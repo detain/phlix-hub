@@ -3,6 +3,7 @@
     <description>PSR-12 coding standard for detain/phlex-hub.</description>
 
     <file>src</file>
+    <file>scripts</file>
 
     <arg name="colors"/>
     <arg name="extensions" value="php"/>
