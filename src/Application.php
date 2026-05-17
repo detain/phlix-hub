@@ -8,9 +8,14 @@ use Phlex\Hub\Common\Logger\LogChannels;
 use Phlex\Hub\Common\Logger\StructuredLogger;
 use Phlex\Hub\Health\HealthController;
 use Phlex\Hub\Http\Controllers\AuthController;
+use Phlex\Hub\Http\Controllers\HubJwksController;
 use Phlex\Hub\Http\Controllers\MeController;
 use Phlex\Hub\Http\Controllers\PageController;
+use Phlex\Hub\Http\Controllers\ServerClaimController;
+use Phlex\Hub\Http\Controllers\ServerController;
 use Phlex\Hub\Http\Middleware\AuthMiddleware;
+use Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware;
+use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlex\Hub\Http\Request;
 use Phlex\Hub\Http\Response;
 use Phlex\Hub\Http\Router;
@@ -98,6 +103,9 @@ final class Application
         $this->router->group('/api/v1', function (Router $r) use ($me): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
         }, [$authMiddleware]);
+
+        // Server-claim and server routes (Phase C.3).
+        $this->registerServerRoutes($authMiddleware);
     }
 
     private function resolvePageController(): PageController
@@ -134,6 +142,91 @@ final class Application
             throw new \RuntimeException('Container returned an unexpected AuthMiddleware instance');
         }
         return $middleware;
+    }
+
+    /**
+     * Register server-claim and server lifecycle routes.
+     */
+    private function registerServerRoutes(AuthMiddleware $authMiddleware): void
+    {
+        $hubProtocol = new HubProtocolMiddleware();
+        $enrollmentJwt = $this->resolveEnrollmentJwtMiddleware();
+        $serverClaimController = $this->resolveServerClaimController();
+        $serverController = $this->resolveServerController();
+        $hubJwksController = $this->resolveHubJwksController();
+
+        // JWKS — public.
+        $this->router->get('/.well-known/jwks.json', static fn (Request $req) => $hubJwksController($req));
+
+        // Public server-claim initiation (server has no JWT yet).
+        $this->router->group('/api/v1', static function (Router $r) use ($serverClaimController): void {
+            $r->post(
+                '/server-claims/new',
+                static fn (Request $req) => $serverClaimController->newClaim($req),
+            );
+        }, [$hubProtocol]);
+
+        // User-authenticated claim (user pastes claim code).
+        $this->router->group('/api/v1', static function (Router $r) use ($serverClaimController): void {
+            $r->post(
+                '/server-claims/claim',
+                static fn (Request $req) => $serverClaimController->claim($req),
+            );
+        }, [$authMiddleware, $hubProtocol]);
+
+        // Server-authenticated routes.
+        $serverGroup = static function (Router $r) use ($serverController): void {
+            $r->post(
+                '/servers/{id}/heartbeat',
+                static fn (Request $req, array $params) => $serverController->heartbeat($req, $params),
+            );
+            $r->get(
+                '/servers/{id}/info',
+                static fn (Request $req, array $params) => $serverController->info($req, $params),
+            );
+            $r->delete(
+                '/servers/{id}',
+                static fn (Request $req, array $params) => $serverController->disconnect($req, $params),
+            );
+        };
+
+        $this->router->group('/api/v1', $serverGroup, [$enrollmentJwt, $hubProtocol]);
+    }
+
+    private function resolveEnrollmentJwtMiddleware(): EnrollmentJwtMiddleware
+    {
+        $middleware = $this->container->get(EnrollmentJwtMiddleware::class);
+        if (!$middleware instanceof EnrollmentJwtMiddleware) {
+            throw new \RuntimeException('Container returned an unexpected EnrollmentJwtMiddleware instance');
+        }
+        return $middleware;
+    }
+
+    private function resolveServerClaimController(): ServerClaimController
+    {
+        $controller = $this->container->get(ServerClaimController::class);
+        if (!$controller instanceof ServerClaimController) {
+            throw new \RuntimeException('Container returned an unexpected ServerClaimController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveServerController(): ServerController
+    {
+        $controller = $this->container->get(ServerController::class);
+        if (!$controller instanceof ServerController) {
+            throw new \RuntimeException('Container returned an unexpected ServerController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveHubJwksController(): HubJwksController
+    {
+        $controller = $this->container->get(HubJwksController::class);
+        if (!$controller instanceof HubJwksController) {
+            throw new \RuntimeException('Container returned an unexpected HubJwksController instance');
+        }
+        return $controller;
     }
 
     /**

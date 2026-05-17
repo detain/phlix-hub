@@ -9,6 +9,7 @@ use Phlex\Hub\Auth\AuthManager;
 use Phlex\Hub\Auth\JwtHandler;
 use Phlex\Hub\Auth\UserRepository;
 use Phlex\Hub\Common\Container\ServiceProviderInterface;
+use Phlex\Hub\Hub\ServerInfoHandler;
 use Phlex\Hub\Common\Logger\AuditLogger;
 use Phlex\Hub\Common\WebPortal\PageRenderer;
 use Phlex\Hub\Http\Controllers\AuthController;
@@ -64,8 +65,11 @@ final class HttpServicesProvider implements ServiceProviderInterface
                 return new PageController($renderer, $auth);
             }),
 
-            MeController::class => factory(static function (AuthManager $auth): MeController {
-                return new MeController($auth);
+            MeController::class => factory(static function (
+                AuthManager $auth,
+                ServerInfoHandler $serverInfo,
+            ): MeController {
+                return new MeController($auth, $serverInfo);
             }),
 
             AuthMiddleware::class => factory(static function (
