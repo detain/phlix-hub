@@ -7,6 +7,10 @@ namespace Phlex\Hub;
 use Phlex\Hub\Common\Logger\LogChannels;
 use Phlex\Hub\Common\Logger\StructuredLogger;
 use Phlex\Hub\Health\HealthController;
+use Phlex\Hub\Http\Controllers\AuthController;
+use Phlex\Hub\Http\Controllers\MeController;
+use Phlex\Hub\Http\Controllers\PageController;
+use Phlex\Hub\Http\Middleware\AuthMiddleware;
 use Phlex\Hub\Http\Request;
 use Phlex\Hub\Http\Response;
 use Phlex\Hub\Http\Router;
@@ -19,10 +23,19 @@ use Workerman\Worker;
 /**
  * Phlex Hub main application bootstrap.
  *
- * Wires the HTTP router with the minimum route set required for B.5
- * (the `/health` endpoint) and boots a single Workerman HTTP worker.
+ * Wires the HTTP router with the public surface as of B.7:
  *
- * Future steps add the auth, claim, heartbeat and relay routes.
+ *  - `GET /health`                — service health JSON.
+ *  - `GET /`                       — landing page (SSR).
+ *  - `GET /signup` / `POST /signup` — signup form + submission.
+ *  - `GET /login`  / `POST /login`  — login form + submission.
+ *  - `POST /logout`                — clear cookies + redirect.
+ *  - `GET /my-servers`             — protected dashboard (empty in B.7).
+ *  - `POST /api/v1/auth/signup`    — JSON signup.
+ *  - `POST /api/v1/auth/login`     — JSON login.
+ *  - `POST /api/v1/auth/logout`    — JSON logout.
+ *  - `POST /api/v1/auth/refresh`   — refresh access token.
+ *  - `GET  /api/v1/me`             — current user JSON (protected).
  *
  * @package Phlex\Hub
  * @since 0.1.0
@@ -32,8 +45,7 @@ final class Application
     private Router $router;
 
     /**
-     * @param ContainerInterface   $container PSR-11 container built by
-     *                                        {@see \Phlex\Hub\Common\Container\ContainerFactory::create()}.
+     * @param ContainerInterface   $container PSR-11 container.
      * @param array<string, mixed> $config    Server config slice (host, port, workers, …).
      */
     public function __construct(
@@ -45,7 +57,7 @@ final class Application
     }
 
     /**
-     * Register the routes the hub exposes today.
+     * Register every route the hub exposes today.
      */
     private function registerRoutes(): void
     {
@@ -58,18 +70,74 @@ final class Application
             return (new Response())->json($health());
         });
 
-        $this->router->get('/', static function (): Response {
-            return (new Response())->html(
-                "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Phlex Hub</title></head>"
-                . "<body><h1>Phlex Hub</h1><p>Coming soon. See <code>/health</code> for status.</p></body></html>",
-            );
-        });
+        // SSR pages.
+        $pages = $this->resolvePageController();
+        $this->router->get('/', static fn (Request $r): Response => $pages($r));
+        $this->router->get('/signup', static fn (Request $r): Response => $pages($r));
+        $this->router->get('/login', static fn (Request $r): Response => $pages($r));
+
+        // Auth form handlers (SSR).
+        $auth = $this->resolveAuthController();
+        $this->router->post('/signup', static fn (Request $r): Response => $auth($r));
+        $this->router->post('/login', static fn (Request $r): Response => $auth($r));
+        $this->router->post('/logout', static fn (Request $r): Response => $auth($r));
+
+        // JSON API.
+        $this->router->post('/api/v1/auth/signup', static fn (Request $r): Response => $auth($r));
+        $this->router->post('/api/v1/auth/login', static fn (Request $r): Response => $auth($r));
+        $this->router->post('/api/v1/auth/logout', static fn (Request $r): Response => $auth($r));
+        $this->router->post('/api/v1/auth/refresh', static fn (Request $r): Response => $auth($r));
+
+        // Protected pages + API.
+        $authMiddleware = $this->resolveAuthMiddleware();
+        $this->router->group('/my-servers', function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
+        $me = $this->resolveMeController();
+        $this->router->group('/api/v1', function (Router $r) use ($me): void {
+            $r->get('/me', static fn (Request $req): Response => $me($req));
+        }, [$authMiddleware]);
+    }
+
+    private function resolvePageController(): PageController
+    {
+        $controller = $this->container->get(PageController::class);
+        if (!$controller instanceof PageController) {
+            throw new \RuntimeException('Container returned an unexpected PageController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveAuthController(): AuthController
+    {
+        $controller = $this->container->get(AuthController::class);
+        if (!$controller instanceof AuthController) {
+            throw new \RuntimeException('Container returned an unexpected AuthController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveMeController(): MeController
+    {
+        $controller = $this->container->get(MeController::class);
+        if (!$controller instanceof MeController) {
+            throw new \RuntimeException('Container returned an unexpected MeController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveAuthMiddleware(): AuthMiddleware
+    {
+        $middleware = $this->container->get(AuthMiddleware::class);
+        if (!$middleware instanceof AuthMiddleware) {
+            throw new \RuntimeException('Container returned an unexpected AuthMiddleware instance');
+        }
+        return $middleware;
     }
 
     /**
      * Get the underlying router (used by tests and B.7 route registration).
-     *
-     * @since 0.1.0
      */
     public function getRouter(): Router
     {
@@ -79,13 +147,6 @@ final class Application
     /**
      * Boot a Workerman HTTP worker that dispatches each request through
      * the router.
-     *
-     * This call is blocking — it returns only after `Worker::runAll()`
-     * exits (i.e. on shutdown).
-     *
-     * @return void
-     *
-     * @since 0.1.0
      */
     public function boot(): void
     {

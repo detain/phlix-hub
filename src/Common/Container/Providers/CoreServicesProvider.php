@@ -113,6 +113,7 @@ final class CoreServicesProvider implements ServiceProviderInterface
             'logger.auth' => LogChannels::AUTH,
             'logger.hub' => LogChannels::HUB,
             'logger.relay' => LogChannels::RELAY,
+            'logger.audit' => LogChannels::AUDIT,
         ];
     }
 }

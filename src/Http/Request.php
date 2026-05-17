@@ -52,6 +52,22 @@ class Request
 
     public ?string $userId = null;
 
+    /**
+     * Hydrated user row (sans password_hash) populated by
+     * {@see \Phlex\Hub\Http\Middleware\AuthMiddleware}. Null until the
+     * middleware runs.
+     *
+     * @var array<string, mixed>|null
+     */
+    public ?array $user = null;
+
+    /**
+     * Decoded JWT claims populated by
+     * {@see \Phlex\Hub\Http\Middleware\AuthMiddleware}. Null until the
+     * middleware runs.
+     */
+    public ?\Phlex\Shared\Auth\JwtClaims $claims = null;
+
     /** @var array<string, string> */
     public array $pathParams = [];
 

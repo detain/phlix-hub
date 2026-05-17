@@ -24,6 +24,20 @@ variable is unset.
 | `HUB_DB_PASSWORD` | `phlex_hub`   | MySQL password. **Override in any non-dev env.**  |
 | `HUB_DB_NAME`     | `phlex_hub`   | Database name.                                    |
 
+## Auth (`config/auth.php`)
+
+| Variable               | Default   | Description                                                                                                                                  |
+| ---------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HUB_JWT_SECRET`       | (dev fallback) | HMAC-SHA256 secret for issuing JWTs. **Required in production** — must be ≥32 bytes. Falls back to a random per-process secret in dev. |
+| `HUB_JWT_ACCESS_TTL`   | `3600`    | Access-token lifetime in seconds (default 1 hour).                                                                                           |
+| `HUB_JWT_REFRESH_TTL`  | `604800`  | Refresh-token lifetime in seconds (default 7 days).                                                                                          |
+
+When `HUB_JWT_SECRET` is unset, `AuthServicesProvider` generates a
+random secret at container-build time. Tokens issued with that secret
+are valid only for the lifetime of the current PHP process — restarting
+the worker invalidates every existing session. Always set this var
+explicitly in production.
+
 ## Container caching
 
 | Variable                       | Default | Description                                                                                                                       |
