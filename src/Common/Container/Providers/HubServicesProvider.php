@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlex\Hub\Auth\JwtHandler;
 use Phlex\Hub\Auth\UserRepository;
 use Phlex\Hub\Hub\ClaimRequestHandler;
 use Phlex\Hub\Hub\DeregisterHandler;
@@ -13,6 +14,7 @@ use Phlex\Hub\Hub\Dns\StaticZoneManager;
 use Phlex\Hub\Hub\Ed25519KeyManager;
 use Phlex\Hub\Hub\EnrollmentJwtService;
 use Phlex\Hub\Hub\HeartbeatHandler;
+use Phlex\Hub\Hub\InviteLinkHandler;
 use Phlex\Hub\Hub\LibrarySharingHandler;
 use Phlex\Hub\Hub\RelayRouter;
 use Phlex\Hub\Hub\RelayServerHandler;
@@ -24,6 +26,7 @@ use Phlex\Hub\Common\Logger\LogChannels;
 use Phlex\Hub\Common\Logger\LoggerFactory;
 use Phlex\Hub\Common\Logger\StructuredLogger;
 use Phlex\Hub\Http\Controllers\HubJwksController;
+use Phlex\Hub\Http\Controllers\InviteLinkController;
 use Phlex\Hub\Http\Controllers\LibraryShareController;
 use Phlex\Hub\Http\Controllers\RelayController;
 use Phlex\Hub\Http\Controllers\ServerClaimController;
@@ -235,6 +238,28 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): LibraryShareController {
                 return new LibraryShareController($handler);
             })->parameter('handler', get(LibrarySharingHandler::class)),
+
+            InviteLinkHandler::class => factory(static function (
+                Connection $db,
+                JwtHandler $jwtHandler,
+                LibrarySharingHandler $sharingHandler,
+            ) use ($hubBaseUrl): InviteLinkHandler {
+                return new InviteLinkHandler(
+                    $db,
+                    $jwtHandler,
+                    $sharingHandler,
+                    LoggerFactory::get(LogChannels::HUB),
+                    $hubBaseUrl,
+                );
+            })->parameter('db', get(Connection::class))
+                ->parameter('jwtHandler', get(JwtHandler::class))
+                ->parameter('sharingHandler', get(LibrarySharingHandler::class)),
+
+            InviteLinkController::class => factory(static function (
+                InviteLinkHandler $handler,
+            ): InviteLinkController {
+                return new InviteLinkController($handler);
+            })->parameter('handler', get(InviteLinkHandler::class)),
         ]);
     }
 
