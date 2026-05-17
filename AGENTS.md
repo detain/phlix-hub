@@ -17,7 +17,13 @@ this repo.
   green from day 1. No baselines.
 - **Database access:** only `Workerman\MySQL\Connection`. No raw PDO,
   no mysqli. Pass parameters as bound parameters; do not interpolate
-  user input into SQL strings.
+  user input into SQL strings. **Always use named `:param` placeholders,
+  not positional `?`.** `workerman/mysql` keys bound parameters by array
+  key: `bindMore()` calls `array_keys()` on the bind array and feeds the
+  result to `PDOStatement::bindParam()`, which rejects 0-based indices
+  with `Argument #1 must be >= 1`. See
+  `src/Common/Database/MigrationRunner.php::recordApplied()` for an
+  example.
 - **Logging:** always via `LoggerFactory::get(LogChannels::*)`. Channels
   defined in `src/Common/Logger/LogChannels.php`.
 - **Container:** PHP-DI 7 (`Phlex\Hub\Common\Container\ContainerFactory`).
