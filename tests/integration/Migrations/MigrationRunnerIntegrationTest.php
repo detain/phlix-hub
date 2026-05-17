@@ -101,6 +101,7 @@ final class MigrationRunnerIntegrationTest extends TestCase
                 '003_shared_libraries.sql',
                 '004_relay_sessions.sql',
                 '005_webhooks.sql',
+                '006_server_heartbeats_sent_at.sql',
             ],
             $applied,
         );
@@ -123,7 +124,7 @@ final class MigrationRunnerIntegrationTest extends TestCase
     public function testRerunningIsIdempotent(): void
     {
         $first = $this->runner->run();
-        self::assertCount(5, $first);
+        self::assertCount(6, $first);
 
         $second = $this->runner->run();
         self::assertSame([], $second, 'Re-running migrations should apply nothing new');
