@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlex\Hub\Auth\UserRepository;
 use Phlex\Hub\Hub\ClaimRequestHandler;
 use Phlex\Hub\Hub\DeregisterHandler;
 use Phlex\Hub\Hub\DnsAliasManager;
@@ -12,6 +13,7 @@ use Phlex\Hub\Hub\Dns\StaticZoneManager;
 use Phlex\Hub\Hub\Ed25519KeyManager;
 use Phlex\Hub\Hub\EnrollmentJwtService;
 use Phlex\Hub\Hub\HeartbeatHandler;
+use Phlex\Hub\Hub\LibrarySharingHandler;
 use Phlex\Hub\Hub\RelayRouter;
 use Phlex\Hub\Hub\RelayServerHandler;
 use Phlex\Hub\Hub\RelaySessionManager;
@@ -20,7 +22,9 @@ use Phlex\Hub\Hub\TlsCertificateManager;
 use Phlex\Hub\Common\Container\ServiceProviderInterface;
 use Phlex\Hub\Common\Logger\LogChannels;
 use Phlex\Hub\Common\Logger\LoggerFactory;
+use Phlex\Hub\Common\Logger\StructuredLogger;
 use Phlex\Hub\Http\Controllers\HubJwksController;
+use Phlex\Hub\Http\Controllers\LibraryShareController;
 use Phlex\Hub\Http\Controllers\RelayController;
 use Phlex\Hub\Http\Controllers\ServerClaimController;
 use Phlex\Hub\Http\Controllers\ServerController;
@@ -213,6 +217,24 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('dnsAliasManager', get(DnsAliasManager::class))
                 ->parameter('certManager', get(TlsCertificateManager::class))
                 ->parameter('jwtService', get(EnrollmentJwtService::class)),
+
+            LibrarySharingHandler::class => factory(static function (
+                Connection $db,
+                UserRepository $users,
+            ): LibrarySharingHandler {
+                return new LibrarySharingHandler(
+                    $db,
+                    $users,
+                    LoggerFactory::get(LogChannels::HUB),
+                );
+            })->parameter('db', get(Connection::class))
+                ->parameter('users', get(UserRepository::class)),
+
+            LibraryShareController::class => factory(static function (
+                LibrarySharingHandler $handler,
+            ): LibraryShareController {
+                return new LibraryShareController($handler);
+            })->parameter('handler', get(LibrarySharingHandler::class)),
         ]);
     }
 
