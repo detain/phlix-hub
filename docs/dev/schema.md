@@ -77,6 +77,7 @@ erDiagram
         int          active_transcodes
         text         hostname_candidates_json
         datetime     received_at
+        datetime     sent_at
     }
 
     shared_libraries {
@@ -202,7 +203,7 @@ the claim to a row in `servers`.
 
 ### `server_heartbeats`
 
-**Migration:** `002_servers.sql`
+**Migrations:** `002_servers.sql`, `006_server_heartbeats_sent_at.sql`
 
 Recent heartbeats from each server. Used to power the dashboard's
 "last activity" and "sessions / transcodes right now" widgets.
@@ -213,7 +214,14 @@ Recent heartbeats from each server. Used to power the dashboard's
   `active_transcodes` — heartbeat payload.
 - `hostname_candidates_json` `TEXT` — fresh hostname candidates the
   hub uses to refresh the parent `servers.hostname_candidates_json`.
-- `received_at` `DATETIME`.
+- `received_at` `DATETIME` — hub clock, set on insert
+  (`DEFAULT CURRENT_TIMESTAMP`).
+- `sent_at` `DATETIME NULL` — server clock at heartbeat send time,
+  populated from `HeartbeatDto::$timestamp`
+  (`Phlex\Shared\Hub\HeartbeatDto`). Compared against `received_at`
+  for clock-skew detection. Nullable because rows written before
+  migration `006` (and any future heartbeat that omits the field)
+  carry no server-side timestamp.
 
 **Indexes:** primary `id`;
 `ix_server_heartbeats_server_time (server_id, received_at)`.
