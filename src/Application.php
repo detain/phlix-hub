@@ -9,6 +9,7 @@ use Phlex\Hub\Common\Logger\StructuredLogger;
 use Phlex\Hub\Health\HealthController;
 use Phlex\Hub\Http\Controllers\AuthController;
 use Phlex\Hub\Http\Controllers\HubJwksController;
+use Phlex\Hub\Http\Controllers\LibraryShareController;
 use Phlex\Hub\Http\Controllers\MeController;
 use Phlex\Hub\Http\Controllers\PageController;
 use Phlex\Hub\Http\Controllers\ServerClaimController;
@@ -127,6 +128,9 @@ final class Application
 
         // Server-claim and server routes (Phase C.3).
         $this->registerServerRoutes($authMiddleware);
+
+        // Library sharing routes (Phase C.9).
+        $this->registerSharingRoutes($authMiddleware);
     }
 
     private function resolvePageController(): PageController
@@ -327,6 +331,43 @@ final class Application
             throw new \RuntimeException('Container returned an unexpected SubdomainController instance');
         }
         return $controller;
+    }
+
+    private function resolveLibraryShareController(): LibraryShareController
+    {
+        $controller = $this->container->get(LibraryShareController::class);
+        if (!$controller instanceof LibraryShareController) {
+            throw new \RuntimeException('Container returned an unexpected LibraryShareController instance');
+        }
+        return $controller;
+    }
+
+    /**
+     * Register library sharing routes.
+     */
+    private function registerSharingRoutes(AuthMiddleware $authMiddleware): void
+    {
+        $pages = $this->resolvePageController();
+        $shareController = $this->resolveLibraryShareController();
+
+        // SSR pages.
+        $this->router->group('/shared-with-me', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
+        $this->router->group('/manage-shares', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
+        // JSON API for shares.
+        $this->router->group('/api/v1/me/shares', static function (Router $r) use ($shareController): void {
+            $r->post('/', static fn (Request $req): Response => $shareController->createShare($req));
+            $r->get('/', static fn (Request $req): Response => $shareController->listShares($req));
+            $r->delete('/{id}', static fn (Request $req, array $params): Response =>
+                $shareController->deleteShare($req, $params));
+            $r->patch('/{id}', static fn (Request $req, array $params): Response =>
+                $shareController->updateShare($req, $params));
+        }, [$authMiddleware]);
     }
 
     /**

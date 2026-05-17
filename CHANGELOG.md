@@ -7,6 +7,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Step C.9 — Shared Libraries (Friends/Family)**: Library sharing between Hub users.
+  - `LibraryShare` DTO — represents a library share record with permission levels (read/readwrite), expiry, and revocation state.
+  - `SharedLibraryDto` DTO — represents a library shared with the current user, including access URLs and permission level.
+  - `LibrarySharingHandler` — business logic for share creation, revocation, permission updates, and listing outgoing/incoming shares.
+  - `LibraryShareController` — API controller with endpoints:
+    - `POST /api/v1/me/shares` — create a new library share
+    - `GET /api/v1/me/shares` — list outgoing and incoming shares
+    - `DELETE /api/v1/me/shares/{id}` — revoke a share
+    - `PATCH /api/v1/me/shares/{id}` — update share permission
+  - `migrations/009_library_shares.sql` — creates `library_shares` table with permission levels, expiry, and proper indexes.
+  - SSR pages: `GET /shared-with-me` (libraries shared with you), `GET /manage-shares` (libraries you've shared).
+  - Smarty templates: `home/shared-with-me.tpl`, `home/manage-shares.tpl`.
+  - Tests: `LibraryShareTest` (13 tests), `LibrarySharingHandlerTest` (12 tests), `SharedLibraryDtoTest` (4 tests), `LibraryShareControllerTest` (12 tests).
+  - `HubServicesProvider` registration for `LibrarySharingHandler` and `LibraryShareController`.
+  - `docs/hub/shared-with-friends.md` — end-user guide for library sharing.
+
 - **Step C.8 — Public Hostname (`*.phlex.media`)**: Subdomain allocation for enrolled servers.
   - `DnsAliasManager` — allocates deterministic 8-char subdomains (sha256 of server_id), stores in `servers.subdomain`, creates DNS records via pluggable `StaticZoneManager`.
   - `TlsCertificateManager` — provisions TLS certificates via Let's Encrypt ACME v2, stores in configurable directory, auto-renews before expiry.
