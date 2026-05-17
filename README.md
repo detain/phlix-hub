@@ -3,8 +3,9 @@
 Central cloud directory + reverse-tunnel relay for Phlex media servers.
 Sign in once, reach any of your servers from anywhere. Self-hostable.
 
-Status: **scaffolding + signup/login MVP (B.7)**. Server claim flow
-and the populated `/my-servers` dashboard land in Phase C.
+Status: **server claim + my-servers dashboard (C.4)**. Pairing Protocol
+landed in C.3; the populated `/my-servers` dashboard and the
+`/claim-server` flow land in C.4.
 
 ## Quick start (dev)
 
@@ -17,11 +18,16 @@ curl http://localhost:8800/health    # => {"status":"ok",...}
 ```
 
 Visit `http://localhost:8800/signup` to create your first account. The
-first user is auto-promoted to admin.
+first user is auto-promoted to admin. After signing in, `/my-servers`
+lists your registered servers and `/claim-server` walks through pairing
+a new one.
 
 See [`docs/dev/schema.md`](docs/dev/schema.md) for the schema
-reference, and [`docs/reference/env-vars.md`](docs/reference/env-vars.md)
-for the full env-var list.
+reference, [`docs/reference/env-vars.md`](docs/reference/env-vars.md)
+for the full env-var list, and
+[`docs/hub/my-servers.md`](docs/hub/my-servers.md) /
+[`docs/hub/claim-server.md`](docs/hub/claim-server.md) for the
+dashboard and claim flow.
 
 ## Related repos
 
@@ -39,6 +45,9 @@ for the full env-var list.
 
 DB schema landed in B.6; signup, login, the dashboard, and the JWT
 auth stack (consuming `Phlex\Shared\Auth\JwtClaims`) landed in **B.7**.
+The server-claim + registry endpoints (claim codes, enrollment JWT,
+heartbeat) landed in **C.3**; the `/my-servers` dashboard and
+`/claim-server` UI land in **C.4**.
 
 ## Configuration
 

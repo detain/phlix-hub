@@ -3,19 +3,37 @@
 {block name="title"}My Servers — Phlex Hub{/block}
 
 {block name="content"}
-    <h2>My Servers</h2>
-    {assign var="is_authenticated" value=true}
-    {if empty($servers)}
-        <div class="empty-state">
-            <p><strong>You haven't claimed any servers yet.</strong></p>
-            <p>Open your local Phlex install and use the "Claim with Phlex Hub" flow to attach it to {if !empty($user.email)}<code>{$user.email|escape:'html'}</code>{else}this account{/if}.</p>
-            <p style="color: #999; font-size: 0.875rem;">Server claim instructions land in Phase C.3 of the expansion plan.</p>
-        </div>
-    {else}
-        <ul>
+<div class="my-servers">
+    <div class="page-header">
+        <h1>My Servers</h1>
+        <a href="/claim-server" class="btn btn-primary">Claim a New Server</a>
+    </div>
+
+    <div class="server-list">
+        {if empty($servers)}
+            <div class="empty-state">
+                <div class="empty-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <rect x="2" y="3" width="20" height="14" rx="2"/>
+                        <line x1="8" y1="21" x2="16" y2="21"/>
+                        <line x1="12" y1="17" x2="12" y2="21"/>
+                    </svg>
+                </div>
+                <h2>No servers yet</h2>
+                <p>You haven't claimed any servers yet.</p>
+                <p>To get started, run <code>php scripts/pair-with-hub.php</code>
+                   on your Phlex server and enter the claim code below.</p>
+                <a href="/claim-server" class="btn btn-primary">Claim a Server</a>
+            </div>
+        {else}
             {foreach $servers as $server}
-                <li>{$server.server_name|escape:'html'}</li>
+                {include file="partials/server-card.tpl" server=$server}
             {/foreach}
-        </ul>
-    {/if}
+        {/if}
+    </div>
+</div>
+{/block}
+
+{block name="scripts"}
+<script src="/assets/js/my-servers.js" defer></script>
 {/block}

@@ -15,8 +15,11 @@ use Phlex\Hub\Common\WebPortal\PageRenderer;
 use Phlex\Hub\Http\Controllers\AuthController;
 use Phlex\Hub\Http\Controllers\MeController;
 use Phlex\Hub\Http\Controllers\PageController;
+use Phlex\Hub\Http\Controllers\ServerListController;
+use Phlex\Hub\Http\Controllers\ServerManageController;
 use Phlex\Hub\Http\Middleware\AdminMiddleware;
 use Phlex\Hub\Http\Middleware\AuthMiddleware;
+use Workerman\MySQL\Connection;
 
 use function DI\factory;
 
@@ -61,8 +64,9 @@ final class HttpServicesProvider implements ServiceProviderInterface
             PageController::class => factory(static function (
                 PageRenderer $renderer,
                 AuthManager $auth,
+                ServerInfoHandler $serverInfo,
             ): PageController {
-                return new PageController($renderer, $auth);
+                return new PageController($renderer, $auth, $serverInfo);
             }),
 
             MeController::class => factory(static function (
@@ -70,6 +74,19 @@ final class HttpServicesProvider implements ServiceProviderInterface
                 ServerInfoHandler $serverInfo,
             ): MeController {
                 return new MeController($auth, $serverInfo);
+            }),
+
+            ServerListController::class => factory(static function (
+                ServerInfoHandler $serverInfo,
+            ): ServerListController {
+                return new ServerListController($serverInfo);
+            }),
+
+            ServerManageController::class => factory(static function (
+                ServerInfoHandler $serverInfo,
+                Connection $db,
+            ): ServerManageController {
+                return new ServerManageController($serverInfo, $db);
             }),
 
             AuthMiddleware::class => factory(static function (

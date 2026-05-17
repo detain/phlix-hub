@@ -13,6 +13,8 @@ use Phlex\Hub\Http\Controllers\MeController;
 use Phlex\Hub\Http\Controllers\PageController;
 use Phlex\Hub\Http\Controllers\ServerClaimController;
 use Phlex\Hub\Http\Controllers\ServerController;
+use Phlex\Hub\Http\Controllers\ServerListController;
+use Phlex\Hub\Http\Controllers\ServerManageController;
 use Phlex\Hub\Http\Middleware\AuthMiddleware;
 use Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
@@ -99,9 +101,26 @@ final class Application
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
 
+        $this->router->group('/claim-server', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
         $me = $this->resolveMeController();
-        $this->router->group('/api/v1', function (Router $r) use ($me): void {
+        $serverList = $this->resolveServerListController();
+        $serverManage = $this->resolveServerManageController();
+        $this->router->group('/api/v1', function (Router $r) use ($me, $serverList, $serverManage): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
+            $r->get('/me/servers', static fn (Request $req): Response => $serverList($req));
+            $r->delete(
+                '/me/servers/{id}',
+                static fn (Request $req, array $params): Response =>
+                    $serverManage->deleteServer($req, $params),
+            );
+            $r->get(
+                '/me/servers/{id}/access-info',
+                static fn (Request $req, array $params): Response =>
+                    $serverManage->accessInfo($req, $params),
+            );
         }, [$authMiddleware]);
 
         // Server-claim and server routes (Phase C.3).
@@ -131,6 +150,24 @@ final class Application
         $controller = $this->container->get(MeController::class);
         if (!$controller instanceof MeController) {
             throw new \RuntimeException('Container returned an unexpected MeController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveServerListController(): ServerListController
+    {
+        $controller = $this->container->get(ServerListController::class);
+        if (!$controller instanceof ServerListController) {
+            throw new \RuntimeException('Container returned an unexpected ServerListController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveServerManageController(): ServerManageController
+    {
+        $controller = $this->container->get(ServerManageController::class);
+        if (!$controller instanceof ServerManageController) {
+            throw new \RuntimeException('Container returned an unexpected ServerManageController instance');
         }
         return $controller;
     }
