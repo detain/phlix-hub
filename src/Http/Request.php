@@ -72,6 +72,12 @@ class Request
     public array $pathParams = [];
 
     /**
+     * Server UUID set by {@see \Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware}
+     * when a server-facing route with enrollment JWT auth is dispatched.
+     */
+    public ?string $serverId = null;
+
+    /**
      * Creates a request from PHP global variables.
      *
      * @return self Populated request.

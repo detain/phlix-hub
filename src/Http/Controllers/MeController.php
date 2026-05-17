@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Hub\Http\Controllers;
 
 use Phlex\Hub\Auth\AuthManager;
+use Phlex\Hub\Hub\ServerInfoHandler;
 use Phlex\Hub\Http\Request;
 use Phlex\Hub\Http\Response;
 
@@ -21,10 +22,13 @@ use Phlex\Hub\Http\Response;
 final class MeController
 {
     /**
-     * @param AuthManager $auth Used to fetch the user row by id.
+     * @param AuthManager     $auth          Used to fetch the user row by id.
+     * @param ServerInfoHandler $serverInfo  Used to fetch user's servers.
      */
-    public function __construct(private readonly AuthManager $auth)
-    {
+    public function __construct(
+        private readonly AuthManager $auth,
+        private readonly ServerInfoHandler $serverInfo,
+    ) {
     }
 
     /**
@@ -48,9 +52,11 @@ final class MeController
                 'code'  => 'user.not_found',
             ]);
         }
+        $servers = $this->serverInfo->getServersForUser($userId);
         return (new Response())->json([
             'user'   => $user,
             'claims' => $request->claims?->toPayload() ?? [],
+            'servers' => array_map(fn ($s) => $s->toPayload(), $servers),
         ]);
     }
 }

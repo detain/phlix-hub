@@ -7,6 +7,7 @@ namespace Phlex\Hub\Common\Container;
 use DI\ContainerBuilder;
 use Phlex\Hub\Common\Container\Providers\AuthServicesProvider;
 use Phlex\Hub\Common\Container\Providers\CoreServicesProvider;
+use Phlex\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlex\Hub\Common\Container\Providers\HttpServicesProvider;
 use Psr\Container\ContainerInterface;
 
@@ -93,6 +94,7 @@ final class ContainerFactory
             new CoreServicesProvider(),
             new AuthServicesProvider(),
             new HttpServicesProvider(),
+            new HubServicesProvider(),
         ];
     }
 

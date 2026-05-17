@@ -6,6 +6,7 @@ namespace Phlex\Hub\Tests\unit\Http\Controllers;
 
 use Phlex\Hub\Auth\AuthManager;
 use Phlex\Hub\Auth\JwtHandler;
+use Phlex\Hub\Hub\ServerInfoHandler;
 use Phlex\Hub\Http\Controllers\MeController;
 use Phlex\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
@@ -20,10 +21,15 @@ use PHPUnit\Framework\TestCase;
  */
 final class MeControllerTest extends TestCase
 {
+    private function controller(AuthManager $auth, ?ServerInfoHandler $serverInfo = null): MeController
+    {
+        return new MeController($auth, $serverInfo ?? $this->createMock(ServerInfoHandler::class));
+    }
+
     public function testReturns401WhenUserIdMissing(): void
     {
         $mgr = $this->createMock(AuthManager::class);
-        $controller = new MeController($mgr);
+        $controller = $this->controller($mgr);
 
         $request = new Request();
         $response = $controller($request);
@@ -36,7 +42,8 @@ final class MeControllerTest extends TestCase
     {
         $mgr = $this->createMock(AuthManager::class);
         $mgr->method('getCurrentUser')->willReturn(null);
-        $controller = new MeController($mgr);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $controller = $this->controller($mgr, $serverInfo);
 
         $request = new Request();
         $request->userId = 'u-1';
@@ -45,7 +52,7 @@ final class MeControllerTest extends TestCase
         self::assertSame(404, $response->statusCode);
     }
 
-    public function testReturnsUserAndClaimsForKnownUser(): void
+    public function testReturnsUserAndClaimsAndServersForKnownUser(): void
     {
         $jwt = new JwtHandler(str_repeat('a', 32));
         $token = $jwt->createAccessToken('u-2');
@@ -54,7 +61,11 @@ final class MeControllerTest extends TestCase
 
         $mgr = $this->createMock(AuthManager::class);
         $mgr->method('getCurrentUser')->willReturn(['id' => 'u-2', 'username' => 'alice']);
-        $controller = new MeController($mgr);
+
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $serverInfo->method('getServersForUser')->willReturn([]);
+
+        $controller = $this->controller($mgr, $serverInfo);
 
         $request = new Request();
         $request->userId = 'u-2';
@@ -65,17 +76,40 @@ final class MeControllerTest extends TestCase
         self::assertStringContainsString('"user"', $response->body);
         self::assertStringContainsString('"alice"', $response->body);
         self::assertStringContainsString('"claims"', $response->body);
+        self::assertStringContainsString('"servers"', $response->body);
         self::assertStringContainsString('"u-2"', $response->body);
+    }
+
+    public function testIncludesServersInResponse(): void
+    {
+        $mgr = $this->createMock(AuthManager::class);
+        $mgr->method('getCurrentUser')->willReturn(['id' => 'u-3', 'username' => 'bob']);
+
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $serverInfo->method('getServersForUser')
+            ->with('u-3')
+            ->willReturn([]);
+
+        $controller = $this->controller($mgr, $serverInfo);
+
+        $request = new Request();
+        $request->userId = 'u-3';
+
+        $response = $controller($request);
+        self::assertSame(200, $response->statusCode);
+        self::assertStringContainsString('"servers"', $response->body);
     }
 
     public function testEmptyClaimsArrayWhenNotSet(): void
     {
         $mgr = $this->createMock(AuthManager::class);
-        $mgr->method('getCurrentUser')->willReturn(['id' => 'u-3']);
-        $controller = new MeController($mgr);
+        $mgr->method('getCurrentUser')->willReturn(['id' => 'u-4']);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $serverInfo->method('getServersForUser')->willReturn([]);
+        $controller = $this->controller($mgr, $serverInfo);
 
         $request = new Request();
-        $request->userId = 'u-3';
+        $request->userId = 'u-4';
 
         $response = $controller($request);
         self::assertSame(200, $response->statusCode);
