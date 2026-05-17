@@ -6,6 +6,7 @@ namespace Phlex\Hub\Tests\unit\Http\Controllers;
 
 use Phlex\Hub\Auth\AuthManager;
 use Phlex\Hub\Common\WebPortal\PageRenderer;
+use Phlex\Hub\Hub\ServerInfoHandler;
 use Phlex\Hub\Http\Controllers\PageController;
 use Phlex\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
@@ -31,7 +32,9 @@ final class PageControllerTest extends TestCase
         }
         $auth = $this->createMock(AuthManager::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 'u-1', 'username' => 'alice']);
-        return new PageController($renderer, $auth);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $serverInfo->method('getServersForUser')->willReturn([]);
+        return new PageController($renderer, $auth, $serverInfo);
     }
 
     public function testHomeRendersIndexTemplate(): void
@@ -57,7 +60,8 @@ final class PageControllerTest extends TestCase
             ->willReturn('<html></html>');
 
         $auth = $this->createMock(AuthManager::class);
-        $controller = new PageController($renderer, $auth);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $controller = new PageController($renderer, $auth, $serverInfo);
 
         $request = new Request();
         $request->path = '/';
@@ -100,7 +104,9 @@ final class PageControllerTest extends TestCase
 
         $auth = $this->createMock(AuthManager::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 'u-1']);
-        $controller = new PageController($renderer, $auth);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $serverInfo->method('getServersForUser')->willReturn([]);
+        $controller = new PageController($renderer, $auth, $serverInfo);
 
         $request = new Request();
         $request->method = 'GET';
@@ -117,12 +123,32 @@ final class PageControllerTest extends TestCase
         $renderer->expects(self::never())->method('render');
 
         $auth = $this->createMock(AuthManager::class);
-        $controller = new PageController($renderer, $auth);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $controller = new PageController($renderer, $auth, $serverInfo);
 
         $request = new Request();
         $request->path = '/nope';
 
         $response = $controller($request);
         self::assertSame(404, $response->statusCode);
+    }
+
+    public function testClaimServerRendersClaimTemplate(): void
+    {
+        $renderer = $this->createMock(PageRenderer::class);
+        $renderer->expects(self::once())
+            ->method('render')
+            ->with('home/claim-server.tpl', self::anything())
+            ->willReturn('<html>claim</html>');
+
+        $auth = $this->createMock(AuthManager::class);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $controller = new PageController($renderer, $auth, $serverInfo);
+
+        $request = new Request();
+        $request->path = '/claim-server';
+
+        $response = $controller($request);
+        self::assertSame(200, $response->statusCode);
     }
 }

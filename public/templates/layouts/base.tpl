@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{block name="title"}Phlex Hub{/block}</title>
+    <link rel="stylesheet" href="/assets/css/app.css">
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1e1e2e; background: #fafafa; }
         header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 1rem; border-bottom: 1px solid #ddd; }
@@ -21,6 +22,10 @@
         .logout-form { display: inline; }
         .logout-form button { background: transparent; color: #4f46e5; padding: 0; font: inherit; cursor: pointer; }
         .logout-form button:hover { text-decoration: underline; }
+        .btn { padding: 0.6rem 1rem; background: #4f46e5; color: white; border: 0; border-radius: 4px; cursor: pointer; font: inherit; text-decoration: none; display: inline-block; }
+        .btn:hover { background: #4338ca; }
+        .btn.btn-primary { background: #4f46e5; }
+        .btn.btn-primary:hover { background: #4338ca; }
     </style>
 </head>
 <body>
@@ -39,5 +44,6 @@
     <main>
         {block name="content"}{/block}
     </main>
+    {block name="scripts"}{/block}
 </body>
 </html>
