@@ -12,16 +12,6 @@ use Phlex\Shared\Hub\ClaimResponse;
 use Workerman\MySQL\Connection;
 
 /**
- * Handles server claim request flow from the hub side.
- *
- * On `handleNewClaim`:
- *   1. Validates the ClaimRequest structure (version format, JWK).
- *   2. Checks for existing pending claim for this public key.
- *   3. Generates claim_id (UUID) and claim_code (ABCD-1234 format).
- *   4. Sets expires_at = now + 600 seconds.
- *   5. Inserts server_claims row.
- *   6. Returns ClaimResponse with claim_code, expires_in, claim_id, hub_base_url.
- *
  * On `handleClaimCode`:
  *   1. Looks up claim code in server_claims (with lock).
  *   2. Validates not expired, not already claimed.
@@ -34,8 +24,6 @@ use Workerman\MySQL\Connection;
  */
 class ClaimRequestHandler
 {
-    private const CLAIM_CODE_TTL = 600;
-
     /**
      * @param Connection          $db         MySQL connection.
      * @param Ed25519KeyManager   $keyManager Key manager (used indirectly via EnrollmentJwtService).
@@ -65,8 +53,11 @@ class ClaimRequestHandler
         if ($existingRow !== null) {
             /** @var array<string, mixed> $row */
             $row = $existingRow;
+            /** @var string */
             $claimCode = is_string($row['claim_code'] ?? null) ? $row['claim_code'] : '';
+            /** @var int */
             $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
+            /** @var string */
             $claimId = is_string($row['id'] ?? null) ? $row['id'] : '';
             $this->logger->info('Returning existing claim code for duplicate request', [
                 'claim_code' => $claimCode,
@@ -83,7 +74,9 @@ class ClaimRequestHandler
         $claimId = $this->generateUuid();
         $claimCode = $this->generateClaimCode();
         $now = time();
-        $expiresAt = $now + self::CLAIM_CODE_TTL;
+        /** @var int */
+        $ttl = 600;
+        $expiresAt = $now + $ttl;
 
         $this->db->query(
             'INSERT INTO server_claims
@@ -111,9 +104,11 @@ class ClaimRequestHandler
             'server_name' => $request->serverName,
         ]);
 
+        /** @var int */
+        $ttl = 600;
         return new ClaimResponse(
             claimCode: $claimCode,
-            expiresIn: self::CLAIM_CODE_TTL,
+            expiresIn: $ttl,
             claimId: $claimId,
             hubBaseUrl: $this->hubBaseUrl,
         );
@@ -153,6 +148,7 @@ class ClaimRequestHandler
         }
         /** @var array<string, mixed> $row */
         $row = $rows[0];
+        /** @var int */
         $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
         $claimedBy = $row['claimed_by'] ?? null;
 
@@ -166,12 +162,17 @@ class ClaimRequestHandler
         $serverId = $this->generateUuid();
         $nowUnix = time();
 
+        /** @var string */
         $publicKeyJwk = is_string($row['public_key_jwk'] ?? null) ? $row['public_key_jwk'] : '';
+        /** @var string */
         $hostnameCandidates = is_string($row['hostname_candidates_json'] ?? null)
             ? $row['hostname_candidates_json']
             : '[]';
+        /** @var string */
         $serverName = is_string($row['server_name'] ?? null) ? $row['server_name'] : '';
+        /** @var string */
         $version = is_string($row['version'] ?? null) ? $row['version'] : '';
+        /** @var string */
         $claimRowId = is_string($row['id'] ?? null) ? $row['id'] : '';
 
         $this->db->query(
@@ -306,6 +307,7 @@ class ClaimRequestHandler
         foreach ($rows as $row) {
             /** @var array<string, mixed> $claimRow */
             $claimRow = $row;
+            /** @var string|null */
             $existingJwkRaw = $claimRow['public_key_jwk'] ?? null;
             /** @var array<string, mixed>|null $existingJwk */
             $existingJwk = is_string($existingJwkRaw) ? json_decode($existingJwkRaw, true) : null;

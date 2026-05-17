@@ -60,8 +60,9 @@ class HeartbeatHandler
         }
 
         $now = time();
+        /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            "SELECT id FROM servers WHERE id = :id FOR UPDATE",
+            'SELECT id FROM servers WHERE id = :id FOR UPDATE',
             ['id' => $serverId],
         );
 
@@ -113,8 +114,9 @@ class HeartbeatHandler
      */
     public function isServerOwnedByUser(string $serverId, string $userId): bool
     {
+        /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            "SELECT id FROM servers WHERE id = :id AND user_id = :user_id LIMIT 1",
+            'SELECT id FROM servers WHERE id = :id AND user_id = :user_id LIMIT 1',
             ['id' => $serverId, 'user_id' => $userId],
         );
         return !empty($rows);
@@ -141,7 +143,9 @@ class HeartbeatHandler
             }
             /** @var array<string, mixed> $header */
             $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-            return is_string($header['kid'] ?? null) ? $header['kid'] : null;
+            /** @var string|null */
+            $kid = $header['kid'] ?? null;
+            return is_string($kid) ? $kid : null;
         } catch (\JsonException) {
             return null;
         }
