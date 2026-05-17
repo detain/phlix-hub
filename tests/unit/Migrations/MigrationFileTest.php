@@ -46,6 +46,7 @@ final class MigrationFileTest extends TestCase
             '007_server_claims_and_servers.sql',
             '008_subdomain_allocation.sql',
             '009_library_shares.sql',
+            '010_invite_links.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);

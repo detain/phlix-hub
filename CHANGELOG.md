@@ -7,6 +7,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Step D.5 — Invite-Link Sharing**: Single-use invite link sharing for library access.
+  - `InviteLink` DTO — represents an invite link with expiry, max uses, and status checks (`isExpired()`, `isExhausted()`, `canUse()`).
+  - `InviteLinkHandler` — business logic for creating, redeeming, listing, and revoking invite links.
+  - `InviteLinkController` — API controller with endpoints:
+    - `POST /api/v1/me/invite-links` — create a new invite link
+    - `GET /api/v1/me/invite-links` — list all invite links for the authenticated user
+    - `DELETE /api/v1/me/invite-links/{id}` — revoke an invite link
+    - `GET /invite/{token}` — public invite acceptance page
+  - `migrations/009_invite_links.sql` — creates `invite_links` table with token hash, max uses, and expiry tracking.
+  - Smarty templates: `home/invite-link.tpl` (link display card), `home/accept-invite.tpl` (acceptance page).
+  - Tests: `InviteLinkTest` (13 tests), `InviteLinkHandlerTest` (7 tests), `InviteLinkControllerTest` (11 tests).
+  - `HubServicesProvider` registration for `InviteLinkHandler` and `InviteLinkController`.
+  - `docs/hub/invite-links.md` — end-user guide for invite link sharing.
+  - `docs/reference/api/hub-invite-links.md` — API reference documentation.
+
 - **Step C.9 — Shared Libraries (Friends/Family)**: Library sharing between Hub users.
   - `LibraryShare` DTO — represents a library share record with permission levels (read/readwrite), expiry, and revocation state.
   - `SharedLibraryDto` DTO — represents a library shared with the current user, including access URLs and permission level.

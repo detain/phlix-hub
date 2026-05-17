@@ -9,6 +9,7 @@ use Phlex\Hub\Common\Logger\StructuredLogger;
 use Phlex\Hub\Health\HealthController;
 use Phlex\Hub\Http\Controllers\AuthController;
 use Phlex\Hub\Http\Controllers\HubJwksController;
+use Phlex\Hub\Http\Controllers\InviteLinkController;
 use Phlex\Hub\Http\Controllers\LibraryShareController;
 use Phlex\Hub\Http\Controllers\MeController;
 use Phlex\Hub\Http\Controllers\PageController;
@@ -131,6 +132,9 @@ final class Application
 
         // Library sharing routes (Phase C.9).
         $this->registerSharingRoutes($authMiddleware);
+
+        // Invite link routes (Phase D.5).
+        $this->registerInviteLinkRoutes();
     }
 
     private function resolvePageController(): PageController
@@ -342,6 +346,15 @@ final class Application
         return $controller;
     }
 
+    private function resolveInviteLinkController(): InviteLinkController
+    {
+        $controller = $this->container->get(InviteLinkController::class);
+        if (!$controller instanceof InviteLinkController) {
+            throw new \RuntimeException('Container returned an unexpected InviteLinkController instance');
+        }
+        return $controller;
+    }
+
     /**
      * Register library sharing routes.
      */
@@ -367,6 +380,30 @@ final class Application
                 $shareController->deleteShare($req, $params));
             $r->patch('/{id}', static fn (Request $req, array $params): Response =>
                 $shareController->updateShare($req, $params));
+        }, [$authMiddleware]);
+    }
+
+    /**
+     * Register invite link routes (Phase D.5).
+     */
+    private function registerInviteLinkRoutes(): void
+    {
+        $inviteController = $this->resolveInviteLinkController();
+
+        // GET /invite/{token} — public invite acceptance page.
+        $this->router->get(
+            '/invite/{token}',
+            static fn (Request $req, array $params): Response =>
+                $inviteController->showAcceptInvitePage($req, $params),
+        );
+
+        // JSON API for invite links (protected).
+        $authMiddleware = $this->resolveAuthMiddleware();
+        $this->router->group('/api/v1/me/invite-links', static function (Router $r) use ($inviteController): void {
+            $r->post('/', static fn (Request $req): Response => $inviteController->createInviteLink($req));
+            $r->get('/', static fn (Request $req): Response => $inviteController->listInviteLinks($req));
+            $r->delete('/{id}', static fn (Request $req, array $params): Response =>
+                $inviteController->deleteInviteLink($req, $params));
         }, [$authMiddleware]);
     }
 
