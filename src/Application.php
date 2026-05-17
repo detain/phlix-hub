@@ -178,15 +178,27 @@ final class Application
         $serverGroup = static function (Router $r) use ($serverController): void {
             $r->post(
                 '/servers/{id}/heartbeat',
-                static fn (Request $req, array $params) => $serverController->heartbeat($req, $params),
+                static function (Request $req, array $params) use ($serverController): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $serverController->heartbeat($req, $typedParams);
+                },
             );
             $r->get(
                 '/servers/{id}/info',
-                static fn (Request $req, array $params) => $serverController->info($req, $params),
+                static function (Request $req, array $params) use ($serverController): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $serverController->info($req, $typedParams);
+                },
             );
             $r->delete(
                 '/servers/{id}',
-                static fn (Request $req, array $params) => $serverController->disconnect($req, $params),
+                static function (Request $req, array $params) use ($serverController): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $serverController->disconnect($req, $typedParams);
+                },
             );
         };
 

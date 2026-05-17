@@ -82,20 +82,27 @@ class ServerInfoHandler
      */
     private function rowToDto(array $row): ServerInfoDto
     {
+        /** @var string */
         $hostnameJson = is_string($row['hostname_candidates_json'] ?? null) ? $row['hostname_candidates_json'] : '[]';
-        /** @var list<string> $hostnames */
+        /** @var list<string> */
         $hostnames = json_decode($hostnameJson, true) ?? [];
 
         $lastSeenAt = null;
+        /** @var mixed */
         $lastSeenRaw = $row['last_seen_at'] ?? null;
         if (is_numeric($lastSeenRaw)) {
             $lastSeenAt = (int) $lastSeenRaw;
         }
 
+        /** @var string */
         $serverId = is_string($row['id'] ?? null) ? $row['id'] : '';
+        /** @var string */
         $userId = is_string($row['user_id'] ?? null) ? $row['user_id'] : '';
+        /** @var string */
         $serverName = is_string($row['server_name'] ?? null) ? $row['server_name'] : '';
+        /** @var string */
         $version = is_string($row['version'] ?? null) ? $row['version'] : '';
+        /** @var string */
         $status = is_string($row['status'] ?? null) ? $row['status'] : 'offline';
 
         return new ServerInfoDto(

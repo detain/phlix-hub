@@ -49,7 +49,9 @@ final class EnrollmentJwtMiddleware
             return $this->unauthorized('ENROLLMENT_TOKEN_EXPIRED');
         }
 
-        $request->serverId = is_string($payload['server_id'] ?? null) ? $payload['server_id'] : null;
+        /** @var string|null */
+        $serverId = $payload['server_id'] ?? null;
+        $request->serverId = is_string($serverId) ? $serverId : null;
 
         return null;
     }
@@ -73,7 +75,9 @@ final class EnrollmentJwtMiddleware
             }
             /** @var array<string, mixed> $header */
             $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-            return is_string($header['kid'] ?? null) ? $header['kid'] : null;
+            /** @var string|null */
+            $kid = $header['kid'] ?? null;
+            return is_string($kid) ? $kid : null;
         } catch (\JsonException) {
             return null;
         }

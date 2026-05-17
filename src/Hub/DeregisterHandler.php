@@ -48,8 +48,9 @@ class DeregisterHandler
             throw new InvalidArgumentException('SERVER_NOT_FOUND');
         }
 
+        /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            "DELETE FROM servers WHERE id = :id RETURNING id",
+            'DELETE FROM servers WHERE id = :id RETURNING id',
             ['id' => $serverId],
         );
 
@@ -83,7 +84,9 @@ class DeregisterHandler
             }
             /** @var array<string, mixed> $header */
             $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-            return is_string($header['kid'] ?? null) ? $header['kid'] : null;
+            /** @var string|null */
+            $kid = $header['kid'] ?? null;
+            return is_string($kid) ? $kid : null;
         } catch (\JsonException) {
             return null;
         }
