@@ -1,20 +1,22 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * Apply every SQL migration in `migrations/` against the hub database.
  *
- * Migrations are sorted lexicographically and executed top-to-bottom.
- * Each `.sql` file is split on semicolons; empty statements are
- * skipped. Errors are reported but do not abort the run — they're
- * usually idempotent re-applies (e.g. "table already exists").
+ * Wraps {@see \Phlex\Hub\Common\Database\MigrationRunner}. The runner
+ * tracks applied migrations in a `migrations` table and is therefore
+ * idempotent: re-running this script after a successful apply is a
+ * no-op. Set the `HUB_DB_*` environment variables to point at the
+ * target database before invoking.
  *
  * @package Phlex\Hub
  * @since 0.1.0
  */
 
+declare(strict_types=1);
+
 use Phlex\Hub\Common\Database\ConnectionPool;
+use Phlex\Hub\Common\Database\MigrationRunner;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -22,35 +24,29 @@ $configPath = __DIR__ . '/../config/database.php';
 ConnectionPool::init($configPath);
 
 $db = ConnectionPool::getConnection('mysql');
-
 $migrationsDir = __DIR__ . '/../migrations';
-$files = glob($migrationsDir . '/*.sql') ?: [];
-sort($files);
 
+$runner = new MigrationRunner($db, $migrationsDir);
+
+$files = $runner->discoverFiles();
 if ($files === []) {
-    echo "No SQL migrations found in {$migrationsDir}. (Real migrations land in B.6.)\n";
+    echo "No SQL migrations found in {$migrationsDir}.\n";
     exit(0);
 }
 
-foreach ($files as $file) {
-    $sql = file_get_contents($file);
-    if ($sql === false) {
-        echo "Failed to read migration: " . basename($file) . "\n";
-        continue;
-    }
-    echo "Running migration: " . basename($file) . "\n";
-
-    $statements = array_filter(array_map('trim', explode(';', $sql)));
-    foreach ($statements as $statement) {
-        if ($statement === '' || str_starts_with($statement, '--')) {
-            continue;
-        }
-        try {
-            $db->query($statement);
-        } catch (\Throwable $e) {
-            echo "  Warning: " . $e->getMessage() . "\n";
-        }
-    }
+try {
+    $ran = $runner->run();
+} catch (\Throwable $e) {
+    fwrite(STDERR, "Migration failed: " . $e->getMessage() . "\n");
+    exit(1);
 }
 
-echo "Migrations complete.\n";
+if ($ran === []) {
+    echo "All migrations already applied. Nothing to do.\n";
+    exit(0);
+}
+
+foreach ($ran as $filename) {
+    echo "Applied: {$filename}\n";
+}
+echo "Migrations complete (" . count($ran) . " applied).\n";
