@@ -17,7 +17,7 @@ namespace Phlex\Hub\Hub;
  * @package Phlex\Hub\Hub
  * @since 0.3.0
  */
-final class EnrollmentJwtService
+class EnrollmentJwtService
 {
     private const ALGORITHM = 'EdDSA';
     private const ISSUER = 'phlex-hub';

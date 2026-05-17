@@ -15,6 +15,8 @@ use Phlex\Hub\Http\Controllers\ServerClaimController;
 use Phlex\Hub\Http\Controllers\ServerController;
 use Phlex\Hub\Http\Controllers\ServerListController;
 use Phlex\Hub\Http\Controllers\ServerManageController;
+use Phlex\Hub\Http\Controllers\RelayController;
+use Phlex\Hub\Http\Controllers\SubdomainController;
 use Phlex\Hub\Http\Middleware\AuthMiddleware;
 use Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
@@ -191,6 +193,8 @@ final class Application
         $serverClaimController = $this->resolveServerClaimController();
         $serverController = $this->resolveServerController();
         $hubJwksController = $this->resolveHubJwksController();
+        $relayController = $this->resolveRelayController();
+        $subdomainController = $this->resolveSubdomainController();
 
         // JWKS — public.
         $this->router->get('/.well-known/jwks.json', static fn (Request $req) => $hubJwksController($req));
@@ -240,6 +244,35 @@ final class Application
         };
 
         $this->router->group('/api/v1', $serverGroup, [$enrollmentJwt, $hubProtocol]);
+
+        // Relay tunnel endpoint — server-initiated WSS (Phase C.6).
+        $this->router->post('/servers/{id}/relay', static function (
+            Request $req,
+            array $params,
+        ) use ($relayController): Response {
+            /** @var array<string, string> $typedParams */
+            $typedParams = $params;
+            return $relayController->handle($req, $typedParams);
+        });
+
+        // Subdomain allocation and revocation (Phase C.8).
+        $this->router->post('/servers/{id}/subdomain', static function (
+            Request $req,
+            array $params,
+        ) use ($subdomainController): Response {
+            /** @var array<string, string> $typedParams */
+            $typedParams = $params;
+            return $subdomainController->allocate($req, $typedParams);
+        });
+
+        $this->router->delete('/servers/{id}/subdomain', static function (
+            Request $req,
+            array $params,
+        ) use ($subdomainController): Response {
+            /** @var array<string, string> $typedParams */
+            $typedParams = $params;
+            return $subdomainController->revoke($req, $typedParams);
+        });
     }
 
     private function resolveEnrollmentJwtMiddleware(): EnrollmentJwtMiddleware
@@ -274,6 +307,24 @@ final class Application
         $controller = $this->container->get(HubJwksController::class);
         if (!$controller instanceof HubJwksController) {
             throw new \RuntimeException('Container returned an unexpected HubJwksController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveRelayController(): RelayController
+    {
+        $controller = $this->container->get(RelayController::class);
+        if (!$controller instanceof RelayController) {
+            throw new \RuntimeException('Container returned an unexpected RelayController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveSubdomainController(): SubdomainController
+    {
+        $controller = $this->container->get(SubdomainController::class);
+        if (!$controller instanceof SubdomainController) {
+            throw new \RuntimeException('Container returned an unexpected SubdomainController instance');
         }
         return $controller;
     }
