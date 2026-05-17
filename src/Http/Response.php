@@ -24,6 +24,14 @@ class Response
     /** @var array<string, string> */
     public array $headers = [];
 
+    /**
+     * Cookies queued for emission as `Set-Cookie` headers when this
+     * response is converted with {@see self::toWorkermanResponse()}.
+     *
+     * @var list<array{name:string,value:string,max_age:int,path:string,http_only:bool,secure:bool,same_site:string}>
+     */
+    public array $cookies = [];
+
     public string $body = '';
 
     /**
@@ -113,12 +121,69 @@ class Response
     }
 
     /**
+     * Queue a cookie to be emitted on this response.
+     *
+     * @param string $name     Cookie name.
+     * @param string $value    Cookie value (empty string + max_age=0 to clear).
+     * @param int    $maxAge   Lifetime in seconds.
+     * @param string $path     Path scope. Default "/".
+     * @param bool   $httpOnly HttpOnly flag. Default true.
+     * @param bool   $secure   Secure flag. Default false in dev.
+     * @param string $sameSite SameSite policy ("Strict"/"Lax"/"None"). Default "Lax".
+     *
+     * @return self
+     */
+    public function cookie(
+        string $name,
+        string $value,
+        int $maxAge = 0,
+        string $path = '/',
+        bool $httpOnly = true,
+        bool $secure = false,
+        string $sameSite = 'Lax',
+    ): self {
+        $this->cookies[] = [
+            'name'      => $name,
+            'value'     => $value,
+            'max_age'   => $maxAge,
+            'path'      => $path,
+            'http_only' => $httpOnly,
+            'secure'    => $secure,
+            'same_site' => $sameSite,
+        ];
+        return $this;
+    }
+
+    /**
+     * 302-redirect shortcut.
+     */
+    public function redirect(string $url, int $statusCode = 302): self
+    {
+        $this->statusCode = $statusCode;
+        $this->headers['Location'] = $url;
+        return $this;
+    }
+
+    /**
      * Convert this builder into a Workerman response object.
      *
      * @return WorkermanResponse
      */
     public function toWorkermanResponse(): WorkermanResponse
     {
-        return new WorkermanResponse($this->statusCode, $this->headers, $this->body);
+        $response = new WorkermanResponse($this->statusCode, $this->headers, $this->body);
+        foreach ($this->cookies as $cookie) {
+            $response->cookie(
+                $cookie['name'],
+                $cookie['value'],
+                $cookie['max_age'],
+                $cookie['path'],
+                '',
+                $cookie['secure'],
+                $cookie['http_only'],
+                $cookie['same_site'],
+            );
+        }
+        return $response;
     }
 }

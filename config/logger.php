@@ -32,5 +32,13 @@ return [
             'max_files' => 30,
             'level' => 'info',
         ],
+        // Audit/security events: signup, login, logout, permission denied.
+        // Wired in B.7 alongside the AuthManager.
+        'audit' => [
+            'type' => 'rotating_file',
+            'path' => __DIR__ . '/../.logs/audit.log',
+            'max_files' => 30,
+            'level' => 'info',
+        ],
     ],
 ];

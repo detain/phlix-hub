@@ -26,6 +26,7 @@ final class LogChannels
     public const AUTH = 'auth';
     public const HUB = 'hub';
     public const RELAY = 'relay';
+    public const AUDIT = 'audit';
 
     /**
      * Prevent instantiation — this class is a static constant holder only.

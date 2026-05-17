@@ -25,6 +25,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 $configDir = __DIR__ . '/../config';
 $dbConfigPath = $configDir . '/database.php';
 $loggerConfigPath = $configDir . '/logger.php';
+$authConfigPath = $configDir . '/auth.php';
 
 LoggerFactory::init($loggerConfigPath);
 // We deliberately do NOT call ConnectionPool::init() at bootstrap so the
@@ -37,6 +38,7 @@ ConnectionPool::class; // ensure autoload pulls the class.
 $serverConfig = include $configDir . '/server.php';
 $serverConfig['db_config_path'] = $dbConfigPath;
 $serverConfig['logger_config_path'] = $loggerConfigPath;
+$serverConfig['auth_config_path'] = $authConfigPath;
 
 $container = ContainerFactory::create($serverConfig);
 $app = new Application($container, $serverConfig);
