@@ -18,6 +18,7 @@ use Phlex\Hub\Http\Controllers\ServerController;
 use Phlex\Hub\Http\Controllers\ServerListController;
 use Phlex\Hub\Http\Controllers\ServerManageController;
 use Phlex\Hub\Http\Controllers\RelayController;
+use Phlex\Hub\Http\Controllers\RequestController;
 use Phlex\Hub\Http\Controllers\SubdomainController;
 use Phlex\Hub\Http\Middleware\AuthMiddleware;
 use Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware;
@@ -135,6 +136,62 @@ final class Application
 
         // Invite link routes (Phase D.5).
         $this->registerInviteLinkRoutes();
+
+        // Media request routes (Phase K.3, moved to hub).
+        $this->registerRequestRoutes();
+    }
+
+    /**
+     * Register the K.3 media-request routes — both the user surface under
+     * `/api/v1/me/requests` and the admin queue under
+     * `/api/v1/admin/requests`. Also wires the SSR pages at `/requests`
+     * (user) and `/admin/requests` (admin queue).
+     */
+    private function registerRequestRoutes(): void
+    {
+        $authMiddleware = $this->resolveAuthMiddleware();
+        $requestController = $this->resolveRequestController();
+        $pages = $this->resolvePageController();
+
+        // SSR pages.
+        $this->router->group('/requests', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
+        $this->router->group('/admin/requests', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
+        // User-scoped JSON API.
+        $this->router->group('/api/v1/me/requests', static function (Router $r) use ($requestController): void {
+            $r->post('', static fn (Request $req, array $params): Response =>
+                $requestController->createRequest($req, $params));
+            $r->get('', static fn (Request $req, array $params): Response =>
+                $requestController->listMyRequests($req, $params));
+            $r->get('/{id}', static fn (Request $req, array $params): Response =>
+                $requestController->getMyRequest($req, $params));
+            $r->delete('/{id}', static fn (Request $req, array $params): Response =>
+                $requestController->deleteMyRequest($req, $params));
+        }, [$authMiddleware]);
+
+        // Admin queue + actions.
+        $this->router->group('/api/v1/admin/requests', static function (Router $r) use ($requestController): void {
+            $r->get('', static fn (Request $req, array $params): Response =>
+                $requestController->listAdminRequests($req, $params));
+            $r->post('/{id}/approve', static fn (Request $req, array $params): Response =>
+                $requestController->approveRequest($req, $params));
+            $r->post('/{id}/deny', static fn (Request $req, array $params): Response =>
+                $requestController->denyRequest($req, $params));
+        }, [$authMiddleware]);
+    }
+
+    private function resolveRequestController(): RequestController
+    {
+        $controller = $this->container->get(RequestController::class);
+        if (!$controller instanceof RequestController) {
+            throw new \RuntimeException('Container returned an unexpected RequestController instance');
+        }
+        return $controller;
     }
 
     private function resolvePageController(): PageController

@@ -29,11 +29,15 @@ use Phlex\Hub\Http\Controllers\HubJwksController;
 use Phlex\Hub\Http\Controllers\InviteLinkController;
 use Phlex\Hub\Http\Controllers\LibraryShareController;
 use Phlex\Hub\Http\Controllers\RelayController;
+use Phlex\Hub\Http\Controllers\RequestController;
 use Phlex\Hub\Http\Controllers\ServerClaimController;
 use Phlex\Hub\Http\Controllers\ServerController;
 use Phlex\Hub\Http\Controllers\SubdomainController;
 use Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlex\Hub\Requests\RequestManager;
+use Phlex\Hub\Requests\RequestNotification;
+use Phlex\Shared\Arr\ArrClientFactory;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -260,6 +264,38 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): InviteLinkController {
                 return new InviteLinkController($handler);
             })->parameter('handler', get(InviteLinkHandler::class)),
+
+            ArrClientFactory::class => factory(static function () use ($appConfig): ArrClientFactory {
+                /** @var array{sonarr?: array{url?: string, api_key?: string, enabled?: bool}, radarr?: array{url?: string, api_key?: string, enabled?: bool}} $arrConfig */
+                $arrConfig = is_array($appConfig['arr'] ?? null) ? $appConfig['arr'] : [];
+                return new ArrClientFactory($arrConfig);
+            }),
+
+            RequestManager::class => factory(static function (
+                Connection $db,
+                ArrClientFactory $arrClientFactory,
+            ): RequestManager {
+                return new RequestManager(
+                    $db,
+                    $arrClientFactory,
+                    LoggerFactory::get(LogChannels::HUB),
+                );
+            })->parameter('db', get(Connection::class))
+                ->parameter('arrClientFactory', get(ArrClientFactory::class)),
+
+            RequestNotification::class => factory(static function (): RequestNotification {
+                return new RequestNotification(LoggerFactory::get(LogChannels::HUB));
+            }),
+
+            RequestController::class => factory(static function (
+                RequestManager $manager,
+                RequestNotification $notification,
+                UserRepository $users,
+            ): RequestController {
+                return new RequestController($manager, $notification, $users);
+            })->parameter('manager', get(RequestManager::class))
+                ->parameter('notification', get(RequestNotification::class))
+                ->parameter('users', get(UserRepository::class)),
         ]);
     }
 

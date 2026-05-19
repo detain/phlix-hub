@@ -42,11 +42,13 @@ final class PageController
     public function __invoke(Request $request): Response
     {
         return match (true) {
-            $request->path === '/signup'       => $this->signup($request),
-            $request->path === '/login'        => $this->login($request),
-            $request->path === '/my-servers'   => $this->myServers($request),
-            $request->path === '/claim-server' => $this->claimServer($request),
-            $request->path === '/'             => $this->home($request),
+            $request->path === '/signup'         => $this->signup($request),
+            $request->path === '/login'          => $this->login($request),
+            $request->path === '/my-servers'     => $this->myServers($request),
+            $request->path === '/claim-server'   => $this->claimServer($request),
+            $request->path === '/requests'       => $this->requests($request),
+            $request->path === '/admin/requests' => $this->adminRequests($request),
+            $request->path === '/'               => $this->home($request),
             default => (new Response())->status(404)->html('<h1>Not Found</h1>'),
         };
     }
@@ -117,6 +119,28 @@ final class PageController
     public function claimServer(Request $request): Response
     {
         $html = $this->renderer->render('home/claim-server.tpl', []);
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /requests` — user "Request media" SSR page (K.3, moved to hub).
+     */
+    public function requests(Request $request): Response
+    {
+        $html = $this->renderer->render('home/requests.tpl', [
+            'is_authenticated' => $request->userId !== null,
+        ]);
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /admin/requests` — admin request queue SSR page (K.3, hub).
+     */
+    public function adminRequests(Request $request): Response
+    {
+        $html = $this->renderer->render('home/admin-requests.tpl', [
+            'is_authenticated' => $request->userId !== null,
+        ]);
         return (new Response())->html($html);
     }
 }
