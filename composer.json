@@ -6,7 +6,7 @@
     "require": {
         "php": "^8.3",
         "crell/tukio": "^2.0",
-        "detain/phlex-shared": "^0.2",
+        "detain/phlex-shared": "^0.4.0",
         "monolog/monolog": "^3.0",
         "php-di/php-di": "^7.0",
         "psr/container": "^2.0",
