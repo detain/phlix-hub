@@ -25,6 +25,7 @@ use Phlex\Hub\Common\Container\ServiceProviderInterface;
 use Phlex\Hub\Common\Logger\LogChannels;
 use Phlex\Hub\Common\Logger\LoggerFactory;
 use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlex\Hub\Common\Logger\AuditLogger;
 use Phlex\Hub\Http\Controllers\HubJwksController;
 use Phlex\Hub\Http\Controllers\InviteLinkController;
 use Phlex\Hub\Http\Controllers\LibraryShareController;
@@ -90,15 +91,18 @@ final class HubServicesProvider implements ServiceProviderInterface
             ClaimRequestHandler::class => factory(static function (
                 Connection $db,
                 Ed25519KeyManager $keyManager,
+                AuditLogger $audit,
             ) use ($hubBaseUrl): ClaimRequestHandler {
                 return new ClaimRequestHandler(
                     $db,
                     $keyManager,
                     LoggerFactory::get(LogChannels::HUB),
+                    $audit,
                     $hubBaseUrl,
                 );
             })->parameter('db', get(Connection::class))
-                ->parameter('keyManager', get(Ed25519KeyManager::class)),
+                ->parameter('keyManager', get(Ed25519KeyManager::class))
+                ->parameter('audit', get(AuditLogger::class)),
 
             HeartbeatHandler::class => factory(static function (
                 Connection $db,
