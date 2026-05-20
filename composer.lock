@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "eab200511039e6e616b3fd988d7b71ca",
+    "content-hash": "b030d94ca2cb314f7cff092cc6dc4c7b",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -284,16 +284,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.4.0",
+            "version": "v0.4.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "1e948370f703b84a54f93162d48fe7af38c159d9"
+                "reference": "00d2f0b3032414c0fe5363afa794ba09e8ed6f76"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/1e948370f703b84a54f93162d48fe7af38c159d9",
-                "reference": "1e948370f703b84a54f93162d48fe7af38c159d9",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/00d2f0b3032414c0fe5363afa794ba09e8ed6f76",
+                "reference": "00d2f0b3032414c0fe5363afa794ba09e8ed6f76",
                 "shasum": ""
             },
             "require": {
@@ -339,10 +339,10 @@
             ],
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O.",
             "support": {
-                "source": "https://github.com/detain/phlix-shared/tree/v0.4.0",
+                "source": "https://github.com/detain/phlix-shared/tree/v0.4.1",
                 "issues": "https://github.com/detain/phlix-shared/issues"
             },
-            "time": "2026-05-19T02:21:46+00:00"
+            "time": "2026-05-20T04:51:56+00:00"
         },
         {
             "name": "fig/event-dispatcher-util",
@@ -2338,11 +2338,11 @@
         },
         {
             "name": "phpstan/phpstan",
-            "version": "2.1.54",
+            "version": "2.1.55",
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/phpstan/phpstan/zipball/8be50c3992107dc837b17da4d140fbbdf9a5c5bd",
-                "reference": "8be50c3992107dc837b17da4d140fbbdf9a5c5bd",
+                "url": "https://api.github.com/repos/phpstan/phpstan/zipball/9eaac3826ed5e9b8427350a43cac825eeca3f566",
+                "reference": "9eaac3826ed5e9b8427350a43cac825eeca3f566",
                 "shasum": ""
             },
             "require": {
@@ -2387,7 +2387,7 @@
                     "type": "github"
                 }
             ],
-            "time": "2026-04-29T13:31:09+00:00"
+            "time": "2026-05-18T11:57:34+00:00"
         },
         {
             "name": "phpunit/php-code-coverage",
@@ -4833,16 +4833,16 @@
         },
         {
             "name": "webmozart/assert",
-            "version": "2.3.0",
+            "version": "2.4.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/webmozarts/assert.git",
-                "reference": "eb0d790f735ba6cff25c683a85a1da0eadeff9e4"
+                "reference": "9007ea6f45ecf352a9422b36644e4bfc039b9155"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/webmozarts/assert/zipball/eb0d790f735ba6cff25c683a85a1da0eadeff9e4",
-                "reference": "eb0d790f735ba6cff25c683a85a1da0eadeff9e4",
+                "url": "https://api.github.com/repos/webmozarts/assert/zipball/9007ea6f45ecf352a9422b36644e4bfc039b9155",
+                "reference": "9007ea6f45ecf352a9422b36644e4bfc039b9155",
                 "shasum": ""
             },
             "require": {
@@ -4858,7 +4858,11 @@
             },
             "type": "library",
             "extra": {
+                "psalm": {
+                    "pluginClass": "Webmozart\\Assert\\PsalmPlugin"
+                },
                 "branch-alias": {
+                    "dev-master": "2.0-dev",
                     "dev-feature/2-0": "2.0-dev"
                 }
             },
@@ -4889,9 +4893,9 @@
             ],
             "support": {
                 "issues": "https://github.com/webmozarts/assert/issues",
-                "source": "https://github.com/webmozarts/assert/tree/2.3.0"
+                "source": "https://github.com/webmozarts/assert/tree/2.4.0"
             },
-            "time": "2026-04-11T10:33:05+00:00"
+            "time": "2026-05-20T13:07:01+00:00"
         }
     ],
     "aliases": [],
