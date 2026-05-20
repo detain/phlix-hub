@@ -14,7 +14,7 @@ use Workerman\MySQL\Connection;
  * Exercises file discovery, tracking-table SQL emission, idempotency
  * gating, and statement splitting without touching a real database.
  * The MySQL connection is fully mocked; the integration test in
- * `tests/integration/Migrations/` covers the live-DB scenarios.
+ * `tests/Integration/Migrations/` covers the live-DB scenarios.
  *
  * @package Phlix\Hub\Tests\Common\Database
  * @since 0.2.0

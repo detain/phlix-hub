@@ -343,7 +343,7 @@ is dropped but the schema persists.
 ## Test environment
 
 The integration test
-(`tests/integration/Migrations/MigrationRunnerIntegrationTest.php`)
+(`tests/Integration/Migrations/MigrationRunnerIntegrationTest.php`)
 applies all five migrations against a real MySQL test database
 configured via `HUB_TEST_DB_*` environment variables and asserts:
 
