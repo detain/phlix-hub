@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Auth;
+namespace Phlix\Hub\Tests\unit\Auth;
 
-use Phlex\Hub\Auth\UserRepository;
+use Phlix\Hub\Auth\UserRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see UserRepository}.
  *
- * @package Phlex\Hub\Tests\unit\Auth
+ * @package Phlix\Hub\Tests\unit\Auth
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Auth\UserRepository
+ * @covers \Phlix\Hub\Auth\UserRepository
  */
 final class UserRepositoryTest extends TestCase
 {

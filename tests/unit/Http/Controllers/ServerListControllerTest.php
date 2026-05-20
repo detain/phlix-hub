@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Controllers;
+namespace Phlix\Hub\Tests\unit\Http\Controllers;
 
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Controllers\ServerListController;
-use Phlex\Hub\Http\Request;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Controllers\ServerListController;
+use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
-use Phlex\Shared\Hub\ServerInfoDto;
+use Phlix\Shared\Hub\ServerInfoDto;
 
 /**
  * Unit tests for {@see ServerListController}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Controllers
+ * @package Phlix\Hub\Tests\unit\Http\Controllers
  * @since 0.4.0
  *
- * @covers \Phlex\Hub\Http\Controllers\ServerListController
+ * @covers \Phlix\Hub\Http\Controllers\ServerListController
  */
 final class ServerListControllerTest extends TestCase
 {

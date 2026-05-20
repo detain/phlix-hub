@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Controllers;
+namespace Phlix\Hub\Tests\unit\Http\Controllers;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\InviteLink;
-use Phlex\Hub\Hub\InviteLinkHandler;
-use Phlex\Hub\Http\Controllers\InviteLinkController;
-use Phlex\Hub\Http\Request;
+use Phlix\Hub\Hub\InviteLink;
+use Phlix\Hub\Hub\InviteLinkHandler;
+use Phlix\Hub\Http\Controllers\InviteLinkController;
+use Phlix\Hub\Http\Request;
 
 /**
  * Unit tests for {@see InviteLinkController}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Controllers
+ * @package Phlix\Hub\Tests\unit\Http\Controllers
  * @since 0.6.0
  *
- * @covers \Phlex\Hub\Http\Controllers\InviteLinkController
+ * @covers \Phlix\Hub\Http\Controllers\InviteLinkController
  */
 final class InviteLinkControllerTest extends TestCase
 {

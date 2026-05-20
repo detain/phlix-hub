@@ -3,22 +3,22 @@
 declare(strict_types=1);
 
 /**
- * Phlex Hub HTTP entry point.
+ * Phlix Hub HTTP entry point.
  *
  * Loads composer autoload, primes the static logger + DB pools, builds
- * the PSR-11 container, then hands off to {@see \Phlex\Hub\Application::boot()}
+ * the PSR-11 container, then hands off to {@see \Phlix\Hub\Application::boot()}
  * which starts a Workerman HTTP worker.
  *
  * Run with `php public/index.php start` during development.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.1.0
  */
 
-use Phlex\Hub\Application;
-use Phlex\Hub\Common\Container\ContainerFactory;
-use Phlex\Hub\Common\Database\ConnectionPool;
-use Phlex\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Application;
+use Phlix\Hub\Common\Container\ContainerFactory;
+use Phlix\Hub\Common\Database\ConnectionPool;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Migrations;
+namespace Phlix\Hub\Tests\unit\Migrations;
 
 use PHPUnit\Framework\TestCase;
 
@@ -11,7 +11,7 @@ use PHPUnit\Framework\TestCase;
  * must start with a `-- migration: NNN_name` header, must be non-empty,
  * must declare InnoDB + utf8mb4, and must have balanced parentheses.
  *
- * @package Phlex\Hub\Tests\unit\Migrations
+ * @package Phlix\Hub\Tests\unit\Migrations
  * @since 0.2.0
  */
 final class MigrationFileTest extends TestCase

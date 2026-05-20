@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\integration\Hub;
+namespace Phlix\Hub\Tests\integration\Hub;
 
-use Phlex\Hub\Auth\AuthManager;
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Database\MigrationRunner;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Controllers\ServerListController;
-use Phlex\Hub\Http\Controllers\ServerManageController;
-use Phlex\Hub\Http\Request;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Database\MigrationRunner;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Controllers\ServerListController;
+use Phlix\Hub\Http\Controllers\ServerManageController;
+use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -24,12 +24,12 @@ use Workerman\MySQL\Connection;
  *
  * Skipped when `HUB_TEST_DB_*` env vars are not set.
  *
- * @package Phlex\Hub\Tests\integration\Hub
+ * @package Phlix\Hub\Tests\integration\Hub
  * @since 0.4.0
  *
- * @covers \Phlex\Hub\Http\Controllers\ServerListController
- * @covers \Phlex\Hub\Http\Controllers\ServerManageController
- * @covers \Phlex\Hub\Hub\ServerInfoHandler
+ * @covers \Phlix\Hub\Http\Controllers\ServerListController
+ * @covers \Phlix\Hub\Http\Controllers\ServerManageController
+ * @covers \Phlix\Hub\Hub\ServerInfoHandler
  *
  * @group integration
  */

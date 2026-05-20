@@ -1,13 +1,13 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Claim a Server — Phlex Hub{/block}
+{block name="title"}Claim a Server — Phlix Hub{/block}
 
 {block name="content"}
 <div class="claim-server">
     <h1>Claim a Server</h1>
     <p class="claim-description">
         To claim a server, run <code>php scripts/pair-with-hub.php</code> on your
-        Phlex server. It will display a claim code like <code>ABCD-1234</code>.
+        Phlix server. It will display a claim code like <code>ABCD-1234</code>.
         Enter that code below to attach the server to your account.
     </p>
     <form id="claim-form" method="post" action="/api/v1/server-claims/claim">

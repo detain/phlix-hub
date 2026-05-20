@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\Unit\Hub;
+namespace Phlix\Hub\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\EnrollmentJwtService;
-use Phlex\Hub\Hub\RelayServerHandler;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Hub\RelayServerHandler;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 
 class RelayServerHandlerTest extends TestCase
 {
@@ -16,7 +16,7 @@ class RelayServerHandlerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-relay-handler-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-relay-handler-test-' . uniqid();
         mkdir($this->tmpDir, 0755, true);
     }
 
@@ -104,7 +104,7 @@ class RelayServerHandlerTest extends TestCase
     {
         $closeCallArgs = [];
 
-        $sessionManager = new class ($closeCallArgs) extends \Phlex\Hub\Hub\RelaySessionManager {
+        $sessionManager = new class ($closeCallArgs) extends \Phlix\Hub\Hub\RelaySessionManager {
             /** @var array<string, string> */
             private array $closeArgsCapture;
             public function __construct(array &$capture) {
@@ -133,7 +133,7 @@ class RelayServerHandlerTest extends TestCase
     {
         $closeCallArgs = [];
 
-        $sessionManager = new class ($closeCallArgs) extends \Phlex\Hub\Hub\RelaySessionManager {
+        $sessionManager = new class ($closeCallArgs) extends \Phlix\Hub\Hub\RelaySessionManager {
             /** @var array<string, string> */
             private array $closeArgsCapture;
             public function __construct(array &$capture) {
@@ -158,16 +158,16 @@ class RelayServerHandlerTest extends TestCase
         $this->assertSame('network_error', $closeCallArgs[0]['reason']);
     }
 
-    private function createStubSessionManager(): \Phlex\Hub\Hub\RelaySessionManager
+    private function createStubSessionManager(): \Phlix\Hub\Hub\RelaySessionManager
     {
         $db = $this->createMock(\Workerman\MySQL\Connection::class);
-        return new \Phlex\Hub\Hub\RelaySessionManager($db, new StructuredLogger('relay', []));
+        return new \Phlix\Hub\Hub\RelaySessionManager($db, new StructuredLogger('relay', []));
     }
 
     private function createStubJwtService(): EnrollmentJwtService
     {
         $keyPath = $this->tmpDir . '/key.pem';
-        $keyManager = new \Phlex\Hub\Hub\Ed25519KeyManager($keyPath);
+        $keyManager = new \Phlix\Hub\Hub\Ed25519KeyManager($keyPath);
         return new EnrollmentJwtService($keyManager, 'https://hub.example.com');
     }
 }

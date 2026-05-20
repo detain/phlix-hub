@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Logger;
+namespace Phlix\Hub\Common\Logger;
 
 use Monolog\Handler\HandlerInterface;
 use Monolog\Handler\RotatingFileHandler;
@@ -17,9 +17,9 @@ use Monolog\Processor\PsrLogMessageProcessor;
  * Wraps a {@see Logger} with channel-aware configuration. Each instance
  * is bound to one log channel and writes to the handlers configured in
  * `config/logger.php`. The class is intentionally similar to the
- * `phlex-server` version so behaviour matches across the two repos.
+ * `phlix-server` version so behaviour matches across the two repos.
  *
- * @package Phlex\Hub\Common\Logger
+ * @package Phlix\Hub\Common\Logger
  * @since 0.1.0
  */
 class StructuredLogger

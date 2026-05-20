@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Container;
+namespace Phlix\Hub\Common\Container;
 
 use DI\ContainerBuilder;
 
@@ -16,7 +16,7 @@ use DI\ContainerBuilder;
  * register() call receives the builder, and the provider mutates it by
  * adding definitions.
  *
- * @package Phlex\Hub\Common\Container
+ * @package Phlix\Hub\Common\Container
  * @since 0.1.0
  */
 interface ServiceProviderInterface

@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
-use Phlex\Hub\Requests\RequestManager;
-use Phlex\Hub\Requests\RequestNotification;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
+use Phlix\Hub\Requests\RequestManager;
+use Phlix\Hub\Requests\RequestNotification;
 
 /**
  * REST API for the K.3 Jellyseerr-class request UI on the hub.
  *
- * User endpoints (mounted behind {@see \Phlex\Hub\Http\Middleware\AuthMiddleware}):
+ * User endpoints (mounted behind {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}):
  *  - `POST   /api/v1/me/requests`     {@see self::createRequest()}
  *  - `GET    /api/v1/me/requests`     {@see self::listMyRequests()}
  *  - `GET    /api/v1/me/requests/{id}` {@see self::getMyRequest()}
@@ -25,7 +25,7 @@ use Phlex\Hub\Requests\RequestNotification;
  *  - `POST   /api/v1/admin/requests/{id}/approve` {@see self::approveRequest()}
  *  - `POST   /api/v1/admin/requests/{id}/deny`    {@see self::denyRequest()}
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.6.0
  */
 final class RequestController

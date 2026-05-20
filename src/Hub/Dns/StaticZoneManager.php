@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub\Dns;
+namespace Phlix\Hub\Hub\Dns;
 
 /**
  * Static zone file writer for DNS management.
@@ -11,7 +11,7 @@ namespace Phlex\Hub\Hub\Dns;
  * This is a pluggable interface - Cloudflare/Route53 implementations can
  * be added later without changing the calling code.
  *
- * @package Phlex\Hub\Hub\Dns
+ * @package Phlix\Hub\Hub\Dns
  * @since 0.12.0
  */
 class StaticZoneManager
@@ -27,8 +27,8 @@ class StaticZoneManager
     /**
      * Add a DNS record to a zone file.
      *
-     * @param string $zone  Zone name (e.g. "phlex.media").
-     * @param string $name   Record name (e.g. "abc123" for abc123.phlex.media).
+     * @param string $zone  Zone name (e.g. "phlix.media").
+     * @param string $name   Record name (e.g. "abc123" for abc123.phlix.media).
      * @param string $type   Record type (A, AAAA, CNAME, TXT, etc.).
      * @param string $value Record value.
      *

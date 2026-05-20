@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Database;
+namespace Phlix\Hub\Common\Database;
 
 use Workerman\MySQL\Connection;
 
@@ -14,7 +14,7 @@ use Workerman\MySQL\Connection;
  * via {@see ConnectionPool::getConnection()}. The pool memoises each
  * named connection inside the worker process.
  *
- * @package Phlex\Hub\Common\Database
+ * @package Phlix\Hub\Common\Database
  * @since 0.1.0
  */
 class ConnectionPool

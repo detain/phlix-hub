@@ -2,29 +2,29 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Auth;
+namespace Phlix\Hub\Auth;
 
 use InvalidArgumentException;
-use Phlex\Shared\Auth\JwtClaims;
+use Phlix\Shared\Auth\JwtClaims;
 use Throwable;
 
 /**
- * HS256 JWT token handler for the Phlex Hub.
+ * HS256 JWT token handler for the Phlix Hub.
  *
- * Differences from `phlex-server`'s {@see \Phlex\Auth\JwtHandler}:
+ * Differences from `phlix-server`'s {@see \Phlix\Auth\JwtHandler}:
  *
- *  - Issuer (`iss`) defaults to {@see JwtClaims::ISS_PHLEX_HUB} ("phlex-hub"),
- *    not "phlex". Hub-minted tokens never collide with server-minted ones.
+ *  - Issuer (`iss`) defaults to {@see JwtClaims::ISS_PHLIX_HUB} ("phlix-hub"),
+ *    not "phlix". Hub-minted tokens never collide with server-minted ones.
  *  - Audience (`aud`) defaults to {@see JwtClaims::AUD_HUB} ("hub"); the
  *    server expects {@see JwtClaims::AUD_SERVER}.
- *  - {@see self::validateToken()} returns a `?\Phlex\Shared\Auth\JwtClaims`
+ *  - {@see self::validateToken()} returns a `?\Phlix\Shared\Auth\JwtClaims`
  *    instance, not an `array`. This is the proof-of-design for the
- *    cross-repo DTO from `phlex-shared` v0.2.0.
+ *    cross-repo DTO from `phlix-shared` v0.2.0.
  *
  * Symmetric HMAC-SHA256 signing only. No support for RS256/ES256 in B.7 —
  * that's a Phase L hardening task.
  *
- * @package Phlex\Hub\Auth
+ * @package Phlix\Hub\Auth
  * @since 0.2.0
  */
 final class JwtHandler
@@ -35,7 +35,7 @@ final class JwtHandler
     private string $secretKey;
 
     /**
-     * Issuer string stamped into every token. Defaults to "phlex-hub".
+     * Issuer string stamped into every token. Defaults to "phlix-hub".
      */
     private string $issuer;
 
@@ -58,7 +58,7 @@ final class JwtHandler
      * Build a JwtHandler.
      *
      * @param string $secretKey  HMAC secret (≥32 bytes for HS256).
-     * @param string $issuer     Issuer claim. Defaults to "phlex-hub".
+     * @param string $issuer     Issuer claim. Defaults to "phlix-hub".
      * @param string $audience   Audience claim. Defaults to "hub".
      * @param int    $accessTtl  Access TTL seconds (default 3600 = 1h).
      * @param int    $refreshTtl Refresh TTL seconds (default 604800 = 7d).
@@ -67,7 +67,7 @@ final class JwtHandler
      */
     public function __construct(
         string $secretKey,
-        string $issuer = JwtClaims::ISS_PHLEX_HUB,
+        string $issuer = JwtClaims::ISS_PHLIX_HUB,
         string $audience = JwtClaims::AUD_HUB,
         int $accessTtl = 3600,
         int $refreshTtl = 604800,

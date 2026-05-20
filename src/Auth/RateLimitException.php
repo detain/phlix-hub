@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Auth;
+namespace Phlix\Hub\Auth;
 
 use RuntimeException;
 
 /**
  * Thrown when a client exceeds the rate limit for authentication attempts.
  *
- * @package Phlex\Hub\Auth
+ * @package Phlix\Hub\Auth
  * @since 0.2.0
  */
 final class RateLimitException extends RuntimeException

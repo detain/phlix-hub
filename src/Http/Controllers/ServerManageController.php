@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 use Workerman\MySQL\Connection;
 
 /**
@@ -15,7 +15,7 @@ use Workerman\MySQL\Connection;
  * `DELETE /api/v1/me/servers/{id}` — remove a claimed server.
  * `GET  /api/v1/me/servers/{id}/access-info` — best URL for client access.
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.4.0
  */
 final class ServerManageController

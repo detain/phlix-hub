@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Hub\Ed25519KeyManager;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * Serves the hub's signing JWKS at GET /.well-known/jwks.json.
@@ -14,7 +14,7 @@ use Phlex\Hub\Http\Response;
  * This is the public endpoint servers use to fetch the hub's Ed25519
  * public key for validating enrollment JWTs.
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.3.0
  */
 final class HubJwksController

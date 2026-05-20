@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Compile-time-constant package version marker.
  *
  * Keep this in sync with the git tag and the CHANGELOG entry.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.1.0
  */
 final class Version

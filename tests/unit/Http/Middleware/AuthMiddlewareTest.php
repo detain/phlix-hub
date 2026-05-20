@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Middleware;
+namespace Phlix\Hub\Tests\unit\Http\Middleware;
 
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Http\Middleware\AuthMiddleware;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see AuthMiddleware}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Middleware
+ * @package Phlix\Hub\Tests\unit\Http\Middleware
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Http\Middleware\AuthMiddleware
+ * @covers \Phlix\Hub\Http\Middleware\AuthMiddleware
  */
 final class AuthMiddlewareTest extends TestCase
 {
@@ -83,7 +83,7 @@ final class AuthMiddlewareTest extends TestCase
     public function testExpiredTokenReturns401(): void
     {
         // Use a handler with negative TTL so the issued token is already expired.
-        $jwt = new JwtHandler(self::SECRET, 'phlex-hub', 'hub', -1, 1);
+        $jwt = new JwtHandler(self::SECRET, 'phlix-hub', 'hub', -1, 1);
         $token = $jwt->createAccessToken('u-7');
 
         // Validation handler is the same one (so it doesn't reject by iss/aud).

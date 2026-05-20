@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}My Servers — Phlex Hub{/block}
+{block name="title"}My Servers — Phlix Hub{/block}
 
 {block name="content"}
 <div class="my-servers">
@@ -22,7 +22,7 @@
                 <h2>No servers yet</h2>
                 <p>You haven't claimed any servers yet.</p>
                 <p>To get started, run <code>php scripts/pair-with-hub.php</code>
-                   on your Phlex server and enter the claim code below.</p>
+                   on your Phlix server and enter the claim code below.</p>
                 <a href="/claim-server" class="btn btn-primary">Claim a Server</a>
             </div>
         {else}

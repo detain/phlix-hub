@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Log in — Phlex Hub{/block}
+{block name="title"}Log in — Phlix Hub{/block}
 
 {block name="content"}
     <h2>Log in</h2>

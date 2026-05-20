@@ -12,14 +12,14 @@ declare(strict_types=1);
  *     php scripts/smoke-jwt-roundtrip.php
  *
  * This script is the post-condition smoke for Step B.7 — it proves the
- * cross-repo `Phlex\Shared\Auth\JwtClaims` wire actually works.
+ * cross-repo `Phlix\Shared\Auth\JwtClaims` wire actually works.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.2.0
  */
 
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Shared\Auth\JwtClaims;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Shared\Auth\JwtClaims;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -37,7 +37,7 @@ if (!$claims instanceof JwtClaims) {
 }
 
 $expected = [
-    'iss' => JwtClaims::ISS_PHLEX_HUB,
+    'iss' => JwtClaims::ISS_PHLIX_HUB,
     'aud' => JwtClaims::AUD_HUB,
     'sub' => $userId,
     'type' => JwtClaims::TYPE_ACCESS,

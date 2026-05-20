@@ -2,30 +2,30 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
-use Phlex\Hub\Common\Logger\LogChannels;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Health\HealthController;
-use Phlex\Hub\Http\Controllers\AuthController;
-use Phlex\Hub\Http\Controllers\HubJwksController;
-use Phlex\Hub\Http\Controllers\InviteLinkController;
-use Phlex\Hub\Http\Controllers\LibraryShareController;
-use Phlex\Hub\Http\Controllers\MeController;
-use Phlex\Hub\Http\Controllers\PageController;
-use Phlex\Hub\Http\Controllers\ServerClaimController;
-use Phlex\Hub\Http\Controllers\ServerController;
-use Phlex\Hub\Http\Controllers\ServerListController;
-use Phlex\Hub\Http\Controllers\ServerManageController;
-use Phlex\Hub\Http\Controllers\RelayController;
-use Phlex\Hub\Http\Controllers\RequestController;
-use Phlex\Hub\Http\Controllers\SubdomainController;
-use Phlex\Hub\Http\Middleware\AuthMiddleware;
-use Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware;
-use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
-use Phlex\Hub\Http\Router;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Health\HealthController;
+use Phlix\Hub\Http\Controllers\AuthController;
+use Phlix\Hub\Http\Controllers\HubJwksController;
+use Phlix\Hub\Http\Controllers\InviteLinkController;
+use Phlix\Hub\Http\Controllers\LibraryShareController;
+use Phlix\Hub\Http\Controllers\MeController;
+use Phlix\Hub\Http\Controllers\PageController;
+use Phlix\Hub\Http\Controllers\ServerClaimController;
+use Phlix\Hub\Http\Controllers\ServerController;
+use Phlix\Hub\Http\Controllers\ServerListController;
+use Phlix\Hub\Http\Controllers\ServerManageController;
+use Phlix\Hub\Http\Controllers\RelayController;
+use Phlix\Hub\Http\Controllers\RequestController;
+use Phlix\Hub\Http\Controllers\SubdomainController;
+use Phlix\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
+use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
+use Phlix\Hub\Http\Router;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
@@ -33,7 +33,7 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Worker;
 
 /**
- * Phlex Hub main application bootstrap.
+ * Phlix Hub main application bootstrap.
  *
  * Wires the HTTP router with the public surface as of B.7:
  *
@@ -49,7 +49,7 @@ use Workerman\Worker;
  *  - `POST /api/v1/auth/refresh`   — refresh access token.
  *  - `GET  /api/v1/me`             — current user JSON (protected).
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.1.0
  */
 final class Application
@@ -490,7 +490,7 @@ final class Application
 
         $worker = new Worker(sprintf('http://%s:%d', $host, $port));
         $worker->count = $workers;
-        $worker->name = 'phlex-hub-http';
+        $worker->name = 'phlix-hub-http';
 
         $router = $this->router;
         $logger = $this->resolveHttpLogger();

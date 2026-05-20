@@ -2,7 +2,7 @@
 -- Step K.3 (hub): Jellyseerr-class media request UI.
 -- Stores user-submitted media requests (movies/series). When an admin
 -- approves a request, the hub talks to the relevant arr client
--- (Sonarr/Radarr) via Phlex\Shared\Arr to actually pull the title.
+-- (Sonarr/Radarr) via Phlix\Shared\Arr to actually pull the title.
 --
 -- Owner: a hub `users.id` (CHAR(36) UUID).
 -- Status enum mirrors the lifecycle: pending -> approved -> available,

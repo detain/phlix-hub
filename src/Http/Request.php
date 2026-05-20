@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http;
+namespace Phlix\Hub\Http;
 
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
@@ -16,10 +16,10 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  * - {@see Request::fromWorkerman()} — populated from a Workerman
  *   `Workerman\Protocols\Http\Request`, used by the live worker.
  *
- * The shape mirrors `phlex-server`'s `Phlex\Server\Http\Request` so the
+ * The shape mirrors `phlix-server`'s `Phlix\Server\Http\Request` so the
  * codebases stay symmetrical.
  *
- * @package Phlex\Hub\Http
+ * @package Phlix\Hub\Http
  * @since 0.1.0
  */
 class Request
@@ -54,7 +54,7 @@ class Request
 
     /**
      * Hydrated user row (sans password_hash) populated by
-     * {@see \Phlex\Hub\Http\Middleware\AuthMiddleware}. Null until the
+     * {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}. Null until the
      * middleware runs.
      *
      * @var array<string, mixed>|null
@@ -63,16 +63,16 @@ class Request
 
     /**
      * Decoded JWT claims populated by
-     * {@see \Phlex\Hub\Http\Middleware\AuthMiddleware}. Null until the
+     * {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}. Null until the
      * middleware runs.
      */
-    public ?\Phlex\Shared\Auth\JwtClaims $claims = null;
+    public ?\Phlix\Shared\Auth\JwtClaims $claims = null;
 
     /** @var array<string, string> */
     public array $pathParams = [];
 
     /**
-     * Server UUID set by {@see \Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware}
+     * Server UUID set by {@see \Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware}
      * when a server-facing route with enrollment JWT auth is dispatched.
      */
     public ?string $serverId = null;

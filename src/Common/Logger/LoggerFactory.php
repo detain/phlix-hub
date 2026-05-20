@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Logger;
+namespace Phlix\Hub\Common\Logger;
 
 /**
  * Static-cache factory for {@see StructuredLogger} instances.
@@ -11,7 +11,7 @@ namespace Phlex\Hub\Common\Logger;
  * path to `config/logger.php`; thereafter callers resolve a logger by
  * channel name with {@see LoggerFactory::get()}.
  *
- * @package Phlex\Hub\Common\Logger
+ * @package Phlix\Hub\Common\Logger
  * @since 0.1.0
  */
 class LoggerFactory

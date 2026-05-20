@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 use InvalidArgumentException;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 /**
  * Handles voluntary server deregistration.
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.3.0
  */
 class DeregisterHandler

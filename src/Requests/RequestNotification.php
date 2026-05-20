@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Requests;
+namespace Phlix\Hub\Requests;
 
-use Phlex\Hub\Common\Logger\LogChannels;
-use Phlex\Hub\Common\Logger\LoggerFactory;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 
 /**
  * Notification side-channel for request lifecycle events.
@@ -16,7 +16,7 @@ use Phlex\Hub\Common\Logger\StructuredLogger;
  * Future work can layer email / push / WebSocket fan-out on top of
  * this class without changing controllers.
  *
- * @package Phlex\Hub\Requests
+ * @package Phlix\Hub\Requests
  * @since 0.6.0
  */
 class RequestNotification

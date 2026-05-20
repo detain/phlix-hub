@@ -1,12 +1,12 @@
 {
-    "name": "detain/phlex-hub",
-    "description": "Central cloud directory + reverse-tunnel relay for Phlex media servers. Sign in once, reach any of your servers from anywhere. Self-hostable.",
+    "name": "detain/phlix-hub",
+    "description": "Central cloud directory + reverse-tunnel relay for Phlix media servers. Sign in once, reach any of your servers from anywhere. Self-hostable.",
     "type": "project",
     "license": "MIT",
     "require": {
         "php": "^8.3",
         "crell/tukio": "^2.0",
-        "detain/phlex-shared": "^0.4.0",
+        "detain/phlix-shared": "^0.4.0",
         "monolog/monolog": "^3.0",
         "php-di/php-di": "^7.0",
         "psr/container": "^2.0",
@@ -23,16 +23,16 @@
         "vimeo/psalm": "^5.0"
     },
     "repositories": [
-        { "type": "vcs", "url": "git@github.com:detain/phlex-shared.git" }
+        { "type": "vcs", "url": "git@github.com:detain/phlix-shared.git" }
     ],
     "autoload": {
         "psr-4": {
-            "Phlex\\Hub\\": "src/"
+            "Phlix\\Hub\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Phlex\\Hub\\Tests\\": "tests/"
+            "Phlix\\Hub\\Tests\\": "tests/"
         }
     },
     "minimum-stability": "stable",

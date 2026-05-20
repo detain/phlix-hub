@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\Unit\Hub;
+namespace Phlix\Hub\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\TlsCertificateManager;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 
 class TlsCertificateManagerTest extends TestCase
 {
@@ -17,7 +17,7 @@ class TlsCertificateManagerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-tls-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-tls-test-' . uniqid();
         mkdir($this->tmpDir, 0755, true);
 
         $this->logger = new StructuredLogger('test', []);
@@ -56,7 +56,7 @@ class TlsCertificateManagerTest extends TestCase
     public function test_certificate_directory_structure_created(): void
     {
         $subdomain = 'test-dir';
-        $fqdn = $subdomain . '.phlex.media';
+        $fqdn = $subdomain . '.phlix.media';
 
         $certsDir = $this->tmpDir;
         if (!is_dir($certsDir)) {

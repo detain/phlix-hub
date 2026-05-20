@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\WebPortal;
+namespace Phlix\Hub\Common\WebPortal;
 
 use Smarty;
 
 /**
  * Thin wrapper around {@see Smarty} for the hub's portal templates.
  *
- * Ported from `phlex-server`'s
- * `\Phlex\Server\WebPortal\PageRenderer::renderTemplate()`. The hub has
+ * Ported from `phlix-server`'s
+ * `\Phlix\Server\WebPortal\PageRenderer::renderTemplate()`. The hub has
  * no library / playback responsibilities (those are server-side concerns)
  * so this class is much narrower than the server counterpart.
  *
@@ -19,7 +19,7 @@ use Smarty;
  * use Smarty's global `escape_html` setting because it applies
  * inconsistently across plugin/function/modifier output.
  *
- * @package Phlex\Hub\Common\WebPortal
+ * @package Phlix\Hub\Common\WebPortal
  * @since 0.2.0
  */
 class PageRenderer

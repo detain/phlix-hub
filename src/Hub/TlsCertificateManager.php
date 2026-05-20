@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 /**
  * Manages TLS certificates for server subdomains.
@@ -11,7 +11,7 @@ namespace Phlex\Hub\Hub;
  * to provision certificates. Certificates are stored in the configured
  * directory and renewed automatically before expiry.
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.12.0
  */
 class TlsCertificateManager
@@ -22,12 +22,12 @@ class TlsCertificateManager
     /**
      * @param string                                   $certsDir  Directory to store certificates.
      * @param string                                   $acmeEmail  Email for Let's Encrypt account.
-     * @param \Phlex\Hub\Common\Logger\StructuredLogger $logger     Application logger.
+     * @param \Phlix\Hub\Common\Logger\StructuredLogger $logger     Application logger.
      */
     public function __construct(
         private readonly string $certsDir,
         private readonly string $acmeEmail,
-        private readonly \Phlex\Hub\Common\Logger\StructuredLogger $logger,
+        private readonly \Phlix\Hub\Common\Logger\StructuredLogger $logger,
     ) {
         // phelix-email is stored for ACME account registration in runAcmeChallenge()
     }
@@ -46,7 +46,7 @@ class TlsCertificateManager
      */
     public function provisionCertificate(string $subdomain): bool
     {
-        $fqdn = $subdomain . '.phlex.media';
+        $fqdn = $subdomain . '.phlix.media';
 
         if ($this->certificateExists($fqdn) && !$this->needsRenewal($fqdn)) {
             $this->logger->debug('Certificate already exists and is valid', ['fqdn' => $fqdn]);
@@ -84,7 +84,7 @@ class TlsCertificateManager
      */
     public function getCertificatePath(string $subdomain): ?string
     {
-        $fqdn = $subdomain . '.phlex.media';
+        $fqdn = $subdomain . '.phlix.media';
         $path = $this->certsDir . '/' . $fqdn . '/fullchain.pem';
 
         if (!file_exists($path)) {
@@ -105,7 +105,7 @@ class TlsCertificateManager
      */
     public function getPrivateKeyPath(string $subdomain): ?string
     {
-        $fqdn = $subdomain . '.phlex.media';
+        $fqdn = $subdomain . '.phlix.media';
         $path = $this->certsDir . '/' . $fqdn . '/privkey.pem';
 
         if (!file_exists($path)) {

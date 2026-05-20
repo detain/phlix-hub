@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{block name="title"}Phlex Hub{/block}</title>
+    <title>{block name="title"}Phlix Hub{/block}</title>
     <link rel="stylesheet" href="/assets/css/app.css">
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1e1e2e; background: #fafafa; }
@@ -30,7 +30,7 @@
 </head>
 <body>
     <header>
-        <h1><a href="/" style="text-decoration: none; color: inherit;">Phlex Hub</a></h1>
+        <h1><a href="/" style="text-decoration: none; color: inherit;">Phlix Hub</a></h1>
         <nav>
             {if $is_authenticated|default:false}
                 <a href="/my-servers">My Servers</a>

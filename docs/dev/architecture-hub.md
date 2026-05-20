@@ -1,24 +1,24 @@
 # Hub architecture
 
-This document covers the runtime architecture of `phlex-hub` as of
+This document covers the runtime architecture of `phlix-hub` as of
 **Step B.7** (signup / login / dashboard MVP). For the cross-repo
-namespace split between `phlex-server`, `phlex-shared`, and `phlex-hub`,
-see `plans/expansion/b.1-shared-design.md` in the `detain/phlex`
+namespace split between `phlix-server`, `phlix-shared`, and `phlix-hub`,
+see `plans/expansion/b.1-shared-design.md` in the `detain/phlix`
 repo.
 
 ## Process model
 
-`phlex-hub` boots a single Workerman HTTP worker bound to
+`phlix-hub` boots a single Workerman HTTP worker bound to
 `HUB_HOST`:`HUB_PORT` (default `0.0.0.0:8800`). The worker forks
 `HUB_WORKERS` child processes (default 2). Every TCP message goes
-through `Phlex\Hub\Application::boot()` which:
+through `Phlix\Hub\Application::boot()` which:
 
-1. Wraps the incoming Workerman request in `Phlex\Hub\Http\Request`.
-2. Dispatches to `Phlex\Hub\Http\Router::dispatch()`.
+1. Wraps the incoming Workerman request in `Phlix\Hub\Http\Request`.
+2. Dispatches to `Phlix\Hub\Http\Router::dispatch()`.
 3. Runs each middleware in order; the first one to return a `Response`
    short-circuits the chain.
 4. Invokes the matched controller and writes the returned
-   `Phlex\Hub\Http\Response` back to the socket via
+   `Phlix\Hub\Http\Response` back to the socket via
    `Response::toWorkermanResponse()`.
 
 There is **no** session store and **no** per-connection state held in
@@ -35,7 +35,7 @@ out of three service providers:
 | `AuthServicesProvider`  | `JwtHandler`, `UserRepository`, `AuditLogger`, `AuthManager`.                           |
 | `HttpServicesProvider`  | `PageRenderer`, `AuthController`, `PageController`, `MeController`, `AuthMiddleware`, `AdminMiddleware`. |
 
-`PHLEX_HUB_CONTAINER_COMPILE=1` switches PHP-DI's compiled-container
+`PHLIX_HUB_CONTAINER_COMPILE=1` switches PHP-DI's compiled-container
 cache on; off in dev.
 
 ## Auth flow
@@ -71,7 +71,7 @@ sequenceDiagram
     AuthManager->>JwtHandler: createAccessToken() + createRefreshToken()
     JwtHandler-->>AuthManager: encoded JWTs
     AuthManager-->>AuthController: response payload
-    AuthController-->>Browser: 302 /my-servers<br/>+ Set-Cookie phlex_hub_token, phlex_hub_refresh
+    AuthController-->>Browser: 302 /my-servers<br/>+ Set-Cookie phlix_hub_token, phlix_hub_refresh
 ```
 
 ### 2. Login
@@ -131,9 +131,9 @@ sequenceDiagram
 
 B.7 uses the **client-side cookie clear** strategy (plan §4 step 5,
 option A). The hub does NOT track refresh-token revocation on the
-server side. A logout simply clears the `phlex_hub_token` and
-`phlex_hub_refresh` cookies, writes an audit log entry, and dispatches
-`Phlex\Shared\Events\Auth\UserLoggedOut`.
+server side. A logout simply clears the `phlix_hub_token` and
+`phlix_hub_refresh` cookies, writes an audit log entry, and dispatches
+`Phlix\Shared\Events\Auth\UserLoggedOut`.
 
 Server-side refresh-token revocation (option B) is deferred to a Phase
 L hardening task — it requires a `revoked_refresh_tokens` table and an
@@ -142,7 +142,7 @@ extra DB round-trip on every refresh. The MVP doesn't need it.
 ## JWT shape — the cross-repo wire
 
 Every JWT the hub mints decodes into a
-`Phlex\Shared\Auth\JwtClaims` instance via
+`Phlix\Shared\Auth\JwtClaims` instance via
 `JwtClaims::fromPayload()`. This is the proof point for B.1's shared-
 DTO design.
 
@@ -150,7 +150,7 @@ DTO design.
 $handler = $container->get(JwtHandler::class);
 $token   = $handler->createAccessToken('user-uuid', ['library:read'], 'server-001');
 $claims  = $handler->validateAccessToken($token);  // returns ?JwtClaims
-echo $claims->iss;       // 'phlex-hub'
+echo $claims->iss;       // 'phlix-hub'
 echo $claims->aud;       // 'hub'
 echo $claims->sub;       // 'user-uuid'
 echo $claims->type;      // 'access'
@@ -161,7 +161,7 @@ Hub-side tokens always carry:
 
 | Claim     | Hub value         | Notes                                       |
 | --------- | ----------------- | ------------------------------------------- |
-| `iss`     | `phlex-hub`       | Distinguishes from server-minted (`phlex`). |
+| `iss`     | `phlix-hub`       | Distinguishes from server-minted (`phlix`). |
 | `aud`     | `hub`             | The hub's own portal/API.                   |
 | `sub`     | user UUID         | Subject.                                    |
 | `iat`     | unix seconds      | Issued-at.                                  |
@@ -171,9 +171,9 @@ Hub-side tokens always carry:
 | `scope`   | list<string>      | Optional; empty array when unscoped.        |
 | `serverId`| string\|null      | Reserved for Phase C client-→server tokens. |
 
-The shared FQCN — `Phlex\Shared\Auth\JwtClaims` — lives in
-`detain/phlex-shared` v0.2+ and is imported by both repos. When
-`phlex-server` validates a hub-minted token (Phase C onward), it will
+The shared FQCN — `Phlix\Shared\Auth\JwtClaims` — lives in
+`detain/phlix-shared` v0.2+ and is imported by both repos. When
+`phlix-server` validates a hub-minted token (Phase C onward), it will
 deserialize through the same `JwtClaims::fromPayload()` call.
 
 ## Admin bootstrap
@@ -181,7 +181,7 @@ deserialize through the same `JwtClaims::fromPayload()` call.
 The first user to register on a fresh install is auto-promoted to
 admin via `UserRepository::setAdmin($id, true)` inside the same
 transaction that creates the row. This matches the
-`phlex-server` policy from SESSION_HANDOFF.md decision #7 and lets
+`phlix-server` policy from SESSION_HANDOFF.md decision #7 and lets
 the operator deploy + sign up + administer without an out-of-band
 seeding step. A proper RBAC + invite flow lands in Phase D.
 
@@ -195,7 +195,7 @@ fall into two buckets:
    Authorization headers across origins, so the typical CSRF vector
    is closed.
 2. **HTML pages** (`/my-servers`) authenticate via the
-   `phlex_hub_token` cookie which is set with `SameSite=Lax`. The
+   `phlix_hub_token` cookie which is set with `SameSite=Lax`. The
    only mutating page route is `/logout` and the failure mode of a
    forged logout is "user has to log in again" — not worth a CSRF
    token for the MVP.
@@ -221,7 +221,7 @@ audit:event=auth_failure      reason=unknown_user identifier=…
 
 ## Pairing protocol internals
 
-Step-by-step flow for pairing a `phlex-server` instance with the hub.
+Step-by-step flow for pairing a `phlix-server` instance with the hub.
 
 ### Step 1 — Server initiates claim
 
@@ -229,7 +229,7 @@ Step-by-step flow for pairing a `phlex-server` instance with the hub.
 # Server (HubClient) POSTs to hub:
 POST https://hub.example.com/api/v1/server-claims/new
 Content-Type: application/json
-X-Phlex-Signature: Ed25519  (signature of request body using server's private key)
+X-Phlix-Signature: Ed25519  (signature of request body using server's private key)
 
 {
   "server_name": "Alice's NAS",
@@ -261,7 +261,7 @@ X-Phlex-Signature: Ed25519  (signature of request body using server's private ke
 
 ```json
 {
-  "iss": "phlex-hub",
+  "iss": "phlix-hub",
   "aud": "server",
   "sub": "server-uuid",
   "type": "enrollment",
@@ -310,7 +310,7 @@ Authorization: Bearer {enrollment_jwt}
 
 ```json
 {
-  "iss": "phlex-hub",
+  "iss": "phlix-hub",
   "aud": "hub",
   "sub": "user-uuid",
   "serverId": "server-uuid",
@@ -350,22 +350,22 @@ Hub → Server (over relay tunnel): { "type": "client_connect", "client_id": "..
 ## Namespace map
 
 ```
-Phlex\Hub\          — Application bootstrap, Router, Config
-Phlex\Hub\Auth\     — JwtHandler (RS256 for user sessions), UserRepository,
+Phlix\Hub\          — Application bootstrap, Router, Config
+Phlix\Hub\Auth\     — JwtHandler (RS256 for user sessions), UserRepository,
                       AuditLogger, AuthManager
-Phlex\Hub\Relay\   — RelaySession (entity), TunnelManager (orchestrator)
-Phlex\Hub\Webhooks\ — WebhookDispatcher, WebhookDelivery
-Phlex\Hub\Http\    — Request, Response, Router, Controllers
+Phlix\Hub\Relay\   — RelaySession (entity), TunnelManager (orchestrator)
+Phlix\Hub\Webhooks\ — WebhookDispatcher, WebhookDelivery
+Phlix\Hub\Http\    — Request, Response, Router, Controllers
                       (Auth, Server, User, Me, Health)
-Phlex\Hub\Common\   — Container, Database (ConnectionPool),
+Phlix\Hub\Common\   — Container, Database (ConnectionPool),
                       Logger (LoggerFactory, LogChannels)
-Phlex\Shared\       — Types shared with phlex-server:
+Phlix\Shared\       — Types shared with phlix-server:
                       JwtClaims, claim DTOs (ClaimRequest, ClaimResponse,
                       ServerInfoDto, HeartbeatDto),
-                      events (Phlex\Shared\Events\*)
+                      events (Phlix\Shared\Events\*)
 ```
 
-**Key split**: the hub repo never contains library scanning, transcoding, FFmpeg, HLS, DLNA, Live TV, or any `Phlex\Server\*` code. Those live exclusively in `phlex-server`.
+**Key split**: the hub repo never contains library scanning, transcoding, FFmpeg, HLS, DLNA, Live TV, or any `Phlix\Server\*` code. Those live exclusively in `phlix-server`.
 
 ---
 
@@ -389,7 +389,7 @@ environment:
 ### Connect to hub MySQL directly
 
 ```bash
-mysql -h ${HUB_DB_HOST:-hub-db} -u phlex_hub -p phlex_hub
+mysql -h ${HUB_DB_HOST:-hub-db} -u phlix_hub -p phlix_hub
 ```
 
 Useful queries:
@@ -457,10 +457,10 @@ grep "550e8400-e29b-41d4-a716-446655440000" .logs/hub.log | grep relay
 **Diagnosis:**
 ```bash
 # Server-side HubClient logs for claim initiation:
-grep "claim\|pairing" .logs/phlex.log | tail -20
+grep "claim\|pairing" .logs/phlix.log | tail -20
 
 # On the hub, check claim code status:
-mysql -h hub-db -u phlex_hub -p phlex_hub \
+mysql -h hub-db -u phlix_hub -p phlix_hub \
   -e "SELECT claim_code, status, expires_at, created_at
       FROM server_claims
       WHERE claim_code = 'ABCD-1234';"
@@ -480,18 +480,18 @@ grep "claim\|server-claims" .logs/hub.log | tail -20
 **Diagnosis:**
 ```bash
 # On the hub, check the server's last_seen_at:
-mysql -h hub-db -u phlex_hub -p phlex_hub \
+mysql -h hub-db -u phlix_hub -p phlix_hub \
   -e "SELECT server_name, status, last_seen_at
       FROM servers WHERE server_name = 'Alice NAS';"
 
 # On the server, check the heartbeat loop logs:
-grep "heartbeat" .logs/phlex.log | tail -50
+grep "heartbeat" .logs/phlix.log | tail -50
 
 # Check if the enrollment JWT has expired (7-day TTL):
 cat config/hub-enrollment.json | grep enrolled_at
 ```
 
-**Fix:** Restart the heartbeat loop: `php scripts/pair-with-hub.php` (re-initiates pairing if enrollment JWT is expired, otherwise just restarts heartbeat). For persistent network issues, increase `PHLEX_HEARTBEAT_INTERVAL`.
+**Fix:** Restart the heartbeat loop: `php scripts/pair-with-hub.php` (re-initiates pairing if enrollment JWT is expired, otherwise just restarts heartbeat). For persistent network issues, increase `PHLIX_HEARTBEAT_INTERVAL`.
 
 ---
 
@@ -502,7 +502,7 @@ cat config/hub-enrollment.json | grep enrolled_at
 **Diagnosis:**
 ```bash
 # On the hub, check relay session status:
-mysql -h hub-db -u phlex_hub -p phlex_hub \
+mysql -h hub-db -u phlix_hub -p phlix_hub \
   -e "SELECT id, server_id, worker_node, bytes_in, bytes_out,
              opened_at, closed_at, close_reason
       FROM relay_sessions
@@ -513,20 +513,20 @@ mysql -h hub-db -u phlex_hub -p phlex_hub \
 grep "relay.*hello\|relay.*close\|relay.*drop\|relay.*error" .logs/hub.log | tail -30
 
 # On the server, check the outbound WS connection to the hub:
-grep -i "relay\|wss\|hub.*connect" .logs/phlex.log | tail -20
+grep -i "relay\|wss\|hub.*connect" .logs/phlix.log | tail -20
 
 # Check if outbound port 8800 is blocked (NAT/firewall):
 ss -tnp | grep ":8800"
 ```
 
-**Fix:** The HubClient reconnect loop re-establishes the outbound WebSocket automatically within seconds. If tunnels drop repeatedly: (1) check NAT timeout (reduce `PHLEX_HEARTBEAT_INTERVAL` or add server-side keepalive), (2) hub worker restart drops all relay sessions — servers reconnect automatically, (3) firewall/proxy dropping idle connections. For production, consider a layer-4 load balancer that preserves TCP connections.
+**Fix:** The HubClient reconnect loop re-establishes the outbound WebSocket automatically within seconds. If tunnels drop repeatedly: (1) check NAT timeout (reduce `PHLIX_HEARTBEAT_INTERVAL` or add server-side keepalive), (2) hub worker restart drops all relay sessions — servers reconnect automatically, (3) firewall/proxy dropping idle connections. For production, consider a layer-4 load balancer that preserves TCP connections.
 
 ---
 
 ## Next steps
 
 - [`docs/dev/schema.md`](schema.md) — complete hub DB schema with ER diagram, table columns, indexes, and FK relationships
-- [`detain/phlex/docs/dev/pairing-protocol.md`](https://github.com/detain/phlex/blob/master/docs/dev/pairing-protocol.md) — full protocol specification with sequence diagrams
-- [`detain/phlex/docs/dev/relay-protocol.md`](https://github.com/detain/phlex/blob/master/docs/dev/relay-protocol.md) — deep dive on tunnel establishment, message framing, and reconnection logic
-- [`detain/phlex/docs/dev/architecture-server.md`](https://github.com/detain/phlex/blob/master/docs/dev/architecture-server.md) — server-side architecture (library scanning, transcoding, streaming, DLNA, Live TV)
-- [`detain/phlex-shared`](https://github.com/detain/phlex-shared) — shared DTOs, JWT claims, and events used by both repos
+- [`detain/phlix/docs/dev/pairing-protocol.md`](https://github.com/detain/phlix/blob/master/docs/dev/pairing-protocol.md) — full protocol specification with sequence diagrams
+- [`detain/phlix/docs/dev/relay-protocol.md`](https://github.com/detain/phlix/blob/master/docs/dev/relay-protocol.md) — deep dive on tunnel establishment, message framing, and reconnection logic
+- [`detain/phlix/docs/dev/architecture-server.md`](https://github.com/detain/phlix/blob/master/docs/dev/architecture-server.md) — server-side architecture (library scanning, transcoding, streaming, DLNA, Live TV)
+- [`detain/phlix-shared`](https://github.com/detain/phlix-shared) — shared DTOs, JWT claims, and events used by both repos

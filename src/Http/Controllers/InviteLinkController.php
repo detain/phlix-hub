@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
 use InvalidArgumentException;
-use Phlex\Hub\Hub\InviteLink;
-use Phlex\Hub\Hub\InviteLinkHandler;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Hub\InviteLink;
+use Phlix\Hub\Hub\InviteLinkHandler;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * API controller for invite link endpoints.
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.6.0
  */
 final class InviteLinkController

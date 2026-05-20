@@ -2,43 +2,43 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Container\Providers;
+namespace Phlix\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Hub\ClaimRequestHandler;
-use Phlex\Hub\Hub\DeregisterHandler;
-use Phlex\Hub\Hub\DnsAliasManager;
-use Phlex\Hub\Hub\Dns\StaticZoneManager;
-use Phlex\Hub\Hub\Ed25519KeyManager;
-use Phlex\Hub\Hub\EnrollmentJwtService;
-use Phlex\Hub\Hub\HeartbeatHandler;
-use Phlex\Hub\Hub\InviteLinkHandler;
-use Phlex\Hub\Hub\LibrarySharingHandler;
-use Phlex\Hub\Hub\RelayRouter;
-use Phlex\Hub\Hub\RelayServerHandler;
-use Phlex\Hub\Hub\RelaySessionManager;
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Hub\TlsCertificateManager;
-use Phlex\Hub\Common\Container\ServiceProviderInterface;
-use Phlex\Hub\Common\Logger\LogChannels;
-use Phlex\Hub\Common\Logger\LoggerFactory;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Http\Controllers\HubJwksController;
-use Phlex\Hub\Http\Controllers\InviteLinkController;
-use Phlex\Hub\Http\Controllers\LibraryShareController;
-use Phlex\Hub\Http\Controllers\RelayController;
-use Phlex\Hub\Http\Controllers\RequestController;
-use Phlex\Hub\Http\Controllers\ServerClaimController;
-use Phlex\Hub\Http\Controllers\ServerController;
-use Phlex\Hub\Http\Controllers\SubdomainController;
-use Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware;
-use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
-use Phlex\Hub\Requests\RequestManager;
-use Phlex\Hub\Requests\RequestNotification;
-use Phlex\Shared\Arr\ArrClientFactory;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Hub\ClaimRequestHandler;
+use Phlix\Hub\Hub\DeregisterHandler;
+use Phlix\Hub\Hub\DnsAliasManager;
+use Phlix\Hub\Hub\Dns\StaticZoneManager;
+use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Hub\HeartbeatHandler;
+use Phlix\Hub\Hub\InviteLinkHandler;
+use Phlix\Hub\Hub\LibrarySharingHandler;
+use Phlix\Hub\Hub\RelayRouter;
+use Phlix\Hub\Hub\RelayServerHandler;
+use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Http\Controllers\HubJwksController;
+use Phlix\Hub\Http\Controllers\InviteLinkController;
+use Phlix\Hub\Http\Controllers\LibraryShareController;
+use Phlix\Hub\Http\Controllers\RelayController;
+use Phlix\Hub\Http\Controllers\RequestController;
+use Phlix\Hub\Http\Controllers\ServerClaimController;
+use Phlix\Hub\Http\Controllers\ServerController;
+use Phlix\Hub\Http\Controllers\SubdomainController;
+use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
+use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Requests\RequestManager;
+use Phlix\Hub\Requests\RequestNotification;
+use Phlix\Shared\Arr\ArrClientFactory;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -60,7 +60,7 @@ use function DI\get;
  *  - {@see ServerClaimController}    → singleton
  *  - {@see ServerController}         → singleton
  *
- * @package Phlex\Hub\Common\Container\Providers
+ * @package Phlix\Hub\Common\Container\Providers
  * @since 0.3.0
  */
 final class HubServicesProvider implements ServiceProviderInterface
@@ -184,13 +184,13 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('jwtService', get(EnrollmentJwtService::class)),
 
             StaticZoneManager::class => factory(static function () use ($appConfig): StaticZoneManager {
-                $zoneDir = self::stringOr($appConfig, 'dns_zone_dir', '/home/phlex/data/dns/zones');
+                $zoneDir = self::stringOr($appConfig, 'dns_zone_dir', '/home/phlix/data/dns/zones');
                 return new StaticZoneManager($zoneDir);
             }),
 
             TlsCertificateManager::class => factory(static function () use ($appConfig): TlsCertificateManager {
-                $certsDir = self::stringOr($appConfig, 'tls_certs_dir', '/home/phlex/data/tls');
-                $acmeEmail = self::stringOr($appConfig, 'acme_email', 'admin@phlex.media');
+                $certsDir = self::stringOr($appConfig, 'tls_certs_dir', '/home/phlix/data/tls');
+                $acmeEmail = self::stringOr($appConfig, 'acme_email', 'admin@phlix.media');
                 return new TlsCertificateManager($certsDir, $acmeEmail, LoggerFactory::get(LogChannels::HUB));
             }),
 

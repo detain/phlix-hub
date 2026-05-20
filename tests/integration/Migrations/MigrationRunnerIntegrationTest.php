@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\integration\Migrations;
+namespace Phlix\Hub\Tests\integration\Migrations;
 
-use Phlex\Hub\Common\Database\MigrationRunner;
+use Phlix\Hub\Common\Database\MigrationRunner;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -19,10 +19,10 @@ use Workerman\MySQL\Connection;
  * named database **must already exist** and the user must have full
  * privileges on it — every table is dropped at setUp().
  *
- * @package Phlex\Hub\Tests\integration\Migrations
+ * @package Phlix\Hub\Tests\integration\Migrations
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Common\Database\MigrationRunner
+ * @covers \Phlix\Hub\Common\Database\MigrationRunner
  *
  * @group integration
  */

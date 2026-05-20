@@ -1,6 +1,6 @@
 # Invite Links
 
-Phlex Hub allows you to share your media libraries with friends and family using invite links. Instead of entering their email address, you can generate a special link that grants them instant access to your library.
+Phlix Hub allows you to share your media libraries with friends and family using invite links. Instead of entering their email address, you can generate a special link that grants them instant access to your library.
 
 ## How Invite Links Work
 

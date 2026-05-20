@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
-use Phlex\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
+use Phlix\Hub\Hub\EnrollmentJwtService;
 
 /**
  * Handles the relay tunnel HTTP endpoint and WebSocket upgrade.
@@ -15,7 +15,7 @@ use Phlex\Hub\Hub\EnrollmentJwtService;
  *   - Perform HTTP/WebSocket upgrade to establish a persistent relay tunnel
  *   - The hub then multiplexes inbound client requests over this tunnel
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.12.0
  */
 final class RelayController

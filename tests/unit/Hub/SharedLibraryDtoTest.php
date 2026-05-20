@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\LibraryShare;
-use Phlex\Hub\Hub\SharedLibraryDto;
+use Phlix\Hub\Hub\LibraryShare;
+use Phlix\Hub\Hub\SharedLibraryDto;
 
 /**
  * Unit tests for {@see SharedLibraryDto}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.5.0
  *
- * @covers \Phlex\Hub\Hub\SharedLibraryDto
+ * @covers \Phlix\Hub\Hub\SharedLibraryDto
  */
 final class SharedLibraryDtoTest extends TestCase
 {

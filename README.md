@@ -1,6 +1,6 @@
-# phlex-hub
+# phlix-hub
 
-Central cloud directory + reverse-tunnel relay for Phlex media servers.
+Central cloud directory + reverse-tunnel relay for Phlix media servers.
 Sign in once, reach any of your servers from anywhere. Self-hostable.
 
 Status: **server claim + my-servers dashboard (C.4)**. Pairing Protocol
@@ -31,8 +31,8 @@ dashboard and claim flow.
 
 ## Related repos
 
-- [`detain/phlex`](https://github.com/detain/phlex) (a.k.a. `phlex-server`) — local media server.
-- [`detain/phlex-shared`](https://github.com/detain/phlex-shared) — shared interfaces, DTOs.
+- [`detain/phlix`](https://github.com/detain/phlix) (a.k.a. `phlix-server`) — local media server.
+- [`detain/phlix-shared`](https://github.com/detain/phlix-shared) — shared interfaces, DTOs.
 
 ## What is shipped in v0.1.0
 
@@ -44,7 +44,7 @@ dashboard and claim flow.
   level 9, psalm v5, security audit) + phpunit.
 
 DB schema landed in B.6; signup, login, the dashboard, and the JWT
-auth stack (consuming `Phlex\Shared\Auth\JwtClaims`) landed in **B.7**.
+auth stack (consuming `Phlix\Shared\Auth\JwtClaims`) landed in **B.7**.
 The server-claim + registry endpoints (claim codes, enrollment JWT,
 heartbeat) landed in **C.3**; the `/my-servers` dashboard and
 `/claim-server` UI land in **C.4**.

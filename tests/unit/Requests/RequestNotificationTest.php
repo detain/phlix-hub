@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Requests;
+namespace Phlix\Hub\Tests\unit\Requests;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Requests\RequestNotification;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Requests\RequestNotification;
 
 /**
  * Unit tests for {@see RequestNotification}.
  *
- * @package Phlex\Hub\Tests\unit\Requests
+ * @package Phlix\Hub\Tests\unit\Requests
  * @since 0.6.0
  *
- * @covers \Phlex\Hub\Requests\RequestNotification
+ * @covers \Phlix\Hub\Requests\RequestNotification
  */
 final class RequestNotificationTest extends TestCase
 {

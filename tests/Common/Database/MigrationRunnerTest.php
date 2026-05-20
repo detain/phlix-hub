@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\Common\Database;
+namespace Phlix\Hub\Tests\Common\Database;
 
-use Phlex\Hub\Common\Database\MigrationRunner;
+use Phlix\Hub\Common\Database\MigrationRunner;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -16,10 +16,10 @@ use Workerman\MySQL\Connection;
  * The MySQL connection is fully mocked; the integration test in
  * `tests/integration/Migrations/` covers the live-DB scenarios.
  *
- * @package Phlex\Hub\Tests\Common\Database
+ * @package Phlix\Hub\Tests\Common\Database
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Common\Database\MigrationRunner
+ * @covers \Phlix\Hub\Common\Database\MigrationRunner
  */
 final class MigrationRunnerTest extends TestCase
 {
@@ -27,7 +27,7 @@ final class MigrationRunnerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->migrationsDir = sys_get_temp_dir() . '/phlex-hub-mig-' . uniqid();
+        $this->migrationsDir = sys_get_temp_dir() . '/phlix-hub-mig-' . uniqid();
         mkdir($this->migrationsDir, 0o777, true);
     }
 

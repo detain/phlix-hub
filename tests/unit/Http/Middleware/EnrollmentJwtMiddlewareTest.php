@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Middleware;
+namespace Phlix\Hub\Tests\unit\Http\Middleware;
 
-use Phlex\Hub\Hub\Ed25519KeyManager;
-use Phlex\Hub\Hub\EnrollmentJwtService;
-use Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware;
-use Phlex\Hub\Http\Request;
+use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
+use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see EnrollmentJwtMiddleware}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Middleware
+ * @package Phlix\Hub\Tests\unit\Http\Middleware
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Http\Middleware\EnrollmentJwtMiddleware
+ * @covers \Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware
  */
 final class EnrollmentJwtMiddlewareTest extends TestCase
 {
@@ -25,7 +25,7 @@ final class EnrollmentJwtMiddlewareTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-hub-mw-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-mw-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
     }
 

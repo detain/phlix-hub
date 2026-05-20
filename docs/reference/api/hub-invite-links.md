@@ -1,6 +1,6 @@
 # Hub Invite Links API Reference
 
-Base URL: `https://hub.phlex.media` (production) or `http://localhost:8800` (development)
+Base URL: `https://hub.phlix.media` (production) or `http://localhost:8800` (development)
 
 ## Authentication
 
@@ -32,7 +32,7 @@ Content-Type: application/json
 **Response (201 Created)**
 ```json
 {
-    "url": "https://hub.phlex.media/invite/eyJ...",
+    "url": "https://hub.phlix.media/invite/eyJ...",
     "expires_at": 1715000000,
     "id": "uuid"
 }
@@ -68,7 +68,7 @@ GET /api/v1/me/invite-links
             "use_count": 2,
             "expires_at": 1715000000,
             "created_at": 1709000000,
-            "url": "https://hub.phlex.media/invite/eyJ..."
+            "url": "https://hub.phlix.media/invite/eyJ..."
         }
     ]
 }

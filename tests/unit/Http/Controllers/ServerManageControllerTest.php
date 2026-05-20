@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Controllers;
+namespace Phlix\Hub\Tests\unit\Http\Controllers;
 
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Controllers\ServerManageController;
-use Phlex\Hub\Http\Request;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Controllers\ServerManageController;
+use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
-use Phlex\Shared\Hub\ServerInfoDto;
+use Phlix\Shared\Hub\ServerInfoDto;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see ServerManageController}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Controllers
+ * @package Phlix\Hub\Tests\unit\Http\Controllers
  * @since 0.4.0
  *
- * @covers \Phlex\Hub\Http\Controllers\ServerManageController
+ * @covers \Phlix\Hub\Http\Controllers\ServerManageController
  */
 final class ServerManageControllerTest extends TestCase
 {

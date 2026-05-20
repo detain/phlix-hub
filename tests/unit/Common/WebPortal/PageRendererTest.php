@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Common\WebPortal;
+namespace Phlix\Hub\Tests\unit\Common\WebPortal;
 
-use Phlex\Hub\Common\WebPortal\PageRenderer;
+use Phlix\Hub\Common\WebPortal\PageRenderer;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -13,10 +13,10 @@ use PHPUnit\Framework\TestCase;
  * Exercises Smarty integration end-to-end against a transient template
  * directory in `sys_get_temp_dir()`.
  *
- * @package Phlex\Hub\Tests\unit\Common\WebPortal
+ * @package Phlix\Hub\Tests\unit\Common\WebPortal
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Common\WebPortal\PageRenderer
+ * @covers \Phlix\Hub\Common\WebPortal\PageRenderer
  */
 final class PageRendererTest extends TestCase
 {
@@ -24,7 +24,7 @@ final class PageRendererTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->tmp = sys_get_temp_dir() . '/phlex-hub-pr-' . uniqid();
+        $this->tmp = sys_get_temp_dir() . '/phlix-hub-pr-' . uniqid();
         mkdir($this->tmp . '/templates', 0o755, true);
     }
 

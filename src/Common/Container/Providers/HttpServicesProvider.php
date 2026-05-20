@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Container\Providers;
+namespace Phlix\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Hub\Auth\AuthManager;
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Container\ServiceProviderInterface;
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Common\WebPortal\PageRenderer;
-use Phlex\Hub\Http\Controllers\AuthController;
-use Phlex\Hub\Http\Controllers\MeController;
-use Phlex\Hub\Http\Controllers\PageController;
-use Phlex\Hub\Http\Controllers\ServerListController;
-use Phlex\Hub\Http\Controllers\ServerManageController;
-use Phlex\Hub\Http\Middleware\AdminMiddleware;
-use Phlex\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\WebPortal\PageRenderer;
+use Phlix\Hub\Http\Controllers\AuthController;
+use Phlix\Hub\Http\Controllers\MeController;
+use Phlix\Hub\Http\Controllers\PageController;
+use Phlix\Hub\Http\Controllers\ServerListController;
+use Phlix\Hub\Http\Controllers\ServerManageController;
+use Phlix\Hub\Http\Middleware\AdminMiddleware;
+use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -31,7 +31,7 @@ use function DI\factory;
  * `<project>/public/templates` and `<project>/var/smarty/{compile,cache}`.
  * Override via the `templates.{dir,compile,cache}` keys on the appConfig.
  *
- * @package Phlex\Hub\Common\Container\Providers
+ * @package Phlix\Hub\Common\Container\Providers
  * @since 0.2.0
  */
 final class HttpServicesProvider implements ServiceProviderInterface

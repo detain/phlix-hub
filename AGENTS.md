@@ -1,6 +1,6 @@
-# AGENTS.md — detain/phlex-hub
+# AGENTS.md — detain/phlix-hub
 
-Agent brief for the `phlex-hub` package. The hub is the multi-server
+Agent brief for the `phlix-hub` package. The hub is the multi-server
 cloud directory + relay layer. It is **not** the media server — keep
 library scanning, transcoding, FFmpeg, HLS, DLNA, and Live TV out of
 this repo.
@@ -11,7 +11,7 @@ this repo.
   callable syntax) are welcome where they aid clarity.
 - **`declare(strict_types=1);`** at the top of every PHP file.
 - **PSR-12** coding standard, enforced by phpcs.
-- **PSR-4 autoload** — `Phlex\Hub\` → `src/`, `Phlex\Hub\Tests\` →
+- **PSR-4 autoload** — `Phlix\Hub\` → `src/`, `Phlix\Hub\Tests\` →
   `tests/`. Namespaces mirror directories.
 - **Static analysis bar:** PHPStan level 9 and Psalm errorLevel 1 — both
   green from day 1. No baselines.
@@ -26,14 +26,14 @@ this repo.
   example.
 - **Logging:** always via `LoggerFactory::get(LogChannels::*)`. Channels
   defined in `src/Common/Logger/LogChannels.php`.
-- **Container:** PHP-DI 7 (`Phlex\Hub\Common\Container\ContainerFactory`).
+- **Container:** PHP-DI 7 (`Phlix\Hub\Common\Container\ContainerFactory`).
   Register new services through a `ServiceProviderInterface`
   implementation; do not call `set()` on the container directly.
 - **Events:** Tukio (PSR-14). Event DTOs live in
-  `Phlex\Shared\Events\*` (the `detain/phlex-shared` package).
-- **Shared types:** any DTO that travels between `phlex-server` and
-  `phlex-hub` (claim request/response, server info, JWT claims) lives
-  in `detain/phlex-shared`. Do not duplicate.
+  `Phlix\Shared\Events\*` (the `detain/phlix-shared` package).
+- **Shared types:** any DTO that travels between `phlix-server` and
+  `phlix-hub` (claim request/response, server info, JWT claims) lives
+  in `detain/phlix-shared`. Do not duplicate.
 - **PHPDoc on every public class and method.** `@package`, `@since`,
   parameter and return tags as appropriate. Static analysers depend on
   it.
@@ -65,10 +65,10 @@ tests/
 ## Layout rationale
 
 See `plans/expansion/b.1-shared-design.md` in
-[`detain/phlex`](https://github.com/detain/phlex) for the cross-repo
-design context (what goes where, what stays in `phlex-server`, what
-moves to `phlex-shared`). Do not re-litigate that design here —
-propose changes in a new plan step against `detain/phlex` if needed.
+[`detain/phlix`](https://github.com/detain/phlix) for the cross-repo
+design context (what goes where, what stays in `phlix-server`, what
+moves to `phlix-shared`). Do not re-litigate that design here —
+propose changes in a new plan step against `detain/phlix` if needed.
 
 ## Before committing
 
@@ -85,5 +85,5 @@ If any tool emits warnings, fix the code — do not add to a baseline.
 ## Versioning
 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Bump
-`Phlex\Hub\Version::VERSION` in lockstep with the git tag and the
+`Phlix\Hub\Version::VERSION` in lockstep with the git tag and the
 `CHANGELOG.md` heading.

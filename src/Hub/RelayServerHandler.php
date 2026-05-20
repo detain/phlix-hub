@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 use InvalidArgumentException;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 
 /**
  * Handles relay server WebSocket connections and frame multiplexing.
@@ -18,7 +18,7 @@ use Phlex\Hub\Common\Logger\StructuredLogger;
  *   - Sends HTTP responses from the server back to the client
  *   - Handles ping/pong keep-alive
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.12.0
  */
 final class RelayServerHandler

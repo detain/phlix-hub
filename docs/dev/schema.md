@@ -1,6 +1,6 @@
 # Hub database schema
 
-This document is the canonical reference for the `phlex-hub` MySQL
+This document is the canonical reference for the `phlix-hub` MySQL
 schema. The migration files in `migrations/` are the source of truth;
 this doc explains the *why* and the *how it fits together*.
 
@@ -147,7 +147,7 @@ user row.
 
 **Migration:** `002_servers.sql`
 
-One row per Phlex server claimed to the hub. The hub does not store
+One row per Phlix server claimed to the hub. The hub does not store
 library or media data here — only what's needed for relay
 (`jwks_json`, `hostname_candidates_json`) and presence
 (`status`, `last_seen_at`).
@@ -218,7 +218,7 @@ Recent heartbeats from each server. Used to power the dashboard's
   (`DEFAULT CURRENT_TIMESTAMP`).
 - `sent_at` `DATETIME NULL` — server clock at heartbeat send time,
   populated from `HeartbeatDto::$timestamp`
-  (`Phlex\Shared\Hub\HeartbeatDto`). Compared against `received_at`
+  (`Phlix\Shared\Hub\HeartbeatDto`). Compared against `received_at`
   for clock-skew detection. Nullable because rows written before
   migration `006` (and any future heartbeat that omits the field)
   carry no server-side timestamp.
@@ -296,15 +296,15 @@ dashboard bandwidth analytics.
 **Migration:** `005_webhooks.sql`
 
 User-defined HTTP callbacks the hub delivers when a subscribed
-event alias fires. Event aliases are the `phlex.*` strings from
-`Phlex\Shared\Plugin\EventNameMap`.
+event alias fires. Event aliases are the `phlix.*` strings from
+`Phlix\Shared\Plugin\EventNameMap`.
 
 - `id` `CHAR(36)` — UUID.
 - `user_id` `CHAR(36)` — FK → `users.id` (CASCADE).
 - `name` `VARCHAR(128)` — user label.
 - `target_url` `VARCHAR(512)`.
 - `secret` `VARCHAR(255)` — HMAC signing secret, optional.
-- `event_aliases_json` `TEXT` — JSON array of `phlex.*` aliases.
+- `event_aliases_json` `TEXT` — JSON array of `phlix.*` aliases.
 - `template_json` `TEXT` — handlebars body template (added in
   L.1).
 - `enabled` `TINYINT(1)`.
@@ -323,7 +323,7 @@ dispatcher worker.
 ## Migration runner
 
 `scripts/run-migrations.php` wraps
-`Phlex\Hub\Common\Database\MigrationRunner`. The runner:
+`Phlix\Hub\Common\Database\MigrationRunner`. The runner:
 
 1. Creates a `migrations` tracking table on first run
    (`CREATE TABLE IF NOT EXISTS migrations (filename VARCHAR(255)

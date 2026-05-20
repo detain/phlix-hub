@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 use InvalidArgumentException;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 /**
  * Handles library sharing business logic.
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.5.0
  */
 class LibrarySharingHandler

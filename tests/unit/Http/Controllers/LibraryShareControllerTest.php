@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Controllers;
+namespace Phlix\Hub\Tests\unit\Http\Controllers;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\LibraryShare;
-use Phlex\Hub\Hub\LibrarySharingHandler;
-use Phlex\Hub\Http\Controllers\LibraryShareController;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Hub\SharedLibraryDto;
+use Phlix\Hub\Hub\LibraryShare;
+use Phlix\Hub\Hub\LibrarySharingHandler;
+use Phlix\Hub\Http\Controllers\LibraryShareController;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Hub\SharedLibraryDto;
 
 /**
  * Unit tests for {@see LibraryShareController}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Controllers
+ * @package Phlix\Hub\Tests\unit\Http\Controllers
  * @since 0.5.0
  *
- * @covers \Phlex\Hub\Http\Controllers\LibraryShareController
+ * @covers \Phlix\Hub\Http\Controllers\LibraryShareController
  */
 final class LibraryShareControllerTest extends TestCase
 {

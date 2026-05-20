@@ -1,5 +1,5 @@
 -- migration: 002_servers
--- Creates three tables that together model a claimed Phlex media server
+-- Creates three tables that together model a claimed Phlix media server
 -- and its operational state.
 --
 --   servers           — one row per server claimed to the hub.

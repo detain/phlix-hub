@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Admin: Request Queue — Phlex Hub{/block}
+{block name="title"}Admin: Request Queue — Phlix Hub{/block}
 
 {block name="content"}
 <div class="admin-requests-page">

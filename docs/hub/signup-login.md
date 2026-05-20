@@ -1,14 +1,14 @@
 # Sign up and log in
 
-This guide walks you through creating an account on a `phlex-hub`
+This guide walks you through creating an account on a `phlix-hub`
 deployment and signing in afterwards. The hub is the cloud directory
-+ reverse-tunnel relay for Phlex media servers — once you sign in,
-you'll be able to claim local Phlex servers from this account (the
++ reverse-tunnel relay for Phlix media servers — once you sign in,
+you'll be able to claim local Phlix servers from this account (the
 "claim a server" workflow ships in Phase C).
 
 ## Prerequisites
 
-- A reachable `phlex-hub` instance (your own self-hosted one, or a
+- A reachable `phlix-hub` instance (your own self-hosted one, or a
   shared deployment your team operates). The default URL during
   development is `http://localhost:8800`.
 - A web browser. The MVP uses standard HTML forms — no client-side JS
@@ -24,7 +24,7 @@ you'll be able to claim local Phlex servers from this account (the
      it's stored.
 3. Submit the form. On success the hub:
    - Creates your account.
-   - Sets two cookies (`phlex_hub_token` and `phlex_hub_refresh`).
+   - Sets two cookies (`phlix_hub_token` and `phlix_hub_refresh`).
    - Redirects you to `/my-servers`.
 
 If you're the very first person to sign up on a fresh hub deployment
@@ -46,12 +46,12 @@ email" field — the form looks up both in turn.
 `/my-servers` is the post-login landing page. In B.7 it shows the
 empty-state placeholder copy:
 
-> You haven't claimed any servers yet. Open your local Phlex install
-> and use the "Claim with Phlex Hub" flow to attach it to this
+> You haven't claimed any servers yet. Open your local Phlix install
+> and use the "Claim with Phlix Hub" flow to attach it to this
 > account.
 
 The actual server claim workflow + the populated server list arrive
-in Phase C (steps C.3 and C.4 of `PHLEX_EXPANSION_PLAN.md`).
+in Phase C (steps C.3 and C.4 of `PHLIX_EXPANSION_PLAN.md`).
 
 ## Log out
 
@@ -67,7 +67,7 @@ The hub clears your session cookies and bounces you back to `/`.
 | "Password must be at least 8 characters" | Choose a longer password.                                                                               |
 | "Invalid email format"                    | The address has to pass PHP's `FILTER_VALIDATE_EMAIL`.                                                  |
 | "Invalid username or password" on login   | The username/email/password combination didn't match anything on file.                                  |
-| Redirect loop to `/login`                 | Your `phlex_hub_token` cookie expired. Log in again.                                                    |
+| Redirect loop to `/login`                 | Your `phlix_hub_token` cookie expired. Log in again.                                                    |
 
 ## JSON API alternative
 

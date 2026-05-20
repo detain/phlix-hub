@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\LibraryShare;
+use Phlix\Hub\Hub\LibraryShare;
 
 /**
  * Unit tests for {@see LibraryShare}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.5.0
  *
- * @covers \Phlex\Hub\Hub\LibraryShare
+ * @covers \Phlix\Hub\Hub\LibraryShare
  */
 final class LibraryShareTest extends TestCase
 {

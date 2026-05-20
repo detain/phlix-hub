@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Common\Logger;
+namespace Phlix\Hub\Tests\unit\Common\Logger;
 
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see AuditLogger}.
  *
- * @package Phlex\Hub\Tests\unit\Common\Logger
+ * @package Phlix\Hub\Tests\unit\Common\Logger
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Common\Logger\AuditLogger
+ * @covers \Phlix\Hub\Common\Logger\AuditLogger
  */
 final class AuditLoggerTest extends TestCase
 {

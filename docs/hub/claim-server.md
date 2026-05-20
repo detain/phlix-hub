@@ -1,18 +1,18 @@
 # Claim a Server
 
-**Applies to:** Hub (phlex-hub)
+**Applies to:** Hub (phlix-hub)
 
-Claiming attaches a running Phlex Media Server to your Hub account so it appears in your [My Servers](./my-servers.md) dashboard and can be accessed through the Hub relay when direct access is unavailable.
+Claiming attaches a running Phlix Media Server to your Hub account so it appears in your [My Servers](./my-servers.md) dashboard and can be accessed through the Hub relay when direct access is unavailable.
 
 ## Prerequisites
 
-- A running Phlex Media Server (any platform)
+- A running Phlix Media Server (any platform)
 - The server must be able to reach the Hub's public URL
 - You must have a Hub account
 
 ## Step 1 — Generate a claim code on the server
 
-On the machine running Phlex Media Server, run:
+On the machine running Phlix Media Server, run:
 
 ```bash
 php scripts/pair-with-hub.php
@@ -22,7 +22,7 @@ The script outputs a claim code in the format `XXXX-XXXX` (for example `A2B4-C9D
 
 ## Step 2 — Enter the claim code
 
-1. Log in to Phlex Hub.
+1. Log in to Phlix Hub.
 2. Click **Claim a New Server** (on the My Servers page, or navigate directly to `/claim-server`).
 3. Enter the claim code from Step 1.
 4. Click **Claim Server**.

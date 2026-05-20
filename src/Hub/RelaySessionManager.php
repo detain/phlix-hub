@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 use InvalidArgumentException;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 /**
@@ -17,7 +17,7 @@ use Workerman\MySQL\Connection;
  *   - Track bytes sent/received per session
  *   - Close a relay session when the server disconnects
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.12.0
  */
 class RelaySessionManager
