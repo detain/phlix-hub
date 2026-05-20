@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Hub\Http\Controllers;
 
 use Phlex\Hub\Auth\UserRepository;
+use Phlex\Hub\Common\Logger\AuditLogger;
 use Phlex\Hub\Http\Request;
 use Phlex\Hub\Http\Response;
 use Phlex\Hub\Requests\RequestManager;
@@ -33,11 +34,13 @@ final class RequestController
      * @param RequestManager      $manager      Request lifecycle manager.
      * @param RequestNotification $notification Notification side-channel.
      * @param UserRepository      $users        Used for admin gating.
+     * @param AuditLogger         $audit        Audit logger for admin actions.
      */
     public function __construct(
         private readonly RequestManager $manager,
         private readonly RequestNotification $notification,
         private readonly UserRepository $users,
+        private readonly AuditLogger $audit,
     ) {
     }
 

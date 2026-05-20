@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Hub\Hub;
 
 use InvalidArgumentException;
+use Phlex\Hub\Common\Logger\AuditLogger;
 use Phlex\Hub\Common\Logger\StructuredLogger;
 use Phlex\Hub\Common\Logger\LogChannels;
 use Phlex\Shared\Hub\ClaimRequest;
@@ -28,12 +29,14 @@ class ClaimRequestHandler
      * @param Connection          $db         MySQL connection.
      * @param Ed25519KeyManager   $keyManager Key manager (used indirectly via EnrollmentJwtService).
      * @param StructuredLogger     $logger     Application logger.
+     * @param AuditLogger          $audit     Audit logger for security events.
      * @param string               $hubBaseUrl Hub's public base URL.
      */
     public function __construct(
         private readonly Connection $db,
         private readonly Ed25519KeyManager $keyManager,
         private readonly StructuredLogger $logger,
+        private readonly AuditLogger $audit,
         private readonly string $hubBaseUrl,
     ) {
     }
@@ -128,6 +131,7 @@ class ClaimRequestHandler
     {
         $normalizedCode = strtoupper((string) preg_replace('/[^A-Z0-9]/', '', $claimCode));
         if ($normalizedCode === '') {
+            $this->audit->logFailedAuth('CLAIM_CODE_INVALID', ['claim_code' => $claimCode]);
             throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
         }
 
@@ -144,6 +148,7 @@ class ClaimRequestHandler
         );
 
         if (empty($rows)) {
+            $this->audit->logFailedAuth('CLAIM_CODE_NOT_FOUND', ['claim_code' => $normalizedCode]);
             throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
         }
         /** @var array<string, mixed> $row */
@@ -153,9 +158,14 @@ class ClaimRequestHandler
         $claimedBy = $row['claimed_by'] ?? null;
 
         if ($expiresAt < $now) {
+            $this->audit->logFailedAuth('CLAIM_CODE_EXPIRED', ['claim_code' => $normalizedCode]);
             throw new InvalidArgumentException('CLAIM_CODE_EXPIRED');
         }
         if ($claimedBy !== null) {
+            $this->audit->logFailedAuth('CLAIM_CODE_ALREADY_CLAIMED', [
+                'claim_code' => $normalizedCode,
+                'claimed_by' => $claimedBy,
+            ]);
             throw new InvalidArgumentException('CLAIM_CODE_ALREADY_CLAIMED');
         }
 
