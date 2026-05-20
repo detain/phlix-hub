@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Middleware;
+namespace Phlix\Hub\Http\Middleware;
 
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
-use Phlex\Shared\Auth\JwtClaims;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
+use Phlix\Shared\Auth\JwtClaims;
 
 /**
  * Hub-side bearer/cookie auth middleware.
  *
  * Reads the access JWT from either the `Authorization: Bearer …` header
- * (the API surface) or a `phlex_hub_token` cookie (the SSR pages), then
+ * (the API surface) or a `phlix_hub_token` cookie (the SSR pages), then
  * hydrates {@see Request::$userId} when the token validates. When the
  * token is missing or invalid:
  *
@@ -23,13 +23,13 @@ use Phlex\Shared\Auth\JwtClaims;
  *  - HTML routes redirect to `/login` so the browser experience is
  *    "click → bounce to login".
  *
- * @package Phlex\Hub\Http\Middleware
+ * @package Phlix\Hub\Http\Middleware
  * @since 0.2.0
  */
 final class AuthMiddleware
 {
-    public const COOKIE_ACCESS = 'phlex_hub_token';
-    public const COOKIE_REFRESH = 'phlex_hub_refresh';
+    public const COOKIE_ACCESS = 'phlix_hub_token';
+    public const COOKIE_REFRESH = 'phlix_hub_refresh';
 
     /**
      * @param JwtHandler     $jwt   JWT validator.

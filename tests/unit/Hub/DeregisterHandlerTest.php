@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Hub\DeregisterHandler;
-use Phlex\Hub\Hub\Ed25519KeyManager;
-use Phlex\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\DeregisterHandler;
+use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Hub\EnrollmentJwtService;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see DeregisterHandler}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Hub\DeregisterHandler
+ * @covers \Phlix\Hub\Hub\DeregisterHandler
  */
 final class DeregisterHandlerTest extends TestCase
 {
@@ -26,7 +26,7 @@ final class DeregisterHandlerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-hub-deregister-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-deregister-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
     }
 

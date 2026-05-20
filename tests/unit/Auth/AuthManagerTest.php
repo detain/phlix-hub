@@ -2,28 +2,28 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Auth;
+namespace Phlix\Hub\Tests\unit\Auth;
 
 use InvalidArgumentException;
-use Phlex\Hub\Auth\AuthManager;
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Shared\Auth\JwtClaims;
-use Phlex\Shared\Events\Auth\UserCreated;
-use Phlex\Shared\Events\Auth\UserLoggedIn;
-use Phlex\Shared\Events\Auth\UserLoggedOut;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Shared\Auth\JwtClaims;
+use Phlix\Shared\Events\Auth\UserCreated;
+use Phlix\Shared\Events\Auth\UserLoggedIn;
+use Phlix\Shared\Events\Auth\UserLoggedOut;
 use PHPUnit\Framework\TestCase;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 /**
  * Unit tests for {@see AuthManager}.
  *
- * @package Phlex\Hub\Tests\unit\Auth
+ * @package Phlix\Hub\Tests\unit\Auth
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Auth\AuthManager
+ * @covers \Phlix\Hub\Auth\AuthManager
  */
 final class AuthManagerTest extends TestCase
 {
@@ -304,7 +304,7 @@ final class AuthManagerTest extends TestCase
         $result = $mgr->register('xanthe', 'x@example.com', 'longenough-pw');
 
         $claims = $result['claims'];
-        self::assertSame(JwtClaims::ISS_PHLEX_HUB, $claims['iss']);
+        self::assertSame(JwtClaims::ISS_PHLIX_HUB, $claims['iss']);
         self::assertSame(JwtClaims::AUD_HUB, $claims['aud']);
         self::assertSame('u-x', $claims['sub']);
         self::assertSame(JwtClaims::TYPE_ACCESS, $claims['type']);

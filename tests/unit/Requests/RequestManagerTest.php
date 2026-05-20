@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Requests;
+namespace Phlix\Hub\Tests\unit\Requests;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Requests\RequestManager;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Shared\Arr\ArrClientFactory;
+use Phlix\Hub\Requests\RequestManager;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Shared\Arr\ArrClientFactory;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see RequestManager}.
  *
- * @package Phlex\Hub\Tests\unit\Requests
+ * @package Phlix\Hub\Tests\unit\Requests
  * @since 0.6.0
  *
- * @covers \Phlex\Hub\Requests\RequestManager
+ * @covers \Phlix\Hub\Requests\RequestManager
  */
 final class RequestManagerTest extends TestCase
 {

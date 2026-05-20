@@ -9,7 +9,7 @@ return [
     'workerman_log' => getenv('HUB_WORKERMAN_LOG') ?: __DIR__ . '/../.logs/workerman.log',
 
     // Sonarr/Radarr endpoints used by the K.3 request UI.
-    // See \Phlex\Shared\Arr\ArrClientFactory for the expected shape.
+    // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.
     'arr' => [
         'sonarr' => [
             'url'     => getenv('HUB_SONARR_URL') ?: 'http://localhost:8989',

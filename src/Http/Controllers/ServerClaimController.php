@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Hub\ClaimRequestHandler;
-use Phlex\Hub\Hub\HubServicesProvider;
-use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
-use Phlex\Shared\Hub\ClaimRequest;
-use Phlex\Shared\Hub\ClaimResponse;
+use Phlix\Hub\Hub\ClaimRequestHandler;
+use Phlix\Hub\Hub\HubServicesProvider;
+use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
+use Phlix\Shared\Hub\ClaimRequest;
+use Phlix\Shared\Hub\ClaimResponse;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -19,7 +19,7 @@ use Psr\Container\ContainerInterface;
  * POST /api/v1/server-claims/new    — server initiates pairing (public)
  * POST /api/v1/server-claims/claim  — user claims a server (auth required)
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.3.0
  */
 final class ServerClaimController
@@ -43,7 +43,7 @@ final class ServerClaimController
         if ($protocolHeader !== HubProtocolMiddleware::REQUIRED_VERSION) {
             return (new Response())->status(400)->json([
                 'error' => 'HUB_PROTOCOL_UNSUPPORTED',
-                'message' => 'Accept-Phlex-Protocol: v1 required',
+                'message' => 'Accept-Phlix-Protocol: v1 required',
             ]);
         }
 
@@ -119,7 +119,7 @@ final class ServerClaimController
             ]),
             'HUB_PROTOCOL_UNSUPPORTED' => (new Response())->status(400)->json([
                 'error' => 'HUB_PROTOCOL_UNSUPPORTED',
-                'message' => 'Accept-Phlex-Protocol: v1 required',
+                'message' => 'Accept-Phlix-Protocol: v1 required',
             ]),
             'SERVER_KEY_INVALID' => (new Response())->status(400)->json([
                 'error' => 'SERVER_KEY_INVALID',

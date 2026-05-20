@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
-use Phlex\Shared\Hub\ServerInfoDto;
+use Phlix\Shared\Hub\ServerInfoDto;
 use Workerman\MySQL\Connection;
 
 /**
  * Returns server info for hub dashboard and API consumers.
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.3.0
  */
 class ServerInfoHandler

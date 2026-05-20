@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Accept Invite — Phlex Hub{/block}
+{block name="title"}Accept Invite — Phlix Hub{/block}
 
 {block name="content"}
 <div class="accept-invite-page">

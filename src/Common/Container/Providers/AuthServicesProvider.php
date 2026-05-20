@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Container\Providers;
+namespace Phlix\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Hub\Auth\AuthManager;
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Container\ServiceProviderInterface;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Common\Logger\LogChannels;
-use Phlex\Hub\Common\Logger\LoggerFactory;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
@@ -29,7 +29,7 @@ use function DI\get;
  *  - {@see AuditLogger} → singleton bound to {@see LogChannels::AUDIT}.
  *  - {@see AuthManager} → autowired with dispatcher optional.
  *
- * @package Phlex\Hub\Common\Container\Providers
+ * @package Phlix\Hub\Common\Container\Providers
  * @since 0.2.0
  */
 final class AuthServicesProvider implements ServiceProviderInterface
@@ -43,7 +43,7 @@ final class AuthServicesProvider implements ServiceProviderInterface
         $secret = self::resolveSecret($authConfig);
         $accessTtl = self::intOr($authConfig, 'access_ttl', 3600);
         $refreshTtl = self::intOr($authConfig, 'refresh_ttl', 604800);
-        $issuer = self::stringOr($authConfig, 'issuer', 'phlex-hub');
+        $issuer = self::stringOr($authConfig, 'issuer', 'phlix-hub');
         $audience = self::stringOr($authConfig, 'audience', 'hub');
 
         $builder->addDefinitions([

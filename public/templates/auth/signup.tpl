@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Sign up — Phlex Hub{/block}
+{block name="title"}Sign up — Phlix Hub{/block}
 
 {block name="content"}
     <h2>Create your account</h2>

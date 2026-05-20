@@ -2,26 +2,26 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Auth\JwtClaims;
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Hub\InviteLink;
-use Phlex\Hub\Hub\InviteLinkHandler;
-use Phlex\Hub\Hub\LibraryShare;
-use Phlex\Hub\Hub\LibrarySharingHandler;
+use Phlix\Hub\Auth\JwtClaims;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\InviteLink;
+use Phlix\Hub\Hub\InviteLinkHandler;
+use Phlix\Hub\Hub\LibraryShare;
+use Phlix\Hub\Hub\LibrarySharingHandler;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see InviteLinkHandler}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.6.0
  *
- * @covers \Phlex\Hub\Hub\InviteLinkHandler
+ * @covers \Phlix\Hub\Hub\InviteLinkHandler
  */
 final class InviteLinkHandlerTest extends TestCase
 {

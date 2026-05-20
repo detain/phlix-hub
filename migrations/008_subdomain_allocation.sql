@@ -3,8 +3,8 @@
 -- Adds subdomain column to servers table for C.8 public hostname claim.
 -- Also creates dns_challenges table for Let's Encrypt ACME DNS-01 challenges.
 --
--- Background: Each server gets a unique subdomain (e.g. abc12345.phlex.media)
--- when it enrolls. The hub operator configures wildcard DNS for *.phlex.media.
+-- Background: Each server gets a unique subdomain (e.g. abc12345.phlix.media)
+-- when it enrolls. The hub operator configures wildcard DNS for *.phlix.media.
 -- TLS certificates are provisioned via Let's Encrypt ACME DNS-01 challenge.
 
 ALTER TABLE servers

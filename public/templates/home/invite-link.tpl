@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Invite Link — Phlex Hub{/block}
+{block name="title"}Invite Link — Phlix Hub{/block}
 
 {block name="content"}
 <div class="invite-link-page">
@@ -45,7 +45,7 @@
         <h3>How invite links work</h3>
         <ul>
             <li>Share this link with friends or family</li>
-            <li>They'll need a Phlex Hub account (free to sign up)</li>
+            <li>They'll need a Phlix Hub account (free to sign up)</li>
             <li>Clicking the link grants them {$permission|escape:'html'} access to {if $library_id}the specified library{else}all your libraries{/if}</li>
             <li>Links can only be used a limited number of times</li>
             <li>You can revoke access at any time from your dashboard</li>

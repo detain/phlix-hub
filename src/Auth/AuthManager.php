@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Auth;
+namespace Phlix\Hub\Auth;
 
 use InvalidArgumentException;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Shared\Auth\JwtClaims;
-use Phlex\Shared\Events\Auth\UserCreated;
-use Phlex\Shared\Events\Auth\UserLoggedIn;
-use Phlex\Shared\Events\Auth\UserLoggedOut;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Shared\Auth\JwtClaims;
+use Phlix\Shared\Events\Auth\UserCreated;
+use Phlix\Shared\Events\Auth\UserLoggedIn;
+use Phlix\Shared\Events\Auth\UserLoggedOut;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -24,10 +24,10 @@ use Workerman\MySQL\Connection;
  *  - persists or validates state through {@see UserRepository},
  *  - mints / validates tokens through {@see JwtHandler},
  *  - records every action through {@see AuditLogger}, and
- *  - dispatches the matching `Phlex\Shared\Events\Auth\*` event on the
+ *  - dispatches the matching `Phlix\Shared\Events\Auth\*` event on the
  *    optional PSR-14 dispatcher.
  *
- * @package Phlex\Hub\Auth
+ * @package Phlix\Hub\Auth
  * @since 0.2.0
  */
 class AuthManager

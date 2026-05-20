@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * JSON API for the authenticated user's server list.
  *
  * `GET /api/v1/me/servers` — returns all servers owned by the user.
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.4.0
  */
 final class ServerListController

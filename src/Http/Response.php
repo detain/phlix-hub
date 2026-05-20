@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http;
+namespace Phlix\Hub\Http;
 
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
  * Fluent HTTP response builder.
  *
- * Mirrors the public surface of `phlex-server`'s
- * `Phlex\Server\Http\Response` so the two repos can share idioms.
+ * Mirrors the public surface of `phlix-server`'s
+ * `Phlix\Server\Http\Response` so the two repos can share idioms.
  * {@see Response::toWorkermanResponse()} converts the builder into the
  * Workerman response object the worker sends down the socket.
  *
- * @package Phlex\Hub\Http
+ * @package Phlix\Hub\Http
  * @since 0.1.0
  */
 class Response

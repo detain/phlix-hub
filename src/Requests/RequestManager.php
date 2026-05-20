@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Requests;
+namespace Phlix\Hub\Requests;
 
-use Phlex\Hub\Common\Logger\LogChannels;
-use Phlex\Hub\Common\Logger\LoggerFactory;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Shared\Arr\ArrClientFactory;
-use Phlex\Shared\Arr\RadarrClient;
-use Phlex\Shared\Arr\SonarrClient;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Shared\Arr\ArrClientFactory;
+use Phlix\Shared\Arr\RadarrClient;
+use Phlix\Shared\Arr\SonarrClient;
 use Workerman\MySQL\Connection;
 
 /**
@@ -20,7 +20,7 @@ use Workerman\MySQL\Connection;
  * approved, the manager talks to Sonarr/Radarr via {@see ArrClientFactory}
  * to actually pull the title.
  *
- * @package Phlex\Hub\Requests
+ * @package Phlix\Hub\Requests
  * @since 0.6.0
  *
  * @phpstan-type RequestRow array{

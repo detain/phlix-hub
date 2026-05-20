@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 /**
  * DTO representing a library shared with the current user.
  *
  * This is what a collaborator sees when browsing "Shared with me".
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.5.0
  */
 final class SharedLibraryDto

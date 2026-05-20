@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 use InvalidArgumentException;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Hub\Dns\StaticZoneManager;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\Dns\StaticZoneManager;
 use Workerman\MySQL\Connection;
 
 /**
@@ -18,12 +18,12 @@ use Workerman\MySQL\Connection;
  *   - Create/remove DNS records via the configured DNS provider
  *   - Provision and manage TLS certificates
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.12.0
  */
 class DnsAliasManager
 {
-    public const DOMAIN = 'phlex.media';
+    public const DOMAIN = 'phlix.media';
 
     /** Subdomain length (8 chars). */
     private const SUBDOMAIN_LENGTH = 8;
@@ -32,14 +32,14 @@ class DnsAliasManager
      * @param Connection                                  $db           MySQL connection.
      * @param StaticZoneManager                          $dnsProvider  DNS provider for record management.
      * @param TlsCertificateManager                      $certManager TLS certificate manager.
-     * @param \Phlex\Hub\Common\Logger\StructuredLogger    $logger      Application logger.
+     * @param \Phlix\Hub\Common\Logger\StructuredLogger    $logger      Application logger.
      * @param string                                      $providerType DNS provider type.
      */
     public function __construct(
         private readonly Connection $db,
         private readonly StaticZoneManager $dnsProvider,
         private readonly TlsCertificateManager $certManager,
-        private readonly \Phlex\Hub\Common\Logger\StructuredLogger $logger,
+        private readonly \Phlix\Hub\Common\Logger\StructuredLogger $logger,
         private readonly string $providerType = 'static',
     ) {
     }
@@ -199,7 +199,7 @@ class DnsAliasManager
      *
      * @param string $subdomain Subdomain label.
      *
-     * @return string FQDN (e.g. "abc12345.phlex.media").
+     * @return string FQDN (e.g. "abc12345.phlix.media").
      *
      * @since 0.12.0
      */

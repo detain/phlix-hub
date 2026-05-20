@@ -1,6 +1,6 @@
 # Sharing Libraries with Friends and Family
 
-Phlex Hub allows you to share your media libraries with other Hub users. This is perfect for sharing your movie collection with a partner or letting your children access your TV shows.
+Phlix Hub allows you to share your media libraries with other Hub users. This is perfect for sharing your movie collection with a partner or letting your children access your TV shows.
 
 ## How Library Sharing Works
 

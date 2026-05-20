@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Auth\AuthManager;
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * JSON endpoint returning the current user's record and decoded claims.
  *
- * Wired behind {@see \Phlex\Hub\Http\Middleware\AuthMiddleware}, so by
+ * Wired behind {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}, so by
  * the time this controller runs `$request->userId` and `$request->claims`
  * are populated.
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.2.0
  */
 final class MeController

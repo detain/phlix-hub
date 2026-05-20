@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Hub\LibraryShare;
-use Phlex\Hub\Hub\LibrarySharingHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\LibraryShare;
+use Phlix\Hub\Hub\LibrarySharingHandler;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see LibrarySharingHandler}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.5.0
  *
- * @covers \Phlex\Hub\Hub\LibrarySharingHandler
+ * @covers \Phlix\Hub\Hub\LibrarySharingHandler
  */
 final class LibrarySharingHandlerTest extends TestCase
 {

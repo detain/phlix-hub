@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests;
+namespace Phlix\Hub\Tests;
 
-use Phlex\Hub\Version;
+use Phlix\Hub\Version;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
 /**
  * Unit tests for {@see Version}.
  *
- * @package Phlex\Hub\Tests
+ * @package Phlix\Hub\Tests
  * @since 0.1.0
  *
- * @covers \Phlex\Hub\Version
+ * @covers \Phlix\Hub\Version
  */
 final class VersionTest extends TestCase
 {

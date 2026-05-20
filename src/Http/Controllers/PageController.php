@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Auth\AuthManager;
-use Phlex\Hub\Common\WebPortal\PageRenderer;
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Common\WebPortal\PageRenderer;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * SSR page controller — serves the Smarty templates that back
@@ -16,10 +16,10 @@ use Phlex\Hub\Http\Response;
  *
  * Each invocation reads `$request->path` and dispatches to the matching
  * template render. Keeping this single-class-many-actions shape lets
- * us register one controller with the {@see \Phlex\Hub\Http\Router} per
+ * us register one controller with the {@see \Phlix\Hub\Http\Router} per
  * path while keeping per-template assigns close together.
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.2.0
  */
 final class PageController

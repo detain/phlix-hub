@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 use InvalidArgumentException;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Shared\Hub\HeartbeatDto;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Shared\Hub\HeartbeatDto;
 use Workerman\MySQL\Connection;
 
 /**
@@ -18,7 +18,7 @@ use Workerman\MySQL\Connection;
  *   3. Updates servers.last_seen_at, status='online', version,
  *      hostname_candidates_json, heartbeat_interval.
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.3.0
  */
 class HeartbeatHandler

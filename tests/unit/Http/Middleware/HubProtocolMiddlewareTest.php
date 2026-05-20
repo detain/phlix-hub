@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Middleware;
+namespace Phlix\Hub\Tests\unit\Http\Middleware;
 
-use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
-use Phlex\Hub\Http\Request;
+use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see HubProtocolMiddleware}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Middleware
+ * @package Phlix\Hub\Tests\unit\Http\Middleware
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Http\Middleware\HubProtocolMiddleware
+ * @covers \Phlix\Hub\Http\Middleware\HubProtocolMiddleware
  */
 final class HubProtocolMiddlewareTest extends TestCase
 {
@@ -23,7 +23,7 @@ final class HubProtocolMiddlewareTest extends TestCase
         $middleware = new HubProtocolMiddleware();
 
         $request = new Request();
-        $request->headers['Accept-Phlex-Protocol'] = 'v1';
+        $request->headers['Accept-Phlix-Protocol'] = 'v1';
 
         $result = $middleware($request);
 
@@ -48,7 +48,7 @@ final class HubProtocolMiddlewareTest extends TestCase
         $middleware = new HubProtocolMiddleware();
 
         $request = new Request();
-        $request->headers['Accept-Phlex-Protocol'] = 'v2';
+        $request->headers['Accept-Phlix-Protocol'] = 'v2';
 
         $result = $middleware($request);
 
@@ -62,7 +62,7 @@ final class HubProtocolMiddlewareTest extends TestCase
         $middleware = new HubProtocolMiddleware();
 
         $request = new Request();
-        $request->headers['Accept-Phlex-Protocol'] = '';
+        $request->headers['Accept-Phlix-Protocol'] = '';
 
         $result = $middleware($request);
 

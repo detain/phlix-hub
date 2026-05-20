@@ -6,11 +6,11 @@
  * - Fade animation on card removal
  * - Empty state reveal when all servers are removed
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.4.0
  */
 
-window.PhlexApp = window.PhlexApp || {};
+window.PhlixApp = window.PhlixApp || {};
 
 (function () {
     'use strict';
@@ -21,7 +21,7 @@ window.PhlexApp = window.PhlexApp || {};
      * @return string|null
      */
     function getAccessToken() {
-        const match = document.cookie.match(/(?:^|;\s*)phlex_hub_token=([^;]+)/);
+        const match = document.cookie.match(/(?:^|;\s*)phlix_hub_token=([^;]+)/);
         if (match) {
             return decodeURIComponent(match[1]);
         }
@@ -47,7 +47,7 @@ window.PhlexApp = window.PhlexApp || {};
                 <h2>No servers yet</h2>
                 <p>You haven't claimed any servers yet.</p>
                 <p>To get started, run <code>php scripts/pair-with-hub.php</code>
-                   on your Phlex server and enter the claim code below.</p>
+                   on your Phlix server and enter the claim code below.</p>
                 <a href="/claim-server" class="btn btn-primary">Claim a Server</a>
             </div>
         `;
@@ -128,7 +128,7 @@ window.PhlexApp = window.PhlexApp || {};
 
     document.addEventListener('DOMContentLoaded', init);
 
-    window.PhlexApp.MyServersPage = {
+    window.PhlixApp.MyServersPage = {
         init: init,
     };
 })();

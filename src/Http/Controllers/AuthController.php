@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
 use InvalidArgumentException;
-use Phlex\Hub\Auth\AuthManager;
-use Phlex\Hub\Common\WebPortal\PageRenderer;
-use Phlex\Hub\Http\Middleware\AuthMiddleware;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
-use Phlex\Shared\Events\Auth\UserLoggedOut;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Common\WebPortal\PageRenderer;
+use Phlix\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
+use Phlix\Shared\Events\Auth\UserLoggedOut;
 use Throwable;
 
 /**
@@ -20,11 +20,11 @@ use Throwable;
  *
  * Decision: this class is invokable as a dispatcher-style controller —
  * it inspects {@see Request::$method} and {@see Request::$path} so the
- * existing {@see \Phlex\Hub\Http\Router} signature stays minimal. Future
+ * existing {@see \Phlix\Hub\Http\Router} signature stays minimal. Future
  * phases that need finer-grained route → method dispatch can split this
  * into per-action invokables.
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.2.0
  */
 final class AuthController

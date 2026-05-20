@@ -1,6 +1,6 @@
-# Environment variables — `phlex-hub`
+# Environment variables — `phlix-hub`
 
-Every runtime setting `phlex-hub` reads is exposed as an environment
+Every runtime setting `phlix-hub` reads is exposed as an environment
 variable prefixed with `HUB_`. The configuration files under `config/`
 are thin wrappers that fall back to safe development defaults when a
 variable is unset.
@@ -20,9 +20,9 @@ variable is unset.
 | ----------------- | ------------- | ------------------------------------------------- |
 | `HUB_DB_HOST`     | `127.0.0.1`   | MySQL host the hub connects to.                   |
 | `HUB_DB_PORT`     | `3306`        | MySQL port.                                       |
-| `HUB_DB_USER`     | `phlex_hub`   | MySQL username.                                   |
-| `HUB_DB_PASSWORD` | `phlex_hub`   | MySQL password. **Override in any non-dev env.**  |
-| `HUB_DB_NAME`     | `phlex_hub`   | Database name.                                    |
+| `HUB_DB_USER`     | `phlix_hub`   | MySQL username.                                   |
+| `HUB_DB_PASSWORD` | `phlix_hub`   | MySQL password. **Override in any non-dev env.**  |
+| `HUB_DB_NAME`     | `phlix_hub`   | Database name.                                    |
 
 ## Auth (`config/auth.php`)
 
@@ -42,7 +42,7 @@ explicitly in production.
 
 | Variable                       | Default | Description                                                                                                                       |
 | ------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `PHLEX_HUB_CONTAINER_COMPILE`  | unset   | When truthy (`1`, `true`, `yes`, `on`), PHP-DI writes compiled definitions to `var/cache/container/` for faster cold-start. Off for dev. |
+| `PHLIX_HUB_CONTAINER_COMPILE`  | unset   | When truthy (`1`, `true`, `yes`, `on`), PHP-DI writes compiled definitions to `var/cache/container/` for faster cold-start. Off for dev. |
 
 ## Logging
 
@@ -60,7 +60,7 @@ php public/index.php start
 HUB_PORT=9000 HUB_DB_HOST=mysql.internal php public/index.php start
 
 # Production with compiled container
-PHLEX_HUB_CONTAINER_COMPILE=1 \
+PHLIX_HUB_CONTAINER_COMPILE=1 \
   HUB_DB_HOST=db.prod \
   HUB_DB_PASSWORD="$(cat /run/secrets/hub-db)" \
   HUB_WORKERS=8 \

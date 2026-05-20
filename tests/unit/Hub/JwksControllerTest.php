@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
-use Phlex\Hub\Hub\Ed25519KeyManager;
-use Phlex\Hub\Http\Controllers\HubJwksController;
-use Phlex\Hub\Http\Request;
+use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Http\Controllers\HubJwksController;
+use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see HubJwksController}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Http\Controllers\HubJwksController
+ * @covers \Phlix\Hub\Http\Controllers\HubJwksController
  */
 final class JwksControllerTest extends TestCase
 {
@@ -24,7 +24,7 @@ final class JwksControllerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-hub-jwks-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-jwks-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
     }
 

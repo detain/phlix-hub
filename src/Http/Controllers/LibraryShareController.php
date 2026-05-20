@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
 use InvalidArgumentException;
-use Phlex\Hub\Hub\LibraryShare;
-use Phlex\Hub\Hub\LibrarySharingHandler;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Hub\LibraryShare;
+use Phlix\Hub\Hub\LibrarySharingHandler;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * API controller for library sharing endpoints.
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.5.0
  */
 final class LibraryShareController

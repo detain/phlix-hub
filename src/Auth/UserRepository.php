@@ -2,24 +2,24 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Auth;
+namespace Phlix\Hub\Auth;
 
 use Workerman\MySQL\Connection;
 
 /**
  * Hub-side users repository.
  *
- * Mirrors the public surface of `phlex-server`'s
- * `\Phlex\Auth\UserRepository` but adapted to:
+ * Mirrors the public surface of `phlix-server`'s
+ * `\Phlix\Auth\UserRepository` but adapted to:
  *
  *  - the hub schema in `migrations/001_users.sql` (no `user_settings`
  *    table, no `avatar_url`, no `last_login`-named column — the hub
  *    uses `updated_at` for now and Phase C may add a `last_login_at`);
  *  - workerman/mysql's named-placeholder requirement (see
- *    {@see \Phlex\Hub\Common\Database\MigrationRunner::recordApplied()}
+ *    {@see \Phlix\Hub\Common\Database\MigrationRunner::recordApplied()}
  *    for the binding quirk that bit us in B.6).
  *
- * @package Phlex\Hub\Auth
+ * @package Phlix\Hub\Auth
  * @since 0.2.0
  */
 class UserRepository
@@ -85,7 +85,7 @@ class UserRepository
     /**
      * Look up a user row only when `is_admin = 1`. Returns null for both
      * unknown ids and known-but-non-admin users. Used by
-     * {@see \Phlex\Hub\Http\Middleware\AdminMiddleware}.
+     * {@see \Phlix\Hub\Http\Middleware\AdminMiddleware}.
      *
      * @return array<string, mixed>|null
      */
@@ -103,7 +103,7 @@ class UserRepository
 
     /**
      * Total user count. Used by
-     * {@see \Phlex\Hub\Auth\AuthManager::register()} to detect the very
+     * {@see \Phlix\Hub\Auth\AuthManager::register()} to detect the very
      * first registration and auto-promote that user to admin.
      */
     public function countUsers(): int
@@ -254,7 +254,7 @@ class UserRepository
     /**
      * Generate a UUID v4 string in the canonical 8-4-4-4-12 layout. Kept
      * inline so the hub doesn't take a hard dependency on a UUID
-     * library; matches the helper used throughout `phlex-server`.
+     * library; matches the helper used throughout `phlix-server`.
      */
     public static function generateUuid(): string
     {

@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Container\Providers;
+namespace Phlix\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Hub\Common\Container\ServiceProviderInterface;
-use Phlex\Hub\Common\Database\ConnectionPool;
-use Phlex\Hub\Common\Logger\LogChannels;
-use Phlex\Hub\Common\Logger\LoggerFactory;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Common\Database\ConnectionPool;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
 
 /**
- * Registers the foundational bindings used across `phlex-hub`.
+ * Registers the foundational bindings used across `phlix-hub`.
  *
  * - {@see Connection} resolves to the singleton MySQL connection vended
  *   by {@see ConnectionPool::getConnection()}.
@@ -25,7 +25,7 @@ use function DI\factory;
  *   ("logger.auth", "logger.http", etc.) so consumers can reference a
  *   channel via `DI\get('logger.auth')` rather than pulling the factory.
  *
- * @package Phlex\Hub\Common\Container\Providers
+ * @package Phlix\Hub\Common\Container\Providers
  * @since 0.1.0
  */
 final class CoreServicesProvider implements ServiceProviderInterface

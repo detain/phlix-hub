@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Hub\DnsAliasManager;
-use Phlex\Hub\Hub\EnrollmentJwtService;
-use Phlex\Hub\Hub\TlsCertificateManager;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Hub\DnsAliasManager;
+use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * Handles subdomain allocation and revocation for enrolled servers.
@@ -16,7 +16,7 @@ use Phlex\Hub\Http\Response;
  * POST   /api/v1/servers/{id}/subdomain  — allocate or retrieve subdomain
  * DELETE /api/v1/servers/{id}/subdomain  — revoke subdomain
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.12.0
  */
 final class SubdomainController

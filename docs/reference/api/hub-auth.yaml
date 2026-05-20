@@ -1,12 +1,12 @@
 openapi: 3.0.3
 info:
-  title: Phlex Hub — Auth API
+  title: Phlix Hub — Auth API
   version: 0.2.0
   description: |
-    JSON authentication surface for `phlex-hub`. Mirrors the SSR form
+    JSON authentication surface for `phlix-hub`. Mirrors the SSR form
     endpoints (`/signup`, `/login`, `/logout`) for clients that need to
     integrate programmatically. All endpoints round-trip through
-    `Phlex\Shared\Auth\JwtClaims` — the same DTO `phlex-server` will use
+    `Phlix\Shared\Auth\JwtClaims` — the same DTO `phlix-server` will use
     to validate hub-minted tokens starting in Phase C.
 
 servers:
@@ -97,7 +97,7 @@ paths:
                   type: string
               description: |
                 Provide `refresh_token` in the body, OR include the
-                `phlex_hub_refresh` cookie.
+                `phlix_hub_refresh` cookie.
       responses:
         '200':
           description: Fresh tokens issued.
@@ -153,7 +153,7 @@ components:
     cookieAuth:
       type: apiKey
       in: cookie
-      name: phlex_hub_token
+      name: phlix_hub_token
 
   schemas:
     SignupRequest:
@@ -189,7 +189,7 @@ components:
       properties:
         access_token:
           type: string
-          description: Signed JWT — round-trips through `Phlex\Shared\Auth\JwtClaims::fromPayload()`.
+          description: Signed JWT — round-trips through `Phlix\Shared\Auth\JwtClaims::fromPayload()`.
         refresh_token:
           type: string
         token_type:
@@ -228,12 +228,12 @@ components:
 
     JwtClaims:
       description: |
-        Decoded JWT payload shape — matches `Phlex\Shared\Auth\JwtClaims::toPayload()`.
+        Decoded JWT payload shape — matches `Phlix\Shared\Auth\JwtClaims::toPayload()`.
       type: object
       properties:
         iss:
           type: string
-          example: phlex-hub
+          example: phlix-hub
         aud:
           type: string
           example: hub

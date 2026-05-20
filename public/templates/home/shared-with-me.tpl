@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Shared With Me — Phlex Hub{/block}
+{block name="title"}Shared With Me — Phlix Hub{/block}
 
 {block name="content"}
 <div class="shared-libraries">

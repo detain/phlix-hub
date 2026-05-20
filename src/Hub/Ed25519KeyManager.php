@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 use RuntimeException;
 
@@ -13,7 +13,7 @@ use RuntimeException;
  * key in PEM format at the configured path. On subsequent boots, loads
  * the existing key. Supports key rotation with an overlap window.
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.3.0
  */
 final class Ed25519KeyManager

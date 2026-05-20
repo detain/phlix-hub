@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
-use Phlex\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Hub\Ed25519KeyManager;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
 /**
  * Unit tests for {@see Ed25519KeyManager}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Hub\Ed25519KeyManager
+ * @covers \Phlix\Hub\Hub\Ed25519KeyManager
  */
 final class Ed25519KeyManagerTest extends TestCase
 {
@@ -24,7 +24,7 @@ final class Ed25519KeyManagerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-hub-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
         $this->keyPath = $this->tmpDir . '/test-signing-key.pem';
     }

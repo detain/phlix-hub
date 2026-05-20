@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Controllers;
+namespace Phlix\Hub\Tests\unit\Http\Controllers;
 
-use Phlex\Hub\Hub\DeregisterHandler;
-use Phlex\Hub\Hub\HeartbeatHandler;
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Controllers\ServerController;
-use Phlex\Hub\Http\Request;
+use Phlix\Hub\Hub\DeregisterHandler;
+use Phlix\Hub\Hub\HeartbeatHandler;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Controllers\ServerController;
+use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see ServerController}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Controllers
+ * @package Phlix\Hub\Tests\unit\Http\Controllers
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Http\Controllers\ServerController
+ * @covers \Phlix\Hub\Http\Controllers\ServerController
  */
 final class ServerControllerTest extends TestCase
 {
@@ -31,7 +31,7 @@ final class ServerControllerTest extends TestCase
         $request = new Request();
         $request->method = 'POST';
         $request->path = '/api/v1/servers/srv-1/heartbeat';
-        $request->headers['Accept-Phlex-Protocol'] = 'v2';
+        $request->headers['Accept-Phlix-Protocol'] = 'v2';
         $request->body = [];
 
         $response = $controller->heartbeat($request, ['id' => 'srv-1']);
@@ -50,7 +50,7 @@ final class ServerControllerTest extends TestCase
         $request = new Request();
         $request->method = 'POST';
         $request->path = '/api/v1/servers/srv-1/heartbeat';
-        $request->headers['Accept-Phlex-Protocol'] = 'v1';
+        $request->headers['Accept-Phlix-Protocol'] = 'v1';
         $request->serverId = 'srv-2';
         $request->body = [];
 

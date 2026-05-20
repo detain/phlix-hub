@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Middleware;
+namespace Phlix\Hub\Http\Middleware;
 
-use Phlex\Hub\Hub\EnrollmentJwtService;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * Validates Ed25519 enrollment JWTs on server-facing routes.
@@ -15,7 +15,7 @@ use Phlex\Hub\Http\Response;
  * populates `$request->serverId`. Returns 401 when the token is
  * missing, malformed, or expired.
  *
- * @package Phlex\Hub\Http\Middleware
+ * @package Phlix\Hub\Http\Middleware
  * @since 0.3.0
  */
 final class EnrollmentJwtMiddleware

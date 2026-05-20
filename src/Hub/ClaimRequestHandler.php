@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 use InvalidArgumentException;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Common\Logger\LogChannels;
-use Phlex\Shared\Hub\ClaimRequest;
-use Phlex\Shared\Hub\ClaimResponse;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Shared\Hub\ClaimRequest;
+use Phlix\Shared\Hub\ClaimResponse;
 use Workerman\MySQL\Connection;
 
 /**
@@ -20,7 +20,7 @@ use Workerman\MySQL\Connection;
  *   4. Inserts servers row with status 'online'.
  *   5. Returns enrollment JWT via EnrollmentJwtService.
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.3.0
  */
 class ClaimRequestHandler

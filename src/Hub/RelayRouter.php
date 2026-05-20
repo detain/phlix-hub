@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 /**
  * Routes inbound requests to the correct relay session based on subdomain.
  *
- * When a client requests `https://{subdomain}.phlex.media/*`, the hub
+ * When a client requests `https://{subdomain}.phlix.media/*`, the hub
  * uses the Host header to look up the server and dispatch to its relay
  * session.
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.12.0
  */
 final class RelayRouter
@@ -32,7 +32,7 @@ final class RelayRouter
      * Extracts the subdomain from the Host header and resolves it to a
      * server ID, then checks for an active relay session.
      *
-     * @param string $host Host header value (e.g. "abc12345.phlex.media").
+     * @param string $host Host header value (e.g. "abc12345.phlix.media").
      *
      * @return string|null Server ID with active relay session, or null if not found.
      *
@@ -63,7 +63,7 @@ final class RelayRouter
      *
      * @param string $host Host header value.
      *
-     * @return string|null Subdomain label or null if not a subdomain of phlex.media.
+     * @return string|null Subdomain label or null if not a subdomain of phlix.media.
      *
      * @since 0.12.0
      */

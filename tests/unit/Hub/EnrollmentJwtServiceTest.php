@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
-use Phlex\Hub\Hub\Ed25519KeyManager;
-use Phlex\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Hub\EnrollmentJwtService;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see EnrollmentJwtService}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Hub\EnrollmentJwtService
+ * @covers \Phlix\Hub\Hub\EnrollmentJwtService
  */
 final class EnrollmentJwtServiceTest extends TestCase
 {
@@ -25,7 +25,7 @@ final class EnrollmentJwtServiceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-hub-enrollment-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-enrollment-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
         $keyPath = $this->tmpDir . '/signing-key.pem';
         $this->keyManager = new Ed25519KeyManager($keyPath);
@@ -64,7 +64,7 @@ final class EnrollmentJwtServiceTest extends TestCase
         $payload = $this->service->validateEnrollmentJwt($token, $kid);
 
         self::assertNotNull($payload);
-        self::assertSame('phlex-hub', $payload['iss']);
+        self::assertSame('phlix-hub', $payload['iss']);
         self::assertSame('server', $payload['aud']);
         self::assertSame($serverId, $payload['sub']);
         self::assertSame($serverId, $payload['server_id']);

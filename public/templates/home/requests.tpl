@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Request Media — Phlex Hub{/block}
+{block name="title"}Request Media — Phlix Hub{/block}
 
 {block name="content"}
 <div class="requests-page">

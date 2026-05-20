@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\Unit\Http\Controllers;
+namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\DnsAliasManager;
-use Phlex\Hub\Hub\Dns\StaticZoneManager;
-use Phlex\Hub\Hub\EnrollmentJwtService;
-use Phlex\Hub\Hub\TlsCertificateManager;
-use Phlex\Hub\Http\Controllers\SubdomainController;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\DnsAliasManager;
+use Phlix\Hub\Hub\Dns\StaticZoneManager;
+use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Http\Controllers\SubdomainController;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 class SubdomainControllerTest extends TestCase

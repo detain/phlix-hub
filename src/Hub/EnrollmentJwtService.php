@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Hub;
+namespace Phlix\Hub\Hub;
 
 /**
  * Issues and validates Ed25519-signed enrollment JWTs for servers.
@@ -10,17 +10,17 @@ namespace Phlex\Hub\Hub;
  * Enrollment JWTs are distinct from user-session JWTs:
  *   - Algorithm: EdDSA (Ed25519) instead of HS256
  *   - Audience: "server" (not "hub")
- *   - Issuer: "phlex-hub"
+ *   - Issuer: "phlix-hub"
  *   - Subject: server UUID assigned by the hub at claim time
  *   - TTL: 7 days (604800 seconds)
  *
- * @package Phlex\Hub\Hub
+ * @package Phlix\Hub\Hub
  * @since 0.3.0
  */
 class EnrollmentJwtService
 {
     private const ALGORITHM = 'EdDSA';
-    private const ISSUER = 'phlex-hub';
+    private const ISSUER = 'phlix-hub';
     private const AUDIENCE = 'server';
 
     /**

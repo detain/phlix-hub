@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<ruleset name="phlex-hub">
-    <description>PSR-12 coding standard for detain/phlex-hub.</description>
+<ruleset name="phlix-hub">
+    <description>PSR-12 coding standard for detain/phlix-hub.</description>
 
     <file>src</file>
     <file>scripts</file>

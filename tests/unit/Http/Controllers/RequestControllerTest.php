@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Http\Controllers;
+namespace Phlix\Hub\Tests\unit\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Http\Controllers\RequestController;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Requests\RequestManager;
-use Phlex\Hub\Requests\RequestNotification;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Http\Controllers\RequestController;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Requests\RequestManager;
+use Phlix\Hub\Requests\RequestNotification;
 
 /**
  * Unit tests for {@see RequestController}.
  *
- * @package Phlex\Hub\Tests\unit\Http\Controllers
+ * @package Phlix\Hub\Tests\unit\Http\Controllers
  * @since 0.6.0
  *
- * @covers \Phlex\Hub\Http\Controllers\RequestController
+ * @covers \Phlix\Hub\Http\Controllers\RequestController
  */
 final class RequestControllerTest extends TestCase
 {

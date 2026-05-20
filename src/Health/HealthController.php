@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Health;
+namespace Phlix\Hub\Health;
 
-use Phlex\Hub\Version;
-use Phlex\Shared\Version as SharedVersion;
+use Phlix\Hub\Version;
+use Phlix\Shared\Version as SharedVersion;
 
 /**
- * Liveness/readiness endpoint for `phlex-hub`.
+ * Liveness/readiness endpoint for `phlix-hub`.
  *
  * Returns a small JSON-serializable array describing service identity,
  * package versions, and the current Unix timestamp. The controller has
  * no DB or filesystem dependency on purpose so the endpoint is safe
  * to hit from monitors while the rest of the stack is starting up.
  *
- * @package Phlex\Hub\Health
+ * @package Phlix\Hub\Health
  * @since 0.1.0
  */
 final class HealthController
@@ -27,7 +27,7 @@ final class HealthController
      *     status: string,
      *     service: string,
      *     version: string,
-     *     phlexShared: string,
+     *     phlixShared: string,
      *     timestamp: int
      * }
      *
@@ -37,9 +37,9 @@ final class HealthController
     {
         return [
             'status' => 'ok',
-            'service' => 'phlex-hub',
+            'service' => 'phlix-hub',
             'version' => Version::VERSION,
-            'phlexShared' => SharedVersion::VERSION,
+            'phlixShared' => SharedVersion::VERSION,
             'timestamp' => time(),
         ];
     }

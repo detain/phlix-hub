@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Container;
+namespace Phlix\Hub\Common\Container;
 
 use DI\ContainerBuilder;
-use Phlex\Hub\Common\Container\Providers\AuthServicesProvider;
-use Phlex\Hub\Common\Container\Providers\CoreServicesProvider;
-use Phlex\Hub\Common\Container\Providers\HubServicesProvider;
-use Phlex\Hub\Common\Container\Providers\HttpServicesProvider;
+use Phlix\Hub\Common\Container\Providers\AuthServicesProvider;
+use Phlix\Hub\Common\Container\Providers\CoreServicesProvider;
+use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
+use Phlix\Hub\Common\Container\Providers\HttpServicesProvider;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -22,7 +22,7 @@ use Psr\Container\ContainerInterface;
  * B.6 / B.7 will add `AuthServicesProvider`, `HubServicesProvider`,
  * etc. as the hub grows.
  *
- * @package Phlex\Hub\Common\Container
+ * @package Phlix\Hub\Common\Container
  * @since 0.1.0
  */
 final class ContainerFactory
@@ -101,13 +101,13 @@ final class ContainerFactory
     /**
      * Whether to enable PHP-DI's compiled-container cache.
      *
-     * @return bool True when `PHLEX_HUB_CONTAINER_COMPILE` is truthy.
+     * @return bool True when `PHLIX_HUB_CONTAINER_COMPILE` is truthy.
      *
      * @since 0.1.0
      */
     private static function shouldCompile(): bool
     {
-        $value = getenv('PHLEX_HUB_CONTAINER_COMPILE');
+        $value = getenv('PHLIX_HUB_CONTAINER_COMPILE');
         if ($value === false) {
             return false;
         }

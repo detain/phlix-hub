@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Hub\Hub\ClaimRequestHandler;
-use Phlex\Hub\Hub\Ed25519KeyManager;
-use Phlex\Hub\Hub\EnrollmentJwtService;
-use Phlex\Shared\Hub\ClaimRequest;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\ClaimRequestHandler;
+use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Shared\Hub\ClaimRequest;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see ClaimRequestHandler}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Hub\ClaimRequestHandler
+ * @covers \Phlix\Hub\Hub\ClaimRequestHandler
  */
 final class ClaimRequestHandlerTest extends TestCase
 {
@@ -27,7 +27,7 @@ final class ClaimRequestHandlerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-hub-claim-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-claim-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
     }
 

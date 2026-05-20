@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\integration\Auth;
+namespace Phlix\Hub\Tests\integration\Auth;
 
-use Phlex\Hub\Auth\AuthManager;
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Database\MigrationRunner;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Common\Logger\StructuredLogger;
-use Phlex\Shared\Auth\JwtClaims;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Database\MigrationRunner;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Shared\Auth\JwtClaims;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -20,12 +20,12 @@ use Workerman\MySQL\Connection;
  * Skipped when `HUB_TEST_DB_*` env vars are not set, matching the
  * gating pattern from B.6's MigrationRunnerIntegrationTest.
  *
- * @package Phlex\Hub\Tests\integration\Auth
+ * @package Phlix\Hub\Tests\integration\Auth
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Auth\AuthManager
- * @covers \Phlex\Hub\Auth\UserRepository
- * @covers \Phlex\Hub\Auth\JwtHandler
+ * @covers \Phlix\Hub\Auth\AuthManager
+ * @covers \Phlix\Hub\Auth\UserRepository
+ * @covers \Phlix\Hub\Auth\JwtHandler
  *
  * @group integration
  */
@@ -104,7 +104,7 @@ final class SignupLoginFlowTest extends TestCase
         $token = (string) $loginResult['access_token'];
         $claims = $this->jwt->validateAccessToken($token);
         self::assertInstanceOf(JwtClaims::class, $claims);
-        self::assertSame('phlex-hub', $claims->iss);
+        self::assertSame('phlix-hub', $claims->iss);
         self::assertSame('hub', $claims->aud);
 
         // 4. Login via email also works.

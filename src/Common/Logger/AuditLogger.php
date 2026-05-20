@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Logger;
+namespace Phlix\Hub\Common\Logger;
 
 /**
  * Specialised logger for security and audit events on the hub.
  *
- * Mirrors `phlex-server`'s `\Phlex\Common\Logger\AuditLogger` minus the
+ * Mirrors `phlix-server`'s `\Phlix\Common\Logger\AuditLogger` minus the
  * plugin-specific helpers; the hub does not host plugins so
  * `logPluginAction()` is intentionally omitted.
  *
  * Every method writes to the configured `audit` channel — see
- * {@see \Phlex\Hub\Common\Logger\LogChannels::AUDIT}. The channel writes
+ * {@see \Phlix\Hub\Common\Logger\LogChannels::AUDIT}. The channel writes
  * to `.logs/audit.log` by default (config/logger.php).
  *
- * @package Phlex\Hub\Common\Logger
+ * @package Phlix\Hub\Common\Logger
  * @since 0.2.0
  */
 class AuditLogger

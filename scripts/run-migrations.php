@@ -3,20 +3,20 @@
 /**
  * Apply every SQL migration in `migrations/` against the hub database.
  *
- * Wraps {@see \Phlex\Hub\Common\Database\MigrationRunner}. The runner
+ * Wraps {@see \Phlix\Hub\Common\Database\MigrationRunner}. The runner
  * tracks applied migrations in a `migrations` table and is therefore
  * idempotent: re-running this script after a successful apply is a
  * no-op. Set the `HUB_DB_*` environment variables to point at the
  * target database before invoking.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.1.0
  */
 
 declare(strict_types=1);
 
-use Phlex\Hub\Common\Database\ConnectionPool;
-use Phlex\Hub\Common\Database\MigrationRunner;
+use Phlix\Hub\Common\Database\ConnectionPool;
+use Phlix\Hub\Common\Database\MigrationRunner;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 

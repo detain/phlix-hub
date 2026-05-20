@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Shared\Hub\ServerInfoDto;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see ServerInfoHandler}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.3.0
  *
- * @covers \Phlex\Hub\Hub\ServerInfoHandler
+ * @covers \Phlix\Hub\Hub\ServerInfoHandler
  */
 final class ServerInfoHandlerTest extends TestCase
 {

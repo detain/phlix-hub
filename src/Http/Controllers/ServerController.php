@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Controllers;
+namespace Phlix\Hub\Http\Controllers;
 
-use Phlex\Hub\Hub\DeregisterHandler;
-use Phlex\Hub\Hub\HeartbeatHandler;
-use Phlex\Hub\Hub\ServerInfoHandler;
-use Phlex\Hub\Http\Middleware\HubProtocolMiddleware;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
-use Phlex\Shared\Hub\HeartbeatDto;
+use Phlix\Hub\Hub\DeregisterHandler;
+use Phlix\Hub\Hub\HeartbeatHandler;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
+use Phlix\Shared\Hub\HeartbeatDto;
 
 /**
  * Handles server lifecycle endpoints.
@@ -19,7 +19,7 @@ use Phlex\Shared\Hub\HeartbeatDto;
  * GET    /api/v1/servers/{id}/info         — hub operator info (enrollment JWT)
  * DELETE /api/v1/servers/{id}             — server deregisters (enrollment JWT)
  *
- * @package Phlex\Hub\Http\Controllers
+ * @package Phlix\Hub\Http\Controllers
  * @since 0.3.0
  */
 final class ServerController
@@ -50,7 +50,7 @@ final class ServerController
         if ($protocolHeader !== HubProtocolMiddleware::REQUIRED_VERSION) {
             return (new Response())->status(400)->json([
                 'error' => 'HUB_PROTOCOL_UNSUPPORTED',
-                'message' => 'Accept-Phlex-Protocol: v1 required',
+                'message' => 'Accept-Phlix-Protocol: v1 required',
             ]);
         }
 

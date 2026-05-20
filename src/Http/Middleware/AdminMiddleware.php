@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http\Middleware;
+namespace Phlix\Hub\Http\Middleware;
 
-use Phlex\Hub\Auth\UserRepository;
-use Phlex\Hub\Common\Logger\AuditLogger;
-use Phlex\Hub\Http\Request;
-use Phlex\Hub\Http\Response;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 
 /**
  * Gates an HTTP route group behind the `users.is_admin` flag.
  *
- * Ported from `phlex-server`'s
- * `\Phlex\Server\Http\Middleware\AdminMiddleware`. Expects to run AFTER
+ * Ported from `phlix-server`'s
+ * `\Phlix\Server\Http\Middleware\AdminMiddleware`. Expects to run AFTER
  * {@see AuthMiddleware} so {@see Request::$userId} is populated; emits
  * 401 when the upstream gave us no user, 403 when the user exists but
  * is not flagged admin.
@@ -21,7 +21,7 @@ use Phlex\Hub\Http\Response;
  * Every 403 the middleware emits is also written to the audit logger so
  * privilege-escalation attempts leave a trail in `.logs/audit.log`.
  *
- * @package Phlex\Hub\Http\Middleware
+ * @package Phlix\Hub\Http\Middleware
  * @since 0.2.0
  */
 final class AdminMiddleware

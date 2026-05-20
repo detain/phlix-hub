@@ -15,7 +15,7 @@
 
     <div class="server-info">
         <h2 class="server-name">{$server.serverName|escape:'html'}</h2>
-        <p class="server-version">Phlex {$server.version|escape:'html'}</p>
+        <p class="server-version">Phlix {$server.version|escape:'html'}</p>
 
         <p class="server-last-seen">
             {if $server.lastSeenAt}

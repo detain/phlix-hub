@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Http;
+namespace Phlix\Hub\Http;
 
 use BadMethodCallException;
 
 /**
- * Lightweight regex-based HTTP router for `phlex-hub`.
+ * Lightweight regex-based HTTP router for `phlix-hub`.
  *
  * Supports `{param}` placeholders, callable handlers,
  * `[ControllerClass, 'method']` array handlers, and grouped routes
  * with shared middleware.
  *
- * @package Phlex\Hub\Http
+ * @package Phlix\Hub\Http
  * @since 0.1.0
  */
 class Router

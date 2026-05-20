@@ -14,13 +14,13 @@ declare(strict_types=1);
  *   HUB_JWT_ACCESS_TTL   — access token TTL in seconds (default 3600).
  *   HUB_JWT_REFRESH_TTL  — refresh token TTL in seconds (default 604800).
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.2.0
  */
 
 return [
     'secret'      => getenv('HUB_JWT_SECRET') ?: null,
-    'issuer'      => 'phlex-hub',
+    'issuer'      => 'phlix-hub',
     'audience'    => 'hub',
     'access_ttl'  => (int) (getenv('HUB_JWT_ACCESS_TTL') ?: 3600),
     'refresh_ttl' => (int) (getenv('HUB_JWT_REFRESH_TTL') ?: 604800),

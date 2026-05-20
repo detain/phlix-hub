@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Common\Database;
+namespace Phlix\Hub\Common\Database;
 
 use RuntimeException;
 use Throwable;
@@ -22,7 +22,7 @@ use Workerman\MySQL\Connection;
  * splitting. `CREATE TABLE IF NOT EXISTS` / `ALTER ... IF NOT EXISTS`
  * patterns mean even an aborted earlier run is safe to re-execute.
  *
- * @package Phlex\Hub\Common\Database
+ * @package Phlix\Hub\Common\Database
  * @since 0.2.0
  */
 final class MigrationRunner

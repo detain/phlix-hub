@@ -1,7 +1,7 @@
 -- migration: 005_webhooks
 -- Creates the `webhooks` table — user-defined HTTP callbacks the hub
 -- delivers when a subscribed event alias fires. `event_aliases_json` is
--- a JSON array of `phlex.*` aliases (see `Phlex\Shared\Plugin\EventNameMap`).
+-- a JSON array of `phlix.*` aliases (see `Phlix\Shared\Plugin\EventNameMap`).
 -- `secret` (HMAC) and `template_json` (handlebars body) are optional and
 -- land formally in step L.1.
 

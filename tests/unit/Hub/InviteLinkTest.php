@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Hub;
+namespace Phlix\Hub\Tests\unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\InviteLink;
+use Phlix\Hub\Hub\InviteLink;
 
 /**
  * Unit tests for {@see InviteLink}.
  *
- * @package Phlex\Hub\Tests\unit\Hub
+ * @package Phlix\Hub\Tests\unit\Hub
  * @since 0.6.0
  *
- * @covers \Phlex\Hub\Hub\InviteLink
+ * @covers \Phlix\Hub\Hub\InviteLink
  */
 final class InviteLinkTest extends TestCase
 {

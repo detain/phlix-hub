@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\unit\Auth;
+namespace Phlix\Hub\Tests\unit\Auth;
 
 use InvalidArgumentException;
-use Phlex\Hub\Auth\JwtHandler;
-use Phlex\Shared\Auth\JwtClaims;
+use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Shared\Auth\JwtClaims;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see JwtHandler}.
  *
- * @package Phlex\Hub\Tests\unit\Auth
+ * @package Phlix\Hub\Tests\unit\Auth
  * @since 0.2.0
  *
- * @covers \Phlex\Hub\Auth\JwtHandler
+ * @covers \Phlix\Hub\Auth\JwtHandler
  */
 final class JwtHandlerTest extends TestCase
 {
@@ -34,7 +34,7 @@ final class JwtHandlerTest extends TestCase
 
         $claims = $handler->validateToken($token);
         self::assertInstanceOf(JwtClaims::class, $claims);
-        self::assertSame('phlex-hub', $claims->iss);
+        self::assertSame('phlix-hub', $claims->iss);
         self::assertSame('hub', $claims->aud);
         self::assertSame('user-123', $claims->sub);
         self::assertSame(JwtClaims::TYPE_ACCESS, $claims->type);
@@ -44,7 +44,7 @@ final class JwtHandlerTest extends TestCase
 
     public function testValidateExpiredTokenReturnsNull(): void
     {
-        $handler = new JwtHandler(self::SECRET, JwtClaims::ISS_PHLEX_HUB, JwtClaims::AUD_HUB, -1, 1);
+        $handler = new JwtHandler(self::SECRET, JwtClaims::ISS_PHLIX_HUB, JwtClaims::AUD_HUB, -1, 1);
         $token = $handler->createAccessToken('user-123');
         // The token's exp is in the past (now + -1).
         self::assertNull($handler->validateToken($token));
@@ -52,19 +52,19 @@ final class JwtHandlerTest extends TestCase
 
     public function testValidateWrongIssReturnsNull(): void
     {
-        $handler = new JwtHandler(self::SECRET, 'phlex-hub');
+        $handler = new JwtHandler(self::SECRET, 'phlix-hub');
         $token = $handler->createAccessToken('user-123');
 
-        $otherHandler = new JwtHandler(self::SECRET, 'phlex'); // server-side iss
+        $otherHandler = new JwtHandler(self::SECRET, 'phlix'); // server-side iss
         self::assertNull($otherHandler->validateToken($token));
     }
 
     public function testValidateWrongAudReturnsNull(): void
     {
-        $handler = new JwtHandler(self::SECRET, 'phlex-hub', 'hub');
+        $handler = new JwtHandler(self::SECRET, 'phlix-hub', 'hub');
         $token = $handler->createAccessToken('user-123');
 
-        $otherHandler = new JwtHandler(self::SECRET, 'phlex-hub', 'server');
+        $otherHandler = new JwtHandler(self::SECRET, 'phlix-hub', 'server');
         self::assertNull($otherHandler->validateToken($token));
     }
 
@@ -121,7 +121,7 @@ final class JwtHandlerTest extends TestCase
 
     public function testTtlGettersReturnConfigured(): void
     {
-        $handler = new JwtHandler(self::SECRET, 'phlex-hub', 'hub', 600, 1200);
+        $handler = new JwtHandler(self::SECRET, 'phlix-hub', 'hub', 600, 1200);
         self::assertSame(600, $handler->getAccessTtl());
         self::assertSame(1200, $handler->getRefreshTtl());
     }

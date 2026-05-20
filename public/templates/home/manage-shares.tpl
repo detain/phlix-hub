@@ -1,6 +1,6 @@
 {extends file="layouts/base.tpl"}
 
-{block name="title"}Manage Library Shares — Phlex Hub{/block}
+{block name="title"}Manage Library Shares — Phlix Hub{/block}
 
 {block name="content"}
 <div class="manage-shares">

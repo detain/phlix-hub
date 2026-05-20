@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\Unit\Hub;
+namespace Phlix\Hub\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\DnsAliasManager;
-use Phlex\Hub\Hub\Dns\StaticZoneManager;
-use Phlex\Hub\Hub\RelayRouter;
-use Phlex\Hub\Hub\RelaySessionManager;
-use Phlex\Hub\Hub\TlsCertificateManager;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\DnsAliasManager;
+use Phlix\Hub\Hub\Dns\StaticZoneManager;
+use Phlix\Hub\Hub\RelayRouter;
+use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 class RelayRouterTest extends TestCase
@@ -26,12 +26,12 @@ class RelayRouterTest extends TestCase
         $sessionManager = $this->createMock(RelaySessionManager::class);
         $router = new RelayRouter($dnsManager, $sessionManager);
 
-        $result = $router->extractSubdomain('abc12345.phlex.media');
+        $result = $router->extractSubdomain('abc12345.phlix.media');
 
         $this->assertSame('abc12345', $result);
     }
 
-    public function test_extractSubdomain_returns_null_for_non_phlex_domain(): void
+    public function test_extractSubdomain_returns_null_for_non_phlix_domain(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -58,7 +58,7 @@ class RelayRouterTest extends TestCase
         $sessionManager = $this->createMock(RelaySessionManager::class);
         $router = new RelayRouter($dnsManager, $sessionManager);
 
-        $result = $router->extractSubdomain('ABC12345.Phlex.Media');
+        $result = $router->extractSubdomain('ABC12345.Phlix.Media');
 
         $this->assertSame('abc12345', $result);
     }
@@ -74,7 +74,7 @@ class RelayRouterTest extends TestCase
         $sessionManager = $this->createMock(RelaySessionManager::class);
         $router = new RelayRouter($dnsManager, $sessionManager);
 
-        $result = $router->extractSubdomain('ab.phlex.media');
+        $result = $router->extractSubdomain('ab.phlix.media');
 
         $this->assertNull($result);
     }
@@ -90,7 +90,7 @@ class RelayRouterTest extends TestCase
         $sessionManager = $this->createMock(RelaySessionManager::class);
         $router = new RelayRouter($dnsManager, $sessionManager);
 
-        $result = $router->extractSubdomain('.phlex.media');
+        $result = $router->extractSubdomain('.phlix.media');
 
         $this->assertNull($result);
     }
@@ -111,7 +111,7 @@ class RelayRouterTest extends TestCase
 
         $router = new RelayRouter($dnsManager, $sessionManager);
 
-        $result = $router->routeBySubdomain('abc12345.phlex.media');
+        $result = $router->routeBySubdomain('abc12345.phlix.media');
 
         $this->assertNull($result);
     }

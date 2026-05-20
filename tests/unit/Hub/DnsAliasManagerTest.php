@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub\Tests\Unit\Hub;
+namespace Phlix\Hub\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Hub\DnsAliasManager;
-use Phlex\Hub\Hub\Dns\StaticZoneManager;
-use Phlex\Hub\Hub\TlsCertificateManager;
-use Phlex\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\DnsAliasManager;
+use Phlix\Hub\Hub\Dns\StaticZoneManager;
+use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 class DnsAliasManagerTest extends TestCase
@@ -23,7 +23,7 @@ class DnsAliasManagerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-dns-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-dns-test-' . uniqid();
         mkdir($this->tmpDir, 0755, true);
 
         $this->db = $this->createMock(Connection::class);
@@ -51,7 +51,7 @@ class DnsAliasManagerTest extends TestCase
 
         $fqdn = $this->manager->getFqdn($subdomain);
 
-        $this->assertSame('abc12345.phlex.media', $fqdn);
+        $this->assertSame('abc12345.phlix.media', $fqdn);
     }
 
     public function test_allocateSubdomain_generates_8_char_subdomain(): void
