@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Requests\RequestManager;
@@ -27,6 +28,8 @@ final class RequestControllerTest extends TestCase
     private RequestNotification $notification;
     /** @var UserRepository&\PHPUnit\Framework\MockObject\MockObject */
     private UserRepository $users;
+    /** @var AuditLogger&\PHPUnit\Framework\MockObject\MockObject */
+    private AuditLogger $audit;
     private RequestController $controller;
 
     protected function setUp(): void
@@ -35,7 +38,8 @@ final class RequestControllerTest extends TestCase
         $this->manager = $this->createMock(RequestManager::class);
         $this->notification = $this->createMock(RequestNotification::class);
         $this->users = $this->createMock(UserRepository::class);
-        $this->controller = new RequestController($this->manager, $this->notification, $this->users);
+        $this->audit = $this->createMock(AuditLogger::class);
+        $this->controller = new RequestController($this->manager, $this->notification, $this->users, $this->audit);
     }
 
     public function testCreateRequestReturns401WhenNotAuthenticated(): void

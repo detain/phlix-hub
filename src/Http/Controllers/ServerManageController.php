@@ -131,7 +131,7 @@ final class ServerManageController
     private function bestDirectUrl(array $candidates): ?string
     {
         foreach ($candidates as $url) {
-            if (is_string($url) && $url !== '') {
+            if ($url !== '') {
                 return $url;
             }
         }

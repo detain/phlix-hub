@@ -103,7 +103,8 @@ final class RelayServerHandler
      */
     public function onFrame(string $sessionId, array $frame): ?array
     {
-        $typeValue = $frame['type'];
+        /** @var mixed $typeValue */
+        $typeValue = $frame['type'] ?? null;
         $type = is_int($typeValue) ? $typeValue : (is_numeric($typeValue) ? (int) $typeValue : 0);
 
         if ($type === 3) {

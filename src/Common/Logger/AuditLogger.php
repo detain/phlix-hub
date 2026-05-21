@@ -98,4 +98,23 @@ class AuditLogger
             'email'    => $email,
         ]);
     }
+
+    /**
+     * Record an admin-initiated action on a target resource (HUB-A09-2).
+     *
+     * @param string               $userId   Admin user id performing the action.
+     * @param string               $action   Short machine-friendly action tag
+     *                                       (e.g. "request.approve").
+     * @param string               $resource Resource id the action targets.
+     * @param array<string, mixed> $context  Additional structured context.
+     */
+    public function logAdminAction(string $userId, string $action, string $resource, array $context = []): void
+    {
+        $this->logger->info('Admin action', array_merge([
+            'event'    => 'admin_action',
+            'user_id'  => $userId,
+            'action'   => $action,
+            'resource' => $resource,
+        ], $context));
+    }
 }
