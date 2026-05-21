@@ -114,14 +114,29 @@ final class LibraryShare
             $revokedAt = (int) $row['revoked_at'];
         }
 
+        /** @var mixed $rawId */
+        $rawId = $row['id'] ?? null;
+        /** @var mixed $rawOwner */
+        $rawOwner = $row['owner_user_id'] ?? null;
+        /** @var mixed $rawCollaborator */
+        $rawCollaborator = $row['collaborator_user_id'] ?? null;
+        /** @var mixed $rawServer */
+        $rawServer = $row['server_id'] ?? null;
+        /** @var mixed $rawLibrary */
+        $rawLibrary = $row['library_id'] ?? null;
+        /** @var mixed $rawLibraryName */
+        $rawLibraryName = $row['library_name'] ?? null;
+        /** @var mixed $rawPermission */
+        $rawPermission = $row['permission_level'] ?? null;
+
         return new self(
-            id: is_string($row['id'] ?? null) ? $row['id'] : '',
-            ownerUserId: is_string($row['owner_user_id'] ?? null) ? $row['owner_user_id'] : '',
-            collaboratorUserId: is_string($row['collaborator_user_id'] ?? null) ? $row['collaborator_user_id'] : '',
-            serverId: is_string($row['server_id'] ?? null) ? $row['server_id'] : '',
-            libraryId: is_string($row['library_id'] ?? null) ? $row['library_id'] : '',
-            libraryName: is_string($row['library_name'] ?? null) ? $row['library_name'] : '',
-            permissionLevel: is_string($row['permission_level'] ?? null) ? $row['permission_level'] : 'read',
+            id: is_string($rawId) ? $rawId : '',
+            ownerUserId: is_string($rawOwner) ? $rawOwner : '',
+            collaboratorUserId: is_string($rawCollaborator) ? $rawCollaborator : '',
+            serverId: is_string($rawServer) ? $rawServer : '',
+            libraryId: is_string($rawLibrary) ? $rawLibrary : '',
+            libraryName: is_string($rawLibraryName) ? $rawLibraryName : '',
+            permissionLevel: is_string($rawPermission) ? $rawPermission : 'read',
             createdAt: is_numeric($row['created_at'] ?? null) ? (int) $row['created_at'] : 0,
             expiresAt: $expiresAt,
             revokedAt: $revokedAt,

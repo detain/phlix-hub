@@ -271,6 +271,7 @@ class LibrarySharingHandler
 
             /** @var array<int, string> $hostnames */
             $hostnames = [];
+            /** @var mixed $hostnameJson */
             $hostnameJson = $row['hostname_candidates_json'] ?? null;
             if (is_string($hostnameJson) && $hostnameJson !== '') {
                 /** @var mixed $decoded */
@@ -285,19 +286,26 @@ class LibrarySharingHandler
                 }
             }
 
-            $permissionLevel = is_string($row['permission_level'] ?? null)
-                ? $row['permission_level']
-                : 'read';
+            /** @var mixed $rawPermission */
+            $rawPermission = $row['permission_level'] ?? null;
+            $permissionLevel = is_string($rawPermission) ? $rawPermission : 'read';
             $expiresAt = isset($row['expires_at']) && is_numeric($row['expires_at'])
                 ? (int) $row['expires_at']
                 : null;
 
+            /** @var mixed $rawOwnerName */
+            $rawOwnerName = $row['owner_name'] ?? null;
+            /** @var mixed $rawServerId */
+            $rawServerId = $row['server_id'] ?? null;
+            /** @var mixed $rawServerName */
+            $rawServerName = $row['server_name'] ?? null;
+
             $shares[] = new SharedLibraryDto(
                 shareId: $share->id,
                 ownerUserId: $share->ownerUserId,
-                ownerName: is_string($row['owner_name'] ?? null) ? $row['owner_name'] : '',
-                serverId: is_string($row['server_id'] ?? null) ? $row['server_id'] : '',
-                serverName: is_string($row['server_name'] ?? null) ? $row['server_name'] : '',
+                ownerName: is_string($rawOwnerName) ? $rawOwnerName : '',
+                serverId: is_string($rawServerId) ? $rawServerId : '',
+                serverName: is_string($rawServerName) ? $rawServerName : '',
                 libraryId: $share->libraryId,
                 libraryName: $share->libraryName,
                 libraryItemCount: 0,

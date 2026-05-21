@@ -109,14 +109,23 @@ final class InviteLink
             $expiresAt = (int) $row['expires_at'];
         }
 
+        /** @var mixed $rawId */
+        $rawId = $row['id'] ?? null;
+        /** @var mixed $rawOwner */
+        $rawOwner = $row['owner_user_id'] ?? null;
+        /** @var mixed $rawServer */
+        $rawServer = $row['server_id'] ?? null;
+        /** @var mixed $rawLibrary */
+        $rawLibrary = $row['library_id'] ?? null;
+        /** @var mixed $rawPermission */
+        $rawPermission = $row['permission'] ?? null;
+
         return new self(
-            id: is_string($row['id'] ?? null) ? $row['id'] : '',
-            ownerUserId: is_string($row['owner_user_id'] ?? null) ? $row['owner_user_id'] : '',
-            serverId: is_string($row['server_id'] ?? null) ? $row['server_id'] : '',
-            libraryId: isset($row['library_id']) && is_string($row['library_id']) && $row['library_id'] !== ''
-                ? $row['library_id']
-                : null,
-            permission: is_string($row['permission'] ?? null) ? $row['permission'] : 'read',
+            id: is_string($rawId) ? $rawId : '',
+            ownerUserId: is_string($rawOwner) ? $rawOwner : '',
+            serverId: is_string($rawServer) ? $rawServer : '',
+            libraryId: is_string($rawLibrary) && $rawLibrary !== '' ? $rawLibrary : null,
+            permission: is_string($rawPermission) ? $rawPermission : 'read',
             maxUses: is_numeric($row['max_uses'] ?? null) ? (int) $row['max_uses'] : 1,
             useCount: is_numeric($row['use_count'] ?? null) ? (int) $row['use_count'] : 0,
             expiresAt: $expiresAt,

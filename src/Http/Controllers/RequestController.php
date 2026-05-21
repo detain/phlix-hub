@@ -292,6 +292,12 @@ final class RequestController
             ]);
         }
 
+        $this->audit->logAdminAction(
+            $request->userId ?? '',
+            'request.approve',
+            $requestId,
+            ['target_user_id' => $existing['user_id']],
+        );
         $this->notification->notifyApproved($existing['user_id'], $existing['title']);
 
         return (new Response())->json([
@@ -341,6 +347,12 @@ final class RequestController
             ]);
         }
 
+        $this->audit->logAdminAction(
+            $request->userId ?? '',
+            'request.deny',
+            $requestId,
+            ['target_user_id' => $existing['user_id'], 'reason' => $reason],
+        );
         $this->notification->notifyRejected($existing['user_id'], $existing['title'], $reason);
 
         return (new Response())->json([
@@ -360,6 +372,7 @@ final class RequestController
         }
         $admin = $this->users->findAdminById($userId);
         if ($admin === null) {
+            $this->audit->logPermissionDenied($userId, 'admin.requests', $request->method);
             return (new Response())->status(403)->json([
                 'error' => 'Forbidden',
                 'code'  => 'admin_required',

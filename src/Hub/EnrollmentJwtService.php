@@ -19,9 +19,9 @@ namespace Phlix\Hub\Hub;
  */
 class EnrollmentJwtService
 {
-    private const ALGORITHM = 'EdDSA';
-    private const ISSUER = 'phlix-hub';
-    private const AUDIENCE = 'server';
+    private const string ALGORITHM = 'EdDSA';
+    private const string ISSUER = 'phlix-hub';
+    private const string AUDIENCE = 'server';
 
     /**
      * @param Ed25519KeyManager $keyManager Key manager for signing.

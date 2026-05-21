@@ -39,19 +39,23 @@ final class LibraryShareController
             ]);
         }
 
-        /** @var array<string, mixed> $body */
         $body = $request->body;
-        if (!is_array($body) || $body === []) {
+        if ($body === []) {
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code' => 'invalid_body',
             ]);
         }
 
+        /** @var mixed $email */
         $email = $body['collaborator_email'] ?? null;
+        /** @var mixed $serverId */
         $serverId = $body['server_id'] ?? null;
+        /** @var mixed $libraryId */
         $libraryId = $body['library_id'] ?? null;
+        /** @var mixed $libraryName */
         $libraryName = $body['library_name'] ?? '';
+        /** @var mixed $permission */
         $permission = $body['permission'] ?? LibraryShare::PERMISSION_READ;
 
         if (!is_string($email) || $email === '') {
@@ -223,15 +227,15 @@ final class LibraryShareController
             ]);
         }
 
-        /** @var array<string, mixed> $body */
         $body = $request->body;
-        if (!is_array($body) || $body === []) {
+        if ($body === []) {
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code' => 'invalid_body',
             ]);
         }
 
+        /** @var mixed $permission */
         $permission = $body['permission'] ?? null;
         if (!is_string($permission)) {
             return (new Response())->status(400)->json([
