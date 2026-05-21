@@ -23,10 +23,10 @@ use Workerman\MySQL\Connection;
  */
 class DnsAliasManager
 {
-    public const DOMAIN = 'phlix.media';
+    public const string DOMAIN = 'phlix.media';
 
     /** Subdomain length (8 chars). */
-    private const SUBDOMAIN_LENGTH = 8;
+    private const int SUBDOMAIN_LENGTH = 8;
 
     /**
      * @param Connection                                  $db           MySQL connection.

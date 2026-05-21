@@ -191,12 +191,14 @@ class RequestManager
     public function listPendingRequests(?string $userId = null): array
     {
         if ($userId !== null) {
+            /** @var mixed $rows */
             $rows = $this->db->query(
                 'SELECT * FROM requests WHERE user_id = :user_id AND status = \'pending\'
                  ORDER BY created_at DESC',
                 ['user_id' => $userId]
             );
         } else {
+            /** @var mixed $rows */
             $rows = $this->db->query(
                 'SELECT * FROM requests WHERE status = \'pending\' ORDER BY created_at DESC'
             );
@@ -211,6 +213,7 @@ class RequestManager
      */
     public function listAvailableRequests(): array
     {
+        /** @var mixed $rows */
         $rows = $this->db->query(
             'SELECT * FROM requests WHERE status = \'available\' ORDER BY updated_at DESC'
         );
@@ -226,6 +229,7 @@ class RequestManager
      */
     public function listUserRequests(string $userId): array
     {
+        /** @var mixed $rows */
         $rows = $this->db->query(
             'SELECT * FROM requests WHERE user_id = :user_id ORDER BY created_at DESC',
             ['user_id' => $userId]
@@ -313,7 +317,7 @@ class RequestManager
                 return false;
             }
             $firstProfile = $qualityProfiles[0];
-            $qualityProfileId = is_array($firstProfile) && isset($firstProfile['id']) && is_numeric($firstProfile['id'])
+            $qualityProfileId = isset($firstProfile['id']) && is_numeric($firstProfile['id'])
                 ? (int) $firstProfile['id']
                 : 1;
             $rootFolder = $this->getRadarrRootFolder($radarrClient);
@@ -376,7 +380,8 @@ class RequestManager
     {
         try {
             $movies = $radarrClient->getMovies();
-            if (!empty($movies) && is_array($movies[0]) && isset($movies[0]['movieFile'])) {
+            if (!empty($movies) && isset($movies[0]['movieFile'])) {
+                /** @var mixed $movieFile */
                 $movieFile = $movies[0]['movieFile'];
                 if (is_array($movieFile) && isset($movieFile['path']) && is_string($movieFile['path'])) {
                     $path = $movieFile['path'];
@@ -445,6 +450,7 @@ class RequestManager
             return [];
         }
         $result = [];
+        /** @var mixed $row */
         foreach ($rows as $row) {
             if (is_array($row)) {
                 $result[] = $this->hydrateRequest($row);

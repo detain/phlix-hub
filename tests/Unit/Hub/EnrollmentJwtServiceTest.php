@@ -81,7 +81,14 @@ final class EnrollmentJwtServiceTest extends TestCase
     public function testValidateEnrollmentJwtReturnsNullForTamperedToken(): void
     {
         $token = $this->service->createEnrollmentJwt('server-tampered');
-        $tampered = substr($token, 0, -1) . (substr($token, -1) === 'A' ? 'B' : 'A');
+        // Flip a byte in the middle of the signature (last segment) — single
+        // last-char flips can collide due to base64url padding bits.
+        $parts = explode('.', $token);
+        $sig = $parts[2];
+        $mid = (int) floor(strlen($sig) / 2);
+        $orig = $sig[$mid];
+        $parts[2] = substr($sig, 0, $mid) . ($orig === 'A' ? 'B' : 'A') . substr($sig, $mid + 1);
+        $tampered = implode('.', $parts);
         $kid = $this->keyManager->getKid();
 
         $payload = $this->service->validateEnrollmentJwt($tampered, $kid);

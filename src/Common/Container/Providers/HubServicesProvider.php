@@ -295,11 +295,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                 RequestManager $manager,
                 RequestNotification $notification,
                 UserRepository $users,
+                AuditLogger $audit,
             ): RequestController {
-                return new RequestController($manager, $notification, $users);
+                return new RequestController($manager, $notification, $users, $audit);
             })->parameter('manager', get(RequestManager::class))
                 ->parameter('notification', get(RequestNotification::class))
-                ->parameter('users', get(UserRepository::class)),
+                ->parameter('users', get(UserRepository::class))
+                ->parameter('audit', get(AuditLogger::class)),
         ]);
     }
 
