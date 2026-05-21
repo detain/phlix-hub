@@ -20,7 +20,6 @@ RUN apk add --no-cache \
         pdo \
         pdo_mysql \
         zip \
-        json \
         gd \
         fileinfo \
         pcntl \
