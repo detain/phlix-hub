@@ -12,6 +12,7 @@ RUN apk add --no-cache \
     mysql-client \
     libzip-dev \
     oniguruma-dev \
+    libpng-dev \
     curl \
     bash \
     tar \
