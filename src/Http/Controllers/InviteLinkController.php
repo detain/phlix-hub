@@ -39,19 +39,23 @@ final class InviteLinkController
             ]);
         }
 
-        /** @var array<string, mixed> $body */
         $body = $request->body;
-        if (!is_array($body) || $body === []) {
+        if ($body === []) {
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code' => 'invalid_body',
             ]);
         }
 
+        /** @var mixed $serverId */
         $serverId = $body['server_id'] ?? null;
+        /** @var mixed $libraryId */
         $libraryId = $body['library_id'] ?? null;
+        /** @var mixed $permission */
         $permission = $body['permission'] ?? 'read';
+        /** @var mixed $maxUses */
         $maxUses = $body['max_uses'] ?? 1;
+        /** @var mixed $expiresIn */
         $expiresIn = $body['expires_in'] ?? 604800;
 
         if (!is_string($serverId) || $serverId === '') {

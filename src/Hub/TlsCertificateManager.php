@@ -17,7 +17,7 @@ namespace Phlix\Hub\Hub;
 class TlsCertificateManager
 {
     /** Duration before expiry to trigger renewal (60 days). */
-    private const RENEW_BEFORE_DAYS = 60;
+    private const int RENEW_BEFORE_DAYS = 60;
 
     /**
      * @param string                                   $certsDir  Directory to store certificates.
@@ -159,7 +159,8 @@ class TlsCertificateManager
             return true;
         }
 
-        if (preg_match('/notAfter=(.+)/i', $output[0], $matches)) {
+        $firstLine = (string) $output[0];
+        if ($firstLine !== '' && preg_match('/notAfter=(.+)/i', $firstLine, $matches)) {
             $expiry = strtotime(trim($matches[1]));
             if ($expiry !== false) {
                 $renewalTime = $expiry - (self::RENEW_BEFORE_DAYS * 86400);

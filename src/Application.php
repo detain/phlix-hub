@@ -118,13 +118,19 @@ final class Application
             $r->get('/me/servers', static fn (Request $req): Response => $serverList($req));
             $r->delete(
                 '/me/servers/{id}',
-                static fn (Request $req, array $params): Response =>
-                    $serverManage->deleteServer($req, $params),
+                static function (Request $req, array $params) use ($serverManage): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $serverManage->deleteServer($req, $typedParams);
+                },
             );
             $r->get(
                 '/me/servers/{id}/access-info',
-                static fn (Request $req, array $params): Response =>
-                    $serverManage->accessInfo($req, $params),
+                static function (Request $req, array $params) use ($serverManage): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $serverManage->accessInfo($req, $typedParams);
+                },
             );
         }, [$authMiddleware]);
 
@@ -164,24 +170,45 @@ final class Application
 
         // User-scoped JSON API.
         $this->router->group('/api/v1/me/requests', static function (Router $r) use ($requestController): void {
-            $r->post('', static fn (Request $req, array $params): Response =>
-                $requestController->createRequest($req, $params));
-            $r->get('', static fn (Request $req, array $params): Response =>
-                $requestController->listMyRequests($req, $params));
-            $r->get('/{id}', static fn (Request $req, array $params): Response =>
-                $requestController->getMyRequest($req, $params));
-            $r->delete('/{id}', static fn (Request $req, array $params): Response =>
-                $requestController->deleteMyRequest($req, $params));
+            $r->post('', static function (Request $req, array $params) use ($requestController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $requestController->createRequest($req, $typedParams);
+            });
+            $r->get('', static function (Request $req, array $params) use ($requestController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $requestController->listMyRequests($req, $typedParams);
+            });
+            $r->get('/{id}', static function (Request $req, array $params) use ($requestController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $requestController->getMyRequest($req, $typedParams);
+            });
+            $r->delete('/{id}', static function (Request $req, array $params) use ($requestController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $requestController->deleteMyRequest($req, $typedParams);
+            });
         }, [$authMiddleware]);
 
         // Admin queue + actions.
         $this->router->group('/api/v1/admin/requests', static function (Router $r) use ($requestController): void {
-            $r->get('', static fn (Request $req, array $params): Response =>
-                $requestController->listAdminRequests($req, $params));
-            $r->post('/{id}/approve', static fn (Request $req, array $params): Response =>
-                $requestController->approveRequest($req, $params));
-            $r->post('/{id}/deny', static fn (Request $req, array $params): Response =>
-                $requestController->denyRequest($req, $params));
+            $r->get('', static function (Request $req, array $params) use ($requestController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $requestController->listAdminRequests($req, $typedParams);
+            });
+            $r->post('/{id}/approve', static function (Request $req, array $params) use ($requestController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $requestController->approveRequest($req, $typedParams);
+            });
+            $r->post('/{id}/deny', static function (Request $req, array $params) use ($requestController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $requestController->denyRequest($req, $typedParams);
+            });
         }, [$authMiddleware]);
     }
 
@@ -433,10 +460,16 @@ final class Application
         $this->router->group('/api/v1/me/shares', static function (Router $r) use ($shareController): void {
             $r->post('/', static fn (Request $req): Response => $shareController->createShare($req));
             $r->get('/', static fn (Request $req): Response => $shareController->listShares($req));
-            $r->delete('/{id}', static fn (Request $req, array $params): Response =>
-                $shareController->deleteShare($req, $params));
-            $r->patch('/{id}', static fn (Request $req, array $params): Response =>
-                $shareController->updateShare($req, $params));
+            $r->delete('/{id}', static function (Request $req, array $params) use ($shareController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $shareController->deleteShare($req, $typedParams);
+            });
+            $r->patch('/{id}', static function (Request $req, array $params) use ($shareController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $shareController->updateShare($req, $typedParams);
+            });
         }, [$authMiddleware]);
     }
 
@@ -450,8 +483,11 @@ final class Application
         // GET /invite/{token} — public invite acceptance page.
         $this->router->get(
             '/invite/{token}',
-            static fn (Request $req, array $params): Response =>
-                $inviteController->showAcceptInvitePage($req, $params),
+            static function (Request $req, array $params) use ($inviteController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $inviteController->showAcceptInvitePage($req, $typedParams);
+            },
         );
 
         // JSON API for invite links (protected).
@@ -459,8 +495,11 @@ final class Application
         $this->router->group('/api/v1/me/invite-links', static function (Router $r) use ($inviteController): void {
             $r->post('/', static fn (Request $req): Response => $inviteController->createInviteLink($req));
             $r->get('/', static fn (Request $req): Response => $inviteController->listInviteLinks($req));
-            $r->delete('/{id}', static fn (Request $req, array $params): Response =>
-                $inviteController->deleteInviteLink($req, $params));
+            $r->delete('/{id}', static function (Request $req, array $params) use ($inviteController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $inviteController->deleteInviteLink($req, $typedParams);
+            });
         }, [$authMiddleware]);
     }
 

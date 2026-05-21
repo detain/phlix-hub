@@ -32,8 +32,8 @@ use Workerman\MySQL\Connection;
  */
 class AuthManager
 {
-    private const RATE_LIMIT_MAX_ATTEMPTS = 5;
-    private const RATE_LIMIT_WINDOW_SECONDS = 900; // 15 minutes
+    private const int RATE_LIMIT_MAX_ATTEMPTS = 5;
+    private const int RATE_LIMIT_WINDOW_SECONDS = 900; // 15 minutes
 
     /** @var array<string, array{attempts: int, reset_at: int}> Static rate limit storage per IP */
     private static array $rateLimitStore = [];
@@ -63,7 +63,9 @@ class AuthManager
      */
     private function getClientIp(): string
     {
-        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        /** @var mixed $ip */
+        $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        return is_string($ip) ? $ip : '127.0.0.1';
     }
 
     /**
@@ -79,9 +81,8 @@ class AuthManager
             return;
         }
 
-        $record = &self::$rateLimitStore[$ip];
+        $record = self::$rateLimitStore[$ip];
 
-        // Clean up expired records
         if ($record['reset_at'] <= $now) {
             unset(self::$rateLimitStore[$ip]);
             return;
@@ -102,24 +103,15 @@ class AuthManager
     {
         $now = time();
 
-        if (!isset(self::$rateLimitStore[$ip])) {
+        if (!isset(self::$rateLimitStore[$ip]) || self::$rateLimitStore[$ip]['reset_at'] <= $now) {
             self::$rateLimitStore[$ip] = [
-                'attempts' => 0,
+                'attempts' => 1,
                 'reset_at' => $now + self::RATE_LIMIT_WINDOW_SECONDS,
             ];
+            return;
         }
 
-        $record = &self::$rateLimitStore[$ip];
-
-        // Reset if window has expired
-        if ($record['reset_at'] <= $now) {
-            $record = [
-                'attempts' => 0,
-                'reset_at' => $now + self::RATE_LIMIT_WINDOW_SECONDS,
-            ];
-        }
-
-        $record['attempts']++;
+        self::$rateLimitStore[$ip]['attempts']++;
     }
 
     /**

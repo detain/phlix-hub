@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Hub;
 
+use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\Ed25519KeyManager;
@@ -50,7 +51,8 @@ final class ClaimRequestHandlerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
         $logger = $this->createMock(StructuredLogger::class);
-        $handler = new ClaimRequestHandler($db, $keyManager, $logger, 'https://hub.example.com');
+        $audit = $this->createMock(AuditLogger::class);
+        $handler = new ClaimRequestHandler($db, $keyManager, $logger, $audit, 'https://hub.example.com');
 
         $code = $handler->generateClaimCode();
 
@@ -68,7 +70,8 @@ final class ClaimRequestHandlerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
         $logger = $this->createMock(StructuredLogger::class);
-        $handler = new ClaimRequestHandler($db, $keyManager, $logger, 'https://hub.example.com');
+        $audit = $this->createMock(AuditLogger::class);
+        $handler = new ClaimRequestHandler($db, $keyManager, $logger, $audit, 'https://hub.example.com');
 
         for ($i = 0; $i < 50; $i++) {
             $code = $handler->generateClaimCode();
@@ -87,7 +90,8 @@ final class ClaimRequestHandlerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
         $logger = $this->createMock(StructuredLogger::class);
-        $handler = new ClaimRequestHandler($db, $keyManager, $logger, 'https://hub.example.com');
+        $audit = $this->createMock(AuditLogger::class);
+        $handler = new ClaimRequestHandler($db, $keyManager, $logger, $audit, 'https://hub.example.com');
 
         $request = new ClaimRequest(
             serverName: 'Test Server',
@@ -106,7 +110,8 @@ final class ClaimRequestHandlerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
         $logger = $this->createMock(StructuredLogger::class);
-        $handler = new ClaimRequestHandler($db, $keyManager, $logger, 'https://hub.example.com');
+        $audit = $this->createMock(AuditLogger::class);
+        $handler = new ClaimRequestHandler($db, $keyManager, $logger, $audit, 'https://hub.example.com');
 
         $request = new ClaimRequest(
             serverName: 'Test Server',
@@ -133,7 +138,8 @@ final class ClaimRequestHandlerTest extends TestCase
 
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
         $logger = $this->createMock(StructuredLogger::class);
-        $handler = new ClaimRequestHandler($db, $keyManager, $logger, 'https://hub.example.com');
+        $audit = $this->createMock(AuditLogger::class);
+        $handler = new ClaimRequestHandler($db, $keyManager, $logger, $audit, 'https://hub.example.com');
 
         $request = new ClaimRequest(
             serverName: 'My NAS',
@@ -175,7 +181,8 @@ final class ClaimRequestHandlerTest extends TestCase
 
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
         $logger = $this->createMock(StructuredLogger::class);
-        $handler = new ClaimRequestHandler($db, $keyManager, $logger, 'https://hub.example.com');
+        $audit = $this->createMock(AuditLogger::class);
+        $handler = new ClaimRequestHandler($db, $keyManager, $logger, $audit, 'https://hub.example.com');
 
         $request = new ClaimRequest(
             serverName: 'Duplicate Server',
