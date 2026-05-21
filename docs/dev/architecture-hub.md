@@ -523,6 +523,70 @@ ss -tnp | grep ":8800"
 
 ---
 
+## Container image
+
+`Dockerfile` at the repo root builds a single-stage `php:8.3-fpm-alpine`
+image with swoole, php-uv, nginx, and supervisor.
+
+### Layer ordering
+
+Composer install is split in two layers so the vendor tree survives
+source-only edits:
+
+```dockerfile
+COPY composer.json composer.lock /var/www/html/
+RUN composer install --no-dev --prefer-dist --no-scripts --no-autoloader \
+                     --ignore-platform-reqs
+COPY . /var/www/html/
+RUN composer dump-autoload --no-dev --optimize
+```
+
+Practical result: editing `src/` does not rebuild the swoole compile
+layer (the slowest one). Editing `composer.{json,lock}` does.
+
+### Swoole `./configure` flags
+
+The image compiles swoole from source. The intentional flag set is:
+
+```
+--enable-swoole --enable-sockets --enable-mysqlnd
+--enable-swoole-curl --enable-cares
+--enable-swoole-pgsql --enable-swoole-sqlite
+--with-openssl-dir=/usr --with-nghttp2-dir=/usr
+--enable-swoole-coro-time --enable-zstd --enable-brotli
+--enable-iouring --enable-uring-socket
+--with-swoole-ssh2 --enable-swoole-ftp
+```
+
+Each flag requires the matching `-dev` package added to `apk add`
+(e.g. `--enable-iouring` ↔ `liburing-dev`, `--with-swoole-ssh2` ↔
+`libssh2-dev`, `--enable-swoole-pgsql` ↔ `postgresql-dev`).
+
+**io_uring** requires **Linux kernel 5.6+ at runtime**. Older kernels
+silently fall back to epoll — the image still builds and runs, but
+the io_uring fast path is unused.
+
+**Deliberately omitted:** `--enable-swoole-thread`,
+`--enable-thread-context` (require ZTS PHP; upstream
+`php:8.3-fpm-alpine` is NTS — mixing crashes at module init), and
+`--enable-swoole-stdext` (experimental upstream; replaces stdlib
+functions with coroutine versions and breaks third-party extensions).
+
+### Alpine quirks
+
+`phpenmod` ships with Debian's PHP packages — **it does not exist on
+Alpine**. The image wires extensions via `docker-php-ext-install` and
+hand-written `.ini` files under `/usr/local/etc/php/conf.d/`. Any
+script that shells out to `phpenmod` will fail with
+`command not found` on this image.
+
+### CI build cache
+
+`docker.yml` (in `phlix-server`, which builds this image cross-repo)
+uses both GHA cache and the registry image as cache sources, with
+`mode=max` so every intermediate layer — including the slow swoole/uv
+compile layers — is exported and reusable across PR builds.
+
 ## Next steps
 
 - [`docs/dev/schema.md`](schema.md) — complete hub DB schema with ER diagram, table columns, indexes, and FK relationships
