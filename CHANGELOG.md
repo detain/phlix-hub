@@ -7,6 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- `migrations/012_enrolled_at_and_last_frame_at.sql` — creates the
+  `servers.enrolled_at` and `relay_sessions.last_frame_at` columns
+  that `ClaimRequestHandler` and `RelaySessionManager` write to.
+  Without this migration a fresh database could not complete a
+  server claim or record relay frame activity. The same migration
+  also back-fills `enrolled_at` from `created_at` for any rows that
+  already exist. Migration `007_server_claims_and_servers.sql` was
+  also updated to (a) drop its forward reference to `enrolled_at`
+  in an `AFTER` clause (column position is cosmetic) and (b) use
+  `ADD COLUMN IF NOT EXISTS` so a re-run on a partly-patched
+  database is a no-op instead of an error.
 - `Phlix\Hub\Hub\ServerInfoHandler::getServerInfo()` and `getServersForUser()`
   now populate `ServerInfoDto::relayActive` from the actual database state
   (an `EXISTS` subquery against `relay_sessions` for rows where

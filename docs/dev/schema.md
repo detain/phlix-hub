@@ -49,6 +49,7 @@ erDiagram
         text         hostname_candidates_json
         enum         status
         datetime     last_seen_at
+        int_unsigned enrolled_at
         datetime     created_at
         datetime     updated_at
     }
@@ -99,6 +100,7 @@ erDiagram
         datetime     closed_at
         bigint       bytes_in
         bigint       bytes_out
+        int_unsigned last_frame_at
         varchar(64)  close_reason
     }
 
@@ -145,7 +147,8 @@ user row.
 
 ### `servers`
 
-**Migration:** `002_servers.sql`
+**Migrations:** `002_servers.sql`, `007_server_claims_and_servers.sql`,
+`008_subdomain_allocation.sql`, `012_enrolled_at_and_last_frame_at.sql`
 
 One row per Phlix server claimed to the hub. The hub does not store
 library or media data here — only what's needed for relay
@@ -162,6 +165,11 @@ library or media data here — only what's needed for relay
   hostnames the hub may try to reach the server directly.
 - `status` `ENUM('online','offline','claiming','disabled')`.
 - `last_seen_at` `DATETIME` — last heartbeat receipt.
+- `enrolled_at` `INT UNSIGNED NULL` — unix timestamp written when a
+  paired claim is promoted into a `servers` row by
+  `ClaimRequestHandler`. Nullable so rows that pre-date migration
+  `012` (back-filled from `created_at`) and any future row that
+  forgets to set it are still well-formed.
 - `created_at`, `updated_at` `DATETIME`.
 
 **Indexes:** primary `id`; `ix_servers_user_id`;
@@ -265,7 +273,8 @@ unique `uk_shared_libraries (server_id, library_id, grantee_user_id)`;
 
 ### `relay_sessions`
 
-**Migration:** `004_relay_sessions.sql`
+**Migrations:** `004_relay_sessions.sql`,
+`012_enrolled_at_and_last_frame_at.sql`
 
 Audit + dashboard rows for the WebSocket relay tunnel the hub
 maintains with each server. One row per connection lifetime; byte
@@ -278,6 +287,11 @@ finalise it on disconnect.
   WS (matters in multi-node deployments).
 - `opened_at`, `closed_at` `DATETIME`.
 - `bytes_in`, `bytes_out` `BIGINT UNSIGNED`.
+- `last_frame_at` `INT UNSIGNED NULL` — unix timestamp of the most
+  recent frame seen in either direction. Updated by
+  `RelaySessionManager::recordBytesIn()` /
+  `recordBytesOut()`. Nullable because sessions opened before
+  migration `012` have no per-frame activity data.
 - `close_reason` `VARCHAR(64)` — `"client-disconnect"`,
   `"timeout"`, `"server-shutdown"`, etc.
 
