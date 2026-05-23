@@ -322,6 +322,20 @@ Authorization: Bearer {enrollment_jwt}
 
 ## Relay tunnel design
 
+> **Current status — WS upgrade currently returns HTTP 501. Multiplex
+> implementation pending.** `POST /api/v1/servers/{id}/relay` in
+> `Phlix\Hub\Http\Controllers\RelayController` validates the
+> enrollment JWT and the `Upgrade: websocket` header, then returns
+> **HTTP 501 Not Implemented** with body
+> `{"error":"NOT_IMPLEMENTED","code":"relay.ws_not_implemented",…}`.
+> The WS upgrade handler, the per-tunnel multiplexer
+> (`TunnelManager`), and the client-side `wss://hub/client/{server_id}`
+> endpoint described below are **not yet implemented in this build**.
+> The sections that follow describe the design target, not the live
+> behavior. Scaffolding that *is* live: enrollment JWT auth,
+> `relay_sessions` schema, subdomain allocation (Step C.8), and the
+> `RelayRouter` used by the access-info endpoint.
+
 ### Overview
 
 The relay allows remote clients to access a server behind NAT — without opening inbound ports on the server.

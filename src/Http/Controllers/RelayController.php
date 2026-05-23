@@ -89,10 +89,22 @@ final class RelayController
             ]);
         }
 
-        return (new Response())->status(500)->json([
-            'error' => 'NOT_IMPLEMENTED',
-            'message' => 'WebSocket relay support is not yet fully implemented in this build.',
-        ]);
+        // The WS upgrade + multiplex tunnel is not implemented in this build.
+        // Return 501 Not Implemented (RFC 9110 §15.6.2) — the canonical status
+        // for "this server doesn't know how to fulfill the request method"
+        // — instead of 500 (which would imply a transient server fault).
+        // Auth still runs above so unauth attempts still get 401/403.
+        $docsUrl = 'https://detain.github.io/phlix-docs/dev/relay-protocol';
+        return (new Response())
+            ->header('Link', '<' . $docsUrl . '>; rel="help"')
+            ->status(501)
+            ->json([
+                'error'   => 'NOT_IMPLEMENTED',
+                'code'    => 'relay.ws_not_implemented',
+                'message' => 'The WebSocket relay tunnel is not implemented in this build.'
+                    . ' See https://github.com/detain/phlix-hub/issues for status.',
+                'docs'    => $docsUrl,
+            ]);
     }
 
     /**
