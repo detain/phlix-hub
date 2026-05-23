@@ -41,6 +41,7 @@ final class ServerInfoHandlerTest extends TestCase
             'status' => 'online',
             'hostname_candidates_json' => '["https://192.168.1.100:32400"]',
             'created_at' => time(),
+            'relay_active' => 1,
         ]]);
 
         $handler = new ServerInfoHandler($db);
@@ -52,6 +53,29 @@ final class ServerInfoHandlerTest extends TestCase
         self::assertSame('My NAS', $result->serverName);
         self::assertSame('0.11.0', $result->version);
         self::assertSame('online', $result->status);
+        self::assertTrue($result->relayActive);
+    }
+
+    public function testGetServerInfoMapsRelayInactive(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'server-1',
+            'user_id' => 'user-1',
+            'server_name' => 'Idle NAS',
+            'version' => '0.12.0',
+            'last_seen_at' => time(),
+            'status' => 'offline',
+            'hostname_candidates_json' => '[]',
+            'created_at' => time(),
+            'relay_active' => 0,
+        ]]);
+
+        $handler = new ServerInfoHandler($db);
+        $result = $handler->getServerInfo('server-1');
+
+        self::assertInstanceOf(ServerInfoDto::class, $result);
+        self::assertFalse($result->relayActive);
     }
 
     public function testGetServersForUserReturnsEmptyArray(): void
