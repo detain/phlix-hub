@@ -7,6 +7,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Changed
+- `Phlix\Hub\Hub\TlsCertificateManager::provisionCertificate()` (and
+  the underlying `runAcmeChallenge()` flow) now throws a
+  `\RuntimeException` with a stable, machine-grep-able message —
+  `'ACME certificate provisioning is not implemented in this build.
+  Provision certs out-of-band — see docs/hub-admin/tls.md.'` — instead
+  of silently shelling out to `openssl`, generating an account key
+  and CSR, and then returning `file_exists(...fullchain.pem)` as if
+  it had actually issued anything. Read-side helpers
+  (`getCertificatePath`, `getPrivateKeyPath`, `needsRenewal`) still
+  tell the truth from on-disk material. New `isProvisioned(string
+  $subdomain): bool` helper exposes that truth directly. Shell-safety
+  pass: the cert-expiry openssl call is now routed through
+  `proc_open` with an argv array (no shell, no `escapeshellcmd`),
+  and the temp-file cleanup in CSR generation no longer needs to
+  swallow `@unlink` errors because that code path is gone.
+  `DnsAliasManager::allocateSubdomain()` catches the new exception
+  and logs a warning so subdomain (DNS) allocation still succeeds —
+  TLS is now an out-of-band step. `DnsAliasManager::refreshCertificate()`
+  lets the exception propagate. `SubdomainController::allocate()` no
+  longer invokes cert provisioning at all — DNS allocation succeeds
+  unconditionally and the cert paths come back as empty strings until
+  material is installed out-of-band, so clients can distinguish "DNS
+  wired, TLS pending" from a fully provisioned state. The explicit
+  cert-refresh entry point `SubdomainController::refreshCertificate()`
+  (not yet routed publicly) catches `\RuntimeException` and returns
+  **HTTP 501 Not Implemented** with
+  `{"error":"NOT_IMPLEMENTED","code":"tls.acme_not_implemented",...}`
+  and a `Link: </docs/hub-admin/tls.md>; rel="help"` header.
+  Previously the manager looked complete on paper but in practice
+  silently failed every provisioning attempt.
 - `Phlix\Hub\Http\Controllers\RelayController::handle()` — the
   post-auth, post-`Upgrade: websocket` "no implementation" path now
   returns **HTTP 501 Not Implemented** (RFC 9110 §15.6.2) instead of
@@ -19,6 +49,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   if this were a transient server fault.
 
 ### Known Limitations
+- **Step C.8 ACME / Let's Encrypt provisioning is not implemented in
+  this build.** `TlsCertificateManager::provisionCertificate()` throws
+  `\RuntimeException` with the stable message
+  `'ACME certificate provisioning is not implemented in this build.
+  Provision certs out-of-band — see docs/hub-admin/tls.md.'`, and the
+  cert-refresh path of `POST /api/v1/servers/{id}/subdomain` returns
+  HTTP 501 `code=tls.acme_not_implemented`. Subdomain allocation (DNS
+  record + DB row) still works; operators install TLS material out-of-
+  band — see [`docs/hub-admin/tls.md`](docs/hub-admin/tls.md).
 - **WebSocket relay multiplex tunnel is not implemented in this
   build.** `POST /api/v1/servers/{id}/relay` validates the
   enrollment JWT and the `Upgrade: websocket` header, then returns

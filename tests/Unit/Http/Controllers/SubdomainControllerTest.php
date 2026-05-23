@@ -88,6 +88,54 @@ class SubdomainControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
     }
 
+    /**
+     * The explicit cert-refresh path must surface ACME-not-
+     * implemented as HTTP 501 with a stable error code and a docs
+     * link, NOT as a generic 500. A regression to the silent-stub
+     * behaviour would either return 204 (success) or 500 (mystery) —
+     * both fail this assertion.
+     */
+    public function test_refreshCertificate_returns_501_when_acme_not_implemented(): void
+    {
+        $dnsManager = $this->createMock(DnsAliasManager::class);
+        $dnsManager->method('refreshCertificate')->willThrowException(new \RuntimeException(
+            'ACME certificate provisioning is not implemented in this build. '
+            . 'Provision certs out-of-band — see docs/hub-admin/tls.md.',
+        ));
+
+        $certManager = $this->createMock(TlsCertificateManager::class);
+        $jwtService = $this->createMock(EnrollmentJwtService::class);
+
+        $controller = new SubdomainController($dnsManager, $certManager, $jwtService);
+
+        $request = $this->createRequest('POST', [], null);
+        $response = $controller->refreshCertificate($request, ['id' => 'server-123']);
+
+        $this->assertSame(501, $response->statusCode);
+        $this->assertSame(
+            '</docs/hub-admin/tls.md>; rel="help"',
+            $response->headers['Link'] ?? '',
+        );
+        $responseBody = (string) $response->body;
+        $this->assertStringContainsString('NOT_IMPLEMENTED', $responseBody);
+        $this->assertStringContainsString('tls.acme_not_implemented', $responseBody);
+        $this->assertStringContainsString('docs/hub-admin/tls.md', $responseBody);
+    }
+
+    public function test_refreshCertificate_returns_400_without_server_id(): void
+    {
+        $dnsManager = $this->createMock(DnsAliasManager::class);
+        $certManager = $this->createMock(TlsCertificateManager::class);
+        $jwtService = $this->createMock(EnrollmentJwtService::class);
+
+        $controller = new SubdomainController($dnsManager, $certManager, $jwtService);
+
+        $request = $this->createRequest('POST', [], null);
+        $response = $controller->refreshCertificate($request, []);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
     private function createRequest(string $method, array $body, ?string $authHeader): Request
     {
         $request = new Request();

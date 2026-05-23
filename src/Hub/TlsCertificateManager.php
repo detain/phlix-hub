@@ -4,12 +4,21 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use RuntimeException;
+
 /**
  * Manages TLS certificates for server subdomains.
  *
- * Uses Let's Encrypt ACME v2 in standalone mode (HTTP-01 challenge)
- * to provision certificates. Certificates are stored in the configured
- * directory and renewed automatically before expiry.
+ * NOTE: ACME (Let's Encrypt) automated provisioning advertised by Step
+ * C.8 in CHANGELOG.md is NOT implemented in this build. Calling
+ * {@see provisionCertificate()} or the underlying ACME challenge will
+ * throw a {@see RuntimeException}. Operators must provision certs
+ * out-of-band — see docs/hub-admin/tls.md.
+ *
+ * The read-side helpers ({@see getCertificatePath()},
+ * {@see getPrivateKeyPath()}) honestly return null when the on-disk
+ * files are missing, so callers can detect "not provisioned" without
+ * being lied to.
  *
  * @package Phlix\Hub\Hub
  * @since 0.12.0
@@ -20,8 +29,18 @@ class TlsCertificateManager
     private const int RENEW_BEFORE_DAYS = 60;
 
     /**
-     * @param string                                   $certsDir  Directory to store certificates.
-     * @param string                                   $acmeEmail  Email for Let's Encrypt account.
+     * Stable, machine-grep-able exception message emitted by every
+     * code path that pretends to "provision" a certificate. Tests pin
+     * to this exact string so a future regression to the silent-stub
+     * behaviour fails fast.
+     */
+    public const string NOT_IMPLEMENTED_MESSAGE =
+        'ACME certificate provisioning is not implemented in this build. '
+        . 'Provision certs out-of-band — see docs/hub-admin/tls.md.';
+
+    /**
+     * @param string                                   $certsDir   Directory to store certificates.
+     * @param string                                   $acmeEmail  Email for Let's Encrypt account (unused; reserved).
      * @param \Phlix\Hub\Common\Logger\StructuredLogger $logger     Application logger.
      */
     public function __construct(
@@ -29,18 +48,36 @@ class TlsCertificateManager
         private readonly string $acmeEmail,
         private readonly \Phlix\Hub\Common\Logger\StructuredLogger $logger,
     ) {
-        // phelix-email is stored for ACME account registration in runAcmeChallenge()
+        // $acmeEmail is retained on the constructor signature for forward
+        // compatibility with the eventual ACME implementation; until then
+        // it is only exposed via getAcmeEmail() for diagnostics/logging.
+    }
+
+    /**
+     * Return the configured ACME account email.
+     *
+     * Exposed for operators / diagnostic endpoints that want to show
+     * which contact would be used once ACME is implemented.
+     *
+     * @return string Configured ACME contact email.
+     */
+    public function getAcmeEmail(): string
+    {
+        return $this->acmeEmail;
     }
 
     /**
      * Provision a TLS certificate for a subdomain.
      *
-     * Uses ACME HTTP-01 challenge. The caller must ensure port 80
-     * is accessible from the internet for challenge verification.
+     * NOT IMPLEMENTED. This build does not ship automated ACME
+     * provisioning. Operators must install certs out-of-band; see
+     * docs/hub-admin/tls.md.
      *
      * @param string $subdomain Subdomain label (e.g. "abc12345").
      *
-     * @return bool True if certificate was provisioned or already exists.
+     * @return bool Never returns — always throws.
+     *
+     * @throws RuntimeException Always, with {@see NOT_IMPLEMENTED_MESSAGE}.
      *
      * @since 0.12.0
      */
@@ -48,29 +85,32 @@ class TlsCertificateManager
     {
         $fqdn = $subdomain . '.phlix.media';
 
-        if ($this->certificateExists($fqdn) && !$this->needsRenewal($fqdn)) {
-            $this->logger->debug('Certificate already exists and is valid', ['fqdn' => $fqdn]);
-            return true;
-        }
+        $this->logger->warning(
+            'TlsCertificateManager::provisionCertificate() called but ACME is not implemented',
+            ['fqdn' => $fqdn],
+        );
 
-        if (!is_dir($this->certsDir)) {
-            mkdir($this->certsDir, 0755, true);
-        }
+        throw new RuntimeException(self::NOT_IMPLEMENTED_MESSAGE);
+    }
 
-        $subdomainDir = $this->certsDir . '/' . $fqdn;
-        if (!is_dir($subdomainDir)) {
-            mkdir($subdomainDir, 0755, true);
-        }
+    /**
+     * Check whether a subdomain has a usable cert on disk.
+     *
+     * Truthful: returns true iff both fullchain.pem and privkey.pem
+     * exist for the FQDN under the configured certs dir. Does not
+     * attempt to provision anything.
+     *
+     * @param string $subdomain Subdomain label (e.g. "abc12345").
+     *
+     * @return bool True if both cert files are present.
+     *
+     * @since 0.12.0
+     */
+    public function isProvisioned(string $subdomain): bool
+    {
+        $fqdn = $subdomain . '.phlix.media';
 
-        $result = $this->runAcmeChallenge($fqdn, $subdomainDir);
-
-        if ($result) {
-            $this->logger->info('Certificate provisioned', ['fqdn' => $fqdn]);
-        } else {
-            $this->logger->error('Certificate provisioning failed', ['fqdn' => $fqdn]);
-        }
-
-        return $result;
+        return $this->certificateExists($fqdn);
     }
 
     /**
@@ -133,12 +173,18 @@ class TlsCertificateManager
     /**
      * Check if a certificate needs renewal.
      *
-     * @param string $fqdn Full domain name.
+     * Used by external monitoring/cron scripts. Pure read; never
+     * mutates state or invokes ACME.
+     *
+     * @param string $subdomain Subdomain label.
      *
      * @return bool True if certificate is missing or expires within RENEW_BEFORE_DAYS.
+     *
+     * @since 0.12.0
      */
-    private function needsRenewal(string $fqdn): bool
+    public function needsRenewal(string $subdomain): bool
     {
+        $fqdn = $subdomain . '.phlix.media';
         $certPath = $this->certsDir . '/' . $fqdn . '/fullchain.pem';
 
         if (!file_exists($certPath)) {
@@ -150,17 +196,23 @@ class TlsCertificateManager
             return true;
         }
 
-        $output = [];
+        // Use proc_open with an argv array so the FQDN-derived path
+        // cannot influence shell parsing. The cert content is fed via
+        // stdin rather than letting the shell expand redirection.
         $exitCode = 0;
-        $cmd = 'openssl x509 -noout -enddate 2>/dev/null < ' . escapeshellarg($certPath);
-        exec(escapeshellcmd($cmd), $output, $exitCode);
+        $output = $this->runOpenssl(
+            ['openssl', 'x509', '-noout', '-enddate'],
+            $certFile,
+            $exitCode,
+        );
 
-        if ($exitCode !== 0 || empty($output)) {
+        if ($exitCode !== 0 || $output === '') {
             return true;
         }
 
-        $firstLine = (string) $output[0];
-        if ($firstLine !== '' && preg_match('/notAfter=(.+)/i', $firstLine, $matches)) {
+        $lines = preg_split('/\r?\n/', $output) ?: [];
+        $firstLine = $lines[0] ?? '';
+        if ($firstLine !== '' && preg_match('/notAfter=(.+)/i', $firstLine, $matches) === 1) {
             $expiry = strtotime(trim($matches[1]));
             if ($expiry !== false) {
                 $renewalTime = $expiry - (self::RENEW_BEFORE_DAYS * 86400);
@@ -172,109 +224,57 @@ class TlsCertificateManager
     }
 
     /**
-     * Run ACME challenge to provision a certificate.
+     * Run an openssl command via proc_open with an argv array.
      *
-     * @param string $fqdn        Full domain name.
-     * @param string $subdomainDir Directory to store certificate files.
+     * No shell, no escapeshellcmd. Argument values cannot be
+     * misinterpreted as flags or redirection.
      *
-     * @return bool True if provisioning succeeded.
+     * @param list<string> $argv     Argv (argv[0] is the program).
+     * @param string|null  $stdin    Optional stdin payload.
+     * @param int          $exitCode Out-param: child exit code.
+     *
+     * @return string Captured stdout.
      */
-    private function runAcmeChallenge(string $fqdn, string $subdomainDir): bool
+    private function runOpenssl(array $argv, ?string $stdin, int &$exitCode): string
     {
-        $acmeServer = 'https://acme-v02.api.letsencrypt.org/directory';
-        $webroot = '/var/www/challenges';
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
 
-        if (!is_dir($webroot)) {
-            mkdir($webroot, 0755, true);
+        $process = proc_open($argv, $descriptors, $pipes);
+        if (!is_resource($process)) {
+            $exitCode = -1;
+            return '';
         }
 
-        $accountKey = $this->certsDir . '/account.key';
-        if (!file_exists($accountKey)) {
-            $this->generateAccountKey($accountKey);
+        if ($stdin !== null && isset($pipes[0]) && is_resource($pipes[0])) {
+            // Non-blocking stdin: a small child that exits before fully
+            // draining stdin must not deadlock the parent fwrite() if a
+            // future caller passes a large payload.
+            stream_set_blocking($pipes[0], false);
+            fwrite($pipes[0], $stdin);
+        }
+        if (isset($pipes[0]) && is_resource($pipes[0])) {
+            fclose($pipes[0]);
         }
 
-        $domainKey = $subdomainDir . '/privkey.pem';
-        if (!file_exists($domainKey)) {
-            $this->generateDomainKey($domainKey);
+        $stdout = '';
+        if (isset($pipes[1]) && is_resource($pipes[1])) {
+            // Defensive: ensure stdout reads block until the child
+            // closes its end, so stream_get_contents() returns the
+            // full output rather than a partial buffer.
+            stream_set_blocking($pipes[1], true);
+            $stdout = (string) stream_get_contents($pipes[1]);
+            fclose($pipes[1]);
+        }
+        if (isset($pipes[2]) && is_resource($pipes[2])) {
+            fclose($pipes[2]);
         }
 
-        $csrFile = $subdomainDir . '/domain.csr';
-        $this->generateCsr($fqdn, $domainKey, $csrFile);
+        $exitCode = proc_close($process);
 
-        $this->logger->info('ACME challenge initiated', [
-            'fqdn' => $fqdn,
-            'acme_email' => $this->acmeEmail,
-            'webroot' => $webroot,
-        ]);
-
-        return file_exists($subdomainDir . '/fullchain.pem');
-    }
-
-    /**
-     * Generate RSA account key for ACME.
-     *
-     * @param string $path Path to write the key.
-     *
-     * @return void
-     */
-    private function generateAccountKey(string $path): void
-    {
-        $output = [];
-        $exitCode = 0;
-        exec('openssl genrsa 4096 2>/dev/null > ' . escapeshellarg($path), $output, $exitCode);
-        if ($exitCode === 0) {
-            chmod($path, 0600);
-        }
-    }
-
-    /**
-     * Generate RSA domain private key.
-     *
-     * @param string $path Path to write the key.
-     *
-     * @return void
-     */
-    private function generateDomainKey(string $path): void
-    {
-        $output = [];
-        $exitCode = 0;
-        exec('openssl genrsa 2048 2>/dev/null > ' . escapeshellarg($path), $output, $exitCode);
-        if ($exitCode === 0) {
-            chmod($path, 0600);
-        }
-    }
-
-    /**
-     * Generate CSR for the domain.
-     *
-     * @param string $fqdn   Full domain name.
-     * @param string $keyPath Path to domain private key.
-     * @param string $csrPath Path to write CSR.
-     *
-     * @return void
-     */
-    private function generateCsr(string $fqdn, string $keyPath, string $csrPath): void
-    {
-        $opensslConf = implode("\n", [
-            'distinguished_name = req_distinguished_name',
-            '[req_distinguished_name]',
-            '[ SAN ]',
-            'subjectAltName=DNS:' . $fqdn,
-        ]);
-        $tmpConf = sys_get_temp_dir() . '/openssl_san.cnf';
-        file_put_contents($tmpConf, $opensslConf);
-
-        $cmd = sprintf(
-            'openssl req -new -sha256 -key %s -out %s -subj "/CN=%s" '
-            . '-addext "subjectAltName=DNS:%s" -config %s 2>/dev/null',
-            escapeshellarg($keyPath),
-            escapeshellarg($csrPath),
-            escapeshellarg($fqdn),
-            escapeshellarg($fqdn),
-            escapeshellarg($tmpConf)
-        );
-
-        exec($cmd);
-        @unlink($tmpConf);
+        return $stdout;
     }
 }
