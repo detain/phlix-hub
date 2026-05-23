@@ -34,9 +34,13 @@ class ServerInfoHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, user_id, server_name, version, last_seen_at, status,
-                    hostname_candidates_json, created_at
-             FROM servers WHERE id = :id LIMIT 1',
+            'SELECT s.id, s.user_id, s.server_name, s.version, s.last_seen_at, s.status,
+                    s.hostname_candidates_json, s.created_at,
+                    EXISTS(
+                        SELECT 1 FROM relay_sessions r
+                        WHERE r.server_id = s.id AND r.closed_at IS NULL
+                    ) AS relay_active
+             FROM servers s WHERE s.id = :id LIMIT 1',
             ['id' => $serverId],
         );
 
@@ -58,11 +62,15 @@ class ServerInfoHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, user_id, server_name, version, last_seen_at, status,
-                    hostname_candidates_json, created_at
-             FROM servers
-             WHERE user_id = :user_id
-             ORDER BY created_at DESC',
+            'SELECT s.id, s.user_id, s.server_name, s.version, s.last_seen_at, s.status,
+                    s.hostname_candidates_json, s.created_at,
+                    EXISTS(
+                        SELECT 1 FROM relay_sessions r
+                        WHERE r.server_id = s.id AND r.closed_at IS NULL
+                    ) AS relay_active
+             FROM servers s
+             WHERE s.user_id = :user_id
+             ORDER BY s.created_at DESC',
             ['user_id' => $userId],
         );
 
@@ -105,6 +113,10 @@ class ServerInfoHandler
         /** @var string */
         $status = is_string($row['status'] ?? null) ? $row['status'] : 'offline';
 
+        /** @var mixed */
+        $relayActiveRaw = $row['relay_active'] ?? false;
+        $relayActive = is_numeric($relayActiveRaw) ? (int) $relayActiveRaw === 1 : (bool) $relayActiveRaw;
+
         return new ServerInfoDto(
             serverId: $serverId,
             userId: $userId,
@@ -113,7 +125,7 @@ class ServerInfoHandler
             lastSeenAt: $lastSeenAt,
             status: $status,
             hostnameCandidates: $hostnames,
-            relayActive: false,
+            relayActive: $relayActive,
         );
     }
 }

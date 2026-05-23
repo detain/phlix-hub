@@ -6,6 +6,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- `Phlix\Hub\Hub\ServerInfoHandler::getServerInfo()` and `getServersForUser()`
+  now populate `ServerInfoDto::relayActive` from the actual database state
+  (an `EXISTS` subquery against `relay_sessions` for rows where
+  `closed_at IS NULL`). The field was previously hardcoded to `false`,
+  so `GET /api/v1/me/servers/{id}/access-info` and the My Servers dashboard
+  always reported the relay tunnel as down regardless of its real state.
+  The DTO contract is unchanged; only the value source was fixed.
+
 ### Added
 - **Step D.5 — Invite-Link Sharing**: Single-use invite link sharing for library access.
   - `InviteLink` DTO — represents an invite link with expiry, max uses, and status checks (`isExpired()`, `isExhausted()`, `canUse()`).
