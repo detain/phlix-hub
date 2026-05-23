@@ -78,7 +78,14 @@ class DnsAliasManager
         $this->dnsProvider->addRecord(self::DOMAIN, $subdomain, 'A', '0.0.0.0');
         $this->dnsProvider->updateSoa(self::DOMAIN);
 
-        $this->certManager->provisionCertificate($subdomain);
+        // NOTE: TLS provisioning is intentionally NOT triggered here.
+        // In this build TlsCertificateManager::provisionCertificate()
+        // throws RuntimeException (ACME not implemented); operators
+        // install certs out-of-band — see docs/hub-admin/tls.md.
+        // Allocating the subdomain (DNS record + DB row) must still
+        // succeed independently. Use refreshCertificate() for an
+        // explicit cert-refresh call site that surfaces the
+        // limitation as HTTP 501.
 
         $this->logger->info('Subdomain allocated', [
             'server_id' => $serverId,
@@ -178,9 +185,16 @@ class DnsAliasManager
     /**
      * Refresh the TLS certificate for a subdomain.
      *
+     * In this build, automated ACME provisioning is not implemented;
+     * {@see TlsCertificateManager::provisionCertificate()} throws
+     * {@see \RuntimeException}. Callers should catch it and surface
+     * a 501 Not Implemented to the client. See docs/hub-admin/tls.md.
+     *
      * @param string $serverId Server UUID.
      *
      * @return bool True if renewal succeeded.
+     *
+     * @throws \RuntimeException When ACME provisioning is not implemented.
      *
      * @since 0.12.0
      */

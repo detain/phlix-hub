@@ -72,7 +72,10 @@ class DnsAliasManagerTest extends TestCase
                 return [];
             });
 
-        $this->certManager->method('provisionCertificate')->willReturn(true);
+        // allocateSubdomain() no longer triggers TLS provisioning;
+        // operators install certs out-of-band (docs/hub-admin/tls.md).
+        // The mock therefore expects no call at all.
+        $this->certManager->expects($this->never())->method('provisionCertificate');
 
         $subdomain = $this->manager->allocateSubdomain($serverId);
 
@@ -115,19 +118,77 @@ class DnsAliasManagerTest extends TestCase
         $this->assertNull($resolved);
     }
 
+    /**
+     * In this build TlsCertificateManager::provisionCertificate()
+     * throws RuntimeException (ACME not implemented). Subdomain
+     * allocation must still succeed — and not even call the cert
+     * manager — so DNS works while operators install TLS material
+     * out-of-band; see docs/hub-admin/tls.md.
+     */
+    public function test_allocateSubdomain_does_not_invoke_cert_provisioning(): void
+    {
+        $serverId = 'server-no-cert-call';
+
+        $this->db->method('query')->willReturn([]);
+        $this->certManager->expects($this->never())->method('provisionCertificate');
+
+        $subdomain = $this->manager->allocateSubdomain($serverId);
+
+        $this->assertIsString($subdomain);
+        $this->assertSame(8, strlen($subdomain));
+    }
+
+    /**
+     * refreshCertificate(), by contrast, MUST surface the
+     * NotImplemented exception. It is the explicit "provision now"
+     * path; silently swallowing it would re-introduce the silent-stub
+     * lie at a different layer.
+     */
+    public function test_refreshCertificate_propagates_not_implemented_exception(): void
+    {
+        $serverId = 'server-refresh';
+
+        $this->db->method('query')->willReturn([
+            ['subdomain' => 'abc12345'],
+        ]);
+
+        $this->certManager->method('provisionCertificate')
+            ->willThrowException(new \RuntimeException(
+                'ACME certificate provisioning is not implemented in this build. '
+                . 'Provision certs out-of-band — see docs/hub-admin/tls.md.',
+            ));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('ACME certificate provisioning is not implemented');
+
+        $this->manager->refreshCertificate($serverId);
+    }
+
     private function recursiveDelete(string $dir): void
     {
         if (!is_dir($dir)) {
             return;
         }
         $files = glob($dir . '/*');
+        if ($files === false) {
+            $files = [];
+        }
         foreach ($files as $file) {
             if (is_dir($file)) {
                 $this->recursiveDelete($file);
             } else {
-                @unlink($file);
+                // Suppression intentionally avoided: production code
+                // removed `@unlink` for shell-safety, and reintroducing
+                // the silenced form here would undermine that fix.
+                // Ignore the boolean return — best-effort cleanup is
+                // fine for a temp dir teardown.
+                if (!unlink($file)) {
+                    // noop: best-effort temp cleanup
+                }
             }
         }
-        @rmdir($dir);
+        if (!rmdir($dir)) {
+            // noop: best-effort temp cleanup
+        }
     }
 }

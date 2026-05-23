@@ -98,12 +98,64 @@ final class SubdomainController
         $certPath = $this->certManager->getCertificatePath($subdomain);
         $keyPath = $this->certManager->getPrivateKeyPath($subdomain);
 
+        // tls_cert_path / tls_key_path are populated iff an operator
+        // has installed cert material at the conventional location
+        // (see docs/hub-admin/tls.md). Automated ACME provisioning is
+        // not implemented in this build, so a fresh subdomain returns
+        // empty strings for these two fields — clients should treat
+        // that as "DNS is wired up, TLS is pending operator action".
         return (new Response())->json([
             'subdomain' => $subdomain,
             'fqdn' => $fqdn,
             'tls_cert_path' => $certPath ?? '',
             'tls_key_path' => $keyPath ?? '',
         ]);
+    }
+
+    /**
+     * POST /api/v1/servers/{id}/subdomain/refresh-cert — explicit
+     * cert refresh.
+     *
+     * In this build ACME is not implemented, so this method exists
+     * to give callers a documented 501 response with the
+     * `tls.acme_not_implemented` code rather than a generic 500. It
+     * is wired only via direct service-layer calls today; no public
+     * route maps to it yet.
+     *
+     * @param Request               $request Workerman HTTP request.
+     * @param array<string, string> $params  Route params containing 'id'.
+     *
+     * @return Response
+     *
+     * @since 0.12.0
+     */
+    public function refreshCertificate(Request $request, array $params): Response
+    {
+        unset($request);
+        $serverIdFromPath = $params['id'] ?? '';
+
+        if ($serverIdFromPath === '') {
+            return (new Response())->status(400)->json([
+                'error' => 'MISSING_SERVER_ID',
+                'message' => 'Server ID is required',
+            ]);
+        }
+
+        try {
+            $this->dnsAliasManager->refreshCertificate($serverIdFromPath);
+        } catch (\RuntimeException $e) {
+            return (new Response())
+                ->status(501)
+                ->header('Link', '</docs/hub-admin/tls.md>; rel="help"')
+                ->json([
+                    'error' => 'NOT_IMPLEMENTED',
+                    'code' => 'tls.acme_not_implemented',
+                    'message' => $e->getMessage(),
+                    'docs' => 'https://detain.github.io/phlix-docs/hub-admin/tls',
+                ]);
+        }
+
+        return (new Response())->status(204);
     }
 
     /**
