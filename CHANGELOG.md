@@ -6,6 +6,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+- `Phlix\Hub\Http\Controllers\RelayController::handle()` — the
+  post-auth, post-`Upgrade: websocket` "no implementation" path now
+  returns **HTTP 501 Not Implemented** (RFC 9110 §15.6.2) instead of
+  HTTP 500. The body carries a stable machine-readable shape:
+  `{"error":"NOT_IMPLEMENTED","code":"relay.ws_not_implemented",
+  "message":"…","docs":"https://detain.github.io/phlix-docs/dev/relay-protocol"}`
+  and a `Link: <docs-url>; rel="help"` header. Auth gates (401, 426)
+  are unchanged — only the terminal "no impl" status code and body
+  shape changed. Previously the 500 misled clients into retrying as
+  if this were a transient server fault.
+
+### Known Limitations
+- **WebSocket relay multiplex tunnel is not implemented in this
+  build.** `POST /api/v1/servers/{id}/relay` validates the
+  enrollment JWT and the `Upgrade: websocket` header, then returns
+  HTTP 501 with `code=relay.ws_not_implemented`. The architectural
+  design is documented in
+  [`docs/dev/architecture-hub.md`](docs/dev/architecture-hub.md#relay-tunnel-design)
+  ("Relay tunnel design") and remains the target shape, but no WS
+  upgrade handler, `TunnelManager` multiplexer, or client-side relay
+  endpoint exists yet. Earlier entries describing Step C.6 / the
+  relay tunnel as shipped refer to scaffolding (auth, session table,
+  router, subdomain allocation) — not the live tunnel itself.
+
 ### Fixed
 - `Phlix\Hub\Http\Controllers\ServerManageController::accessInfo()` now
   populates `relay_url` when the relay tunnel is active and the server has
