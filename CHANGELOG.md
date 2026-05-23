@@ -7,6 +7,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- `Phlix\Hub\Http\Controllers\ServerManageController::accessInfo()` now
+  populates `relay_url` when the relay tunnel is active and the server has
+  been allocated a subdomain (via migration 008's `servers.subdomain`).
+  The URL is built as `https://{subdomain}.{public_domain}` using the new
+  `public_domain` key in `config/server.php` (default `phlix.media`,
+  overridable via the `HUB_PUBLIC_DOMAIN` env var). Previously the field
+  was hardcoded to `null`, so even with a live relay tunnel clients were
+  never told how to reach the server. The response shape (`relay_url`
+  key) is unchanged.
 - `migrations/012_enrolled_at_and_last_frame_at.sql` — creates the
   `servers.enrolled_at` and `relay_sessions.last_frame_at` columns
   that `ClaimRequestHandler` and `RelaySessionManager` write to.

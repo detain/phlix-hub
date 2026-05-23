@@ -44,6 +44,7 @@ final class HttpServicesProvider implements ServiceProviderInterface
         $templatesDir = self::stringOr($appConfig, 'templates.dir', dirname(__DIR__, 4) . '/public/templates');
         $compileDir = self::stringOr($appConfig, 'templates.compile', dirname(__DIR__, 4) . '/var/smarty/compile');
         $cacheDir = self::stringOr($appConfig, 'templates.cache', dirname(__DIR__, 4) . '/var/smarty/cache');
+        $publicDomain = self::stringOr($appConfig, 'public_domain', 'phlix.media');
 
         $builder->addDefinitions([
             PageRenderer::class => factory(static function () use (
@@ -85,8 +86,8 @@ final class HttpServicesProvider implements ServiceProviderInterface
             ServerManageController::class => factory(static function (
                 ServerInfoHandler $serverInfo,
                 Connection $db,
-            ): ServerManageController {
-                return new ServerManageController($serverInfo, $db);
+            ) use ($publicDomain): ServerManageController {
+                return new ServerManageController($serverInfo, $db, $publicDomain);
             }),
 
             AuthMiddleware::class => factory(static function (
