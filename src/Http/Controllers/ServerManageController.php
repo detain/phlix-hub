@@ -21,12 +21,14 @@ use Workerman\MySQL\Connection;
 final class ServerManageController
 {
     /**
-     * @param ServerInfoHandler $serverInfo Used to fetch server info and verify ownership.
-     * @param Connection          $db         Used to delete the server row.
+     * @param ServerInfoHandler $serverInfo   Used to fetch server info and verify ownership.
+     * @param Connection        $db           Used to delete the server row and look up the subdomain.
+     * @param string            $publicDomain Public domain used to build relay URLs (e.g. `phlix.media`).
      */
     public function __construct(
         private readonly ServerInfoHandler $serverInfo,
         private readonly Connection $db,
+        private readonly string $publicDomain = 'phlix.media',
     ) {
     }
 
@@ -112,11 +114,12 @@ final class ServerManageController
 
         $directUrl = $this->bestDirectUrl($server->hostnameCandidates);
         $relayActive = $server->relayActive;
+        $relayUrl = $this->buildRelayUrl($serverId, $relayActive);
 
         return (new Response())->json([
             'server_id'    => $serverId,
             'direct_url'   => $directUrl,
-            'relay_url'    => null,
+            'relay_url'    => $relayUrl,
             'relay_active' => $relayActive,
         ]);
     }
@@ -136,5 +139,49 @@ final class ServerManageController
             }
         }
         return null;
+    }
+
+    /**
+     * Build the public relay URL for a server.
+     *
+     * Returns `https://{subdomain}.{publicDomain}` when the relay tunnel
+     * is active AND the server has been allocated a subdomain (migration
+     * 008 / `DnsAliasManager`). Otherwise returns null — clients should
+     * not be handed a URL that is structurally complete but unreachable.
+     *
+     * @param string $serverId    Server UUID.
+     * @param bool   $relayActive Whether the relay tunnel is currently open.
+     *
+     * @return string|null Full https URL or null when relay is unreachable.
+     */
+    private function buildRelayUrl(string $serverId, bool $relayActive): ?string
+    {
+        if (!$relayActive) {
+            return null;
+        }
+
+        // TODO: eliminate this second query once ServerInfoDto carries `subdomain`
+        // (requires a phlix-shared bump — see missing.md §1.3).
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT subdomain FROM servers WHERE id = :id LIMIT 1',
+            ['id' => $serverId],
+        );
+
+        if (!isset($rows[0])) {
+            return null;
+        }
+
+        /** @var mixed $subdomainRaw */
+        $subdomainRaw = $rows[0]['subdomain'] ?? null;
+        if (!is_string($subdomainRaw) || $subdomainRaw === '') {
+            return null;
+        }
+
+        if ($this->publicDomain === '') {
+            return null;
+        }
+
+        return 'https://' . $subdomainRaw . '.' . $this->publicDomain;
     }
 }

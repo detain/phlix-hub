@@ -8,6 +8,11 @@ return [
     'workers'       => (int) (getenv('HUB_WORKERS') ?: 2),
     'workerman_log' => getenv('HUB_WORKERMAN_LOG') ?: __DIR__ . '/../.logs/workerman.log',
 
+    // Public domain used to build relay URLs for subdomain-allocated servers.
+    // Each enrolled server gets `<subdomain>.<public_domain>` (see migration
+    // 008 and `Phlix\Hub\Hub\DnsAliasManager`).
+    'public_domain' => getenv('HUB_PUBLIC_DOMAIN') ?: 'phlix.media',
+
     // Sonarr/Radarr endpoints used by the K.3 request UI.
     // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.
     'arr' => [
