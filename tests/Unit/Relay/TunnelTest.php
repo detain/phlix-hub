@@ -20,6 +20,7 @@ class TunnelTest extends TestCase
 {
     private RelayWireCodecInterface $codec;
     private StructuredLogger $logger;
+    private StructuredLogger $clientLogger;
     private RelaySessionManager $sessionManager;
     private TcpConnection $serverWs;
 
@@ -29,6 +30,7 @@ class TunnelTest extends TestCase
 
         $this->codec = new FrameDecoder();
         $this->logger = $this->createMock(StructuredLogger::class);
+        $this->clientLogger = $this->createMock(StructuredLogger::class);
         $this->sessionManager = $this->createMock(RelaySessionManager::class);
         $this->serverWs = $this->createMock(TcpConnection::class);
     }
@@ -156,8 +158,8 @@ class TunnelTest extends TestCase
                 $sentData2 = $data;
             });
 
-        $client1 = new ClientConnection($clientWs1, 'server-123', 'client-1');
-        $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2');
+        $client1 = new ClientConnection($clientWs1, 'server-123', 'client-1', $this->clientLogger, '');
+        $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2', $this->clientLogger, '');
 
         $tunnel->clientConnections->attach($client1);
         $tunnel->clientConnections->attach($client2);
@@ -232,7 +234,7 @@ class TunnelTest extends TestCase
         $clientWs->expects($this->once())->method('send');
         $clientWs->expects($this->once())->method('close');
 
-        $client = new ClientConnection($clientWs, 'server-123', 'client-1');
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
         $tunnel->clientConnections->attach($client);
 
         $this->sessionManager
@@ -289,7 +291,7 @@ class TunnelTest extends TestCase
             });
 
         $clientWs = $this->createMock(TcpConnection::class);
-        $client = new ClientConnection($clientWs, 'server-123', 'client-1', 'relay-session-1');
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, 'relay-session-1');
 
         $tunnel->registerClient($client);
 
@@ -320,7 +322,7 @@ class TunnelTest extends TestCase
         $tunnel->status = Tunnel::STATUS_ACTIVE;
 
         $clientWs = $this->createMock(TcpConnection::class);
-        $client = new ClientConnection($clientWs, 'server-123', 'client-1', 'relay-session-1');
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, 'relay-session-1');
         $tunnel->clientConnections->attach($client);
 
         $sentData = null;
