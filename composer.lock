@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "5553741ba638a2374963a8f1a76858ea",
+    "content-hash": "535b6eef248b050286ebe68b5f4f0e58",
     "packages": [
         {
             "name": "crell/attributeutils",
