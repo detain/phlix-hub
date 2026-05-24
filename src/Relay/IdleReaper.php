@@ -83,19 +83,27 @@ final class IdleReaper
     {
         $reapedCount = 0;
 
+        // Collect stale tunnels first to avoid concurrent modification
+        // when closeTunnel() is called (which modifies the tunnel collection).
+        $staleTunnels = [];
         foreach ($this->tunnelManager->allTunnels() as $serverId => $tunnel) {
             if ($tunnel->isStale($this->staleThresholdSeconds)) {
-                $this->logger->info('Relay: reaping stale tunnel', [
-                    'server_id' => $serverId,
-                    'tunnel_id' => $tunnel->getTunnelId(),
-                    'last_frame_at' => $tunnel->getLastFrameAt(),
-                    'stale_threshold_seconds' => $this->staleThresholdSeconds,
-                    'reason' => 'timeout',
-                ]);
-
-                $this->tunnelManager->closeTunnel($serverId, 'timeout');
-                $reapedCount++;
+                $staleTunnels[$serverId] = $tunnel;
             }
+        }
+
+        // Close stale tunnels after iteration is complete.
+        foreach ($staleTunnels as $serverId => $tunnel) {
+            $this->logger->info('Relay: reaping stale tunnel', [
+                'server_id' => $serverId,
+                'tunnel_id' => $tunnel->getTunnelId(),
+                'last_frame_at' => $tunnel->getLastFrameAt(),
+                'stale_threshold_seconds' => $this->staleThresholdSeconds,
+                'reason' => 'timeout',
+            ]);
+
+            $this->tunnelManager->closeTunnel($serverId, 'timeout');
+            $reapedCount++;
         }
 
         if ($reapedCount > 0) {
