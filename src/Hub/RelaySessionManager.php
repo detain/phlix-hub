@@ -201,6 +201,50 @@ class RelaySessionManager
     }
 
     /**
+     * Record bytes sent from a client to the server through the tunnel.
+     *
+     * @param string $sessionId Relay session UUID.
+     * @param int    $bytes     Number of bytes received.
+     *
+     * @return void
+     *
+     * @since 0.5.0
+     */
+    public function recordBytesIn(string $sessionId, int $bytes): void
+    {
+        $this->db->query(
+            'UPDATE relay_sessions SET bytes_in = bytes_in + :bytes,
+             last_frame_at = UNIX_TIMESTAMP() WHERE id = :id',
+            [
+                'bytes' => $bytes,
+                'id' => $sessionId,
+            ],
+        );
+    }
+
+    /**
+     * Touch the last_frame_at timestamp without changing byte counts.
+     *
+     * Used for HEARTBEAT frames where we want to update activity but
+     * not count the heartbeat as data traffic.
+     *
+     * @param string $sessionId Relay session UUID.
+     *
+     * @return void
+     *
+     * @since 0.5.0
+     */
+    public function touchLastFrame(string $sessionId): void
+    {
+        $this->db->query(
+            'UPDATE relay_sessions SET last_frame_at = UNIX_TIMESTAMP() WHERE id = :id',
+            [
+                'id' => $sessionId,
+            ],
+        );
+    }
+
+    /**
      * Generate a random UUID v4.
      */
     private function generateUuid(): string
