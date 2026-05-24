@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Relay;
 
 use InvalidArgumentException;
+use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
@@ -115,10 +116,8 @@ final class FrameDecoder implements RelayWireCodecInterface
 
         // Validate frame type
         if (!RelayFrameType::isValid($typeValue)) {
-            // TODO: Per the spec, this should close the tunnel with RFC 6455 1011
-            // For now, clear buffer and return null to skip invalid frame
             $this->buffer = '';
-            return null;
+            throw new InvalidFrameTypeException($typeValue, 'Unrecognized frame type');
         }
 
         // Total frame size = 7 bytes header + payload len

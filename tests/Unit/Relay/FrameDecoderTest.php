@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 
 use InvalidArgumentException;
 use Phlix\Hub\Relay\FrameDecoder;
+use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
@@ -258,5 +259,16 @@ class FrameDecoderTest extends TestCase
 
         $this->assertInstanceOf(RelayFrame::class, $result);
         $this->assertSame($payload, $result->payload);
+    }
+
+    public function test_decode_invalid_frame_type_throws(): void
+    {
+        // 4-byte seq (0x00000001) + invalid type (0xFF) + 2-byte len (0x0000)
+        $invalidFrame = pack('N', 1) . chr(0xFF) . pack('n', 0);
+
+        $this->expectException(InvalidFrameTypeException::class);
+        $this->expectExceptionCode(1011);
+
+        $this->decoder->decode($invalidFrame);
     }
 }
