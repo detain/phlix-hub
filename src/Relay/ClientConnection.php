@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Relay;
 
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Shared\Relay\RelayFrame;
@@ -25,25 +26,33 @@ use function time;
 final class ClientConnection
 {
     /**
-     * @param TcpConnection  $clientWs  Workerman connection to the client.
-     * @param string         $serverId Server UUID this client is connected through.
-     * @param string         $clientId Client UUID (assigned by the hub).
-     * @param string         $sessionId Optional relay session ID for this client.
+     * @param TcpConnection        $clientWs  Workerman connection to the client.
+     * @param string               $serverId  Server UUID this client is connected through.
+     * @param string               $clientId  Client UUID (assigned by the hub).
+     * @param StructuredLogger     $logger    Structured logger for relay events.
+     * @param string               $sessionId Optional relay session ID for this client.
      */
     public function __construct(
         public readonly TcpConnection $clientWs,
         public readonly string $serverId,
         public readonly string $clientId,
+        StructuredLogger $logger,
         public readonly string $sessionId = '',
     ) {
         $this->lastFrameAt = time();
         $this->tunnel = null;
+        $this->logger = $logger;
     }
 
     /**
      * @var Tunnel|null Tunnel this client is attached to.
      */
     public ?Tunnel $tunnel;
+
+    /**
+     * @var StructuredLogger Logger for relay events.
+     */
+    private readonly StructuredLogger $logger;
 
     /**
      * @var int Timestamp of the last frame received from the client.
@@ -80,15 +89,15 @@ final class ClientConnection
 
         // Forward DATA frames to the server via the tunnel
         if ($this->tunnel !== null) {
-            $this->tunnel->broadcastToClients($frame);
+            $this->tunnel->sendToServer($frame);
         }
     }
 
     /**
      * Handle a non-DATA frame from the client.
      *
-     * Logs a warning and discards the frame. Only DATA frames are
-     * forwarded through the tunnel.
+     * Logs a warning and sends TYPE_ERROR back to the client.
+     * Only DATA frames are forwarded through the tunnel.
      *
      * @param RelayFrame $frame The non-DATA frame.
      *
@@ -96,8 +105,19 @@ final class ClientConnection
      */
     private function onNonDataFrame(RelayFrame $frame): void
     {
-        // Log warning about unexpected frame type but don't forward
-        // (clients should only send DATA frames in the multiplexed protocol)
+        // Log warning about unexpected frame type
+        $this->logger->warning('Relay: unexpected frame type from client, sending error', [
+            'server_id' => $this->serverId,
+            'client_id' => $this->clientId,
+            'frame_type' => $frame->type->label(),
+            'seq' => $frame->seq,
+        ]);
+
+        // Send TYPE_ERROR back to the client
+        $errorPayload = json_encode(['error' => 'Unexpected frame type'], JSON_THROW_ON_ERROR);
+        $errorFrame = new RelayFrame(RelayFrameType::ERROR, 0, $errorPayload);
+        $encoder = new FrameEncoder();
+        $this->send($errorFrame, $encoder);
     }
 
     /**

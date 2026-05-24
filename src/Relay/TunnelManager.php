@@ -136,7 +136,7 @@ final class TunnelManager
             return null;
         }
 
-        $client = new ClientConnection($clientWs, $serverId, $clientId, $sessionId);
+        $client = new ClientConnection($clientWs, $serverId, $clientId, $this->logger, $sessionId);
         $client->tunnel = $tunnel;
         $tunnel->registerClient($client);
 
