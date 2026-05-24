@@ -23,6 +23,7 @@
         "vimeo/psalm": ">=5.0"
     },
     "repositories": [
+        { "type": "path", "url": "/home/sites/phlix/phlix-shared", "canonical": false },
         { "type": "vcs", "url": "git@github.com:detain/phlix-shared.git" }
     ],
     "autoload": {

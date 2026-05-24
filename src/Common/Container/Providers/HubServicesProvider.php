@@ -19,6 +19,8 @@ use Phlix\Hub\Hub\LibrarySharingHandler;
 use Phlix\Hub\Hub\RelayRouter;
 use Phlix\Hub\Hub\RelayServerHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Relay\FrameDecoder;
+use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
@@ -182,6 +184,16 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): RelayController {
                 return new RelayController($jwtService);
             })->parameter('jwtService', get(EnrollmentJwtService::class)),
+
+            FrameDecoder::class => factory(static function (): FrameDecoder {
+                return new FrameDecoder();
+            }),
+
+            FrameEncoder::class => factory(static function (
+                FrameDecoder $decoder,
+            ): FrameEncoder {
+                return new FrameEncoder($decoder);
+            })->parameter('decoder', get(FrameDecoder::class)),
 
             StaticZoneManager::class => factory(static function () use ($appConfig): StaticZoneManager {
                 $zoneDir = self::stringOr($appConfig, 'dns_zone_dir', '/home/phlix/data/dns/zones');
