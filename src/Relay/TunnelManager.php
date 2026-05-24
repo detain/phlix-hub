@@ -25,7 +25,7 @@ use function time;
  * @package Phlix\Hub\Relay
  * @since 0.5.0
  */
-final class TunnelManager
+final class TunnelManager implements TunnelManagerInterface
 {
     /**
      * @param RelaySessionManager       $sessionManager Session manager for byte accounting.
