@@ -21,6 +21,8 @@ use Phlix\Hub\Hub\RelayServerHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
+use Phlix\Hub\Relay\IdleReaper;
+use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
@@ -41,6 +43,7 @@ use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Requests\RequestManager;
 use Phlix\Hub\Requests\RequestNotification;
 use Phlix\Shared\Arr\ArrClientFactory;
+use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -194,6 +197,44 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): FrameEncoder {
                 return new FrameEncoder($decoder);
             })->parameter('decoder', get(FrameDecoder::class)),
+
+            RelayWireCodecInterface::class => factory(static function (
+                FrameDecoder $decoder,
+            ): RelayWireCodecInterface {
+                return $decoder;
+            })->parameter('decoder', get(FrameDecoder::class)),
+
+            TunnelManager::class => factory(static function (
+                RelaySessionManager $sessionManager,
+                RelayWireCodecInterface $codec,
+            ): TunnelManager {
+                return new TunnelManager(
+                    $sessionManager,
+                    $codec,
+                    LoggerFactory::get(LogChannels::RELAY),
+                );
+            })->parameter('sessionManager', get(RelaySessionManager::class))
+                ->parameter('codec', get(RelayWireCodecInterface::class)),
+
+            IdleReaper::class => factory(static function (
+                TunnelManager $tunnelManager,
+            ) use ($appConfig): IdleReaper {
+                /** @var int $interval */
+                $interval = is_int($appConfig['relay_idle_reaper_interval'] ?? null)
+                    ? (int) $appConfig['relay_idle_reaper_interval']
+                    : IdleReaper::DEFAULT_INTERVAL_SECONDS;
+                /** @var int $staleThreshold */
+                $staleThreshold = is_int($appConfig['relay_stale_threshold'] ?? null)
+                    ? (int) $appConfig['relay_stale_threshold']
+                    : IdleReaper::DEFAULT_STALE_THRESHOLD_SECONDS;
+
+                return new IdleReaper(
+                    $tunnelManager,
+                    LoggerFactory::get(LogChannels::RELAY),
+                    $interval,
+                    $staleThreshold,
+                );
+            })->parameter('tunnelManager', get(TunnelManager::class)),
 
             StaticZoneManager::class => factory(static function () use ($appConfig): StaticZoneManager {
                 $zoneDir = self::stringOr($appConfig, 'dns_zone_dir', '/home/phlix/data/dns/zones');

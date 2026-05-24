@@ -34,7 +34,7 @@ use function time;
  * @package Phlix\Hub\Relay
  * @since 0.5.0
  */
-final class Tunnel
+final class Tunnel implements TunnelInterface
 {
     /**
      * Tunnel is awaiting the HELLO handshake from the server.
@@ -548,6 +548,46 @@ final class Tunnel
     public function isStale(int $staleThresholdSeconds = 90): bool
     {
         return (time() - $this->lastFrameAt) > $staleThresholdSeconds;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getTunnelId(): string
+    {
+        return $this->tunnelId;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getServerId(): string
+    {
+        return $this->serverId;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getLastFrameAt(): int
+    {
+        return $this->lastFrameAt;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getStatus(): string
+    {
+        return $this->status;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getClientConnections(): SplObjectStorage
+    {
+        return $this->clientConnections;
     }
 
     /**
