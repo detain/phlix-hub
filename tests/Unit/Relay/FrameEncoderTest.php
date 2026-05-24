@@ -177,7 +177,8 @@ class FrameEncoderTest extends TestCase
 
     public function test_static_decode_returns_null_for_incomplete(): void
     {
-        $result = FrameEncoder::decode('not enough bytes');
+        // Only 5 bytes — not enough for 7-byte header (4 seq + 1 type + 2 len minimum)
+        $result = FrameEncoder::decode('abc');
 
         $this->assertNull($result);
     }
