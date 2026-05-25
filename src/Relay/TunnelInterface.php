@@ -63,6 +63,16 @@ interface TunnelInterface
     public function getClientConnections(): SplObjectStorage;
 
     /**
+     * @return int Total bytes sent to the server through this tunnel.
+     */
+    public function getBytesOut(): int;
+
+    /**
+     * @return int Total bytes received from the server and sent to clients.
+     */
+    public function getBytesIn(): int;
+
+    /**
      * Check if the tunnel is stale (no frames received within the threshold).
      *
      * @param int $staleThresholdSeconds Threshold in seconds to consider stale.
