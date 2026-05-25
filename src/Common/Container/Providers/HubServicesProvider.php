@@ -23,6 +23,7 @@ use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\TunnelManager;
+use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
@@ -224,6 +225,17 @@ final class HubServicesProvider implements ServiceProviderInterface
                 );
             })->parameter('sessionManager', get(RelaySessionManager::class))
                 ->parameter('codec', get(RelayWireCodecInterface::class)),
+
+            // Alias the interface to the concrete TunnelManager so callers
+            // that depend on the abstraction (RelayWorker, ClientRelayWorker,
+            // ClientMountController, IdleReaper) all resolve the *same*
+            // singleton tunnel registry. Without this binding the relay
+            // workers would fail to resolve TunnelManagerInterface at runtime.
+            TunnelManagerInterface::class => factory(static function (
+                TunnelManager $tunnelManager,
+            ): TunnelManagerInterface {
+                return $tunnelManager;
+            })->parameter('tunnelManager', get(TunnelManager::class)),
 
             IdleReaper::class => factory(static function (
                 TunnelManager $tunnelManager,

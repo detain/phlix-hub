@@ -14,11 +14,10 @@ use Phlix\Hub\Relay\FrameDecoder;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
-use Workerman\Timer;
+use Workerman\Protocols\Http\Request as WorkermanRequest;
 
-use function json_encode;
+use function getenv;
 use function spl_object_id;
-use function time;
 
 /**
  * Handles inbound client WebSocket connections to reach servers via the relay tunnel.
@@ -75,46 +74,72 @@ final class ClientMountController
             return $this->errorResponse(400, 'MISSING_SERVER_ID', 'Server ID is required');
         }
 
-        // Validate the Upgrade header
+        // The relay tunnel is established over the dedicated client WS worker
+        // (ws://…:8803), NOT over this HTTP route. Authentication, tunnel
+        // binding, and bidirectional frame relay all happen there — see
+        // {@see \Phlix\Hub\Relay\ClientRelayWorker} and the WS-upgrade
+        // handlers below ({@see onWebSocketConnect()} et al).
+        //
+        // Reaching this method means a caller issued a plain HTTP GET (or a
+        // GET without a valid WebSocket upgrade) to the client mount. Mirror
+        // RelayController's contract: 426 when no upgrade was requested, and
+        // otherwise steer the caller to the WS endpoint with a 501.
+        $hubWsHost = getenv('HUB_WS_HOST') ?: getenv('HUB_PUBLIC_DOMAIN') ?: 'your-hub-host';
+        $wsEndpoint = 'ws://' . $hubWsHost . ':' . \Phlix\Hub\Relay\ClientRelayWorker::DEFAULT_PORT
+            . '/client/' . $serverId;
+
         if ((($request->headers['Upgrade'] ?? '') !== 'websocket')) {
-            return $this->errorResponse(426, 'UPGRADE_REQUIRED', 'This endpoint requires a WebSocket upgrade');
+            return (new Response())
+                ->header('X-WS-Endpoint', $wsEndpoint)
+                ->status(426)
+                ->json([
+                    'error' => 'UPGRADE_REQUIRED',
+                    'code' => 'relay.client_ws_endpoint',
+                    'message' => 'The client relay must be established via WebSocket. Connect to '
+                        . $wsEndpoint . ' with your enrollment JWT.',
+                    'ws_endpoint' => $wsEndpoint,
+                ]);
         }
 
-        // TODO: JWT validation from client
-        // The client should send an enrollment JWT for the server_id
-        // For now, we'll accept connections and validate later
-
-        // Return response indicating WS upgrade should proceed
-        // The actual WS handling is done via onWebSocketConnect callback
-        // In Workerman, we can't easily intercept the upgrade from a controller
-        // Instead, we handle the WS in the Application's HTTP worker with a special handler
-
-        return (new Response())->status(401)->json([
-            'error' => 'UNAUTHORIZED',
-            'message' => 'Client relay authentication not yet implemented',
-        ]);
+        return (new Response())
+            ->header('X-WS-Endpoint', $wsEndpoint)
+            ->status(501)
+            ->json([
+                'error' => 'NOT_IMPLEMENTED_VIA_HTTP',
+                'code' => 'relay.client_ws_endpoint',
+                'message' => 'The client relay tunnel must be established over the WebSocket worker. Connect to '
+                    . $wsEndpoint . ' with your enrollment JWT.',
+                'ws_endpoint' => $wsEndpoint,
+            ]);
     }
 
     /**
-     * Handle WebSocket upgrade for client connection.
+     * Handle WebSocket upgrade for a client connection.
      *
-     * This is called from the HTTP worker's onMessage when a WS upgrade
-     * is detected for the /client/{server_id} path.
+     * Invoked by {@see \Phlix\Hub\Relay\ClientRelayWorker} after the
+     * enrollment JWT has been validated for $serverId. Binds the client to
+     * the matching server tunnel via {@see TunnelManagerInterface::acceptClient()}.
      *
-     * @param TcpConnection $connection Workerman TCP connection.
-     * @param Request      $request    The HTTP request (already parsed).
-     * @param string       $serverId   Server UUID the client wants to reach.
+     * The caller (ClientRelayWorker) is responsible for authentication; this
+     * method assumes $serverId has already been authorised.
+     *
+     * @param TcpConnection    $connection Workerman TCP connection.
+     * @param WorkermanRequest $request    The WS upgrade request (path/headers).
+     * @param string           $serverId   Server UUID the client wants to reach.
      *
      * @return void
      */
-    public function onWebSocketConnect(TcpConnection $connection, Request $request, string $serverId): void
-    {
+    public function onWebSocketConnect(
+        TcpConnection $connection,
+        WorkermanRequest $request,
+        string $serverId,
+    ): void {
         $connId = spl_object_id($connection);
         $logger = LoggerFactory::get(LogChannels::RELAY);
 
         try {
             $tunnelManager = $this->container->get(TunnelManagerInterface::class);
-            if (!$tunnelManager instanceof \Phlix\Hub\Relay\TunnelManager) {
+            if (!$tunnelManager instanceof TunnelManagerInterface) {
                 $connection->close('internal_error');
                 return;
             }
@@ -126,7 +151,13 @@ final class ClientMountController
             $client = $tunnelManager->acceptClient($serverId, $connection, $clientId);
 
             if ($client === null) {
-                // Tunnel not found or not active — reject with 503
+                // No active server tunnel for this server_id — reject.
+                // RFC 6455 close: 1011 (server error) is the closest match for
+                // "upstream not available"; the client should retry later.
+                $logger->info('Relay: client WS closed, no active server tunnel', [
+                    'server_id' => $serverId,
+                    'client_id' => $clientId,
+                ]);
                 $connection->close('server_offline');
                 return;
             }
@@ -140,14 +171,12 @@ final class ClientMountController
                 'client_id' => $clientId,
             ]);
 
-            // Set up close handler
-            $connection->onClose = static function (TcpConnection $conn): void {
-                $connId = spl_object_id($conn);
-                if (isset(self::$connClients[$connId])) {
-                    self::$connClients[$connId]->onClose();
-                    unset(self::$connClients[$connId], self::$connDecoders[$connId]);
-                }
-            };
+            // NOTE: connection cleanup is driven by the owning worker's
+            // onClose callback ({@see \Phlix\Hub\Relay\ClientRelayWorker::onClose})
+            // which dispatches to {@see onClientClose()}. We deliberately do
+            // NOT set $connection->onClose here — doing so would override the
+            // worker-level callback Workerman copied onto the connection and
+            // silently drop the worker's own bookkeeping.
         } catch (Throwable $e) {
             $logger->error('Relay: client mount error', [
                 'server_id' => $serverId,
