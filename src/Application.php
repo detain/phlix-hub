@@ -8,6 +8,7 @@ use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Health\HealthController;
+use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
@@ -585,9 +586,25 @@ final class Application
         // Wire up runtime timers for relay services before starting workers
         HubServicesProvider::boot();
 
-        // Start the relay WebSocket worker for server connections on port 8802
-        $relayWorker = new RelayWorker($this->container);
+        // Start the relay WebSocket worker for server connections on port 8802.
+        /** @var mixed $relayPortRaw */
+        $relayPortRaw = $this->config['relay_port'] ?? 8802;
+        $relayPort = is_int($relayPortRaw)
+            ? $relayPortRaw
+            : (int) (is_numeric($relayPortRaw) ? $relayPortRaw : 8802);
+        $relayWorker = new RelayWorker($this->container, $relayPort);
         $relayWorker->start();
+
+        // Start the client-facing relay WebSocket worker on port 8803. Remote
+        // clients connect here (GET /client/{server_id}) to reach a server
+        // through its outbound tunnel.
+        /** @var mixed $clientRelayPortRaw */
+        $clientRelayPortRaw = $this->config['client_relay_port'] ?? ClientRelayWorker::DEFAULT_PORT;
+        $clientRelayPort = is_int($clientRelayPortRaw)
+            ? $clientRelayPortRaw
+            : (int) (is_numeric($clientRelayPortRaw) ? $clientRelayPortRaw : ClientRelayWorker::DEFAULT_PORT);
+        $clientRelayWorker = new ClientRelayWorker($this->container, $clientRelayPort);
+        $clientRelayWorker->start();
 
         Worker::runAll();
     }
