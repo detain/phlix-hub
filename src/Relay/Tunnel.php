@@ -24,7 +24,23 @@ use function time;
  * Represents a bidirectional WebSocket tunnel between the hub and a server.
  *
  * Manages the server-side WebSocket connection, all client connections
- * multiplexed through this tunnel, frame sequencing, and session lifecycle.
+ * multiplexed through this tunnel, per-client channel routing, and session
+ * lifecycle.
+ *
+ * ## Channel multiplexing (multi-client)
+ *
+ * Each {@see ClientConnection} attached to this tunnel is assigned a stable,
+ * monotonically increasing uint32 **channel id** (1, 2, 3, …). The channel id
+ * travels in the frame's `seq` field (see {@see RelayFrame}) on every
+ * client-scoped frame:
+ *
+ *   - CLIENT_CONNECT / CLIENT_DISCONNECT carry the client's channel id, so the
+ *     server can open/close the matching local connection.
+ *   - Client→server DATA is re-tagged with the originating client's channel id
+ *     in {@see sendClientData()} before forwarding to the server.
+ *   - Server→client DATA is routed to the single client owning that channel via
+ *     {@see sendToClient()} (replacing the old broadcast-to-all behaviour). A
+ *     DATA frame for an unknown/closed channel is dropped and logged.
  *
  * State transitions:
  *   PENDING → ACTIVE  (after successful HELLO handshake)
@@ -74,6 +90,8 @@ final class Tunnel implements TunnelInterface
     ) {
         $this->tunnelId = $tunnelId ?? $this->generateUuid();
         $this->clientConnections = new SplObjectStorage();
+        $this->channelClients = [];
+        $this->nextChannelId = 0;
         $this->openedAt = time();
         $this->lastFrameAt = time();
         $this->seq = 0;
@@ -91,6 +109,23 @@ final class Tunnel implements TunnelInterface
     public readonly SplObjectStorage $clientConnections;
 
     /**
+     * Channel id → ClientConnection routing map.
+     *
+     * The channel id is the uint32 value carried in DATA / CLIENT_CONNECT /
+     * CLIENT_DISCONNECT frames' `seq` field. Server→client DATA frames are
+     * routed by looking the client up here; a missing key means the channel is
+     * unknown/closed (drop + log).
+     *
+     * @var array<int, ClientConnection>
+     */
+    private array $channelClients;
+
+    /**
+     * @var int Highest channel id assigned so far (channels start at 1).
+     */
+    private int $nextChannelId;
+
+    /**
      * @var int Timestamp when the tunnel was opened.
      */
     public readonly int $openedAt;
@@ -101,7 +136,10 @@ final class Tunnel implements TunnelInterface
     public int $lastFrameAt;
 
     /**
-     * @var int Next sequence number for frames sent to the server.
+     * @var int Legacy per-tunnel counter. No longer used for frame routing —
+     *          client-scoped frames carry a per-client channel id in `seq`
+     *          (see {@see registerClient()} / {@see RelayFrame}). Retained at 0
+     *          for diagnostics/back-compat; not incremented.
      */
     public int $seq;
 
@@ -135,7 +173,7 @@ final class Tunnel implements TunnelInterface
      *
      * During PENDING state: expects JSON HELLO frame, transitions to ACTIVE.
      * During ACTIVE state: decodes binary frames via FrameDecoder and handles:
-     *   - DATA → broadcast to all clients
+     *   - DATA → route to the single client owning the frame's channel id
      *   - HEARTBEAT → touch lastFrameAt
      *   - other types → log warning and close
      *
@@ -253,7 +291,7 @@ final class Tunnel implements TunnelInterface
         $this->lastFrameAt = time();
 
         match ($frame->type) {
-            RelayFrameType::DATA => $this->broadcastToClients($frame),
+            RelayFrameType::DATA => $this->sendToClient($frame->channelId(), $frame),
             RelayFrameType::HEARTBEAT => $this->onHeartbeat($frame),
             default => $this->onUnexpectedFrameType($frame),
         };
@@ -361,39 +399,69 @@ final class Tunnel implements TunnelInterface
     }
 
     /**
-     * Broadcast a DATA frame to all connected clients.
+     * Route a server→client DATA frame to the single client owning its channel.
      *
-     * The frame is encoded once and written to each client connection.
+     * The frame's channel id ({@see RelayFrame::channelId()}, i.e. its `seq`
+     * field) identifies exactly one client. If no client is mapped to that
+     * channel (unknown or already-closed channel) the frame is dropped and a
+     * warning is logged — this prevents the old broadcast-to-all cross-talk
+     * between concurrent clients.
      *
-     * @param RelayFrame $frame DATA frame to broadcast.
+     * @param int        $channelId Channel id the bytes belong to.
+     * @param RelayFrame $frame     DATA frame to deliver.
      *
      * @return void
      */
-    public function broadcastToClients(RelayFrame $frame): void
+    public function sendToClient(int $channelId, RelayFrame $frame): void
     {
         if ($this->status !== self::STATUS_ACTIVE) {
             return;
         }
 
-        // Encode once
+        $client = $this->channelClients[$channelId] ?? null;
+        if ($client === null) {
+            $this->logger->warning('Relay: DATA for unknown/closed channel, dropping', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'channel_id' => $channelId,
+                'payload_len' => strlen($frame->payload),
+            ]);
+            return;
+        }
+
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
         $frameLen = strlen($encoded);
 
-        // Track bytes in per client for diagnostics (local tunnel counter)
-        $numClients = 0;
-        foreach ($this->clientConnections as $client) {
-            /** @var ClientConnection $client */
-            $client->sendRaw($encoded);
-            $numClients++;
+        $client->sendRaw($encoded);
 
-            // Record bytes in to the session manager per client (DB)
-            if ($this->relaySessionId !== null) {
-                $this->sessionManager->recordBytesIn($this->relaySessionId, $frameLen);
-            }
+        // Record bytes in to the session manager for this client (DB)
+        if ($this->relaySessionId !== null) {
+            $this->sessionManager->recordBytesIn($this->relaySessionId, $frameLen);
         }
 
-        // Track total bytes sent to clients (frame_len * num_clients)
-        $this->bytesIn += $frameLen * $numClients;
+        $this->bytesIn += $frameLen;
+    }
+
+    /**
+     * Forward a client→server DATA frame, tagged with the client's channel id.
+     *
+     * The hub overwrites the DATA frame's channel/seq field with the
+     * originating client's channel id before sending to the server, so the
+     * server can demultiplex it back to the correct local connection.
+     *
+     * @param ClientConnection $client The originating client.
+     * @param RelayFrame       $frame  DATA frame received from the client.
+     *
+     * @return void
+     */
+    public function sendClientData(ClientConnection $client, RelayFrame $frame): void
+    {
+        if ($this->status !== self::STATUS_ACTIVE) {
+            return;
+        }
+
+        $tagged = new RelayFrame($frame->type, $client->channelId, $frame->payload);
+        $this->sendToServer($tagged);
     }
 
     /**
@@ -414,10 +482,17 @@ final class Tunnel implements TunnelInterface
             return;
         }
 
+        // Assign a stable channel id for this client (1, 2, 3, …) and record the
+        // channel → client mapping used to route server→client DATA frames.
+        $this->nextChannelId++;
+        $channelId = $this->nextChannelId;
+        $client->channelId = $channelId;
+        $this->channelClients[$channelId] = $client;
+
         $this->clientConnections->attach($client);
 
-        // Send CLIENT_CONNECT notification to the server
-        $this->seq++;
+        // Send CLIENT_CONNECT notification to the server. The channel id travels
+        // in the frame's seq field; the JSON payload is observability only.
         $payload = json_encode([
             'client_id' => $client->clientId,
             'session_id' => $client->sessionId,
@@ -425,7 +500,7 @@ final class Tunnel implements TunnelInterface
 
         $clientConnectFrame = new RelayFrame(
             RelayFrameType::CLIENT_CONNECT,
-            $this->seq,
+            $channelId,
             $payload,
         );
 
@@ -435,6 +510,7 @@ final class Tunnel implements TunnelInterface
             'server_id' => $this->serverId,
             'tunnel_id' => $this->tunnelId,
             'client_id' => $client->clientId,
+            'channel_id' => $channelId,
         ]);
     }
 
@@ -453,16 +529,21 @@ final class Tunnel implements TunnelInterface
 
         $this->clientConnections->detach($client);
 
-        // Send CLIENT_DISCONNECT notification to the server
-        if ($this->status === self::STATUS_ACTIVE) {
-            $this->seq++;
+        $channelId = $client->channelId;
+        if ($channelId > 0) {
+            unset($this->channelClients[$channelId]);
+        }
+
+        // Send CLIENT_DISCONNECT notification to the server, tagged with the
+        // client's channel id so the server closes the matching local conn.
+        if ($this->status === self::STATUS_ACTIVE && $channelId > 0) {
             $payload = json_encode([
                 'client_id' => $client->clientId,
             ], JSON_THROW_ON_ERROR);
 
             $clientDisconnectFrame = new RelayFrame(
                 RelayFrameType::CLIENT_DISCONNECT,
-                $this->seq,
+                $channelId,
                 $payload,
             );
 
@@ -473,6 +554,7 @@ final class Tunnel implements TunnelInterface
             'server_id' => $this->serverId,
             'tunnel_id' => $this->tunnelId,
             'client_id' => $client->clientId,
+            'channel_id' => $channelId,
         ]);
     }
 
@@ -496,6 +578,7 @@ final class Tunnel implements TunnelInterface
         }
 
         $this->clientConnections->removeAll($this->clientConnections);
+        $this->channelClients = [];
     }
 
     /**
@@ -545,8 +628,8 @@ final class Tunnel implements TunnelInterface
             return;
         }
 
-        $this->seq++;
-        $heartbeatFrame = new RelayFrame(RelayFrameType::HEARTBEAT, $this->seq, '');
+        // HEARTBEAT is tunnel-scoped (no channel) — channel id 0.
+        $heartbeatFrame = new RelayFrame(RelayFrameType::HEARTBEAT, 0, '');
         $this->sendToServer($heartbeatFrame);
 
         $this->lastFrameAt = time();

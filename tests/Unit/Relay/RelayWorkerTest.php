@@ -200,7 +200,7 @@ final class RelayWorkerTest extends TestCase
         self::assertGreaterThan(0, $tunnel->lastFrameAt);
     }
 
-    public function testServerBinaryDataFrameBroadcastsToClients(): void
+    public function testServerBinaryDataFrameRoutesToOwningChannel(): void
     {
         $relay = new RelayWorker($this->buildContainer(), 0);
         $serverWs = $this->createMock(TcpConnection::class);
@@ -210,8 +210,9 @@ final class RelayWorkerTest extends TestCase
         $tunnel = $this->tunnelManager->getTunnelForServer('server-data');
         self::assertInstanceOf(Tunnel::class, $tunnel);
 
-        // Attach a real ClientConnection whose underlying WS captures the raw
-        // bytes the tunnel broadcasts (ClientConnection::sendRaw → clientWs->send).
+        // Register a real ClientConnection (gets channel id 1) whose underlying
+        // WS captures the raw bytes the tunnel routes to it (sendToClient →
+        // ClientConnection::sendRaw → clientWs->send).
         $received = '';
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
@@ -227,18 +228,88 @@ final class RelayWorkerTest extends TestCase
             $this->logger,
             'session-1',
         );
-        $tunnel->clientConnections->attach($client);
+        $tunnel->registerClient($client);
+        self::assertSame(1, $client->channelId);
 
-        // The server emits a DATA frame carrying raw HTTP response bytes.
+        // The server emits a DATA frame on channel 1 (the client's channel).
         $payload = "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\n\r\n#EXTM3U";
-        $relay->onMessage($serverWs, $this->encodeServerFrame(RelayFrameType::DATA, 9, $payload));
+        $relay->onMessage($serverWs, $this->encodeServerFrame(RelayFrameType::DATA, $client->channelId, $payload));
 
-        // The tunnel re-encoded and broadcast the DATA frame. Decode what the
-        // client received and confirm the payload survived intact.
+        // The tunnel re-encoded and routed the DATA frame to channel 1. Decode
+        // what the client received and confirm the payload + channel survived.
         $decoded = (new FrameDecoder())->decode($received);
         self::assertNotNull($decoded);
         self::assertSame(RelayFrameType::DATA, $decoded->type);
         self::assertSame($payload, $decoded->payload);
+        self::assertSame(1, $decoded->channelId());
+    }
+
+    public function testServerBinaryDataFrameForUnknownChannelIsDropped(): void
+    {
+        $relay = new RelayWorker($this->buildContainer(), 0);
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+
+        $relay->onMessage($serverWs, $this->encodeServerHello('server-drop'));
+        $tunnel = $this->tunnelManager->getTunnelForServer('server-drop');
+        self::assertInstanceOf(Tunnel::class, $tunnel);
+
+        // Register a client on channel 1.
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->expects($this->never())->method('send');
+        $client = new ClientConnection($clientWs, 'server-drop', 'client-1', $this->logger, 'session-1');
+        $tunnel->registerClient($client);
+
+        // The server emits DATA on a channel that does not exist (42) — dropped.
+        $relay->onMessage($serverWs, $this->encodeServerFrame(RelayFrameType::DATA, 42, 'orphan-bytes'));
+
+        // No bytes were delivered to any client.
+        self::assertSame(0, $tunnel->getBytesIn());
+    }
+
+    public function testTwoClientsOnDistinctChannelsDoNotCrossTalk(): void
+    {
+        $relay = new RelayWorker($this->buildContainer(), 0);
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+
+        $relay->onMessage($serverWs, $this->encodeServerHello('server-mux'));
+        $tunnel = $this->tunnelManager->getTunnelForServer('server-mux');
+        self::assertInstanceOf(Tunnel::class, $tunnel);
+
+        // Two clients register and get channels 1 and 2.
+        $recv1 = '';
+        $clientWs1 = $this->createMock(TcpConnection::class);
+        $clientWs1->method('send')->willReturnCallback(function (mixed $d) use (&$recv1): bool {
+            $recv1 .= (string) $d;
+            return true;
+        });
+        $recv2 = '';
+        $clientWs2 = $this->createMock(TcpConnection::class);
+        $clientWs2->method('send')->willReturnCallback(function (mixed $d) use (&$recv2): bool {
+            $recv2 .= (string) $d;
+            return true;
+        });
+
+        $client1 = new ClientConnection($clientWs1, 'server-mux', 'client-1', $this->logger, 's1');
+        $client2 = new ClientConnection($clientWs2, 'server-mux', 'client-2', $this->logger, 's2');
+        $tunnel->registerClient($client1);
+        $tunnel->registerClient($client2);
+        self::assertSame(1, $client1->channelId);
+        self::assertSame(2, $client2->channelId);
+
+        // Server DATA for channel 1 reaches only client 1; channel 2 only client 2.
+        $relay->onMessage($serverWs, $this->encodeServerFrame(RelayFrameType::DATA, 1, 'to-one'));
+        $relay->onMessage($serverWs, $this->encodeServerFrame(RelayFrameType::DATA, 2, 'to-two'));
+
+        $d1 = (new FrameDecoder())->decode($recv1);
+        $d2 = (new FrameDecoder())->decode($recv2);
+        self::assertNotNull($d1);
+        self::assertNotNull($d2);
+        self::assertSame('to-one', $d1->payload);
+        self::assertSame(1, $d1->channelId());
+        self::assertSame('to-two', $d2->payload);
+        self::assertSame(2, $d2->channelId());
     }
 
     // ---- Close lifecycle --------------------------------------------------

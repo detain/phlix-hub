@@ -50,6 +50,14 @@ final class ClientConnection
     public ?Tunnel $tunnel;
 
     /**
+     * @var int Per-client channel id assigned by the tunnel at register time
+     *          (1, 2, 3, …). 0 means "not yet assigned". Travels in the `seq`
+     *          field of this client's CLIENT_CONNECT / DATA / CLIENT_DISCONNECT
+     *          frames so the server can demultiplex per client.
+     */
+    public int $channelId = 0;
+
+    /**
      * @var StructuredLogger Logger for relay events.
      */
     private readonly StructuredLogger $logger;
@@ -87,9 +95,10 @@ final class ClientConnection
             return;
         }
 
-        // Forward DATA frames to the server via the tunnel
+        // Forward DATA frames to the server via the tunnel, tagged with this
+        // client's channel id so the server routes them to the right local conn.
         if ($this->tunnel !== null) {
-            $this->tunnel->sendToServer($frame);
+            $this->tunnel->sendClientData($this, $frame);
         }
     }
 
