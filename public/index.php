@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 use Phlix\Hub\Application;
 use Phlix\Hub\Common\Container\ContainerFactory;
+use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 
@@ -41,5 +42,9 @@ $serverConfig['logger_config_path'] = $loggerConfigPath;
 $serverConfig['auth_config_path'] = $authConfigPath;
 
 $container = ContainerFactory::create($serverConfig);
+
+// Register container for runtime timer wiring in HubServicesProvider::boot()
+HubServicesProvider::setContainer($container);
+
 $app = new Application($container, $serverConfig);
 $app->boot();

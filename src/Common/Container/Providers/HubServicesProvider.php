@@ -44,7 +44,9 @@ use Phlix\Hub\Requests\RequestManager;
 use Phlix\Hub\Requests\RequestNotification;
 use Phlix\Shared\Arr\ArrClientFactory;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
+use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
+use Workerman\Timer;
 
 use function DI\factory;
 use function DI\get;
@@ -366,5 +368,70 @@ final class HubServicesProvider implements ServiceProviderInterface
         /** @var mixed $value */
         $value = $config[$key] ?? null;
         return is_string($value) && $value !== '' ? $value : $default;
+    }
+
+    /**
+     * PSR-11 container instance used during boot.
+     *
+     * @var ContainerInterface|null
+     */
+    private static ?ContainerInterface $container = null;
+
+    /**
+     * Set the static container instance for use in boot().
+     *
+     * @param ContainerInterface $container PSR-11 container.
+     *
+     * @return void
+     */
+    public static function setContainer(ContainerInterface $container): void
+    {
+        self::$container = $container;
+    }
+
+    /**
+     * Boot the hub services that require runtime timer wiring.
+     *
+     * Starts the IdleReaper timer and sets up the 30-second heartbeat
+     * timer that sends heartbeats to all active tunnels.
+     *
+     * @return void
+     */
+    public static function boot(): void
+    {
+        $container = self::$container;
+        if ($container === null) {
+            return;
+        }
+
+        // Start the idle reaper timer if available
+        try {
+            $idleReaper = $container->get(IdleReaper::class);
+            if ($idleReaper instanceof IdleReaper) {
+                $idleReaper->start();
+            }
+        } catch (\Throwable) {
+            // IdleReaper not available in this context — skip
+        }
+
+        // Set up heartbeat timer for active tunnels
+        try {
+            $tunnelManager = $container->get(TunnelManager::class);
+            if ($tunnelManager instanceof TunnelManager) {
+                /** @var int Heartbeat interval in seconds (30 from plan) */
+                $heartbeatInterval = 30;
+
+                Timer::add(
+                    $heartbeatInterval,
+                    static function () use ($tunnelManager): void {
+                        foreach ($tunnelManager->allTunnels() as $tunnel) {
+                            $tunnel->sendHeartbeat();
+                        }
+                    },
+                );
+            }
+        } catch (\Throwable) {
+            // TunnelManager not available in this context — skip
+        }
     }
 }
