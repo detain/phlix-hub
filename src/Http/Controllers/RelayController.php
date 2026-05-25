@@ -95,15 +95,20 @@ final class RelayController
         // — instead of 500 (which would imply a transient server fault).
         // Auth still runs above so unauth attempts still get 401/403.
         $docsUrl = 'https://detain.github.io/phlix-docs/dev/relay-protocol';
+        $hubWsHost = getenv('HUB_WS_HOST') ?: getenv('HUB_PUBLIC_DOMAIN') ?: 'your-hub-host';
+
         return (new Response())
             ->header('Link', '<' . $docsUrl . '>; rel="help"')
+            ->header('X-WS-Endpoint', 'ws://' . $hubWsHost . ':8802')
             ->status(501)
             ->json([
-                'error'   => 'NOT_IMPLEMENTED',
-                'code'    => 'relay.ws_not_implemented',
-                'message' => 'The WebSocket relay tunnel is not implemented in this build.'
-                    . ' See https://github.com/detain/phlix-hub/issues for status.',
-                'docs'    => $docsUrl,
+                'error'   => 'NOT_IMPLEMENTED_VIA_HTTP',
+                'code'    => 'relay.ws_http_endpoint',
+                'message' => 'Relay tunnel must be established via WebSocket.'
+                    . ' Connect to ws://' . $hubWsHost . ':8802 with your enrollment JWT.',
+                'ws_endpoint' => 'ws://' . $hubWsHost . ':8802',
+                'protocol'    => 'See docs/dev/relay-protocol for the WS framing specification',
+                'docs'        => $docsUrl,
             ]);
     }
 

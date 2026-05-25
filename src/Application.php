@@ -8,7 +8,9 @@ use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Health\HealthController;
+use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\Http\Controllers\AuthController;
+use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
@@ -348,6 +350,17 @@ final class Application
             return $relayController->handle($req, $typedParams);
         });
 
+        // Client relay mount — client-initiated WSS to reach servers via hub.
+        $clientMountController = $this->resolveClientMountController();
+        $this->router->get('/client/{server_id}', static function (
+            Request $req,
+            array $params,
+        ) use ($clientMountController): Response {
+            /** @var array<string, string> $typedParams */
+            $typedParams = $params;
+            return $clientMountController->handle($req, $typedParams);
+        });
+
         // Subdomain allocation and revocation (Phase C.8).
         $this->router->post('/servers/{id}/subdomain', static function (
             Request $req,
@@ -409,6 +422,15 @@ final class Application
         $controller = $this->container->get(RelayController::class);
         if (!$controller instanceof RelayController) {
             throw new \RuntimeException('Container returned an unexpected RelayController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveClientMountController(): ClientMountController
+    {
+        $controller = $this->container->get(ClientMountController::class);
+        if (!$controller instanceof ClientMountController) {
+            throw new \RuntimeException('Container returned an unexpected ClientMountController instance');
         }
         return $controller;
     }
@@ -562,6 +584,10 @@ final class Application
 
         // Wire up runtime timers for relay services before starting workers
         HubServicesProvider::boot();
+
+        // Start the relay WebSocket worker for server connections on port 8802
+        $relayWorker = new RelayWorker($this->container);
+        $relayWorker->start();
 
         Worker::runAll();
     }

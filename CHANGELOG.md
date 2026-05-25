@@ -38,15 +38,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Previously the manager looked complete on paper but in practice
   silently failed every provisioning attempt.
 - `Phlix\Hub\Http\Controllers\RelayController::handle()` — the
-  post-auth, post-`Upgrade: websocket` "no implementation" path now
-  returns **HTTP 501 Not Implemented** (RFC 9110 §15.6.2) instead of
-  HTTP 500. The body carries a stable machine-readable shape:
-  `{"error":"NOT_IMPLEMENTED","code":"relay.ws_not_implemented",
-  "message":"…","docs":"https://detain.github.io/phlix-docs/dev/relay-protocol"}`
-  and a `Link: <docs-url>; rel="help"` header. Auth gates (401, 426)
-  are unchanged — only the terminal "no impl" status code and body
-  shape changed. Previously the 500 misled clients into retrying as
-  if this were a transient server fault.
+  post-auth, post-`Upgrade: websocket` HTTP path now returns
+  **HTTP 501 Not Implemented** (RFC 9110 §15.6.2) instead of
+  HTTP 500. This endpoint is HTTP-only by design: the relay tunnel is
+  actually established over the dedicated WebSocket worker (`ws://…:8802`,
+  see `RelayWorker`), so the HTTP handler exists only to redirect
+  callers there. The body carries a stable machine-readable shape:
+  `{"error":"NOT_IMPLEMENTED_VIA_HTTP","code":"relay.ws_http_endpoint",
+  "message":"…","ws_endpoint":"ws://…:8802","protocol":"…",
+  "docs":"https://detain.github.io/phlix-docs/dev/relay-protocol"}`
+  plus `Link: <docs-url>; rel="help"` and `X-WS-Endpoint: ws://…:8802`
+  headers. Auth gates (401, 426) are unchanged — only the terminal
+  status code and body shape changed. Previously the 500 misled clients
+  into retrying as if this were a transient server fault.
 
 ### Known Limitations
 - **Step C.8 ACME / Let's Encrypt provisioning is not implemented in
@@ -58,17 +62,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   HTTP 501 `code=tls.acme_not_implemented`. Subdomain allocation (DNS
   record + DB row) still works; operators install TLS material out-of-
   band — see [`docs/hub-admin/tls.md`](docs/hub-admin/tls.md).
-- **WebSocket relay multiplex tunnel is not implemented in this
-  build.** `POST /api/v1/servers/{id}/relay` validates the
-  enrollment JWT and the `Upgrade: websocket` header, then returns
-  HTTP 501 with `code=relay.ws_not_implemented`. The architectural
-  design is documented in
-  [`docs/dev/architecture-hub.md`](docs/dev/architecture-hub.md#relay-tunnel-design)
-  ("Relay tunnel design") and remains the target shape, but no WS
-  upgrade handler, `TunnelManager` multiplexer, or client-side relay
-  endpoint exists yet. Earlier entries describing Step C.6 / the
-  relay tunnel as shipped refer to scaffolding (auth, session table,
-  router, subdomain allocation) — not the live tunnel itself.
+- **Remote access via the hub relay is NOT yet operational
+  end-to-end.** The *server-side* tunnel infrastructure IS implemented
+  and the relay worker DOES run: `RelayWorker` (`src/Relay/RelayWorker.php`)
+  is started by `Application::run()` and listens on `ws://…:8802` for
+  servers to connect; `TunnelManager` (`src/Relay/TunnelManager.php`) is
+  the per-server multiplexer and `Tunnel` (`src/Relay/Tunnel.php`) carries
+  framed traffic. `ClientMountController::onWebSocketConnect()` knows how
+  to attach a client to a tunnel. What is **missing** is the
+  *client-facing* half: `ClientMountController::handle()`
+  (`GET /client/{server_id}`) is a hardcoded **HTTP 401 stub**
+  (`"Client relay authentication not yet implemented"`), and the
+  `onWebSocketConnect` / `onClientMessage` / `onClientClose` callbacks
+  have **zero callers** because no client-facing WS worker has been wired
+  up to invoke them. The HTTP relay endpoint
+  `POST /api/v1/servers/{id}/relay` validates the enrollment JWT and the
+  `Upgrade: websocket` header, then returns HTTP 501
+  (`code=relay.ws_http_endpoint`) pointing servers at the `ws://…:8802`
+  worker. Net effect: a server can connect its tunnel to the hub, but a
+  client cannot yet reach a server *through* the hub — that requires the
+  client WS worker, which is a substantial, separately-tracked piece of
+  work.
 
 ### Fixed
 - `Phlix\Hub\Http\Controllers\ServerManageController::accessInfo()` now
@@ -77,9 +91,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The URL is built as `https://{subdomain}.{public_domain}` using the new
   `public_domain` key in `config/server.php` (default `phlix.media`,
   overridable via the `HUB_PUBLIC_DOMAIN` env var). Previously the field
-  was hardcoded to `null`, so even with a live relay tunnel clients were
-  never told how to reach the server. The response shape (`relay_url`
-  key) is unchanged.
+  was hardcoded to `null`, so the response never exposed the relay URL
+  at all. The response shape (`relay_url` key) is unchanged. NOTE: this
+  only fixes the *reporting* of the URL — it does not make the relay
+  reachable. Remote access through the hub is not yet operational
+  end-to-end (the client-facing WS worker is unimplemented; see
+  "Known Limitations"), so `relay_url` reflects where the server *would*
+  be reachable once the client relay path ships.
 - `migrations/012_enrolled_at_and_last_frame_at.sql` — creates the
   `servers.enrolled_at` and `relay_sessions.last_frame_at` columns
   that `ClaimRequestHandler` and `RelaySessionManager` write to.
@@ -97,7 +115,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `closed_at IS NULL`). The field was previously hardcoded to `false`,
   so `GET /api/v1/me/servers/{id}/access-info` and the My Servers dashboard
   always reported the relay tunnel as down regardless of its real state.
-  The DTO contract is unchanged; only the value source was fixed.
+  The DTO contract is unchanged; only the value source was fixed. NOTE:
+  `relayActive=true` means a *server* has an open relay session with the
+  hub (the server-side tunnel is up) — it does NOT mean clients can reach
+  the server through the hub yet, since the client-facing relay path is
+  still unimplemented (see "Known Limitations").
 
 ### Added
 - **Step D.5 — Invite-Link Sharing**: Single-use invite link sharing for library access.
@@ -133,7 +155,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - **Step C.8 — Public Hostname (`*.phlix.media`)**: Subdomain allocation for enrolled servers.
   - `DnsAliasManager` — allocates deterministic 8-char subdomains (sha256 of server_id), stores in `servers.subdomain`, creates DNS records via pluggable `StaticZoneManager`.
-  - `TlsCertificateManager` — provisions TLS certificates via Let's Encrypt ACME v2, stores in configurable directory, auto-renews before expiry.
+  - `TlsCertificateManager` — read-side cert helpers (path/expiry lookups, `isProvisioned()`, `needsRenewal()`) over a configurable certs directory. NOTE: automated ACME issuance is NOT implemented — `provisionCertificate()` throws and operators install certs out-of-band (see [`docs/hub-admin/tls.md`](docs/hub-admin/tls.md)); see the "Changed" / "Known Limitations" sections above.
   - `RelayRouter` — routes inbound requests by Host header to the correct relay session based on subdomain.
   - `SubdomainController` — `POST /api/v1/servers/{id}/subdomain` (allocate/retrieve) and `DELETE /api/v1/servers/{id}/subdomain` (revoke).
   - `StaticZoneManager` — static zone file writer for DNS record management.

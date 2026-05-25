@@ -33,6 +33,7 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
+use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
@@ -189,6 +190,12 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): RelayController {
                 return new RelayController($jwtService);
             })->parameter('jwtService', get(EnrollmentJwtService::class)),
+
+            ClientMountController::class => factory(static function (
+                ContainerInterface $container,
+            ): ClientMountController {
+                return new ClientMountController($container);
+            }),
 
             FrameDecoder::class => factory(static function (): FrameDecoder {
                 return new FrameDecoder();
