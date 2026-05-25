@@ -62,27 +62,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   HTTP 501 `code=tls.acme_not_implemented`. Subdomain allocation (DNS
   record + DB row) still works; operators install TLS material out-of-
   band — see [`docs/hub-admin/tls.md`](docs/hub-admin/tls.md).
-- **Remote access via the hub relay is NOT yet operational
-  end-to-end.** The *server-side* tunnel infrastructure IS implemented
-  and the relay worker DOES run: `RelayWorker` (`src/Relay/RelayWorker.php`)
-  is started by `Application::run()` and listens on `ws://…:8802` for
-  servers to connect; `TunnelManager` (`src/Relay/TunnelManager.php`) is
-  the per-server multiplexer and `Tunnel` (`src/Relay/Tunnel.php`) carries
-  framed traffic. `ClientMountController::onWebSocketConnect()` knows how
-  to attach a client to a tunnel. What is **missing** is the
-  *client-facing* half: `ClientMountController::handle()`
-  (`GET /client/{server_id}`) is a hardcoded **HTTP 401 stub**
-  (`"Client relay authentication not yet implemented"`), and the
-  `onWebSocketConnect` / `onClientMessage` / `onClientClose` callbacks
-  have **zero callers** because no client-facing WS worker has been wired
-  up to invoke them. The HTTP relay endpoint
-  `POST /api/v1/servers/{id}/relay` validates the enrollment JWT and the
-  `Upgrade: websocket` header, then returns HTTP 501
-  (`code=relay.ws_http_endpoint`) pointing servers at the `ws://…:8802`
-  worker. Net effect: a server can connect its tunnel to the hub, but a
-  client cannot yet reach a server *through* the hub — that requires the
-  client WS worker, which is a substantial, separately-tracked piece of
-  work.
+- **Hub relay TLS depends on out-of-band certificates.** The relay URL is
+  advertised as `https://{subdomain}.{public_domain}`, but automatic
+  certificate provisioning is the stubbed ACME flow above — operators must
+  install TLS material out-of-band (see `docs/hub-admin/tls.md`) before the
+  relay endpoint presents a valid certificate. The relay tunnel itself
+  (server-side and client-facing) is implemented; see "Added".
 
 ### Fixed
 - `Phlix\Hub\Http\Controllers\ServerManageController::accessInfo()` now
@@ -92,12 +77,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `public_domain` key in `config/server.php` (default `phlix.media`,
   overridable via the `HUB_PUBLIC_DOMAIN` env var). Previously the field
   was hardcoded to `null`, so the response never exposed the relay URL
-  at all. The response shape (`relay_url` key) is unchanged. NOTE: this
-  only fixes the *reporting* of the URL — it does not make the relay
-  reachable. Remote access through the hub is not yet operational
-  end-to-end (the client-facing WS worker is unimplemented; see
-  "Known Limitations"), so `relay_url` reflects where the server *would*
-  be reachable once the client relay path ships.
+  at all. The response shape (`relay_url` key) is unchanged. With the
+  client-facing relay worker now implemented (see "Added"), `relay_url`
+  is reachable end-to-end once the server's tunnel is active and TLS
+  material is installed for the subdomain (cert provisioning is still
+  out-of-band — see "Known Limitations").
 - `migrations/012_enrolled_at_and_last_frame_at.sql` — creates the
   `servers.enrolled_at` and `relay_sessions.last_frame_at` columns
   that `ClaimRequestHandler` and `RelaySessionManager` write to.
@@ -117,11 +101,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   always reported the relay tunnel as down regardless of its real state.
   The DTO contract is unchanged; only the value source was fixed. NOTE:
   `relayActive=true` means a *server* has an open relay session with the
-  hub (the server-side tunnel is up) — it does NOT mean clients can reach
-  the server through the hub yet, since the client-facing relay path is
-  still unimplemented (see "Known Limitations").
+  hub (the server-side tunnel is up). Clients reach the server through the
+  hub via the client-facing relay worker (`ws://…:8803`, see "Added"),
+  authenticating with their enrollment JWT.
 
 ### Added
+- **Client-facing hub relay worker (Section 9) — remote access through the
+  hub is now wired end-to-end.** Previously only the *server-side* tunnel
+  half existed; the client-facing half is now implemented and unit-tested:
+  - `Phlix\Hub\Relay\ClientRelayWorker` (`src/Relay/ClientRelayWorker.php`) —
+    a Workerman WebSocket worker on `ws://…:8803` (`ClientRelayWorker::DEFAULT_PORT`,
+    overridable via the `client_relay_port` config). Started by
+    `Application::run()` alongside the server-side `RelayWorker` (`:8802`).
+    It extracts the enrollment JWT from `Authorization: Bearer`,
+    `Sec-WebSocket-Protocol: bearer, <jwt>`, or `?token=` (in that order),
+    validates it for the requested `server_id` via `EnrollmentJwtService`,
+    and on success delegates to `ClientMountController`.
+  - `ClientMountController::onWebSocketConnect/onClientMessage/onClientClose`
+    now have a real caller (the worker). `acceptClient()` binds the client
+    to the matching server `Tunnel` via `TunnelManager`; frames are parsed
+    with `FrameDecoder` and routed per channel so a single server tunnel can
+    multiplex many concurrent clients. Idle sessions are swept by `IdleReaper`.
+  - `ClientMountController::handle()` (the plain-HTTP `GET /client/{server_id}`
+    route) is no longer a 401 stub: it returns **426 Upgrade Required** when
+    no WebSocket upgrade is requested and **501** (with `X-WS-Endpoint`)
+    steering callers to the `ws://…:8803` worker — mirroring `RelayController`'s
+    HTTP-endpoint contract.
+  - Requires `phlix-shared ^0.5.1` (relay channel-mux). The server side
+    (`phlix-server`) rewrote `RelayConsumer` to the same multiplexed tunnel
+    protocol with per-channel DATA routing.
+  - Tests: `ClientRelayWorkerTest`, `TunnelTest`, `TunnelManagerTest`,
+    `RelayWorkerTest` under `tests/Unit/Relay/`.
 - **Step D.5 — Invite-Link Sharing**: Single-use invite link sharing for library access.
   - `InviteLink` DTO — represents an invite link with expiry, max uses, and status checks (`isExpired()`, `isExhausted()`, `canUse()`).
   - `InviteLinkHandler` — business logic for creating, redeeming, listing, and revoking invite links.
