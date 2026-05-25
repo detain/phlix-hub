@@ -117,7 +117,7 @@ class TunnelTest extends TestCase
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
 
-    public function test_broadcast_to_clients_encodes_once_and_writes_to_all(): void
+    public function test_send_to_client_routes_only_to_the_owning_channel(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -133,44 +133,80 @@ class TunnelTest extends TestCase
             $this->logger,
         );
 
-        // Manually set to active for testing broadcast
         $tunnel->relaySessionId = $sessionId;
         $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $this->serverWs->method('send');
 
-        // Create two mock client connections
+        // Register two clients — they receive channel ids 1 and 2.
         $clientWs1 = $this->createMock(TcpConnection::class);
         $clientWs2 = $this->createMock(TcpConnection::class);
 
         $sentData1 = null;
         $sentData2 = null;
 
+        // Only client 1 must receive the channel-1 DATA frame.
         $clientWs1
             ->expects($this->once())
             ->method('send')
             ->willReturnCallback(function (string $data) use (&$sentData1): void {
                 $sentData1 = $data;
             });
-
         $clientWs2
-            ->expects($this->once())
-            ->method('send')
-            ->willReturnCallback(function (string $data) use (&$sentData2): void {
-                $sentData2 = $data;
-            });
+            ->expects($this->never())
+            ->method('send');
 
         $client1 = new ClientConnection($clientWs1, 'server-123', 'client-1', $this->clientLogger, '');
         $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2', $this->clientLogger, '');
 
-        $tunnel->clientConnections->attach($client1);
-        $tunnel->clientConnections->attach($client2);
+        $tunnel->registerClient($client1);
+        $tunnel->registerClient($client2);
 
-        $frame = new RelayFrame(RelayFrameType::DATA, 1, 'hello world');
+        $this->assertSame(1, $client1->channelId);
+        $this->assertSame(2, $client2->channelId);
 
-        $tunnel->broadcastToClients($frame);
+        // DATA for channel 1 must reach only client 1.
+        $frame = new RelayFrame(RelayFrameType::DATA, $client1->channelId, 'hello world');
+        $tunnel->sendToClient($client1->channelId, $frame);
 
-        // Both clients should receive the same encoded data (encoded once, sent to all)
-        $this->assertSame($sentData1, $sentData2);
         $this->assertNotNull($sentData1);
+
+        // Decode what client 1 received and confirm the payload survived.
+        $decoded = $this->codec->decode($sentData1);
+        $this->assertInstanceOf(RelayFrame::class, $decoded);
+        $this->assertSame('hello world', $decoded->payload);
+        $this->assertSame(1, $decoded->channelId());
+    }
+
+    public function test_send_to_client_drops_data_for_unknown_channel(): void
+    {
+        $sessionId = 'session-456';
+        $this->sessionManager
+            ->method('registerServer')
+            ->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $this->serverWs->method('send');
+
+        // One registered client on channel 1.
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->expects($this->never())->method('send');
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        // DATA for a channel that was never assigned (99) must be dropped.
+        $frame = new RelayFrame(RelayFrameType::DATA, 99, 'orphan');
+        $tunnel->sendToClient(99, $frame);
+
+        // bytesIn untouched — nothing delivered.
+        $this->assertSame(0, $tunnel->getBytesIn());
     }
 
     public function test_send_to_server_encodes_and_records_bytes(): void
@@ -323,25 +359,29 @@ class TunnelTest extends TestCase
 
         $clientWs = $this->createMock(TcpConnection::class);
         $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, 'relay-session-1');
-        $tunnel->clientConnections->attach($client);
 
-        $sentData = null;
+        // Capture every frame sent to the server (CLIENT_CONNECT then DISCONNECT).
+        $sent = [];
         $this->serverWs
-            ->expects($this->once())
             ->method('send')
-            ->willReturnCallback(function (string $data) use (&$sentData): void {
-                $sentData = $data;
+            ->willReturnCallback(function (string $data) use (&$sent): void {
+                $sent[] = $data;
             });
+
+        $tunnel->registerClient($client); // assigns channel 1, sends CLIENT_CONNECT
+        $channelId = $client->channelId;
+        $this->assertSame(1, $channelId);
 
         $tunnel->removeClient($client);
 
         $this->assertCount(0, $tunnel->clientConnections);
-        $this->assertNotNull($sentData);
+        $this->assertNotEmpty($sent);
 
-        // Verify CLIENT_DISCONNECT frame was sent
-        $decoded = $this->codec->decode($sentData);
+        // The LAST frame sent is the CLIENT_DISCONNECT, tagged with the channel id.
+        $decoded = $this->codec->decode($sent[count($sent) - 1]);
         $this->assertInstanceOf(RelayFrame::class, $decoded);
         $this->assertSame(RelayFrameType::CLIENT_DISCONNECT, $decoded->type);
+        $this->assertSame($channelId, $decoded->channelId());
     }
 
     public function test_heartbeat_touches_last_frame_at(): void
@@ -370,7 +410,7 @@ class TunnelTest extends TestCase
         $this->assertGreaterThanOrEqual($initialLastFrameAt, $tunnel->lastFrameAt);
     }
 
-    public function test_broadcast_to_clients_records_bytes_in_per_client(): void
+    public function test_send_to_client_records_bytes_in_for_the_target_only(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -386,12 +426,12 @@ class TunnelTest extends TestCase
         );
         $tunnel->relaySessionId = $sessionId;
         $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $this->serverWs->method('send');
 
-        // Create three mock client connections
+        // Three registered clients (channels 1, 2, 3).
         $clientWs1 = $this->createMock(TcpConnection::class);
         $clientWs2 = $this->createMock(TcpConnection::class);
         $clientWs3 = $this->createMock(TcpConnection::class);
-
         $clientWs1->method('send');
         $clientWs2->method('send');
         $clientWs3->method('send');
@@ -400,20 +440,19 @@ class TunnelTest extends TestCase
         $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2', $this->clientLogger, '');
         $client3 = new ClientConnection($clientWs3, 'server-123', 'client-3', $this->clientLogger, '');
 
-        $tunnel->clientConnections->attach($client1);
-        $tunnel->clientConnections->attach($client2);
-        $tunnel->clientConnections->attach($client3);
+        $tunnel->registerClient($client1);
+        $tunnel->registerClient($client2);
+        $tunnel->registerClient($client3);
 
-        // Expect recordBytesIn to be called once per client (3 times total)
+        // recordBytesIn is called exactly once — only for the routed client.
         $this->sessionManager
-            ->expects($this->exactly(3))
+            ->expects($this->once())
             ->method('recordBytesIn')
             ->with($sessionId, $this->greaterThan(0));
 
-        $frame = new RelayFrame(RelayFrameType::DATA, 1, 'hello world');
-        $tunnel->broadcastToClients($frame);
+        $frame = new RelayFrame(RelayFrameType::DATA, $client2->channelId, 'hello world');
+        $tunnel->sendToClient($client2->channelId, $frame);
 
-        // bytesIn on tunnel should be frame_len * 3 clients
         $this->assertGreaterThan(0, $tunnel->getBytesIn());
     }
 
@@ -444,7 +483,7 @@ class TunnelTest extends TestCase
         $this->assertGreaterThan(0, $tunnel->getBytesOut());
     }
 
-    public function test_broadcast_to_clients_increments_bytes_in(): void
+    public function test_send_to_client_increments_bytes_in(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -460,22 +499,23 @@ class TunnelTest extends TestCase
         );
         $tunnel->relaySessionId = $sessionId;
         $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $this->serverWs->method('send');
 
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send');
 
         $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
-        $tunnel->clientConnections->attach($client);
+        $tunnel->registerClient($client);
 
         $this->assertSame(0, $tunnel->getBytesIn());
 
-        $frame = new RelayFrame(RelayFrameType::DATA, 1, 'hello world');
-        $tunnel->broadcastToClients($frame);
+        $frame = new RelayFrame(RelayFrameType::DATA, $client->channelId, 'hello world');
+        $tunnel->sendToClient($client->channelId, $frame);
 
         $this->assertGreaterThan(0, $tunnel->getBytesIn());
     }
 
-    public function test_bytes_in_tracks_total_per_recipient(): void
+    public function test_client_to_server_data_is_tagged_with_channel_id(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -492,22 +532,33 @@ class TunnelTest extends TestCase
         $tunnel->relaySessionId = $sessionId;
         $tunnel->status = Tunnel::STATUS_ACTIVE;
 
-        // Create two clients
-        $clientWs1 = $this->createMock(TcpConnection::class);
-        $clientWs2 = $this->createMock(TcpConnection::class);
-        $clientWs1->method('send');
-        $clientWs2->method('send');
+        $sent = [];
+        $this->serverWs
+            ->method('send')
+            ->willReturnCallback(function (string $data) use (&$sent): bool {
+                $sent[] = $data;
+                return true;
+            });
 
-        $client1 = new ClientConnection($clientWs1, 'server-123', 'client-1', $this->clientLogger, '');
-        $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2', $this->clientLogger, '');
-        $tunnel->clientConnections->attach($client1);
-        $tunnel->clientConnections->attach($client2);
+        $client = new ClientConnection(
+            $this->createMock(TcpConnection::class),
+            'server-123',
+            'client-1',
+            $this->clientLogger,
+            '',
+        );
+        $tunnel->registerClient($client); // channel 1; CLIENT_CONNECT is sent
 
-        $frame = new RelayFrame(RelayFrameType::DATA, 1, 'test');
-        $tunnel->broadcastToClients($frame);
+        // Client sends DATA with an arbitrary seq — the hub must overwrite it
+        // with the client's channel id before forwarding to the server.
+        $clientFrame = new RelayFrame(RelayFrameType::DATA, 999, 'client-bytes');
+        $tunnel->sendClientData($client, $clientFrame);
 
-        // bytesIn should be frame_encoded_len * 2 clients
-        // (same frame sent to each client)
-        $this->assertGreaterThan(0, $tunnel->getBytesIn());
+        // Last frame sent to the server is the tagged DATA frame.
+        $decoded = $this->codec->decode($sent[count($sent) - 1]);
+        $this->assertInstanceOf(RelayFrame::class, $decoded);
+        $this->assertSame(RelayFrameType::DATA, $decoded->type);
+        $this->assertSame($client->channelId, $decoded->channelId());
+        $this->assertSame('client-bytes', $decoded->payload);
     }
 }
