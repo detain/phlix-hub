@@ -6,7 +6,7 @@
     "require": {
         "php": "^8.3",
         "crell/tukio": "^2.0",
-        "detain/phlix-shared": "^0.4.0",
+        "detain/phlix-shared": "^0.5.1",
         "monolog/monolog": "^3.0",
         "php-di/php-di": "^7.0",
         "psr/container": "^2.0",
@@ -23,7 +23,6 @@
         "vimeo/psalm": ">=5.0"
     },
     "repositories": [
-        { "type": "path", "url": "/home/sites/phlix/phlix-shared", "canonical": false },
         { "type": "vcs", "url": "git@github.com:detain/phlix-shared.git" }
     ],
     "autoload": {
