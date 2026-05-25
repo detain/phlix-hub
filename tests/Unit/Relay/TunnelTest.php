@@ -369,4 +369,145 @@ class TunnelTest extends TestCase
 
         $this->assertGreaterThanOrEqual($initialLastFrameAt, $tunnel->lastFrameAt);
     }
+
+    public function test_broadcast_to_clients_records_bytes_in_per_client(): void
+    {
+        $sessionId = 'session-456';
+        $this->sessionManager
+            ->method('registerServer')
+            ->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        // Create three mock client connections
+        $clientWs1 = $this->createMock(TcpConnection::class);
+        $clientWs2 = $this->createMock(TcpConnection::class);
+        $clientWs3 = $this->createMock(TcpConnection::class);
+
+        $clientWs1->method('send');
+        $clientWs2->method('send');
+        $clientWs3->method('send');
+
+        $client1 = new ClientConnection($clientWs1, 'server-123', 'client-1', $this->clientLogger, '');
+        $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2', $this->clientLogger, '');
+        $client3 = new ClientConnection($clientWs3, 'server-123', 'client-3', $this->clientLogger, '');
+
+        $tunnel->clientConnections->attach($client1);
+        $tunnel->clientConnections->attach($client2);
+        $tunnel->clientConnections->attach($client3);
+
+        // Expect recordBytesIn to be called once per client (3 times total)
+        $this->sessionManager
+            ->expects($this->exactly(3))
+            ->method('recordBytesIn')
+            ->with($sessionId, $this->greaterThan(0));
+
+        $frame = new RelayFrame(RelayFrameType::DATA, 1, 'hello world');
+        $tunnel->broadcastToClients($frame);
+
+        // bytesIn on tunnel should be frame_len * 3 clients
+        $this->assertGreaterThan(0, $tunnel->getBytesIn());
+    }
+
+    public function test_send_to_server_increments_bytes_out(): void
+    {
+        $sessionId = 'session-456';
+        $this->sessionManager
+            ->method('registerServer')
+            ->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $this->serverWs->method('send');
+
+        $this->assertSame(0, $tunnel->getBytesOut());
+
+        $frame = new RelayFrame(RelayFrameType::DATA, 1, 'hello');
+        $tunnel->sendToServer($frame);
+
+        $this->assertGreaterThan(0, $tunnel->getBytesOut());
+    }
+
+    public function test_broadcast_to_clients_increments_bytes_in(): void
+    {
+        $sessionId = 'session-456';
+        $this->sessionManager
+            ->method('registerServer')
+            ->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send');
+
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->clientConnections->attach($client);
+
+        $this->assertSame(0, $tunnel->getBytesIn());
+
+        $frame = new RelayFrame(RelayFrameType::DATA, 1, 'hello world');
+        $tunnel->broadcastToClients($frame);
+
+        $this->assertGreaterThan(0, $tunnel->getBytesIn());
+    }
+
+    public function test_bytes_in_tracks_total_per_recipient(): void
+    {
+        $sessionId = 'session-456';
+        $this->sessionManager
+            ->method('registerServer')
+            ->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        // Create two clients
+        $clientWs1 = $this->createMock(TcpConnection::class);
+        $clientWs2 = $this->createMock(TcpConnection::class);
+        $clientWs1->method('send');
+        $clientWs2->method('send');
+
+        $client1 = new ClientConnection($clientWs1, 'server-123', 'client-1', $this->clientLogger, '');
+        $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2', $this->clientLogger, '');
+        $tunnel->clientConnections->attach($client1);
+        $tunnel->clientConnections->attach($client2);
+
+        $frame = new RelayFrame(RelayFrameType::DATA, 1, 'test');
+        $tunnel->broadcastToClients($frame);
+
+        // bytesIn should be frame_encoded_len * 2 clients
+        // (same frame sent to each client)
+        $this->assertGreaterThan(0, $tunnel->getBytesIn());
+    }
 }

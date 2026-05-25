@@ -121,6 +121,16 @@ final class Tunnel implements TunnelInterface
     private ?FrameDecoder $serverDecoder = null;
 
     /**
+     * @var int Total bytes sent to the server through this tunnel.
+     */
+    private int $bytesOut = 0;
+
+    /**
+     * @var int Total bytes received from the server and sent to clients through this tunnel.
+     */
+    private int $bytesIn = 0;
+
+    /**
      * Handle an incoming message from the server.
      *
      * During PENDING state: expects JSON HELLO frame, transitions to ACTIVE.
@@ -341,7 +351,10 @@ final class Tunnel implements TunnelInterface
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
         $this->serverWs->send($encoded);
 
-        // Record bytes sent to the server
+        // Track local byte counter for diagnostics
+        $this->bytesOut += strlen($encoded);
+
+        // Record bytes sent to the server in session manager (DB)
         if ($this->relaySessionId !== null) {
             $this->sessionManager->recordBytesOut($this->relaySessionId, strlen($encoded));
         }
@@ -366,15 +379,21 @@ final class Tunnel implements TunnelInterface
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
         $frameLen = strlen($encoded);
 
+        // Track bytes in per client for diagnostics (local tunnel counter)
+        $numClients = 0;
         foreach ($this->clientConnections as $client) {
             /** @var ClientConnection $client */
             $client->sendRaw($encoded);
+            $numClients++;
 
-            // Record bytes in to the session manager per client
+            // Record bytes in to the session manager per client (DB)
             if ($this->relaySessionId !== null) {
                 $this->sessionManager->recordBytesIn($this->relaySessionId, $frameLen);
             }
         }
+
+        // Track total bytes sent to clients (frame_len * num_clients)
+        $this->bytesIn += $frameLen * $numClients;
     }
 
     /**
@@ -588,6 +607,30 @@ final class Tunnel implements TunnelInterface
     public function getClientConnections(): SplObjectStorage
     {
         return $this->clientConnections;
+    }
+
+    /**
+     * Get total bytes sent to the server through this tunnel.
+     *
+     * @return int Bytes out counter.
+     *
+     * @since 0.5.0
+     */
+    public function getBytesOut(): int
+    {
+        return $this->bytesOut;
+    }
+
+    /**
+     * Get total bytes received from the server and sent to clients.
+     *
+     * @return int Bytes in counter.
+     *
+     * @since 0.5.0
+     */
+    public function getBytesIn(): int
+    {
+        return $this->bytesIn;
     }
 
     /**
