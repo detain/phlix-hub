@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub;
 
+use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Health\HealthController;
@@ -558,6 +559,9 @@ final class Application
                 $connection->send($error->toWorkermanResponse());
             }
         };
+
+        // Wire up runtime timers for relay services before starting workers
+        HubServicesProvider::boot();
 
         Worker::runAll();
     }
