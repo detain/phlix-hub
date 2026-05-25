@@ -7,9 +7,13 @@
 -- when it enrolls. The hub operator configures wildcard DNS for *.phlix.media.
 -- TLS certificates are provisioned via Let's Encrypt ACME DNS-01 challenge.
 
+-- `ADD COLUMN IF NOT EXISTS` / `ADD INDEX IF NOT EXISTS` keep this
+-- re-runnable (matching the idempotency convention in migrations 007
+-- and 012) even though the MigrationRunner tracking table already
+-- guards against double-apply.
 ALTER TABLE servers
-    ADD COLUMN subdomain VARCHAR(63) NULL AFTER capabilities,
-    ADD INDEX ix_servers_subdomain (subdomain);
+    ADD COLUMN IF NOT EXISTS subdomain VARCHAR(63) NULL AFTER capabilities,
+    ADD INDEX IF NOT EXISTS ix_servers_subdomain (subdomain);
 
 CREATE TABLE IF NOT EXISTS dns_challenges (
     id                       CHAR(36) NOT NULL,

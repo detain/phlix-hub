@@ -13,10 +13,12 @@ use Phlix\Hub\Http\Request;
 /**
  * Unit tests for {@see RelayController}.
  *
- * The WS upgrade + multiplex tunnel is not implemented in this build; the
- * controller is expected to return HTTP 501 (Not Implemented) for the
- * post-auth, post-upgrade-required path. These tests pin that contract
- * along with the surrounding auth gates (401 / 426 / 400).
+ * The relay tunnel is established over the dedicated WS worker
+ * (ws://…:8802), not over this HTTP endpoint. The controller is therefore
+ * expected to return HTTP 501 (Not Implemented Via HTTP) for the post-auth,
+ * post-upgrade-required path, with a body that points callers at the WS
+ * endpoint. These tests pin that contract along with the surrounding auth
+ * gates (401 / 426 / 400).
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  * @since 0.13.0
@@ -115,15 +117,26 @@ final class RelayControllerTest extends TestCase
         // know how to fulfill the request method" — not 500.
         self::assertSame(501, $response->statusCode);
 
+        // The HTTP relay endpoint is intentionally HTTP-only: the tunnel
+        // is established over the dedicated WS worker (ws://…:8802), so the
+        // 501 body steers callers there rather than claiming the feature
+        // is missing entirely.
         $body = $this->decodeJsonBody($response->body);
-        self::assertSame('NOT_IMPLEMENTED', $body['error']);
-        self::assertSame('relay.ws_not_implemented', $body['code']);
+        self::assertSame('NOT_IMPLEMENTED_VIA_HTTP', $body['error']);
+        self::assertSame('relay.ws_http_endpoint', $body['code']);
         self::assertIsString($body['message']);
-        self::assertStringContainsString('not implemented', $body['message']);
+        self::assertStringContainsString('WebSocket', $body['message']);
+        self::assertIsString($body['ws_endpoint']);
+        self::assertStringContainsString(':8802', $body['ws_endpoint']);
         self::assertSame(
             'https://detain.github.io/phlix-docs/dev/relay-protocol',
             $body['docs'],
         );
+
+        // The WS endpoint is also advertised in a response header so a
+        // client can discover it without parsing the body.
+        self::assertArrayHasKey('X-WS-Endpoint', $response->headers);
+        self::assertStringContainsString(':8802', $response->headers['X-WS-Endpoint']);
 
         // Sanity-check the docs Link header is present so clients can
         // discover the protocol spec without parsing the body.
