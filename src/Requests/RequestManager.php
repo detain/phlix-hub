@@ -21,7 +21,6 @@ use Workerman\MySQL\Connection;
  * to actually pull the title.
  *
  * @package Phlix\Hub\Requests
- * @since 0.6.0
  *
  * @phpstan-type RequestRow array{
  *     id: string,

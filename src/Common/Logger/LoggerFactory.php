@@ -12,7 +12,6 @@ namespace Phlix\Hub\Common\Logger;
  * channel name with {@see LoggerFactory::get()}.
  *
  * @package Phlix\Hub\Common\Logger
- * @since 0.1.0
  */
 class LoggerFactory
 {

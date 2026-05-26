@@ -21,7 +21,6 @@ use Psr\EventDispatcher\EventDispatcherInterface;
  * Unit tests for {@see AuthManager}.
  *
  * @package Phlix\Hub\Tests\Unit\Auth
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Auth\AuthManager
  */

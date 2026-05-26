@@ -26,7 +26,6 @@ use function DI\factory;
  *   channel via `DI\get('logger.auth')` rather than pulling the factory.
  *
  * @package Phlix\Hub\Common\Container\Providers
- * @since 0.1.0
  */
 final class CoreServicesProvider implements ServiceProviderInterface
 {
@@ -40,7 +39,6 @@ final class CoreServicesProvider implements ServiceProviderInterface
      *
      * @return void
      *
-     * @since 0.1.0
      */
     public function register(ContainerBuilder $builder, array $appConfig): void
     {
@@ -101,7 +99,6 @@ final class CoreServicesProvider implements ServiceProviderInterface
      *
      * @return array<string, string>
      *
-     * @since 0.1.0
      */
     public static function channels(): array
     {

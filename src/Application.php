@@ -39,14 +39,14 @@ use Workerman\Worker;
 /**
  * Phlix Hub main application bootstrap.
  *
- * Wires the HTTP router with the public surface as of B.7:
+ * Wires the HTTP router with the public surface:
  *
  *  - `GET /health`                — service health JSON.
  *  - `GET /`                       — landing page (SSR).
  *  - `GET /signup` / `POST /signup` — signup form + submission.
  *  - `GET /login`  / `POST /login`  — login form + submission.
  *  - `POST /logout`                — clear cookies + redirect.
- *  - `GET /my-servers`             — protected dashboard (empty in B.7).
+ *  - `GET /my-servers`             — protected dashboard.
  *  - `POST /api/v1/auth/signup`    — JSON signup.
  *  - `POST /api/v1/auth/login`     — JSON login.
  *  - `POST /api/v1/auth/logout`    — JSON logout.
@@ -54,7 +54,6 @@ use Workerman\Worker;
  *  - `GET  /api/v1/me`             — current user JSON (protected).
  *
  * @package Phlix\Hub
- * @since 0.1.0
  */
 final class Application
 {
@@ -138,21 +137,21 @@ final class Application
             );
         }, [$authMiddleware]);
 
-        // Server-claim and server routes (Phase C.3).
+        // Server-claim and server routes.
         $this->registerServerRoutes($authMiddleware);
 
-        // Library sharing routes (Phase C.9).
+        // Library sharing routes.
         $this->registerSharingRoutes($authMiddleware);
 
-        // Invite link routes (Phase D.5).
+        // Invite link routes.
         $this->registerInviteLinkRoutes();
 
-        // Media request routes (Phase K.3, moved to hub).
+        // Media request routes.
         $this->registerRequestRoutes();
     }
 
     /**
-     * Register the K.3 media-request routes — both the user surface under
+     * Register the media-request routes — both the user surface under
      * `/api/v1/me/requests` and the admin queue under
      * `/api/v1/admin/requests`. Also wires the SSR pages at `/requests`
      * (user) and `/admin/requests` (admin queue).
@@ -341,7 +340,7 @@ final class Application
 
         $this->router->group('/api/v1', $serverGroup, [$enrollmentJwt, $hubProtocol]);
 
-        // Relay tunnel endpoint — server-initiated WSS (Phase C.6).
+        // Relay tunnel endpoint — server-initiated WSS.
         $this->router->post('/servers/{id}/relay', static function (
             Request $req,
             array $params,
@@ -362,7 +361,7 @@ final class Application
             return $clientMountController->handle($req, $typedParams);
         });
 
-        // Subdomain allocation and revocation (Phase C.8).
+        // Subdomain allocation and revocation.
         $this->router->post('/servers/{id}/subdomain', static function (
             Request $req,
             array $params,
@@ -498,7 +497,7 @@ final class Application
     }
 
     /**
-     * Register invite link routes (Phase D.5).
+     * Register invite link routes.
      */
     private function registerInviteLinkRoutes(): void
     {
@@ -528,7 +527,7 @@ final class Application
     }
 
     /**
-     * Get the underlying router (used by tests and B.7 route registration).
+     * Get the underlying router (used by tests and route registration).
      */
     public function getRouter(): Router
     {

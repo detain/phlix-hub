@@ -15,7 +15,6 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * Workerman response object the worker sends down the socket.
  *
  * @package Phlix\Hub\Http
- * @since 0.1.0
  */
 class Response
 {

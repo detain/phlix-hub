@@ -25,7 +25,6 @@ use Workerman\MySQL\Connection;
  * Skipped when `HUB_TEST_DB_*` env vars are not set.
  *
  * @package Phlix\Hub\Tests\Integration\Hub
- * @since 0.4.0
  *
  * @covers \Phlix\Hub\Http\Controllers\ServerListController
  * @covers \Phlix\Hub\Http\Controllers\ServerManageController

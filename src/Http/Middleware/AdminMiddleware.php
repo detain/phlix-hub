@@ -22,7 +22,6 @@ use Phlix\Hub\Http\Response;
  * privilege-escalation attempts leave a trail in `.logs/audit.log`.
  *
  * @package Phlix\Hub\Http\Middleware
- * @since 0.2.0
  */
 final class AdminMiddleware
 {

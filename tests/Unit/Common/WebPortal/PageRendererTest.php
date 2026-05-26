@@ -14,7 +14,6 @@ use PHPUnit\Framework\TestCase;
  * directory in `sys_get_temp_dir()`.
  *
  * @package Phlix\Hub\Tests\Unit\Common\WebPortal
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Common\WebPortal\PageRenderer
  */

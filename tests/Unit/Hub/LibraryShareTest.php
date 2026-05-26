@@ -11,7 +11,6 @@ use Phlix\Hub\Hub\LibraryShare;
  * Unit tests for {@see LibraryShare}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- * @since 0.5.0
  *
  * @covers \Phlix\Hub\Hub\LibraryShare
  */

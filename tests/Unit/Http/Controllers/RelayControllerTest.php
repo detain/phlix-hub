@@ -21,7 +21,6 @@ use Phlix\Hub\Http\Request;
  * gates (401 / 426 / 400).
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- * @since 0.13.0
  *
  * @covers \Phlix\Hub\Http\Controllers\RelayController
  */

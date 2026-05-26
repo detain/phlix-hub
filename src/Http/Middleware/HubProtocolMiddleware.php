@@ -15,7 +15,6 @@ use Phlix\Hub\Http\Response;
  * not exactly "v1".
  *
  * @package Phlix\Hub\Http\Middleware
- * @since 0.3.0
  */
 final class HubProtocolMiddleware
 {

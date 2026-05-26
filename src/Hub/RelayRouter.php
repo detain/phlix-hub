@@ -12,7 +12,6 @@ namespace Phlix\Hub\Hub;
  * session.
  *
  * @package Phlix\Hub\Hub
- * @since 0.12.0
  */
 final class RelayRouter
 {
@@ -36,7 +35,6 @@ final class RelayRouter
      *
      * @return string|null Server ID with active relay session, or null if not found.
      *
-     * @since 0.12.0
      */
     public function routeBySubdomain(string $host): ?string
     {
@@ -65,7 +63,6 @@ final class RelayRouter
      *
      * @return string|null Subdomain label or null if not a subdomain of phlix.media.
      *
-     * @since 0.12.0
      */
     public function extractSubdomain(string $host): ?string
     {
@@ -102,7 +99,6 @@ final class RelayRouter
      *
      * @return array<string, mixed>|null Active relay session or null.
      *
-     * @since 0.12.0
      */
     public function getRelaySession(string $serverId): ?array
     {

@@ -13,7 +13,7 @@ return [
     // 008 and `Phlix\Hub\Hub\DnsAliasManager`).
     'public_domain' => getenv('HUB_PUBLIC_DOMAIN') ?: 'phlix.media',
 
-    // Sonarr/Radarr endpoints used by the K.3 request UI.
+    // Sonarr/Radarr endpoints used by the request UI.
     // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.
     'arr' => [
         'sonarr' => [

@@ -17,7 +17,6 @@ use Workerman\MySQL\Connection;
  * `tests/Integration/Migrations/` covers the live-DB scenarios.
  *
  * @package Phlix\Hub\Tests\Common\Database
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Common\Database\MigrationRunner
  */

@@ -1,6 +1,6 @@
 -- migration: 001_users
 -- Creates the `users` table — the authoritative directory of hub accounts.
--- Used by signup/login (B.7) and as the owner referent for servers, shared
+-- Used by signup/login and as the owner referent for servers, shared
 -- libraries, and webhooks. Argon2ID-hashed passwords; email + username
 -- are both unique.
 

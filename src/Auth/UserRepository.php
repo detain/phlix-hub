@@ -14,13 +14,12 @@ use Workerman\MySQL\Connection;
  *
  *  - the hub schema in `migrations/001_users.sql` (no `user_settings`
  *    table, no `avatar_url`, no `last_login`-named column — the hub
- *    uses `updated_at` for now and Phase C may add a `last_login_at`);
+ *    uses `updated_at` for now);
  *  - workerman/mysql's named-placeholder requirement (see
  *    {@see \Phlix\Hub\Common\Database\MigrationRunner::recordApplied()}
- *    for the binding quirk that bit us in B.6).
+ *    for the binding quirk).
  *
  * @package Phlix\Hub\Auth
- * @since 0.2.0
  */
 class UserRepository
 {
@@ -170,8 +169,8 @@ class UserRepository
 
     /**
      * Refresh `updated_at` for a user — the hub treats this as a
-     * surrogate for "last activity" until a dedicated `last_login_at`
-     * column lands in a follow-up migration.
+     * surrogate for "last activity" (there is no dedicated
+     * `last_login_at` column).
      */
     public function updateLastLogin(string $id): void
     {

@@ -10,7 +10,6 @@ namespace Phlix\Hub\Hub;
  * This is what a collaborator sees when browsing "Shared with me".
  *
  * @package Phlix\Hub\Hub
- * @since 0.5.0
  */
 final class SharedLibraryDto
 {

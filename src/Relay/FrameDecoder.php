@@ -28,7 +28,6 @@ use function unpack;
  * Maximum frame payload: 65535 bytes.
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 final class FrameDecoder implements RelayWireCodecInterface
 {

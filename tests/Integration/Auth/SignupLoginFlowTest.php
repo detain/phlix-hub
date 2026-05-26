@@ -18,10 +18,9 @@ use Workerman\MySQL\Connection;
  * End-to-end signup → login → protected → logout flow against a real DB.
  *
  * Skipped when `HUB_TEST_DB_*` env vars are not set, matching the
- * gating pattern from B.6's MigrationRunnerIntegrationTest.
+ * gating pattern from the MigrationRunnerIntegrationTest.
  *
  * @package Phlix\Hub\Tests\Integration\Auth
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Auth\AuthManager
  * @covers \Phlix\Hub\Auth\UserRepository
@@ -181,7 +180,7 @@ final class SignupLoginFlowTest extends TestCase
         $value = is_string($rawValue) ? $rawValue : '';
         if (strtoupper($value) === 'ON') {
             self::markTestSkipped(
-                'Test DB runs Group Replication multi-primary; B.7 integration suite needs single-primary.',
+                'Test DB runs Group Replication multi-primary; integration suite needs single-primary.',
             );
         }
     }

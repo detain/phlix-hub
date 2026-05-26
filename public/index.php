@@ -12,7 +12,6 @@ declare(strict_types=1);
  * Run with `php public/index.php start` during development.
  *
  * @package Phlix\Hub
- * @since 0.1.0
  */
 
 use Phlix\Hub\Application;

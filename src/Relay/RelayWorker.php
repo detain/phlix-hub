@@ -24,7 +24,6 @@ use function spl_object_id;
  * TunnelManager and hands off message handling to the appropriate Tunnel.
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 final class RelayWorker
 {

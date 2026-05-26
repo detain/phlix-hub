@@ -20,7 +20,6 @@ use Monolog\Processor\PsrLogMessageProcessor;
  * `phlix-server` version so behaviour matches across the two repos.
  *
  * @package Phlix\Hub\Common\Logger
- * @since 0.1.0
  */
 class StructuredLogger
 {
@@ -37,7 +36,6 @@ class StructuredLogger
      * @param string               $channel Channel name (see {@see LogChannels}).
      * @param array<string, mixed> $config  The loaded logger config array.
      *
-     * @since 0.1.0
      */
     public function __construct(string $channel, array $config)
     {

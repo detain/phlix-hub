@@ -20,7 +20,6 @@ use Smarty;
  * inconsistently across plugin/function/modifier output.
  *
  * @package Phlix\Hub\Common\WebPortal
- * @since 0.2.0
  */
 class PageRenderer
 {

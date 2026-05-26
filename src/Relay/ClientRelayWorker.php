@@ -51,7 +51,6 @@ use function trim;
  *      {@see ClientMountController::onClientClose()}.
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 final class ClientRelayWorker
 {

@@ -19,7 +19,6 @@ use Workerman\Connection\TcpConnection;
  * Unit tests for {@see ClientConnection}.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
- * @since 0.5.0
  *
  * @covers \Phlix\Hub\Relay\ClientConnection
  */

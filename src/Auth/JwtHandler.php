@@ -21,11 +21,10 @@ use Throwable;
  *    instance, not an `array`. This is the proof-of-design for the
  *    cross-repo DTO from `phlix-shared` v0.2.0.
  *
- * Symmetric HMAC-SHA256 signing only. No support for RS256/ES256 in B.7 —
- * that's a Phase L hardening task.
+ * Symmetric HMAC-SHA256 signing only — no support for RS256/ES256
+ * (a potential future hardening task).
  *
  * @package Phlix\Hub\Auth
- * @since 0.2.0
  */
 final class JwtHandler
 {
@@ -93,7 +92,7 @@ final class JwtHandler
      * @param list<string> $scope        Permission strings; empty for unscoped.
      * @param ?string      $serverId     Optional `serverId` claim (used for
      *                                   hub-minted client tokens that target
-     *                                   a specific server). Phase C wires this.
+     *                                   a specific server).
      *
      * @return string Encoded JWT.
      */
@@ -117,7 +116,7 @@ final class JwtHandler
 
     /**
      * Mint a signed refresh token for a user. Refresh tokens carry a `jti`
-     * so a later phase can implement server-side revocation; B.7 itself
+     * so server-side revocation can be added later; the hub itself
      * does not track refresh JTIs.
      *
      * @param string $userId Subject — the user UUID.

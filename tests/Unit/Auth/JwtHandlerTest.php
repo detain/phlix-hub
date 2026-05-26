@@ -13,7 +13,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see JwtHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Auth
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Auth\JwtHandler
  */

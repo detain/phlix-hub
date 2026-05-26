@@ -22,7 +22,6 @@ use Psr\Container\ContainerInterface;
  * {@see \Phlix\Hub\Tests\Unit\Relay\ClientRelayWorkerTest}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- * @since 0.5.0
  *
  * @covers \Phlix\Hub\Http\Controllers\ClientMountController
  */

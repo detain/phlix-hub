@@ -70,7 +70,6 @@ use function DI\get;
  *  - {@see ServerController}         → singleton
  *
  * @package Phlix\Hub\Common\Container\Providers
- * @since 0.3.0
  */
 final class HubServicesProvider implements ServiceProviderInterface
 {

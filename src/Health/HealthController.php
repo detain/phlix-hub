@@ -16,7 +16,6 @@ use Phlix\Shared\Version as SharedVersion;
  * to hit from monitors while the rest of the stack is starting up.
  *
  * @package Phlix\Hub\Health
- * @since 0.1.0
  */
 final class HealthController
 {
@@ -31,7 +30,6 @@ final class HealthController
      *     timestamp: int
      * }
      *
-     * @since 0.1.0
      */
     public function __invoke(): array
     {

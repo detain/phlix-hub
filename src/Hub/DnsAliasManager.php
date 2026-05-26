@@ -19,7 +19,6 @@ use Workerman\MySQL\Connection;
  *   - Provision and manage TLS certificates
  *
  * @package Phlix\Hub\Hub
- * @since 0.12.0
  */
 class DnsAliasManager
 {
@@ -56,7 +55,6 @@ class DnsAliasManager
      *
      * @throws InvalidArgumentException When server is not found.
      *
-     * @since 0.12.0
      */
     public function allocateSubdomain(string $serverId): string
     {
@@ -103,7 +101,6 @@ class DnsAliasManager
      *
      * @return string|null Subdomain label or null if not allocated.
      *
-     * @since 0.12.0
      */
     public function getSubdomain(string $serverId): ?string
     {
@@ -130,7 +127,6 @@ class DnsAliasManager
      *
      * @return string|null Server ID or null if subdomain is not allocated.
      *
-     * @since 0.12.0
      */
     public function resolve(string $subdomain): ?string
     {
@@ -159,7 +155,6 @@ class DnsAliasManager
      *
      * @return void
      *
-     * @since 0.12.0
      */
     public function revokeSubdomain(string $serverId): void
     {
@@ -196,7 +191,6 @@ class DnsAliasManager
      *
      * @throws \RuntimeException When ACME provisioning is not implemented.
      *
-     * @since 0.12.0
      */
     public function refreshCertificate(string $serverId): bool
     {
@@ -215,7 +209,6 @@ class DnsAliasManager
      *
      * @return string FQDN (e.g. "abc12345.phlix.media").
      *
-     * @since 0.12.0
      */
     public function getFqdn(string $subdomain): string
     {
@@ -232,7 +225,6 @@ class DnsAliasManager
      *
      * @return string 8-character subdomain label.
      *
-     * @since 0.12.0
      */
     private function generateSubdomain(string $serverId): string
     {

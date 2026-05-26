@@ -25,7 +25,6 @@ use function strlen;
  * Maximum frame payload: 65535 bytes.
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 final class FrameEncoder
 {

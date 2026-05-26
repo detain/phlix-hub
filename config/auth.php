@@ -15,7 +15,6 @@ declare(strict_types=1);
  *   HUB_JWT_REFRESH_TTL  — refresh token TTL in seconds (default 604800).
  *
  * @package Phlix\Hub
- * @since 0.2.0
  */
 
 return [

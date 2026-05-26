@@ -15,7 +15,6 @@ namespace Phlix\Hub\Hub;
  *   - TTL: 7 days (604800 seconds)
  *
  * @package Phlix\Hub\Hub
- * @since 0.3.0
  */
 class EnrollmentJwtService
 {

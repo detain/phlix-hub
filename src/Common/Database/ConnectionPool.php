@@ -15,7 +15,6 @@ use Workerman\MySQL\Connection;
  * named connection inside the worker process.
  *
  * @package Phlix\Hub\Common\Database
- * @since 0.1.0
  */
 class ConnectionPool
 {

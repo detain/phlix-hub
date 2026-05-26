@@ -15,7 +15,6 @@ use Phlix\Hub\Http\Response;
  * public key for validating enrollment JWTs.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.3.0
  */
 final class HubJwksController
 {

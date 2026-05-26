@@ -20,7 +20,6 @@ use Workerman\MySQL\Connection;
  * privileges on it — every table is dropped at setUp().
  *
  * @package Phlix\Hub\Tests\Integration\Migrations
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Common\Database\MigrationRunner
  *

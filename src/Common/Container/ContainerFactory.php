@@ -14,16 +14,12 @@ use Psr\Container\ContainerInterface;
 /**
  * Builds the application's PSR-11 container.
  *
- * `ContainerFactory::create($config)` composes the canonical service
- * providers (currently just {@see CoreServicesProvider}) against a
- * fresh PHP-DI {@see ContainerBuilder} with autowiring and PHP 8
- * attribute parsing enabled, then returns the compiled container.
- *
- * B.6 / B.7 will add `AuthServicesProvider`, `HubServicesProvider`,
- * etc. as the hub grows.
+ * `ContainerFactory::create($config)` composes the application's
+ * service providers against a fresh PHP-DI {@see ContainerBuilder}
+ * with autowiring and PHP 8 attribute parsing enabled, then returns
+ * the compiled container.
  *
  * @package Phlix\Hub\Common\Container
- * @since 0.1.0
  */
 final class ContainerFactory
 {
@@ -54,7 +50,6 @@ final class ContainerFactory
      *
      * @throws \Exception When PHP-DI fails to compile the container.
      *
-     * @since 0.1.0
      */
     public static function create(array $appConfig = [], ?array $providers = null): ContainerInterface
     {
@@ -86,7 +81,6 @@ final class ContainerFactory
      *
      * @return array<int, ServiceProviderInterface>
      *
-     * @since 0.1.0
      */
     public static function defaultProviders(): array
     {
@@ -103,7 +97,6 @@ final class ContainerFactory
      *
      * @return bool True when `PHLIX_HUB_CONTAINER_COMPILE` is truthy.
      *
-     * @since 0.1.0
      */
     private static function shouldCompile(): bool
     {

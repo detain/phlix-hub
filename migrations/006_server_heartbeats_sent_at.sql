@@ -2,7 +2,7 @@
 -- Adds `sent_at` to `server_heartbeats` so the hub can persist the
 -- server-side send timestamp (HeartbeatDto::$timestamp) alongside the
 -- hub-side `received_at`. The pair powers clock-skew detection in the
--- C.3 heartbeat handler.
+-- heartbeat handler.
 --
 -- `sent_at` is nullable because rows written before this migration
 -- (and any heartbeat where the sender omits the field) carry no

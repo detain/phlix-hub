@@ -21,7 +21,6 @@ use Workerman\MySQL\Connection;
  *   5. Returns enrollment JWT via EnrollmentJwtService.
  *
  * @package Phlix\Hub\Hub
- * @since 0.3.0
  */
 class ClaimRequestHandler
 {

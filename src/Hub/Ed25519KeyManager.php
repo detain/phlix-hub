@@ -14,7 +14,6 @@ use RuntimeException;
  * the existing key. Supports key rotation with an overlap window.
  *
  * @package Phlix\Hub\Hub
- * @since 0.3.0
  */
 final class Ed25519KeyManager
 {

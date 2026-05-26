@@ -12,7 +12,6 @@ use ReflectionClass;
  * Unit tests for {@see Version}.
  *
  * @package Phlix\Hub\Tests
- * @since 0.1.0
  *
  * @covers \Phlix\Hub\Version
  */

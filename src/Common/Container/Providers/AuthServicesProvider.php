@@ -30,7 +30,6 @@ use function DI\get;
  *  - {@see AuthManager} → autowired with dispatcher optional.
  *
  * @package Phlix\Hub\Common\Container\Providers
- * @since 0.2.0
  */
 final class AuthServicesProvider implements ServiceProviderInterface
 {

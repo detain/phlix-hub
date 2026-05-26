@@ -14,7 +14,6 @@ use Phlix\Hub\Http\Response;
  * API controller for library sharing endpoints.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.5.0
  */
 final class LibraryShareController
 {

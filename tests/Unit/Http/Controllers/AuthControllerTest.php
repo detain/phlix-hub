@@ -17,7 +17,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see AuthController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Http\Controllers\AuthController
  */

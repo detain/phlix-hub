@@ -16,7 +16,6 @@ use Workerman\MySQL\Connection;
  * `GET  /api/v1/me/servers/{id}/access-info` — best URL for client access.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.4.0
  */
 final class ServerManageController
 {

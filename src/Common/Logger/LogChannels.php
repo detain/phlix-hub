@@ -15,7 +15,6 @@ namespace Phlix\Hub\Common\Logger;
  * so they are resolvable via `logger.<name>` aliases.
  *
  * @package Phlix\Hub\Common\Logger
- * @since 0.1.0
  */
 final class LogChannels
 {

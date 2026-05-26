@@ -1,6 +1,6 @@
 -- migration: 008_subdomain_allocation
 --
--- Adds subdomain column to servers table for C.8 public hostname claim.
+-- Adds subdomain column to servers table for public hostname claim.
 -- Also creates dns_challenges table for Let's Encrypt ACME DNS-01 challenges.
 --
 -- Background: Each server gets a unique subdomain (e.g. abc12345.phlix.media)

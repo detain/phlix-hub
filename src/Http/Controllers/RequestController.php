@@ -12,7 +12,7 @@ use Phlix\Hub\Requests\RequestManager;
 use Phlix\Hub\Requests\RequestNotification;
 
 /**
- * REST API for the K.3 Jellyseerr-class request UI on the hub.
+ * REST API for the Jellyseerr-class request UI on the hub.
  *
  * User endpoints (mounted behind {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}):
  *  - `POST   /api/v1/me/requests`     {@see self::createRequest()}
@@ -26,7 +26,6 @@ use Phlix\Hub\Requests\RequestNotification;
  *  - `POST   /api/v1/admin/requests/{id}/deny`    {@see self::denyRequest()}
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.6.0
  */
 final class RequestController
 {

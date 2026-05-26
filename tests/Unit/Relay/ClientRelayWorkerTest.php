@@ -32,7 +32,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  * a DATA frame round-trip through the router to the server tunnel.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
- * @since 0.5.0
  *
  * @covers \Phlix\Hub\Relay\ClientRelayWorker
  */

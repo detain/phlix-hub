@@ -13,7 +13,6 @@ use RuntimeException;
  * with status 1011 (Protocol Error).
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 final class InvalidFrameTypeException extends RuntimeException
 {

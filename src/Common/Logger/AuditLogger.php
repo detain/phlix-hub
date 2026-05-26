@@ -16,7 +16,6 @@ namespace Phlix\Hub\Common\Logger;
  * to `.logs/audit.log` by default (config/logger.php).
  *
  * @package Phlix\Hub\Common\Logger
- * @since 0.2.0
  */
 class AuditLogger
 {

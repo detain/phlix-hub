@@ -13,7 +13,6 @@ use Workerman\Connection\TcpConnection;
  * Defines the contract for managing relay tunnels between the hub and servers.
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 interface TunnelManagerInterface
 {

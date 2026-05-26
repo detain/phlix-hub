@@ -1,6 +1,6 @@
 -- migration: 007_server_claims_and_servers
 --
--- Extends server_claims and servers tables for pairing protocol C.3
+-- Extends server_claims and servers tables for the pairing protocol
 --
 -- Background: migration 002 created the initial schema with jwks_json (text blob)
 -- and hostname_candidates_json (text blob). This migration:

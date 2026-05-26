@@ -17,7 +17,6 @@ use DI\ContainerBuilder;
  * adding definitions.
  *
  * @package Phlix\Hub\Common\Container
- * @since 0.1.0
  */
 interface ServiceProviderInterface
 {
@@ -31,7 +30,6 @@ interface ServiceProviderInterface
      *
      * @return void
      *
-     * @since 0.1.0
      */
     public function register(ContainerBuilder $builder, array $appConfig): void;
 }

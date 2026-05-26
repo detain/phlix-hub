@@ -16,7 +16,6 @@ use Phlix\Hub\Hub\EnrollmentJwtService;
  *   - The hub then multiplexes inbound client requests over this tunnel
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.12.0
  */
 final class RelayController
 {
@@ -40,7 +39,6 @@ final class RelayController
      *
      * @return Response
      *
-     * @since 0.12.0
      */
     public function handle(Request $request, array $params): Response
     {
