@@ -8,8 +8,8 @@
 -- (and any heartbeat where the sender omits the field) carry no
 -- server timestamp.
 --
--- `ALTER ... IF NOT EXISTS` keeps this re-runnable even though the
--- MigrationRunner tracking table already guards against double-apply.
+-- Idempotency is provided by the MigrationRunner tracking table; plain
+-- `ALTER` keeps the SQL portable across MySQL 8 and MariaDB.
 
 ALTER TABLE server_heartbeats
-    ADD COLUMN IF NOT EXISTS sent_at DATETIME NULL AFTER received_at;
+    ADD COLUMN sent_at DATETIME NULL AFTER received_at;
