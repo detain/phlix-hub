@@ -22,6 +22,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 - [One-line install](#one-line-install)
 - [Updating an existing install](#updating-an-existing-install)
 - [Uninstalling](#uninstalling)
+- [Running alongside phlix-server](#running-alongside-phlix-server)
 - [Quick start (development)](#quick-start-development)
 - [Production install on Ubuntu](#production-install-on-ubuntu)
   - [1. System packages](#1-system-packages)
@@ -206,6 +207,51 @@ What it removes, only if it finds them:
 
 System packages (`php-*`, `mysql-server`, `haproxy`, `certbot`) and `ufw` rules are left in
 place — uninstall them yourself with `apt remove` / `ufw delete` if you no longer need them.
+
+## Running alongside phlix-server
+
+Both installers can share a single HAProxy instance — they auto-merge into one
+`/etc/haproxy/haproxy.cfg`. Just run both installers normally; whichever runs second detects
+the first's fragment and rebuilds a combined config that routes by `Host:` header.
+
+```bash
+# 1. Install phlix-hub first (with TLS).
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh \
+  | sudo bash -s -- --domain hub.example.com --admin-email you@example.com -y
+
+# 2. Install phlix-server, also with TLS, on a different hostname.
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh \
+  | sudo bash -s -- --domain phlix.example.com --admin-email you@example.com -y
+```
+
+After both finish, `/etc/haproxy/haproxy.cfg` is a Phlix-managed config carrying both
+projects' frontends and backends, with HAProxy picking the right cert per SNI hostname from
+`/etc/haproxy/certs/`.
+
+**How the merge works.** Each install drops a fragment at
+`/etc/haproxy/phlix-managed/<project>.cfg.fragment` with `fe_http`, `fe_https`, and `backends`
+sections. A shared rebuilder then assembles the final `haproxy.cfg` from every fragment it
+finds. HAProxy's `crt /etc/haproxy/certs/` directive auto-loads every `.pem` in that directory
+and picks the right one per SNI hostname.
+
+The first install snapshots any pre-Phlix `haproxy.cfg` to
+`/etc/haproxy/haproxy.cfg.pre-phlix.bak`.
+
+**Uninstall behaviour**: `--uninstall` removes only that project's fragment and rebuilds. If
+other Phlix projects remain, their frontend stays untouched. When the **last** Phlix project
+is uninstalled, the rebuilder restores the pre-Phlix snapshot (or removes `haproxy.cfg`
+outright if there was no pre-Phlix config) and stops/disables `haproxy`.
+
+The **hub server-tunnel port** (`:8802`) is a separate listener — servers connect to that port
+directly. Open it on the firewall but don't put it behind the HAProxy 80/443 frontend.
+
+If you'd rather use your own reverse proxy (nginx, Caddy, Traefik, etc.) instead of the
+managed HAProxy, pass `--no-proxy` to either install script. Each service then listens on its
+own port (8800 / 8802 / 8803 for phlix-hub, 8096 for phlix-server) and you point your proxy
+at those.
+
+Everything else is already namespaced (env files, systemd units, install dirs, service users,
+MySQL DBs, backend ports, certbot artefacts) so there are no other co-install conflicts.
 
 ## Quick start (development)
 
