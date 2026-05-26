@@ -19,7 +19,6 @@ use Workerman\MySQL\Connection;
  *      hostname_candidates_json, heartbeat_interval.
  *
  * @package Phlix\Hub\Hub
- * @since 0.3.0
  */
 class HeartbeatHandler
 {

@@ -14,7 +14,6 @@ use Workerman\MySQL\Connection;
  * Handles invite link business logic.
  *
  * @package Phlix\Hub\Hub
- * @since 0.6.0
  */
 class InviteLinkHandler
 {

@@ -32,7 +32,6 @@ use function DI\factory;
  * Override via the `templates.{dir,compile,cache}` keys on the appConfig.
  *
  * @package Phlix\Hub\Common\Container\Providers
- * @since 0.2.0
  */
 final class HttpServicesProvider implements ServiceProviderInterface
 {

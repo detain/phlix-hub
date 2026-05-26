@@ -18,7 +18,6 @@ use Workerman\MySQL\Connection;
  *   - Close a relay session when the server disconnects
  *
  * @package Phlix\Hub\Hub
- * @since 0.12.0
  */
 class RelaySessionManager
 {
@@ -42,7 +41,6 @@ class RelaySessionManager
      *
      * @throws InvalidArgumentException When server is not found (404).
      *
-     * @since 0.12.0
      */
     public function registerServer(string $serverId, string $workerNode): string
     {
@@ -91,7 +89,6 @@ class RelaySessionManager
      *
      * @return array<string, mixed>|null Relay session record or null if not connected.
      *
-     * @since 0.12.0
      */
     public function routeRequest(
         string $serverId,
@@ -137,7 +134,6 @@ class RelaySessionManager
      *
      * @return void
      *
-     * @since 0.12.0
      */
     public function recordBytesOut(string $sessionId, int $bytes): void
     {
@@ -159,7 +155,6 @@ class RelaySessionManager
      *
      * @return void
      *
-     * @since 0.12.0
      */
     public function closeSession(string $sessionId, string $reason): void
     {
@@ -185,7 +180,6 @@ class RelaySessionManager
      *
      * @return array<string, mixed>|null Session record or null.
      *
-     * @since 0.12.0
      */
     public function getActiveSession(string $serverId): ?array
     {
@@ -208,7 +202,6 @@ class RelaySessionManager
      *
      * @return void
      *
-     * @since 0.5.0
      */
     public function recordBytesIn(string $sessionId, int $bytes): void
     {
@@ -232,7 +225,6 @@ class RelaySessionManager
      *
      * @return void
      *
-     * @since 0.5.0
      */
     public function touchLastFrame(string $sessionId): void
     {

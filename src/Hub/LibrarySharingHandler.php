@@ -13,7 +13,6 @@ use Workerman\MySQL\Connection;
  * Handles library sharing business logic.
  *
  * @package Phlix\Hub\Hub
- * @since 0.5.0
  */
 class LibrarySharingHandler
 {

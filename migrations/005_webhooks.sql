@@ -2,8 +2,7 @@
 -- Creates the `webhooks` table — user-defined HTTP callbacks the hub
 -- delivers when a subscribed event alias fires. `event_aliases_json` is
 -- a JSON array of `phlix.*` aliases (see `Phlix\Shared\Plugin\EventNameMap`).
--- `secret` (HMAC) and `template_json` (handlebars body) are optional and
--- land formally in step L.1.
+-- `secret` (HMAC) and `template_json` (handlebars body) are optional.
 
 CREATE TABLE IF NOT EXISTS webhooks (
     id                   CHAR(36) NOT NULL,

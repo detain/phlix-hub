@@ -24,7 +24,6 @@ use Phlix\Shared\Auth\JwtClaims;
  *    "click → bounce to login".
  *
  * @package Phlix\Hub\Http\Middleware
- * @since 0.2.0
  */
 final class AuthMiddleware
 {
@@ -66,7 +65,7 @@ final class AuthMiddleware
         // Stash the claims + user in pathParams (the Request struct doesn't
         // expose typed bags yet; controllers can pull these via $request->pathParams).
         // Note: keep this minimal and unobtrusive so we don't need to change
-        // the Request shape just for B.7.
+        // the Request shape.
         unset($user['password_hash']);
         $request->user = $user;
         $request->claims = $claims;

@@ -15,7 +15,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see AuthMiddleware}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Middleware
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Http\Middleware\AuthMiddleware
  */

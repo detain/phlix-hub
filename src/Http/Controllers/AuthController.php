@@ -25,7 +25,6 @@ use Throwable;
  * into per-action invokables.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.2.0
  */
 final class AuthController
 {

@@ -21,7 +21,6 @@ use function time;
  * ClientConnection attached to a specific server Tunnel.
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 final class ClientConnection
 {

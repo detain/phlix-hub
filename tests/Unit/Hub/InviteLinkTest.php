@@ -11,7 +11,6 @@ use Phlix\Hub\Hub\InviteLink;
  * Unit tests for {@see InviteLink}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- * @since 0.6.0
  *
  * @covers \Phlix\Hub\Hub\InviteLink
  */

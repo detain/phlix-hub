@@ -48,7 +48,6 @@ use function time;
  *   CLOSING → CLOSED  (after cleanup completes)
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 final class Tunnel implements TunnelInterface
 {
@@ -697,7 +696,6 @@ final class Tunnel implements TunnelInterface
      *
      * @return int Bytes out counter.
      *
-     * @since 0.5.0
      */
     public function getBytesOut(): int
     {
@@ -709,7 +707,6 @@ final class Tunnel implements TunnelInterface
      *
      * @return int Bytes in counter.
      *
-     * @since 0.5.0
      */
     public function getBytesIn(): int
     {

@@ -8,7 +8,6 @@ namespace Phlix\Hub\Hub;
  * DTO representing a library share record.
  *
  * @package Phlix\Hub\Hub
- * @since 0.5.0
  */
 final class LibraryShare
 {

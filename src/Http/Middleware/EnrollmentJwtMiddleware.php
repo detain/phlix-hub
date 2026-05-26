@@ -16,7 +16,6 @@ use Phlix\Hub\Http\Response;
  * missing, malformed, or expired.
  *
  * @package Phlix\Hub\Http\Middleware
- * @since 0.3.0
  */
 final class EnrollmentJwtMiddleware
 {

@@ -10,7 +10,6 @@ namespace Phlix\Hub;
  * Keep this in sync with the git tag and the CHANGELOG entry.
  *
  * @package Phlix\Hub
- * @since 0.1.0
  */
 final class Version
 {

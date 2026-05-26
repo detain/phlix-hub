@@ -12,7 +12,6 @@ use Workerman\MySQL\Connection;
  * Handles voluntary server deregistration.
  *
  * @package Phlix\Hub\Hub
- * @since 0.3.0
  */
 class DeregisterHandler
 {

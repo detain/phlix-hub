@@ -10,7 +10,6 @@ use RuntimeException;
  * Thrown when a client exceeds the rate limit for authentication attempts.
  *
  * @package Phlix\Hub\Auth
- * @since 0.2.0
  */
 final class RateLimitException extends RuntimeException
 {

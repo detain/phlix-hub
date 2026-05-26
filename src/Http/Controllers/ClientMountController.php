@@ -28,7 +28,6 @@ use function spl_object_id;
  * the tunnel for frame multiplexing.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.5.0
  */
 final class ClientMountController
 {

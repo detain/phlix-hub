@@ -19,7 +19,6 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
  *   - Handles ping/pong keep-alive
  *
  * @package Phlix\Hub\Hub
- * @since 0.12.0
  */
 final class RelayServerHandler
 {
@@ -63,7 +62,6 @@ final class RelayServerHandler
      *
      * @throws InvalidArgumentException When JWT is invalid (401) or server not found (404).
      *
-     * @since 0.12.0
      */
     public function onConnect(string $serverId, string $enrollmentJwt): string
     {
@@ -99,7 +97,6 @@ final class RelayServerHandler
      *
      * @return array<string, mixed>|null Response to send back, or null for ping/pong.
      *
-     * @since 0.12.0
      */
     public function onFrame(string $sessionId, array $frame): ?array
     {
@@ -132,7 +129,6 @@ final class RelayServerHandler
      *
      * @return void
      *
-     * @since 0.12.0
      */
     public function onClose(string $sessionId, string $reason = 'server_disconnect'): void
     {

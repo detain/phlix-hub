@@ -20,7 +20,6 @@ use Phlix\Hub\Http\Response;
  * path while keeping per-template assigns close together.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.2.0
  */
 final class PageController
 {
@@ -123,7 +122,7 @@ final class PageController
     }
 
     /**
-     * `GET /requests` — user "Request media" SSR page (K.3, moved to hub).
+     * `GET /requests` — user "Request media" SSR page.
      */
     public function requests(Request $request): Response
     {
@@ -134,7 +133,7 @@ final class PageController
     }
 
     /**
-     * `GET /admin/requests` — admin request queue SSR page (K.3, hub).
+     * `GET /admin/requests` — admin request queue SSR page.
      */
     public function adminRequests(Request $request): Response
     {

@@ -14,7 +14,6 @@ use Phlix\Hub\Http\Response;
  * API controller for invite link endpoints.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.6.0
  */
 final class InviteLinkController
 {

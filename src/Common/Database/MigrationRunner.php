@@ -23,7 +23,6 @@ use Workerman\MySQL\Connection;
  * patterns mean even an aborted earlier run is safe to re-execute.
  *
  * @package Phlix\Hub\Common\Database
- * @since 0.2.0
  */
 final class MigrationRunner
 {

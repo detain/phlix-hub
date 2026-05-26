@@ -20,7 +20,6 @@ use Phlix\Shared\Hub\HeartbeatDto;
  * DELETE /api/v1/servers/{id}             — server deregisters (enrollment JWT)
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.3.0
  */
 final class ServerController
 {

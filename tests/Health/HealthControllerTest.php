@@ -13,7 +13,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see HealthController}.
  *
  * @package Phlix\Hub\Tests\Health
- * @since 0.1.0
  *
  * @covers \Phlix\Hub\Health\HealthController
  */

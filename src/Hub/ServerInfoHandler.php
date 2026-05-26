@@ -11,7 +11,6 @@ use Workerman\MySQL\Connection;
  * Returns server info for hub dashboard and API consumers.
  *
  * @package Phlix\Hub\Hub
- * @since 0.3.0
  */
 class ServerInfoHandler
 {

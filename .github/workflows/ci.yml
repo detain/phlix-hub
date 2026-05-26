@@ -104,6 +104,15 @@ jobs:
       - name: Run PHPUnit
         run: ./vendor/bin/phpunit --colors=always
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          flags: phpunit
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
   composer-audit:
     name: Security Audit
     runs-on: ubuntu-latest

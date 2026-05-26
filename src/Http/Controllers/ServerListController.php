@@ -14,7 +14,6 @@ use Phlix\Hub\Http\Response;
  * `GET /api/v1/me/servers` — returns all servers owned by the user.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.4.0
  */
 final class ServerListController
 {

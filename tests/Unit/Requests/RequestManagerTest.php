@@ -14,7 +14,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see RequestManager}.
  *
  * @package Phlix\Hub\Tests\Unit\Requests
- * @since 0.6.0
  *
  * @covers \Phlix\Hub\Requests\RequestManager
  */

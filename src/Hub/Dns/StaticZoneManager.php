@@ -12,7 +12,6 @@ namespace Phlix\Hub\Hub\Dns;
  * be added later without changing the calling code.
  *
  * @package Phlix\Hub\Hub\Dns
- * @since 0.12.0
  */
 class StaticZoneManager
 {
@@ -34,7 +33,6 @@ class StaticZoneManager
      *
      * @return void
      *
-     * @since 0.12.0
      */
     public function addRecord(string $zone, string $name, string $type, string $value): void
     {
@@ -65,7 +63,6 @@ class StaticZoneManager
      *
      * @return void
      *
-     * @since 0.12.0
      */
     public function removeRecord(string $zone, string $name, string $type): void
     {
@@ -94,7 +91,6 @@ class StaticZoneManager
      *
      * @return void
      *
-     * @since 0.12.0
      */
     public function updateSoa(string $zone): void
     {

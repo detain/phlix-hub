@@ -17,7 +17,6 @@ use Phlix\Hub\Http\Response;
  * DELETE /api/v1/servers/{id}/subdomain  — revoke subdomain
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.12.0
  */
 final class SubdomainController
 {
@@ -44,7 +43,6 @@ final class SubdomainController
      *
      * @return Response
      *
-     * @since 0.12.0
      */
     public function allocate(Request $request, array $params): Response
     {
@@ -127,7 +125,6 @@ final class SubdomainController
      *
      * @return Response
      *
-     * @since 0.12.0
      */
     public function refreshCertificate(Request $request, array $params): Response
     {
@@ -166,7 +163,6 @@ final class SubdomainController
      *
      * @return Response
      *
-     * @since 0.12.0
      */
     public function revoke(Request $request, array $params): Response
     {

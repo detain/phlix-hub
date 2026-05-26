@@ -1,5 +1,5 @@
 -- migration: 011_media_requests
--- Step K.3 (hub): Jellyseerr-class media request UI.
+-- Jellyseerr-class media request UI.
 -- Stores user-submitted media requests (movies/series). When an admin
 -- approves a request, the hub talks to the relevant arr client
 -- (Sonarr/Radarr) via Phlix\Shared\Arr to actually pull the title.

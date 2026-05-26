@@ -8,7 +8,6 @@ namespace Phlix\Hub\Hub;
  * DTO representing an invite link for library sharing.
  *
  * @package Phlix\Hub\Hub
- * @since 0.6.0
  */
 final class InviteLink
 {

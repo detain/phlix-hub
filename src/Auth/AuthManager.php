@@ -28,7 +28,6 @@ use Workerman\MySQL\Connection;
  *    optional PSR-14 dispatcher.
  *
  * @package Phlix\Hub\Auth
- * @since 0.2.0
  */
 class AuthManager
 {
@@ -210,7 +209,7 @@ class AuthManager
      *
      * @param string $usernameOrEmail Either the username or the email — looked up against both indexes.
      * @param string $password        Plain password.
-     * @param string $deviceId        Opaque device/session identifier (Phase B has no formal session rows yet).
+     * @param string $deviceId        Opaque device/session identifier (no formal session rows yet).
      *
      * @return array{access_token:string,refresh_token:string,token_type:string,expires_in:int,user:array<string,mixed>,claims:array<string,mixed>}
      *
@@ -270,9 +269,9 @@ class AuthManager
     }
 
     /**
-     * Mark the user as logged out. B.7's MVP does NOT track refresh-token
-     * revocation server-side — see plan §4 step 5 (option A) — so this
-     * method only writes the audit + event entries.
+     * Mark the user as logged out. The hub does NOT track refresh-token
+     * revocation server-side, so this method only writes the audit and
+     * event entries.
      */
     public function logout(string $userId, string $sessionId, string $reason = UserLoggedOut::REASON_EXPLICIT): void
     {

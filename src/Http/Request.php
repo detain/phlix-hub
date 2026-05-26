@@ -20,7 +20,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  * codebases stay symmetrical.
  *
  * @package Phlix\Hub\Http
- * @since 0.1.0
  */
 class Request
 {
@@ -82,7 +81,6 @@ class Request
      *
      * @return self Populated request.
      *
-     * @since 0.1.0
      */
     public static function fromGlobals(): self
     {
@@ -134,7 +132,6 @@ class Request
      *
      * @return self Populated request.
      *
-     * @since 0.1.0
      */
     public static function fromWorkerman(WorkermanRequest $wr): self
     {

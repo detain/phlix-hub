@@ -12,7 +12,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see UserRepository}.
  *
  * @package Phlix\Hub\Tests\Unit\Auth
- * @since 0.2.0
  *
  * @covers \Phlix\Hub\Auth\UserRepository
  */

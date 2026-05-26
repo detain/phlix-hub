@@ -11,11 +11,10 @@ declare(strict_types=1);
  *
  *     php scripts/smoke-jwt-roundtrip.php
  *
- * This script is the post-condition smoke for Step B.7 — it proves the
+ * This script is a smoke test — it proves the
  * cross-repo `Phlix\Shared\Auth\JwtClaims` wire actually works.
  *
  * @package Phlix\Hub
- * @since 0.2.0
  */
 
 use Phlix\Hub\Auth\JwtHandler;

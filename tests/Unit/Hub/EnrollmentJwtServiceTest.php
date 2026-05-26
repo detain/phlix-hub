@@ -12,7 +12,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see EnrollmentJwtService}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- * @since 0.3.0
  *
  * @covers \Phlix\Hub\Hub\EnrollmentJwtService
  */

@@ -12,7 +12,6 @@ use RuntimeException;
  * Unit tests for {@see Ed25519KeyManager}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- * @since 0.3.0
  *
  * @covers \Phlix\Hub\Hub\Ed25519KeyManager
  */

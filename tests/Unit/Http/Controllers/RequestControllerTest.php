@@ -16,7 +16,6 @@ use Phlix\Hub\Requests\RequestNotification;
  * Unit tests for {@see RequestController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- * @since 0.6.0
  *
  * @covers \Phlix\Hub\Http\Controllers\RequestController
  */

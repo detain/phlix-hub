@@ -12,7 +12,6 @@ use PHPUnit\Framework\TestCase;
  * must declare InnoDB + utf8mb4, and must have balanced parentheses.
  *
  * @package Phlix\Hub\Tests\Unit\Migrations
- * @since 0.2.0
  */
 final class MigrationFileTest extends TestCase
 {

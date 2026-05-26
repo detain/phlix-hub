@@ -9,8 +9,8 @@ use RuntimeException;
 /**
  * Manages TLS certificates for server subdomains.
  *
- * NOTE: ACME (Let's Encrypt) automated provisioning advertised by Step
- * C.8 in CHANGELOG.md is NOT implemented in this build. Calling
+ * NOTE: ACME (Let's Encrypt) automated provisioning is NOT implemented
+ * in this build. Calling
  * {@see provisionCertificate()} or the underlying ACME challenge will
  * throw a {@see RuntimeException}. Operators must provision certs
  * out-of-band — see docs/hub-admin/tls.md.
@@ -21,7 +21,6 @@ use RuntimeException;
  * being lied to.
  *
  * @package Phlix\Hub\Hub
- * @since 0.12.0
  */
 class TlsCertificateManager
 {
@@ -79,7 +78,6 @@ class TlsCertificateManager
      *
      * @throws RuntimeException Always, with {@see NOT_IMPLEMENTED_MESSAGE}.
      *
-     * @since 0.12.0
      */
     public function provisionCertificate(string $subdomain): bool
     {
@@ -104,7 +102,6 @@ class TlsCertificateManager
      *
      * @return bool True if both cert files are present.
      *
-     * @since 0.12.0
      */
     public function isProvisioned(string $subdomain): bool
     {
@@ -120,7 +117,6 @@ class TlsCertificateManager
      *
      * @return string|null Full path to fullchain.pem or null if not provisioned.
      *
-     * @since 0.12.0
      */
     public function getCertificatePath(string $subdomain): ?string
     {
@@ -141,7 +137,6 @@ class TlsCertificateManager
      *
      * @return string|null Full path to privkey.pem or null if not provisioned.
      *
-     * @since 0.12.0
      */
     public function getPrivateKeyPath(string $subdomain): ?string
     {
@@ -180,7 +175,6 @@ class TlsCertificateManager
      *
      * @return bool True if certificate is missing or expires within RENEW_BEFORE_DAYS.
      *
-     * @since 0.12.0
      */
     public function needsRenewal(string $subdomain): bool
     {

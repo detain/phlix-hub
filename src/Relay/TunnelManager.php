@@ -23,7 +23,6 @@ use function time;
  *   - Tunnel lifecycle (close, reaper)
  *
  * @package Phlix\Hub\Relay
- * @since 0.5.0
  */
 final class TunnelManager implements TunnelManagerInterface
 {

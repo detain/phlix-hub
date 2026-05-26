@@ -20,7 +20,6 @@ use Psr\Container\ContainerInterface;
  * POST /api/v1/server-claims/claim  — user claims a server (auth required)
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.3.0
  */
 final class ServerClaimController
 {

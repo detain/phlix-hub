@@ -12,7 +12,6 @@ use Phlix\Hub\Hub\SharedLibraryDto;
  * Unit tests for {@see SharedLibraryDto}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- * @since 0.5.0
  *
  * @covers \Phlix\Hub\Hub\SharedLibraryDto
  */

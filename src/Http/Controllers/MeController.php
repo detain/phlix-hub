@@ -17,7 +17,6 @@ use Phlix\Hub\Http\Response;
  * are populated.
  *
  * @package Phlix\Hub\Http\Controllers
- * @since 0.2.0
  */
 final class MeController
 {

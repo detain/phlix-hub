@@ -17,7 +17,6 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
  * this class without changing controllers.
  *
  * @package Phlix\Hub\Requests
- * @since 0.6.0
  */
 class RequestNotification
 {

@@ -14,7 +14,6 @@ use BadMethodCallException;
  * with shared middleware.
  *
  * @package Phlix\Hub\Http
- * @since 0.1.0
  */
 class Router
 {
