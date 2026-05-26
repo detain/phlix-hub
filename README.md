@@ -157,14 +157,10 @@ These steps target **Ubuntu 22.04 / 24.04**. Run as a sudo-capable user.
 ### 1. System packages
 
 ```bash
-# PHP: use the version-agnostic php-* package names so this works across
-# Ubuntu releases (apt installs the distro's current PHP). On releases whose
-# default PHP is older than 8.3, add the ondrej PPA first to get a current PHP.
+# PHP: use the version-agnostic php-* package names so apt installs the
+# distro's current PHP. Ubuntu 24.04 ships PHP 8.3 by default, which meets
+# the Hub's requirement.
 sudo apt update
-sudo apt install -y software-properties-common
-sudo add-apt-repository -y ppa:ondrej/php
-sudo apt update
-
 sudo apt install -y \
   php-cli php-mysql php-mbstring php-curl \
   php-xml php-bcmath php-gd php-zip \
@@ -178,7 +174,8 @@ sudo mv composer.phar /usr/local/bin/composer
 ```
 
 > `pcntl`, `posix`, and `sodium` ship with the `php-cli` package on Ubuntu — verify with
-> `php -m | grep -E 'pcntl|posix|sodium'`.
+> `php -m | grep -E 'pcntl|posix|sodium'`. If your distro's default PHP is older than 8.3,
+> upgrade to Ubuntu 24.04 (or newer) rather than pulling in a third-party PHP build.
 
 ### 2. MySQL: database, user, and grants
 
