@@ -19,6 +19,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 - [Features](#features)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
+- [One-line install](#one-line-install)
 - [Quick start (development)](#quick-start-development)
 - [Production install on Ubuntu](#production-install-on-ubuntu)
   - [1. System packages](#1-system-packages)
@@ -102,6 +103,29 @@ Supporting pieces:
 - **Composer 2**
 - A POSIX host (Linux recommended; Workerman uses `pcntl`/`posix` for process management)
 
+## One-line install
+
+On a fresh Ubuntu/Debian host, [`scripts/install.sh`](scripts/install.sh) does everything in
+[Production install](#production-install-on-ubuntu) for you — system packages, MySQL database +
+user, code, env file, JWT secret, migrations, a systemd service, and an HAProxy reverse proxy
+with an auto-renewing Let's Encrypt certificate:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh | sudo bash
+```
+
+To set up HTTPS at the same time, pass your domain and an email for Let's Encrypt:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh \
+  | sudo bash -s -- --domain hub.example.com --admin-email you@example.com
+```
+
+The script prompts for the install path, database user/password, and hostname when run in a
+terminal (with sensible defaults), and runs **fully unattended** when piped or given `-y`. See
+`sudo bash scripts/install.sh --help` for every flag. Prefer to do it by hand? Follow the
+[step-by-step guide](#production-install-on-ubuntu) below.
+
 ## Quick start (development)
 
 ```bash
@@ -133,23 +157,27 @@ These steps target **Ubuntu 22.04 / 24.04**. Run as a sudo-capable user.
 ### 1. System packages
 
 ```bash
-# PHP 8.3 (use the ondrej PPA on releases that don't ship 8.3 by default)
+# PHP: use the version-agnostic php-* package names so this works across
+# Ubuntu releases (apt installs the distro's current PHP). On releases whose
+# default PHP is older than 8.3, add the ondrej PPA first to get a current PHP.
 sudo apt update
 sudo apt install -y software-properties-common
 sudo add-apt-repository -y ppa:ondrej/php
 sudo apt update
 
 sudo apt install -y \
-  php8.3-cli php8.3-mysql php8.3-mbstring php8.3-curl \
-  php8.3-xml php8.3-bcmath php8.3-gd php8.3-zip \
+  php-cli php-mysql php-mbstring php-curl \
+  php-xml php-bcmath php-gd php-zip \
   git unzip mysql-server
+
+php -v   # confirm PHP 8.3 or newer
 
 # Composer
 curl -sS https://getcomposer.org/installer | php
 sudo mv composer.phar /usr/local/bin/composer
 ```
 
-> `pcntl`, `posix`, and `sodium` ship with the `php8.3-cli` package on Ubuntu — verify with
+> `pcntl`, `posix`, and `sodium` ship with the `php-cli` package on Ubuntu — verify with
 > `php -m | grep -E 'pcntl|posix|sodium'`.
 
 ### 2. MySQL: database, user, and grants

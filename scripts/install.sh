@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+#
+# Phlix Hub one-shot installer for Ubuntu/Debian.
+#
+# Installs system packages, creates the MySQL database + user, fetches the
+# application code, writes the environment file, generates a JWT secret,
+# runs database migrations, installs a systemd service, and (optionally)
+# sets up an HAProxy reverse proxy with a Let's Encrypt certificate that
+# auto-renews monthly.
+#
+# Usage:
+#   sudo bash install.sh [options]
+#   curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh | sudo bash
+#
+# Run with --help for the full option list.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults (override via flags or interactive prompts)
+# ---------------------------------------------------------------------------
+REPO_URL="https://github.com/detain/phlix-hub.git"
+BRANCH="master"
+INSTALL_PATH="/opt/phlix-hub"
+SERVICE_USER="www-data"
+ENV_FILE="/etc/phlix-hub.env"
+SERVICE_FILE="/etc/systemd/system/phlix-hub.service"
+
+DB_HOST="127.0.0.1"
+DB_PORT="3306"
+DB_NAME="phlix_hub"
+DB_USER="phlix_hub"
+DB_PASS=""              # generated if empty
+
+HUB_PORT="8800"
+RELAY_PORT="8802"
+CLIENT_RELAY_PORT="8803"
+HUB_WORKERS="4"
+
+DOMAIN=""               # public hostname; enables TLS when set with --admin-email
+ADMIN_EMAIL=""          # Let's Encrypt registration email
+JWT_SECRET=""           # generated if empty
+
+WANT_TLS="auto"         # auto|yes|no
+INTERACTIVE="auto"      # auto|yes|no
+ASSUME_YES="no"
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+if [ -t 1 ]; then
+  C_BOLD=$'\033[1m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_RESET=$'\033[0m'
+else
+  C_BOLD=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_RESET=""
+fi
+log()  { printf '%s==>%s %s\n' "$C_GREEN$C_BOLD" "$C_RESET" "$*"; }
+info() { printf '    %s\n' "$*"; }
+warn() { printf '%s[warn]%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+die()  { printf '%s[error]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Usage
+# ---------------------------------------------------------------------------
+usage() {
+  cat <<'EOF'
+Phlix Hub installer
+
+Usage:
+  sudo bash install.sh [options]
+
+Options:
+  --install-path PATH     Where to install the code      (default: /opt/phlix-hub)
+  --domain HOST           Public hostname for the hub     (enables TLS with --admin-email)
+  --admin-email EMAIL     Email for Let's Encrypt registration
+  --db-name NAME          Database name to create         (default: phlix_hub)
+  --db-user USER          Database user to create         (default: phlix_hub)
+  --db-pass PASS          Database password               (default: random)
+  --db-host HOST          Database host                   (default: 127.0.0.1)
+  --db-port PORT          Database port                   (default: 3306)
+  --jwt-secret SECRET     JWT signing secret              (default: random 32-byte)
+  --service-user USER     System user to run as           (default: www-data)
+  --workers N             HTTP worker processes           (default: 4)
+  --branch NAME           Git branch to install           (default: master)
+  --repo URL              Git repository URL              (default: detain/phlix-hub)
+  --tls                   Force TLS / HAProxy + certbot setup
+  --no-tls                Skip TLS; HAProxy serves plain HTTP on :80
+  -y, --non-interactive   Never prompt; use defaults/flags (auto when no TTY)
+  --interactive           Force prompts even when piped
+  -h, --help              Show this help and exit
+
+Examples:
+  # Interactive install
+  sudo bash install.sh
+
+  # Fully unattended with TLS
+  sudo bash install.sh -y --domain hub.example.com --admin-email me@example.com
+
+  # One-liner (auto non-interactive; add flags for TLS)
+  curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh | sudo bash
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --install-path) INSTALL_PATH="$2"; shift 2;;
+    --domain)       DOMAIN="$2"; shift 2;;
+    --admin-email)  ADMIN_EMAIL="$2"; shift 2;;
+    --db-name)      DB_NAME="$2"; shift 2;;
+    --db-user)      DB_USER="$2"; shift 2;;
+    --db-pass)      DB_PASS="$2"; shift 2;;
+    --db-host)      DB_HOST="$2"; shift 2;;
+    --db-port)      DB_PORT="$2"; shift 2;;
+    --jwt-secret)   JWT_SECRET="$2"; shift 2;;
+    --service-user) SERVICE_USER="$2"; shift 2;;
+    --workers)      HUB_WORKERS="$2"; shift 2;;
+    --branch)       BRANCH="$2"; shift 2;;
+    --repo)         REPO_URL="$2"; shift 2;;
+    --tls)          WANT_TLS="yes"; shift;;
+    --no-tls)       WANT_TLS="no"; shift;;
+    -y|--non-interactive|--yes) INTERACTIVE="no"; ASSUME_YES="yes"; shift;;
+    --interactive)  INTERACTIVE="yes"; shift;;
+    -h|--help)      usage; exit 0;;
+    *) die "Unknown option: $1 (try --help)";;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Environment checks
+# ---------------------------------------------------------------------------
+[ "$(id -u)" -eq 0 ] || die "Please run as root (e.g. with sudo)."
+command -v apt-get >/dev/null 2>&1 || die "This installer targets Ubuntu/Debian (apt-get not found)."
+
+# Decide interactivity: explicit flag wins, otherwise auto-detect a TTY on stdin.
+if [ "$INTERACTIVE" = "auto" ]; then
+  if [ -t 0 ]; then INTERACTIVE="yes"; else INTERACTIVE="no"; fi
+fi
+
+prompt() {
+  # prompt VAR "message" "default"
+  local __var="$1" __msg="$2" __def="$3" __ans=""
+  if [ "$INTERACTIVE" = "yes" ] && [ -e /dev/tty ]; then
+    read -r -p "$__msg [$__def]: " __ans </dev/tty || true
+  fi
+  printf -v "$__var" '%s' "${__ans:-$__def}"
+}
+
+confirm() {
+  # confirm "message" -> returns 0 for yes
+  [ "$ASSUME_YES" = "yes" ] && return 0
+  [ "$INTERACTIVE" = "yes" ] && [ -e /dev/tty ] || return 0
+  local __ans=""
+  read -r -p "$1 [Y/n]: " __ans </dev/tty || true
+  case "${__ans:-y}" in [Nn]*) return 1;; *) return 0;; esac
+}
+
+rand_hex() { openssl rand -hex "${1:-32}"; }
+rand_pass() { openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24; }
+
+# ---------------------------------------------------------------------------
+# Gather configuration
+# ---------------------------------------------------------------------------
+log "Phlix Hub installer"
+[ "$INTERACTIVE" = "yes" ] && info "Interactive mode — press Enter to accept each default." \
+                           || info "Non-interactive mode — using defaults/flags."
+
+prompt INSTALL_PATH "Install path" "$INSTALL_PATH"
+prompt DB_NAME      "Database name" "$DB_NAME"
+prompt DB_USER      "Database user" "$DB_USER"
+if [ -z "$DB_PASS" ]; then
+  if [ "$INTERACTIVE" = "yes" ]; then
+    prompt DB_PASS "Database password (blank = generate random)" ""
+  fi
+  [ -z "$DB_PASS" ] && DB_PASS="$(rand_pass)" && info "Generated a random database password."
+fi
+prompt DOMAIN "Public hostname (blank = no TLS, serve plain HTTP)" "$DOMAIN"
+
+if [ -n "$DOMAIN" ] && [ "$WANT_TLS" != "no" ]; then
+  prompt ADMIN_EMAIL "Email for Let's Encrypt (blank = skip TLS)" "$ADMIN_EMAIL"
+fi
+
+# Resolve final TLS decision.
+if [ "$WANT_TLS" = "yes" ]; then
+  [ -n "$DOMAIN" ] && [ -n "$ADMIN_EMAIL" ] || die "--tls requires --domain and --admin-email."
+  TLS_ENABLED="yes"
+elif [ "$WANT_TLS" = "no" ]; then
+  TLS_ENABLED="no"
+else
+  if [ -n "$DOMAIN" ] && [ -n "$ADMIN_EMAIL" ]; then TLS_ENABLED="yes"; else TLS_ENABLED="no"; fi
+fi
+
+# Public domain for the env file (used to build per-server subdomains).
+PUBLIC_DOMAIN="${DOMAIN:-$(hostname -f 2>/dev/null || hostname)}"
+[ -n "$JWT_SECRET" ] || JWT_SECRET="$(rand_hex 32)"
+
+echo
+log "Configuration summary"
+info "Install path : $INSTALL_PATH"
+info "Service user : $SERVICE_USER"
+info "Database     : $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
+info "Public domain: $PUBLIC_DOMAIN"
+info "HTTP port    : $HUB_PORT  (relay $RELAY_PORT, client-relay $CLIENT_RELAY_PORT)"
+info "TLS / HAProxy: $TLS_ENABLED"
+echo
+confirm "Proceed with installation?" || die "Aborted by user."
+
+# ---------------------------------------------------------------------------
+# 1. System packages
+# ---------------------------------------------------------------------------
+log "Installing system packages"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+# software-properties-common gives us add-apt-repository for the PHP PPA.
+apt-get install -y software-properties-common ca-certificates curl git unzip openssl >/dev/null
+# The ondrej PPA provides a current PHP on releases whose default is older
+# than 8.3. Version-agnostic php-* names then resolve to that current PHP.
+if ! grep -rq "ondrej/php" /etc/apt/sources.list.d 2>/dev/null; then
+  add-apt-repository -y ppa:ondrej/php >/dev/null 2>&1 || warn "Could not add ondrej PPA (continuing with distro PHP)."
+  apt-get update -y
+fi
+apt-get install -y \
+  php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip \
+  mysql-server >/dev/null
+[ "$TLS_ENABLED" = "yes" ] && apt-get install -y haproxy certbot >/dev/null || apt-get install -y haproxy >/dev/null
+
+PHP_VER="$(php -r 'echo PHP_VERSION;')"
+case "$PHP_VER" in
+  8.3*|8.4*|8.5*|9.*) info "PHP $PHP_VER OK";;
+  *) warn "PHP $PHP_VER detected — Phlix Hub requires 8.3+. Install may not run correctly.";;
+esac
+
+# Composer
+if ! command -v composer >/dev/null 2>&1; then
+  log "Installing Composer"
+  curl -fsSL https://getcomposer.org/installer -o /tmp/composer-setup.php
+  php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer >/dev/null
+  rm -f /tmp/composer-setup.php
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Application code
+# ---------------------------------------------------------------------------
+log "Fetching application code into $INSTALL_PATH"
+if [ -d "$INSTALL_PATH/.git" ]; then
+  git -C "$INSTALL_PATH" fetch --depth 1 origin "$BRANCH"
+  git -C "$INSTALL_PATH" checkout "$BRANCH"
+  git -C "$INSTALL_PATH" reset --hard "origin/$BRANCH"
+else
+  mkdir -p "$INSTALL_PATH"
+  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_PATH"
+fi
+
+log "Installing PHP dependencies"
+( cd "$INSTALL_PATH" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction )
+mkdir -p "$INSTALL_PATH/.logs"
+id -u "$SERVICE_USER" >/dev/null 2>&1 || die "Service user '$SERVICE_USER' does not exist."
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
+
+# ---------------------------------------------------------------------------
+# 3. Database
+# ---------------------------------------------------------------------------
+log "Configuring MySQL database and user"
+systemctl enable --now mysql >/dev/null 2>&1 || systemctl enable --now mysqld >/dev/null 2>&1 || true
+# Runs as root via the local socket. Idempotent.
+mysql <<SQL
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';
+ALTER USER '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${DB_HOST}';
+FLUSH PRIVILEGES;
+SQL
+
+# ---------------------------------------------------------------------------
+# 4. Environment file
+# ---------------------------------------------------------------------------
+log "Writing environment file $ENV_FILE"
+cat > "$ENV_FILE" <<EOF
+# Phlix Hub environment — generated by install.sh on $(date -u +%FT%TZ)
+HUB_HOST=0.0.0.0
+HUB_PORT=${HUB_PORT}
+HUB_WORKERS=${HUB_WORKERS}
+HUB_PUBLIC_DOMAIN=${PUBLIC_DOMAIN}
+
+HUB_DB_HOST=${DB_HOST}
+HUB_DB_PORT=${DB_PORT}
+HUB_DB_NAME=${DB_NAME}
+HUB_DB_USER=${DB_USER}
+HUB_DB_PASSWORD=${DB_PASS}
+
+HUB_JWT_SECRET=${JWT_SECRET}
+EOF
+chmod 600 "$ENV_FILE"
+chown root:root "$ENV_FILE"
+
+# ---------------------------------------------------------------------------
+# 5. Database migrations
+# ---------------------------------------------------------------------------
+log "Running database migrations"
+HUB_DB_HOST="$DB_HOST" HUB_DB_PORT="$DB_PORT" HUB_DB_NAME="$DB_NAME" \
+HUB_DB_USER="$DB_USER" HUB_DB_PASSWORD="$DB_PASS" \
+  php "$INSTALL_PATH/scripts/run-migrations.php"
+
+# ---------------------------------------------------------------------------
+# 6. systemd service
+# ---------------------------------------------------------------------------
+log "Installing systemd service"
+cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Phlix Hub
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
+EnvironmentFile=${ENV_FILE}
+WorkingDirectory=${INSTALL_PATH}
+ExecStart=/usr/bin/php ${INSTALL_PATH}/public/index.php start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now phlix-hub
+sleep 2
+systemctl is-active --quiet phlix-hub && info "phlix-hub service is running." \
+                                       || warn "phlix-hub service did not start — check 'journalctl -u phlix-hub'."
+
+# ---------------------------------------------------------------------------
+# 7. Reverse proxy (HAProxy) + TLS (certbot)
+# ---------------------------------------------------------------------------
+write_haproxy_cfg() {
+  # $1 = "tls" | "http"
+  local mode="$1"
+  [ -f /etc/haproxy/haproxy.cfg ] && cp -n /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.phlix.bak || true
+  {
+    cat <<'GLOBAL'
+global
+    log /dev/log local0
+    maxconn 4096
+    tune.ssl.default-dh-param 2048
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  forwardfor
+    timeout connect 5s
+    timeout client  1h
+    timeout server  1h
+    timeout tunnel  1h
+GLOBAL
+    if [ "$mode" = "tls" ]; then
+      cat <<TLSFE
+frontend fe_http
+    bind :80
+    redirect scheme https code 301
+frontend fe_https
+    bind :443 ssl crt /etc/haproxy/certs/${DOMAIN}.pem
+    http-request set-header X-Forwarded-Proto https
+    use_backend be_client_relay if { path_beg /client/ }
+    default_backend be_hub
+TLSFE
+    else
+      cat <<HTTPFE
+frontend fe_http
+    bind :80
+    use_backend be_client_relay if { path_beg /client/ }
+    default_backend be_hub
+HTTPFE
+    fi
+    cat <<BACKEND
+backend be_hub
+    server hub 127.0.0.1:${HUB_PORT}
+backend be_client_relay
+    server clientrelay 127.0.0.1:${CLIENT_RELAY_PORT}
+BACKEND
+  } > /etc/haproxy/haproxy.cfg
+}
+
+if [ "$TLS_ENABLED" = "yes" ]; then
+  log "Obtaining TLS certificate for $DOMAIN via certbot"
+  mkdir -p /etc/haproxy/certs
+  systemctl stop haproxy >/dev/null 2>&1 || true
+  if certbot certonly --standalone --non-interactive --agree-tos \
+        -m "$ADMIN_EMAIL" -d "$DOMAIN" --keep-until-expiring; then
+    cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
+        "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" > "/etc/haproxy/certs/${DOMAIN}.pem"
+    chmod 600 "/etc/haproxy/certs/${DOMAIN}.pem"
+
+    # Deploy hook: rebuild combined PEM + reload HAProxy after each renewal.
+    mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+    cat > /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh <<HOOK
+#!/bin/sh
+cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \\
+    "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" > "/etc/haproxy/certs/${DOMAIN}.pem"
+chmod 600 "/etc/haproxy/certs/${DOMAIN}.pem"
+systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
+HOOK
+    chmod +x /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
+
+    # Monthly auto-renewal (1st of the month, 03:00). certbot only renews when
+    # the certificate is near expiry; HAProxy is stopped briefly for the
+    # standalone challenge, then the deploy hook rebuilds the PEM and reloads.
+    cat > /etc/cron.d/phlix-hub-certbot <<CRON
+# Phlix Hub: monthly Let's Encrypt renewal
+0 3 1 * * root certbot renew --quiet --pre-hook "systemctl stop haproxy" --post-hook "systemctl start haproxy" --deploy-hook /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
+CRON
+
+    write_haproxy_cfg tls
+  else
+    warn "certbot failed (is DNS for $DOMAIN pointed here and port 80 reachable?). Falling back to plain HTTP."
+    TLS_ENABLED="no"
+    write_haproxy_cfg http
+  fi
+else
+  log "Configuring HAProxy (plain HTTP)"
+  write_haproxy_cfg http
+fi
+
+haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 || die "HAProxy config validation failed."
+systemctl enable haproxy >/dev/null 2>&1 || true
+systemctl restart haproxy
+
+# Best-effort firewall openings.
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+  for p in 80 443 "$RELAY_PORT"; do ufw allow "$p"/tcp >/dev/null 2>&1 || true; done
+  info "Opened ports 80, 443, and $RELAY_PORT in ufw."
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Done
+# ---------------------------------------------------------------------------
+echo
+log "Phlix Hub installation complete"
+if [ "$TLS_ENABLED" = "yes" ]; then
+  info "URL          : https://${DOMAIN}/"
+  info "Health check : curl https://${DOMAIN}/health"
+else
+  info "URL          : http://${PUBLIC_DOMAIN}/  (or http://<server-ip>/)"
+  info "Health check : curl http://localhost:${HUB_PORT}/health"
+  [ -n "$DOMAIN" ] || info "Re-run with --domain and --admin-email to enable HTTPS."
+fi
+info "Service      : systemctl status phlix-hub"
+info "Env file     : ${ENV_FILE}  (HUB_JWT_SECRET + DB password stored here)"
+info "Database pass : ${DB_PASS}"
+echo
+info "Next: open the URL and create the first account at /signup — it is"
+info "automatically promoted to admin."
