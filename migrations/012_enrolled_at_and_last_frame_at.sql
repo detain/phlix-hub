@@ -17,17 +17,15 @@
 --     migration have no activity data; the application treats NULL
 --     as "no frames yet".
 --
--- `ADD COLUMN IF NOT EXISTS` keeps this re-runnable even though the
--- MigrationRunner tracking table already guards against double-apply,
--- and (more importantly) tolerates environments where a DBA has
--- already hand-patched `enrolled_at` to unblock migration 007.
+-- Idempotency is provided by the MigrationRunner tracking table; plain
+-- `ADD COLUMN` keeps the SQL portable across MySQL 8 and MariaDB.
 
 ALTER TABLE servers
-    ADD COLUMN IF NOT EXISTS enrolled_at INT UNSIGNED NULL AFTER last_seen_at;
+    ADD COLUMN enrolled_at INT UNSIGNED NULL AFTER last_seen_at;
 
 UPDATE servers
    SET enrolled_at = UNIX_TIMESTAMP(created_at)
  WHERE enrolled_at IS NULL;
 
 ALTER TABLE relay_sessions
-    ADD COLUMN IF NOT EXISTS last_frame_at INT UNSIGNED NULL AFTER bytes_out;
+    ADD COLUMN last_frame_at INT UNSIGNED NULL AFTER bytes_out;

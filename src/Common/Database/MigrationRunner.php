@@ -19,8 +19,11 @@ use Workerman\MySQL\Connection;
  *
  * Each `.sql` file may contain multiple statements separated by `;`.
  * Single-line `--` comments and blank lines are stripped before
- * splitting. `CREATE TABLE IF NOT EXISTS` / `ALTER ... IF NOT EXISTS`
- * patterns mean even an aborted earlier run is safe to re-execute.
+ * splitting. The tracking table is the sole idempotency mechanism;
+ * migrations themselves use plain MySQL 8 / MariaDB-portable DDL
+ * (e.g. `CREATE TABLE IF NOT EXISTS` for tables, plain `ALTER` for
+ * column/index changes — MariaDB's `ADD COLUMN IF NOT EXISTS` is
+ * not portable to MySQL 8).
  *
  * @package Phlix\Hub\Common\Database
  */
