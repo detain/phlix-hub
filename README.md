@@ -129,6 +129,33 @@ terminal (with sensible defaults), and runs **fully unattended** when piped or g
 `sudo bash scripts/install.sh --help` for every flag. Prefer to do it by hand? Follow the
 [step-by-step guide](#production-install-on-ubuntu) below.
 
+### Install flags
+
+`sudo bash scripts/install.sh --help` lists every option. The most useful:
+
+| Flag | Effect |
+|---|---|
+| `--domain HOST` | Public hostname for the hub (enables TLS when paired with `--admin-email`) |
+| `--admin-email EMAIL` | Email registered with Let's Encrypt |
+| `--db-name`, `--db-user`, `--db-pass`, `--db-host`, `--db-port` | MySQL identity (random password if `--db-pass` omitted) |
+| `--jwt-secret SECRET` | HMAC secret used to sign JWTs (random 32-byte hex if omitted) |
+| `--service-user USER` | System user to run as (default `phlix-hub` — dedicated system account, created if missing) |
+| `--workers N` | HTTP worker processes (default 4) |
+| `--branch NAME` | Git branch or tag to install (default `master`) |
+| `--repo URL` | Git repository URL (default `detain/phlix-hub`) |
+| `--tls` / `--no-tls` | Force or skip Let's Encrypt + HAProxy TLS |
+| `--no-proxy` | Skip the managed HAProxy entirely (use your own reverse proxy) |
+| `--update` | Pull new code + run migrations on an existing install (preserves env + secrets) |
+| `--uninstall` | Remove the install — interactive prompts before each destructive step |
+| `--purge` | With `--uninstall`, also drop the DB, delete the Let's Encrypt cert, and remove the dedicated system user |
+| `-y`, `--non-interactive` | Never prompt; use defaults/flags |
+| `--interactive` | Force prompts even when piped |
+
+> Default service user changed from `www-data` to `phlix-hub` so the hub runs under
+> its own dedicated system account, isolated from the apache/nginx-owned `www-data`.
+> Existing installs that were created on `www-data` keep running on `www-data` —
+> `--update` reads `User=` from the systemd unit rather than rewriting it.
+
 ## Updating an existing install
 
 The same `scripts/install.sh` updates an in-place install **without rotating any secrets**. It
@@ -194,16 +221,22 @@ Piped, non-interactive runs require an explicit `-y` to proceed.
 What it removes, only if it finds them:
 
 1. The `phlix-hub` systemd service — `stop`, `disable`, remove the unit, `daemon-reload`.
-2. HAProxy config — if `/etc/haproxy/haproxy.cfg.phlix.bak` exists (the pre-install snapshot),
-   it is **restored over** the current config and HAProxy reloaded. Otherwise the script warns
-   that the current config still references Phlix backends and leaves it alone.
+2. HAProxy fragment at `/etc/haproxy/phlix-managed/phlix-hub.cfg.fragment`, and
+   `/etc/haproxy/haproxy.cfg` is rebuilt. If phlix-server is still installed, its frontend
+   and backend stay. If phlix-hub was the last Phlix project, the pre-Phlix snapshot at
+   `/etc/haproxy/haproxy.cfg.pre-phlix.bak` is restored (or `haproxy.cfg` is removed and
+   haproxy is stopped + disabled if no snapshot exists).
 3. The combined PEM at `/etc/haproxy/certs/<domain>.pem`.
 4. `/etc/cron.d/phlix-hub-certbot` and `/etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh`.
 5. The Let's Encrypt cert via `certbot delete --cert-name <domain>` — only with `--purge` or
    interactive confirmation.
 6. The MySQL database and dedicated user — only with `--purge` or interactive confirmation.
 7. The install directory (`rm -rf`, with a denylist of system paths like `/`, `/etc`, `/opt`).
-8. `/etc/phlix-hub.env` (last, since the DB credentials are read from it earlier).
+8. `/etc/phlix-hub.env` (env file).
+9. The dedicated system user (`phlix-hub` or whatever `User=` the systemd unit was using) via
+   `userdel` — only with `--purge` or interactive confirmation. Refuses to touch shared OS
+   accounts (`www-data`, `root`, `daemon`, etc.). Cross-detects phlix-server's systemd unit
+   and refuses to remove a user that's still being used by the sibling service.
 
 System packages (`php-*`, `mysql-server`, `haproxy`, `certbot`) and `ufw` rules are left in
 place — uninstall them yourself with `apt remove` / `ufw delete` if you no longer need them.

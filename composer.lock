@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "07e1f60afb099b1fc501e34b0c2cf270",
+    "content-hash": "e1da25f46dc4e30ca26e570c7a438bc5",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -284,16 +284,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "0.5.1",
+            "version": "0.6.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "482becf7ab583eba1ea7c725d627fcf4cf7c8a28"
+                "reference": "9c508b89fa042b263e0961e74e3e87e7fc3f0fa6"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/482becf7ab583eba1ea7c725d627fcf4cf7c8a28",
-                "reference": "482becf7ab583eba1ea7c725d627fcf4cf7c8a28",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/9c508b89fa042b263e0961e74e3e87e7fc3f0fa6",
+                "reference": "9c508b89fa042b263e0961e74e3e87e7fc3f0fa6",
                 "shasum": ""
             },
             "require": {
@@ -339,10 +339,10 @@
             ],
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O.",
             "support": {
-                "source": "https://github.com/detain/phlix-shared/tree/v0.5.1",
+                "source": "https://github.com/detain/phlix-shared/tree/v0.6.0",
                 "issues": "https://github.com/detain/phlix-shared/issues"
             },
-            "time": "2026-05-25T15:40:43+00:00"
+            "time": "2026-05-26T21:58:07+00:00"
         },
         {
             "name": "fig/event-dispatcher-util",
