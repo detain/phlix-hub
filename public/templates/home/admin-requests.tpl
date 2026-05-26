@@ -17,6 +17,8 @@
 {/block}
 
 {block name="scripts"}
+{* Smarty treats `{...}` as a tag, which breaks JS object literals below. *}
+{literal}
 <script>
 (function () {
     'use strict';
@@ -110,4 +112,5 @@
     loadAdminRequests();
 }());
 </script>
+{/literal}
 {/block}

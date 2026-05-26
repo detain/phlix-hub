@@ -24,6 +24,7 @@ use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
+use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
@@ -195,7 +196,10 @@ final class Application
             });
         }, [$authMiddleware]);
 
-        // Admin queue + actions.
+        // Admin queue + actions. Gated by AdminMiddleware in addition to the
+        // controller's own requireAdmin() so the group is protected even if a
+        // future handler in this group forgets the inline check.
+        $adminMiddleware = $this->resolveAdminMiddleware();
         $this->router->group('/api/v1/admin/requests', static function (Router $r) use ($requestController): void {
             $r->get('', static function (Request $req, array $params) use ($requestController): Response {
                 /** @var array<string, string> $typedParams */
@@ -212,7 +216,16 @@ final class Application
                 $typedParams = $params;
                 return $requestController->denyRequest($req, $typedParams);
             });
-        }, [$authMiddleware]);
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    private function resolveAdminMiddleware(): AdminMiddleware
+    {
+        $middleware = $this->container->get(AdminMiddleware::class);
+        if (!$middleware instanceof AdminMiddleware) {
+            throw new \RuntimeException('Container returned an unexpected AdminMiddleware instance');
+        }
+        return $middleware;
     }
 
     private function resolveRequestController(): RequestController

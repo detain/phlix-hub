@@ -7,6 +7,7 @@ namespace Phlix\Hub\Http\Controllers;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -27,12 +28,41 @@ final class PageController
      * @param PageRenderer     $renderer    Smarty wrapper.
      * @param AuthManager      $auth        Used to load the user record on protected pages.
      * @param ServerInfoHandler $serverInfo Used to fetch the user's servers for the dashboard.
+     * @param AdminMiddleware  $admin       Reused to gate the SSR admin pages (its
+     *                                      `checkAccess()` helper performs the same
+     *                                      check + audit log as the API gate).
      */
     public function __construct(
         private readonly PageRenderer $renderer,
         private readonly AuthManager $auth,
         private readonly ServerInfoHandler $serverInfo,
+        private readonly AdminMiddleware $admin,
     ) {
+    }
+
+    /**
+     * Common variables every layout-aware template needs.
+     *
+     * Reads `$request->user` (populated by {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}),
+     * so this is silently `is_authenticated = false, is_admin = false` on
+     * pages that aren't gated by AuthMiddleware (`/`, `/signup`, `/login`).
+     *
+     * @return array{is_authenticated: bool, is_admin: bool}
+     */
+    private function layoutContext(Request $request): array
+    {
+        $user = $request->user ?? [];
+        $isAuthenticated = ($request->userId ?? '') !== '';
+        /** @var mixed $flag */
+        $flag = $user['is_admin'] ?? null;
+        // The MySQL driver may return TINYINT(1) as either 1 or "1" depending
+        // on the connection mode, so accept both (and a real boolean).
+        $isAdmin = $isAuthenticated
+            && ($flag === 1 || $flag === '1' || $flag === true);
+        return [
+            'is_authenticated' => $isAuthenticated,
+            'is_admin'         => $isAdmin,
+        ];
     }
 
     /**
@@ -57,9 +87,7 @@ final class PageController
      */
     public function home(Request $request): Response
     {
-        $html = $this->renderer->render('home/index.tpl', [
-            'is_authenticated' => $request->userId !== null,
-        ]);
+        $html = $this->renderer->render('home/index.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 
@@ -71,6 +99,7 @@ final class PageController
         $html = $this->renderer->render('auth/signup.tpl', [
             'username' => '',
             'email'    => '',
+            ...$this->layoutContext($request),
         ]);
         return (new Response())->html($html);
     }
@@ -82,6 +111,7 @@ final class PageController
     {
         $html = $this->renderer->render('auth/login.tpl', [
             'username' => '',
+            ...$this->layoutContext($request),
         ]);
         return (new Response())->html($html);
     }
@@ -107,6 +137,7 @@ final class PageController
         $html = $this->renderer->render('home/my-servers.tpl', [
             'user'    => $user ?? [],
             'servers' => $servers,
+            ...$this->layoutContext($request),
         ]);
         return (new Response())->html($html);
     }
@@ -117,7 +148,7 @@ final class PageController
      */
     public function claimServer(Request $request): Response
     {
-        $html = $this->renderer->render('home/claim-server.tpl', []);
+        $html = $this->renderer->render('home/claim-server.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 
@@ -126,20 +157,36 @@ final class PageController
      */
     public function requests(Request $request): Response
     {
-        $html = $this->renderer->render('home/requests.tpl', [
-            'is_authenticated' => $request->userId !== null,
-        ]);
+        $html = $this->renderer->render('home/requests.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 
     /**
      * `GET /admin/requests` — admin request queue SSR page.
+     *
+     * Reuses {@see AdminMiddleware::checkAccess()} so the SSR gate behaves
+     * identically to the API gate (same DB lookup, same audit-log entry on
+     * denial). Renders an HTML 403 with a link back to the dashboard rather
+     * than the middleware's JSON 403 response, since the visitor here is a
+     * browser, not an API client.
      */
     public function adminRequests(Request $request): Response
     {
-        $html = $this->renderer->render('home/admin-requests.tpl', [
-            'is_authenticated' => $request->userId !== null,
-        ]);
+        $status = $this->admin->checkAccess($request);
+        if ($status === 403) {
+            return (new Response())
+                ->html(
+                    '<h1>Forbidden</h1>'
+                    . '<p>You need admin access to view the request queue.</p>'
+                    . '<p><a href="/my-servers">Back to my servers</a></p>',
+                    403,
+                );
+        }
+        // $status === 401 cannot happen here in practice: the route is mounted
+        // behind AuthMiddleware, which redirects unauthenticated visitors to
+        // /login before this handler runs.
+
+        $html = $this->renderer->render('home/admin-requests.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 }

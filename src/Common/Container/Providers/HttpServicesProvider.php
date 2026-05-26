@@ -65,8 +65,9 @@ final class HttpServicesProvider implements ServiceProviderInterface
                 PageRenderer $renderer,
                 AuthManager $auth,
                 ServerInfoHandler $serverInfo,
+                AdminMiddleware $admin,
             ): PageController {
-                return new PageController($renderer, $auth, $serverInfo);
+                return new PageController($renderer, $auth, $serverInfo, $admin);
             }),
 
             MeController::class => factory(static function (
