@@ -44,6 +44,8 @@ JWT_SECRET=""           # generated if empty
 WANT_TLS="auto"         # auto|yes|no
 INTERACTIVE="auto"      # auto|yes|no
 ASSUME_YES="no"
+ACTION="install"        # install|uninstall
+PURGE="no"              # uninstall: also drop the DB and delete the Let's Encrypt cert
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -84,6 +86,10 @@ Options:
   --repo URL              Git repository URL              (default: detain/phlix-hub)
   --tls                   Force TLS / HAProxy + certbot setup
   --no-tls                Skip TLS; HAProxy serves plain HTTP on :80
+  --uninstall             Remove an existing (possibly partial) install
+                          (prompts before each destructive step)
+  --purge                 With --uninstall, also DROP the database and DELETE
+                          the Let's Encrypt certificate (data loss)
   -y, --non-interactive   Never prompt; use defaults/flags (auto when no TTY)
   --interactive           Force prompts even when piped
   -h, --help              Show this help and exit
@@ -97,6 +103,12 @@ Examples:
 
   # One-liner (auto non-interactive; add flags for TLS)
   curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh | sudo bash
+
+  # Interactive uninstall (keeps DB + cert unless you confirm each)
+  sudo bash install.sh --uninstall
+
+  # Fully unattended uninstall, including DB drop and cert deletion
+  sudo bash install.sh --uninstall --purge -y
 EOF
 }
 
@@ -120,6 +132,8 @@ while [ $# -gt 0 ]; do
     --repo)         REPO_URL="$2"; shift 2;;
     --tls)          WANT_TLS="yes"; shift;;
     --no-tls)       WANT_TLS="no"; shift;;
+    --uninstall)    ACTION="uninstall"; shift;;
+    --purge)        PURGE="yes"; ACTION="uninstall"; shift;;
     -y|--non-interactive|--yes) INTERACTIVE="no"; ASSUME_YES="yes"; shift;;
     --interactive)  INTERACTIVE="yes"; shift;;
     -h|--help)      usage; exit 0;;
@@ -158,6 +172,218 @@ confirm() {
 
 rand_hex() { openssl rand -hex "${1:-32}"; }
 rand_pass() { openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24; }
+
+# ---------------------------------------------------------------------------
+# Uninstall
+# ---------------------------------------------------------------------------
+do_uninstall() {
+  log "Phlix Hub uninstaller"
+
+  # Prefer the install path recorded in the systemd unit (the operator may
+  # have used a non-default --install-path on the original run). An explicit
+  # --install-path flag on this invocation overrides everything.
+  local svc_workdir=""
+  if [ -f "$SERVICE_FILE" ] && [ "$INSTALL_PATH" = "/opt/phlix-hub" ]; then
+    svc_workdir="$(awk -F= '/^WorkingDirectory=/{print $2; exit}' "$SERVICE_FILE" 2>/dev/null || true)"
+    [ -n "$svc_workdir" ] && INSTALL_PATH="$svc_workdir"
+  fi
+
+  # Pull DB / domain details from the env file when present so we can clean
+  # up matching MySQL grants and HAProxy/Let's Encrypt artefacts.
+  local env_db_name="" env_db_user="" env_db_host="" env_domain=""
+  if [ -f "$ENV_FILE" ]; then
+    env_db_name="$(awk -F= '/^HUB_DB_NAME=/{print $2; exit}' "$ENV_FILE")"
+    env_db_user="$(awk -F= '/^HUB_DB_USER=/{print $2; exit}' "$ENV_FILE")"
+    env_db_host="$(awk -F= '/^HUB_DB_HOST=/{print $2; exit}' "$ENV_FILE")"
+    env_domain="$(awk -F= '/^HUB_PUBLIC_DOMAIN=/{print $2; exit}'  "$ENV_FILE")"
+  fi
+  # Flags win over env values; otherwise use the env value (then defaults).
+  local U_DB_NAME="${env_db_name:-$DB_NAME}"
+  local U_DB_USER="${env_db_user:-$DB_USER}"
+  local U_DB_HOST="${env_db_host:-$DB_HOST}"
+  local U_DOMAIN="${DOMAIN:-$env_domain}"
+
+  # Detect artefacts.
+  local found=0
+  local svc="" envf="" instdir=""
+  local hapcfg_bak="" hapcert="" hapcfg_modified="no"
+  local cron="" hook="" le_dir=""
+  [ -f "$SERVICE_FILE" ] && svc="$SERVICE_FILE" && found=1
+  [ -f "$ENV_FILE" ]     && envf="$ENV_FILE"   && found=1
+  [ -d "$INSTALL_PATH" ] && instdir="$INSTALL_PATH" && found=1
+  [ -f /etc/haproxy/haproxy.cfg.phlix.bak ] \
+      && hapcfg_bak="/etc/haproxy/haproxy.cfg.phlix.bak" && found=1
+  if [ -n "$U_DOMAIN" ] && [ -f "/etc/haproxy/certs/${U_DOMAIN}.pem" ]; then
+    hapcert="/etc/haproxy/certs/${U_DOMAIN}.pem"; found=1
+  fi
+  [ -f /etc/cron.d/phlix-hub-certbot ] \
+      && cron="/etc/cron.d/phlix-hub-certbot" && found=1
+  [ -f /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh ] \
+      && hook="/etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh" && found=1
+  if [ -n "$U_DOMAIN" ] && [ -d "/etc/letsencrypt/live/${U_DOMAIN}" ]; then
+    le_dir="/etc/letsencrypt/live/${U_DOMAIN}"; found=1
+  fi
+  # HAProxy config we wrote but for which no backup was preserved (i.e.
+  # haproxy was unconfigured before install): leave it but warn.
+  if [ -z "$hapcfg_bak" ] && [ -f /etc/haproxy/haproxy.cfg ] \
+     && grep -qE 'be_hub|be_client_relay' /etc/haproxy/haproxy.cfg; then
+    hapcfg_modified="yes"; found=1
+  fi
+
+  # Database lookup is best-effort: requires mysql client + running server.
+  local has_db="no"
+  if [ -n "$U_DB_NAME" ] && command -v mysql >/dev/null 2>&1; then
+    if mysql -N -e "SHOW DATABASES LIKE '${U_DB_NAME}';" 2>/dev/null \
+         | grep -qx "${U_DB_NAME}"; then
+      has_db="yes"; found=1
+    fi
+  fi
+
+  if [ "$found" -eq 0 ]; then
+    info "No Phlix Hub artefacts found — nothing to uninstall."
+    return 0
+  fi
+
+  echo
+  log "Found the following Phlix Hub artefacts:"
+  [ -n "$svc" ]                  && info " - systemd service      : $svc"
+  [ -n "$envf" ]                 && info " - environment file     : $envf"
+  [ -n "$instdir" ]              && info " - install directory    : $instdir"
+  [ "$has_db" = "yes" ]          && info " - MySQL database       : ${U_DB_NAME} (user '${U_DB_USER}'@'${U_DB_HOST}')"
+  [ -n "$hapcfg_bak" ]           && info " - HAProxy backup       : $hapcfg_bak (will be restored)"
+  [ "$hapcfg_modified" = "yes" ] && info " - HAProxy config has Phlix backends but no backup of a previous config"
+  [ -n "$hapcert" ]              && info " - HAProxy TLS cert     : $hapcert"
+  [ -n "$hook" ]                 && info " - Certbot deploy hook  : $hook"
+  [ -n "$cron" ]                 && info " - Certbot renewal cron : $cron"
+  [ -n "$le_dir" ]               && info " - Let's Encrypt cert   : $le_dir"
+  echo
+
+  # Destructive opt-ins (DB drop, cert delete). --purge says yes to both;
+  # otherwise we only ask interactively. -y alone keeps the data.
+  local drop_db="no"
+  if [ "$has_db" = "yes" ]; then
+    if [ "$PURGE" = "yes" ]; then
+      drop_db="yes"
+    elif [ "$ASSUME_YES" != "yes" ] && [ "$INTERACTIVE" = "yes" ] && [ -e /dev/tty ]; then
+      confirm "Drop MySQL database '${U_DB_NAME}' and user '${U_DB_USER}'@'${U_DB_HOST}'? (DATA LOSS)" \
+        && drop_db="yes"
+    fi
+  fi
+
+  local revoke_cert="no"
+  if [ -n "$le_dir" ]; then
+    if [ "$PURGE" = "yes" ]; then
+      revoke_cert="yes"
+    elif [ "$ASSUME_YES" != "yes" ] && [ "$INTERACTIVE" = "yes" ] && [ -e /dev/tty ]; then
+      confirm "Delete Let's Encrypt certificate for '${U_DOMAIN}' via 'certbot delete'?" \
+        && revoke_cert="yes"
+    fi
+  fi
+
+  [ "$has_db" = "yes" ] && { [ "$drop_db"     = "yes" ] && info "Will DROP database '${U_DB_NAME}' and user '${U_DB_USER}'@'${U_DB_HOST}'." \
+                                                       || info "Will KEEP MySQL database and user."; }
+  [ -n "$le_dir" ]      && { [ "$revoke_cert" = "yes" ] && info "Will DELETE Let's Encrypt certificate '${U_DOMAIN}'." \
+                                                       || info "Will KEEP Let's Encrypt certificate '${U_DOMAIN}'."; }
+  echo
+
+  # Final gate. Piped/non-interactive runs require explicit -y.
+  if [ "$ASSUME_YES" != "yes" ]; then
+    if [ "$INTERACTIVE" = "yes" ] && [ -e /dev/tty ]; then
+      confirm "Proceed with uninstall?" || die "Aborted by user."
+    else
+      die "Refusing to uninstall non-interactively without -y."
+    fi
+  fi
+
+  # ---- Execute ----
+
+  # 1. systemd
+  if [ -n "$svc" ]; then
+    log "Stopping and removing phlix-hub service"
+    systemctl stop phlix-hub      >/dev/null 2>&1 || true
+    systemctl disable phlix-hub   >/dev/null 2>&1 || true
+    rm -f "$svc"
+    systemctl daemon-reload       >/dev/null 2>&1 || true
+  fi
+
+  # 2. HAProxy config: restore the pre-install backup, or warn if we wrote
+  # the config from scratch (no original to fall back to).
+  if [ -n "$hapcfg_bak" ]; then
+    log "Restoring previous HAProxy configuration"
+    mv "$hapcfg_bak" /etc/haproxy/haproxy.cfg
+  elif [ "$hapcfg_modified" = "yes" ]; then
+    warn "/etc/haproxy/haproxy.cfg still references Phlix backends but no backup was preserved."
+    warn "Leaving it in place — edit or replace it manually."
+  fi
+
+  # 3. HAProxy TLS cert pem
+  [ -n "$hapcert" ] && { log "Removing HAProxy TLS certificate"; rm -f "$hapcert"; }
+
+  # 4. Reload haproxy if it's actually running and the config still validates.
+  if command -v haproxy >/dev/null 2>&1 \
+     && systemctl is-active --quiet haproxy 2>/dev/null; then
+    if haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1; then
+      systemctl reload haproxy >/dev/null 2>&1 \
+        || systemctl restart haproxy >/dev/null 2>&1 || true
+    else
+      warn "Updated HAProxy config did not validate — leaving haproxy in its current state."
+    fi
+  fi
+
+  # 5. Certbot artefacts
+  [ -n "$cron" ] && { log "Removing certbot cron entry"; rm -f "$cron"; }
+  [ -n "$hook" ] && { log "Removing certbot deploy hook"; rm -f "$hook"; }
+  if [ "$revoke_cert" = "yes" ] && command -v certbot >/dev/null 2>&1; then
+    log "Deleting Let's Encrypt certificate for ${U_DOMAIN}"
+    certbot delete --non-interactive --cert-name "${U_DOMAIN}" >/dev/null 2>&1 \
+      || warn "certbot delete failed — remove /etc/letsencrypt/live/${U_DOMAIN}/ manually if needed."
+  fi
+
+  # 6. Database
+  if [ "$drop_db" = "yes" ]; then
+    log "Dropping MySQL database and user"
+    if mysql <<SQL >/dev/null 2>&1
+DROP DATABASE IF EXISTS \`${U_DB_NAME}\`;
+DROP USER IF EXISTS '${U_DB_USER}'@'${U_DB_HOST}';
+FLUSH PRIVILEGES;
+SQL
+    then
+      info "Dropped database '${U_DB_NAME}' and user '${U_DB_USER}'@'${U_DB_HOST}'."
+    else
+      warn "MySQL cleanup failed — drop the database and user manually if needed."
+    fi
+  fi
+
+  # 7. Install directory (sanity-check the path before rm -rf).
+  if [ -n "$instdir" ]; then
+    case "$instdir" in
+      ""|/|/bin|/boot|/dev|/etc|/home|/lib*|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+        warn "Refusing to remove suspicious install path: $instdir"
+        ;;
+      *)
+        log "Removing install directory $instdir"
+        rm -rf "$instdir"
+        ;;
+    esac
+  fi
+
+  # 8. Env file last — we read DB creds out of it earlier.
+  [ -n "$envf" ] && { log "Removing environment file $envf"; rm -f "$envf"; }
+
+  echo
+  log "Phlix Hub uninstallation complete."
+  info "System packages (PHP, MySQL, HAProxy, certbot) were left installed."
+  info "Remove them with 'sudo apt remove ...' if you no longer need them."
+  [ "$has_db" = "yes" ] && [ "$drop_db" != "yes" ] \
+    && info "MySQL database '${U_DB_NAME}' and user '${U_DB_USER}'@'${U_DB_HOST}' were preserved."
+  [ -n "$le_dir" ] && [ "$revoke_cert" != "yes" ] \
+    && info "Let's Encrypt certificate '${U_DOMAIN}' was preserved at $le_dir."
+}
+
+if [ "$ACTION" = "uninstall" ]; then
+  do_uninstall
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # Gather configuration
