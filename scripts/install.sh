@@ -212,14 +212,10 @@ confirm "Proceed with installation?" || die "Aborted by user."
 log "Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-# software-properties-common gives us add-apt-repository for the PHP PPA.
-apt-get install -y software-properties-common ca-certificates curl git unzip openssl >/dev/null
-# The ondrej PPA provides a current PHP on releases whose default is older
-# than 8.3. Version-agnostic php-* names then resolve to that current PHP.
-if ! grep -rq "ondrej/php" /etc/apt/sources.list.d 2>/dev/null; then
-  add-apt-repository -y ppa:ondrej/php >/dev/null 2>&1 || warn "Could not add ondrej PPA (continuing with distro PHP)."
-  apt-get update -y
-fi
+apt-get install -y ca-certificates curl git unzip openssl >/dev/null
+# Use the distro's PHP via version-agnostic php-* names. Ubuntu 24.04 ships
+# PHP 8.3 by default, which meets the Hub's requirement. Older releases will
+# get an older PHP — the version check below will warn if that's the case.
 apt-get install -y \
   php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip \
   mysql-server >/dev/null
