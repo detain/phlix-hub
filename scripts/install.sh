@@ -42,6 +42,7 @@ ADMIN_EMAIL=""          # Let's Encrypt registration email
 JWT_SECRET=""           # generated if empty
 
 WANT_TLS="auto"         # auto|yes|no
+SKIP_HAPROXY="no"       # --no-proxy: skip HAProxy install + config entirely
 INTERACTIVE="auto"      # auto|yes|no
 ASSUME_YES="no"
 ACTION="install"        # install|update|uninstall
@@ -86,6 +87,9 @@ Options:
   --repo URL              Git repository URL              (default: detain/phlix-hub)
   --tls                   Force TLS / HAProxy + certbot setup
   --no-tls                Skip TLS; HAProxy serves plain HTTP on :80
+  --no-proxy              Skip HAProxy and certbot entirely (use when you
+                          run your own reverse proxy or are co-hosting
+                          phlix-server on the same box — see README)
   --update                Update an existing install (reuses env file, pulls
                           new code, runs composer + migrations, restarts service)
   --uninstall             Remove an existing (possibly partial) install
@@ -140,6 +144,7 @@ while [ $# -gt 0 ]; do
     --repo)         REPO_URL="$2"; shift 2;;
     --tls)          WANT_TLS="yes"; shift;;
     --no-tls)       WANT_TLS="no"; shift;;
+    --no-proxy)     SKIP_HAPROXY="yes"; WANT_TLS="no"; shift;;
     --update)       ACTION="update"; shift;;
     --uninstall)    ACTION="uninstall"; shift;;
     --purge)        PURGE="yes"; ACTION="uninstall"; shift;;
@@ -183,6 +188,261 @@ rand_hex() { openssl rand -hex "${1:-32}"; }
 rand_pass() { openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
 # ---------------------------------------------------------------------------
+# Shared HAProxy management
+#
+# Both phlix-hub and phlix-server can be installed on the same host. Each
+# install drops a fragment file into /etc/haproxy/phlix-managed/ and then
+# a shared rebuilder assembles /etc/haproxy/haproxy.cfg from every
+# fragment it finds. Uninstall removes one fragment and rebuilds — when
+# the last fragment is gone, the pre-Phlix backup is restored (or the
+# config is removed outright).
+# ---------------------------------------------------------------------------
+PHLIX_HAPROXY_MGR_DIR="/etc/haproxy/phlix-managed"
+PHLIX_HAPROXY_CFG="/etc/haproxy/haproxy.cfg"
+PHLIX_HAPROXY_BAK="/etc/haproxy/haproxy.cfg.pre-phlix.bak"
+PHLIX_HAPROXY_CERTS_DIR="/etc/haproxy/certs"
+PHLIX_HAPROXY_MARKER="# phlix-managed: rebuilt by phlix install scripts — do not edit"
+
+# Consolidate older Phlix backup names into the shared one. Earlier
+# revisions of these install scripts wrote `haproxy.cfg.phlix.bak`
+# (phlix-hub) and `haproxy.cfg.phlix-server.bak` (phlix-server) — promote
+# the first one found.
+phlix_haproxy_migrate_backup() {
+  if [ ! -f "$PHLIX_HAPROXY_BAK" ]; then
+    for old in /etc/haproxy/haproxy.cfg.phlix.bak /etc/haproxy/haproxy.cfg.phlix-server.bak; do
+      if [ -f "$old" ]; then
+        mv "$old" "$PHLIX_HAPROXY_BAK"
+        return 0
+      fi
+    done
+  fi
+  rm -f /etc/haproxy/haproxy.cfg.phlix.bak /etc/haproxy/haproxy.cfg.phlix-server.bak 2>/dev/null || true
+}
+
+# Extract one section (`fe_http` | `fe_https` | `backends`) from a fragment.
+phlix_haproxy_extract_section() {
+  awk -v target="$2" '
+    /^## section: / { in_sec = ($3 == target) ? 1 : 0; next }
+    /^## end$/      { in_sec = 0; next }
+    in_sec          { print }
+  ' "$1"
+}
+
+# Rebuild /etc/haproxy/haproxy.cfg from all *.cfg.fragment files in the
+# manager dir. If none remain, restore the pre-Phlix backup or remove the
+# file entirely.
+phlix_haproxy_rebuild() {
+  phlix_haproxy_migrate_backup
+
+  local fragments=()
+  if [ -d "$PHLIX_HAPROXY_MGR_DIR" ]; then
+    while IFS= read -r -d '' f; do
+      fragments+=("$f")
+    done < <(find "$PHLIX_HAPROXY_MGR_DIR" -maxdepth 1 -name '*.cfg.fragment' -print0 2>/dev/null | sort -z)
+  fi
+
+  if [ ${#fragments[@]} -eq 0 ]; then
+    if [ -f "$PHLIX_HAPROXY_BAK" ]; then
+      mv "$PHLIX_HAPROXY_BAK" "$PHLIX_HAPROXY_CFG"
+      info "Restored pre-Phlix HAProxy configuration."
+    elif [ -f "$PHLIX_HAPROXY_CFG" ] \
+         && grep -qE 'phlix-managed|^backend be_hub\b|^backend be_client_relay\b|^backend be_phlix_server\b' \
+              "$PHLIX_HAPROXY_CFG" 2>/dev/null; then
+      rm -f "$PHLIX_HAPROXY_CFG"
+      info "Removed Phlix-managed HAProxy configuration (no pre-Phlix config to restore)."
+    fi
+    rmdir "$PHLIX_HAPROXY_MGR_DIR" 2>/dev/null || true
+    return 0
+  fi
+
+  # First-time takeover: snapshot any pre-existing config.
+  if [ -f "$PHLIX_HAPROXY_CFG" ] && [ ! -f "$PHLIX_HAPROXY_BAK" ] \
+     && ! grep -qF "phlix-managed" "$PHLIX_HAPROXY_CFG" 2>/dev/null; then
+    cp "$PHLIX_HAPROXY_CFG" "$PHLIX_HAPROXY_BAK"
+  fi
+
+  # Emit fe_https only if at least one cert pem is present.
+  local emit_https="no"
+  if [ -d "$PHLIX_HAPROXY_CERTS_DIR" ] \
+     && [ -n "$(find "$PHLIX_HAPROXY_CERTS_DIR" -maxdepth 1 -name '*.pem' -print -quit 2>/dev/null)" ]; then
+    emit_https="yes"
+  fi
+
+  {
+    printf '%s\n' "$PHLIX_HAPROXY_MARKER"
+    cat <<'BASE'
+# Per-project sections under /etc/haproxy/phlix-managed/*.cfg.fragment.
+# Stop Phlix from managing this file by running --uninstall on every
+# installed Phlix project.
+
+global
+    log /dev/log local0
+    maxconn 4096
+    tune.ssl.default-dh-param 2048
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  forwardfor
+    timeout connect 5s
+    timeout client  1h
+    timeout server  1h
+    timeout tunnel  1h
+
+frontend fe_http
+    bind :80
+BASE
+
+    local f section
+    for f in "${fragments[@]}"; do
+      section="$(phlix_haproxy_extract_section "$f" fe_http)"
+      if [ -n "$section" ]; then
+        printf '\n    # --- %s ---\n%s\n' "$(basename "$f" .cfg.fragment)" "$section"
+      fi
+    done
+
+    printf '\n    default_backend be_phlix_default\n'
+
+    if [ "$emit_https" = "yes" ]; then
+      cat <<'HTTPS_TOP'
+
+frontend fe_https
+    bind :443 ssl crt /etc/haproxy/certs/
+    http-request set-header X-Forwarded-Proto https
+HTTPS_TOP
+      for f in "${fragments[@]}"; do
+        section="$(phlix_haproxy_extract_section "$f" fe_https)"
+        if [ -n "$section" ]; then
+          printf '\n    # --- %s ---\n%s\n' "$(basename "$f" .cfg.fragment)" "$section"
+        fi
+      done
+
+      printf '\n    default_backend be_phlix_default\n'
+    fi
+
+    cat <<'DEFAULT_BACKEND'
+
+backend be_phlix_default
+    http-request return status 404 content-type "text/plain" string "No Phlix backend matched.\n"
+DEFAULT_BACKEND
+
+    for f in "${fragments[@]}"; do
+      section="$(phlix_haproxy_extract_section "$f" backends)"
+      if [ -n "$section" ]; then
+        printf '\n# === %s backends ===\n%s\n' "$(basename "$f" .cfg.fragment)" "$section"
+      fi
+    done
+  } > "$PHLIX_HAPROXY_CFG"
+}
+
+# Write the phlix-hub fragment. Args: <mode tls|http> <domain or empty>
+phlix_haproxy_write_fragment_hub() {
+  local mode="$1" dom="$2"
+  mkdir -p "$PHLIX_HAPROXY_MGR_DIR"
+  local fragment="$PHLIX_HAPROXY_MGR_DIR/phlix-hub.cfg.fragment"
+  {
+    cat <<EOF
+# Phlix Hub HAProxy fragment — managed by phlix-hub install.sh
+# Project : phlix-hub
+# Mode    : ${mode}
+# Domain  : ${dom:-<none>}
+# Written : $(date -u +%FT%TZ)
+
+EOF
+    if [ "$mode" = "tls" ] && [ -n "$dom" ]; then
+      cat <<EOF
+## section: fe_http
+    acl is_phlix_hub_host hdr(host) -i ${dom}
+    redirect scheme https code 301 if is_phlix_hub_host
+## end
+
+## section: fe_https
+    acl is_phlix_hub_host hdr(host) -i ${dom}
+    use_backend be_hub_client_relay if is_phlix_hub_host { path_beg /client/ }
+    use_backend be_hub if is_phlix_hub_host
+## end
+
+EOF
+    elif [ -n "$dom" ]; then
+      cat <<EOF
+## section: fe_http
+    acl is_phlix_hub_host hdr(host) -i ${dom}
+    use_backend be_hub_client_relay if is_phlix_hub_host { path_beg /client/ }
+    use_backend be_hub if is_phlix_hub_host
+## end
+
+EOF
+    else
+      cat <<EOF
+## section: fe_http
+    use_backend be_hub_client_relay if { path_beg /client/ }
+    use_backend be_hub
+## end
+
+EOF
+    fi
+
+    cat <<EOF
+## section: backends
+backend be_hub
+    server hub 127.0.0.1:${HUB_PORT}
+backend be_hub_client_relay
+    server clientrelay 127.0.0.1:${CLIENT_RELAY_PORT}
+## end
+EOF
+  } > "$fragment"
+}
+
+# Validate and reload haproxy (used after every rebuild).
+phlix_haproxy_reload() {
+  [ "$SKIP_HAPROXY" = "yes" ] && return 0
+  command -v haproxy >/dev/null 2>&1 || return 0
+  if [ ! -f "$PHLIX_HAPROXY_CFG" ]; then
+    # No managed config — make sure haproxy is stopped.
+    systemctl stop haproxy >/dev/null 2>&1 || true
+    systemctl disable haproxy >/dev/null 2>&1 || true
+    return 0
+  fi
+  if ! haproxy -c -f "$PHLIX_HAPROXY_CFG" >/dev/null 2>&1; then
+    haproxy -c -f "$PHLIX_HAPROXY_CFG" || true
+    die "HAProxy config validation failed — see message above."
+  fi
+  systemctl enable haproxy >/dev/null 2>&1 || true
+  systemctl reload haproxy >/dev/null 2>&1 || systemctl restart haproxy
+}
+
+# Convert an older (pre-fragment) phlix-hub install into the fragment-based
+# layout. Idempotent: returns 0 if the fragment already exists or there's no
+# Phlix-managed HAProxy state to convert.
+phlix_haproxy_migrate_if_needed_hub() {
+  [ "$SKIP_HAPROXY" = "yes" ] && return 0
+  [ -f "$PHLIX_HAPROXY_MGR_DIR/phlix-hub.cfg.fragment" ] && return 0
+  [ -f /etc/haproxy/haproxy.cfg ] || return 0
+  # Legacy install marker: the old install.sh hard-coded backend be_hub.
+  if ! grep -qE '^backend be_hub\b' /etc/haproxy/haproxy.cfg 2>/dev/null \
+     && ! grep -qF "phlix-managed" /etc/haproxy/haproxy.cfg 2>/dev/null; then
+    return 0
+  fi
+
+  log "Migrating phlix-hub HAProxy config to the fragment-based layout"
+
+  local migrated_domain="" migrated_mode="http"
+  if [ -f "$ENV_FILE" ]; then
+    migrated_domain="$(grep -m1 -E '^HUB_PUBLIC_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  fi
+  if [ -n "$migrated_domain" ] && [ -f "/etc/haproxy/certs/${migrated_domain}.pem" ]; then
+    migrated_mode="tls"
+  fi
+  info "Detected mode: $migrated_mode (domain: ${migrated_domain:-<none>})"
+
+  phlix_haproxy_write_fragment_hub "$migrated_mode" "$migrated_domain"
+  phlix_haproxy_rebuild
+  phlix_haproxy_reload
+  info "HAProxy migrated. The legacy snapshot was renamed to $PHLIX_HAPROXY_BAK."
+}
+
+# ---------------------------------------------------------------------------
 # Uninstall
 # ---------------------------------------------------------------------------
 do_uninstall() {
@@ -215,13 +475,25 @@ do_uninstall() {
   # Detect artefacts.
   local found=0
   local svc="" envf="" instdir=""
-  local hapcfg_bak="" hapcert="" hapcfg_modified="no"
+  local hap_fragment="" hap_other_fragments="no" hap_backup="" hapcert=""
   local cron="" hook="" le_dir=""
   [ -f "$SERVICE_FILE" ] && svc="$SERVICE_FILE" && found=1
   [ -f "$ENV_FILE" ]     && envf="$ENV_FILE"   && found=1
   [ -d "$INSTALL_PATH" ] && instdir="$INSTALL_PATH" && found=1
-  [ -f /etc/haproxy/haproxy.cfg.phlix.bak ] \
-      && hapcfg_bak="/etc/haproxy/haproxy.cfg.phlix.bak" && found=1
+  if [ -f "$PHLIX_HAPROXY_MGR_DIR/phlix-hub.cfg.fragment" ]; then
+    hap_fragment="$PHLIX_HAPROXY_MGR_DIR/phlix-hub.cfg.fragment"; found=1
+  fi
+  # Note whether any *other* Phlix project fragments would remain, so the
+  # summary can say "rebuilt" vs "removed entirely".
+  if [ -d "$PHLIX_HAPROXY_MGR_DIR" ] \
+     && [ -n "$(find "$PHLIX_HAPROXY_MGR_DIR" -maxdepth 1 -name '*.cfg.fragment' \
+                  ! -name 'phlix-hub.cfg.fragment' -print -quit 2>/dev/null)" ]; then
+    hap_other_fragments="yes"
+  fi
+  # Pre-Phlix backup (new shared name + legacy hub-specific name).
+  for b in "$PHLIX_HAPROXY_BAK" /etc/haproxy/haproxy.cfg.phlix.bak; do
+    [ -f "$b" ] && hap_backup="$b" && break
+  done
   if [ -n "$U_DOMAIN" ] && [ -f "/etc/haproxy/certs/${U_DOMAIN}.pem" ]; then
     hapcert="/etc/haproxy/certs/${U_DOMAIN}.pem"; found=1
   fi
@@ -231,12 +503,6 @@ do_uninstall() {
       && hook="/etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh" && found=1
   if [ -n "$U_DOMAIN" ] && [ -d "/etc/letsencrypt/live/${U_DOMAIN}" ]; then
     le_dir="/etc/letsencrypt/live/${U_DOMAIN}"; found=1
-  fi
-  # HAProxy config we wrote but for which no backup was preserved (i.e.
-  # haproxy was unconfigured before install): leave it but warn.
-  if [ -z "$hapcfg_bak" ] && [ -f /etc/haproxy/haproxy.cfg ] \
-     && grep -qE 'be_hub|be_client_relay' /etc/haproxy/haproxy.cfg; then
-    hapcfg_modified="yes"; found=1
   fi
 
   # Database lookup is best-effort: requires mysql client + running server.
@@ -259,8 +525,15 @@ do_uninstall() {
   [ -n "$envf" ]                 && info " - environment file     : $envf"
   [ -n "$instdir" ]              && info " - install directory    : $instdir"
   [ "$has_db" = "yes" ]          && info " - MySQL database       : ${U_DB_NAME} (user '${U_DB_USER}'@'${U_DB_HOST}')"
-  [ -n "$hapcfg_bak" ]           && info " - HAProxy backup       : $hapcfg_bak (will be restored)"
-  [ "$hapcfg_modified" = "yes" ] && info " - HAProxy config has Phlix backends but no backup of a previous config"
+  if [ -n "$hap_fragment" ]; then
+    if [ "$hap_other_fragments" = "yes" ]; then
+      info " - HAProxy fragment     : $hap_fragment (will be removed; haproxy.cfg rebuilt for remaining Phlix projects)"
+    elif [ -n "$hap_backup" ]; then
+      info " - HAProxy fragment     : $hap_fragment (last Phlix fragment; pre-Phlix config restored from $hap_backup)"
+    else
+      info " - HAProxy fragment     : $hap_fragment (last Phlix fragment; haproxy.cfg removed entirely)"
+    fi
+  fi
   [ -n "$hapcert" ]              && info " - HAProxy TLS cert     : $hapcert"
   [ -n "$hook" ]                 && info " - Certbot deploy hook  : $hook"
   [ -n "$cron" ]                 && info " - Certbot renewal cron : $cron"
@@ -315,28 +588,21 @@ do_uninstall() {
     systemctl daemon-reload       >/dev/null 2>&1 || true
   fi
 
-  # 2. HAProxy config: restore the pre-install backup, or warn if we wrote
-  # the config from scratch (no original to fall back to).
-  if [ -n "$hapcfg_bak" ]; then
-    log "Restoring previous HAProxy configuration"
-    mv "$hapcfg_bak" /etc/haproxy/haproxy.cfg
-  elif [ "$hapcfg_modified" = "yes" ]; then
-    warn "/etc/haproxy/haproxy.cfg still references Phlix backends but no backup was preserved."
-    warn "Leaving it in place — edit or replace it manually."
-  fi
-
-  # 3. HAProxy TLS cert pem
-  [ -n "$hapcert" ] && { log "Removing HAProxy TLS certificate"; rm -f "$hapcert"; }
-
-  # 4. Reload haproxy if it's actually running and the config still validates.
-  if command -v haproxy >/dev/null 2>&1 \
-     && systemctl is-active --quiet haproxy 2>/dev/null; then
-    if haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1; then
-      systemctl reload haproxy >/dev/null 2>&1 \
-        || systemctl restart haproxy >/dev/null 2>&1 || true
-    else
-      warn "Updated HAProxy config did not validate — leaving haproxy in its current state."
-    fi
+  # 2. HAProxy fragment + rebuild. Removing this project's fragment and
+  # rebuilding will either drop the phlix-hub frontend/backend (other Phlix
+  # projects remain) or restore the pre-Phlix config / delete the file
+  # outright (we were the last fragment).
+  if [ -n "$hap_fragment" ]; then
+    log "Removing HAProxy fragment and rebuilding shared config"
+    rm -f "$hap_fragment"
+    # Also remove the cert PEM before rebuild so fe_https is dropped if it
+    # was the only one.
+    [ -n "$hapcert" ] && { log "Removing HAProxy TLS certificate"; rm -f "$hapcert"; }
+    phlix_haproxy_rebuild
+    phlix_haproxy_reload
+  else
+    # Cert PEM may still exist even if the fragment didn't (partial install).
+    [ -n "$hapcert" ] && { log "Removing HAProxy TLS certificate"; rm -f "$hapcert"; }
   fi
 
   # 5. Certbot artefacts
@@ -498,6 +764,10 @@ do_update() {
   HUB_DB_PASSWORD="$env_db_pass" \
     php "$INSTALL_PATH/scripts/run-migrations.php"
 
+  # 4b. One-off migration: if this install pre-dates the fragment-based
+  # HAProxy layout, convert it now. Idempotent on subsequent updates.
+  phlix_haproxy_migrate_if_needed_hub
+
   # 5. Refresh the systemd unit in case ExecStart / WorkingDirectory drifted,
   # then restart. We don't touch the env file.
   if [ -f "$SERVICE_FILE" ]; then
@@ -594,7 +864,13 @@ apt-get install -y ca-certificates curl git unzip openssl >/dev/null
 apt-get install -y \
   php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip \
   mysql-server >/dev/null
-[ "$TLS_ENABLED" = "yes" ] && apt-get install -y haproxy certbot >/dev/null || apt-get install -y haproxy >/dev/null
+if [ "$SKIP_HAPROXY" = "yes" ]; then
+  info "Skipping HAProxy install (--no-proxy)."
+elif [ "$TLS_ENABLED" = "yes" ]; then
+  apt-get install -y haproxy certbot >/dev/null
+else
+  apt-get install -y haproxy >/dev/null
+fi
 
 PHP_VER="$(php -r 'echo PHP_VERSION;')"
 case "$PHP_VER" in
@@ -704,58 +980,25 @@ systemctl is-active --quiet phlix-hub && info "phlix-hub service is running." \
 # ---------------------------------------------------------------------------
 # 7. Reverse proxy (HAProxy) + TLS (certbot)
 # ---------------------------------------------------------------------------
-write_haproxy_cfg() {
-  # $1 = "tls" | "http"
-  local mode="$1"
-  [ -f /etc/haproxy/haproxy.cfg ] && cp -n /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.phlix.bak || true
-  {
-    cat <<'GLOBAL'
-global
-    log /dev/log local0
-    maxconn 4096
-    tune.ssl.default-dh-param 2048
+if [ "$SKIP_HAPROXY" = "yes" ]; then
+  log "Skipping HAProxy / certbot setup (--no-proxy)"
+  info "Run your own reverse proxy in front of:"
+  info "  127.0.0.1:${HUB_PORT}  (HTTP API + SSR pages + /health)"
+  info "  127.0.0.1:${CLIENT_RELAY_PORT}  (GET /client/{server_id}, WebSocket)"
+  info "Servers connect to 127.0.0.1:${RELAY_PORT} for their outbound tunnels."
+  info "See README.md → 'Running alongside phlix-server' for a sample shared HAProxy config."
 
-defaults
-    log     global
-    mode    http
-    option  httplog
-    option  forwardfor
-    timeout connect 5s
-    timeout client  1h
-    timeout server  1h
-    timeout tunnel  1h
-GLOBAL
-    if [ "$mode" = "tls" ]; then
-      cat <<TLSFE
-frontend fe_http
-    bind :80
-    redirect scheme https code 301
-frontend fe_https
-    bind :443 ssl crt /etc/haproxy/certs/${DOMAIN}.pem
-    http-request set-header X-Forwarded-Proto https
-    use_backend be_client_relay if { path_beg /client/ }
-    default_backend be_hub
-TLSFE
-    else
-      cat <<HTTPFE
-frontend fe_http
-    bind :80
-    use_backend be_client_relay if { path_beg /client/ }
-    default_backend be_hub
-HTTPFE
-    fi
-    cat <<BACKEND
-backend be_hub
-    server hub 127.0.0.1:${HUB_PORT}
-backend be_client_relay
-    server clientrelay 127.0.0.1:${CLIENT_RELAY_PORT}
-BACKEND
-  } > /etc/haproxy/haproxy.cfg
-}
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow "$HUB_PORT"/tcp comment 'Phlix Hub HTTP' >/dev/null 2>&1 || true
+    ufw allow "$RELAY_PORT"/tcp comment 'Phlix Hub server tunnels' >/dev/null 2>&1 || true
+    info "Opened ports ${HUB_PORT}/tcp and ${RELAY_PORT}/tcp in ufw."
+  fi
+else
+# Reach a TLS-or-HTTP fragment + rebuild the merged haproxy.cfg.
+mkdir -p /etc/haproxy/certs
 
 if [ "$TLS_ENABLED" = "yes" ]; then
   log "Obtaining TLS certificate for $DOMAIN via certbot"
-  mkdir -p /etc/haproxy/certs
   systemctl stop haproxy >/dev/null 2>&1 || true
   if certbot certonly --standalone --non-interactive --agree-tos \
         -m "$ADMIN_EMAIL" -d "$DOMAIN" --keep-until-expiring; then
@@ -774,41 +1017,45 @@ systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
 HOOK
     chmod +x /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
 
-    # Monthly auto-renewal (1st of the month, 03:00). certbot only renews when
-    # the certificate is near expiry; HAProxy is stopped briefly for the
-    # standalone challenge, then the deploy hook rebuilds the PEM and reloads.
+    # Monthly auto-renewal (1st of the month, 03:00).
     cat > /etc/cron.d/phlix-hub-certbot <<CRON
 # Phlix Hub: monthly Let's Encrypt renewal
 0 3 1 * * root certbot renew --quiet --pre-hook "systemctl stop haproxy" --post-hook "systemctl start haproxy" --deploy-hook /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
 CRON
 
-    write_haproxy_cfg tls
+    log "Writing phlix-hub HAProxy fragment (TLS)"
+    phlix_haproxy_write_fragment_hub tls "$DOMAIN"
   else
     warn "certbot failed (is DNS for $DOMAIN pointed here and port 80 reachable?). Falling back to plain HTTP."
     TLS_ENABLED="no"
-    write_haproxy_cfg http
+    log "Writing phlix-hub HAProxy fragment (plain HTTP)"
+    phlix_haproxy_write_fragment_hub http "$DOMAIN"
   fi
 else
-  log "Configuring HAProxy (plain HTTP)"
-  write_haproxy_cfg http
+  log "Writing phlix-hub HAProxy fragment (plain HTTP)"
+  phlix_haproxy_write_fragment_hub http "$DOMAIN"
 fi
 
-haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 || die "HAProxy config validation failed."
-systemctl enable haproxy >/dev/null 2>&1 || true
-systemctl restart haproxy
+log "Rebuilding /etc/haproxy/haproxy.cfg from Phlix fragments"
+phlix_haproxy_rebuild
+phlix_haproxy_reload
 
 # Best-effort firewall openings.
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
   for p in 80 443 "$RELAY_PORT"; do ufw allow "$p"/tcp >/dev/null 2>&1 || true; done
   info "Opened ports 80, 443, and $RELAY_PORT in ufw."
 fi
+fi  # SKIP_HAPROXY guard
 
 # ---------------------------------------------------------------------------
 # 8. Done
 # ---------------------------------------------------------------------------
 echo
 log "Phlix Hub installation complete"
-if [ "$TLS_ENABLED" = "yes" ]; then
+if [ "$SKIP_HAPROXY" = "yes" ]; then
+  info "URL          : http://<server-ip>:${HUB_PORT}/  (configure your own reverse proxy in front)"
+  info "Health check : curl http://localhost:${HUB_PORT}/health"
+elif [ "$TLS_ENABLED" = "yes" ]; then
   info "URL          : https://${DOMAIN}/"
   info "Health check : curl https://${DOMAIN}/health"
 else
