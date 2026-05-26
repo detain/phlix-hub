@@ -287,6 +287,7 @@ final class ClientRelayWorker
      */
     public static function extractJwt(WorkermanRequest $request): ?string
     {
+        /** @var mixed $auth */
         $auth = $request->header('authorization');
         if (is_string($auth) && str_starts_with($auth, 'Bearer ')) {
             $token = trim(substr($auth, 7));
@@ -295,6 +296,7 @@ final class ClientRelayWorker
             }
         }
 
+        /** @var mixed $proto */
         $proto = $request->header('sec-websocket-protocol');
         if (is_string($proto) && $proto !== '') {
             $parts = explode(',', $proto);
@@ -307,6 +309,7 @@ final class ClientRelayWorker
             }
         }
 
+        /** @var mixed $queryToken */
         $queryToken = $request->get('token');
         if (is_string($queryToken) && $queryToken !== '') {
             return $queryToken;
@@ -348,6 +351,7 @@ final class ClientRelayWorker
     private function resolveController(): ?ClientMountController
     {
         try {
+            /** @var mixed $controller */
             $controller = $this->container->get(ClientMountController::class);
         } catch (Throwable) {
             return null;
@@ -389,6 +393,7 @@ final class ClientRelayWorker
             return null;
         }
 
+        /** @var mixed $kid */
         $kid = $header['kid'] ?? null;
 
         return is_string($kid) ? $kid : null;

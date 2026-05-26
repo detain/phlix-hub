@@ -84,7 +84,9 @@ final class ClientMountController
         // GET without a valid WebSocket upgrade) to the client mount. Mirror
         // RelayController's contract: 426 when no upgrade was requested, and
         // otherwise steer the caller to the WS endpoint with a 501.
-        $hubWsHost = getenv('HUB_WS_HOST') ?: getenv('HUB_PUBLIC_DOMAIN') ?: 'your-hub-host';
+        $hubWsHost = getenv('HUB_WS_HOST');
+        $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : getenv('HUB_PUBLIC_DOMAIN');
+        $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : 'your-hub-host';
         $wsEndpoint = 'ws://' . $hubWsHost . ':' . \Phlix\Hub\Relay\ClientRelayWorker::DEFAULT_PORT
             . '/client/' . $serverId;
 

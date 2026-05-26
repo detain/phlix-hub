@@ -95,7 +95,9 @@ final class RelayController
         // — instead of 500 (which would imply a transient server fault).
         // Auth still runs above so unauth attempts still get 401/403.
         $docsUrl = 'https://detain.github.io/phlix-docs/dev/relay-protocol';
-        $hubWsHost = getenv('HUB_WS_HOST') ?: getenv('HUB_PUBLIC_DOMAIN') ?: 'your-hub-host';
+        $hubWsHost = getenv('HUB_WS_HOST');
+        $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : getenv('HUB_PUBLIC_DOMAIN');
+        $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : 'your-hub-host';
 
         return (new Response())
             ->header('Link', '<' . $docsUrl . '>; rel="help"')

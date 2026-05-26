@@ -20,22 +20,22 @@ interface TunnelInterface
     /**
      * @var string Tunnel is awaiting the HELLO handshake from the server.
      */
-    public const STATUS_PENDING = 'pending';
+    public const string STATUS_PENDING = 'pending';
 
     /**
      * @var string Tunnel is active and frames can be exchanged.
      */
-    public const STATUS_ACTIVE = 'active';
+    public const string STATUS_ACTIVE = 'active';
 
     /**
      * @var string Tunnel is being closed (clean shutdown in progress).
      */
-    public const STATUS_CLOSING = 'closing';
+    public const string STATUS_CLOSING = 'closing';
 
     /**
      * @var string Tunnel is fully closed and all resources released.
      */
-    public const STATUS_CLOSED = 'closed';
+    public const string STATUS_CLOSED = 'closed';
 
     /**
      * @return string Unique tunnel UUID.

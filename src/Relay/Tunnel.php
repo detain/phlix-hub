@@ -55,22 +55,22 @@ final class Tunnel implements TunnelInterface
     /**
      * Tunnel is awaiting the HELLO handshake from the server.
      */
-    public const STATUS_PENDING = 'pending';
+    public const string STATUS_PENDING = 'pending';
 
     /**
      * Tunnel is active andFrames can be exchanged.
      */
-    public const STATUS_ACTIVE = 'active';
+    public const string STATUS_ACTIVE = 'active';
 
     /**
      * Tunnel is being closed (clean shutdown in progress).
      */
-    public const STATUS_CLOSING = 'closing';
+    public const string STATUS_CLOSING = 'closing';
 
     /**
      * Tunnel is fully closed and all resources released.
      */
-    public const STATUS_CLOSED = 'closed';
+    public const string STATUS_CLOSED = 'closed';
 
     /**
      * @param string                       $serverId    Server UUID.

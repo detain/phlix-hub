@@ -66,8 +66,9 @@ final class TunnelManager implements TunnelManagerInterface
             $this->closeTunnel($serverId, 'server_replaced');
         }
 
+        $hostname = @gethostname();
         /** @var non-falsy-string $workerNode */
-        $workerNode = (string) (@gethostname() ?: 'unknown');
+        $workerNode = is_string($hostname) && $hostname !== '' ? $hostname : 'unknown';
 
         $tunnel = new Tunnel(
             $serverId,
