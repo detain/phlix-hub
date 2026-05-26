@@ -192,7 +192,10 @@ class TlsCertificateManager
         }
 
         $certFile = file_get_contents($certPath);
-        if ($certFile === false || !str_contains($certFile, 'BEGIN CERTIFICATE')) {
+        if ($certFile === false) {
+            return true;
+        }
+        if (!str_contains($certFile, 'BEGIN CERTIFICATE')) {
             return true;
         }
 
@@ -249,29 +252,23 @@ class TlsCertificateManager
             return '';
         }
 
-        if ($stdin !== null && isset($pipes[0]) && is_resource($pipes[0])) {
+        if ($stdin !== null) {
             // Non-blocking stdin: a small child that exits before fully
             // draining stdin must not deadlock the parent fwrite() if a
             // future caller passes a large payload.
             stream_set_blocking($pipes[0], false);
             fwrite($pipes[0], $stdin);
         }
-        if (isset($pipes[0]) && is_resource($pipes[0])) {
-            fclose($pipes[0]);
-        }
+        fclose($pipes[0]);
 
-        $stdout = '';
-        if (isset($pipes[1]) && is_resource($pipes[1])) {
-            // Defensive: ensure stdout reads block until the child
-            // closes its end, so stream_get_contents() returns the
-            // full output rather than a partial buffer.
-            stream_set_blocking($pipes[1], true);
-            $stdout = (string) stream_get_contents($pipes[1]);
-            fclose($pipes[1]);
-        }
-        if (isset($pipes[2]) && is_resource($pipes[2])) {
-            fclose($pipes[2]);
-        }
+        // Defensive: ensure stdout reads block until the child
+        // closes its end, so stream_get_contents() returns the
+        // full output rather than a partial buffer.
+        stream_set_blocking($pipes[1], true);
+        $stdout = (string) stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+
+        fclose($pipes[2]);
 
         $exitCode = proc_close($process);
 

@@ -70,9 +70,7 @@ final class FrameDecoder implements RelayWireCodecInterface
             'server_id' => $serverId,
         ];
 
-        $result = json_encode($payload, JSON_THROW_ON_ERROR);
-        assert(is_string($result));
-        return $result;
+        return json_encode($payload, JSON_THROW_ON_ERROR);
     }
 
     /**
@@ -86,9 +84,7 @@ final class FrameDecoder implements RelayWireCodecInterface
             'tunnel_id' => $tunnelId,
         ];
 
-        $result = json_encode($payload, JSON_THROW_ON_ERROR);
-        assert(is_string($result));
-        return $result;
+        return json_encode($payload, JSON_THROW_ON_ERROR);
     }
 
     /**

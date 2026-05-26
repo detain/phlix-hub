@@ -425,6 +425,7 @@ final class HubServicesProvider implements ServiceProviderInterface
 
         // Start the idle reaper timer if available
         try {
+            /** @var mixed $idleReaper */
             $idleReaper = $container->get(IdleReaper::class);
             if ($idleReaper instanceof IdleReaper) {
                 $idleReaper->start();
@@ -435,6 +436,7 @@ final class HubServicesProvider implements ServiceProviderInterface
 
         // Set up heartbeat timer for active tunnels
         try {
+            /** @var mixed $tunnelManager */
             $tunnelManager = $container->get(TunnelManager::class);
             if ($tunnelManager instanceof TunnelManager) {
                 /** @var int Heartbeat interval in seconds (30 from plan) */
