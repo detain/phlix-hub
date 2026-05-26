@@ -44,7 +44,7 @@ JWT_SECRET=""           # generated if empty
 WANT_TLS="auto"         # auto|yes|no
 INTERACTIVE="auto"      # auto|yes|no
 ASSUME_YES="no"
-ACTION="install"        # install|uninstall
+ACTION="install"        # install|update|uninstall
 PURGE="no"              # uninstall: also drop the DB and delete the Let's Encrypt cert
 
 # ---------------------------------------------------------------------------
@@ -86,6 +86,8 @@ Options:
   --repo URL              Git repository URL              (default: detain/phlix-hub)
   --tls                   Force TLS / HAProxy + certbot setup
   --no-tls                Skip TLS; HAProxy serves plain HTTP on :80
+  --update                Update an existing install (reuses env file, pulls
+                          new code, runs composer + migrations, restarts service)
   --uninstall             Remove an existing (possibly partial) install
                           (prompts before each destructive step)
   --purge                 With --uninstall, also DROP the database and DELETE
@@ -109,6 +111,12 @@ Examples:
 
   # Fully unattended uninstall, including DB drop and cert deletion
   sudo bash install.sh --uninstall --purge -y
+
+  # Update an existing install to the latest master (preserves env + JWT secret)
+  sudo bash install.sh --update -y
+
+  # Update and switch to a different branch / tag
+  sudo bash install.sh --update --branch v0.2.0 -y
 EOF
 }
 
@@ -132,6 +140,7 @@ while [ $# -gt 0 ]; do
     --repo)         REPO_URL="$2"; shift 2;;
     --tls)          WANT_TLS="yes"; shift;;
     --no-tls)       WANT_TLS="no"; shift;;
+    --update)       ACTION="update"; shift;;
     --uninstall)    ACTION="uninstall"; shift;;
     --purge)        PURGE="yes"; ACTION="uninstall"; shift;;
     -y|--non-interactive|--yes) INTERACTIVE="no"; ASSUME_YES="yes"; shift;;
@@ -382,6 +391,126 @@ SQL
 
 if [ "$ACTION" = "uninstall" ]; then
   do_uninstall
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Update
+# ---------------------------------------------------------------------------
+do_update() {
+  log "Phlix Hub updater"
+
+  # Prefer the install path recorded in the systemd unit (unless the user
+  # passed --install-path explicitly).
+  if [ -f "$SERVICE_FILE" ] && [ "$INSTALL_PATH" = "/opt/phlix-hub" ]; then
+    local svc_workdir=""
+    svc_workdir="$(awk -F= '/^WorkingDirectory=/{print $2; exit}' "$SERVICE_FILE" 2>/dev/null || true)"
+    [ -n "$svc_workdir" ] && INSTALL_PATH="$svc_workdir"
+  fi
+
+  # Sanity-check: we need a real install to update.
+  [ -f "$ENV_FILE" ]          || die "No env file at $ENV_FILE — run a fresh install first."
+  [ -d "$INSTALL_PATH" ]      || die "Install path '$INSTALL_PATH' not found — run a fresh install first."
+  [ -d "$INSTALL_PATH/.git" ] || die "Install path '$INSTALL_PATH' is not a git checkout — cannot fast-forward updates."
+
+  # Read existing env so we can run migrations with the right credentials.
+  # Use cut -f2- so values containing '=' (unlikely but possible) survive.
+  local env_db_name env_db_user env_db_host env_db_port env_db_pass env_hub_port
+  env_db_name="$(grep -m1 -E '^HUB_DB_NAME='     "$ENV_FILE" | cut -d= -f2- || true)"
+  env_db_user="$(grep -m1 -E '^HUB_DB_USER='     "$ENV_FILE" | cut -d= -f2- || true)"
+  env_db_host="$(grep -m1 -E '^HUB_DB_HOST='     "$ENV_FILE" | cut -d= -f2- || true)"
+  env_db_port="$(grep -m1 -E '^HUB_DB_PORT='     "$ENV_FILE" | cut -d= -f2- || true)"
+  env_db_pass="$(grep -m1 -E '^HUB_DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2- || true)"
+  env_hub_port="$(grep -m1 -E '^HUB_PORT='       "$ENV_FILE" | cut -d= -f2- || true)"
+  [ -n "$env_db_name" ] || die "HUB_DB_NAME missing from $ENV_FILE — refusing to migrate."
+
+  local prev_commit current_branch
+  prev_commit="$(git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  current_branch="$(git -C "$INSTALL_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+
+  if [ -n "$(git -C "$INSTALL_PATH" status --porcelain 2>/dev/null)" ]; then
+    warn "Uncommitted local changes in $INSTALL_PATH will be discarded by 'git reset --hard'."
+  fi
+
+  echo
+  log "Update summary"
+  info "Install path : $INSTALL_PATH"
+  info "Env file     : $ENV_FILE  (JWT secret + DB password preserved)"
+  info "Database     : ${env_db_user:-?}@${env_db_host:-?}:${env_db_port:-?}/${env_db_name}"
+  info "Branch       : $current_branch  ->  $BRANCH"
+  info "Commit       : $prev_commit  ->  (fetching…)"
+  info "Repo         : $REPO_URL"
+  echo
+  confirm "Proceed with update?" || die "Aborted by user."
+
+  # 1. Pull updated code.
+  log "Fetching code"
+  git -C "$INSTALL_PATH" fetch --depth 1 origin "$BRANCH"
+  git -C "$INSTALL_PATH" checkout "$BRANCH" >/dev/null 2>&1 || git -C "$INSTALL_PATH" checkout -B "$BRANCH" "origin/$BRANCH"
+  git -C "$INSTALL_PATH" reset --hard "origin/$BRANCH"
+  local new_commit
+  new_commit="$(git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  info "Code: $prev_commit -> $new_commit"
+
+  # 2. Refresh PHP deps. Composer reads composer.lock, so changes ship with
+  # the repo and we don't risk surprise upgrades.
+  log "Updating PHP dependencies"
+  ( cd "$INSTALL_PATH" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction )
+
+  # 3. Clear Smarty compile cache so templates pick up changes immediately.
+  # (compile_check is on by default, but stale entries from earlier renders
+  #  occasionally linger after .tpl edits.)
+  if [ -d "$INSTALL_PATH/var/smarty" ]; then
+    log "Clearing Smarty compile + cache directories"
+    rm -rf "$INSTALL_PATH/var/smarty/compile"/* "$INSTALL_PATH/var/smarty/cache"/* 2>/dev/null || true
+  fi
+
+  mkdir -p "$INSTALL_PATH/.logs"
+  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
+  fi
+
+  # 4. Apply pending migrations (idempotent — the runner tracks applied
+  # filenames in the `migrations` table).
+  log "Running pending migrations"
+  HUB_DB_HOST="${env_db_host:-127.0.0.1}" HUB_DB_PORT="${env_db_port:-3306}" \
+  HUB_DB_NAME="$env_db_name" HUB_DB_USER="${env_db_user:-phlix_hub}" \
+  HUB_DB_PASSWORD="$env_db_pass" \
+    php "$INSTALL_PATH/scripts/run-migrations.php"
+
+  # 5. Refresh the systemd unit in case ExecStart / WorkingDirectory drifted,
+  # then restart. We don't touch the env file.
+  if [ -f "$SERVICE_FILE" ]; then
+    log "Restarting phlix-hub service"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl restart phlix-hub
+    sleep 2
+    if systemctl is-active --quiet phlix-hub; then
+      info "phlix-hub service is running."
+    else
+      warn "phlix-hub did not start cleanly — check 'journalctl -u phlix-hub -e'."
+    fi
+  else
+    warn "No systemd unit at $SERVICE_FILE — start the hub manually."
+  fi
+
+  # 6. Health check.
+  local hub_port="${env_hub_port:-8800}"
+  if curl -fsS --max-time 5 "http://localhost:${hub_port}/health" >/dev/null 2>&1; then
+    info "Health check OK: http://localhost:${hub_port}/health"
+  else
+    warn "Health check did not return success — inspect 'journalctl -u phlix-hub -e'."
+  fi
+
+  echo
+  log "Phlix Hub update complete."
+  info "Branch : $BRANCH"
+  info "Commit : $prev_commit -> $new_commit"
+  [ "$prev_commit" = "$new_commit" ] && info "(already up to date)"
+}
+
+if [ "$ACTION" = "update" ]; then
+  do_update
   exit 0
 fi
 

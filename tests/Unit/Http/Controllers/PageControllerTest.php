@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\PageController;
+use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 
@@ -20,7 +23,10 @@ use PHPUnit\Framework\TestCase;
  */
 final class PageControllerTest extends TestCase
 {
-    private function controller(string $expectedTemplate, array $expectedVars = null): PageController
+    /**
+     * @param array<string, mixed>|null $expectedVars
+     */
+    private function controller(string $expectedTemplate, ?array $expectedVars = null): PageController
     {
         $renderer = $this->createMock(PageRenderer::class);
         if ($expectedTemplate !== '') {
@@ -33,7 +39,21 @@ final class PageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 'u-1', 'username' => 'alice']);
         $serverInfo = $this->createMock(ServerInfoHandler::class);
         $serverInfo->method('getServersForUser')->willReturn([]);
-        return new PageController($renderer, $auth, $serverInfo);
+        return new PageController($renderer, $auth, $serverInfo, $this->adminMiddleware());
+    }
+
+    /**
+     * Build a real AdminMiddleware backed by mocked dependencies — the
+     * controller only calls its `checkAccess()` helper, which is pure and
+     * cheap to exercise. Default repo mock returns null from findAdminById,
+     * so callers that want admin access should override per-test.
+     */
+    private function adminMiddleware(?UserRepository $users = null): AdminMiddleware
+    {
+        return new AdminMiddleware(
+            $users ?? $this->createMock(UserRepository::class),
+            $this->createMock(AuditLogger::class),
+        );
     }
 
     public function testHomeRendersIndexTemplate(): void
@@ -60,7 +80,7 @@ final class PageControllerTest extends TestCase
 
         $auth = $this->createMock(AuthManager::class);
         $serverInfo = $this->createMock(ServerInfoHandler::class);
-        $controller = new PageController($renderer, $auth, $serverInfo);
+        $controller = new PageController($renderer, $auth, $serverInfo, $this->adminMiddleware());
 
         $request = new Request();
         $request->path = '/';
@@ -105,7 +125,7 @@ final class PageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 'u-1']);
         $serverInfo = $this->createMock(ServerInfoHandler::class);
         $serverInfo->method('getServersForUser')->willReturn([]);
-        $controller = new PageController($renderer, $auth, $serverInfo);
+        $controller = new PageController($renderer, $auth, $serverInfo, $this->adminMiddleware());
 
         $request = new Request();
         $request->method = 'GET';
@@ -123,7 +143,7 @@ final class PageControllerTest extends TestCase
 
         $auth = $this->createMock(AuthManager::class);
         $serverInfo = $this->createMock(ServerInfoHandler::class);
-        $controller = new PageController($renderer, $auth, $serverInfo);
+        $controller = new PageController($renderer, $auth, $serverInfo, $this->adminMiddleware());
 
         $request = new Request();
         $request->path = '/nope';
@@ -142,10 +162,59 @@ final class PageControllerTest extends TestCase
 
         $auth = $this->createMock(AuthManager::class);
         $serverInfo = $this->createMock(ServerInfoHandler::class);
-        $controller = new PageController($renderer, $auth, $serverInfo);
+        $controller = new PageController($renderer, $auth, $serverInfo, $this->adminMiddleware());
 
         $request = new Request();
         $request->path = '/claim-server';
+
+        $response = $controller($request);
+        self::assertSame(200, $response->statusCode);
+    }
+
+    public function testAdminRequestsReturns403ForNonAdmin(): void
+    {
+        $renderer = $this->createMock(PageRenderer::class);
+        $renderer->expects(self::never())->method('render');
+
+        $auth = $this->createMock(AuthManager::class);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->willReturn(null);
+
+        $controller = new PageController($renderer, $auth, $serverInfo, $this->adminMiddleware($users));
+
+        $request = new Request();
+        $request->path = '/admin/requests';
+        $request->userId = 'u-1';
+
+        $response = $controller($request);
+        self::assertSame(403, $response->statusCode);
+        self::assertStringContainsString('Forbidden', $response->body);
+    }
+
+    public function testAdminRequestsRendersTemplateForAdmin(): void
+    {
+        $renderer = $this->createMock(PageRenderer::class);
+        $renderer->expects(self::once())
+            ->method('render')
+            ->with('home/admin-requests.tpl', self::callback(static function ($vars): bool {
+                return is_array($vars) && ($vars['is_admin'] ?? null) === true;
+            }))
+            ->willReturn('<html>admin</html>');
+
+        $auth = $this->createMock(AuthManager::class);
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->willReturn(['id' => 'u-1', 'is_admin' => 1]);
+
+        $controller = new PageController($renderer, $auth, $serverInfo, $this->adminMiddleware($users));
+
+        $request = new Request();
+        $request->path = '/admin/requests';
+        $request->userId = 'u-1';
+        $request->user = ['id' => 'u-1', 'is_admin' => 1];
 
         $response = $controller($request);
         self::assertSame(200, $response->statusCode);

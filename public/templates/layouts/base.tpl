@@ -34,6 +34,10 @@
         <nav>
             {if $is_authenticated|default:false}
                 <a href="/my-servers">My Servers</a>
+                <a href="/requests">Requests</a>
+                {if $is_admin|default:false}
+                    <a href="/admin/requests">Admin</a>
+                {/if}
                 <form method="post" action="/logout" class="logout-form"><button type="submit">Log out</button></form>
             {else}
                 <a href="/login">Log in</a>
