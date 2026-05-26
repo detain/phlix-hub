@@ -20,6 +20,8 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 - [Architecture](#architecture)
 - [Requirements](#requirements)
 - [One-line install](#one-line-install)
+- [Updating an existing install](#updating-an-existing-install)
+- [Uninstalling](#uninstalling)
 - [Quick start (development)](#quick-start-development)
 - [Production install on Ubuntu](#production-install-on-ubuntu)
   - [1. System packages](#1-system-packages)
@@ -125,6 +127,85 @@ The script prompts for the install path, database user/password, and hostname wh
 terminal (with sensible defaults), and runs **fully unattended** when piped or given `-y`. See
 `sudo bash scripts/install.sh --help` for every flag. Prefer to do it by hand? Follow the
 [step-by-step guide](#production-install-on-ubuntu) below.
+
+## Updating an existing install
+
+The same `scripts/install.sh` updates an in-place install **without rotating any secrets**. It
+reads the existing `/etc/phlix-hub.env` (so the JWT secret and DB password are preserved),
+pulls the latest code, refreshes Composer dependencies, runs pending migrations, and restarts
+the service:
+
+```bash
+sudo bash /opt/phlix-hub/scripts/install.sh --update -y
+```
+
+Or via the one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh \
+  | sudo bash -s -- --update -y
+```
+
+Pin to a specific tag or branch with `--branch`:
+
+```bash
+sudo bash /opt/phlix-hub/scripts/install.sh --update --branch v0.2.0 -y
+```
+
+What `--update` does, in order:
+
+1. Discovers the install path from the systemd unit's `WorkingDirectory` (so non-default
+   `--install-path` setups are detected automatically).
+2. Reads `/etc/phlix-hub.env` and reuses every value — `HUB_JWT_SECRET`, `HUB_DB_PASSWORD`,
+   `HUB_PUBLIC_DOMAIN`, etc. are never regenerated.
+3. `git fetch --depth 1 origin $BRANCH` then `git reset --hard origin/$BRANCH` in the install
+   directory. Uncommitted local edits are **discarded** — the script warns first.
+4. `composer install --no-dev --optimize-autoloader` (follows `composer.lock`).
+5. Clears `var/smarty/{compile,cache}` to avoid stale compiled templates.
+6. Runs `scripts/run-migrations.php` — idempotent, only pending migrations apply.
+7. `systemctl daemon-reload` then `systemctl restart phlix-hub`.
+8. `curl http://localhost:$HUB_PORT/health` as a final sanity check.
+
+What it explicitly does **not** touch: the env file, MySQL grants, HAProxy config, or the
+Let's Encrypt certificate. If a release adds new `HUB_*` env vars, append them to
+`/etc/phlix-hub.env` yourself — anything the code expects but doesn't find falls back to its
+documented default.
+
+## Uninstalling
+
+`scripts/install.sh --uninstall` removes an existing install. By default it is **interactive**
+and prompts separately before each destructive step. The MySQL database and the Let's Encrypt
+certificate are **kept** unless you opt in explicitly:
+
+```bash
+sudo bash /opt/phlix-hub/scripts/install.sh --uninstall
+```
+
+Add `--purge` to also drop the database (and user) and delete the Let's Encrypt certificate
+via `certbot delete`. Combine with `-y` for a fully unattended teardown:
+
+```bash
+sudo bash /opt/phlix-hub/scripts/install.sh --uninstall --purge -y
+```
+
+Piped, non-interactive runs require an explicit `-y` to proceed.
+
+What it removes, only if it finds them:
+
+1. The `phlix-hub` systemd service — `stop`, `disable`, remove the unit, `daemon-reload`.
+2. HAProxy config — if `/etc/haproxy/haproxy.cfg.phlix.bak` exists (the pre-install snapshot),
+   it is **restored over** the current config and HAProxy reloaded. Otherwise the script warns
+   that the current config still references Phlix backends and leaves it alone.
+3. The combined PEM at `/etc/haproxy/certs/<domain>.pem`.
+4. `/etc/cron.d/phlix-hub-certbot` and `/etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh`.
+5. The Let's Encrypt cert via `certbot delete --cert-name <domain>` — only with `--purge` or
+   interactive confirmation.
+6. The MySQL database and dedicated user — only with `--purge` or interactive confirmation.
+7. The install directory (`rm -rf`, with a denylist of system paths like `/`, `/etc`, `/opt`).
+8. `/etc/phlix-hub.env` (last, since the DB credentials are read from it earlier).
+
+System packages (`php-*`, `mysql-server`, `haproxy`, `certbot`) and `ufw` rules are left in
+place — uninstall them yourself with `apt remove` / `ufw delete` if you no longer need them.
 
 ## Quick start (development)
 

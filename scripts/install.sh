@@ -424,17 +424,32 @@ do_update() {
   env_hub_port="$(grep -m1 -E '^HUB_PORT='       "$ENV_FILE" | cut -d= -f2- || true)"
   [ -n "$env_db_name" ] || die "HUB_DB_NAME missing from $ENV_FILE — refusing to migrate."
 
-  local prev_commit current_branch
-  prev_commit="$(git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  current_branch="$(git -C "$INSTALL_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  # The initial install chowns the tree to $SERVICE_USER. Running git as
+  # root against a non-root-owned worktree trips CVE-2022-24765 ("dubious
+  # ownership"), so detect the owner and run git/composer as that user.
+  local repo_owner current_user
+  repo_owner="$(stat -c '%U' "$INSTALL_PATH" 2>/dev/null || true)"
+  [ -n "$repo_owner" ] || repo_owner="root"
+  current_user="$(id -un)"
+  local -a as_owner=()
+  if [ "$repo_owner" != "$current_user" ]; then
+    command -v sudo >/dev/null 2>&1 \
+      || die "Install dir owned by '$repo_owner' but sudo is not available."
+    as_owner=(sudo -H -u "$repo_owner" --)
+  fi
 
-  if [ -n "$(git -C "$INSTALL_PATH" status --porcelain 2>/dev/null)" ]; then
+  local prev_commit current_branch
+  prev_commit="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  current_branch="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+
+  if [ -n "$("${as_owner[@]}" git -C "$INSTALL_PATH" status --porcelain 2>/dev/null)" ]; then
     warn "Uncommitted local changes in $INSTALL_PATH will be discarded by 'git reset --hard'."
   fi
 
   echo
   log "Update summary"
   info "Install path : $INSTALL_PATH"
+  info "Owned by     : $repo_owner"
   info "Env file     : $ENV_FILE  (JWT secret + DB password preserved)"
   info "Database     : ${env_db_user:-?}@${env_db_host:-?}:${env_db_port:-?}/${env_db_name}"
   info "Branch       : $current_branch  ->  $BRANCH"
@@ -443,17 +458,20 @@ do_update() {
   echo
   confirm "Proceed with update?" || die "Aborted by user."
 
-  # 1. Pull updated code.
+  # 1. Pull updated code as the install dir owner.
   log "Fetching code"
-  git -C "$INSTALL_PATH" fetch --depth 1 origin "$BRANCH"
-  git -C "$INSTALL_PATH" checkout "$BRANCH" >/dev/null 2>&1 || git -C "$INSTALL_PATH" checkout -B "$BRANCH" "origin/$BRANCH"
-  git -C "$INSTALL_PATH" reset --hard "origin/$BRANCH"
+  "${as_owner[@]}" git -C "$INSTALL_PATH" fetch --depth 1 origin "$BRANCH"
+  "${as_owner[@]}" git -C "$INSTALL_PATH" checkout "$BRANCH" >/dev/null 2>&1 \
+    || "${as_owner[@]}" git -C "$INSTALL_PATH" checkout -B "$BRANCH" "origin/$BRANCH"
+  "${as_owner[@]}" git -C "$INSTALL_PATH" reset --hard "origin/$BRANCH"
   local new_commit
-  new_commit="$(git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  new_commit="$("${as_owner[@]}" git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   info "Code: $prev_commit -> $new_commit"
 
   # 2. Refresh PHP deps. Composer reads composer.lock, so changes ship with
-  # the repo and we don't risk surprise upgrades.
+  # the repo and we don't risk surprise upgrades. Run as root with
+  # COMPOSER_ALLOW_SUPERUSER set (matches the initial install path); we
+  # restore ownership afterwards so vendor/ ends up owned by $repo_owner.
   log "Updating PHP dependencies"
   ( cd "$INSTALL_PATH" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction )
 
@@ -466,8 +484,10 @@ do_update() {
   fi
 
   mkdir -p "$INSTALL_PATH/.logs"
-  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
+  # Restore ownership the install was running with — anything composer or
+  # the cache-clear created as root gets chowned back to $repo_owner.
+  if [ "$repo_owner" != "root" ] && id -u "$repo_owner" >/dev/null 2>&1; then
+    chown -R "$repo_owner:$repo_owner" "$INSTALL_PATH"
   fi
 
   # 4. Apply pending migrations (idempotent — the runner tracks applied
