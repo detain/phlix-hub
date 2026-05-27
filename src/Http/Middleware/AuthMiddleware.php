@@ -7,6 +7,7 @@ namespace Phlix\Hub\Http\Middleware;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\RequestContext;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Auth\JwtClaims;
 
@@ -22,6 +23,15 @@ use Phlix\Shared\Auth\JwtClaims;
  *    short-circuit with a 401 JSON response;
  *  - HTML routes redirect to `/login` so the browser experience is
  *    "click → bounce to login".
+ *
+ * On success, the middleware also publishes the authenticated user-id
+ * into the coroutine-local request context via
+ * {@see RequestContext::setUserId()} so downstream services can read it
+ * without re-receiving the {@see Request}. This is the canonical
+ * coroutine-safe replacement for the static/global pattern under the
+ * Workerman 5 + Swoole eventLoop runtime introduced in step 0.2; see
+ * `phlix-docs/docs/dev/coroutine-runtime.md` for the no-static-state
+ * rule.
  *
  * @package Phlix\Hub\Http\Middleware
  */
@@ -69,6 +79,14 @@ final class AuthMiddleware
         unset($user['password_hash']);
         $request->user = $user;
         $request->claims = $claims;
+
+        // Publish the authenticated user-id into the coroutine-local
+        // request context so downstream services / controllers can read
+        // it without re-passing the Request object. This is the canonical
+        // replacement for the static/global pattern that resident-memory
+        // workers cannot use safely under coroutines (see step 0.2c
+        // and `phlix-docs/docs/dev/coroutine-runtime.md`).
+        RequestContext::setUserId($claims->sub);
 
         return null;
     }

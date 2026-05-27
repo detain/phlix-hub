@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **Coroutine runtime enabled (step 0.2c).** `start.php` now sets `Worker::$eventLoopClass = \Workerman\Events\Swoole::class` before any `Worker` is instantiated and calls `Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL)` in the master process, mirroring `phlix-server/start.php`. The block is guarded by `extension_loaded('swoole')` with a `trigger_error(E_USER_WARNING)` fallback so dev hosts without ext-swoole still boot (the loaded-extension assertion lands in CI in step 0.3). Audit of `src/` for `protected|private|public static $`, `global $`, and `$GLOBALS[…]` carrying per-request data found **zero offenders** (output recorded in `/tmp/0.2-hub-static-audit.txt`). Introduced `Phlix\Hub\Http\RequestContext` — a thin typed wrapper around `support\Context` with `setUserId/getUserId/hasUserId/clearUserId` — as the canonical place to publish and read per-request data; mirrors `Phlix\Server\Http\RequestContext`. `AuthMiddleware` now publishes the authenticated user-id into the coroutine-local context on a successful auth and explicitly does NOT publish on any rejection path (missing token, invalid token, unknown user). New `tests/Unit/Coroutine/ContextIsolationTest.php` (10 tests, 100% coverage on `RequestContext.php`) proves per-fiber isolation and exercises the ext-swoole graceful-fallback branch. `AuthMiddlewareTest` extended with `Context::destroy()` setUp + two new tests verifying the publish/no-publish behavior. Documented in `phlix-docs/docs/dev/coroutine-runtime.md`.
+
 ### Changed
 - **Upgraded to Webman 2.2 / Workerman 5.1.** Added `workerman/webman-framework:~2.2` and pinned `workerman/workerman:~5.1` as a prerequisite for coroutine support (step 0.2). No other changes.
 - `Phlix\Hub\Hub\TlsCertificateManager::provisionCertificate()` (and
