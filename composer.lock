@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "e1da25f46dc4e30ca26e570c7a438bc5",
+    "content-hash": "30c344d82cc126d71394514153249c08",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -564,6 +564,56 @@
             "time": "2026-01-02T08:56:05+00:00"
         },
         {
+            "name": "nikic/fast-route",
+            "version": "v1.3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/nikic/FastRoute.git",
+                "reference": "181d480e08d9476e61381e04a71b34dc0432e812"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/nikic/FastRoute/zipball/181d480e08d9476e61381e04a71b34dc0432e812",
+                "reference": "181d480e08d9476e61381e04a71b34dc0432e812",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=5.4.0"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^4.8.35|~5.7"
+            },
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "src/functions.php"
+                ],
+                "psr-4": {
+                    "FastRoute\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "BSD-3-Clause"
+            ],
+            "authors": [
+                {
+                    "name": "Nikita Popov",
+                    "email": "nikic@php.net"
+                }
+            ],
+            "description": "Fast request router for PHP",
+            "keywords": [
+                "router",
+                "routing"
+            ],
+            "support": {
+                "issues": "https://github.com/nikic/FastRoute/issues",
+                "source": "https://github.com/nikic/FastRoute/tree/master"
+            },
+            "time": "2018-02-13T20:26:39+00:00"
+        },
+        {
             "name": "php-di/invoker",
             "version": "2.3.7",
             "source": {
@@ -997,6 +1047,72 @@
                 "source": "https://github.com/walkor/mysql/tree/v1.0.9"
             },
             "time": "2025-03-18T06:10:03+00:00"
+        },
+        {
+            "name": "workerman/webman-framework",
+            "version": "v2.2.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/walkor/webman-framework.git",
+                "reference": "ce54d8f8f4c1f2c336293dbc37df1ea46ec34c92"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/walkor/webman-framework/zipball/ce54d8f8f4c1f2c336293dbc37df1ea46ec34c92",
+                "reference": "ce54d8f8f4c1f2c336293dbc37df1ea46ec34c92",
+                "shasum": ""
+            },
+            "require": {
+                "ext-json": "*",
+                "nikic/fast-route": "^1.3",
+                "php": ">=8.1",
+                "psr/container": ">=1.0",
+                "psr/log": "^2.0 || ^3.0",
+                "workerman/workerman": "^5.1 || dev-master"
+            },
+            "suggest": {
+                "ext-event": "For better performance. "
+            },
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "./src/support/helpers.php"
+                ],
+                "psr-4": {
+                    "Webman\\": "./src",
+                    "Support\\": "./src/support",
+                    "support\\": "./src/support",
+                    "Support\\View\\": "./src/support/view",
+                    "Support\\Bootstrap\\": "./src/support/bootstrap",
+                    "Support\\Exception\\": "./src/support/exception"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "walkor",
+                    "email": "walkor@workerman.net",
+                    "homepage": "https://www.workerman.net",
+                    "role": "Developer"
+                }
+            ],
+            "description": "High performance HTTP Service Framework.",
+            "homepage": "https://www.workerman.net",
+            "keywords": [
+                "High Performance",
+                "http service"
+            ],
+            "support": {
+                "email": "walkor@workerman.net",
+                "forum": "https://wenda.workerman.net/",
+                "issues": "https://github.com/walkor/webman/issues",
+                "source": "https://github.com/walkor/webman-framework",
+                "wiki": "https://doc.workerman.net/"
+            },
+            "time": "2026-03-26T01:51:42+00:00"
         },
         {
             "name": "workerman/workerman",
