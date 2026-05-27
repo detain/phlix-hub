@@ -846,8 +846,17 @@ do_update() {
   # HAProxy layout, convert it now. Idempotent on subsequent updates.
   phlix_haproxy_migrate_if_needed_hub
 
-  # 5. Refresh the systemd unit in case ExecStart / WorkingDirectory drifted,
-  # then restart. We don't touch the env file.
+  # 5. Migrate the systemd unit if it's pre-`start.php`. Older installs
+  # had `ExecStart=… public/index.php start`; the new entry point is
+  # start.php at the repo root. We only touch the ExecStart line so any
+  # operator customisation elsewhere in the unit is preserved.
+  if [ -f "$SERVICE_FILE" ] && grep -q 'public/index\.php start' "$SERVICE_FILE" 2>/dev/null; then
+    log "Migrating systemd unit ExecStart to start.php"
+    sed -i 's|public/index\.php start|start.php start|' "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  # 6. Restart the service. We don't touch the env file.
   if [ -f "$SERVICE_FILE" ]; then
     log "Restarting phlix-hub service"
     systemctl daemon-reload >/dev/null 2>&1 || true
@@ -1065,10 +1074,9 @@ User=${SERVICE_USER}
 Group=${SERVICE_USER}
 EnvironmentFile=${ENV_FILE}
 WorkingDirectory=${INSTALL_PATH}
-# start.php is the canonical Workerman bootstrap (webman-style). The
-# legacy public/index.php is kept as a thin shim that forwards here, so
-# existing units pre-dating start.php still work if they were left in
-# place — but new installs go straight to the root-level entry.
+# start.php is the Workerman bootstrap (webman-style — see start.php
+# for the full pattern). public/index.php no longer exists; public/ is
+# a pure document root containing only static assets + templates.
 ExecStart=/usr/bin/php ${INSTALL_PATH}/start.php start
 Restart=on-failure
 RestartSec=5
