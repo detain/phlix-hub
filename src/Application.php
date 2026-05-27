@@ -574,6 +574,7 @@ final class Application
         // public/ that resolves to an existing non-PHP file is served
         // directly; anything else falls through to the router. The path
         // comes from config (set by start.php) — falls back to <repo>/public.
+        /** @var mixed $publicRootRaw */
         $publicRootRaw = $this->config['public_root'] ?? null;
         $publicRoot = is_string($publicRootRaw) && is_dir($publicRootRaw)
             ? rtrim($publicRootRaw, DIRECTORY_SEPARATOR)
@@ -595,14 +596,19 @@ final class Application
                 if ($path !== '' && $path !== '/' && !str_starts_with($path, '/api/')) {
                     $candidate = $publicRoot . $path;
                     $real = realpath($candidate);
-                    if ($real !== false
+                    if (
+                        $real !== false
                         && str_starts_with($real, $publicRoot . DIRECTORY_SEPARATOR)
                         && is_file($real)
-                        && strtolower((string) pathinfo($real, PATHINFO_EXTENSION)) !== 'php'
+                        && strtolower(pathinfo($real, PATHINFO_EXTENSION)) !== 'php'
                     ) {
-                        $mime = function_exists('mime_content_type')
-                            ? (mime_content_type($real) ?: 'application/octet-stream')
-                            : 'application/octet-stream';
+                        $mime = 'application/octet-stream';
+                        if (function_exists('mime_content_type')) {
+                            $detected = mime_content_type($real);
+                            if (is_string($detected) && $detected !== '') {
+                                $mime = $detected;
+                            }
+                        }
                         $resp = new \Workerman\Protocols\Http\Response(200, ['Content-Type' => $mime]);
                         $resp->withFile($real);
                         $connection->send($resp);
