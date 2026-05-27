@@ -46,6 +46,31 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Workerman\Worker;
 
 // -----------------------------------------------------------------------------
+// 0. Coroutine runtime — set Swoole as the eventLoop driver and enable
+//    coroutine hooks in the master process before any Worker is instantiated.
+//    Mirrors phlix-server/start.php lines ~48-58 (step 0.2a). Degrades
+//    gracefully with an E_USER_WARNING when ext-swoole is absent so the
+//    install scripts + test suite can boot on dev hosts that haven't
+//    built ext-swoole yet (CI loading lives in step 0.3).
+// -----------------------------------------------------------------------------
+
+if (extension_loaded('swoole')) {
+    // NOTE: the canonical Workerman 5 static property is
+    // `Worker::$eventLoopClass`, not `Worker::$eventLoop` (which is an
+    // *instance* property used to override the eventLoop on a single
+    // Worker). Setting the static here, before any Worker is created,
+    // makes Swoole the default eventLoop driver for ALL workers in
+    // this process.
+    Worker::$eventLoopClass = \Workerman\Events\Swoole::class;
+    \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
+} else {
+    trigger_error(
+        'Swoole extension not detected — coroutine runtime will not be active. Install ext-swoole to enable.',
+        E_USER_WARNING
+    );
+}
+
+// -----------------------------------------------------------------------------
 // 1. Config paths
 // -----------------------------------------------------------------------------
 
