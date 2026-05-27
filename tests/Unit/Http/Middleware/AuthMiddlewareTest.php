@@ -8,8 +8,10 @@ use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\RequestContext;
 use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
+use support\Context;
 
 /**
  * Unit tests for {@see AuthMiddleware}.
@@ -21,6 +23,16 @@ use PHPUnit\Framework\TestCase;
 final class AuthMiddlewareTest extends TestCase
 {
     private const SECRET = 'this-is-a-32-byte-or-larger-test-secret';
+
+    /**
+     * Reset the coroutine-local request context between tests so the
+     * Context-publication assertions don't see leakage from a prior
+     * test (step 0.2c).
+     */
+    protected function setUp(): void
+    {
+        Context::destroy();
+    }
 
     public function testMissingTokenReturns401ForApiRoute(): void
     {
@@ -185,5 +197,78 @@ final class AuthMiddlewareTest extends TestCase
         $claims = AuthMiddleware::claimsForUser($jwt, $token);
         self::assertNotNull($claims);
         self::assertSame('u-h', $claims->sub);
+    }
+
+    /**
+     * On a successful auth, the middleware publishes the authenticated
+     * user-id into the coroutine-local request context (step 0.2c).
+     * Downstream services read it via {@see RequestContext::getUserId()}
+     * instead of relying on static/global state, which is unsafe under
+     * the Workerman 5 + Swoole coroutine runtime.
+     */
+    public function testPublishesUserIdToRequestContextOnSuccessfulAuth(): void
+    {
+        $jwt = new JwtHandler(self::SECRET);
+        $token = $jwt->createAccessToken('u-ctx');
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->with('u-ctx')->willReturn([
+            'id' => 'u-ctx', 'username' => 'ctx-user', 'password_hash' => 'secret',
+        ]);
+
+        $mw = new AuthMiddleware($jwt, $repo);
+
+        self::assertNull(RequestContext::getUserId(), 'baseline: no user-id in context');
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/me';
+        $request->bearerToken = $token;
+
+        $result = $mw($request);
+        self::assertNull($result, 'middleware returns null to continue routing');
+        self::assertSame('u-ctx', RequestContext::getUserId());
+        self::assertTrue(RequestContext::hasUserId());
+    }
+
+    /**
+     * Conversely, every rejected-auth path (missing token, invalid
+     * token, unknown user) MUST NOT publish a user-id — otherwise a
+     * rejected caller could leak an identity into a downstream service
+     * that defensively reads the context.
+     */
+    public function testDoesNotPublishUserIdOnAnyRejectionPath(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+
+        // (1) Missing token
+        $mw = new AuthMiddleware(new JwtHandler(self::SECRET), $repo);
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/me';
+        self::assertNotNull($mw($request));
+        self::assertNull(RequestContext::getUserId(), 'no user-id on missing-token path');
+
+        // (2) Invalid token
+        Context::destroy();
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/me';
+        $request->bearerToken = 'not-a-jwt';
+        self::assertNotNull($mw($request));
+        self::assertNull(RequestContext::getUserId(), 'no user-id on invalid-token path');
+
+        // (3) Valid token but unknown user
+        Context::destroy();
+        $jwt = new JwtHandler(self::SECRET);
+        $token = $jwt->createAccessToken('u-missing');
+        $repo->method('findById')->willReturn(null);
+        $mw2 = new AuthMiddleware($jwt, $repo);
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/me';
+        $request->bearerToken = $token;
+        self::assertNotNull($mw2($request));
+        self::assertNull(RequestContext::getUserId(), 'no user-id on unknown-user path');
     }
 }
