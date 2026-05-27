@@ -315,6 +315,19 @@ new one.
 > Run `php public/index.php start -d` to daemonize; `stop`, `restart`, `reload`, and `status`
 > are also available.
 
+### CLI (`bin/phlix`)
+
+A small [`webman/console`](https://www.workerman.net/doc/webman/components/command.html) CLI
+ships at `bin/phlix`:
+
+```bash
+php bin/phlix list         # list available commands (works with no database)
+php bin/phlix migrate      # apply migrations/*.sql (idempotent; tracking table)
+php bin/phlix smoke:jwt    # smoke-test the JWT create/validate round-trip
+```
+
+`migrate` is the CLI equivalent of `php scripts/run-migrations.php`.
+
 ## Production install on Ubuntu
 
 These steps target **Ubuntu 22.04 / 24.04**. Run as a sudo-capable user.

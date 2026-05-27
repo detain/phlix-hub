@@ -27,9 +27,9 @@ use Workerman\MySQL\Connection;
  *
  * @package Phlix\Hub\Common\Database
  */
-final class MigrationRunner
+class MigrationRunner
 {
-    public const TRACKING_TABLE = 'migrations';
+    public const string TRACKING_TABLE = 'migrations';
 
     /**
      * @param Connection $db             Live MySQL connection.
