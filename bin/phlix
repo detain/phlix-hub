@@ -1,0 +1,54 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Phlix Hub CLI entrypoint.
+ *
+ * `webman/console` only auto-discovers commands from `app/command`, which
+ * this repo does not have, so this shim explicitly registers our
+ * `Phlix\Hub\Console\Commands\*` instances on a `Webman\Console\Command`
+ * application (which extends Symfony's Console Application) and runs it.
+ *
+ * This is a one-shot CLI process — NOT the resident Workerman worker — so
+ * it does not set up the Swoole event loop. The database connection is
+ * resolved LAZILY (only when a command that needs it actually runs), so
+ * commands like `php bin/phlix list` work with no database available:
+ * the `migrate` command receives a factory whose connection is only
+ * obtained inside the command's `execute()`.
+ */
+
+use Phlix\Hub\Common\Database\ConnectionPool;
+use Phlix\Hub\Common\Database\MigrationRunner;
+use Phlix\Hub\Console\Commands\MigrateCommand;
+use Phlix\Hub\Console\Commands\SmokeJwtCommand;
+use Webman\Console\Command;
+
+define('BASE_PATH', dirname(__DIR__));
+
+require BASE_PATH . '/vendor/autoload.php';
+
+// Register the database config path. ConnectionPool::init() only stores the
+// path — it does NOT open a socket — so this is safe even with no DB. The
+// actual connection is opened lazily, the first time getConnection() is
+// called (inside the migrate command's runner factory).
+ConnectionPool::init(BASE_PATH . '/config/database.php');
+
+$cli = new Command();
+$cli->setName('Phlix Hub CLI');
+
+// `migrate` — the runner factory (and thus getConnection()) is invoked only
+// inside MigrateCommand::execute(), so `list` opens no connection.
+$cli->add(new MigrateCommand(
+    static fn(): MigrationRunner => new MigrationRunner(
+        ConnectionPool::getConnection('mysql'),
+        BASE_PATH . '/migrations',
+    ),
+));
+
+// `smoke:jwt` — needs no constructor deps; builds its own JwtHandler with a
+// throwaway test secret inside execute(). No DB, no config.
+$cli->add(new SmokeJwtCommand());
+
+exit($cli->run());
