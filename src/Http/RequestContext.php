@@ -87,6 +87,7 @@ final class RequestContext
      */
     public static function getUserId(): ?string
     {
+        /** @psalm-suppress MixedAssignment — Context::get returns mixed; narrowed via is_string */
         $value = Context::get(self::KEY_USER_ID);
         return is_string($value) ? $value : null;
     }
@@ -102,6 +103,7 @@ final class RequestContext
      */
     public static function hasUserId(): bool
     {
+        /** @psalm-suppress MixedAssignment — Context::get returns mixed; narrowed via is_string */
         $value = Context::get(self::KEY_USER_ID);
         return is_string($value) && $value !== '';
     }
