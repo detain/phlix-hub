@@ -602,13 +602,41 @@ final class Application
                         && is_file($real)
                         && strtolower(pathinfo($real, PATHINFO_EXTENSION)) !== 'php'
                     ) {
-                        $mime = 'application/octet-stream';
-                        if (function_exists('mime_content_type')) {
+                        // Extension-first MIME map — mime_content_type()
+                        // sniffs content via libmagic and returns text/plain
+                        // for CSS/JS/JSON/SVG, which makes the browser
+                        // refuse to apply stylesheets / execute scripts.
+                        $ext = strtolower(pathinfo($real, PATHINFO_EXTENSION));
+                        $mimeMap = [
+                            'css' => 'text/css; charset=utf-8',
+                            'js' => 'application/javascript; charset=utf-8',
+                            'mjs' => 'application/javascript; charset=utf-8',
+                            'json' => 'application/json; charset=utf-8',
+                            'html' => 'text/html; charset=utf-8',
+                            'txt' => 'text/plain; charset=utf-8',
+                            'xml' => 'application/xml; charset=utf-8',
+                            'svg' => 'image/svg+xml',
+                            'ico' => 'image/x-icon',
+                            'png' => 'image/png',
+                            'jpg' => 'image/jpeg',
+                            'jpeg' => 'image/jpeg',
+                            'gif' => 'image/gif',
+                            'webp' => 'image/webp',
+                            'woff' => 'font/woff',
+                            'woff2' => 'font/woff2',
+                            'ttf' => 'font/ttf',
+                            'otf' => 'font/otf',
+                            'pdf' => 'application/pdf',
+                            'wasm' => 'application/wasm',
+                        ];
+                        $mime = $mimeMap[$ext] ?? null;
+                        if ($mime === null && function_exists('mime_content_type')) {
                             $detected = mime_content_type($real);
                             if (is_string($detected) && $detected !== '') {
                                 $mime = $detected;
                             }
                         }
+                        $mime ??= 'application/octet-stream';
                         $resp = new \Workerman\Protocols\Http\Response(200, ['Content-Type' => $mime]);
                         $resp->withFile($real);
                         $connection->send($resp);
