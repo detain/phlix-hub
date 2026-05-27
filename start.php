@@ -43,6 +43,7 @@ use Phlix\Hub\Common\Container\ContainerFactory;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Workerman\Worker;
 
 // -----------------------------------------------------------------------------
 // 1. Config paths
@@ -63,6 +64,15 @@ LoggerFactory::init($loggerConfigPath);
 // pool is initialised lazily by the container the first time a service
 // asks for a Connection.
 ConnectionPool::class; // ensure autoload pulls the class.
+
+// Workerman's default log file is `workerman.log` in the current
+// directory. Pin it to the install's .logs/ dir so the location is
+// explicit and survives future systemd hardening (ProtectSystem=strict
+// + ReadWritePaths) without needing a code change. phlix-server hit
+// this exact EROFS path when its hardened unit shipped first.
+$workerLogFile = __DIR__ . '/.logs/workerman.log';
+@mkdir(dirname($workerLogFile), 0775, true);
+Worker::$logFile = $workerLogFile;
 
 // -----------------------------------------------------------------------------
 // 3. Build the PSR-11 container from server.php + injected paths
