@@ -7,6 +7,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Changed
+- **Upgraded to Webman 2.2 / Workerman 5.1.** Added `workerman/webman-framework:~2.2` and pinned `workerman/workerman:~5.1` as a prerequisite for coroutine support (step 0.2). No other changes.
 - `Phlix\Hub\Hub\TlsCertificateManager::provisionCertificate()` (and
   the underlying `runAcmeChallenge()` flow) now throws a
   `\RuntimeException` with a stable, machine-grep-able message —
