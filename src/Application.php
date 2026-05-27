@@ -570,14 +570,47 @@ final class Application
         $router = $this->router;
         $logger = $this->resolveHttpLogger();
 
+        // Document root for the static-file fast path. Anything under
+        // public/ that resolves to an existing non-PHP file is served
+        // directly; anything else falls through to the router. The path
+        // comes from config (set by start.php) — falls back to <repo>/public.
+        $publicRootRaw = $this->config['public_root'] ?? null;
+        $publicRoot = is_string($publicRootRaw) && is_dir($publicRootRaw)
+            ? rtrim($publicRootRaw, DIRECTORY_SEPARATOR)
+            : rtrim(dirname(__DIR__) . '/public', DIRECTORY_SEPARATOR);
+
         $worker->onMessage = static function (
             TcpConnection $connection,
             WorkermanRequest $request,
         ) use (
             $router,
             $logger,
+            $publicRoot,
         ): void {
             try {
+                // 1. Static-file fast path. Serve files under public/
+                //    directly (CSS, JS, images, fonts). Refuses traversal
+                //    via realpath() prefix check; refuses raw .php files.
+                $path = $request->path();
+                if ($path !== '' && $path !== '/' && !str_starts_with($path, '/api/')) {
+                    $candidate = $publicRoot . $path;
+                    $real = realpath($candidate);
+                    if ($real !== false
+                        && str_starts_with($real, $publicRoot . DIRECTORY_SEPARATOR)
+                        && is_file($real)
+                        && strtolower((string) pathinfo($real, PATHINFO_EXTENSION)) !== 'php'
+                    ) {
+                        $mime = function_exists('mime_content_type')
+                            ? (mime_content_type($real) ?: 'application/octet-stream')
+                            : 'application/octet-stream';
+                        $resp = new \Workerman\Protocols\Http\Response(200, ['Content-Type' => $mime]);
+                        $resp->withFile($real);
+                        $connection->send($resp);
+                        return;
+                    }
+                }
+
+                // 2. Dynamic dispatch via the router.
                 $hubRequest = Request::fromWorkerman($request);
                 $response = $router->dispatch($hubRequest);
                 $connection->send($response->toWorkermanResponse());

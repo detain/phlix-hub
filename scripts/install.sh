@@ -1065,7 +1065,11 @@ User=${SERVICE_USER}
 Group=${SERVICE_USER}
 EnvironmentFile=${ENV_FILE}
 WorkingDirectory=${INSTALL_PATH}
-ExecStart=/usr/bin/php ${INSTALL_PATH}/public/index.php start
+# start.php is the canonical Workerman bootstrap (webman-style). The
+# legacy public/index.php is kept as a thin shim that forwards here, so
+# existing units pre-dating start.php still work if they were left in
+# place — but new installs go straight to the root-level entry.
+ExecStart=/usr/bin/php ${INSTALL_PATH}/start.php start
 Restart=on-failure
 RestartSec=5
 
