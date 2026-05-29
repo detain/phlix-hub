@@ -33,6 +33,7 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
+use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\RelayController;
@@ -341,6 +342,12 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): InviteLinkController {
                 return new InviteLinkController($handler);
             })->parameter('handler', get(InviteLinkHandler::class)),
+
+            LibraryController::class => factory(static function (
+                LibrarySharingHandler $sharingHandler,
+            ): LibraryController {
+                return new LibraryController($sharingHandler);
+            })->parameter('sharingHandler', get(LibrarySharingHandler::class)),
 
             ArrClientFactory::class => factory(static function () use ($appConfig): ArrClientFactory {
                 /** @var array{sonarr?: array{url?: string, api_key?: string, enabled?: bool}, radarr?: array{url?: string, api_key?: string, enabled?: bool}} $arrConfig */

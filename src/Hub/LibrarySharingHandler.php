@@ -325,6 +325,41 @@ class LibrarySharingHandler
     }
 
     /**
+     * Get distinct library_id/library_name pairs for a user's server.
+     *
+     * @param string $ownerId  The user who owns the server.
+     * @param string $serverId  The server UUID.
+     *
+     * @return list<array{library_id: string, library_name: string}>
+     */
+    public function getDistinctLibrariesForServer(string $ownerId, string $serverId): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT DISTINCT library_id, library_name
+             FROM library_shares
+             WHERE owner_user_id = :owner_id AND server_id = :server_id AND revoked_at IS NULL
+             ORDER BY library_name ASC',
+            ['owner_id' => $ownerId, 'server_id' => $serverId],
+        );
+
+        $result = [];
+        foreach ($rows as $row) {
+            /** @var string $libId */
+            $libId = is_string($row['library_id'] ?? null) ? $row['library_id'] : '';
+            /** @var string $libName */
+            $libName = is_string($row['library_name'] ?? null) ? $row['library_name'] : '';
+            if ($libId !== '') {
+                $result[] = [
+                    'library_id' => $libId,
+                    'library_name' => $libName,
+                ];
+            }
+        }
+        return $result;
+    }
+
+    /**
      * Check if a server is owned by a specific user.
      */
     public function isServerOwnedByUser(string $serverId, string $userId): bool
