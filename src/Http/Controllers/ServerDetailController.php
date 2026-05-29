@@ -7,6 +7,7 @@ namespace Phlix\Hub\Http\Controllers;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -24,11 +25,13 @@ final class ServerDetailController
      * @param ServerInfoHandler   $serverInfo   Fetches server info and validates ownership.
      * @param RelaySessionManager $relayManager Fetches the active relay session.
      * @param HeartbeatHandler    $heartbeat    Fetches heartbeat history.
+     * @param TlsCertificateManager $tlsManager Manages TLS certificate status.
      */
     public function __construct(
         private readonly ServerInfoHandler $serverInfo,
         private readonly RelaySessionManager $relayManager,
         private readonly HeartbeatHandler $heartbeat,
+        private readonly TlsCertificateManager $tlsManager,
     ) {
     }
 
@@ -37,12 +40,17 @@ final class ServerDetailController
      *
      * @param array<string, string> $params Route parameters including `id`.
      *
-     * Response shape:
-     * {
-     *   "server": { "id", "server_name", "version", "status", "last_seen_at", "hostname_candidates": [], "relay_active" },
-     *   "relay_session": { "id", "worker_node", "opened_at", "bytes_in", "bytes_out", "last_frame_at" } | null,
-     *   "heartbeat_history": [{ "id", "version", "uptime_seconds", "active_sessions", "active_transcodes", "received_at" }]
-     * }
+      * Response shape:
+      * {
+      *   "server": { "id", "server_name", "version", "status", "last_seen_at",
+      *              "hostname_candidates": [], "relay_active", "subdomain", "fqdn" },
+      *   "relay_session": { "id", "worker_node", "opened_at", "bytes_in", "bytes_out",
+      *                      "last_frame_at" } | null,
+      *   "heartbeat_history": [{ "id", "version", "uptime_seconds", "active_sessions",
+      *                          "active_transcodes", "received_at" }],
+      *   "tls_status": { "provisioned", "cert_path", "key_path", "needs_renewal",
+      *                   "expiry_days_remaining" } | null
+      * }
      *
      * Status codes:
      * - 200: success
@@ -80,6 +88,22 @@ final class ServerDetailController
         $relaySession = $this->relayManager->getActiveSession($serverId);
         $heartbeatHistory = $this->heartbeat->getHeartbeatHistory($serverId, 20);
 
+        // Get subdomain and TLS status
+        $subdomain = $this->serverInfo->getServerSubdomain($serverId);
+        $publicDomain = getenv('HUB_PUBLIC_DOMAIN') ?: 'phlix.media';
+        $fqdn = $subdomain !== null ? $subdomain . '.' . $publicDomain : null;
+
+        $tlsStatus = null;
+        if ($subdomain !== null) {
+            $tlsStatus = [
+                'provisioned' => $this->tlsManager->isProvisioned($subdomain),
+                'cert_path' => $this->tlsManager->getCertificatePath($subdomain),
+                'key_path' => $this->tlsManager->getPrivateKeyPath($subdomain),
+                'needs_renewal' => $this->tlsManager->needsRenewal($subdomain),
+                'expiry_days_remaining' => $this->tlsManager->getExpiryDaysRemaining($subdomain),
+            ];
+        }
+
         return (new Response())->json([
             'server' => [
                 'id'                   => $server->serverId,
@@ -89,6 +113,8 @@ final class ServerDetailController
                 'last_seen_at'         => $server->lastSeenAt,
                 'hostname_candidates'  => $server->hostnameCandidates,
                 'relay_active'         => $server->relayActive,
+                'subdomain'            => $subdomain,
+                'fqdn'                 => $fqdn,
             ],
             'relay_session' => $relaySession !== null ? [
                 'id'          => $relaySession['id'],
@@ -99,6 +125,7 @@ final class ServerDetailController
                 'last_frame_at' => $relaySession['last_frame_at'],
             ] : null,
             'heartbeat_history' => $heartbeatHistory,
+            'tls_status' => $tlsStatus,
         ]);
     }
 }
