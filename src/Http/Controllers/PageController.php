@@ -71,14 +71,16 @@ final class PageController
     public function __invoke(Request $request): Response
     {
         return match (true) {
-            $request->path === '/signup'         => $this->signup($request),
-            $request->path === '/login'          => $this->login($request),
-            $request->path === '/my-servers'     => $this->myServers($request),
-            $request->path === '/claim-server'   => $this->claimServer($request),
-            $request->path === '/requests'       => $this->requests($request),
-            $request->path === '/admin/requests' => $this->adminRequests($request),
-            $request->path === '/invite-links'   => $this->inviteLinks($request),
-            $request->path === '/'               => $this->home($request),
+            $request->path === '/signup'           => $this->signup($request),
+            $request->path === '/login'            => $this->login($request),
+            $request->path === '/my-servers'       => $this->myServers($request),
+            $request->path === '/claim-server'     => $this->claimServer($request),
+            $request->path === '/requests'         => $this->requests($request),
+            $request->path === '/admin/requests'   => $this->adminRequests($request),
+            $request->path === '/invite-links'     => $this->inviteLinks($request),
+            $request->path === '/manage-shares'    => $this->manageShares($request),
+            $request->path === '/shared-with-me'   => $this->sharedWithMe($request),
+            $request->path === '/'                 => $this->home($request),
             default => (new Response())->status(404)->html('<h1>Not Found</h1>'),
         };
     }
@@ -199,6 +201,28 @@ final class PageController
     public function inviteLinks(Request $request): Response
     {
         $html = $this->renderer->render('home/invite-links.tpl', $this->layoutContext($request));
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /manage-shares` — render the library shares management page.
+     *
+     * Data is fetched client-side from the API; the SSR page is a shell.
+     */
+    public function manageShares(Request $request): Response
+    {
+        $html = $this->renderer->render('home/manage-shares.tpl', $this->layoutContext($request));
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /shared-with-me` — render the libraries shared with current user page.
+     *
+     * Data is fetched client-side from the API; the SSR page is a shell.
+     */
+    public function sharedWithMe(Request $request): Response
+    {
+        $html = $this->renderer->render('home/shared-with-me.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 }
