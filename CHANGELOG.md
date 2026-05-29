@@ -140,6 +140,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     protocol with per-channel DATA routing.
   - Tests: `ClientRelayWorkerTest`, `TunnelTest`, `TunnelManagerTest`,
     `RelayWorkerTest` under `tests/Unit/Relay/`.
+- **Hub: invite link management UI at `/invite-links` — create/list/revoke invite links with server and library selection (H.1).** A new SSR page (`invite-links.tpl`) backed by vanilla JS (`invite-links.js`) renders the invite-link management interface. The page fetches list/create/revoke data client-side from the existing `/api/v1/me/invite-links` endpoints. Library selection for the server dropdown is provided by the new `GET /api/v1/me/libraries?server_id={id}` endpoint (`LibraryController::listForServer`). The "Invite Links" nav item is wired into `layouts/base.tpl`. PHPUnit suite: 575 tests unchanged.
+
 - **Step D.5 — Invite-Link Sharing**: Single-use invite link sharing for library access.
   - `InviteLink` DTO — represents an invite link with expiry, max uses, and status checks (`isExpired()`, `isExhausted()`, `canUse()`).
   - `InviteLinkHandler` — business logic for creating, redeeming, listing, and revoking invite links.
