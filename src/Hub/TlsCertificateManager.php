@@ -166,6 +166,52 @@ class TlsCertificateManager
     }
 
     /**
+     * Get the number of days until the certificate expires.
+     *
+     * Pure read; never mutates state or invokes ACME.
+     *
+     * @param string $subdomain Subdomain label.
+     *
+     * @return int|null Days remaining until expiry, or null if not provisioned / error.
+     */
+    public function getExpiryDaysRemaining(string $subdomain): ?int
+    {
+        $fqdn = $subdomain . '.phlix.media';
+        $certPath = $this->certsDir . '/' . $fqdn . '/fullchain.pem';
+
+        if (!file_exists($certPath)) {
+            return null;
+        }
+
+        $certFile = file_get_contents($certPath);
+        if ($certFile === false || !str_contains($certFile, 'BEGIN CERTIFICATE')) {
+            return null;
+        }
+
+        $exitCode = 0;
+        $output = $this->runOpenssl(
+            ['openssl', 'x509', '-noout', '-enddate'],
+            $certFile,
+            $exitCode,
+        );
+
+        if ($exitCode !== 0 || $output === '') {
+            return null;
+        }
+
+        $lines = preg_split('/\r?\n/', $output) ?: [];
+        $firstLine = $lines[0] ?? '';
+        if ($firstLine !== '' && preg_match('/notAfter=(.+)/i', $firstLine, $matches) === 1) {
+            $expiry = strtotime(trim($matches[1]));
+            if ($expiry !== false) {
+                return (int) ceil(($expiry - time()) / 86400);
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Check if a certificate needs renewal.
      *
      * Used by external monitoring/cron scripts. Pure read; never

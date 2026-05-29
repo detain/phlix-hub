@@ -1,8 +1,8 @@
 {**
- * Server detail page (H.3).
+ * Server detail page (H.3 + H.4).
  *
- * Fetches server detail, active relay session, and heartbeat history from
- * `GET /api/v1/me/servers/{id}` client-side.
+ * Fetches server detail, active relay session, TLS status (H.4), and
+ * heartbeat history from `GET /api/v1/me/servers/{id}` client-side.
  *
  * @package Phlix\Hub
  *}
@@ -72,6 +72,31 @@
         </div>
         <div id="relay-session-empty" class="empty-state" style="display:none;">
             <p>No active relay session.</p>
+        </div>
+    </section>
+
+    {* ── TLS Status (H.4) ── *}
+    <section class="detail-section" id="tls-status-section">
+        <h2>TLS Status</h2>
+        <div id="tls-status-content" style="display:none;">
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Subdomain</span>
+                    <span id="tls-subdomain" class="info-value"></span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Certificate</span>
+                    <span id="tls-provisioned" class="info-value"></span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Renewal</span>
+                    <span id="tls-renewal" class="info-value"></span>
+                </div>
+            </div>
+            <p class="info-note"><em>ACME provisioning is out-of-band — no auto-renewal.</em></p>
+        </div>
+        <div id="tls-status-empty" class="empty-state" style="display:none;">
+            <p>No subdomain allocated.</p>
         </div>
     </section>
 

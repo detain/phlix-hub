@@ -34,7 +34,7 @@ class ServerInfoHandler
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
             'SELECT s.id, s.user_id, s.server_name, s.version, s.last_seen_at, s.status,
-                    s.hostname_candidates_json, s.created_at,
+                    s.hostname_candidates_json, s.created_at, s.subdomain,
                     EXISTS(
                         SELECT 1 FROM relay_sessions r
                         WHERE r.server_id = s.id AND r.closed_at IS NULL
@@ -48,6 +48,29 @@ class ServerInfoHandler
         }
 
         return $this->rowToDto($rows[0]);
+    }
+
+    /**
+     * Get the subdomain for a server.
+     *
+     * @param string $serverId Server UUID.
+     *
+     * @return string|null Subdomain label or null when not found/no subdomain.
+     */
+    public function getServerSubdomain(string $serverId): ?string
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT subdomain FROM servers WHERE id = :id LIMIT 1',
+            ['id' => $serverId],
+        );
+
+        if (!isset($rows[0])) {
+            return null;
+        }
+
+        /** @var string|null */
+        return is_string($rows[0]['subdomain'] ?? null) ? $rows[0]['subdomain'] : null;
     }
 
     /**
@@ -101,10 +124,18 @@ class ServerInfoHandler
             $lastSeenAt = (int) $lastSeenRaw;
         }
 
+        if (!is_string($row['id'] ?? null)) {
+            throw new \RuntimeException('ServerInfoHandler: row missing or null server id');
+        }
+        if (!is_string($row['user_id'] ?? null)) {
+            throw new \RuntimeException('ServerInfoHandler: row missing or null user_id');
+        }
+
         /** @var string */
-        $serverId = is_string($row['id'] ?? null) ? $row['id'] : '';
+        $serverId = $row['id'];
         /** @var string */
-        $userId = is_string($row['user_id'] ?? null) ? $row['user_id'] : '';
+        $userId = $row['user_id'];
+
         /** @var string */
         $serverName = is_string($row['server_name'] ?? null) ? $row['server_name'] : '';
         /** @var string */

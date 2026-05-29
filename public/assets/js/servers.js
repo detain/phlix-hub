@@ -1,9 +1,10 @@
 /**
- * Server detail page interactivity (H.3).
+ * Server detail page interactivity (H.3 + H.4).
  *
  * Fetches and renders:
  * - Server info (status badge, version, last seen)
  * - Active relay session details
+ * - TLS status (subdomain, certificate, renewal) — H.4
  * - Recent heartbeat history
  *
  * @package Phlix\Hub
@@ -298,6 +299,61 @@ window.PhlixApp = window.PhlixApp || {};
     }
 
     /**
+     * Render the TLS status section (or empty state if no subdomain).
+     *
+     * @param {object|null} tlsStatus
+     * @param {string|null} fqdn
+     */
+    function renderTlsStatus(tlsStatus, fqdn) {
+        const contentEl = document.getElementById('tls-status-content');
+        const emptyEl = document.getElementById('tls-status-empty');
+
+        if (!tlsStatus || !fqdn) {
+            if (contentEl) {
+                contentEl.style.display = 'none';
+            }
+            if (emptyEl) {
+                emptyEl.style.display = 'block';
+            }
+            return;
+        }
+
+        if (contentEl) {
+            contentEl.style.display = 'block';
+        }
+        if (emptyEl) {
+            emptyEl.style.display = 'none';
+        }
+
+        const subdomainEl = document.getElementById('tls-subdomain');
+        if (subdomainEl) {
+            subdomainEl.textContent = fqdn;
+        }
+
+        const provisionedEl = document.getElementById('tls-provisioned');
+        if (provisionedEl) {
+            if (tlsStatus.provisioned) {
+                provisionedEl.textContent = 'Provisioned';
+                provisionedEl.className = 'info-value status-provisioned';
+            } else {
+                provisionedEl.textContent = 'Not provisioned';
+                provisionedEl.className = 'info-value status-not-provisioned';
+            }
+        }
+
+        const renewalEl = document.getElementById('tls-renewal');
+        if (renewalEl) {
+            if (tlsStatus.needs_renewal) {
+                renewalEl.textContent = 'Expiring soon';
+                renewalEl.className = 'info-value status-warning';
+            } else {
+                renewalEl.textContent = 'OK';
+                renewalEl.className = 'info-value status-ok';
+            }
+        }
+    }
+
+    /**
      * Show an error message in the page.
      *
      * @param {string} message
@@ -346,6 +402,7 @@ window.PhlixApp = window.PhlixApp || {};
 
             renderServerInfo(data.server);
             renderRelaySession(data.relay_session);
+            renderTlsStatus(data.tls_status, data.server.fqdn);
             renderHeartbeatHistory(data.heartbeat_history);
         } catch (err) {
             showError('Network error — could not load server details.');
