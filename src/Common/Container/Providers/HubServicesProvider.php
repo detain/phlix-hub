@@ -388,11 +388,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ServerInfoHandler $serverInfo,
                 RelaySessionManager $relayManager,
                 HeartbeatHandler $heartbeat,
+                TlsCertificateManager $tls,
             ): ServerDetailController {
-                return new ServerDetailController($serverInfo, $relayManager, $heartbeat);
+                return new ServerDetailController($serverInfo, $relayManager, $heartbeat, $tls);
             })->parameter('serverInfo', get(ServerInfoHandler::class))
                 ->parameter('relayManager', get(RelaySessionManager::class))
-                ->parameter('heartbeat', get(HeartbeatHandler::class)),
+                ->parameter('heartbeat', get(HeartbeatHandler::class))
+                ->parameter('tls', get(TlsCertificateManager::class)),
         ]);
     }
 
