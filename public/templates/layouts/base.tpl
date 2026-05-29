@@ -76,6 +76,7 @@
         <h1><a href="/" style="text-decoration: none; color: inherit;">Phlix Hub</a></h1>
         <nav>
             {if $is_authenticated|default:false}
+                <a href="/my-servers">Servers</a>
                 <a href="/my-servers">My Servers</a>
                 <a href="/invite-links">Invite Links</a>
                 <a href="/requests">Requests</a>

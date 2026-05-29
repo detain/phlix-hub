@@ -41,6 +41,7 @@
         </div>
 
         <div class="server-actions">
+            <a href="/servers/{$server.serverId|escape:'url'}" class="btn btn-small">View Details</a>
             <button class="btn btn-remove" data-server-id="{$server.serverId|escape:'html'}"
                     type="button">Remove</button>
         </div>

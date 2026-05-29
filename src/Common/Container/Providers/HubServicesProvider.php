@@ -40,6 +40,7 @@ use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
+use Phlix\Hub\Http\Controllers\ServerDetailController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
@@ -382,6 +383,16 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->parameter('notification', get(RequestNotification::class))
                 ->parameter('users', get(UserRepository::class))
                 ->parameter('audit', get(AuditLogger::class)),
+
+            ServerDetailController::class => factory(static function (
+                ServerInfoHandler $serverInfo,
+                RelaySessionManager $relayManager,
+                HeartbeatHandler $heartbeat,
+            ): ServerDetailController {
+                return new ServerDetailController($serverInfo, $relayManager, $heartbeat);
+            })->parameter('serverInfo', get(ServerInfoHandler::class))
+                ->parameter('relayManager', get(RelaySessionManager::class))
+                ->parameter('heartbeat', get(HeartbeatHandler::class)),
         ]);
     }
 
