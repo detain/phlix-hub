@@ -80,7 +80,8 @@ final class PageController
             $request->path === '/invite-links'     => $this->inviteLinks($request),
             $request->path === '/manage-shares'    => $this->manageShares($request),
             $request->path === '/shared-with-me'   => $this->sharedWithMe($request),
-            $request->path === '/'                 => $this->home($request),
+            $request->path === '/'                  => $this->home($request),
+            str_starts_with($request->path, '/servers/') => $this->serverDetail($request),
             default => (new Response())->status(404)->html('<h1>Not Found</h1>'),
         };
     }
@@ -223,6 +224,18 @@ final class PageController
     public function sharedWithMe(Request $request): Response
     {
         $html = $this->renderer->render('home/shared-with-me.tpl', $this->layoutContext($request));
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /servers/{id}` — render the server detail page.
+     *
+     * The page is a shell; data is fetched client-side from
+     * `GET /api/v1/me/servers/{id}`.
+     */
+    public function serverDetail(Request $request): Response
+    {
+        $html = $this->renderer->render('home/servers.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 }

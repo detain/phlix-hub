@@ -20,10 +20,9 @@ use Phlix\Hub\Http\Controllers\MeController;
 use Phlix\Hub\Http\Controllers\PageController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
+use Phlix\Hub\Http\Controllers\ServerDetailController;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
-use Phlix\Hub\Http\Controllers\RelayController;
-use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
@@ -119,11 +118,16 @@ final class Application
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
 
+        $this->router->group('/servers/{id}', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
         $me = $this->resolveMeController();
         $serverList = $this->resolveServerListController();
         $serverManage = $this->resolveServerManageController();
+        $serverDetail = $this->resolveServerDetailController();
         $libraryController = $this->resolveLibraryController();
-        $this->router->group('/api/v1', function (Router $r) use ($me, $serverList, $serverManage, $libraryController): void {
+        $this->router->group('/api/v1', function (Router $r) use ($me, $serverList, $serverManage, $serverDetail, $libraryController): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
             $r->get('/me/servers', static fn (Request $req): Response => $serverList($req));
             $r->delete(
@@ -146,6 +150,14 @@ final class Application
                 '/me/libraries',
                 static function (Request $req) use ($libraryController): Response {
                     return $libraryController->listForServer($req);
+                },
+            );
+            $r->get(
+                '/me/servers/{id}',
+                static function (Request $req, array $params) use ($serverDetail): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $serverDetail->getServerDetail($req, $typedParams);
                 },
             );
         }, [$authMiddleware]);
@@ -290,6 +302,15 @@ final class Application
         $controller = $this->container->get(ServerManageController::class);
         if (!$controller instanceof ServerManageController) {
             throw new \RuntimeException('Container returned an unexpected ServerManageController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveServerDetailController(): ServerDetailController
+    {
+        $controller = $this->container->get(ServerDetailController::class);
+        if (!$controller instanceof ServerDetailController) {
+            throw new \RuntimeException('Container returned an unexpected ServerDetailController instance');
         }
         return $controller;
     }
