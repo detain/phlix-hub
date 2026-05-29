@@ -34,6 +34,7 @@
         <nav>
             {if $is_authenticated|default:false}
                 <a href="/my-servers">My Servers</a>
+                <a href="/invite-links">Invite Links</a>
                 <a href="/requests">Requests</a>
                 {if $is_admin|default:false}
                     <a href="/admin/requests">Admin</a>

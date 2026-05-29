@@ -14,6 +14,7 @@ use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
+use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
 use Phlix\Hub\Http\Controllers\MeController;
 use Phlix\Hub\Http\Controllers\PageController;
@@ -114,10 +115,15 @@ final class Application
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
 
+        $this->router->group('/invite-links', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
         $me = $this->resolveMeController();
         $serverList = $this->resolveServerListController();
         $serverManage = $this->resolveServerManageController();
-        $this->router->group('/api/v1', function (Router $r) use ($me, $serverList, $serverManage): void {
+        $libraryController = $this->resolveLibraryController();
+        $this->router->group('/api/v1', function (Router $r) use ($me, $serverList, $serverManage, $libraryController): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
             $r->get('/me/servers', static fn (Request $req): Response => $serverList($req));
             $r->delete(
@@ -134,6 +140,12 @@ final class Application
                     /** @var array<string, string> $typedParams */
                     $typedParams = $params;
                     return $serverManage->accessInfo($req, $typedParams);
+                },
+            );
+            $r->get(
+                '/me/libraries',
+                static function (Request $req) use ($libraryController): Response {
+                    return $libraryController->listForServer($req);
                 },
             );
         }, [$authMiddleware]);
@@ -462,6 +474,15 @@ final class Application
         $controller = $this->container->get(LibraryShareController::class);
         if (!$controller instanceof LibraryShareController) {
             throw new \RuntimeException('Container returned an unexpected LibraryShareController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveLibraryController(): LibraryController
+    {
+        $controller = $this->container->get(LibraryController::class);
+        if (!$controller instanceof LibraryController) {
+            throw new \RuntimeException('Container returned an unexpected LibraryController instance');
         }
         return $controller;
     }

@@ -77,6 +77,7 @@ final class PageController
             $request->path === '/claim-server'   => $this->claimServer($request),
             $request->path === '/requests'       => $this->requests($request),
             $request->path === '/admin/requests' => $this->adminRequests($request),
+            $request->path === '/invite-links'   => $this->inviteLinks($request),
             $request->path === '/'               => $this->home($request),
             default => (new Response())->status(404)->html('<h1>Not Found</h1>'),
         };
@@ -187,6 +188,17 @@ final class PageController
         // /login before this handler runs.
 
         $html = $this->renderer->render('home/admin-requests.tpl', $this->layoutContext($request));
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /invite-links` — render the invite links management page.
+     *
+     * Data is fetched client-side from the API; the SSR page is a shell.
+     */
+    public function inviteLinks(Request $request): Response
+    {
+        $html = $this->renderer->render('home/invite-links.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 }
