@@ -7,6 +7,10 @@ namespace Phlix\Hub\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Federation\FederationAdminDelegationRepository;
+use Phlix\Hub\Federation\FederationHubRepository;
+use Phlix\Hub\Federation\FederationLibraryShareRepository;
+use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\DeregisterHandler;
 use Phlix\Hub\Hub\DnsAliasManager;
@@ -409,6 +413,32 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): HubSettingsController {
                 return new HubSettingsController($settings);
             })->parameter('settings', get(HubSettingsRepository::class)),
+
+            FederationHubRepository::class => factory(static function (
+                Connection $db,
+            ): FederationHubRepository {
+                return new FederationHubRepository($db);
+            })->parameter('db', get(Connection::class)),
+
+            FederationSessionManager::class => factory(static function (
+                Connection $db,
+                StructuredLogger $logger,
+            ): FederationSessionManager {
+                return new FederationSessionManager($db, $logger);
+            })->parameter('db', get(Connection::class))
+                ->parameter('logger', get(StructuredLogger::class)),
+
+            FederationLibraryShareRepository::class => factory(static function (
+                Connection $db,
+            ): FederationLibraryShareRepository {
+                return new FederationLibraryShareRepository($db);
+            })->parameter('db', get(Connection::class)),
+
+            FederationAdminDelegationRepository::class => factory(static function (
+                Connection $db,
+            ): FederationAdminDelegationRepository {
+                return new FederationAdminDelegationRepository($db);
+            })->parameter('db', get(Connection::class)),
         ]);
     }
 
