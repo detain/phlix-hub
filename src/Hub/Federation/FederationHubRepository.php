@@ -87,7 +87,7 @@ class FederationHubRepository
     public function updateRole(string $role): void
     {
         $this->db->query(
-            'UPDATE federation_hubs SET is_master = CASE WHEN role = :role THEN 1 ELSE 0 END',
+            'UPDATE federation_hubs SET role = :role, is_master = CASE WHEN role = :role THEN 1 ELSE 0 END',
             ['role' => $role],
         );
     }

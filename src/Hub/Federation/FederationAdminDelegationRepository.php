@@ -32,9 +32,10 @@ class FederationAdminDelegationRepository
     public function grant(string $id, string $peerId, string $userId): void
     {
         $this->db->query(
-            'INSERT IGNORE INTO federation_admin_delegations
+            'INSERT INTO federation_admin_delegations
              (id, peer_id, user_id)
-             VALUES (:id, :peer_id, :user_id)',
+             VALUES (:id, :peer_id, :user_id)
+             ON DUPLICATE KEY UPDATE peer_id = VALUES(peer_id), revoked_at = NULL',
             [
                 'id' => $id,
                 'peer_id' => $peerId,
