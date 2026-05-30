@@ -49,8 +49,10 @@ final readonly class FederationPeerDto
             name: is_string($rawName) ? $rawName : '',
             url: is_string($rawUrl) ? $rawUrl : '',
             publicKey: is_string($rawPublicKey) ? $rawPublicKey : '',
-            relayEnabled: is_int($rawRelayEnabled) ? $rawRelayEnabled === 1 : false,
-            adminDelegationEnabled: is_int($rawAdminDelegationEnabled) ? $rawAdminDelegationEnabled === 1 : false,
+            relayEnabled: ($row['relay_enabled'] ?? '') === '1'
+                || ($row['relay_enabled'] ?? 0) === 1,
+            adminDelegationEnabled: ($row['admin_delegation_enabled'] ?? '') === '1'
+                || ($row['admin_delegation_enabled'] ?? 0) === 1,
             status: is_string($rawStatus) ? $rawStatus : 'pending',
             lastSeenAt: is_string($row['last_seen_at'] ?? null) ? $row['last_seen_at'] : null,
             lastConnectedAt: is_string($row['last_connected_at'] ?? null) ? $row['last_connected_at'] : null,

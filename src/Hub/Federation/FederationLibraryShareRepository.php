@@ -236,7 +236,8 @@ class FederationLibraryShareRepository
              VALUES (:id, :peer_id, :library_id, :library_name, :permission)
              ON DUPLICATE KEY UPDATE
                library_name = VALUES(library_name),
-               permission = VALUES(permission)',
+               permission = VALUES(permission),
+               status = VALUES(status)',
             [
                 'id' => $id,
                 'peer_id' => $peerId,
