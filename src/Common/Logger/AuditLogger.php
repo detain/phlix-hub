@@ -116,4 +116,83 @@ class AuditLogger
             'resource' => $resource,
         ], $context));
     }
+
+    /**
+     * Record a hub federation connection attempt.
+     *
+     * @param string  $peerId   Peer UUID.
+     * @param string  $peerName Human-readable peer name.
+     * @param string  $peerUrl  Public peer URL.
+     * @param bool    $success  Whether the connection succeeded.
+     * @param ?string $reason   Optional reason for failure.
+     */
+    public function logHubConnect(
+        string $peerId,
+        string $peerName,
+        string $peerUrl,
+        bool $success,
+        ?string $reason = null,
+    ): void {
+        $this->logger->info('Hub connected', [
+            'event' => 'hub_connect',
+            'peer_id' => $peerId,
+            'peer_name' => $peerName,
+            'peer_url' => $peerUrl,
+            'success' => $success,
+            'reason' => $reason,
+        ]);
+    }
+
+    /**
+     * Record a hub federation disconnection.
+     *
+     * @param string $peerId   Peer UUID.
+     * @param string $peerName Human-readable peer name.
+     * @param string $reason   Reason for disconnection.
+     */
+    public function logHubDisconnect(string $peerId, string $peerName, string $reason): void
+    {
+        $this->logger->info('Hub disconnected', [
+            'event' => 'hub_disconnect',
+            'peer_id' => $peerId,
+            'peer_name' => $peerName,
+            'reason' => $reason,
+        ]);
+    }
+
+    /**
+     * Record a cross-hub library share event.
+     *
+     * @param string $peerId     Peer UUID.
+     * @param string $libraryId  Library UUID.
+     * @param string $permission Share permission level.
+     * @param string $action     Action performed ('created'|'revoked'|'accepted'|'rejected').
+     */
+    public function logLibraryShareCrossHub(string $peerId, string $libraryId, string $permission, string $action): void
+    {
+        $this->logger->info('Cross-hub library share', [
+            'event' => 'library_share_cross_hub',
+            'peer_id' => $peerId,
+            'library_id' => $libraryId,
+            'permission' => $permission,
+            'action' => $action,
+        ]);
+    }
+
+    /**
+     * Record an admin delegation change.
+     *
+     * @param string $peerId Peer UUID.
+     * @param string $userId User UUID.
+     * @param string $action Action performed ('grant'|'revoke').
+     */
+    public function logAdminDelegation(string $peerId, string $userId, string $action): void
+    {
+        $this->logger->info('Admin delegation changed', [
+            'event' => 'admin_delegation',
+            'peer_id' => $peerId,
+            'user_id' => $userId,
+            'action' => $action,
+        ]);
+    }
 }
