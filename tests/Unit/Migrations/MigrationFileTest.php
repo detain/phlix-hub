@@ -48,6 +48,7 @@ final class MigrationFileTest extends TestCase
             '010_invite_links.sql',
             '011_media_requests.sql',
             '012_enrolled_at_and_last_frame_at.sql',
+            '027_hub_settings.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
