@@ -9,6 +9,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
+use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
