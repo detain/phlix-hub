@@ -202,9 +202,10 @@
                 value = field.value;
             }
 
-            // Only include fields that differ from their original value (optimization)
-            // or include all for all-or-nothing semantics.
-            payload[name] = value;
+            // Only include fields that differ from their original effective value.
+            if (!Object.prototype.hasOwnProperty.call(settings, name) || settings[name] !== value) {
+                payload[name] = value;
+            }
         }
 
         var body = JSON.stringify({ settings: payload });

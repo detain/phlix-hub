@@ -616,9 +616,9 @@ final class Application
         $adminMiddleware = $this->resolveAdminMiddleware();
         $controller      = $this->resolveHubSettingsController();
 
-        $this->router->group('/api/v1/me/hub-settings', static function (Router $r) use ($controller): void {
-            $r->get('/', static fn (Request $req): Response => $controller->getSettings($req));
-            $r->put('/', static fn (Request $req): Response => $controller->putSettings($req));
+        $this->router->group('/api/v1/me', static function (Router $r) use ($controller): void {
+            $r->get('/hub-settings', static fn (Request $req): Response => $controller->getSettings($req));
+            $r->put('/hub-settings', static fn (Request $req): Response => $controller->putSettings($req));
         }, [$authMiddleware, $adminMiddleware]);
     }
 
