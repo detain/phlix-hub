@@ -14,6 +14,7 @@ use Phlix\Hub\Hub\Dns\StaticZoneManager;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\HeartbeatHandler;
+use Phlix\Hub\Hub\HubSettingsRepository;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibrarySharingHandler;
 use Phlix\Hub\Hub\RelayRouter;
@@ -121,6 +122,12 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new HeartbeatHandler($db, $jwtService, LoggerFactory::get(LogChannels::HUB));
             })->parameter('db', get(Connection::class))
                 ->parameter('jwtService', get(EnrollmentJwtService::class)),
+
+            HubSettingsRepository::class => factory(static function (
+                Connection $db,
+            ): HubSettingsRepository {
+                return new HubSettingsRepository($db);
+            })->parameter('db', get(Connection::class)),
 
             ServerInfoHandler::class => factory(static function (
                 Connection $db,
