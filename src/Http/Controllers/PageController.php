@@ -80,6 +80,7 @@ final class PageController
             $request->path === '/invite-links'     => $this->inviteLinks($request),
             $request->path === '/manage-shares'    => $this->manageShares($request),
             $request->path === '/shared-with-me'   => $this->sharedWithMe($request),
+            $request->path === '/hub-settings'      => $this->hubSettings($request),
             $request->path === '/'                  => $this->home($request),
             str_starts_with($request->path, '/servers/') => $this->serverDetail($request),
             default => (new Response())->status(404)->html('<h1>Not Found</h1>'),
@@ -224,6 +225,32 @@ final class PageController
     public function sharedWithMe(Request $request): Response
     {
         $html = $this->renderer->render('home/shared-with-me.tpl', $this->layoutContext($request));
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /hub-settings` — render the hub admin settings page.
+     *
+     * Data is fetched client-side from `GET /api/v1/me/hub-settings`;
+     * the SSR page is a shell rendered by JS.
+     *
+     * Access is gated by the admin middleware; unauthenticated or
+     * non-admin visitors see a 403 HTML error.
+     */
+    public function hubSettings(Request $request): Response
+    {
+        $status = $this->admin->checkAccess($request);
+        if ($status === 403) {
+            return (new Response())
+                ->html(
+                    '<h1>Forbidden</h1>'
+                    . '<p>You need admin access to view hub settings.</p>'
+                    . '<p><a href="/my-servers">Back to my servers</a></p>',
+                    403,
+                );
+        }
+
+        $html = $this->renderer->render('home/hub-settings.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 
