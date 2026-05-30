@@ -52,4 +52,22 @@ final readonly class FederationHubConfig
             isActive: is_int($rawIsActive) ? $rawIsActive === 1 : (is_string($rawIsActive) && $rawIsActive === '1'),
         );
     }
+
+    /**
+     * Convert this config to an array representation.
+     *
+     * @return array<string, mixed>
+     */
+    public function toArray(): array
+    {
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'url' => $this->url,
+            'public_key' => $this->publicKey,
+            'role' => $this->role,
+            'is_master' => $this->isMaster,
+            'is_active' => $this->isActive,
+        ];
+    }
 }

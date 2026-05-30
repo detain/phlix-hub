@@ -13,6 +13,7 @@ use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
+use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Controllers\HubSettingsController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
@@ -185,6 +186,9 @@ final class Application
 
         // Hub admin settings routes (admin-only API).
         $this->registerHubSettingsRoutes();
+
+        // Federation management routes.
+        $this->registerFederationRoutes();
 
         // Media request routes.
         $this->registerRequestRoutes();
@@ -621,6 +625,101 @@ final class Application
             $r->get('/hub-settings', static fn (Request $req): Response => $controller->getSettings($req));
             $r->put('/hub-settings', static fn (Request $req): Response => $controller->putSettings($req));
         }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
+     * Register federation management REST routes.
+     *
+     * All routes require authMiddleware + adminMiddleware.
+     *
+     * Endpoints:
+     *  - GET    /api/v1/me/federation/hub-config
+     *  - PUT    /api/v1/me/federation/hub-config
+     *  - GET    /api/v1/me/federation/peers
+     *  - POST   /api/v1/me/federation/peers
+     *  - DELETE /api/v1/me/federation/peers/{id}
+     *  - PUT    /api/v1/me/federation/peers/{id}/relay
+     *  - PUT    /api/v1/me/federation/peers/{id}/admin-delegation
+     *  - GET    /api/v1/me/federation/library-shares/outgoing
+     *  - POST   /api/v1/me/federation/library-shares/outgoing
+     *  - DELETE /api/v1/me/federation/library-shares/outgoing/{id}
+     *  - GET    /api/v1/me/federation/library-shares/incoming
+     *  - POST   /api/v1/me/federation/library-shares/incoming/{id}/accept
+     *  - POST   /api/v1/me/federation/library-shares/incoming/{id}/reject
+     *  - GET    /api/v1/me/federation/admin-delegations
+     *  - POST   /api/v1/me/federation/admin-delegations
+     *  - DELETE /api/v1/me/federation/admin-delegations/{id}
+     */
+    private function registerFederationRoutes(): void
+    {
+        $authMiddleware = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller = $this->resolveFederationController();
+
+        $this->router->group('/api/v1/me/federation', static function (Router $r) use ($controller): void {
+            // Hub config
+            $r->get('/hub-config', static fn (Request $req): Response => $controller->getHubConfig($req));
+            $r->put('/hub-config', static fn (Request $req): Response => $controller->putHubConfig($req));
+
+            // Peers
+            $r->get('/peers', static fn (Request $req): Response => $controller->getPeers($req));
+            $r->post('/peers', static fn (Request $req): Response => $controller->createPeer($req));
+            $r->delete('/peers/{id}', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->deletePeer($req, $typedParams);
+            });
+            $r->put('/peers/{id}/relay', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->toggleRelay($req, $typedParams);
+            });
+            $r->put('/peers/{id}/admin-delegation', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->toggleAdminDelegation($req, $typedParams);
+            });
+
+            // Library shares - outgoing
+            $r->get('/library-shares/outgoing', static fn (Request $req): Response => $controller->getOutgoingShares($req));
+            $r->post('/library-shares/outgoing', static fn (Request $req): Response => $controller->createOutgoingShare($req));
+            $r->delete('/library-shares/outgoing/{id}', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->revokeOutgoingShare($req, $typedParams);
+            });
+
+            // Library shares - incoming
+            $r->get('/library-shares/incoming', static fn (Request $req): Response => $controller->getIncomingOffers($req));
+            $r->post('/library-shares/incoming/{id}/accept', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->acceptIncomingOffer($req, $typedParams);
+            });
+            $r->post('/library-shares/incoming/{id}/reject', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->rejectIncomingOffer($req, $typedParams);
+            });
+
+            // Admin delegations
+            $r->get('/admin-delegations', static fn (Request $req): Response => $controller->getAdminDelegations($req));
+            $r->post('/admin-delegations', static fn (Request $req): Response => $controller->createAdminDelegation($req));
+            $r->delete('/admin-delegations/{id}', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->deleteAdminDelegation($req, $typedParams);
+            });
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    private function resolveFederationController(): FederationController
+    {
+        $controller = $this->container->get(FederationController::class);
+        if (!$controller instanceof FederationController) {
+            throw new \RuntimeException('Container returned an unexpected FederationController instance');
+        }
+        return $controller;
     }
 
     /**

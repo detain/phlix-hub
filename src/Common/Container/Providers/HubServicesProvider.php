@@ -12,7 +12,9 @@ use Phlix\Hub\Federation\FederationConnectionManager;
 use Phlix\Hub\Federation\FederationFrameHandler;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
+use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
+use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\DeregisterHandler;
 use Phlix\Hub\Hub\DnsAliasManager;
@@ -475,6 +477,49 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new FederationRelayController($frameHandler, $connMgr);
             })->parameter('frameHandler', get(FederationFrameHandler::class))
                 ->parameter('connMgr', get(FederationConnectionManager::class)),
+
+            FederationController::class => factory(static function (
+                FederationHubRepository $hubRepo,
+                FederationSessionManager $sessions,
+                FederationLibraryShareRepository $libraryShares,
+                FederationAdminDelegationRepository $adminDel,
+                FederationPeerManager $peerManager,
+                AuditLogger $audit,
+            ): FederationController {
+                return new FederationController(
+                    $hubRepo,
+                    $sessions,
+                    $libraryShares,
+                    $adminDel,
+                    $peerManager,
+                    $audit,
+                );
+            })->parameter('hubRepo', get(FederationHubRepository::class))
+                ->parameter('sessions', get(FederationSessionManager::class))
+                ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
+                ->parameter('adminDel', get(FederationAdminDelegationRepository::class))
+                ->parameter('peerManager', get(FederationPeerManager::class))
+                ->parameter('audit', get(AuditLogger::class)),
+
+            FederationPeerManager::class => factory(static function (
+                FederationHubRepository $hubRepo,
+                FederationSessionManager $sessions,
+                FederationLibraryShareRepository $libraryShares,
+                FederationAdminDelegationRepository $adminDel,
+                AuditLogger $audit,
+            ): FederationPeerManager {
+                return new FederationPeerManager(
+                    $hubRepo,
+                    $sessions,
+                    $libraryShares,
+                    $adminDel,
+                    $audit,
+                );
+            })->parameter('hubRepo', get(FederationHubRepository::class))
+                ->parameter('sessions', get(FederationSessionManager::class))
+                ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
+                ->parameter('adminDel', get(FederationAdminDelegationRepository::class))
+                ->parameter('audit', get(AuditLogger::class)),
         ]);
     }
 
@@ -582,6 +627,17 @@ final class HubServicesProvider implements ServiceProviderInterface
             }
         } catch (\Throwable) {
             // FederationSessionManager not available in this context — skip
+        }
+
+        // Bootstrap leaf hub WS connection to master hub
+        try {
+            /** @var mixed $peerManager */
+            $peerManager = $container->get(FederationPeerManager::class);
+            if ($peerManager instanceof FederationPeerManager) {
+                $peerManager->connectToMaster();
+            }
+        } catch (\Throwable) {
+            // FederationPeerManager not available in this context — skip
         }
     }
 }
