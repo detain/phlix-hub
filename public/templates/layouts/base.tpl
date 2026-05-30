@@ -84,6 +84,7 @@
                 <a href="/shared-with-me">Shared With Me</a>
                 {if $is_admin|default:false}
                     <a href="/admin/requests">Admin</a>
+                    <a href="/hub-settings">Hub Settings</a>
                 {/if}
                 <form method="post" action="/logout" class="logout-form"><button type="submit">Log out</button></form>
             {else}

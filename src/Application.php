@@ -13,6 +13,7 @@ use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\HubJwksController;
+use Phlix\Hub\Http\Controllers\HubSettingsController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
@@ -118,6 +119,10 @@ final class Application
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
 
+        $this->router->group('/hub-settings', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
         $this->router->group('/servers/{id}', static function (Router $r) use ($pages): void {
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
@@ -127,7 +132,13 @@ final class Application
         $serverManage = $this->resolveServerManageController();
         $serverDetail = $this->resolveServerDetailController();
         $libraryController = $this->resolveLibraryController();
-        $this->router->group('/api/v1', function (Router $r) use ($me, $serverList, $serverManage, $serverDetail, $libraryController): void {
+        $this->router->group('/api/v1', function (Router $r) use (
+            $me,
+            $serverList,
+            $serverManage,
+            $serverDetail,
+            $libraryController,
+        ): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
             $r->get('/me/servers', static fn (Request $req): Response => $serverList($req));
             $r->delete(
@@ -170,6 +181,9 @@ final class Application
 
         // Invite link routes.
         $this->registerInviteLinkRoutes();
+
+        // Hub admin settings routes (admin-only API).
+        $this->registerHubSettingsRoutes();
 
         // Media request routes.
         $this->registerRequestRoutes();
@@ -517,6 +531,15 @@ final class Application
         return $controller;
     }
 
+    private function resolveHubSettingsController(): HubSettingsController
+    {
+        $controller = $this->container->get(HubSettingsController::class);
+        if (!$controller instanceof HubSettingsController) {
+            throw new \RuntimeException('Container returned an unexpected HubSettingsController instance');
+        }
+        return $controller;
+    }
+
     /**
      * Register library sharing routes.
      */
@@ -579,6 +602,24 @@ final class Application
                 return $inviteController->deleteInviteLink($req, $typedParams);
             });
         }, [$authMiddleware]);
+    }
+
+    /**
+     * Register hub admin settings routes.
+     *
+     * `GET /api/v1/me/hub-settings`    — read effective settings (admin-only).
+     * `PUT /api/v1/me/hub-settings`  — persist setting overrides (admin-only).
+     */
+    private function registerHubSettingsRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveHubSettingsController();
+
+        $this->router->group('/api/v1/me/hub-settings', static function (Router $r) use ($controller): void {
+            $r->get('/', static fn (Request $req): Response => $controller->getSettings($req));
+            $r->put('/', static fn (Request $req): Response => $controller->putSettings($req));
+        }, [$authMiddleware, $adminMiddleware]);
     }
 
     /**

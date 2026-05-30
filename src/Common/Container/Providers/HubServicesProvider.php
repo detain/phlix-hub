@@ -33,6 +33,7 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Http\Controllers\HubJwksController;
+use Phlix\Hub\Http\Controllers\HubSettingsController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
@@ -402,6 +403,12 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->parameter('relayManager', get(RelaySessionManager::class))
                 ->parameter('heartbeat', get(HeartbeatHandler::class))
                 ->parameter('tls', get(TlsCertificateManager::class)),
+
+            HubSettingsController::class => factory(static function (
+                HubSettingsRepository $settings,
+            ): HubSettingsController {
+                return new HubSettingsController($settings);
+            })->parameter('settings', get(HubSettingsRepository::class)),
         ]);
     }
 
