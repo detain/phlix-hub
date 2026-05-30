@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS federation_incoming_share_offers (
     accepted_by     CHAR(36) NULL,
     PRIMARY KEY (id),
     FOREIGN KEY (peer_id) REFERENCES federation_peers(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_incoming_peer_library (peer_id, library_id),
     INDEX idx_peer_status (peer_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
