@@ -8,6 +8,8 @@ use DI\ContainerBuilder;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Federation\FederationAdminDelegationRepository;
+use Phlix\Hub\Federation\FederationConnectionManager;
+use Phlix\Hub\Federation\FederationFrameHandler;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationSessionManager;
@@ -42,7 +44,9 @@ use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
+use Phlix\Hub\Http\Controllers\FederationRelayController;
 use Phlix\Hub\Http\Controllers\RelayController;
+use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
@@ -439,6 +443,38 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): FederationAdminDelegationRepository {
                 return new FederationAdminDelegationRepository($db);
             })->parameter('db', get(Connection::class)),
+
+            FederationConnectionManager::class => factory(static function (): FederationConnectionManager {
+                return new FederationConnectionManager();
+            }),
+
+            FederationFrameHandler::class => factory(static function (
+                FederationHubRepository $hubRepo,
+                FederationSessionManager $sessions,
+                FederationLibraryShareRepository $libraryShares,
+                FederationConnectionManager $connMgr,
+                AuditLogger $audit,
+            ): FederationFrameHandler {
+                return new FederationFrameHandler(
+                    $hubRepo,
+                    $sessions,
+                    $libraryShares,
+                    $connMgr,
+                    $audit,
+                );
+            })->parameter('hubRepo', get(FederationHubRepository::class))
+                ->parameter('sessions', get(FederationSessionManager::class))
+                ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
+                ->parameter('connMgr', get(FederationConnectionManager::class))
+                ->parameter('audit', get(AuditLogger::class)),
+
+            FederationRelayController::class => factory(static function (
+                FederationFrameHandler $frameHandler,
+                FederationConnectionManager $connMgr,
+            ): FederationRelayController {
+                return new FederationRelayController($frameHandler, $connMgr);
+            })->parameter('frameHandler', get(FederationFrameHandler::class))
+                ->parameter('connMgr', get(FederationConnectionManager::class)),
         ]);
     }
 
@@ -474,8 +510,9 @@ final class HubServicesProvider implements ServiceProviderInterface
     /**
      * Boot the hub services that require runtime timer wiring.
      *
-     * Starts the IdleReaper timer and sets up the 30-second heartbeat
-     * timer that sends heartbeats to all active tunnels.
+     * Starts the IdleReaper timer, sets up the 30-second heartbeat
+     * timer for active tunnels, and starts the FederationWorker for
+     * hub-to-hub WebSocket connections.
      *
      * @return void
      */
@@ -516,6 +553,35 @@ final class HubServicesProvider implements ServiceProviderInterface
             }
         } catch (\Throwable) {
             // TunnelManager not available in this context — skip
+        }
+
+        // Start the federation WebSocket worker for hub-to-hub connections
+        try {
+            $federationWorker = new FederationWorker($container);
+            $federationWorker->start();
+        } catch (\Throwable) {
+            // FederationWorker not available in this context — skip
+        }
+
+        // Set up periodic reaping of dead federation sessions
+        try {
+            /** @var mixed $federationSessionMgr */
+            $federationSessionMgr = $container->get(FederationSessionManager::class);
+            if ($federationSessionMgr instanceof FederationSessionManager) {
+                /** @var int Reaping interval in seconds (matches IdleReaper: 60s) */
+                $reapInterval = 60;
+                /** @var int Dead threshold in seconds (no heartbeat) */
+                $deadThreshold = 60;
+
+                Timer::add(
+                    $reapInterval,
+                    static function () use ($federationSessionMgr, $deadThreshold): void {
+                        $federationSessionMgr->reapDeadSessions($deadThreshold);
+                    },
+                );
+            }
+        } catch (\Throwable) {
+            // FederationSessionManager not available in this context — skip
         }
     }
 }
