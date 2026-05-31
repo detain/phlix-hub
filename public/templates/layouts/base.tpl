@@ -85,6 +85,8 @@
                 {if $is_admin|default:false}
                     <a href="/admin/requests">Admin</a>
                     <a href="/hub-settings">Hub Settings</a>
+                    <a href="/federation">Federation</a>
+                    <a href="/federation/shares">Shares</a>
                 {/if}
                 <form method="post" action="/logout" class="logout-form"><button type="submit">Log out</button></form>
             {else}
