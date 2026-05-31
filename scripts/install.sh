@@ -209,7 +209,7 @@ rand_pass() { openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24; }
 # (version-matched below) provides phpize; the rest are the C library headers
 # each Swoole ./configure flag links against.
 PHLIX_SWOOLE_BUILD_PKGS="build-essential autoconf pkg-config git \
-libssl-dev libuv1-dev libbrotli-dev libzstd-dev libnghttp2-dev \
+libssl-dev libcurl4-openssl-dev libuv1-dev libbrotli-dev libzstd-dev libnghttp2-dev \
 libpq-dev libsqlite3-dev libc-ares-dev liburing-dev libssh2-1-dev"
 
 # Resolve PHP's conf.d directory (Debian layout: /etc/php/X.Y/<sapi>/conf.d).

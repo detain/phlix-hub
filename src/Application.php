@@ -22,6 +22,8 @@ use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
 use Phlix\Hub\Http\Controllers\MeController;
 use Phlix\Hub\Http\Controllers\PageController;
+use Phlix\Hub\Http\Controllers\RelayController;
+use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
 use Phlix\Hub\Http\Controllers\ServerDetailController;
