@@ -5,6 +5,3 @@ parameters:
     bootstrapFiles:
         - vendor/autoload.php
     treatPhpDocTypesAsCertain: false
-    ignoreErrors:
-        - '#Phlix\\Hub\\RequestController#'
-        - '#Phlix\\Hub\\RelayController#'
