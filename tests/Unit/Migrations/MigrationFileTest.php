@@ -50,6 +50,7 @@ final class MigrationFileTest extends TestCase
             '012_enrolled_at_and_last_frame_at.sql',
             '027_hub_settings.sql',
             '028_federation.sql',
+            '029_audit_logs.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
