@@ -1275,6 +1275,11 @@ WorkingDirectory=${INSTALL_PATH}
 ExecStart=/usr/bin/php ${INSTALL_PATH}/start.php start
 Restart=on-failure
 RestartSec=5
+# Swoole 6's io_uring event loop pins locked memory; the default 8 MB
+# RLIMIT_MEMLOCK is too small for the worker pool, so io_uring init fails
+# with ENOMEM and workers intermittently drop connections (random 502s).
+# Lift the cap so io_uring initialises cleanly.
+LimitMEMLOCK=infinity
 
 [Install]
 WantedBy=multi-user.target
