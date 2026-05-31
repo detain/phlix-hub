@@ -409,6 +409,14 @@ final class Application
                     return $serverController->heartbeat($req, $typedParams);
                 },
             );
+            $r->post(
+                '/servers/{id}/renew',
+                static function (Request $req, array $params) use ($serverController): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $serverController->renew($req, $typedParams);
+                },
+            );
             $r->get(
                 '/servers/{id}/info',
                 static function (Request $req, array $params) use ($serverController): Response {
