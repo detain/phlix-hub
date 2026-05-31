@@ -24,6 +24,7 @@ use Phlix\Hub\Hub\Dns\StaticZoneManager;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\HeartbeatHandler;
+use Phlix\Hub\Hub\RenewHandler;
 use Phlix\Hub\Hub\HubSettingsRepository;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibrarySharingHandler;
@@ -166,6 +167,14 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('db', get(Connection::class))
                 ->parameter('jwtService', get(EnrollmentJwtService::class)),
 
+            RenewHandler::class => factory(static function (
+                Connection $db,
+                EnrollmentJwtService $jwtService,
+            ): RenewHandler {
+                return new RenewHandler($db, $jwtService, LoggerFactory::get(LogChannels::HUB));
+            })->parameter('db', get(Connection::class))
+                ->parameter('jwtService', get(EnrollmentJwtService::class)),
+
             EnrollmentJwtMiddleware::class => factory(static function (
                 EnrollmentJwtService $jwtService,
             ): EnrollmentJwtMiddleware {
@@ -192,11 +201,18 @@ final class HubServicesProvider implements ServiceProviderInterface
                 HeartbeatHandler $heartbeatHandler,
                 ServerInfoHandler $serverInfoHandler,
                 DeregisterHandler $deregisterHandler,
+                RenewHandler $renewHandler,
             ): ServerController {
-                return new ServerController($heartbeatHandler, $serverInfoHandler, $deregisterHandler);
+                return new ServerController(
+                    $heartbeatHandler,
+                    $serverInfoHandler,
+                    $deregisterHandler,
+                    $renewHandler,
+                );
             })->parameter('heartbeatHandler', get(HeartbeatHandler::class))
                 ->parameter('serverInfoHandler', get(ServerInfoHandler::class))
-                ->parameter('deregisterHandler', get(DeregisterHandler::class)),
+                ->parameter('deregisterHandler', get(DeregisterHandler::class))
+                ->parameter('renewHandler', get(RenewHandler::class)),
 
             RelaySessionManager::class => factory(static function (
                 Connection $db,

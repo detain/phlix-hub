@@ -6,6 +6,7 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Hub\DeregisterHandler;
 use Phlix\Hub\Hub\HeartbeatHandler;
+use Phlix\Hub\Hub\RenewHandler;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\Request;
@@ -16,6 +17,7 @@ use Phlix\Shared\Hub\HeartbeatDto;
  * Handles server lifecycle endpoints.
  *
  * POST   /api/v1/servers/{id}/heartbeat  — server health ping (enrollment JWT)
+ * POST   /api/v1/servers/{id}/renew       — refresh enrollment JWT (enrollment JWT)
  * GET    /api/v1/servers/{id}/info         — hub operator info (enrollment JWT)
  * DELETE /api/v1/servers/{id}             — server deregisters (enrollment JWT)
  *
@@ -27,11 +29,13 @@ final class ServerController
      * @param HeartbeatHandler  $heartbeatHandler Heartbeat processing.
      * @param ServerInfoHandler $serverInfoHandler Server info retrieval.
      * @param DeregisterHandler $deregisterHandler Server deregistration.
+     * @param RenewHandler      $renewHandler     Enrollment JWT renewal.
      */
     public function __construct(
         private readonly HeartbeatHandler $heartbeatHandler,
         private readonly ServerInfoHandler $serverInfoHandler,
         private readonly DeregisterHandler $deregisterHandler,
+        private readonly RenewHandler $renewHandler,
     ) {
     }
 
@@ -77,6 +81,50 @@ final class ServerController
         try {
             $this->heartbeatHandler->handle($serverIdFromPath, $token, $heartbeat);
             return (new Response())->json(['status' => 'ok']);
+        } catch (\InvalidArgumentException $e) {
+            return $this->mapError($e->getMessage());
+        }
+    }
+
+    /**
+     * `POST /api/v1/servers/{id}/renew` — refresh the enrollment JWT.
+     *
+     * The server presents its CURRENT (still-valid) enrollment JWT and receives
+     * a freshly minted JWT with a full 7-day TTL.
+     *
+     * Requires enrollment JWT; $request->serverId is set by EnrollmentJwtMiddleware.
+     */
+    /**
+     * @param array<string, string> $params Route parameters.
+     */
+    public function renew(Request $request, array $params): Response
+    {
+        $protocolHeader = $request->getHeader(HubProtocolMiddleware::HEADER_NAME);
+        if ($protocolHeader !== HubProtocolMiddleware::REQUIRED_VERSION) {
+            return (new Response())->status(400)->json([
+                'error' => 'HUB_PROTOCOL_UNSUPPORTED',
+                'message' => 'Accept-Phlix-Protocol: v1 required',
+            ]);
+        }
+
+        $serverIdFromPath = $params['id'] ?? '';
+        $serverIdFromToken = $request->serverId ?? '';
+
+        if ($serverIdFromPath !== $serverIdFromToken) {
+            return (new Response())->status(403)->json([
+                'error' => 'AUTHORIZATION_FAILED',
+                'message' => 'Server ID mismatch',
+            ]);
+        }
+
+        $token = $request->bearerToken ?? '';
+
+        try {
+            $newToken = $this->renewHandler->handle($serverIdFromPath, $token);
+            return (new Response())->json([
+                'enrollment_jwt' => $newToken,
+                'expires_in' => 604800,
+            ]);
         } catch (\InvalidArgumentException $e) {
             return $this->mapError($e->getMessage());
         }
