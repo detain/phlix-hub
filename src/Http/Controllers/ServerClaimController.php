@@ -64,6 +64,28 @@ final class ServerClaimController
     }
 
     /**
+     * `GET /api/v1/server-claims/{claimId}` — poll claim status.
+     *
+     * Public endpoint — the server polls this before it has a JWT. The
+     * claim id is an unguessable UUID and acts as the bearer secret; a
+     * `claimed` response returns the one-time enrollment material.
+     *
+     * @param array<string, string> $params Route params (claimId).
+     */
+    public function status(Request $request, array $params): Response
+    {
+        $claimId = $params['claimId'] ?? '';
+        if ($claimId === '') {
+            return (new Response())->status(400)->json([
+                'error' => 'Bad Request',
+                'message' => 'claim id is required',
+            ]);
+        }
+
+        return (new Response())->json($this->handler->getClaimStatus($claimId));
+    }
+
+    /**
      * `POST /api/v1/server-claims/claim` — user claims a server.
      *
      * Requires user auth (userId must be set by AuthMiddleware).

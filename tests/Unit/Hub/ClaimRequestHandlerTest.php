@@ -197,6 +197,82 @@ final class ClaimRequestHandlerTest extends TestCase
         self::assertSame($existingClaimId, $response->claimId);
     }
 
+    public function testGetClaimStatusReturnsPendingForUnclaimedRow(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'claim-1',
+            'status' => 'pending',
+            'claimed_by' => null,
+            'paired_server_id' => null,
+            'expires_at' => time() + 600,
+        ]]);
+        $handler = $this->makeHandler($db);
+
+        self::assertSame(['status' => 'pending'], $handler->getClaimStatus('claim-1'));
+    }
+
+    public function testGetClaimStatusReturnsExpiredWhenMissing(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+        $handler = $this->makeHandler($db);
+
+        self::assertSame(['status' => 'expired'], $handler->getClaimStatus('nope'));
+    }
+
+    public function testGetClaimStatusReturnsExpiredWhenPastExpiry(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'claim-1',
+            'status' => 'pending',
+            'claimed_by' => null,
+            'paired_server_id' => null,
+            'expires_at' => time() - 1,
+        ]]);
+        $handler = $this->makeHandler($db);
+
+        self::assertSame(['status' => 'expired'], $handler->getClaimStatus('claim-1'));
+    }
+
+    public function testGetClaimStatusReturnsEnrollmentWhenPaired(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // SELECT returns the paired row; the follow-up DELETE returns null.
+        $db->method('query')->willReturnCallback(function (string $sql) {
+            if (str_contains($sql, 'SELECT')) {
+                return [[
+                    'id' => 'claim-1',
+                    'status' => 'paired',
+                    'claimed_by' => 'user-1',
+                    'paired_server_id' => 'server-1',
+                    'expires_at' => time() + 600,
+                ]];
+            }
+            return null;
+        });
+        $handler = $this->makeHandler($db);
+
+        $result = $handler->getClaimStatus('claim-1');
+
+        self::assertSame('claimed', $result['status']);
+        self::assertSame('server-1', $result['server_id'] ?? null);
+        self::assertSame('https://hub.example.com/.well-known/jwks.json', $result['hub_jwks_url'] ?? null);
+        self::assertNotEmpty($result['enrollment_jwt'] ?? '');
+        // A signed JWT is three dot-separated segments (two dots).
+        self::assertSame(2, substr_count((string) ($result['enrollment_jwt'] ?? ''), '.'));
+    }
+
+    private function makeHandler(Connection $db): ClaimRequestHandler
+    {
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $logger = $this->createMock(StructuredLogger::class);
+        $audit = $this->createMock(AuditLogger::class);
+
+        return new ClaimRequestHandler($db, $keyManager, $logger, $audit, 'https://hub.example.com');
+    }
+
     /**
      * Valid Ed25519 JWK for testing.
      *
