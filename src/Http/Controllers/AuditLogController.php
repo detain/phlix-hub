@@ -46,6 +46,7 @@ final class AuditLogController
         if (isset($params['action']) && is_string($params['action']) && $params['action'] !== '') {
             $filters['action'] = $params['action'];
         }
+        /** @var mixed $successVal */
         $successVal = $params['success'] ?? null;
         if (is_string($successVal) && in_array($successVal, ['0', '1'], true)) {
             $filters['success'] = (bool) (int) $successVal;
@@ -68,8 +69,8 @@ final class AuditLogController
         return (new Response())->json([
             'logs' => $result['entries'],
             'total' => $result['total'],
-            'limit' => (int) ($filters['limit'] ?? 50),
-            'offset' => (int) ($filters['offset'] ?? 0),
+            'limit' => $filters['limit'] ?? 50,
+            'offset' => $filters['offset'] ?? 0,
         ]);
     }
 }

@@ -191,7 +191,7 @@ class TlsCertificateManager
         $exitCode = 0;
         $output = $this->runOpenssl(
             ['openssl', 'x509', '-noout', '-enddate'],
-            $certFile,
+            (string) $certFile,
             $exitCode,
         );
 
