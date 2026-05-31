@@ -128,7 +128,9 @@ class ClaimRequestHandler
      */
     public function handleClaimCode(string $claimCode, string $userId): array
     {
-        $normalizedCode = strtoupper((string) preg_replace('/[^A-Z0-9]/', '', $claimCode));
+        // Strip separators/spaces first, THEN uppercase, so lenient input
+        // like "dr4q 7axb" or "dr4q-7axb" normalises to "DR4Q7AXB".
+        $normalizedCode = strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $claimCode));
         if ($normalizedCode === '') {
             $this->audit->logFailedAuth('CLAIM_CODE_INVALID', ['claim_code' => $claimCode]);
             throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
@@ -136,13 +138,12 @@ class ClaimRequestHandler
 
         $now = time();
 
-        $this->db->query(
-            "SELECT * FROM server_claims WHERE claim_code = :code FOR UPDATE",
-            ['code' => $normalizedCode],
-        );
+        // claim_code is stored in its dashed display form (e.g. ABCD-1234);
+        // compare against the de-dashed stored value so the normalised input
+        // (separators removed) still matches.
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            "SELECT * FROM server_claims WHERE claim_code = :code FOR UPDATE",
+            "SELECT * FROM server_claims WHERE REPLACE(claim_code, '-', '') = :code FOR UPDATE",
             ['code' => $normalizedCode],
         );
 
