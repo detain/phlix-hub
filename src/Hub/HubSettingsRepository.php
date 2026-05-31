@@ -158,6 +158,7 @@ class HubSettingsRepository
             }
             $type = is_string($row['value_type'] ?? null) ? (string) $row['value_type'] : 'string';
             $raw  = is_string($row['setting_value'] ?? null) ? (string) $row['setting_value'] : '';
+            /** @psalm-suppress MixedAssignment */
             $out[(string) $row['setting_key']] = self::decode($raw, $type);
         }
 
@@ -268,11 +269,11 @@ class HubSettingsRepository
         $overridden = [];
         foreach ($keys as $key) {
             if (array_key_exists($key, $overrides)) {
-                /** @var mixed $overrideValue */
-                $overrideValue = $overrides[$key];
-                $values[$key] = $overrideValue;
+                /** @psalm-suppress MixedAssignment */
+                $values[$key] = $overrides[$key];
                 $overridden[] = $key;
             } else {
+                /** @psalm-suppress MixedAssignment */
                 $values[$key] = $this->getDefault($key);
             }
         }
