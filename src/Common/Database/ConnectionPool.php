@@ -64,7 +64,12 @@ class ConnectionPool
             /** @var array<string, scalar> $connConfig */
             $connConfig = $config[$name];
 
-            self::$connections[$name] = new Connection(
+            // Use the local PhlixMySQLConnection subclass so positional
+            // arrays passed to query() are re-keyed to 1-indexed before
+            // PDO::bindParam() — workaround for workerman/mysql v1.0.9's
+            // bindMore() bug on PHP 8.x ("Argument #1 must be >= 1" when
+            // saving settings). Type-compatible with the parent Connection.
+            self::$connections[$name] = new PhlixMySQLConnection(
                 (string) $connConfig['host'],
                 (int) $connConfig['port'],
                 (string) $connConfig['user'],
