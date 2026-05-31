@@ -16,19 +16,6 @@ window.PhlixApp = window.PhlixApp || {};
     'use strict';
 
     /**
-     * Get the access token from cookie or localStorage.
-     *
-     * @return string|null
-     */
-    function getAccessToken() {
-        const match = document.cookie.match(/(?:^|;\s*)phlix_hub_token=([^;]+)/);
-        if (match) {
-            return decodeURIComponent(match[1]);
-        }
-        return null;
-    }
-
-    /**
      * Show the empty state in the server list container.
      */
     function showEmptyState() {
@@ -84,18 +71,16 @@ window.PhlixApp = window.PhlixApp || {};
             return;
         }
 
-        const token = getAccessToken();
-        if (!token) {
-            alert('Session expired. Please log in again.');
-            window.location.href = '/login';
-            return;
-        }
-
         try {
+            // The `phlix_hub_token` cookie is HttpOnly, so it CANNOT be read
+            // from JS — send it with `credentials: 'include'` and let
+            // AuthMiddleware read it server-side (it accepts the cookie). The
+            // old code read document.cookie (always null → "Session expired"
+            // even when logged in).
             const resp = await fetch('/api/v1/me/servers/' + encodeURIComponent(serverId), {
                 method: 'DELETE',
+                credentials: 'include',
                 headers: {
-                    'Authorization': 'Bearer ' + token,
                     'Accept': 'application/json',
                 },
             });

@@ -335,12 +335,10 @@
         if (!confirm('Revoke this invite link? This cannot be undone.')) {
             return;
         }
-        var token = getAccessToken();
-        if (!token) {
-            alert('Session expired. Please log in again.');
-            window.location.href = '/login';
-            return;
-        }
+        // No JS-side token pre-check: `phlix_hub_token` is HttpOnly (unreadable
+        // from JS), so getAccessToken() is always null here and wrongly bailed
+        // with "Session expired". fetchJson sends the cookie via
+        // `credentials: 'include'`; a genuine 401 is handled in the response.
         fetchJson('/api/v1/me/invite-links/' + encodeURIComponent(linkId), {
             method: 'DELETE',
         }).then(function (result) {
