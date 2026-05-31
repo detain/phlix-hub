@@ -1234,6 +1234,10 @@ HUB_HOST=0.0.0.0
 HUB_PORT=${HUB_PORT}
 HUB_WORKERS=${HUB_WORKERS}
 HUB_PUBLIC_DOMAIN=${PUBLIC_DOMAIN}
+# Public base URL advertised to enrolled servers (enrollment JWT + JWKS
+# URL). Defaults to https://\${HUB_PUBLIC_DOMAIN}; uncomment to override
+# the scheme/host (e.g. a non-standard port or http for a private LAN hub).
+#HUB_BASE_URL=https://${PUBLIC_DOMAIN}
 
 HUB_DB_HOST=${DB_HOST}
 HUB_DB_PORT=${DB_PORT}
