@@ -85,6 +85,7 @@
                 {if $is_admin|default:false}
                     <a href="/admin/requests">Admin</a>
                     <a href="/hub-settings">Hub Settings</a>
+                    <a href="/audit-logs">Audit Logs</a>
                     <a href="/federation">Federation</a>
                     <a href="/federation/shares">Shares</a>
                 {/if}

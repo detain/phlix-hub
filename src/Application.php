@@ -11,6 +11,7 @@ use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\RelayWorker;
+use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\FederationController;
@@ -125,6 +126,10 @@ final class Application
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
 
+        $this->router->group('/audit-logs', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
         $this->router->group('/federation', static function (Router $r) use ($pages): void {
             $r->get('', static fn (Request $req): Response => $pages($req));
             $r->get('/shares', static fn (Request $req): Response => $pages($req));
@@ -191,6 +196,9 @@ final class Application
 
         // Hub admin settings routes (admin-only API).
         $this->registerHubSettingsRoutes();
+
+        // Audit log routes (admin-only API).
+        $this->registerAuditLogRoutes();
 
         // Federation management routes.
         $this->registerFederationRoutes();
@@ -550,6 +558,15 @@ final class Application
         return $controller;
     }
 
+    private function resolveAuditLogController(): AuditLogController
+    {
+        $controller = $this->container->get(AuditLogController::class);
+        if (!$controller instanceof AuditLogController) {
+            throw new \RuntimeException('Container returned an unexpected AuditLogController instance');
+        }
+        return $controller;
+    }
+
     /**
      * Register library sharing routes.
      */
@@ -633,6 +650,22 @@ final class Application
     }
 
     /**
+     * Register audit log API routes (admin-only).
+     *
+     * `GET /api/v1/me/audit-logs` — query audit log entries.
+     */
+    private function registerAuditLogRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveAuditLogController();
+
+        $this->router->group('/api/v1/me', static function (Router $r) use ($controller): void {
+            $r->get('/audit-logs', static fn (Request $req): Response => $controller->index($req));
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
      * Register federation management REST routes.
      *
      * All routes require authMiddleware + adminMiddleware.
@@ -674,47 +707,80 @@ final class Application
                 $typedParams = $params;
                 return $controller->deletePeer($req, $typedParams);
             });
-            $r->put('/peers/{id}/relay', static function (Request $req, array $params) use ($controller): Response {
-                /** @var array<string, string> $typedParams */
-                $typedParams = $params;
-                return $controller->toggleRelay($req, $typedParams);
-            });
-            $r->put('/peers/{id}/admin-delegation', static function (Request $req, array $params) use ($controller): Response {
-                /** @var array<string, string> $typedParams */
-                $typedParams = $params;
-                return $controller->toggleAdminDelegation($req, $typedParams);
-            });
+            $r->put(
+                '/peers/{id}/relay',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->toggleRelay($req, $typedParams);
+                },
+            );
+            $r->put(
+                '/peers/{id}/admin-delegation',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->toggleAdminDelegation($req, $typedParams);
+                },
+            );
 
             // Library shares - outgoing
-            $r->get('/library-shares/outgoing', static fn (Request $req): Response => $controller->getOutgoingShares($req));
-            $r->post('/library-shares/outgoing', static fn (Request $req): Response => $controller->createOutgoingShare($req));
-            $r->delete('/library-shares/outgoing/{id}', static function (Request $req, array $params) use ($controller): Response {
-                /** @var array<string, string> $typedParams */
-                $typedParams = $params;
-                return $controller->revokeOutgoingShare($req, $typedParams);
-            });
+            $r->get(
+                '/library-shares/outgoing',
+                static fn (Request $req): Response => $controller->getOutgoingShares($req),
+            );
+            $r->post(
+                '/library-shares/outgoing',
+                static fn (Request $req): Response => $controller->createOutgoingShare($req),
+            );
+            $r->delete(
+                '/library-shares/outgoing/{id}',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->revokeOutgoingShare($req, $typedParams);
+                },
+            );
 
             // Library shares - incoming
-            $r->get('/library-shares/incoming', static fn (Request $req): Response => $controller->getIncomingOffers($req));
-            $r->post('/library-shares/incoming/{id}/accept', static function (Request $req, array $params) use ($controller): Response {
-                /** @var array<string, string> $typedParams */
-                $typedParams = $params;
-                return $controller->acceptIncomingOffer($req, $typedParams);
-            });
-            $r->post('/library-shares/incoming/{id}/reject', static function (Request $req, array $params) use ($controller): Response {
-                /** @var array<string, string> $typedParams */
-                $typedParams = $params;
-                return $controller->rejectIncomingOffer($req, $typedParams);
-            });
+            $r->get(
+                '/library-shares/incoming',
+                static fn (Request $req): Response => $controller->getIncomingOffers($req),
+            );
+            $r->post(
+                '/library-shares/incoming/{id}/accept',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->acceptIncomingOffer($req, $typedParams);
+                },
+            );
+            $r->post(
+                '/library-shares/incoming/{id}/reject',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->rejectIncomingOffer($req, $typedParams);
+                },
+            );
 
             // Admin delegations
-            $r->get('/admin-delegations', static fn (Request $req): Response => $controller->getAdminDelegations($req));
-            $r->post('/admin-delegations', static fn (Request $req): Response => $controller->createAdminDelegation($req));
-            $r->delete('/admin-delegations/{id}', static function (Request $req, array $params) use ($controller): Response {
-                /** @var array<string, string> $typedParams */
-                $typedParams = $params;
-                return $controller->deleteAdminDelegation($req, $typedParams);
-            });
+            $r->get(
+                '/admin-delegations',
+                static fn (Request $req): Response => $controller->getAdminDelegations($req),
+            );
+            $r->post(
+                '/admin-delegations',
+                static fn (Request $req): Response => $controller->createAdminDelegation($req),
+            );
+            $r->delete(
+                '/admin-delegations/{id}',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->deleteAdminDelegation($req, $typedParams);
+                },
+            );
         }, [$authMiddleware, $adminMiddleware]);
     }
 
