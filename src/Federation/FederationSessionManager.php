@@ -135,6 +135,7 @@ class FederationSessionManager
             ['id' => $sessionId],
         );
 
+        /** @var mixed $peerId */
         $peerId = $rows[0]['peer_id'] ?? null;
 
         $this->db->query(

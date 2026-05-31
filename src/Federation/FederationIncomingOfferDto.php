@@ -43,6 +43,10 @@ final readonly class FederationIncomingOfferDto
         $rawStatus = $row['status'] ?? null;
         /** @var mixed $rawOfferedAt */
         $rawOfferedAt = $row['offered_at'] ?? null;
+        /** @var mixed $rawRespondedAt */
+        $rawRespondedAt = $row['responded_at'] ?? null;
+        /** @var mixed $rawAcceptedBy */
+        $rawAcceptedBy = $row['accepted_by'] ?? null;
 
         return new self(
             id: is_string($rawId) ? $rawId : '',
@@ -52,8 +56,8 @@ final readonly class FederationIncomingOfferDto
             permission: is_string($rawPermission) ? $rawPermission : 'read',
             status: is_string($rawStatus) ? $rawStatus : 'pending',
             offeredAt: is_string($rawOfferedAt) ? $rawOfferedAt : '',
-            respondedAt: is_string($row['responded_at'] ?? null) ? $row['responded_at'] : null,
-            acceptedBy: is_string($row['accepted_by'] ?? null) ? $row['accepted_by'] : null,
+            respondedAt: is_string($rawRespondedAt) ? $rawRespondedAt : null,
+            acceptedBy: is_string($rawAcceptedBy) ? $rawAcceptedBy : null,
         );
     }
 }

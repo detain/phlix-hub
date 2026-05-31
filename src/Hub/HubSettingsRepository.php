@@ -51,7 +51,7 @@ class HubSettingsRepository
      *
      * @var array<string, string>
      */
-    public const ALLOWED_KEYS = [
+    public const array ALLOWED_KEYS = [
         // config/server.php
         'server.enrollment_ttl'       => 'int',
         'server.relay_ping_interval'   => 'int',
@@ -124,8 +124,8 @@ class HubSettingsRepository
             return null;
         }
 
-        $type = is_string($row['value_type'] ?? null) ? $row['value_type'] : 'string';
-        $raw  = is_string($row['setting_value'] ?? null) ? $row['setting_value'] : '';
+        $type = is_string($row['value_type'] ?? null) ? (string) $row['value_type'] : 'string';
+        $raw  = is_string($row['setting_value'] ?? null) ? (string) $row['setting_value'] : '';
 
         return [
             'value'      => self::decode($raw, $type),
@@ -146,6 +146,7 @@ class HubSettingsRepository
             'SELECT setting_key, setting_value, value_type FROM hub_settings',
         );
 
+        /** @var array<string, mixed> $out */
         $out = [];
         if (!is_array($rows)) {
             return $out;
@@ -155,9 +156,9 @@ class HubSettingsRepository
             if (!is_array($row) || !is_string($row['setting_key'] ?? null)) {
                 continue;
             }
-            $type = is_string($row['value_type'] ?? null) ? $row['value_type'] : 'string';
-            $raw  = is_string($row['setting_value'] ?? null) ? $row['setting_value'] : '';
-            $out[$row['setting_key']] = self::decode($raw, $type);
+            $type = is_string($row['value_type'] ?? null) ? (string) $row['value_type'] : 'string';
+            $raw  = is_string($row['setting_value'] ?? null) ? (string) $row['setting_value'] : '';
+            $out[(string) $row['setting_key']] = self::decode($raw, $type);
         }
 
         return $out;
@@ -204,7 +205,7 @@ class HubSettingsRepository
     {
         $segments = explode('.', $key);
         $file     = array_shift($segments);
-        if ($file === null || $file === '') {
+        if ($file === '') {
             return null;
         }
 
@@ -218,6 +219,7 @@ class HubSettingsRepository
             if (!is_array($cursor) || !array_key_exists($segment, $cursor)) {
                 return null;
             }
+            /** @var mixed $cursor */
             $cursor = $cursor[$segment];
         }
 
@@ -261,11 +263,14 @@ class HubSettingsRepository
     {
         $overrides = $this->getAllOverrides();
 
+        /** @var array<string, mixed> $values */
         $values     = [];
         $overridden = [];
         foreach ($keys as $key) {
             if (array_key_exists($key, $overrides)) {
-                $values[$key] = $overrides[$key];
+                /** @var mixed $overrideValue */
+                $overrideValue = $overrides[$key];
+                $values[$key] = $overrideValue;
                 $overridden[] = $key;
             } else {
                 $values[$key] = $this->getDefault($key);
@@ -301,7 +306,10 @@ class HubSettingsRepository
             return $this->configCache[$file] = null;
         }
 
-        /** @psalm-suppress UnresolvableInclude $path is a jailed config file resolved at runtime */
+        /**
+         * @psalm-suppress UnresolvableInclude $path is a jailed config file resolved at runtime
+         * @var mixed $loaded
+         */
         $loaded = @include $path;
 
         return $this->configCache[$file] = is_array($loaded) ? $loaded : null;

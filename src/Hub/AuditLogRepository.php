@@ -143,23 +143,28 @@ class AuditLogRepository
         }
 
         $where = implode(' AND ', $conditions);
+        /** @var mixed $limitRaw */
         $limitRaw = $filters['limit'] ?? null;
         $limit = is_numeric($limitRaw) ? max(1, min(200, (int) $limitRaw)) : 50;
+        /** @var mixed $offsetRaw */
         $offsetRaw = $filters['offset'] ?? null;
         $offset = is_numeric($offsetRaw) ? max(0, (int) $offsetRaw) : 0;
 
+        /** @var mixed $countRows */
         $countRows = $this->db->query(
             "SELECT COUNT(*) as cnt FROM audit_logs WHERE {$where}",
             $params,
         );
         $total = 0;
         if (is_array($countRows) && isset($countRows[0]) && is_array($countRows[0])) {
+            /** @var mixed $cnt */
             $cnt = $countRows[0]['cnt'] ?? null;
             if (is_numeric($cnt)) {
                 $total = (int) $cnt;
             }
         }
 
+        /** @var mixed $rows */
         $rows = $this->db->query(
             "SELECT * FROM audit_logs WHERE {$where}"
                 . " ORDER BY created_at DESC"
@@ -169,6 +174,7 @@ class AuditLogRepository
 
         $entries = [];
         if (is_array($rows)) {
+            /** @var mixed $row */
             foreach ($rows as $row) {
                 if (is_array($row) && is_string(key($row))) {
                     /** @var array<string, mixed> $typedRow */
@@ -192,12 +198,15 @@ class AuditLogRepository
      */
     private function rowToEntry(array $row): array
     {
+        /** @var mixed $contextJson */
         $contextJson = $row['context_json'] ?? null;
+        /** @var mixed $context */
         $context = null;
         if ($contextJson !== null && is_string($contextJson) && $contextJson !== '') {
             $context = json_decode($contextJson, true);
         }
 
+        /** @var mixed $successRaw */
         $successRaw = $row['success'] ?? 1;
         $successInt = is_numeric($successRaw) ? (int) $successRaw : 1;
 

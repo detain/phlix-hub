@@ -116,6 +116,7 @@ class FederationPeerManager
         }
 
         $role = is_string($hubConfig['role'] ?? null) ? $hubConfig['role'] : 'leaf';
+        /** @var mixed $isActiveRaw */
         $isActiveRaw = $hubConfig['is_active'] ?? null;
         $isActive = is_int($isActiveRaw) ? $isActiveRaw === 1 : (is_string($isActiveRaw) && $isActiveRaw === '1');
 
@@ -131,7 +132,7 @@ class FederationPeerManager
         // Get the first connected peer — assumes it is the master hub
         /** @var array<string, mixed> $masterPeer */
         $masterPeer = $peers[0];
-        $masterUrl = is_string($masterPeer['url'] ?? null) ? $masterPeer['url'] : '';
+        $masterUrl = is_string($masterPeer['url'] ?? null) ? (string) $masterPeer['url'] : '';
 
         if ($masterUrl === '') {
             return;
@@ -565,6 +566,7 @@ class FederationPeerManager
 
         // Handle library share updates (incoming offers from master)
         if (isset($data['shares']) && is_array($data['shares'])) {
+            /** @var mixed $share */
             foreach ($data['shares'] as $share) {
                 if (is_array($share)) {
                     /** @var array<string, mixed> $share */

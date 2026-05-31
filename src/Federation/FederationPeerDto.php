@@ -43,6 +43,10 @@ final readonly class FederationPeerDto
         $rawAdminDelegationEnabled = $row['admin_delegation_enabled'] ?? null;
         /** @var mixed $rawStatus */
         $rawStatus = $row['status'] ?? null;
+        /** @var mixed $rawLastSeenAt */
+        $rawLastSeenAt = $row['last_seen_at'] ?? null;
+        /** @var mixed $rawLastConnectedAt */
+        $rawLastConnectedAt = $row['last_connected_at'] ?? null;
 
         return new self(
             id: is_string($rawId) ? $rawId : '',
@@ -54,8 +58,8 @@ final readonly class FederationPeerDto
             adminDelegationEnabled: ($row['admin_delegation_enabled'] ?? '') === '1'
                 || ($row['admin_delegation_enabled'] ?? 0) === 1,
             status: is_string($rawStatus) ? $rawStatus : 'pending',
-            lastSeenAt: is_string($row['last_seen_at'] ?? null) ? $row['last_seen_at'] : null,
-            lastConnectedAt: is_string($row['last_connected_at'] ?? null) ? $row['last_connected_at'] : null,
+            lastSeenAt: is_string($rawLastSeenAt) ? $rawLastSeenAt : null,
+            lastConnectedAt: is_string($rawLastConnectedAt) ? $rawLastConnectedAt : null,
         );
     }
 }
