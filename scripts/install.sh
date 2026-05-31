@@ -326,12 +326,19 @@ phlix_install_swoole_uv() {
 
   if [ "$need_swoole" = "no" ] && [ "$need_uv" = "no" ]; then
     info "Swoole and php-uv already loaded — nothing to build."
-    return 0
+  else
+    phlix_install_ext_build_deps
+    [ "$need_swoole" = "yes" ] && phlix_build_swoole
+    [ "$need_uv" = "yes" ]     && phlix_build_uv
   fi
 
-  phlix_install_ext_build_deps
-  [ "$need_swoole" = "yes" ] && phlix_build_swoole
-  [ "$need_uv" = "yes" ]     && phlix_build_uv
+  # Swoole is built with --enable-swoole-ftp and provides FTP itself, so the
+  # standalone php-ftp module is redundant — disable it for all PHP versions
+  # and SAPIs. Idempotent; no-op when phpdismod or the module is absent.
+  if command -v phpdismod >/dev/null 2>&1; then
+    log "Disabling standalone php-ftp module (Swoole provides FTP)"
+    phpdismod -v ALL -s ALL ftp >/dev/null 2>&1 || true
+  fi
 }
 
 # Preflight: Workerman needs process-control / posix / socket primitives that
