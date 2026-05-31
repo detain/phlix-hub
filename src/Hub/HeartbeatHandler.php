@@ -75,7 +75,8 @@ class HeartbeatHandler
             "UPDATE servers SET status = 'online', last_seen_at = :last_seen_at, version = :version,
              hostname_candidates_json = :hostname_candidates_json WHERE id = :id",
             [
-                'last_seen_at' => $now,
+                // servers.last_seen_at is a DATETIME column.
+                'last_seen_at' => date('Y-m-d H:i:s', $now),
                 'version' => $heartbeat->version,
                 'hostname_candidates_json' => $hostnameJson,
                 'id' => $serverId,
@@ -95,7 +96,8 @@ class HeartbeatHandler
                 'active_sessions' => $heartbeat->activeSessions,
                 'active_transcodes' => $heartbeat->activeTranscodes,
                 'hostname_candidates_json' => $hostnameJson,
-                'received_at' => $now,
+                // server_heartbeats.received_at is a DATETIME column.
+                'received_at' => date('Y-m-d H:i:s', $now),
             ],
         );
 

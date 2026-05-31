@@ -374,11 +374,20 @@ final class Application
         // JWKS — public.
         $this->router->get('/.well-known/jwks.json', static fn (Request $req) => $hubJwksController($req));
 
-        // Public server-claim initiation (server has no JWT yet).
+        // Public server-claim initiation + status polling (server has no
+        // JWT yet; the claim id in the path is the unguessable bearer secret).
         $this->router->group('/api/v1', static function (Router $r) use ($serverClaimController): void {
             $r->post(
                 '/server-claims/new',
                 static fn (Request $req) => $serverClaimController->newClaim($req),
+            );
+            $r->get(
+                '/server-claims/{claimId}',
+                static function (Request $req, array $params) use ($serverClaimController): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $serverClaimController->status($req, $typedParams);
+                },
             );
         }, [$hubProtocol]);
 

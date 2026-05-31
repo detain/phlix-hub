@@ -184,12 +184,7 @@ class ClaimRequestHandler
         /** @var string */
         $claimRowId = is_string($row['id'] ?? null) ? $row['id'] : '';
 
-        $this->db->query(
-            'UPDATE server_claims
-             SET claimed_by = :user_id, claimed_at = :claimed_at
-             WHERE id = :id',
-            ['user_id' => $userId, 'claimed_at' => $nowUnix, 'id' => $claimRowId],
-        );
+        $nowDateTime = date('Y-m-d H:i:s', $nowUnix);
 
         $this->db->query(
             'INSERT INTO servers
@@ -205,13 +200,32 @@ class ClaimRequestHandler
                 'version' => $version,
                 'public_key_jwk' => $publicKeyJwk,
                 'hostname_candidates_json' => $hostnameCandidates,
-                'last_seen_at' => $nowUnix,
-                'created_at' => $nowUnix,
+                // servers.last_seen_at / created_at are DATETIME columns.
+                'last_seen_at' => $nowDateTime,
+                'created_at' => $nowDateTime,
+                // servers.enrolled_at is INT UNSIGNED (migration 012).
                 'enrolled_at' => $nowUnix,
             ],
         );
 
-        $this->db->query("DELETE FROM server_claims WHERE id = :id", ['id' => $claimRowId]);
+        // Mark the claim paired and record the new server id, instead of
+        // deleting the row. The headless server has no JWT yet and the
+        // enrollment material is delivered to it by polling
+        // GET /api/v1/server-claims/{id}; that poll regenerates the
+        // enrollment JWT from paired_server_id and then consumes the row.
+        $this->db->query(
+            'UPDATE server_claims
+                SET status = \'paired\', claimed_by = :user_id, claimed_at = :claimed_at,
+                    paired_at = :paired_at, paired_server_id = :server_id
+              WHERE id = :id',
+            [
+                'user_id' => $userId,
+                'claimed_at' => $nowUnix,
+                'paired_at' => $nowUnix,
+                'server_id' => $serverId,
+                'id' => $claimRowId,
+            ],
+        );
 
         $jwtService = new EnrollmentJwtService($this->keyManager, $this->hubBaseUrl);
         $enrollmentJwt = $jwtService->createEnrollmentJwt($serverId);
@@ -227,6 +241,64 @@ class ClaimRequestHandler
             'hub_jwks_url' => $jwtService->getHubJwksUrl(),
             'server_id' => $serverId,
         ];
+    }
+
+    /**
+     * Poll the status of a claim by its id (the headless pairing flow).
+     *
+     * Returns `{status: pending}` while the claim is unclaimed, and once a
+     * user has claimed it on the hub portal `{status: claimed}` plus a
+     * freshly-minted enrollment JWT — then consumes the claim so the JWT
+     * can't be fetched again. Unknown or expired claims report `expired`.
+     *
+     * The enrollment JWT is regenerated here from paired_server_id rather
+     * than stored at rest, so no bearer credential lingers in the database.
+     *
+     * @param string $claimId The claim id returned by handleNewClaim().
+     *
+     * @return array{status: string, enrollment_jwt?: string, hub_jwks_url?: string, server_id?: string}
+     */
+    public function getClaimStatus(string $claimId): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT * FROM server_claims WHERE id = :id',
+            ['id' => $claimId],
+        );
+        if (empty($rows)) {
+            return ['status' => 'expired'];
+        }
+        /** @var array<string, mixed> $row */
+        $row = $rows[0];
+
+        /** @var string|null $claimedBy */
+        $claimedBy = $row['claimed_by'] ?? null;
+        /** @var string $serverId */
+        $serverId = is_string($row['paired_server_id'] ?? null) ? $row['paired_server_id'] : '';
+        /** @var string $status */
+        $status = is_string($row['status'] ?? null) ? $row['status'] : 'pending';
+        /** @var int $expiresAt */
+        $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
+
+        if ($status === 'paired' && is_string($claimedBy) && $claimedBy !== '' && $serverId !== '') {
+            $jwtService = new EnrollmentJwtService($this->keyManager, $this->hubBaseUrl);
+            $enrollmentJwt = $jwtService->createEnrollmentJwt($serverId);
+            // One-time retrieval: drop the claim now the server has its JWT.
+            $this->db->query('DELETE FROM server_claims WHERE id = :id', ['id' => $claimId]);
+
+            return [
+                'status' => 'claimed',
+                'enrollment_jwt' => $enrollmentJwt,
+                'hub_jwks_url' => $jwtService->getHubJwksUrl(),
+                'server_id' => $serverId,
+            ];
+        }
+
+        if ($expiresAt > 0 && $expiresAt < time()) {
+            return ['status' => 'expired'];
+        }
+
+        return ['status' => 'pending'];
     }
 
     /**
