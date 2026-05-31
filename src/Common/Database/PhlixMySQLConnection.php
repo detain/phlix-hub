@@ -23,6 +23,11 @@ use Workerman\MySQL\Connection;
  *
  * Associative arrays (string keys, e.g. `[':id' => $id]`) pass through
  * untouched. Mirrors phlix-server's identical fix.
+ *
+ * @psalm-suppress PropertyNotSetInConstructor
+ *   The parent Connection declares untyped query-builder properties
+ *   (e.g. `$table`) it only initialises lazily; we add no constructor,
+ *   so Psalm's not-set-in-constructor check is a parent concern.
  */
 final class PhlixMySQLConnection extends Connection
 {
@@ -30,10 +35,11 @@ final class PhlixMySQLConnection extends Connection
      * Signature matches the parent's declared docblock (`@param array`).
      * Workerman's execute() defaults `$parameters = ""` and forwards the
      * string straight into bindMore(); the parent then no-ops on
-     * non-array input. We mirror that escape hatch here so the parent
-     * call stays type-safe for PHPStan.
+     * non-array input. We mirror that escape hatch here so the
+     * `is_array()` guard below stays meaningful (hence `mixed`, not
+     * `array`, which both PHPStan and Psalm accept).
      *
-     * @param array<int|string, mixed> $parray
+     * @param mixed $parray
      */
     public function bindMore($parray): void
     {
