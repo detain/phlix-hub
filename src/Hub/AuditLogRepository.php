@@ -203,6 +203,7 @@ class AuditLogRepository
         /** @var mixed $context */
         $context = null;
         if ($contextJson !== null && is_string($contextJson) && $contextJson !== '') {
+            /** @psalm-suppress MixedAssignment */
             $context = json_decode($contextJson, true);
         }
 
