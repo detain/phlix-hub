@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Common\Logger;
 
+use Phlix\Hub\Hub\AuditLogRepository;
+
 /**
  * Specialised logger for security and audit events on the hub.
  *
@@ -15,34 +17,51 @@ namespace Phlix\Hub\Common\Logger;
  * {@see \Phlix\Hub\Common\Logger\LogChannels::AUDIT}. The channel writes
  * to `.logs/audit.log` by default (config/logger.php).
  *
+ * When an {@see AuditLogRepository} is available (injected by the container
+ * via the optional ctor param), each event is also persisted to the
+ * `audit_logs` database table.
+ *
  * @package Phlix\Hub\Common\Logger
  */
 class AuditLogger
 {
     /**
-     * @param StructuredLogger $logger Underlying channel-bound logger.
+     * @param StructuredLogger    $logger   Underlying channel-bound logger.
+     * @param AuditLogRepository|null $auditRepo Optional DB-backed audit repo.
+     *
+     * @since H.5b Added nullable $auditRepo parameter.
      */
-    public function __construct(private readonly StructuredLogger $logger)
-    {
+    public function __construct(
+        private readonly StructuredLogger $logger,
+        private readonly ?AuditLogRepository $auditRepo = null,
+    ) {
     }
 
     /**
      * Record a successful or failed login attempt.
      *
      * @param string  $userId   UUID of the user (or empty string when unknown).
-     * @param string  $deviceId Opaque device/session identifier.
+     * @param string  $deviceId  Opaque device/session identifier.
      * @param bool    $success  Whether authentication succeeded.
      * @param ?string $reason   Optional human-readable reason (e.g. "bad_password").
      */
     public function logLogin(string $userId, string $deviceId, bool $success, ?string $reason = null): void
     {
         $this->logger->info('User login attempt', [
-            'event'     => 'login',
-            'user_id'   => $userId,
+            'event' => 'login',
+            'user_id' => $userId,
             'device_id' => $deviceId,
-            'success'   => $success,
-            'reason'    => $reason,
+            'success' => $success,
+            'reason' => $reason,
         ]);
+
+        $this->auditRepo?->log(
+            event: 'login',
+            userId: $userId,
+            deviceId: $deviceId,
+            success: $success,
+            reason: $reason,
+        );
     }
 
     /**
@@ -51,10 +70,16 @@ class AuditLogger
     public function logLogout(string $userId, string $sessionId): void
     {
         $this->logger->info('User logout', [
-            'event'      => 'logout',
-            'user_id'    => $userId,
+            'event' => 'logout',
+            'user_id' => $userId,
             'session_id' => $sessionId,
         ]);
+
+        $this->auditRepo?->log(
+            event: 'logout',
+            userId: $userId,
+            sessionId: $sessionId,
+        );
     }
 
     /**
@@ -66,9 +91,15 @@ class AuditLogger
     public function logFailedAuth(string $reason, array $context = []): void
     {
         $this->logger->warning('Authentication failure', array_merge([
-            'event'  => 'auth_failure',
+            'event' => 'auth_failure',
             'reason' => $reason,
         ], $context));
+
+        $this->auditRepo?->log(
+            event: 'auth_failure',
+            reason: $reason,
+            context: $context,
+        );
     }
 
     /**
@@ -77,11 +108,18 @@ class AuditLogger
     public function logPermissionDenied(string $userId, string $resource, string $action): void
     {
         $this->logger->warning('Permission denied', [
-            'event'    => 'permission_denied',
-            'user_id'  => $userId,
+            'event' => 'permission_denied',
+            'user_id' => $userId,
             'resource' => $resource,
-            'action'   => $action,
+            'action' => $action,
         ]);
+
+        $this->auditRepo?->log(
+            event: 'permission_denied',
+            userId: $userId,
+            resource: $resource,
+            action: $action,
+        );
     }
 
     /**
@@ -91,11 +129,18 @@ class AuditLogger
     public function logSignup(string $userId, string $username, string $email): void
     {
         $this->logger->info('User signup', [
-            'event'    => 'signup',
-            'user_id'  => $userId,
+            'event' => 'signup',
+            'user_id' => $userId,
             'username' => $username,
-            'email'    => $email,
+            'email' => $email,
         ]);
+
+        $this->auditRepo?->log(
+            event: 'signup',
+            userId: $userId,
+            resource: $username,
+            action: $email,
+        );
     }
 
     /**
@@ -110,11 +155,19 @@ class AuditLogger
     public function logAdminAction(string $userId, string $action, string $resource, array $context = []): void
     {
         $this->logger->info('Admin action', array_merge([
-            'event'    => 'admin_action',
-            'user_id'  => $userId,
-            'action'   => $action,
+            'event' => 'admin_action',
+            'user_id' => $userId,
+            'action' => $action,
             'resource' => $resource,
         ], $context));
+
+        $this->auditRepo?->log(
+            event: 'admin_action',
+            userId: $userId,
+            action: $action,
+            resource: $resource,
+            context: $context,
+        );
     }
 
     /**
@@ -141,6 +194,15 @@ class AuditLogger
             'success' => $success,
             'reason' => $reason,
         ]);
+
+        $this->auditRepo?->log(
+            event: 'hub_connect',
+            resource: $peerId,
+            action: $peerUrl,
+            success: $success,
+            reason: $reason,
+            context: ['peer_name' => $peerName],
+        );
     }
 
     /**
@@ -158,6 +220,13 @@ class AuditLogger
             'peer_name' => $peerName,
             'reason' => $reason,
         ]);
+
+        $this->auditRepo?->log(
+            event: 'hub_disconnect',
+            resource: $peerId,
+            action: $reason,
+            context: ['peer_name' => $peerName],
+        );
     }
 
     /**
@@ -166,7 +235,7 @@ class AuditLogger
      * @param string $peerId     Peer UUID.
      * @param string $libraryId  Library UUID.
      * @param string $permission Share permission level.
-     * @param string $action     Action performed ('created'|'revoked'|'accepted'|'rejected').
+     * @param string $action    Action performed ('created'|'revoked'|'accepted'|'rejected').
      */
     public function logLibraryShareCrossHub(string $peerId, string $libraryId, string $permission, string $action): void
     {
@@ -177,6 +246,13 @@ class AuditLogger
             'permission' => $permission,
             'action' => $action,
         ]);
+
+        $this->auditRepo?->log(
+            event: 'library_share_cross_hub',
+            resource: $libraryId,
+            action: $action,
+            context: ['peer_id' => $peerId, 'permission' => $permission],
+        );
     }
 
     /**
@@ -194,5 +270,12 @@ class AuditLogger
             'user_id' => $userId,
             'action' => $action,
         ]);
+
+        $this->auditRepo?->log(
+            event: 'admin_delegation',
+            userId: $userId,
+            resource: $peerId,
+            action: $action,
+        );
     }
 }
