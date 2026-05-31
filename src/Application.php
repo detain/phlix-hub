@@ -125,6 +125,11 @@ final class Application
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
 
+        $this->router->group('/federation', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+            $r->get('/shares', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
         $this->router->group('/servers/{id}', static function (Router $r) use ($pages): void {
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
