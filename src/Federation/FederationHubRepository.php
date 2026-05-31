@@ -173,7 +173,7 @@ class FederationHubRepository
             'SELECT * FROM federation_peers ORDER BY name',
         );
 
-        return is_array($rows) ? $rows : [];
+        return $rows;
     }
 
     /**
@@ -189,7 +189,7 @@ class FederationHubRepository
             ['status' => 'connected'],
         );
 
-        return is_array($rows) ? $rows : [];
+        return $rows;
     }
 
     /**

@@ -183,7 +183,9 @@ final class FederationController
         return (new Response())->json([
             'peers' => array_map(
                 static function (array $p): array {
+                    /** @var mixed $relayEnabled */
                     $relayEnabled = $p['relay_enabled'] ?? null;
+                    /** @var mixed $adminDelEnabled */
                     $adminDelEnabled = $p['admin_delegation_enabled'] ?? null;
                     return [
                         'id' => $p['id'] ?? '',
@@ -298,7 +300,9 @@ final class FederationController
         }
 
         // If this peer is connected, disconnect first
-        $status = is_string($peer['status'] ?? null) ? $peer['status'] : 'pending';
+        /** @var mixed $statusRaw */
+        $statusRaw = $peer['status'] ?? null;
+        $status = is_string($statusRaw) ? $statusRaw : 'pending';
         if ($status === 'connected') {
             // Disconnect any active federation sessions for this peer
             $session = $this->sessions->getActiveSession($peerId);
@@ -347,6 +351,7 @@ final class FederationController
         $relayEnabled = is_bool($enabledRaw) ? $enabledRaw
             : (is_string($enabledRaw) && $enabledRaw === 'true');
 
+        /** @var mixed $adminDelRaw */
         $adminDelRaw = $peer['admin_delegation_enabled'] ?? null;
         $adminDelEnabled = is_int($adminDelRaw)
             ? $adminDelRaw === 1
@@ -402,6 +407,7 @@ final class FederationController
         $adminDelEnabled = is_bool($enabledRaw) ? $enabledRaw
             : (is_string($enabledRaw) && $enabledRaw === 'true');
 
+        /** @var mixed $relayRaw */
         $relayRaw = $peer['relay_enabled'] ?? null;
         $relayEnabled = is_int($relayRaw) ? $relayRaw === 1 : (is_string($relayRaw) && $relayRaw === '1');
 
@@ -687,6 +693,7 @@ final class FederationController
     {
         // Only allow on master hub
         $hubConfig = $this->hubRepo->getHubConfig();
+        /** @var mixed $isMasterRaw */
         $isMasterRaw = $hubConfig['is_master'] ?? null;
         $isMaster = is_int($isMasterRaw) ? $isMasterRaw === 1 : (is_string($isMasterRaw) && $isMasterRaw === '1');
         if ($hubConfig === null || !$isMaster) {
@@ -733,6 +740,7 @@ final class FederationController
     {
         // Only allow on master hub
         $hubConfig = $this->hubRepo->getHubConfig();
+        /** @var mixed $isMasterRaw */
         $isMasterRaw = $hubConfig['is_master'] ?? null;
         $isMaster = is_int($isMasterRaw) ? $isMasterRaw === 1 : (is_string($isMasterRaw) && $isMasterRaw === '1');
         if ($hubConfig === null || !$isMaster) {

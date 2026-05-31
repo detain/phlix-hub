@@ -90,7 +90,10 @@ final class ServerDetailController
 
         // Get subdomain and TLS status
         $subdomain = $this->serverInfo->getServerSubdomain($serverId);
-        $publicDomain = getenv('HUB_PUBLIC_DOMAIN') ?: 'phlix.media';
+        $envPublicDomain = getenv('HUB_PUBLIC_DOMAIN');
+        $publicDomain = ($envPublicDomain !== false && $envPublicDomain !== '')
+            ? $envPublicDomain
+            : 'phlix.media';
         $fqdn = $subdomain !== null ? $subdomain . '.' . $publicDomain : null;
 
         $tlsStatus = null;

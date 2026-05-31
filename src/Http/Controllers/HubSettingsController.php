@@ -128,6 +128,7 @@ final class HubSettingsController
         $allowedKeys = HubSettingsRepository::ALLOWED_KEYS;
 
         // Validate all keys and types before persisting anything.
+        /** @var mixed $value */
         foreach ($settings as $key => $value) {
             if (!array_key_exists($key, $allowedKeys)) {
                 return (new Response())->status(400)->json([
@@ -150,8 +151,9 @@ final class HubSettingsController
         }
 
         // All-or-nothing persist.
+        /** @var mixed $value */
         foreach ($settings as $key => $value) {
-            $this->settings->set($key, $value, $allowedKeys[$key]);
+            $this->settings->set((string) $key, $value, $allowedKeys[$key]);
         }
 
         return (new Response())->json(['success' => true]);

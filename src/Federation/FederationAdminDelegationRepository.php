@@ -77,7 +77,7 @@ class FederationAdminDelegationRepository
             ['user_id' => $userId],
         );
 
-        return is_array($rows) ? $rows : [];
+        return $rows;
     }
 
     /**
@@ -96,7 +96,7 @@ class FederationAdminDelegationRepository
             ['peer_id' => $peerId],
         );
 
-        return is_array($rows) ? $rows : [];
+        return $rows;
     }
 
     /**

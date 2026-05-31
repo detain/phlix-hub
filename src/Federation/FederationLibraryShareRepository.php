@@ -65,7 +65,7 @@ class FederationLibraryShareRepository
             'SELECT * FROM federation_library_shares ORDER BY shared_at DESC',
         );
 
-        return is_array($rows) ? $rows : [];
+        return $rows;
     }
 
     /**
@@ -99,7 +99,7 @@ class FederationLibraryShareRepository
             ['status' => 'active'],
         );
 
-        return is_array($rows) ? $rows : [];
+        return $rows;
     }
 
     /**
@@ -134,7 +134,7 @@ class FederationLibraryShareRepository
             'SELECT * FROM federation_incoming_share_offers ORDER BY offered_at DESC',
         );
 
-        return is_array($rows) ? $rows : [];
+        return $rows;
     }
 
     /**

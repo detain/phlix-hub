@@ -42,6 +42,8 @@ final readonly class FederationLibraryShareDto
         $rawStatus = $row['status'] ?? null;
         /** @var mixed $rawSharedAt */
         $rawSharedAt = $row['shared_at'] ?? null;
+        /** @var mixed $rawRevokedAt */
+        $rawRevokedAt = $row['revoked_at'] ?? null;
 
         return new self(
             id: is_string($rawId) ? $rawId : '',
@@ -51,7 +53,7 @@ final readonly class FederationLibraryShareDto
             permission: is_string($rawPermission) ? $rawPermission : 'read',
             status: is_string($rawStatus) ? $rawStatus : 'pending',
             sharedAt: is_string($rawSharedAt) ? $rawSharedAt : '',
-            revokedAt: is_string($row['revoked_at'] ?? null) ? $row['revoked_at'] : null,
+            revokedAt: is_string($rawRevokedAt) ? $rawRevokedAt : null,
         );
     }
 }
