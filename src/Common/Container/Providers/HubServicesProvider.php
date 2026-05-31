@@ -14,6 +14,7 @@ use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
+use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\ClaimRequestHandler;
@@ -430,6 +431,12 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): HubSettingsController {
                 return new HubSettingsController($settings);
             })->parameter('settings', get(HubSettingsRepository::class)),
+
+            AuditLogController::class => factory(static function (
+                AuditLogRepository $repo,
+            ): AuditLogController {
+                return new AuditLogController($repo);
+            })->parameter('repo', get(AuditLogRepository::class)),
 
             FederationHubRepository::class => factory(static function (
                 Connection $db,
