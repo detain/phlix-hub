@@ -30,7 +30,7 @@ use Workerman\Timer;
  *
  * @package Phlix\Hub\Federation
  */
-final class FederationPeerManager
+class FederationPeerManager
 {
     /**
      * Leaf-side connection to master hub (null when disconnected).
