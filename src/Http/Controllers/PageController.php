@@ -83,6 +83,7 @@ final class PageController
             $request->path === '/hub-settings'      => $this->hubSettings($request),
             $request->path === '/federation'        => $this->federation($request),
             $request->path === '/federation/shares' => $this->federationShares($request),
+            $request->path === '/audit-logs'        => $this->auditLogs($request),
             $request->path === '/'                  => $this->home($request),
             str_starts_with($request->path, '/servers/') => $this->serverDetail($request),
             default => (new Response())->status(404)->html('<h1>Not Found</h1>'),
@@ -304,6 +305,31 @@ final class PageController
         }
 
         $html = $this->renderer->render('home/federation-shares.tpl', $this->layoutContext($request));
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /audit-logs` — render the audit log viewer page.
+     *
+     * Shell page; data is fetched client-side from
+     * `GET /api/v1/me/audit-logs`.
+     *
+     * Access is gated by the admin middleware.
+     */
+    public function auditLogs(Request $request): Response
+    {
+        $status = $this->admin->checkAccess($request);
+        if ($status === 403) {
+            return (new Response())
+                ->html(
+                    '<h1>Forbidden</h1>'
+                    . '<p>You need admin access to view audit logs.</p>'
+                    . '<p><a href="/my-servers">Back to my servers</a></p>',
+                    403,
+                );
+        }
+
+        $html = $this->renderer->render('home/audit-logs.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 
