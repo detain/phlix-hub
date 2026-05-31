@@ -15,6 +15,7 @@ use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Http\Controllers\FederationController;
+use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\DeregisterHandler;
 use Phlix\Hub\Hub\DnsAliasManager;
@@ -98,6 +99,16 @@ final class HubServicesProvider implements ServiceProviderInterface
             dirname(__DIR__, 4) . '/config/hub-signing-key.pem',
         );
         $hubBaseUrl = self::stringOr($appConfig, 'hub_base_url', 'http://localhost:8800');
+
+        // AuditLogRepository must be registered before AuditLogger so PHP-DI
+        // can auto-inject it as the optional nullable constructor param.
+        $builder->addDefinitions([
+            AuditLogRepository::class => factory(static function (
+                Connection $db,
+            ): AuditLogRepository {
+                return new AuditLogRepository($db);
+            })->parameter('db', get(Connection::class)),
+        ]);
 
         $builder->addDefinitions([
             Ed25519KeyManager::class => factory(static function () use ($keyPath): Ed25519KeyManager {
