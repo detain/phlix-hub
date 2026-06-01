@@ -99,6 +99,12 @@ final class Application
         $this->router->get('/signup', static fn (Request $r): Response => $pages($r));
         $this->router->get('/login', static fn (Request $r): Response => $pages($r));
 
+        // Shared Vue 3 SPA shell (Phase C) — no auth gate; SPA handles its own auth.
+        $publicRoot = $this->config['public_root'] ?? rtrim(dirname(__DIR__) . '/public', DIRECTORY_SEPARATOR);
+        $sharedUi = new \Phlix\Hub\Http\Controllers\SharedUiController($publicRoot);
+        $this->router->get('/app', static fn (Request $r) => $sharedUi->shell($r, []));
+        $this->router->get('/app/{path}', static fn (Request $r, array $params) => $sharedUi->shell($r, $params));
+
         // Auth form handlers (SSR).
         $auth = $this->resolveAuthController();
         $this->router->post('/signup', static fn (Request $r): Response => $auth($r));
