@@ -77,6 +77,41 @@ final class EnrollmentJwtServiceTest extends TestCase
         self::assertNull($payload);
     }
 
+    /**
+     * Regression: a token minted before a hub restart must still validate
+     * afterwards. The kid is a fingerprint of the persisted key (stable across
+     * restarts), not a per-process timestamp — an earlier version timestamped
+     * the kid in the constructor, so a fresh manager on the same key file
+     * produced a different kid and rejected every outstanding token as a
+     * spurious ENROLLMENT_TOKEN_EXPIRED on heartbeat.
+     */
+    public function testEnrollmentJwtSurvivesKeyManagerReload(): void
+    {
+        $keyPath = $this->tmpDir . '/signing-key.pem';
+        // Mint under the first manager (generates + persists the key).
+        $token = $this->service->createEnrollmentJwt('server-reload');
+        $originalKid = $this->keyManager->getKid();
+
+        // Simulate a restart: a brand-new manager loading the SAME key file.
+        $reloadedManager = new Ed25519KeyManager($keyPath);
+        $reloadedService = new EnrollmentJwtService($reloadedManager, 'https://hub.example.com');
+
+        self::assertSame(
+            $originalKid,
+            $reloadedManager->getKid(),
+            'kid must be stable across reloads of the same key',
+        );
+
+        $tokenKid = json_decode(
+            (string) base64_decode(strtr(explode('.', $token)[0], '-_', '+/'), true),
+            true,
+        )['kid'] ?? null;
+
+        $payload = $reloadedService->validateEnrollmentJwt($token, (string) $tokenKid);
+        self::assertNotNull($payload, 'token minted before reload must still validate after');
+        self::assertSame('server-reload', $payload['server_id']);
+    }
+
     public function testValidateEnrollmentJwtReturnsNullForTamperedToken(): void
     {
         $token = $this->service->createEnrollmentJwt('server-tampered');
