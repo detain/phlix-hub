@@ -84,6 +84,7 @@ final class PageController
             $request->path === '/federation'        => $this->federation($request),
             $request->path === '/federation/shares' => $this->federationShares($request),
             $request->path === '/audit-logs'        => $this->auditLogs($request),
+            $request->path === '/logs'              => $this->logs($request),
             $request->path === '/'                  => $this->home($request),
             str_starts_with($request->path, '/servers/') => $this->serverDetail($request),
             default => (new Response())->status(404)->html('<h1>Not Found</h1>'),
@@ -330,6 +331,30 @@ final class PageController
         }
 
         $html = $this->renderer->render('home/audit-logs.tpl', $this->layoutContext($request));
+        return (new Response())->html($html);
+    }
+
+    /**
+     * `GET /logs` — admin log viewer SSR page (lists + tails the hub log files).
+     *
+     * Admin-gated via {@see AdminMiddleware::checkAccess()} so the SSR gate
+     * matches the API gate (same DB lookup + audit-log entry on denial); the
+     * page itself is a shell that fetches from `/api/v1/me/logs*` client-side.
+     */
+    public function logs(Request $request): Response
+    {
+        $status = $this->admin->checkAccess($request);
+        if ($status === 403) {
+            return (new Response())
+                ->html(
+                    '<h1>Forbidden</h1>'
+                    . '<p>You need admin access to view the logs.</p>'
+                    . '<p><a href="/my-servers">Back to my servers</a></p>',
+                    403,
+                );
+        }
+
+        $html = $this->renderer->render('home/logs.tpl', $this->layoutContext($request));
         return (new Response())->html($html);
     }
 
