@@ -16,6 +16,7 @@ use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\FederationController;
+use Phlix\Hub\Http\Controllers\LogController;
 use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\DeregisterHandler;
@@ -453,6 +454,14 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): AuditLogController {
                 return new AuditLogController($repo);
             })->parameter('repo', get(AuditLogRepository::class)),
+
+            // Admin log viewer (mirrors phlix-server). Resolves to the hub's
+            // .logs/ directory — the same dir config/logger.php writes to. The
+            // path is resolved + jailed inside LogController so traversal and
+            // symlinks cannot escape it.
+            LogController::class => factory(static function (): LogController {
+                return new LogController(dirname(__DIR__, 4) . '/.logs');
+            }),
 
             FederationHubRepository::class => factory(static function (
                 Connection $db,

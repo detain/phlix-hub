@@ -12,6 +12,7 @@ use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\Http\Controllers\AuditLogController;
+use Phlix\Hub\Http\Controllers\LogController;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\FederationController;
@@ -132,6 +133,10 @@ final class Application
             $r->get('', static fn (Request $req): Response => $pages($req));
         }, [$authMiddleware]);
 
+        $this->router->group('/logs', static function (Router $r) use ($pages): void {
+            $r->get('', static fn (Request $req): Response => $pages($req));
+        }, [$authMiddleware]);
+
         $this->router->group('/federation', static function (Router $r) use ($pages): void {
             $r->get('', static fn (Request $req): Response => $pages($req));
             $r->get('/shares', static fn (Request $req): Response => $pages($req));
@@ -201,6 +206,9 @@ final class Application
 
         // Audit log routes (admin-only API).
         $this->registerAuditLogRoutes();
+
+        // Log viewer routes (admin-only API) — list + tail the hub log files.
+        $this->registerLogRoutes();
 
         // Federation management routes.
         $this->registerFederationRoutes();
@@ -586,6 +594,15 @@ final class Application
         return $controller;
     }
 
+    private function resolveLogController(): LogController
+    {
+        $controller = $this->container->get(LogController::class);
+        if (!$controller instanceof LogController) {
+            throw new \RuntimeException('Container returned an unexpected LogController instance');
+        }
+        return $controller;
+    }
+
     /**
      * Register library sharing routes.
      */
@@ -681,6 +698,24 @@ final class Application
 
         $this->router->group('/api/v1/me', static function (Router $r) use ($controller): void {
             $r->get('/audit-logs', static fn (Request $req): Response => $controller->index($req));
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
+     * Wire the admin log-viewer API (admin-only): list the hub log files, tail
+     * one, or tail all of them merged into one chronological stream. Mounted
+     * under /api/v1/me alongside /audit-logs and gated by auth + admin.
+     */
+    private function registerLogRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveLogController();
+
+        $this->router->group('/api/v1/me/logs', static function (Router $r) use ($controller): void {
+            $r->get('', static fn (Request $req): Response => $controller->index($req));
+            $r->get('/tail-all', static fn (Request $req): Response => $controller->tailAll($req));
+            $r->get('/tail', static fn (Request $req): Response => $controller->tail($req));
         }, [$authMiddleware, $adminMiddleware]);
     }
 
