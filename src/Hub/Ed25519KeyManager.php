@@ -13,6 +13,17 @@ use RuntimeException;
  * key in PEM format at the configured path. On subsequent boots, loads
  * the existing key. Supports key rotation with an overlap window.
  *
+ * The `kid` is a deterministic fingerprint of the public key (base64url of
+ * its SHA-256), NOT a per-process timestamp. Because the private key is
+ * persisted and reloaded across restarts, the kid is therefore STABLE across
+ * restarts and only changes when the key itself rotates. An earlier version
+ * set the kid from `date()` in the constructor, so every hub restart re-labelled
+ * the same key with a new kid; {@see EnrollmentJwtService::validateEnrollmentJwt()}
+ * rejects any token whose kid differs from the current one, so every restart
+ * invalidated all outstanding enrollment JWTs (surfacing to servers as a
+ * spurious ENROLLMENT_TOKEN_EXPIRED on heartbeat). Deriving the kid from the
+ * key keeps it stable and ends that breakage.
+ *
  * @package Phlix\Hub\Hub
  */
 final class Ed25519KeyManager
@@ -21,7 +32,8 @@ final class Ed25519KeyManager
 
     private ?string $publicKey = null;
 
-    private string $kid;
+    /** Lazily derived from the public key; reset to null whenever the key changes. */
+    private ?string $kid = null;
 
     /**
      * @param string $keyPath Absolute path to the PEM-encoded private key file.
@@ -29,7 +41,6 @@ final class Ed25519KeyManager
     public function __construct(
         private readonly string $keyPath,
     ) {
-        $this->kid = date('Y-m-d\TH:i:s\Z');
     }
 
     /**
@@ -76,18 +87,25 @@ final class Ed25519KeyManager
             'kty' => 'OKP',
             'crv' => 'Ed25519',
             'x' => $this->base64UrlEncode($publicKey),
-            'kid' => $this->kid,
+            'kid' => $this->getKid(),
             'use' => 'sig',
             'alg' => 'EdDSA',
         ];
     }
 
     /**
-     * Get the current key ID (ISO 8601 timestamp of key creation).
+     * Get the current key ID — a deterministic fingerprint of the public key
+     * (base64url of its SHA-256).
+     *
+     * Stable across process restarts (the key is persisted and reloaded) and
+     * changes only when the key rotates, so enrollment JWTs minted under one
+     * boot stay valid after a restart.
      */
     public function getKid(): string
     {
-        return $this->kid;
+        return $this->kid ??= $this->base64UrlEncode(
+            hash('sha256', $this->getOrCreateKeyPair()['public'], true),
+        );
     }
 
     /**
@@ -100,7 +118,8 @@ final class Ed25519KeyManager
     {
         $this->privateKey = null;
         $this->publicKey = null;
-        $this->kid = date('Y-m-d\TH:i:s\Z');
+        // Cleared so getKid() re-derives the fingerprint from the new public key.
+        $this->kid = null;
         $this->generateAndStore();
     }
 
