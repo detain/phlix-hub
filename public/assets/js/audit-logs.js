@@ -39,7 +39,7 @@ const AuditLogsPage = {
         params.set('offset', String(this.state.offset));
 
         try {
-            const res = await fetch(` / api / v1 / me / audit - logs ? ${params}`, {
+            const res = await fetch(`/api/v1/me/audit-logs?${params}`, {
                 credentials: 'include',
             });
             if (!res.ok) {
@@ -105,16 +105,16 @@ const AuditLogsPage = {
         const ip = this.escapeHtml(entry.ip_address || '—');
         const details = this.truncateDetails(entry.context);
 
-        return ` < tr >
-            < td > ${time} < / td >
-            < td > < span class = "event-badge" > ${event} < / span > < / td >
-            < td > ${userId} < / td >
-            < td > ${resource} < / td >
-            < td > ${action} < / td >
-            < td > ${successIcon} < / td >
-            < td > ${ip} < / td >
-            < td class = "details-cell" > ${details} < / td >
-        <  / tr > `;
+        return `<tr>
+            <td>${time}</td>
+            <td><span class="event-badge">${event}</span></td>
+            <td>${userId}</td>
+            <td>${resource}</td>
+            <td>${action}</td>
+            <td>${successIcon}</td>
+            <td>${ip}</td>
+            <td class="details-cell">${details}</td>
+        </tr>`;
     },
 
     formatTime(timestamp) {
