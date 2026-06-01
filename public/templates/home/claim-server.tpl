@@ -35,5 +35,5 @@
 {/block}
 
 {block name="scripts"}
-<script src="/assets/js/claim-server.js?v=2" defer></script>
+<script src="/assets/js/claim-server.js?v=3" defer></script>
 {/block}

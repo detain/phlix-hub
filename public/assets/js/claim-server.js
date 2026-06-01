@@ -40,14 +40,68 @@
         }
     });
 
-    // Normalise an autofilled/pasted initial value, and again on submit as a
-    // final guard before the POST.
+    // Normalise an autofilled/pasted initial value.
     input.value = normalize(input.value);
 
     var form = document.getElementById('claim-form');
+    var result = document.getElementById('claim-result');
+
+    /** Render a message into the result region. */
+    function showResult(message, isError) {
+        if (!result) {
+            return;
+        }
+        result.textContent = message;
+        result.className = 'claim-result ' + (isError ? 'error' : 'success');
+    }
+
     if (form) {
-        form.addEventListener('submit', function () {
+        // A native form POST cannot send the `Accept-Phlix-Protocol: v1`
+        // header that HubProtocolMiddleware requires, so it always failed with
+        // HUB_PROTOCOL_UNSUPPORTED. Intercept the submit and POST via fetch
+        // with the protocol header; the `phlix_hub_token` session cookie is
+        // carried by `credentials: 'same-origin'` for AuthMiddleware.
+        form.addEventListener('submit', function (event) {
+            event.preventDefault();
             input.value = normalize(input.value);
+
+            var button = form.querySelector('button[type="submit"]');
+            if (button) {
+                button.disabled = true;
+            }
+            showResult('Claiming server…', false);
+
+            fetch(form.getAttribute('action') || '/api/v1/server-claims/claim', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'Accept-Phlix-Protocol': 'v1'
+                },
+                body: JSON.stringify({ claim_code: input.value })
+            }).then(function (response) {
+                return response.json().catch(function () {
+                    return {};
+                }).then(function (data) {
+                    return { ok: response.ok, status: response.status, data: data };
+                });
+            }).then(function (res) {
+                if (res.ok && res.data && res.data.server_id) {
+                    showResult('Server claimed successfully (' + res.data.server_id + ').', false);
+                    form.reset();
+                } else {
+                    var msg = (res.data && (res.data.message || res.data.error)) ||
+                        ('Failed to claim server (HTTP ' + res.status + ').');
+                    showResult(msg, true);
+                }
+            }).catch(function () {
+                showResult('Network error — could not reach the hub. Please try again.', true);
+            }).then(function () {
+                if (button) {
+                    button.disabled = false;
+                }
+            });
         });
     }
 })();
