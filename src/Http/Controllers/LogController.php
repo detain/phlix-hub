@@ -59,14 +59,22 @@ final class LogController
         }
 
         $files = [];
-        foreach (glob($this->logDir . '/*.log') ?: [] as $path) {
+        $logFiles = glob($this->logDir . '/*.log');
+        if ($logFiles === false) {
+            $logFiles = [];
+        }
+        foreach ($logFiles as $path) {
             if (!is_file($path)) {
                 continue;
             }
+            /** @var int|false $size */
+            $size = filesize($path);
+            /** @var int|false $modified */
+            $modified = filemtime($path);
             $files[] = [
                 'name' => basename($path),
-                'size' => (int) (filesize($path) ?: 0),
-                'modified_at' => date('c', (int) (filemtime($path) ?: 0)),
+                'size' => $size !== false ? $size : 0,
+                'modified_at' => date('c', $modified !== false ? $modified : 0),
             ];
         }
         // Most-recently-modified first.
@@ -111,7 +119,7 @@ final class LogController
 
         return (new Response())->json([
             'file' => $file,
-            'lines' => array_values($tail),
+            'lines' => $tail,
             'truncated' => count($all) > count($tail),
         ]);
     }
@@ -138,7 +146,11 @@ final class LogController
             return (new Response())->json(['files' => [], 'lines' => [], 'truncated' => false]);
         }
 
-        $paths = array_values(array_filter(glob($this->logDir . '/*.log') ?: [], 'is_file'));
+        $globResult = glob($this->logDir . '/*.log');
+        if ($globResult === false) {
+            $globResult = [];
+        }
+        $paths = array_filter($globResult, 'is_file');
         $fileCount = count($paths);
         if ($fileCount === 0) {
             return (new Response())->json(['files' => [], 'lines' => [], 'truncated' => false]);
@@ -191,7 +203,7 @@ final class LogController
 
         return (new Response())->json([
             'files' => $names,
-            'lines' => array_values(array_map(static fn (array $e): string => $e['text'], $kept)),
+            'lines' => array_map(static fn (array $e): string => $e['text'], $kept),
             'truncated' => count($entries) > count($kept),
         ]);
     }
@@ -203,9 +215,12 @@ final class LogController
     {
         /** @var array<string, mixed> $query */
         $query = $request->query;
-        $value = $query[$key] ?? '';
+        /** @var mixed $rawValue */
+        $rawValue = $query[$key] ?? '';
+        /** @var string $value */
+        $value = is_string($rawValue) ? $rawValue : '';
 
-        return is_string($value) ? $value : '';
+        return $value;
     }
 
     /**
@@ -215,7 +230,9 @@ final class LogController
     {
         /** @var array<string, mixed> $query */
         $query = $request->query;
+        /** @var mixed $raw */
         $raw = $query['lines'] ?? null;
+        /** @var int $lines */
         $lines = is_numeric($raw) ? (int) $raw : self::DEFAULT_LINES;
 
         return max(1, min(self::MAX_LINES, $lines));
