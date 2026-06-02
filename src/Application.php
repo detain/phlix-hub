@@ -106,7 +106,7 @@ final class Application
             : rtrim(dirname(__DIR__) . '/public', DIRECTORY_SEPARATOR);
         $sharedUi = new \Phlix\Hub\Http\Controllers\SharedUiController($publicRoot);
         $this->router->get('/app', static fn (Request $r) => $sharedUi->shell($r, []));
-        $this->router->get('/app/{path}', static function (Request $r, array $params) use ($sharedUi): Response {
+        $this->router->get('/app/{path:.*}', static function (Request $r, array $params) use ($sharedUi): Response {
             /** @var array<string, string> $typedParams */
             $typedParams = $params;
             return $sharedUi->shell($r, $typedParams);
