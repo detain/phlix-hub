@@ -61,11 +61,7 @@ final class SharedUiController
         $shellPath = $this->publicRoot . self::SHELL_RELATIVE_PATH;
         $real = realpath($shellPath);
 
-        if (
-            $real === false
-            || ! str_starts_with($real, $this->publicRoot . DIRECTORY_SEPARATOR)
-            || ! is_file($real)
-        ) {
+        if ($real === false) {
             return (new Response())
                 ->status(503)
                 ->html(
@@ -75,7 +71,30 @@ final class SharedUiController
                 );
         }
 
-        $html = file_get_contents($real);
+        /** @var string $realPath */
+        $realPath = $real;
+
+        if (! str_starts_with($realPath, $this->publicRoot . DIRECTORY_SEPARATOR)) {
+            return (new Response())
+                ->status(503)
+                ->html(
+                    '<h1>503 — Shared UI not built</h1>'
+                    . '<p>The Vue SPA bundle is missing. '
+                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
+                );
+        }
+
+        if (! is_file($realPath)) {
+            return (new Response())
+                ->status(503)
+                ->html(
+                    '<h1>503 — Shared UI not built</h1>'
+                    . '<p>The Vue SPA bundle is missing. '
+                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
+                );
+        }
+
+        $html = file_get_contents($realPath);
         if ($html === false) {
             return (new Response())
                 ->status(503)
@@ -93,10 +112,15 @@ final class SharedUiController
             'features' => (object) [],
         ];
 
-        $configScript = '<script>window.__PHLIX__ = '
-            . json_encode($config, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) . '</script>' . "\n";
-        $html = preg_replace('/<head>/i', "<head>\n" . $configScript, $html, 1) ?? $html;
+        $configJson = json_encode($config, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP);
+        if ($configJson === false) {
+            $configJson = '{}';
+        }
+        $configScript = '<script>window.__PHLIX__ = ' . $configJson . '</script>' . "\n";
+        /** @var string $htmlContent */
+        $htmlContent = $html;
+        $htmlContent = preg_replace('/<head>/i', "<head>\n" . $configScript, $htmlContent, 1) ?? $htmlContent;
 
-        return (new Response())->html($html);
+        return (new Response())->html($htmlContent);
     }
 }
