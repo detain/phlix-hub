@@ -109,7 +109,18 @@ class Router
     {
         $fullPath = ($this->groupPrefix !== null ? $this->groupPrefix : '') . $path;
 
-        $pattern = preg_replace('/\{([a-zA-Z_]+)\}/', '(?P<$1>[^/]+)', $fullPath);
+        // `{name}` matches one path segment; `{name:regex}` lets a route opt into a
+        // custom (possibly multi-segment) pattern, e.g. `{path:.*}` for an SPA shell
+        // catch-all that must serve `/app/player/abc` and `/app/media/123`.
+        $pattern = preg_replace_callback(
+            '/\{([a-zA-Z_]+)(?::([^{}]+))?\}/',
+            static function (array $m): string {
+                // The optional `:regex` group is non-empty when matched ([^{}]+).
+                $inner = isset($m[2]) ? $m[2] : '[^/]+';
+                return '(?P<' . $m[1] . '>' . $inner . ')';
+            },
+            $fullPath
+        );
         $pattern = '#^' . ($pattern ?? $fullPath) . '$#';
 
         $this->routes[$method][$pattern] = [
