@@ -121,7 +121,9 @@ final class Application
         $this->router->post('/login', static fn (Request $r): Response => $auth($r));
         $this->router->post('/logout', static fn (Request $r): Response => $auth($r));
 
-        // JSON API.
+        // JSON API. `/register` is the canonical signup path used by the shared
+        // @phlix/ui SPA (and phlix-server); `/signup` is kept as an alias.
+        $this->router->post('/api/v1/auth/register', static fn (Request $r): Response => $auth($r));
         $this->router->post('/api/v1/auth/signup', static fn (Request $r): Response => $auth($r));
         $this->router->post('/api/v1/auth/login', static fn (Request $r): Response => $auth($r));
         $this->router->post('/api/v1/auth/logout', static fn (Request $r): Response => $auth($r));
@@ -175,6 +177,9 @@ final class Application
             $libraryController,
         ): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
+            // `/auth/me` is the path the shared @phlix/ui SPA calls (matches
+            // phlix-server); aliased to the same MeController as `/me`.
+            $r->get('/auth/me', static fn (Request $req): Response => $me($req));
             $r->get('/me/servers', static fn (Request $req): Response => $serverList($req));
             $r->delete(
                 '/me/servers/{id}',
