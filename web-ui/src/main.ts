@@ -1,4 +1,6 @@
 import { createPhlixApp, MyServersPage, FederationPage, ManageSharesPage, AuditLogsPage } from '@phlix/ui';
+import '@phlix/ui/style.css';
+import '@phlix/ui/fonts.css';
 
 const app = createPhlixApp({
     app: 'hub',
