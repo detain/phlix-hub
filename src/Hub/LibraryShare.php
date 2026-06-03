@@ -25,6 +25,7 @@ final class LibraryShare
      * @param int         $createdAt        Unix timestamp when share was created.
      * @param int|null    $expiresAt       Unix timestamp when share expires, or null.
      * @param int|null    $revokedAt        Unix timestamp when share was revoked, or null.
+     * @param string|null $collaboratorName Friendly collaborator display name, or null.
      */
     public function __construct(
         public readonly string $id,
@@ -37,6 +38,7 @@ final class LibraryShare
         public readonly int $createdAt,
         public readonly ?int $expiresAt = null,
         public readonly ?int $revokedAt = null,
+        public readonly ?string $collaboratorName = null,
     ) {
     }
 
@@ -93,6 +95,7 @@ final class LibraryShare
             'created_at' => $this->createdAt,
             'expires_at' => $this->expiresAt,
             'revoked_at' => $this->revokedAt,
+            'collaborator_name' => $this->collaboratorName,
         ];
     }
 
@@ -128,6 +131,19 @@ final class LibraryShare
         /** @var mixed $rawPermission */
         $rawPermission = $row['permission_level'] ?? null;
 
+        // Friendly collaborator name from a joined users table (outgoing-shares
+        // query): prefer display_name, fall back to username, else null.
+        /** @var mixed $rawCollaboratorName */
+        $rawCollaboratorName = $row['collaborator_name'] ?? null;
+        /** @var mixed $rawCollaboratorUsername */
+        $rawCollaboratorUsername = $row['collaborator_username'] ?? null;
+        $collaboratorName = null;
+        if (is_string($rawCollaboratorName) && $rawCollaboratorName !== '') {
+            $collaboratorName = $rawCollaboratorName;
+        } elseif (is_string($rawCollaboratorUsername) && $rawCollaboratorUsername !== '') {
+            $collaboratorName = $rawCollaboratorUsername;
+        }
+
         return new self(
             id: is_string($rawId) ? $rawId : '',
             ownerUserId: is_string($rawOwner) ? $rawOwner : '',
@@ -139,6 +155,7 @@ final class LibraryShare
             createdAt: is_numeric($row['created_at'] ?? null) ? (int) $row['created_at'] : 0,
             expiresAt: $expiresAt,
             revokedAt: $revokedAt,
+            collaboratorName: $collaboratorName,
         );
     }
 }
