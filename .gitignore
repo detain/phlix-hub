@@ -8,3 +8,16 @@
 /var/
 public/workerman.*.pid
 public/workerman.log
+
+# Caliber local state
+.caliber/
+.claude/
+!.claude/settings.json
+!.claude/rules/
+!.claude/skills/
+!.claude/hooks/
+.opencode/node_modules/
+.opencode/memory/
+.opencode/.env
+.opencode/cache/
+.opencode/logs/
