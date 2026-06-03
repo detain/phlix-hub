@@ -425,4 +425,118 @@ final class AuditLogRepositoryTest extends TestCase
         self::assertCount(1, $result['entries']);
         self::assertSame('user.delete', $result['entries'][0]['action']);
     }
+
+    public function testFindJoinsUsersAndQualifiesWhereWithAlias(): void
+    {
+        $mockDb = $this->createMock(Connection::class);
+        $callCount = 0;
+
+        $mockDb->expects(self::exactly(2))
+            ->method('query')
+            ->willReturnCallback(function (string $sql) use (&$callCount): array {
+                $callCount++;
+                if ($callCount === 1) {
+                    // Count query: aliased table, no join, alias-qualified WHERE.
+                    self::assertStringContainsString('FROM audit_logs al', $sql);
+                    self::assertStringContainsString('al.event = :event', $sql);
+                    return [['cnt' => 1]];
+                }
+                // Select query: LEFT JOIN users for the actor name, alias-qualified order.
+                self::assertStringContainsString('LEFT JOIN users u ON u.id = al.user_id', $sql);
+                self::assertStringContainsString('u.display_name AS actor_name', $sql);
+                self::assertStringContainsString('u.username AS actor_username', $sql);
+                self::assertStringContainsString('al.event = :event', $sql);
+                self::assertStringContainsString('ORDER BY al.created_at DESC', $sql);
+                return [[
+                    'id' => 'uuid-1',
+                    'event' => 'login',
+                    'user_id' => 'user-1',
+                    'session_id' => null,
+                    'device_id' => null,
+                    'resource' => null,
+                    'action' => null,
+                    'success' => 1,
+                    'reason' => null,
+                    'ip_address' => null,
+                    'user_agent' => null,
+                    'context_json' => null,
+                    'created_at' => '2026-01-01 00:00:00',
+                    'actor_name' => 'Alice Admin',
+                    'actor_username' => 'alice',
+                ]];
+            });
+
+        $repo = new AuditLogRepository($mockDb);
+        $result = $repo->find(['event' => 'login']);
+
+        self::assertCount(1, $result['entries']);
+        self::assertSame('Alice Admin', $result['entries'][0]['actor']);
+    }
+
+    public function testFindActorFallsBackToUsernameWhenDisplayNameEmpty(): void
+    {
+        $mockDb = $this->createMock(Connection::class);
+
+        $mockDb->expects(self::exactly(2))
+            ->method('query')
+            ->willReturnOnConsecutiveCalls(
+                [['cnt' => 1]],
+                [[
+                    'id' => 'uuid-1',
+                    'event' => 'login',
+                    'user_id' => 'user-1',
+                    'session_id' => null,
+                    'device_id' => null,
+                    'resource' => null,
+                    'action' => null,
+                    'success' => 1,
+                    'reason' => null,
+                    'ip_address' => null,
+                    'user_agent' => null,
+                    'context_json' => null,
+                    'created_at' => '2026-01-01 00:00:00',
+                    'actor_name' => '',
+                    'actor_username' => 'bob',
+                ]],
+            );
+
+        $repo = new AuditLogRepository($mockDb);
+        $result = $repo->find(['event' => 'login']);
+
+        self::assertSame('bob', $result['entries'][0]['actor']);
+    }
+
+    public function testFindActorIsNullForSystemEvents(): void
+    {
+        $mockDb = $this->createMock(Connection::class);
+
+        $mockDb->expects(self::exactly(2))
+            ->method('query')
+            ->willReturnOnConsecutiveCalls(
+                [['cnt' => 1]],
+                [[
+                    'id' => 'uuid-1',
+                    'event' => 'system_startup',
+                    'user_id' => null,
+                    'session_id' => null,
+                    'device_id' => null,
+                    'resource' => null,
+                    'action' => null,
+                    'success' => 1,
+                    'reason' => null,
+                    'ip_address' => null,
+                    'user_agent' => null,
+                    'context_json' => null,
+                    'created_at' => '2026-01-01 00:00:00',
+                    'actor_name' => null,
+                    'actor_username' => null,
+                ]],
+            );
+
+        $repo = new AuditLogRepository($mockDb);
+        $result = $repo->find([]);
+
+        self::assertArrayHasKey('actor', $result['entries'][0]);
+        self::assertNull($result['entries'][0]['actor']);
+    }
 }

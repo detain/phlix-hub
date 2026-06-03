@@ -213,8 +213,11 @@ class LibrarySharingHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM library_shares WHERE owner_user_id = :owner_id AND revoked_at IS NULL
-             ORDER BY created_at DESC',
+            'SELECT ls.*, u.display_name AS collaborator_name, u.username AS collaborator_username
+             FROM library_shares ls
+             LEFT JOIN users u ON u.id = ls.collaborator_user_id
+             WHERE ls.owner_user_id = :owner_id AND ls.revoked_at IS NULL
+             ORDER BY ls.created_at DESC',
             ['owner_id' => $ownerId],
         );
 

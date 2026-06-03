@@ -108,37 +108,37 @@ class AuditLogRepository
         $params = [];
 
         if (isset($filters['event']) && is_string($filters['event'])) {
-            $conditions[] = 'event = :event';
+            $conditions[] = 'al.event = :event';
             $params[':event'] = $filters['event'];
         }
 
         if (isset($filters['user_id']) && is_string($filters['user_id'])) {
-            $conditions[] = 'user_id = :userId';
+            $conditions[] = 'al.user_id = :userId';
             $params[':userId'] = $filters['user_id'];
         }
 
         if (isset($filters['resource']) && is_string($filters['resource'])) {
-            $conditions[] = 'resource = :resource';
+            $conditions[] = 'al.resource = :resource';
             $params[':resource'] = $filters['resource'];
         }
 
         if (isset($filters['action']) && is_string($filters['action'])) {
-            $conditions[] = 'action = :action';
+            $conditions[] = 'al.action = :action';
             $params[':action'] = $filters['action'];
         }
 
         if (isset($filters['success']) && is_bool($filters['success'])) {
-            $conditions[] = 'success = :success';
+            $conditions[] = 'al.success = :success';
             $params[':success'] = $filters['success'] ? 1 : 0;
         }
 
         if (isset($filters['from']) && is_numeric($filters['from'])) {
-            $conditions[] = 'created_at >= FROM_UNIXTIME(:from)';
+            $conditions[] = 'al.created_at >= FROM_UNIXTIME(:from)';
             $params[':from'] = (int) $filters['from'];
         }
 
         if (isset($filters['to']) && is_numeric($filters['to'])) {
-            $conditions[] = 'created_at <= FROM_UNIXTIME(:to)';
+            $conditions[] = 'al.created_at <= FROM_UNIXTIME(:to)';
             $params[':to'] = (int) $filters['to'];
         }
 
@@ -152,7 +152,7 @@ class AuditLogRepository
 
         /** @var mixed $countRows */
         $countRows = $this->db->query(
-            "SELECT COUNT(*) as cnt FROM audit_logs WHERE {$where}",
+            "SELECT COUNT(*) as cnt FROM audit_logs al WHERE {$where}",
             $params,
         );
         $total = 0;
@@ -166,8 +166,11 @@ class AuditLogRepository
 
         /** @var mixed $rows */
         $rows = $this->db->query(
-            "SELECT * FROM audit_logs WHERE {$where}"
-                . " ORDER BY created_at DESC"
+            "SELECT al.*, u.display_name AS actor_name, u.username AS actor_username"
+                . " FROM audit_logs al"
+                . " LEFT JOIN users u ON u.id = al.user_id"
+                . " WHERE {$where}"
+                . " ORDER BY al.created_at DESC"
                 . " LIMIT {$limit} OFFSET {$offset}",
             $params,
         );
@@ -211,10 +214,24 @@ class AuditLogRepository
         $successRaw = $row['success'] ?? 1;
         $successInt = is_numeric($successRaw) ? (int) $successRaw : 1;
 
+        // Friendly actor name from the joined users table: prefer display_name,
+        // fall back to username, else null (system events / deleted users).
+        /** @var mixed $actorName */
+        $actorName = $row['actor_name'] ?? null;
+        /** @var mixed $actorUsername */
+        $actorUsername = $row['actor_username'] ?? null;
+        $actor = null;
+        if (is_string($actorName) && $actorName !== '') {
+            $actor = $actorName;
+        } elseif (is_string($actorUsername) && $actorUsername !== '') {
+            $actor = $actorUsername;
+        }
+
         return [
             'id' => is_string($row['id'] ?? null) ? $row['id'] : '',
             'event' => is_string($row['event'] ?? null) ? $row['event'] : '',
             'user_id' => $row['user_id'] ?? null,
+            'actor' => $actor,
             'session_id' => $row['session_id'] ?? null,
             'device_id' => $row['device_id'] ?? null,
             'resource' => $row['resource'] ?? null,

@@ -187,6 +187,8 @@ final class FederationController
                     $relayEnabled = $p['relay_enabled'] ?? null;
                     /** @var mixed $adminDelEnabled */
                     $adminDelEnabled = $p['admin_delegation_enabled'] ?? null;
+                    /** @var mixed $sharedLibraryCount */
+                    $sharedLibraryCount = $p['shared_library_count'] ?? null;
                     return [
                         'id' => $p['id'] ?? '',
                         'name' => $p['name'] ?? '',
@@ -199,6 +201,9 @@ final class FederationController
                             ? $adminDelEnabled === 1
                             : (is_string($adminDelEnabled) && $adminDelEnabled === '1'),
                         'status' => $p['status'] ?? 'pending',
+                        'shared_library_count' => is_numeric($sharedLibraryCount)
+                            ? (int) $sharedLibraryCount
+                            : 0,
                         'last_seen_at' => $p['last_seen_at'] ?? null,
                         'last_connected_at' => $p['last_connected_at'] ?? null,
                         'created_at' => $p['created_at'] ?? null,
