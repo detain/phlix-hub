@@ -1,89 +1,101 @@
 # AGENTS.md — detain/phlix-hub
 
-Agent brief for the `phlix-hub` package. The hub is the multi-server
-cloud directory + relay layer. It is **not** the media server — keep
-library scanning, transcoding, FFmpeg, HLS, DLNA, and Live TV out of
-this repo.
+Agent brief for `phlix-hub`: the multi-server cloud directory + reverse-tunnel relay. It is **not** the media server — keep library scanning, transcoding, FFmpeg, HLS, DLNA, and Live TV out of this repo. PHP 8.3 on Workerman 5.1 + Swoole coroutines.
+
+## Commands
+
+```bash
+php start.php start            # HTTP :8800, relay :8802 (servers) / :8803 (clients)
+php bin/phlix migrate          # apply migrations/*.sql via MigrationRunner
+./vendor/bin/phpunit           # PHPUnit 10
+./vendor/bin/phpstan analyze --no-progress   # level 9, no baseline
+./vendor/bin/psalm --no-progress             # errorLevel 1
+./vendor/bin/phpcs --standard=PSR12 src/     # PSR-12
+composer validate --strict && composer audit --no-dev
+cd web-ui && npm install && npm run build     # Vite SPA -> public/assets/app/
+```
+
+Container, provisioning, and CI:
+
+```bash
+docker compose up                  # local stack: docker/docker-entrypoint.sh + docker/nginx.conf
+bash scripts/install.sh            # provision PHP deps + system prerequisites
+php scripts/run-migrations.php     # standalone CLI migration runner
+ls .github/workflows/              # CI pipelines: phpunit + phpstan + psalm + phpcs
+```
+
+## Architecture
+
+**Entry** `start.php` → `src/Application.php` boots routes + Workerman workers. **Container** PHP-DI 7 `src/Common/Container/ContainerFactory.php` — register services via `ServiceProviderInterface`, never `set()`.
+
+- `src/Http/` — `Request.php` · `Response.php` · `Router.php` (regex `{id}` params) · `Controllers/` · `Middleware/` (`AuthMiddleware`, `AdminMiddleware`, `EnrollmentJwtMiddleware`, `HubProtocolMiddleware`) · `RequestContext.php` (coroutine-local user id).
+- `src/Hub/` — claim/heartbeat/renew/deregister/sharing handlers, `EnrollmentJwtService`+`Ed25519KeyManager`, `RelaySessionManager`, `DnsAliasManager`, `TlsCertificateManager`, DTOs.
+- `src/Relay/` — `RelayWorker` (:8802), `ClientRelayWorker` (:8803), `Tunnel`/`TunnelManager`, `Frame{Encoder,Decoder}`.
+- `src/Federation/`, `src/Auth/` (`AuthManager`, `JwtHandler` HS256, `UserRepository`), `src/Common/{Database,Logger,WebPortal}/`, `src/Health/`.
+- `config/{server,database,logger,auth}.php` · `migrations/` · `public/templates/` (Smarty) + `public/assets/js/` · `web-ui/` (`@phlix/hub-web-ui` consuming `@phlix/ui`) · `tests/` mirror src.
+- `docker/` (`docker-entrypoint.sh`, `nginx.conf` — container image) · `scripts/` (`install.sh` provisioning, `run-migrations.php` standalone migrator) · `.github/workflows/` (CI gates) · `.opencode/` (`memory`, `skills`, `package.json`) + `.remember/` (cross-session agent context).
 
 ## Conventions
 
-- **PHP 8.3+**. Modern features (readonly properties, enums, first-class
-  callable syntax) are welcome where they aid clarity.
-- **`declare(strict_types=1);`** at the top of every PHP file.
-- **PSR-12** coding standard, enforced by phpcs.
-- **PSR-4 autoload** — `Phlix\Hub\` → `src/`, `Phlix\Hub\Tests\` →
-  `tests/`. Namespaces mirror directories.
-- **Static analysis bar:** PHPStan level 9 and Psalm errorLevel 1 — both
-  green from day 1. No baselines.
-- **Database access:** only `Workerman\MySQL\Connection`. No raw PDO,
-  no mysqli. Pass parameters as bound parameters; do not interpolate
-  user input into SQL strings. **Always use named `:param` placeholders,
-  not positional `?`.** `workerman/mysql` keys bound parameters by array
-  key: `bindMore()` calls `array_keys()` on the bind array and feeds the
-  result to `PDOStatement::bindParam()`, which rejects 0-based indices
-  with `Argument #1 must be >= 1`. See
-  `src/Common/Database/MigrationRunner.php::recordApplied()` for an
-  example.
-- **Logging:** always via `LoggerFactory::get(LogChannels::*)`. Channels
-  defined in `src/Common/Logger/LogChannels.php`.
-- **Container:** PHP-DI 7 (`Phlix\Hub\Common\Container\ContainerFactory`).
-  Register new services through a `ServiceProviderInterface`
-  implementation; do not call `set()` on the container directly.
-- **Events:** Tukio (PSR-14). Event DTOs live in
-  `Phlix\Shared\Events\*` (the `detain/phlix-shared` package).
-- **Shared types:** any DTO that travels between `phlix-server` and
-  `phlix-hub` (claim request/response, server info, JWT claims) lives
-  in `detain/phlix-shared`. Do not duplicate.
-- **PHPDoc on every public class and method.** `@package`, `@since`,
-  parameter and return tags as appropriate. Static analysers depend on
-  it.
-
-## Layout (intended, fills in across v0.x)
-
-```
-src/
-  Application.php
-  Version.php
-  Common/
-    Container/    # PSR-11 container factory + providers
-    Database/     # ConnectionPool wrapper around workerman/mysql
-    Logger/       # LoggerFactory, LogChannels, StructuredLogger
-  Http/           # Request, Response, Router
-  Health/         # GET /health controller
-  # (B.6+ adds Auth/, Hub/, Relay/, WebPortal/)
-config/
-  server.php database.php logger.php
-migrations/
-public/
-  index.php       # Workerman HTTP entry
-scripts/
-  run-migrations.php
-tests/
-  (mirror of src/, PHPUnit 10)
-```
-
-## Layout rationale
-
-See `plans/expansion/b.1-shared-design.md` in
-[`detain/phlix`](https://github.com/detain/phlix) for the cross-repo
-design context (what goes where, what stays in `phlix-server`, what
-moves to `phlix-shared`). Do not re-litigate that design here —
-propose changes in a new plan step against `detain/phlix` if needed.
+- `declare(strict_types=1);` everywhere; PSR-4 `Phlix\Hub\`→`src/`, `Phlix\Hub\Tests\`→`tests/`.
+- **DB**: only `Workerman\MySQL\Connection` with named `:param` placeholders (positional `?` breaks `bindMore()`); no PDO/mysqli; no string interpolation. Example: `src/Common/Database/MigrationRunner.php`.
+- **Logging**: `LoggerFactory::get(LogChannels::*)` (`src/Common/Logger/LogChannels.php`).
+- **Controllers**: `final`, return `Response->json([...'error','code'])`, gate on `$request->userId` (401 `auth.required`), map handler exception codes to HTTP.
+- **Migrations**: `-- migration: NNN_name` header, `CREATE TABLE IF NOT EXISTS`, `ENGINE=InnoDB` utf8mb4, `CHAR(36)` PK — enforced by `tests/Unit/Migrations/MigrationFileTest.php`.
+- **Shared types**: cross-repo DTOs live in the `Phlix\Shared\*` namespace (the shared composer package); do not duplicate.
+- PHPStan 9 + Psalm 1 green, **no baselines**; PHPDoc on public API.
 
 ## Before committing
 
-1. `composer install` resolves clean.
-2. `./vendor/bin/phpunit` green.
-3. `./vendor/bin/phpstan analyze --no-progress` green.
-4. `./vendor/bin/phpcs --standard=PSR12 src/` clean.
-5. `./vendor/bin/psalm --no-progress` clean.
-6. `composer validate --strict` clean.
-7. `composer audit --no-dev` no advisories.
-
-If any tool emits warnings, fix the code — do not add to a baseline.
+`composer install` clean → `phpunit` green → `phpstan` green → `phpcs` clean → `psalm` clean → `composer validate --strict` → `composer audit --no-dev`. Fix code, never add a baseline.
 
 ## Versioning
 
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Bump
-`Phlix\Hub\Version::VERSION` in lockstep with the git tag and the
-`CHANGELOG.md` heading.
+SemVer. Bump `Phlix\Hub\Version::VERSION` in lockstep with the git tag and the `CHANGELOG.md` heading.
+
+<!-- caliber:managed:pre-commit -->
+## Before Committing
+
+**IMPORTANT:** Before every git commit, you MUST ensure Caliber syncs agent configs with the latest code changes.
+
+First, check if the pre-commit hook is already installed:
+```bash
+grep -q "caliber" .git/hooks/pre-commit 2>/dev/null && echo "hook-active" || echo "no-hook"
+```
+
+- If **hook-active**: the hook handles sync automatically — just commit normally. Tell the user: "Caliber will sync your agent configs automatically via the pre-commit hook."
+- If **no-hook**: run Caliber manually before committing:
+  1. Tell the user: "Caliber: Syncing agent configs with your latest changes..."
+  2. Run: `caliber refresh && git add CLAUDE.md .claude/ .cursor/ .cursorrules .github/copilot-instructions.md .github/instructions/ AGENTS.md CALIBER_LEARNINGS.md .agents/ .opencode/ 2>/dev/null`
+  3. After it completes, briefly tell the user what Caliber updated. Then proceed with the commit.
+
+**Valid `caliber refresh` options:** `--quiet` (suppress output) and `--dry-run` (preview without writing). Do not pass any other flags — options like `--auto-approve`, `--debug`, or `--force` do not exist and will cause errors.
+
+**`caliber config`** takes no flags — it runs an interactive provider setup. Do not pass `--provider`, `--api-key`, or `--endpoint`.
+
+If `caliber` is not found, read `.agents/skills/setup-caliber/SKILL.md` and follow its instructions to install Caliber.
+<!-- /caliber:managed:pre-commit -->
+
+<!-- caliber:managed:learnings -->
+## Session Learnings
+
+Read `CALIBER_LEARNINGS.md` for patterns and anti-patterns learned from previous sessions.
+These are auto-extracted from real tool usage — treat them as project-specific rules.
+<!-- /caliber:managed:learnings -->
+
+<!-- caliber:managed:model-config -->
+## Model Configuration
+
+Recommended default: `claude-sonnet-4-6` with high effort (stronger reasoning; higher cost and latency than smaller models).
+Smaller/faster models trade quality for speed and cost — pick what fits the task.
+Pin your choice (`/model` in Claude Code, or `CALIBER_MODEL` when using Caliber with an API provider) so upstream default changes do not silently change behavior.
+
+<!-- /caliber:managed:model-config -->
+
+<!-- caliber:managed:sync -->
+## Context Sync
+
+This project uses [Caliber](https://github.com/caliber-ai-org/ai-setup) to keep AI agent configs in sync across Claude Code, Cursor, Copilot, and Codex.
+Configs update automatically before each commit via `caliber refresh`.
+If the pre-commit hook is not set up, read `.agents/skills/setup-caliber/SKILL.md` and follow the setup instructions.
+<!-- /caliber:managed:sync -->
