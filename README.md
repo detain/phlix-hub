@@ -72,6 +72,8 @@ You can use the public Hub or run your own — the same codebase powers both.
 - **Library sharing** — share a specific library on one of your servers with another Hub user,
   with read-only or read/write permission levels.
 - **Invite links** — single-use, signed invite links that grant library access to a recipient.
+- **Hub-to-hub federation** — federate with peer hubs to share libraries across hubs, with
+  per-peer sessions and admin delegation.
 - **Media requests** — a Jellyseerr-class request queue. Users request movies/series; admins
   approve, and the Hub talks to Sonarr/Radarr to fulfil them.
 - **Server-rendered dashboard** — `/my-servers`, `/claim-server`, sharing, and request pages
@@ -596,6 +598,10 @@ Migrations live in [`migrations/`](migrations) and are applied in filename order
 | `webhooks` | User-defined HTTP callbacks for `phlix.*` event aliases |
 | `media_requests` | Jellyseerr-class request queue |
 | `dns_challenges` | DNS-01 challenge records for subdomain TLS |
+| `hub_settings` | Hub-wide configuration key/value settings |
+| `federation_hubs` | Peer hubs for hub-to-hub federation |
+| `federation_library_shares` | Libraries shared across federated hubs |
+| `audit_logs` | Audit trail of administrative actions |
 
 ## HTTP API
 
@@ -696,9 +702,11 @@ phlix-hub/
 │   ├── Common/          # Container, database pool, logging, web portal
 │   ├── Http/            # Router, request/response, controllers, middleware
 │   ├── Hub/             # Claims, heartbeats, sharing, DNS, TLS, relay sessions
+│   ├── Federation/      # Hub-to-hub federation peers, shares, sessions
 │   ├── Relay/           # Reverse-tunnel relay workers, frame codec, tunnels
 │   └── Requests/        # Media request manager
 ├── tests/           # PHPUnit Unit + Integration suites
+├── web-ui/          # Vite + TypeScript SPA (@phlix/hub-web-ui), built to public/assets/app/
 └── Dockerfile
 ```
 
