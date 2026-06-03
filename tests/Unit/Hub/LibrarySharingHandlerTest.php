@@ -241,15 +241,25 @@ final class LibrarySharingHandlerTest extends TestCase
                 'created_at' => time(),
                 'expires_at' => null,
                 'revoked_at' => null,
+                'collaborator_name' => 'Friendly Collaborator',
+                'collaborator_username' => 'friend',
             ],
         ];
 
-        $this->db->method('query')->willReturn($shares);
+        $this->db->method('query')->willReturnCallback(function (string $sql) use ($shares): array {
+            // The outgoing-shares query must LEFT JOIN users for the collaborator name.
+            self::assertStringContainsString('LEFT JOIN users u ON u.id = ls.collaborator_user_id', $sql);
+            self::assertStringContainsString('collaborator_name', $sql);
+            self::assertStringContainsString('collaborator_username', $sql);
+            return $shares;
+        });
 
         $result = $this->handler->getSharesForOwner('owner-1');
 
         self::assertCount(1, $result);
         self::assertSame('share-1', $result[0]->id);
+        self::assertSame('Friendly Collaborator', $result[0]->collaboratorName);
+        self::assertSame('Friendly Collaborator', $result[0]->toPayload()['collaborator_name']);
     }
 
     public function testGetSharesForOwnerExcludesRevoked(): void

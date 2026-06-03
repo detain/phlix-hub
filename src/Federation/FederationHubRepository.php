@@ -170,7 +170,11 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_peers ORDER BY name',
+            'SELECT p.*,
+                    (SELECT COUNT(*) FROM federation_library_shares fls
+                     WHERE fls.peer_id = p.id AND fls.status = \'active\') AS shared_library_count
+             FROM federation_peers p
+             ORDER BY p.name',
         );
 
         return $rows;

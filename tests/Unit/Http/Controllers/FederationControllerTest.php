@@ -107,6 +107,7 @@ final class FederationControllerTest extends TestCase
                 'relay_enabled' => 1,
                 'admin_delegation_enabled' => 0,
                 'status' => 'connected',
+                'shared_library_count' => 3,
                 'last_seen_at' => '2024-01-01 00:00:00',
                 'last_connected_at' => '2024-01-01 00:00:00',
                 'created_at' => '2023-12-01 00:00:00',
@@ -119,6 +120,7 @@ final class FederationControllerTest extends TestCase
                 'relay_enabled' => 0,
                 'admin_delegation_enabled' => 0,
                 'status' => 'pending',
+                'shared_library_count' => 0,
                 'last_seen_at' => null,
                 'last_connected_at' => null,
                 'created_at' => '2023-12-01 00:00:00',
@@ -137,6 +139,46 @@ final class FederationControllerTest extends TestCase
         self::assertSame('peer-1', $body['peers'][0]['id']);
         self::assertTrue($body['peers'][0]['relay_enabled']);
         self::assertFalse($body['peers'][1]['relay_enabled']);
+        self::assertSame(3, $body['peers'][0]['shared_library_count']);
+        self::assertSame(0, $body['peers'][1]['shared_library_count']);
+    }
+
+    public function testGetPeersCoercesStringSharedLibraryCountAndDefaultsToZero(): void
+    {
+        $this->hubRepo->method('getAllPeers')->willReturn([
+            // shared_library_count comes back as a numeric string from MySQL COUNT(*).
+            [
+                'id' => 'peer-1',
+                'name' => 'Peer Hub A',
+                'url' => 'https://peer-a.example.com',
+                'public_key' => 'key-a',
+                'relay_enabled' => 0,
+                'admin_delegation_enabled' => 0,
+                'status' => 'connected',
+                'shared_library_count' => '5',
+            ],
+            // Missing column entirely → must default to 0, never error.
+            [
+                'id' => 'peer-2',
+                'name' => 'Peer Hub B',
+                'url' => 'https://peer-b.example.com',
+                'public_key' => 'key-b',
+                'relay_enabled' => 0,
+                'admin_delegation_enabled' => 0,
+                'status' => 'pending',
+            ],
+        ]);
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/peers';
+        $request->method = 'GET';
+
+        $response = $this->controller->getPeers($request);
+
+        self::assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        self::assertSame(5, $body['peers'][0]['shared_library_count']);
+        self::assertSame(0, $body['peers'][1]['shared_library_count']);
     }
 
     public function testCreatePeerReturns201OnSuccess(): void

@@ -210,6 +210,92 @@ final class LibraryShareTest extends TestCase
         self::assertSame($createdAt, $payload['created_at']);
         self::assertSame($expiresAt, $payload['expires_at']);
         self::assertNull($payload['revoked_at']);
+        self::assertArrayHasKey('collaborator_name', $payload);
+        self::assertNull($payload['collaborator_name']);
+    }
+
+    public function testToPayloadIncludesCollaboratorName(): void
+    {
+        $share = new LibraryShare(
+            id: 'share-1',
+            ownerUserId: 'owner-1',
+            collaboratorUserId: 'collab-1',
+            serverId: 'server-1',
+            libraryId: 'lib-1',
+            libraryName: 'My Movies',
+            permissionLevel: LibraryShare::PERMISSION_READ,
+            createdAt: time(),
+            collaboratorName: 'Friendly Collaborator',
+        );
+
+        $payload = $share->toPayload();
+
+        self::assertSame('Friendly Collaborator', $payload['collaborator_name']);
+    }
+
+    public function testFromRowPopulatesCollaboratorNameFromDisplayName(): void
+    {
+        $row = [
+            'id' => 'share-1',
+            'owner_user_id' => 'owner-1',
+            'collaborator_user_id' => 'collab-1',
+            'server_id' => 'server-1',
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'permission_level' => 'read',
+            'created_at' => 1700000000,
+            'expires_at' => null,
+            'revoked_at' => null,
+            'collaborator_name' => 'Bob Collaborator',
+            'collaborator_username' => 'bob',
+        ];
+
+        $share = LibraryShare::fromRow($row);
+
+        self::assertSame('Bob Collaborator', $share->collaboratorName);
+        self::assertSame('Bob Collaborator', $share->toPayload()['collaborator_name']);
+    }
+
+    public function testFromRowFallsBackToCollaboratorUsername(): void
+    {
+        $row = [
+            'id' => 'share-1',
+            'owner_user_id' => 'owner-1',
+            'collaborator_user_id' => 'collab-1',
+            'server_id' => 'server-1',
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'permission_level' => 'read',
+            'created_at' => 1700000000,
+            'expires_at' => null,
+            'revoked_at' => null,
+            'collaborator_name' => '',
+            'collaborator_username' => 'bob',
+        ];
+
+        $share = LibraryShare::fromRow($row);
+
+        self::assertSame('bob', $share->collaboratorName);
+    }
+
+    public function testFromRowCollaboratorNameNullWhenAbsent(): void
+    {
+        $row = [
+            'id' => 'share-1',
+            'owner_user_id' => 'owner-1',
+            'collaborator_user_id' => 'collab-1',
+            'server_id' => 'server-1',
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'permission_level' => 'read',
+            'created_at' => 1700000000,
+            'expires_at' => null,
+            'revoked_at' => null,
+        ];
+
+        $share = LibraryShare::fromRow($row);
+
+        self::assertNull($share->collaboratorName);
     }
 
     public function testFromRowCreatesCorrectInstance(): void
