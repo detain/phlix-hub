@@ -220,6 +220,30 @@ final class AuthControllerTest extends TestCase
         self::assertStringContainsString('claims', $response->body);
     }
 
+    public function testRegisterJsonAliasReturns201(): void
+    {
+        $jwt = new JwtHandler(self::SECRET);
+        $mgr = $this->createMock(AuthManager::class);
+        $mgr->method('jwt')->willReturn($jwt);
+        $mgr->method('register')->willReturn([
+            'access_token' => $jwt->createAccessToken('u-9'),
+            'refresh_token' => $jwt->createRefreshToken('u-9'),
+            'token_type' => 'Bearer', 'expires_in' => 3600,
+            'user' => ['id' => 'u-9'], 'claims' => ['sub' => 'u-9'],
+        ]);
+
+        $controller = $this->controller($mgr);
+        $request = new Request();
+        $request->method = 'POST';
+        // The shared @phlix/ui SPA posts signup to /register (not /signup).
+        $request->path = '/api/v1/auth/register';
+        $request->body = ['username' => 'bob', 'email' => 'b@example.com', 'password' => 'longenough'];
+
+        $response = $controller($request);
+        self::assertSame(201, $response->statusCode, '/api/v1/auth/register must alias signupJson');
+        self::assertStringContainsString('access_token', $response->body);
+    }
+
     public function testSignupJsonReturns400OnInvalidInput(): void
     {
         $mgr = $this->authMgr();
