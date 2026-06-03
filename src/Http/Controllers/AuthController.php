@@ -48,6 +48,9 @@ final class AuthController
             ['POST', '/signup']             => $this->signupForm($request),
             ['POST', '/login']              => $this->loginForm($request),
             ['POST', '/logout']             => $this->logout($request),
+            // `/register` is the canonical JSON signup path used by the shared
+            // @phlix/ui SPA (and phlix-server); `/signup` is kept as an alias.
+            ['POST', '/api/v1/auth/register'] => $this->signupJson($request),
             ['POST', '/api/v1/auth/signup'] => $this->signupJson($request),
             ['POST', '/api/v1/auth/login']  => $this->loginJson($request),
             ['POST', '/api/v1/auth/logout'] => $this->logoutJson($request),
