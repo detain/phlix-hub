@@ -95,7 +95,10 @@ final class Application
 
         // SSR pages.
         $pages = $this->resolvePageController();
-        $this->router->get('/', static fn (Request $r): Response => $pages($r));
+        // The redesigned Vue SPA is the front door — send the bare root to the
+        // hub's home (My Servers) rather than the media-oriented browse landing.
+        // Old SSR pages (/login, /signup, /my-servers, …) stay reachable directly.
+        $this->router->get('/', static fn (Request $r): Response => (new Response())->redirect('/app/servers'));
         $this->router->get('/signup', static fn (Request $r): Response => $pages($r));
         $this->router->get('/login', static fn (Request $r): Response => $pages($r));
 
