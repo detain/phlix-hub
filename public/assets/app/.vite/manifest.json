@@ -39,7 +39,7 @@
     ]
   },
   "index.html": {
-    "file": "assets/index-C8MZeFz6.js",
+    "file": "assets/index-DhcMkg4_.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -61,7 +61,7 @@
       "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js"
     ],
     "css": [
-      "assets/index-gP4e83YP.css"
+      "assets/index-DP2R1A4h.css"
     ],
     "assets": [
       "assets/fraunces-var-latin-DihXLNYH.woff2",
@@ -70,7 +70,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/BrowsePage-CTUZe02W.js": {
-    "file": "assets/BrowsePage-CTUZe02W-Cku7cDVd.js",
+    "file": "assets/BrowsePage-CTUZe02W-BEeRR2hH.js",
     "name": "BrowsePage-CTUZe02W",
     "src": "node_modules/@phlix/ui/dist/BrowsePage-CTUZe02W.js",
     "isDynamicEntry": true,
@@ -84,7 +84,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/CommandPalette-BRIAAiSF.js": {
-    "file": "assets/CommandPalette-BRIAAiSF-CNRp6_2b.js",
+    "file": "assets/CommandPalette-BRIAAiSF-DUT1Pw_8.js",
     "name": "CommandPalette-BRIAAiSF",
     "src": "node_modules/@phlix/ui/dist/CommandPalette-BRIAAiSF.js",
     "isDynamicEntry": true,
@@ -96,7 +96,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/LoginPage-D-HZupX6.js": {
-    "file": "assets/LoginPage-D-HZupX6-CC0Aig7g.js",
+    "file": "assets/LoginPage-D-HZupX6-DEBNYm2G.js",
     "name": "LoginPage-D-HZupX6",
     "src": "node_modules/@phlix/ui/dist/LoginPage-D-HZupX6.js",
     "isDynamicEntry": true,
@@ -106,7 +106,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/MediaDetailPage-D6PXVAsQ.js": {
-    "file": "assets/MediaDetailPage-D6PXVAsQ-Blcxx9gv.js",
+    "file": "assets/MediaDetailPage-D6PXVAsQ-BB1fFiXX.js",
     "name": "MediaDetailPage-D6PXVAsQ",
     "src": "node_modules/@phlix/ui/dist/MediaDetailPage-D6PXVAsQ.js",
     "isDynamicEntry": true,
@@ -120,7 +120,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/PlayerPage-3oji0CfW.js": {
-    "file": "assets/PlayerPage-3oji0CfW-CjB4wU6x.js",
+    "file": "assets/PlayerPage-3oji0CfW-D2kTLOcd.js",
     "name": "PlayerPage-3oji0CfW",
     "src": "node_modules/@phlix/ui/dist/PlayerPage-3oji0CfW.js",
     "isDynamicEntry": true,
@@ -134,7 +134,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js": {
-    "file": "assets/SettingsPage-9rku4j9E-BVB4vsa0.js",
+    "file": "assets/SettingsPage-9rku4j9E-Cm4WrPe2.js",
     "name": "SettingsPage-9rku4j9E",
     "src": "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js",
     "isDynamicEntry": true,
@@ -146,7 +146,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SignupPage-NR_4KnZ2.js": {
-    "file": "assets/SignupPage-NR_4KnZ2-S8j9fPSO.js",
+    "file": "assets/SignupPage-NR_4KnZ2-B4XhjovD.js",
     "name": "SignupPage-NR_4KnZ2",
     "src": "node_modules/@phlix/ui/dist/SignupPage-NR_4KnZ2.js",
     "isDynamicEntry": true,
