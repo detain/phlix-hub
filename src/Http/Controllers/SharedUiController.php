@@ -71,7 +71,7 @@ final class SharedUiController
                 );
         }
 
-        /** @var string $realPath */
+        /** @var non-empty-string $realPath */
         $realPath = $real;
 
         if (! str_starts_with($realPath, $this->publicRoot . DIRECTORY_SEPARATOR)) {
