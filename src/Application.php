@@ -236,6 +236,12 @@ final class Application
         // onto that path so the shared admin pages work on the hub (hubby.md H1.1).
         $this->registerAdminLogRoutes();
 
+        // Shared admin console settings routes — the @phlix/ui AdminSettingsApi
+        // calls `/api/v1/admin/settings`; mirror the `/api/v1/me/hub-settings`
+        // surface onto that path so the shared admin Settings page works on the
+        // hub (hubby.md H1.2). Same HubSettingsController, same auth + admin gate.
+        $this->registerAdminSettingsRoutes();
+
         // Federation management routes.
         $this->registerFederationRoutes();
 
@@ -762,6 +768,26 @@ final class Application
             $r->get('', static fn (Request $req): Response => $controller->index($req));
             $r->get('/tail-all', static fn (Request $req): Response => $controller->tailAll($req));
             $r->get('/tail', static fn (Request $req): Response => $controller->tail($req));
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
+     * Wire the shared-admin-console settings API (admin-only) under
+     * `/api/v1/admin/settings`. The redesigned `@phlix/ui` admin Settings page
+     * (via `AdminSettingsApi`, matching phlix-server) calls
+     * `GET/PUT /api/v1/admin/settings`; this mirrors the existing
+     * `/api/v1/me/hub-settings` surface onto that path so the shared page works
+     * against the hub. Same {@see HubSettingsController}, same auth + admin gate.
+     */
+    private function registerAdminSettingsRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveHubSettingsController();
+
+        $this->router->group('/api/v1/admin/settings', static function (Router $r) use ($controller): void {
+            $r->get('', static fn (Request $req): Response => $controller->getSettings($req));
+            $r->put('', static fn (Request $req): Response => $controller->putSettings($req));
         }, [$authMiddleware, $adminMiddleware]);
     }
 
