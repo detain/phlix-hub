@@ -67,7 +67,7 @@ final class LogController
             if (!is_file($path)) {
                 continue;
             }
-            /** @var int|false $size */
+            /** @var int<0, max>|false $size */
             $size = filesize($path);
             /** @var int|false $modified */
             $modified = filemtime($path);
