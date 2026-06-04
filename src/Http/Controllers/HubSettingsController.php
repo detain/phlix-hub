@@ -101,7 +101,19 @@ final class HubSettingsController
      * is persisted.
      *
      * Response shape (success):
-     * { "success": true }
+     * {
+     *   "success": true,
+     *   "data": {
+     *     "settings": { "<key>": <value>, ... },
+     *     "overridden": ["<key>", ...]
+     *   }
+     * }
+     *
+     * The `data` envelope echoes the re-resolved effective settings and the
+     * new overridden list so the shared `@phlix/ui` admin Settings page can
+     * refresh its "custom" badges from the save response without a second GET.
+     * It is purely additive: the SSR `/api/v1/me/hub-settings` consumer reads
+     * only `success`.
      *
      * Response shape (error):
      * { "success": false, "error": "<code>", "message": "<human message>" }
@@ -156,6 +168,19 @@ final class HubSettingsController
             $this->settings->set((string) $key, $value, $allowedKeys[$key]);
         }
 
-        return (new Response())->json(['success' => true]);
+        // Re-resolve the full effective set so the response can echo the new
+        // values + overridden list (the shared admin Settings page refreshes
+        // its "custom" badges from this without a follow-up GET).
+        /** @var list<string> $allKeys */
+        $allKeys   = array_keys($allowedKeys);
+        $effective = $this->settings->getEffectiveMany($allKeys);
+
+        return (new Response())->json([
+            'success' => true,
+            'data' => [
+                'settings' => $effective['values'],
+                'overridden' => $effective['overridden'],
+            ],
+        ]);
     }
 }
