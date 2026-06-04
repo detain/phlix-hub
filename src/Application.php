@@ -231,6 +231,11 @@ final class Application
         // Log viewer routes (admin-only API) — list + tail the hub log files.
         $this->registerLogRoutes();
 
+        // Shared admin console log-viewer routes — the @phlix/ui AdminLogsApi
+        // calls `/api/v1/admin/logs*`; mirror the `/api/v1/me/logs*` routes
+        // onto that path so the shared admin pages work on the hub (hubby.md H1.1).
+        $this->registerAdminLogRoutes();
+
         // Federation management routes.
         $this->registerFederationRoutes();
 
@@ -734,6 +739,26 @@ final class Application
         $controller      = $this->resolveLogController();
 
         $this->router->group('/api/v1/me/logs', static function (Router $r) use ($controller): void {
+            $r->get('', static fn (Request $req): Response => $controller->index($req));
+            $r->get('/tail-all', static fn (Request $req): Response => $controller->tailAll($req));
+            $r->get('/tail', static fn (Request $req): Response => $controller->tail($req));
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
+     * Wire the shared-admin-console log-viewer API (admin-only) under
+     * `/api/v1/admin/logs`. The redesigned `@phlix/ui` admin pages (and
+     * phlix-server) call `/api/v1/admin/logs*`; this mirrors the existing
+     * `/api/v1/me/logs*` surface onto that path so the shared `AdminLogsApi`
+     * works against the hub. Same {@see LogController}, same auth + admin gate.
+     */
+    private function registerAdminLogRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveLogController();
+
+        $this->router->group('/api/v1/admin/logs', static function (Router $r) use ($controller): void {
             $r->get('', static fn (Request $req): Response => $controller->index($req));
             $r->get('/tail-all', static fn (Request $req): Response => $controller->tailAll($req));
             $r->get('/tail', static fn (Request $req): Response => $controller->tail($req));
