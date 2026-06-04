@@ -20,9 +20,9 @@
       "_usePreferencesStore-BFFMWKZp-CwGERYS4.js"
     ]
   },
-  "_useMessages-Cvd20ZUW-DqKmazFI.js": {
-    "file": "assets/useMessages-Cvd20ZUW-DqKmazFI.js",
-    "name": "useMessages-Cvd20ZUW",
+  "_useMessages-D7StdIzu-Ca4Vc1jd.js": {
+    "file": "assets/useMessages-D7StdIzu-Ca4Vc1jd.js",
+    "name": "useMessages-D7StdIzu",
     "imports": [
       "_usePreferencesStore-BFFMWKZp-CwGERYS4.js"
     ]
@@ -39,7 +39,7 @@
     ]
   },
   "index.html": {
-    "file": "assets/index-DhcMkg4_.js",
+    "file": "assets/index-C4U9U5ZB.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -48,20 +48,20 @@
       "_EmptyState-Ds4WcVdG-DHhMczW_.js",
       "_usePreferencesStore-BFFMWKZp-CwGERYS4.js",
       "_media-query-D1H7YKGl-CQw8UnUl.js",
-      "_useMessages-Cvd20ZUW-DqKmazFI.js",
+      "_useMessages-D7StdIzu-Ca4Vc1jd.js",
       "_vue-router-CqWPUuBy.js"
     ],
     "dynamicImports": [
-      "node_modules/@phlix/ui/dist/CommandPalette-BRIAAiSF.js",
-      "node_modules/@phlix/ui/dist/BrowsePage-CTUZe02W.js",
-      "node_modules/@phlix/ui/dist/MediaDetailPage-D6PXVAsQ.js",
-      "node_modules/@phlix/ui/dist/PlayerPage-3oji0CfW.js",
-      "node_modules/@phlix/ui/dist/LoginPage-D-HZupX6.js",
-      "node_modules/@phlix/ui/dist/SignupPage-NR_4KnZ2.js",
-      "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js"
+      "node_modules/@phlix/ui/dist/CommandPalette-BdL8G7xQ.js",
+      "node_modules/@phlix/ui/dist/BrowsePage-BXm-Bntl.js",
+      "node_modules/@phlix/ui/dist/MediaDetailPage-DJx8mO5c.js",
+      "node_modules/@phlix/ui/dist/PlayerPage-Cb6uYNEB.js",
+      "node_modules/@phlix/ui/dist/LoginPage-muA-5A2C.js",
+      "node_modules/@phlix/ui/dist/SignupPage-DRtfH29d.js",
+      "node_modules/@phlix/ui/dist/SettingsPage-Bg7eWVjf.js"
     ],
     "css": [
-      "assets/index-DP2R1A4h.css"
+      "assets/index-B3oGTATF.css"
     ],
     "assets": [
       "assets/fraunces-var-latin-DihXLNYH.woff2",
@@ -69,10 +69,10 @@
       "assets/jetbrains-mono-var-latin-6fWv1k7M.woff2"
     ]
   },
-  "node_modules/@phlix/ui/dist/BrowsePage-CTUZe02W.js": {
-    "file": "assets/BrowsePage-CTUZe02W-BEeRR2hH.js",
-    "name": "BrowsePage-CTUZe02W",
-    "src": "node_modules/@phlix/ui/dist/BrowsePage-CTUZe02W.js",
+  "node_modules/@phlix/ui/dist/BrowsePage-BXm-Bntl.js": {
+    "file": "assets/BrowsePage-BXm-Bntl-BrGyqyMB.js",
+    "name": "BrowsePage-BXm-Bntl",
+    "src": "node_modules/@phlix/ui/dist/BrowsePage-BXm-Bntl.js",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
@@ -83,32 +83,32 @@
       "_vue-router-CqWPUuBy.js"
     ]
   },
-  "node_modules/@phlix/ui/dist/CommandPalette-BRIAAiSF.js": {
-    "file": "assets/CommandPalette-BRIAAiSF-DUT1Pw_8.js",
-    "name": "CommandPalette-BRIAAiSF",
-    "src": "node_modules/@phlix/ui/dist/CommandPalette-BRIAAiSF.js",
+  "node_modules/@phlix/ui/dist/CommandPalette-BdL8G7xQ.js": {
+    "file": "assets/CommandPalette-BdL8G7xQ-BH6vqMY5.js",
+    "name": "CommandPalette-BdL8G7xQ",
+    "src": "node_modules/@phlix/ui/dist/CommandPalette-BdL8G7xQ.js",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
       "_usePreferencesStore-BFFMWKZp-CwGERYS4.js",
-      "_useMessages-Cvd20ZUW-DqKmazFI.js",
+      "_useMessages-D7StdIzu-Ca4Vc1jd.js",
       "_vue-router-CqWPUuBy.js"
     ]
   },
-  "node_modules/@phlix/ui/dist/LoginPage-D-HZupX6.js": {
-    "file": "assets/LoginPage-D-HZupX6-DEBNYm2G.js",
-    "name": "LoginPage-D-HZupX6",
-    "src": "node_modules/@phlix/ui/dist/LoginPage-D-HZupX6.js",
+  "node_modules/@phlix/ui/dist/LoginPage-muA-5A2C.js": {
+    "file": "assets/LoginPage-muA-5A2C-DKfOOkM9.js",
+    "name": "LoginPage-muA-5A2C",
+    "src": "node_modules/@phlix/ui/dist/LoginPage-muA-5A2C.js",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
       "_usePreferencesStore-BFFMWKZp-CwGERYS4.js"
     ]
   },
-  "node_modules/@phlix/ui/dist/MediaDetailPage-D6PXVAsQ.js": {
-    "file": "assets/MediaDetailPage-D6PXVAsQ-BB1fFiXX.js",
-    "name": "MediaDetailPage-D6PXVAsQ",
-    "src": "node_modules/@phlix/ui/dist/MediaDetailPage-D6PXVAsQ.js",
+  "node_modules/@phlix/ui/dist/MediaDetailPage-DJx8mO5c.js": {
+    "file": "assets/MediaDetailPage-DJx8mO5c-DeJC9qMT.js",
+    "name": "MediaDetailPage-DJx8mO5c",
+    "src": "node_modules/@phlix/ui/dist/MediaDetailPage-DJx8mO5c.js",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
@@ -119,10 +119,10 @@
       "_vue-router-CqWPUuBy.js"
     ]
   },
-  "node_modules/@phlix/ui/dist/PlayerPage-3oji0CfW.js": {
-    "file": "assets/PlayerPage-3oji0CfW-D2kTLOcd.js",
-    "name": "PlayerPage-3oji0CfW",
-    "src": "node_modules/@phlix/ui/dist/PlayerPage-3oji0CfW.js",
+  "node_modules/@phlix/ui/dist/PlayerPage-Cb6uYNEB.js": {
+    "file": "assets/PlayerPage-Cb6uYNEB-CwZRuJSL.js",
+    "name": "PlayerPage-Cb6uYNEB",
+    "src": "node_modules/@phlix/ui/dist/PlayerPage-Cb6uYNEB.js",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
@@ -133,22 +133,22 @@
       "_vue-router-CqWPUuBy.js"
     ]
   },
-  "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js": {
-    "file": "assets/SettingsPage-9rku4j9E-Cm4WrPe2.js",
-    "name": "SettingsPage-9rku4j9E",
-    "src": "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js",
+  "node_modules/@phlix/ui/dist/SettingsPage-Bg7eWVjf.js": {
+    "file": "assets/SettingsPage-Bg7eWVjf-ClF8Hr4Q.js",
+    "name": "SettingsPage-Bg7eWVjf",
+    "src": "node_modules/@phlix/ui/dist/SettingsPage-Bg7eWVjf.js",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
       "_Button-BwQkyEkr-D3Dbk8Mg.js",
       "_usePreferencesStore-BFFMWKZp-CwGERYS4.js",
-      "_useMessages-Cvd20ZUW-DqKmazFI.js"
+      "_useMessages-D7StdIzu-Ca4Vc1jd.js"
     ]
   },
-  "node_modules/@phlix/ui/dist/SignupPage-NR_4KnZ2.js": {
-    "file": "assets/SignupPage-NR_4KnZ2-B4XhjovD.js",
-    "name": "SignupPage-NR_4KnZ2",
-    "src": "node_modules/@phlix/ui/dist/SignupPage-NR_4KnZ2.js",
+  "node_modules/@phlix/ui/dist/SignupPage-DRtfH29d.js": {
+    "file": "assets/SignupPage-DRtfH29d-DVcrN4rw.js",
+    "name": "SignupPage-DRtfH29d",
+    "src": "node_modules/@phlix/ui/dist/SignupPage-DRtfH29d.js",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
