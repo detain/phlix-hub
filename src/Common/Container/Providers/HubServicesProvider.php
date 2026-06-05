@@ -14,6 +14,7 @@ use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
+use Phlix\Hub\Http\Controllers\AdminUserController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Http\Controllers\LogController;
@@ -448,6 +449,17 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): HubSettingsController {
                 return new HubSettingsController($settings);
             })->parameter('settings', get(HubSettingsRepository::class)),
+
+            // Shared admin console user-management API (hubby.md H1.3). Reuses
+            // the existing UserRepository and AuditLogger; gated [auth, admin]
+            // at the route group in Application::registerAdminUserRoutes().
+            AdminUserController::class => factory(static function (
+                UserRepository $users,
+                AuditLogger $audit,
+            ): AdminUserController {
+                return new AdminUserController($users, $audit);
+            })->parameter('users', get(UserRepository::class))
+                ->parameter('audit', get(AuditLogger::class)),
 
             AuditLogController::class => factory(static function (
                 AuditLogRepository $repo,

@@ -264,6 +264,126 @@ final class UserRepositoryTest extends TestCase
         $repo->updateLastLogin('u-7');
     }
 
+    public function testFindAllSelectsPublicColumnsOnly(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::once())
+            ->method('query')
+            ->with(self::stringContains('SELECT id, username, email, is_admin, created_at, updated_at'))
+            ->willReturn([
+                ['id' => 'u-1', 'username' => 'alice', 'is_admin' => 1],
+                ['id' => 'u-2', 'username' => 'bob', 'is_admin' => 0],
+            ]);
+
+        $repo = new UserRepository($db);
+        $rows = $repo->findAll();
+
+        self::assertCount(2, $rows);
+        self::assertSame('alice', $rows[0]['username']);
+        self::assertSame('u-2', $rows[1]['id']);
+    }
+
+    public function testFindAllReturnsEmptyWhenQueryNotArray(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(false);
+
+        $repo = new UserRepository($db);
+        self::assertSame([], $repo->findAll());
+    }
+
+    public function testUpdateBuildsNamedPlaceholderQuery(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::callback(static function (string $sql): bool {
+                    return str_contains($sql, 'UPDATE users SET')
+                        && str_contains($sql, 'username = :username')
+                        && str_contains($sql, 'email = :email')
+                        && str_contains($sql, 'WHERE id = :id');
+                }),
+                self::callback(static function (array $params): bool {
+                    return ($params['username'] ?? null) === 'newname'
+                        && ($params['email'] ?? null) === 'new@example.com'
+                        && ($params['id'] ?? null) === 'u-1';
+                }),
+            );
+
+        $repo = new UserRepository($db);
+        $repo->update('u-1', ['username' => 'newname', 'email' => 'new@example.com']);
+    }
+
+    public function testUpdateHashesPlainPassword(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::stringContains('password_hash = :password_hash'),
+                self::callback(static function (array $params): bool {
+                    $hash = $params['password_hash'] ?? null;
+                    return is_string($hash)
+                        && str_starts_with($hash, '$argon2id$')
+                        && ($params['id'] ?? null) === 'u-1';
+                }),
+            );
+
+        $repo = new UserRepository($db);
+        $repo->update('u-1', ['password' => 'correct-horse-battery']);
+    }
+
+    public function testUpdateWithNoRecognisedKeysIssuesNoQuery(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::never())->method('query');
+
+        $repo = new UserRepository($db);
+        $repo->update('u-1', ['unknown_column' => 'ignored']);
+    }
+
+    public function testDeleteEmitsNamedPlaceholderDelete(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::once())
+            ->method('query')
+            ->with('DELETE FROM users WHERE id = :id', ['id' => 'u-9']);
+
+        $repo = new UserRepository($db);
+        $repo->delete('u-9');
+    }
+
+    public function testCountAdminsExtractsScalar(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::once())
+            ->method('query')
+            ->with(self::stringContains('WHERE is_admin = 1'))
+            ->willReturn([['c' => 3]]);
+
+        $repo = new UserRepository($db);
+        self::assertSame(3, $repo->countAdmins());
+    }
+
+    public function testCountAdminsReturnsZeroForEmptyResult(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $repo = new UserRepository($db);
+        self::assertSame(0, $repo->countAdmins());
+    }
+
+    public function testCountAdminsReturnsZeroWhenFirstRowNotArray(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(['not-a-row']);
+
+        $repo = new UserRepository($db);
+        self::assertSame(0, $repo->countAdmins());
+    }
+
     public function testGenerateUuidProducesV4Shape(): void
     {
         $uuid = UserRepository::generateUuid();
