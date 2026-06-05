@@ -104,6 +104,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (server-side and client-facing) is implemented; see "Added".
 
 ### Fixed
+- **Admin console no longer renders for an unvalidated session or a non-admin (`@phlix/ui` → v0.20.0).**
+  The shared SPA router guard treated a token's mere *presence* in `localStorage` as "logged in" and applied
+  no admin-role check, so after a reload a stale/expired token still rendered every `/app/*` route — including
+  the whole `/app/admin/*` console — and the account badge fell back to a generic "A" because the user was
+  never rehydrated. (The hub API already returned 401/403 via `[AuthMiddleware, AdminMiddleware]`, so this was
+  client-side broken access control, not data exposure.) v0.20.0 validates a restored token once via
+  `/auth/me` before the first protected route resolves — clearing it and redirecting to login when invalid —
+  and redirects a logged-in non-admin away from the admin section. `web-ui/package.json` pins `#v0.20.0`
+  (commit `426e1ba`); the committed `public/assets/app/` bundle is rebuilt; no hub code changed.
 - **`scripts/install.sh --update` no longer exits 1 after a successful update.** `do_update()`'s final
   statement was `[ "$prev_commit" = "$new_commit" ] && info "(already up to date)"`; when the commit
   actually changed (a real update — the common case) that test evaluated to 1, and because `do_update`
