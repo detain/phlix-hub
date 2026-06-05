@@ -11,6 +11,7 @@ use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\RelayWorker;
+use Phlix\Hub\Http\Controllers\AdminUserController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\LogController;
 use Phlix\Hub\Http\Controllers\AuthController;
@@ -241,6 +242,13 @@ final class Application
         // surface onto that path so the shared admin Settings page works on the
         // hub (hubby.md H1.2). Same HubSettingsController, same auth + admin gate.
         $this->registerAdminSettingsRoutes();
+
+        // Shared admin console user-management routes — the @phlix/ui
+        // AdminUsersApi calls `/api/v1/admin/users*`; this serves that surface
+        // (list/get/create/update/delete + set-admin/reset-password, and an
+        // always-empty per-user profiles list) so the shared admin Users page
+        // works on the hub (hubby.md H1.3). Same auth + admin gate.
+        $this->registerAdminUserRoutes();
 
         // Federation management routes.
         $this->registerFederationRoutes();
@@ -789,6 +797,75 @@ final class Application
             $r->get('', static fn (Request $req): Response => $controller->getSettings($req));
             $r->put('', static fn (Request $req): Response => $controller->putSettings($req));
         }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
+     * Wire the shared-admin-console user-management API (admin-only) under
+     * `/api/v1/admin/users`. The redesigned `@phlix/ui` admin Users page (via
+     * `AdminUsersApi`, matching phlix-server) calls this surface; we serve
+     * list/get/create/update/delete plus set-admin and reset-password, and a
+     * per-user profiles list that is always empty on the hub (no profiles
+     * subsystem). Same {@see AdminUserController}, same auth + admin gate as
+     * the other admin APIs (hubby.md H1.3).
+     */
+    private function registerAdminUserRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveAdminUserController();
+
+        $this->router->group('/api/v1/admin/users', static function (Router $r) use ($controller): void {
+            $r->get('', static fn (Request $req): Response => $controller->list($req));
+            $r->post('', static fn (Request $req): Response => $controller->create($req));
+            $r->get('/{id}', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->get($req, $typedParams);
+            });
+            $r->put('/{id}', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->update($req, $typedParams);
+            });
+            $r->delete('/{id}', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->delete($req, $typedParams);
+            });
+            $r->post(
+                '/{id}/set-admin',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->setAdmin($req, $typedParams);
+                },
+            );
+            $r->post(
+                '/{id}/reset-password',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->resetPassword($req, $typedParams);
+                },
+            );
+            $r->get(
+                '/{id}/profiles',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->listProfiles($req, $typedParams);
+                },
+            );
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    private function resolveAdminUserController(): AdminUserController
+    {
+        $controller = $this->container->get(AdminUserController::class);
+        if (!$controller instanceof AdminUserController) {
+            throw new \RuntimeException('Container returned an unexpected AdminUserController instance');
+        }
+        return $controller;
     }
 
     /**

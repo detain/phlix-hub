@@ -168,6 +168,109 @@ class UserRepository
     }
 
     /**
+     * Return every user row ordered oldest-first, projected to the public
+     * columns only — `password_hash` is never selected, so it cannot leak
+     * through the admin user list (`GET /api/v1/admin/users`).
+     *
+     * @return list<array<string, mixed>> Zero or more user rows.
+     */
+    public function findAll(): array
+    {
+        $result = $this->db->query(
+            'SELECT id, username, email, is_admin, created_at, updated_at '
+            . 'FROM users ORDER BY created_at ASC, username ASC',
+        );
+        if (!is_array($result)) {
+            return [];
+        }
+        $out = [];
+        /**
+         * @var mixed $row
+         * @psalm-suppress MixedAssignment
+         */
+        foreach ($result as $row) {
+            if (is_array($row)) {
+                $out[] = $this->normaliseRow($row);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Apply a partial update to a user. Only the keys present in `$data`
+     * are written; every other column is left untouched, and passing no
+     * recognised key is a no-op (no query is issued). A `password` entry
+     * is treated as a PLAIN password and hashed with Argon2ID before
+     * persisting — mirroring {@see self::create()} so callers never deal
+     * in hashes. `updated_at` bumps automatically via the column's
+     * `ON UPDATE CURRENT_TIMESTAMP`.
+     *
+     * Column names are a fixed allow-list (never interpolated from user
+     * input) and every value is bound through a named placeholder.
+     *
+     * @param array<string, string> $data Recognised keys: `username`,
+     *        `email`, `display_name`, and `password` (plain text).
+     */
+    public function update(string $id, array $data): void
+    {
+        $sets = [];
+        $params = [];
+
+        foreach (['username', 'email', 'display_name'] as $column) {
+            if (array_key_exists($column, $data)) {
+                $sets[] = $column . ' = :' . $column;
+                $params[$column] = $data[$column];
+            }
+        }
+
+        if (array_key_exists('password', $data)) {
+            $sets[] = 'password_hash = :password_hash';
+            $params['password_hash'] = password_hash($data['password'], PASSWORD_ARGON2ID);
+        }
+
+        if ($sets === []) {
+            return;
+        }
+
+        $params['id'] = $id;
+        $this->db->query(
+            'UPDATE users SET ' . implode(', ', $sets) . ' WHERE id = :id',
+            $params,
+        );
+    }
+
+    /**
+     * Permanently delete a user row by primary key.
+     */
+    public function delete(string $id): void
+    {
+        $this->db->query('DELETE FROM users WHERE id = :id', ['id' => $id]);
+    }
+
+    /**
+     * Count users flagged `is_admin = 1`. Used to refuse demoting or
+     * deleting the final administrator. Mirrors {@see self::countUsers()}
+     * with a fixed `is_admin = 1` predicate.
+     */
+    public function countAdmins(): int
+    {
+        $rows = $this->db->query('SELECT COUNT(*) AS c FROM users WHERE is_admin = 1');
+        if (!is_array($rows) || $rows === []) {
+            return 0;
+        }
+        $row = $rows[0];
+        if (!is_array($row)) {
+            return 0;
+        }
+        /**
+         * @var mixed $raw
+         * @psalm-suppress MixedAssignment
+         */
+        $raw = $row['c'] ?? 0;
+        return is_numeric($raw) ? (int) $raw : 0;
+    }
+
+    /**
      * Refresh `updated_at` for a user — the hub treats this as a
      * surrogate for "last activity" (there is no dedicated
      * `last_login_at` column).
