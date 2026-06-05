@@ -7,6 +7,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Shared admin console — `/api/v1/admin/*` API + the hub SPA admin section.** The hub now mounts
+  the shared `@phlix/ui` admin console at `/app/admin/*` (Hub Dashboard, Users, Logs, Settings,
+  Audit Logs), exposed via a `requiresAdmin` nav entry and gated server-side by
+  `[AuthMiddleware, AdminMiddleware]` (401 `auth.required` / 403 `auth.not_admin`). It is backed by a
+  new `/api/v1/admin/*` surface the shared admin clients call: `GET /api/v1/admin/logs`(+`/tail`,
+  `/tail-all`) and `GET/PUT /api/v1/admin/settings` reuse the existing `LogController` /
+  `HubSettingsController` (mirroring the back-compat `/api/v1/me/logs*` and `/api/v1/me/hub-settings`
+  routes — `putSettings()` now also returns the re-resolved `{settings, overridden}` so the page
+  refreshes its custom-badges); a new `AdminUserController` serves `/api/v1/admin/users`
+  (list/create + `{id}` get/update/delete + `set-admin` + `reset-password` + an always-empty
+  `{id}/profiles`, since the hub has no profiles table) on top of `UserRepository` (gained
+  `findAll`/`update`/`delete`/`countAdmins`); and a new `AdminDashboardController` serves
+  `GET /api/v1/admin/dashboard/summary` (server fleet total/online/offline, active relay sessions,
+  pending requests, user count) and `GET /api/v1/admin/dashboard/activity?limit=` (recent audit
+  events). The hub SPA (`web-ui`) bumped `@phlix/ui` to `v0.19.0` and wires the section via
+  `buildHubAdminRoutes()`; the built bundle is committed to `public/assets/app/`. Documented in the
+  README and `phlix-docs` (new Hub Admin Console page). (PRs #75–#79.)
+
 - **Hub: server detail page at `/servers/{id}` — server info, active relay session, and heartbeat history (H.3).** New `GET /api/v1/me/servers/{id}` API endpoint (`ServerDetailController`) returns server info (`ServerInfoHandler`), active relay session (`RelaySessionManager::getActiveSession()`), and the last 20 heartbeat rows (`HeartbeatHandler::getHeartbeatHistory()`). Ownership validated (403 if not owner). The SSR shell `home/servers.tpl` is populated client-side by vanilla JS (`servers.js`) — `formatRelativeTime()`, `formatUptime()`, `formatBytes()` helpers — with `credentials: 'include'` and `encodeURIComponent()` on the path param. "View Details" button added to each server card in `server-card.tpl`; "Servers" nav link added to `layouts/base.tpl`. PHPUnit suite: 575 tests unchanged. PHPStan level 9 clean (0 new errors introduced by this step).
 
 - **Hub: library share management UI at `/manage-shares` and `/shared-with-me` — create/revoke shares, inline permission edit (H.2).** New SSR pages (`manage-shares.tpl`, `shared-with-me.tpl`) backed by vanilla JS (`manage-shares.js`, `shared-libraries.js`). The "Share Library" modal lets you select a server, library, collaborator email, permission level, and optional expiry, then create the share via `POST /api/v1/me/shares`. The "Libraries I've Shared" table supports inline permission changes (`PATCH /api/v1/me/shares/{id}`) and one-click revoke (`DELETE /api/v1/me/shares/{id}`). The "Shared With Me" page renders incoming shares as cards with a "Browse Library" link. Navigation items wired into `layouts/base.tpl`. PHPUnit suite: 575 tests unchanged.
