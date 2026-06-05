@@ -104,6 +104,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (server-side and client-facing) is implemented; see "Added".
 
 ### Fixed
+- **`scripts/install.sh --update` no longer exits 1 after a successful update.** `do_update()`'s final
+  statement was `[ "$prev_commit" = "$new_commit" ] && info "(already up to date)"`; when the commit
+  actually changed (a real update — the common case) that test evaluated to 1, and because `do_update`
+  runs as a bare statement under `set -euo pipefail`, the non-zero return aborted the script before the
+  trailing `exit 0` — so a successful update reported failure to anyone checking `$?` (a no-op update,
+  where the commits matched, exited 0 and masked it). The check is now an `if` block followed by an
+  explicit `return 0`.
 - **Admin dashboard summary 500 + audit-log binding — named query params must be colon-free.**
   `GET /api/v1/admin/dashboard/summary` returned HTTP 500 (`SQLSTATE[HY093] Invalid parameter
   number: parameter was not defined`) because `AdminDashboardController` bound the pending-requests
