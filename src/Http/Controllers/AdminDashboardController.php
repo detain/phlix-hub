@@ -79,7 +79,7 @@ final class AdminDashboardController
                 ),
                 'pending_requests' => $this->scalarCount(
                     'SELECT COUNT(*) AS cnt FROM requests WHERE status = :status',
-                    [':status' => 'pending'],
+                    ['status' => 'pending'],
                 ),
                 'user_count' => $this->scalarCount('SELECT COUNT(*) AS cnt FROM users'),
             ],

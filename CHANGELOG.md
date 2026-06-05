@@ -104,6 +104,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (server-side and client-facing) is implemented; see "Added".
 
 ### Fixed
+- **Admin dashboard summary 500 + audit-log binding — named query params must be colon-free.**
+  `GET /api/v1/admin/dashboard/summary` returned HTTP 500 (`SQLSTATE[HY093] Invalid parameter
+  number: parameter was not defined`) because `AdminDashboardController` bound the pending-requests
+  counter with a colon-prefixed key (`[':status' => 'pending']`). `workerman/mysql`'s `Connection::bind()`
+  prepends the `':'` itself, so a leading colon produces the placeholder `'::status'`, which PDO never
+  matches. Corrected to the colon-free form (`['status' => 'pending']`) the rest of the codebase and
+  `.claude/rules/database-queries.md` already use. The same latent bug in `AuditLogRepository` (the
+  `log()` INSERT and every `find()` filter) is fixed too — DB-backed audit logging and filtered audit
+  queries silently failed before this. The misleading `[':id' => $id]` example in
+  `PhlixMySQLConnection`'s docblock (which propagated the mistake) is corrected. A new
+  `tests/Support/BindingContractConnection` test double replays workerman's real binding rule (throws
+  HY093 on a colon-prefixed key) so this class of bug can no longer pass a green test.
 - `Phlix\Hub\Http\Controllers\ServerManageController::accessInfo()` now
   populates `relay_url` when the relay tunnel is active and the server has
   been allocated a subdomain (via migration 008's `servers.subdomain`).
