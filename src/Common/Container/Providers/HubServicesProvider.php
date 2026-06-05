@@ -14,6 +14,7 @@ use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
+use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\FederationController;
@@ -466,6 +467,18 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): AuditLogController {
                 return new AuditLogController($repo);
             })->parameter('repo', get(AuditLogRepository::class)),
+
+            // Shared admin console dashboard API (hubby.md H1.4). Injects the
+            // Connection for the summary counters and reuses AuditLogRepository
+            // for the activity feed; gated [auth, admin] at the route group in
+            // Application::registerAdminDashboardRoutes().
+            AdminDashboardController::class => factory(static function (
+                Connection $db,
+                AuditLogRepository $auditLogs,
+            ): AdminDashboardController {
+                return new AdminDashboardController($db, $auditLogs);
+            })->parameter('db', get(Connection::class))
+                ->parameter('auditLogs', get(AuditLogRepository::class)),
 
             // Admin log viewer (mirrors phlix-server). Resolves to the hub's
             // .logs/ directory — the same dir config/logger.php writes to. The
