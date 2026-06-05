@@ -76,8 +76,11 @@ You can use the public Hub or run your own — the same codebase powers both.
   per-peer sessions and admin delegation.
 - **Media requests** — a Jellyseerr-class request queue. Users request movies/series; admins
   approve, and the Hub talks to Sonarr/Radarr to fulfil them.
-- **Server-rendered dashboard** — `/my-servers`, `/claim-server`, sharing, and request pages
-  rendered with Smarty, plus a full JSON API under `/api/v1`.
+- **Web UI & admin console** — the hub's front door is a Vue SPA (the shared `@phlix/ui` design
+  system) served at `/app` (`/` redirects to `/app/servers`): My Servers, Federation, and Shares for
+  every signed-in user, plus a `requiresAdmin` **admin console** at `/app/admin/*` (Hub Dashboard,
+  Users, Logs, Settings, Audit Logs). The original Smarty pages still resolve as a legacy fallback.
+  Everything is backed by a full JSON API under `/api/v1` (incl. `/api/v1/admin/*`).
 - **Operations-ready** — structured JSON logging (Monolog) across dedicated channels
   (app, error, hub, relay, audit), a `/health` endpoint, and idempotent SQL migrations.
 
@@ -88,7 +91,7 @@ process group:
 
 | Worker | Default port | Purpose |
 |--------|--------------|---------|
-| HTTP | `8800` | REST API + server-rendered pages + `/health` |
+| HTTP | `8800` | REST API + the Vue SPA (`/app`) + legacy SSR pages + `/health` |
 | Relay (server-facing) | `8802` | Servers connect here to open their outbound tunnel |
 | Relay (client-facing) | `8803` | Remote clients connect (`GET /client/{server_id}`) and are routed down a tunnel |
 
@@ -619,11 +622,11 @@ routes require a `Bearer` access token (or session cookie for SSR pages).
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/v1/auth/signup` | Create account |
+| `POST` | `/api/v1/auth/register` | Create account (canonical; `/api/v1/auth/signup` is an alias) |
 | `POST` | `/api/v1/auth/login` | Obtain access + refresh tokens |
 | `POST` | `/api/v1/auth/refresh` | Exchange a refresh token |
 | `POST` | `/api/v1/auth/logout` | Invalidate session |
-| `GET` | `/api/v1/me` | Current user (protected) |
+| `GET` | `/api/v1/me`, `/api/v1/auth/me` | Current user, incl. `is_admin` (protected) |
 
 ### Servers
 
@@ -651,6 +654,25 @@ routes require a `Bearer` access token (or session cookie for SSR pages).
 | `POST` | `/api/v1/admin/requests/{id}/approve` | Approve a request |
 | `POST` | `/api/v1/admin/requests/{id}/deny` | Deny a request |
 
+### Admin (web console)
+
+The Vue admin console at `/app/admin/*` is backed by these admin-gated endpoints
+(`[AuthMiddleware, AdminMiddleware]` — 401 unauthenticated / 403 non-admin):
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `GET` | `/api/v1/admin/dashboard/summary` | Server fleet (total/online/offline), active relay sessions, pending requests, user count |
+| `GET` | `/api/v1/admin/dashboard/activity` | Recent audit events (`?limit=`) |
+| `GET`/`POST` | `/api/v1/admin/users` | List / create accounts |
+| `GET`/`PUT`/`DELETE` | `/api/v1/admin/users/{id}` | Fetch / update / delete an account |
+| `POST` | `/api/v1/admin/users/{id}/set-admin` | Grant / revoke admin |
+| `POST` | `/api/v1/admin/users/{id}/reset-password` | Set a new password |
+| `GET` | `/api/v1/admin/logs`, `/logs/tail`, `/logs/tail-all` | Browse / tail the hub log files |
+| `GET`/`PUT` | `/api/v1/admin/settings` | Read / persist hub settings |
+
+The same logic is also reachable under `/api/v1/me/*` for back-compat (`/me/audit-logs`,
+`/me/logs*`, `/me/hub-settings`, `/me/federation/*`).
+
 ### Relay (WebSocket)
 
 | Endpoint | Port | Notes |
@@ -660,13 +682,14 @@ routes require a `Bearer` access token (or session cookie for SSR pages).
 
 ## Connecting a media server
 
-1. On the Hub, sign in and open `/claim-server` to start a claim (or the server requests a code
-   via `POST /api/v1/server-claims/new`).
+1. On the Hub, sign in and open **My Servers** (`/app/servers`) to start a claim — the legacy
+   `/claim-server` page still works too — or the server requests a code via
+   `POST /api/v1/server-claims/new`.
 2. Enter the claim code on the server; the server is issued an **enrollment JWT** and registers
    its public key.
 3. The server opens its **outbound relay tunnel** to the Hub and begins sending heartbeats.
-4. The server now appears under `/my-servers`, and remote clients can reach it through the Hub —
-   no inbound ports required.
+4. The server now appears under **My Servers** (`/app/servers`), and remote clients can reach it
+   through the Hub — no inbound ports required.
 
 ## Testing & quality
 
