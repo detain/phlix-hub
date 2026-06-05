@@ -11,6 +11,7 @@ use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\RelayWorker;
+use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\LogController;
@@ -249,6 +250,13 @@ final class Application
         // always-empty per-user profiles list) so the shared admin Users page
         // works on the hub (hubby.md H1.3). Same auth + admin gate.
         $this->registerAdminUserRoutes();
+
+        // Shared admin console dashboard routes — the @phlix/ui
+        // AdminHubDashboardApi (HubDashboardPage) calls
+        // `/api/v1/admin/dashboard/{summary,activity}`; this serves the
+        // hub-scoped headline counters + recent-activity feed aggregated from
+        // existing tables (hubby.md H1.4). Same auth + admin gate.
+        $this->registerAdminDashboardRoutes();
 
         // Federation management routes.
         $this->registerFederationRoutes();
@@ -864,6 +872,36 @@ final class Application
         $controller = $this->container->get(AdminUserController::class);
         if (!$controller instanceof AdminUserController) {
             throw new \RuntimeException('Container returned an unexpected AdminUserController instance');
+        }
+        return $controller;
+    }
+
+    /**
+     * Wire the shared-admin-console dashboard API (admin-only) under
+     * `/api/v1/admin/dashboard`. The redesigned `@phlix/ui` admin
+     * `HubDashboardPage` (via `AdminHubDashboardApi`) calls
+     * `GET /summary` (hub-scoped headline counters) and
+     * `GET /activity?limit=` (recent audit events as the activity feed);
+     * {@see AdminDashboardController} aggregates both from existing tables.
+     * Same auth + admin gate as the other admin APIs (hubby.md H1.4).
+     */
+    private function registerAdminDashboardRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveAdminDashboardController();
+
+        $this->router->group('/api/v1/admin/dashboard', static function (Router $r) use ($controller): void {
+            $r->get('/summary', static fn (Request $req): Response => $controller->summary($req));
+            $r->get('/activity', static fn (Request $req): Response => $controller->activity($req));
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    private function resolveAdminDashboardController(): AdminDashboardController
+    {
+        $controller = $this->container->get(AdminDashboardController::class);
+        if (!$controller instanceof AdminDashboardController) {
+            throw new \RuntimeException('Container returned an unexpected AdminDashboardController instance');
         }
         return $controller;
     }
