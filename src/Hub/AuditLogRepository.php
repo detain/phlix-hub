@@ -68,18 +68,18 @@ class AuditLogRepository
                 . ' VALUES (:id, :event, :userId, :sessionId, :deviceId, :resource,'
                 . '         :action, :success, :reason, :ipAddress, :userAgent, :contextJson)',
             [
-                ':id' => $id,
-                ':event' => $event,
-                ':userId' => $userId,
-                ':sessionId' => $sessionId,
-                ':deviceId' => $deviceId,
-                ':resource' => $resource,
-                ':action' => $action,
-                ':success' => $success ? 1 : 0,
-                ':reason' => $reason,
-                ':ipAddress' => $ipAddress,
-                ':userAgent' => $userAgent,
-                ':contextJson' => $contextJson,
+                'id' => $id,
+                'event' => $event,
+                'userId' => $userId,
+                'sessionId' => $sessionId,
+                'deviceId' => $deviceId,
+                'resource' => $resource,
+                'action' => $action,
+                'success' => $success ? 1 : 0,
+                'reason' => $reason,
+                'ipAddress' => $ipAddress,
+                'userAgent' => $userAgent,
+                'contextJson' => $contextJson,
             ],
         );
     }
@@ -109,37 +109,37 @@ class AuditLogRepository
 
         if (isset($filters['event']) && is_string($filters['event'])) {
             $conditions[] = 'al.event = :event';
-            $params[':event'] = $filters['event'];
+            $params['event'] = $filters['event'];
         }
 
         if (isset($filters['user_id']) && is_string($filters['user_id'])) {
             $conditions[] = 'al.user_id = :userId';
-            $params[':userId'] = $filters['user_id'];
+            $params['userId'] = $filters['user_id'];
         }
 
         if (isset($filters['resource']) && is_string($filters['resource'])) {
             $conditions[] = 'al.resource = :resource';
-            $params[':resource'] = $filters['resource'];
+            $params['resource'] = $filters['resource'];
         }
 
         if (isset($filters['action']) && is_string($filters['action'])) {
             $conditions[] = 'al.action = :action';
-            $params[':action'] = $filters['action'];
+            $params['action'] = $filters['action'];
         }
 
         if (isset($filters['success']) && is_bool($filters['success'])) {
             $conditions[] = 'al.success = :success';
-            $params[':success'] = $filters['success'] ? 1 : 0;
+            $params['success'] = $filters['success'] ? 1 : 0;
         }
 
         if (isset($filters['from']) && is_numeric($filters['from'])) {
             $conditions[] = 'al.created_at >= FROM_UNIXTIME(:from)';
-            $params[':from'] = (int) $filters['from'];
+            $params['from'] = (int) $filters['from'];
         }
 
         if (isset($filters['to']) && is_numeric($filters['to'])) {
             $conditions[] = 'al.created_at <= FROM_UNIXTIME(:to)';
-            $params[':to'] = (int) $filters['to'];
+            $params['to'] = (int) $filters['to'];
         }
 
         $where = implode(' AND ', $conditions);

@@ -12,6 +12,7 @@ use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
+use Phlix\Hub\Tests\Support\BindingContractConnection;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -182,7 +183,9 @@ final class AdminDashboardRoutesTest extends TestCase
                     return [['cnt' => 4]];
                 }
                 if (str_contains($sql, 'FROM requests')) {
-                    self::assertSame([':status' => 'pending'], $params);
+                    // workerman's bind() prepends ':' to each key, so the key
+                    // must be colon-free ('status', never ':status').
+                    self::assertSame(['status' => 'pending'], $params);
                     return [['cnt' => 2]];
                 }
                 if (str_contains($sql, 'FROM users')) {
@@ -207,6 +210,44 @@ final class AdminDashboardRoutesTest extends TestCase
         self::assertSame(4, $data['active_relay_sessions']);
         self::assertSame(2, $data['pending_requests']);
         self::assertSame(7, $data['user_count']);
+    }
+
+    public function testSummaryBindsNamedParamsUnderRealBindingContract(): void
+    {
+        $this->asAdmin('admin-1', true);
+
+        // Regression guard for the production 500: a Connection that enforces
+        // workerman's real bind() rule, where a colon-prefixed param key (the
+        // [':status' => …] bug) throws HY093 exactly as it did at runtime.
+        // PHPUnit's createMock(Connection::class) cannot catch this — its stub
+        // ignores the colon. The summary must bind ['status' => …] (no colon)
+        // for this to reach 200.
+        $db = new BindingContractConnection([
+            'FROM servers'        => [['total' => 5, 'online' => 3, 'offline' => 1]],
+            'FROM relay_sessions' => [['cnt' => 4]],
+            'FROM requests'       => [['cnt' => 2]],
+            'FROM users'          => [['cnt' => 7]],
+        ]);
+        $router = $this->buildRouter($db);
+
+        $res = $router->dispatch($this->get('/api/v1/admin/dashboard/summary', 'admin-1'));
+        self::assertSame(200, $res->statusCode);
+
+        $payload = json_decode((string) $res->body, true);
+        self::assertIsArray($payload);
+        $data = $payload['data'];
+        self::assertIsArray($data);
+        self::assertSame(2, $data['pending_requests']);
+
+        // The requests counter must have bound a colon-free 'status' key.
+        $requestsCall = null;
+        foreach ($db->calls as $call) {
+            if (str_contains($call['sql'], 'FROM requests')) {
+                $requestsCall = $call;
+            }
+        }
+        self::assertNotNull($requestsCall);
+        self::assertSame(['status' => 'pending'], $requestsCall['params']);
     }
 
     public function testSummaryReturnsZerosWhenResultsEmpty(): void
