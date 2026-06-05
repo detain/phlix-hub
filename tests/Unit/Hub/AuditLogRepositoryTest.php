@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Hub\AuditLogRepository;
+use Phlix\Hub\Tests\Support\BindingContractConnection;
 use Workerman\MySQL\Connection;
 
 /**
@@ -26,11 +27,11 @@ final class AuditLogRepositoryTest extends TestCase
             ->with(
                 self::stringContains('INSERT INTO audit_logs'),
                 self::callback(function (array $params): bool {
-                    return $params[':event'] === 'login'
-                        && $params[':userId'] === 'user-123'
-                        && $params[':deviceId'] === 'device-456'
-                        && $params[':success'] === 1
-                        && $params[':reason'] === 'bad_password';
+                    return $params['event'] === 'login'
+                        && $params['userId'] === 'user-123'
+                        && $params['deviceId'] === 'device-456'
+                        && $params['success'] === 1
+                        && $params['reason'] === 'bad_password';
                 }),
             );
 
@@ -42,6 +43,59 @@ final class AuditLogRepositoryTest extends TestCase
             success: true,
             reason: 'bad_password',
         );
+    }
+
+    public function testLogAndFindBindColonFreeKeysUnderRealContract(): void
+    {
+        // Regression guard: workerman's bind() prepends ':' to every param
+        // key, so the keys must be colon-free. BindingContractConnection
+        // throws HY093 on a leading-colon key exactly as PDO did in production
+        // (the audit INSERT + filtered find() silently 500'd before the fix).
+        $db = new BindingContractConnection([
+            'INSERT INTO audit_logs' => [],
+            'COUNT(*)'               => [['cnt' => 0]],
+            'FROM audit_logs al'     => [],
+        ]);
+        $repo = new AuditLogRepository($db);
+
+        // INSERT path — every column placeholder must bind a colon-free key.
+        $repo->log(
+            event: 'admin_action',
+            userId: 'admin-001',
+            sessionId: 'sess-1',
+            deviceId: 'dev-1',
+            resource: 'user-9',
+            action: 'user.update',
+            success: true,
+            reason: 'ok',
+            ipAddress: '127.0.0.1',
+            userAgent: 'HubAdmin/1.0',
+            context: ['k' => 'v'],
+        );
+
+        // find() with every filter — each condition must bind a colon-free key.
+        $result = $repo->find([
+            'event'    => 'admin_action',
+            'user_id'  => 'admin-001',
+            'resource' => 'user-9',
+            'action'   => 'user.update',
+            'success'  => true,
+            'from'     => 1704067200,
+            'to'       => 1704153600,
+            'limit'    => 10,
+        ]);
+        self::assertSame(['entries' => [], 'total' => 0], $result);
+
+        $insert = null;
+        foreach ($db->calls as $call) {
+            if (str_contains($call['sql'], 'INSERT INTO audit_logs')) {
+                $insert = $call;
+            }
+        }
+        self::assertNotNull($insert);
+        self::assertArrayHasKey('event', $insert['params']);
+        self::assertArrayNotHasKey(':event', $insert['params']);
+        self::assertSame('admin_action', $insert['params']['event']);
     }
 
     public function testFindWithNoFilters(): void
@@ -72,8 +126,8 @@ final class AuditLogRepositoryTest extends TestCase
                 $callCount++;
                 if ($callCount === 1) {
                     // Count query
-                    self::assertArrayHasKey(':event', $params);
-                    self::assertSame('login', $params[':event']);
+                    self::assertArrayHasKey('event', $params);
+                    self::assertSame('login', $params['event']);
                     return [['cnt' => 1]];
                 }
                 // Select query
@@ -186,8 +240,8 @@ final class AuditLogRepositoryTest extends TestCase
         $mockDb->expects(self::once())
             ->method('query')
             ->willReturnCallback(function (string $sql, array $params) use (&$capturedUuid): array {
-                if (isset($params[':id'])) {
-                    $capturedUuid = $params[':id'];
+                if (isset($params['id'])) {
+                    $capturedUuid = $params['id'];
                 }
                 return [['cnt' => 0]];
             });
@@ -267,18 +321,18 @@ final class AuditLogRepositoryTest extends TestCase
             ->with(
                 self::stringContains('INSERT INTO audit_logs'),
                 self::callback(function (array $params): bool {
-                    return $params[':event'] === 'admin_action'
-                        && $params[':userId'] === 'admin-001'
-                        && $params[':sessionId'] === 'session-abc'
-                        && $params[':deviceId'] === 'device-xyz'
-                        && $params[':resource'] === 'user-123'
-                        && $params[':action'] === 'user.update'
-                        && $params[':success'] === 1
-                        && $params[':reason'] === 'legitimate'
-                        && $params[':ipAddress'] === '192.168.1.100'
-                        && $params[':userAgent'] === 'HubAdmin/1.0'
-                        && is_string($params[':contextJson'])
-                        && str_contains($params[':contextJson'], 'detail');
+                    return $params['event'] === 'admin_action'
+                        && $params['userId'] === 'admin-001'
+                        && $params['sessionId'] === 'session-abc'
+                        && $params['deviceId'] === 'device-xyz'
+                        && $params['resource'] === 'user-123'
+                        && $params['action'] === 'user.update'
+                        && $params['success'] === 1
+                        && $params['reason'] === 'legitimate'
+                        && $params['ipAddress'] === '192.168.1.100'
+                        && $params['userAgent'] === 'HubAdmin/1.0'
+                        && is_string($params['contextJson'])
+                        && str_contains($params['contextJson'], 'detail');
                 }),
             );
 
@@ -309,10 +363,10 @@ final class AuditLogRepositoryTest extends TestCase
                 $callCount++;
                 if ($callCount === 1) {
                     // Count query
-                    self::assertArrayHasKey(':from', $params);
-                    self::assertSame(1704067200, $params[':from']);
-                    self::assertArrayHasKey(':to', $params);
-                    self::assertSame(1704153600, $params[':to']);
+                    self::assertArrayHasKey('from', $params);
+                    self::assertSame(1704067200, $params['from']);
+                    self::assertArrayHasKey('to', $params);
+                    self::assertSame(1704153600, $params['to']);
                     return [['cnt' => 0]];
                 }
                 // Select query

@@ -21,8 +21,11 @@ use Workerman\MySQL\Connection;
  * (e.g. saving hub settings). Rather than re-key every call site to
  * named placeholders or `[1 => $a, 2 => $b]`, we normalise here once.
  *
- * Associative arrays (string keys, e.g. `[':id' => $id]`) pass through
- * untouched. Mirrors phlix-server's identical fix.
+ * Associative (named) arrays pass through untouched — but their keys must be
+ * colon-free (`['id' => $id]`, never `[':id' => $id]`): workerman's `bind()`
+ * prepends the `':'` itself, so a leading colon produces the placeholder
+ * `'::id'`, which PDO rejects with `SQLSTATE[HY093] Invalid parameter number:
+ * parameter was not defined`. Mirrors phlix-server's identical fix.
  *
  * @psalm-suppress PropertyNotSetInConstructor
  *   The parent Connection declares untyped query-builder properties
