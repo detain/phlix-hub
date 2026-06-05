@@ -1068,7 +1068,18 @@ do_update() {
   log "Phlix Hub update complete."
   info "Branch : $BRANCH"
   info "Commit : $prev_commit -> $new_commit"
-  [ "$prev_commit" = "$new_commit" ] && info "(already up to date)"
+  if [ "$prev_commit" = "$new_commit" ]; then
+    info "(already up to date)"
+  fi
+
+  # do_update runs as a bare statement under `set -euo pipefail` (see the
+  # `if [ "$ACTION" = "update" ]` dispatch below), so its return value becomes
+  # the script's exit status. Return success explicitly: without this the
+  # final command above evaluates to 1 whenever the commit actually changed
+  # (i.e. a real update — the common case), which under `set -e` aborts the
+  # script before the trailing `exit 0` and makes a successful update look
+  # like a failure to anyone checking $?.
+  return 0
 }
 
 if [ "$ACTION" = "update" ]; then
