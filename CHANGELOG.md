@@ -7,6 +7,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Changed
+- **`web-ui`: bumped `@phlix/ui` `v0.39.0` → `v0.41.0` and rebuilt the committed SPA bundle (`public/assets/app/`).** Fixes the **My Servers** and **Federation** pages showing "unauthorized" with a Retry button that never cleared, and makes the **"Add server"** button functional. Root cause: the SPA's default API client used a no-op token store, so those pages never sent the user's Bearer token and the hub's `AuthMiddleware` returned 401. v0.41.0 sends the session token by default; "Add server" now opens a modal that posts a claim code to `POST /api/v1/server-claims/claim`. `package.json`/`package-lock.json` pin the new git tag; the Vite bundle was regenerated. No hub PHP changed.
 - **`web-ui`: bumped `@phlix/ui` `v0.30.0` → `v0.36.0` and rebuilt the committed SPA bundle (`public/assets/app/`).** Picks up the shared-UI work served at `/app/*`: full-width layout, clicking a poster opens the info/detail page, the matched/unmatched metadata filter, clickable cast (each cast name opens that title's library filtered to the actor), the listing grid pre-sized to the full result count with on-demand paging, and the A-Z jump rail on long library listings. `package.json`/`package-lock.json` pin the new git tag; the Vite bundle was regenerated. No hub PHP changed.
 
 ### Added
