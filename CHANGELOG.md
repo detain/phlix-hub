@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+- **`web-ui`: bumped `@phlix/ui` `v0.30.0` → `v0.34.0` and rebuilt the committed SPA bundle (`public/assets/app/`).** Picks up the shared-UI work served at `/app/*`: full-width layout, clicking a poster opens the info/detail page, the matched/unmatched metadata filter, and clickable cast (each cast name opens that title's library filtered to the actor). `package.json`/`package-lock.json` pin the new git tag; the Vite bundle was regenerated. No hub PHP changed.
+
 ### Added
 - **Shared admin console — `/api/v1/admin/*` API + the hub SPA admin section.** The hub now mounts
   the shared `@phlix/ui` admin console at `/app/admin/*` (Hub Dashboard, Users, Logs, Settings,
