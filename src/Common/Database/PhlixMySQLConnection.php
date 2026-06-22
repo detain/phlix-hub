@@ -108,6 +108,12 @@ final class PhlixMySQLConnection extends Connection
      * (was ~5-10% before). Parameterisation stays safe — PDO still quotes every
      * bound value, and the connection charset is utf8mb4 (see above).
      *
+     * @psalm-suppress RedundantConditionGivenDocblockType
+     *   Psalm types the parent's `$pdo` as `\PDO` so it deems the instanceof
+     *   redundant; PHPStan sees the parent's untyped property as `mixed` and
+     *   needs the guard to call `setAttribute()` safely. Keep the guard for
+     *   PHPStan; suppress Psalm.
+     *
      * @return void
      */
     protected function connect()
