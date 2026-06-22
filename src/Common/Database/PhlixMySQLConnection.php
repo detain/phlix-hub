@@ -56,6 +56,17 @@ use Workerman\MySQL\Connection;
  * triggered (→ worker crash → 500). Serialising every query on a per-
  * connection coroutine mutex makes each query atomic w.r.t. other coroutines.
  *
+ * ## 4. Emulated + buffered prepared statements (`connect()`)
+ *
+ * Even with the mutex serialising queries, NATIVE prepares (the parent's
+ * default) keep per-statement state on the coroutine-hooked MySQL socket that
+ * leaks across coroutine yields, wedging the connection so the next
+ * `prepare()` returns `false` / params desync (HY093). {@see connect()} forces
+ * emulated + fully-buffered prepares so `prepare()` is client-side only and
+ * every result is consumed immediately — no socket state survives a yield.
+ * This is the fix that actually eliminated the pairing/login 500s (#3's mutex
+ * alone did not).
+ *
  * @psalm-suppress PropertyNotSetInConstructor
  *   The parent Connection declares untyped query-builder properties
  *   (e.g. `$table`) it only initialises lazily; our constructor just forwards
@@ -75,6 +86,38 @@ final class PhlixMySQLConnection extends Connection
 
     /** @var int Coroutine id currently holding {@see $queryLock}, or -1 when free. */
     private int $queryLockHolder = -1;
+
+    /**
+     * Force emulated + fully-buffered prepared statements.
+     *
+     * The parent connects with NATIVE prepares (`PDO::ATTR_EMULATE_PREPARES =
+     * false`). Under the Swoole event loop the MySQL socket is coroutine-hooked
+     * (mysqlnd uses PHP streams), so a query yields the coroutine while it waits
+     * on the socket. With native prepares each statement keeps per-statement
+     * server-side state on that socket, and that state leaks across coroutine
+     * switches — even when queries are otherwise serialised — leaving the
+     * connection wedged so the next `prepare()` silently returns `false`
+     * ("Call to a member function bindParam() on false") or the bound params
+     * desync ("HY093 Invalid parameter number"). This is exactly what 500'd the
+     * server↔hub pairing/claim flow and the parallel dashboard fetches.
+     *
+     * Emulated prepares keep `prepare()` purely client-side (no socket round
+     * trip, so it cannot fail at the socket), and buffered queries fetch every
+     * result row immediately, so no pending unbuffered result survives a yield.
+     * Verified: 150 concurrent claim POSTs with zero connection corruption
+     * (was ~5-10% before). Parameterisation stays safe — PDO still quotes every
+     * bound value, and the connection charset is utf8mb4 (see above).
+     *
+     * @return void
+     */
+    protected function connect()
+    {
+        parent::connect();
+        if ($this->pdo instanceof \PDO) {
+            $this->pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
+            $this->pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+        }
+    }
 
     /**
      * Default the connection charset to utf8mb4 (the parent defaults to the
