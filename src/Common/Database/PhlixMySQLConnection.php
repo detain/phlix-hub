@@ -105,8 +105,13 @@ final class PhlixMySQLConnection extends Connection
      * trip, so it cannot fail at the socket), and buffered queries fetch every
      * result row immediately, so no pending unbuffered result survives a yield.
      * Verified: 150 concurrent claim POSTs with zero connection corruption
-     * (was ~5-10% before). Parameterisation stays safe — PDO still quotes every
-     * bound value, and the connection charset is utf8mb4 (see above).
+     * (was ~5-10% before). Parameterisation stays injection-safe (PDO still
+     * escapes every bound value); the connection charset is utf8mb4 (see above).
+     *
+     * NOTE: emulated prepares send bound params as STRINGS by default, which
+     * makes MySQL reject `LIMIT '50'` / `OFFSET '0'` with a 1064 syntax error.
+     * {@see execute()} is overridden to bind each value with its natural PDO
+     * type (int → PARAM_INT, …) so integer placeholders stay unquoted.
      *
      * @psalm-suppress RedundantConditionGivenDocblockType
      *   Psalm types the parent's `$pdo` as `\PDO` so it deems the instanceof
@@ -123,6 +128,100 @@ final class PhlixMySQLConnection extends Connection
             $this->pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
             $this->pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
         }
+    }
+
+    /**
+     * Prepare + bind + execute with TYPE-AWARE binding.
+     *
+     * Mirrors the parent's `execute()` (including the one-shot reconnect on
+     * MySQL "server has gone away" 2006/2013) but binds each parameter with its
+     * natural PDO type via {@see pdoParamType()} instead of the parent's
+     * untyped `bindParam()` (which is `PARAM_STR`). Under emulated prepares
+     * (see {@see connect()}) a `PARAM_STR` integer is emitted quoted, so
+     * `LIMIT ?`/`OFFSET ?` become `LIMIT '50'` and MySQL 1064-errors; binding
+     * ints as `PARAM_INT` keeps them unquoted. The parent's `clearSQuery()` is
+     * private, so we inline its one line (`$this->sQuery = null`).
+     *
+     * @param string $query
+     * @param mixed  $parameters
+     * @return void
+     */
+    protected function execute($query, $parameters = '')
+    {
+        try {
+            $this->prepareAndBind($query, $parameters);
+            $this->success = $this->sQuery instanceof \PDOStatement && $this->sQuery->execute();
+        } catch (\PDOException $e) {
+            $errno = (is_array($e->errorInfo) && isset($e->errorInfo[1])) ? (int) $e->errorInfo[1] : 0;
+            if ($errno === 2006 || $errno === 2013) {
+                // "MySQL server has gone away" — drop the dead socket and retry once.
+                $this->closeConnection();
+                try {
+                    $this->prepareAndBind($query, $parameters);
+                    $this->success = $this->sQuery instanceof \PDOStatement && $this->sQuery->execute();
+                } catch (\PDOException $ex) {
+                    $this->rollBackTrans();
+                    throw $ex;
+                }
+            } else {
+                $this->rollBackTrans();
+                throw new \PDOException('SQL:' . $this->lastSQL() . ' ' . $e->getMessage(), (int) $e->getCode());
+            }
+        }
+        $this->parameters = [];
+    }
+
+    /**
+     * Prepare $query and bind the accumulated parameters with their natural PDO
+     * type. Reconnects if the PDO handle is missing. Replaces the parent's
+     * private clearSQuery() with an inline `$this->sQuery = null`.
+     *
+     * @param mixed $parameters
+     */
+    private function prepareAndBind(string $query, mixed $parameters): void
+    {
+        if (!$this->pdo instanceof \PDO) {
+            $this->connect();
+        }
+        if (!$this->pdo instanceof \PDO) {
+            throw new \PDOException('PDO connection is not available.');
+        }
+        $this->sQuery = null;
+        $statement = $this->pdo->prepare($query);
+        if (!$statement instanceof \PDOStatement) {
+            throw new \PDOException('Failed to prepare SQL statement.');
+        }
+        $this->sQuery = $statement;
+        $this->bindMore($parameters);
+        /** @var mixed $param */
+        foreach ($this->parameters as $param) {
+            if (!is_array($param)) {
+                continue;
+            }
+            $placeholder = $param[0] ?? null;
+            if (!is_int($placeholder) && !is_string($placeholder)) {
+                continue;
+            }
+            /** @var mixed $value */
+            $value = $param[1] ?? null;
+            $statement->bindValue($placeholder, $value, $this->pdoParamType($value));
+        }
+    }
+
+    /**
+     * Map a PHP value to the PDO bind type that keeps it correctly typed under
+     * emulated prepares (integers stay unquoted so `LIMIT ?`/`OFFSET ?` work).
+     *
+     * @param mixed $value
+     */
+    private function pdoParamType(mixed $value): int
+    {
+        return match (true) {
+            is_int($value)  => \PDO::PARAM_INT,
+            is_bool($value) => \PDO::PARAM_BOOL,
+            $value === null => \PDO::PARAM_NULL,
+            default         => \PDO::PARAM_STR,
+        };
     }
 
     /**
