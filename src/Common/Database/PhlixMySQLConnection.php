@@ -128,6 +128,14 @@ final class PhlixMySQLConnection extends Connection
     /**
      * Current Swoole coroutine id, or -1 when not running inside a coroutine
      * (e.g. CLI scripts) or when the extension is absent.
+     *
+     * @psalm-suppress RedundantCondition,TypeDoesNotContainType
+     *   ext-swoole's reflected `getCid()` return type is `int`, so Psalm (which
+     *   loads swoole in CI) treats the `is_int()` guard as redundant — but
+     *   PHPStan runs WITHOUT swoole, sees the call as `mixed`, and REQUIRES the
+     *   guard to narrow the `int` return. The guard stays for PHPStan; we
+     *   suppress Psalm's redundancy complaint rather than drop a guard that a
+     *   sibling tool needs.
      */
     private function currentCoroutineId(): int
     {
