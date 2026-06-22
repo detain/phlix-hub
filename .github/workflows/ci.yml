@@ -75,7 +75,10 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: json, pcntl, posix
+          # swoole is required so Psalm can reflect \Swoole\Coroutine\Channel
+          # used by PhlixMySQLConnection's per-connection coroutine mutex;
+          # without it Psalm reports UndefinedClass at errorLevel 1.
+          extensions: json, pcntl, posix, swoole
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist

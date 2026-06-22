@@ -72,4 +72,52 @@ final class PhlixMySQLConnectionTest extends TestCase
 
         $this->assertSame([], $this->boundParameters($conn));
     }
+
+    /**
+     * @return mixed
+     */
+    private function invokePrivate(PhlixMySQLConnection $conn, string $method, mixed ...$args)
+    {
+        $ref = (new ReflectionClass(PhlixMySQLConnection::class))->getMethod($method);
+        $ref->setAccessible(true);
+
+        return $ref->invoke($conn, ...$args);
+    }
+
+    /**
+     * Outside the Swoole coroutine runtime (plain CLI / PHPUnit), the
+     * coroutine-mutex guard must report -1 so query() takes the direct
+     * passthrough to the parent and never touches a Channel (which can only
+     * be created inside the coroutine runtime).
+     */
+    public function testCurrentCoroutineIdIsNegativeOutsideCoroutine(): void
+    {
+        $conn = (new ReflectionClass(PhlixMySQLConnection::class))
+            ->newInstanceWithoutConstructor();
+
+        $this->assertSame(-1, $this->invokePrivate($conn, 'currentCoroutineId'));
+    }
+
+    /**
+     * The query mutex is reentrant per coroutine: a coroutine that already
+     * holds the lock must get `false` back (so it does NOT release a lock it
+     * is still using on the outer call) without ever allocating the Channel.
+     */
+    public function testAcquireQueryLockIsReentrantForSameCoroutine(): void
+    {
+        $conn = (new ReflectionClass(PhlixMySQLConnection::class))
+            ->newInstanceWithoutConstructor();
+
+        $holder = (new ReflectionClass(PhlixMySQLConnection::class))->getProperty('queryLockHolder');
+        $holder->setAccessible(true);
+        $holder->setValue($conn, 7);
+
+        // cid 7 already holds the lock → reentrant acquire returns false.
+        $this->assertFalse($this->invokePrivate($conn, 'acquireQueryLock', 7));
+
+        // No Channel should have been allocated on the reentrant path.
+        $lock = (new ReflectionClass(PhlixMySQLConnection::class))->getProperty('queryLock');
+        $lock->setAccessible(true);
+        $this->assertNull($lock->getValue($conn));
+    }
 }
