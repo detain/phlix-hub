@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Generator;
+use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\TunnelInterface;
 use Phlix\Hub\Relay\TunnelManagerInterface;
@@ -245,6 +246,48 @@ class IdleReaperTest extends TestCase
         $reapedCount = $reaper->tick();
 
         $this->assertSame(1, $reapedCount);
+    }
+
+    public function test_tick_reaps_stale_db_sessions_when_session_manager_wired(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager
+            ->method('allTunnels')
+            ->willReturn($this->createTunnelGenerator([]));
+
+        $sessionManager = $this->createMock(RelaySessionManager::class);
+        $sessionManager
+            ->expects($this->once())
+            ->method('reapStaleSessions')
+            ->willReturn(3);
+
+        $reaper = new IdleReaper(
+            $tunnelManager,
+            $this->logger,
+            60,
+            90,
+            $sessionManager,
+        );
+
+        $reaper->tick();
+    }
+
+    public function test_tick_is_noop_for_db_sessions_when_session_manager_null(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager
+            ->method('allTunnels')
+            ->willReturn($this->createTunnelGenerator([]));
+
+        // No session manager passed; tick() must complete cleanly.
+        $reaper = new IdleReaper(
+            $tunnelManager,
+            $this->logger,
+            60,
+            90,
+        );
+
+        $this->assertSame(0, $reaper->tick());
     }
 
     /**

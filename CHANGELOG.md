@@ -299,6 +299,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Removed
 - `migrations/001_placeholder.sql` — superseded by the real migrations.
 
+### Fixed
+- **My Servers "Last seen" stuck on "never".** `ServerInfoHandler`'s two SELECTs
+  returned `last_seen_at` as a MySQL DATETIME string, but `rowToDto()` only mapped
+  it when numeric, so `lastSeenAt` was always null. The column is now returned as
+  `UNIX_TIMESTAMP(s.last_seen_at)` so the existing `is_numeric` → `(int)` path
+  populates `lastSeenAt`.
+- **My Servers "Libraries" stuck on "--".** The per-server library count cached in
+  `server_libraries` was never surfaced. Both `ServerInfoHandler` SELECTs now
+  include a `COUNT(*)` subquery over `server_libraries`, and `rowToDto()` maps it
+  to the new optional `ServerInfoDto.libraryCount` (phlix-shared 0.10.1).
+- **Dashboard "active relays" growing without bound (~9718 with one server).**
+  `RelaySessionManager::registerServer()` inserted a new `relay_sessions` row on
+  every (re)connect without ever closing the prior open session, and
+  `closeSession()` is not always reached (worker restart, dropped connection), so
+  open rows accumulated. `registerServer()` now supersedes any prior open session
+  for the server before inserting (`close_reason = 'superseded'`), and a new
+  `RelaySessionManager::reapStaleSessions()` closes open sessions with no recent
+  frame activity (`close_reason = 'stale'`), wired into `IdleReaper::tick()` (runs
+  every 60s on the single relay worker), so the count converges on the number of
+  connected servers.
+
+### Changed
+- Bumped `detain/phlix-shared` constraint to `^0.10.1` (adds optional
+  `ServerInfoDto.libraryCount`).
+
 ## [0.1.0] — 2026-05-17
 
 ### Added

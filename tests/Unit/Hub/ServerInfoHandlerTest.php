@@ -30,17 +30,19 @@ final class ServerInfoHandlerTest extends TestCase
 
     public function testGetServerInfoReturnsDto(): void
     {
+        $now = time();
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([[
             'id' => 'server-1',
             'user_id' => 'user-1',
             'server_name' => 'My NAS',
             'version' => '0.11.0',
-            'last_seen_at' => time(),
+            'last_seen_at' => $now,
             'status' => 'online',
             'hostname_candidates_json' => '["https://192.168.1.100:32400"]',
-            'created_at' => time(),
+            'created_at' => $now,
             'relay_active' => 1,
+            'library_count' => 4,
         ]]);
 
         $handler = new ServerInfoHandler($db);
@@ -53,6 +55,94 @@ final class ServerInfoHandlerTest extends TestCase
         self::assertSame('0.11.0', $result->version);
         self::assertSame('online', $result->status);
         self::assertTrue($result->relayActive);
+        self::assertSame($now, $result->lastSeenAt);
+        self::assertSame(4, $result->libraryCount);
+    }
+
+    public function testGetServerInfoSelectsUnixTimestampAndLibraryCount(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $captured = '';
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$captured): array {
+                $captured = $sql;
+                return [];
+            },
+        );
+
+        $handler = new ServerInfoHandler($db);
+        $handler->getServerInfo('server-1');
+
+        self::assertStringContainsString('UNIX_TIMESTAMP(s.last_seen_at) AS last_seen_at', $captured);
+        self::assertStringContainsString('FROM server_libraries sl', $captured);
+        self::assertStringContainsString('AS library_count', $captured);
+    }
+
+    public function testGetServersForUserSelectsUnixTimestampAndLibraryCount(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $captured = '';
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$captured): array {
+                $captured = $sql;
+                return [];
+            },
+        );
+
+        $handler = new ServerInfoHandler($db);
+        $handler->getServersForUser('user-1');
+
+        self::assertStringContainsString('UNIX_TIMESTAMP(s.last_seen_at) AS last_seen_at', $captured);
+        self::assertStringContainsString('FROM server_libraries sl', $captured);
+        self::assertStringContainsString('AS library_count', $captured);
+    }
+
+    public function testRowToDtoMapsNumericLastSeenAndLibraryCount(): void
+    {
+        $now = time();
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'server-9',
+            'user_id' => 'user-9',
+            'server_name' => 'Mapped NAS',
+            'version' => '1.0.0',
+            'last_seen_at' => (string) $now,
+            'status' => 'online',
+            'hostname_candidates_json' => '[]',
+            'created_at' => $now,
+            'relay_active' => 1,
+            'library_count' => '7',
+        ]]);
+
+        $handler = new ServerInfoHandler($db);
+        $result = $handler->getServerInfo('server-9');
+
+        self::assertInstanceOf(ServerInfoDto::class, $result);
+        self::assertSame($now, $result->lastSeenAt);
+        self::assertSame(7, $result->libraryCount);
+    }
+
+    public function testRowToDtoLeavesLibraryCountNullWhenAbsent(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'server-x',
+            'user_id' => 'user-x',
+            'server_name' => 'No Libs',
+            'version' => '1.0.0',
+            'last_seen_at' => null,
+            'status' => 'offline',
+            'hostname_candidates_json' => '[]',
+            'created_at' => time(),
+            'relay_active' => 0,
+        ]]);
+
+        $handler = new ServerInfoHandler($db);
+        $result = $handler->getServerInfo('server-x');
+
+        self::assertInstanceOf(ServerInfoDto::class, $result);
+        self::assertNull($result->libraryCount);
+        self::assertNull($result->lastSeenAt);
     }
 
     public function testGetServerInfoMapsRelayInactive(): void
