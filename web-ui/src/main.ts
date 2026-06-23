@@ -4,6 +4,13 @@ import '@phlix/ui/fonts.css';
 
 const app = createPhlixApp({
     app: 'hub',
+    // The hub's home is its servers directory — never the media-server Browse page
+    // (which calls server-only endpoints like /api/v1/libraries that 404 on the
+    // hub). Login/signup land here and the brand link points here.
+    home: '/app/servers',
+    // The continue-watching endpoint is a media-server surface; don't poll it from
+    // the hub shell (it only 404s until inline browsing is scoped to a server).
+    features: { resumeSync: false },
     // Top-bar nav for the hub's own pages. Supplying `menu` replaces the shell's
     // default Browse/Settings (which are media-server oriented and irrelevant to
     // the directory/relay hub), so only the hub surfaces are listed. "Admin" is
