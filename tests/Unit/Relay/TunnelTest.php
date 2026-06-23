@@ -561,4 +561,150 @@ class TunnelTest extends TestCase
         $this->assertSame($client->channelId, $decoded->channelId());
         $this->assertSame('client-bytes', $decoded->payload);
     }
+
+    /**
+     * Build a syntactically valid JWT whose header carries the given kid.
+     */
+    private function jwtWithKid(string $kid): string
+    {
+        $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
+        return $b64((string) json_encode(['alg' => 'EdDSA', 'kid' => $kid]))
+            . '.' . $b64('{}')
+            . '.' . $b64('signature');
+    }
+
+    public function test_hello_with_valid_jwt_activates_tunnel(): void
+    {
+        $jwt = $this->jwtWithKid('k1');
+
+        $jwtService = $this->createMock(\Phlix\Hub\Hub\EnrollmentJwtService::class);
+        $jwtService->expects($this->once())
+            ->method('validateEnrollmentJwt')
+            ->with($jwt, 'k1')
+            ->willReturn(['server_id' => 'server-123']);
+
+        $this->sessionManager->method('registerServer')->willReturn('sess-1');
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            $jwtService,
+        );
+
+        $tunnel->onServerMessage((string) json_encode([
+            'type' => 'hello',
+            'enrollment_jwt' => $jwt,
+            'server_id' => 'server-123',
+        ]));
+
+        $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
+    }
+
+    public function test_hello_with_invalid_jwt_rejects_tunnel(): void
+    {
+        $jwt = $this->jwtWithKid('k1');
+
+        $jwtService = $this->createMock(\Phlix\Hub\Hub\EnrollmentJwtService::class);
+        $jwtService->method('validateEnrollmentJwt')->willReturn(null);
+
+        $this->sessionManager->expects($this->never())->method('registerServer');
+        $this->serverWs->expects($this->once())->method('close');
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            $jwtService,
+        );
+
+        $tunnel->onServerMessage((string) json_encode([
+            'type' => 'hello',
+            'enrollment_jwt' => $jwt,
+            'server_id' => 'server-123',
+        ]));
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    public function test_hello_with_mismatched_server_id_in_jwt_rejects_tunnel(): void
+    {
+        $jwt = $this->jwtWithKid('k1');
+
+        $jwtService = $this->createMock(\Phlix\Hub\Hub\EnrollmentJwtService::class);
+        // Token is valid but minted for a different server.
+        $jwtService->method('validateEnrollmentJwt')->willReturn(['server_id' => 'other-server']);
+
+        $this->sessionManager->expects($this->never())->method('registerServer');
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            $jwtService,
+        );
+
+        $tunnel->onServerMessage((string) json_encode([
+            'type' => 'hello',
+            'enrollment_jwt' => $jwt,
+            'server_id' => 'server-123',
+        ]));
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    public function test_http_response_frame_is_routed_to_proxy_manager(): void
+    {
+        $managerLogger = $this->createMock(StructuredLogger::class);
+        // An HTTP_RESPONSE for an unknown request id makes the manager log a
+        // warning — proving the tunnel routed the frame to it.
+        $managerLogger->expects($this->atLeastOnce())->method('warning');
+
+        $proxyManager = new \Phlix\Hub\Relay\RelayProxyManager(
+            $this->createMock(\Phlix\Hub\Relay\TunnelManagerInterface::class),
+            $managerLogger,
+            30,
+            static function (string $e, array $d): void {
+            },
+        );
+
+        $this->sessionManager->method('registerServer')->willReturn('sess-1');
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            null,
+            $proxyManager,
+        );
+
+        // Activate.
+        $tunnel->onServerMessage((string) json_encode([
+            'type' => 'hello',
+            'enrollment_jwt' => 'a.b.c',
+            'server_id' => 'server-123',
+        ]));
+
+        // Feed an HTTP_RESPONSE frame (END chunk) for an unknown request id.
+        $frame = $this->codec->encode(
+            RelayFrameType::HTTP_RESPONSE,
+            12345,
+            \Phlix\Shared\Relay\RelayHttpResponseCodec::encodeEnd(),
+        );
+        $tunnel->onServerMessage($frame);
+
+        $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
+    }
 }

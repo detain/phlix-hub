@@ -5,11 +5,16 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
+use Channel\Client as ChannelClient;
+use Channel\Server as ChannelServer;
 use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\FederationWorker;
+use Phlix\Hub\Relay\RelayProxyBridge;
+use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
@@ -30,6 +35,7 @@ use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
 use Phlix\Hub\Http\Controllers\ServerDetailController;
+use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
@@ -171,12 +177,14 @@ final class Application
         $serverManage = $this->resolveServerManageController();
         $serverDetail = $this->resolveServerDetailController();
         $libraryController = $this->resolveLibraryController();
+        $serverProxy = $this->resolveServerProxyController();
         $this->router->group('/api/v1', function (Router $r) use (
             $me,
             $serverList,
             $serverManage,
             $serverDetail,
             $libraryController,
+            $serverProxy,
         ): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
             // `/auth/me` is the path the shared @phlix/ui SPA calls (matches
@@ -213,6 +221,16 @@ final class Application
                     return $serverDetail->getServerDetail($req, $typedParams);
                 },
             );
+            // HTTP-over-relay proxy: forward a browser request to a paired
+            // media server over the reverse tunnel (owner-gated). The
+            // {path:.*} catch-all carries the server-side path + sub-segments.
+            $proxyHandler = static function (Request $req, array $params) use ($serverProxy): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $serverProxy->proxy($req, $typedParams);
+            };
+            $r->get('/servers/{id}/proxy/{path:.*}', $proxyHandler);
+            $r->post('/servers/{id}/proxy/{path:.*}', $proxyHandler);
         }, [$authMiddleware]);
 
         // Server-claim and server routes.
@@ -393,6 +411,16 @@ final class Application
         if (!$controller instanceof ServerManageController) {
             throw new \RuntimeException('Container returned an unexpected ServerManageController instance');
         }
+        return $controller;
+    }
+
+    private function resolveServerProxyController(): ServerProxyController
+    {
+        $controller = $this->container->get(ServerProxyController::class);
+        if (!$controller instanceof ServerProxyController) {
+            throw new \RuntimeException('Container returned an unexpected ServerProxyController instance');
+        }
+
         return $controller;
     }
 
@@ -1058,9 +1086,38 @@ final class Application
         $workersRaw = $this->config['workers'] ?? 2;
         $workers = is_int($workersRaw) ? $workersRaw : (int) (is_numeric($workersRaw) ? $workersRaw : 2);
 
+        // Cross-process channel broker coordinates (workerman/channel). HTTP
+        // workers publish relay-proxy requests to the relay-ws worker over this
+        // broker and receive the responses back.
+        $channelHost = '127.0.0.1';
+        /** @var mixed $channelPortRaw */
+        $channelPortRaw = $this->config['channel_port'] ?? RelayProxyProtocol::DEFAULT_CHANNEL_PORT;
+        $channelPort = is_int($channelPortRaw)
+            ? $channelPortRaw
+            : (int) (is_numeric($channelPortRaw) ? $channelPortRaw : RelayProxyProtocol::DEFAULT_CHANNEL_PORT);
+
         $worker = new Worker(sprintf('http://%s:%d', $host, $port));
         $worker->count = $workers;
         $worker->name = 'phlix-hub-http';
+
+        // Each HTTP worker joins the channel broker and subscribes to its own
+        // unique reply event so relayed responses are delivered back to the
+        // coroutine that issued the proxy request.
+        $proxyContainer = $this->container;
+        $worker->onWorkerStart = static function () use ($channelHost, $channelPort, $proxyContainer): void {
+            try {
+                ChannelClient::connect($channelHost, $channelPort);
+                /** @var mixed $bridge */
+                $bridge = $proxyContainer->get(RelayProxyBridge::class);
+                if ($bridge instanceof RelayProxyBridge) {
+                    ChannelClient::on($bridge->replyEvent(), [$bridge, 'onReply']);
+                }
+            } catch (Throwable $e) {
+                LoggerFactory::get(LogChannels::RELAY)->error('Relay proxy: HTTP worker channel init failed', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        };
 
         $router = $this->router;
         $logger = $this->resolveHttpLogger();
@@ -1160,13 +1217,23 @@ final class Application
         // Wire up runtime timers for relay services before starting workers
         HubServicesProvider::boot();
 
+        // Start the cross-process channel broker that carries relay-proxy
+        // requests/responses between the HTTP workers and the relay-ws worker.
+        try {
+            new ChannelServer($channelHost, $channelPort);
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error('Relay proxy: failed to start channel broker', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         // Start the relay WebSocket worker for server connections on port 8802.
         /** @var mixed $relayPortRaw */
         $relayPortRaw = $this->config['relay_port'] ?? 8802;
         $relayPort = is_int($relayPortRaw)
             ? $relayPortRaw
             : (int) (is_numeric($relayPortRaw) ? $relayPortRaw : 8802);
-        $relayWorker = new RelayWorker($this->container, $relayPort);
+        $relayWorker = new RelayWorker($this->container, $relayPort, 1, $channelHost, $channelPort);
         $relayWorker->start();
 
         // Start the client-facing relay WebSocket worker on port 8803. Remote

@@ -4,4 +4,6 @@ parameters:
         - src
     bootstrapFiles:
         - vendor/autoload.php
+    stubFiles:
+        - phpstan-stubs/ChannelClient.stub
     treatPhpDocTypesAsCertain: false

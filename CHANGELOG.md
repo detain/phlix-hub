@@ -6,6 +6,34 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **HTTP-over-relay proxy: `GET|POST /api/v1/servers/{id}/proxy/{path:.*}`.** Lets a
+  browser on the hub fetch a paired media server's API over the existing reverse
+  tunnel (Phase 1 of hub inline media browsing). The endpoint authenticates the
+  user, verifies they own the server, and confirms a live relay session, then
+  round-trips the request to the server and returns its response. Pieces:
+  - `Relay\RelayProxyBridge` (HTTP-worker side) publishes the request over a
+    `workerman/channel` broker and awaits the reply on a per-worker event,
+    blocking only the request's coroutine.
+  - `Relay\RelayProxyManager` (relay-ws-worker side) owns the tunnels: it sends an
+    `HTTP_REQUEST` frame, reassembles the streamed `HTTP_RESPONSE` chunks
+    (`HEAD → BODY* → END`), and publishes the response back. Per-request timeout
+    → 504; tunnel drop → 503.
+  - `Relay\RelayProxyProtocol` constants; channel broker started in
+    `Application::boot()`; `RelayWorker` joins the broker + wires the proxy on
+    `onWorkerStart`.
+  - `Http\Controllers\ServerProxyController` (owner-gated; 401/404/403/503/504).
+  - Consumes `detain/phlix-shared` ^0.10.0 (`HTTP_REQUEST`/`HTTP_RESPONSE` types).
+- **`workerman/channel`** dependency for cross-process (HTTP-worker ↔ relay-worker)
+  request/response delivery.
+
+### Security
+- **Relay tunnel HELLO now cryptographically validates the `enrollment_jwt`.**
+  `Relay\Tunnel` verifies the Ed25519-signed enrollment JWT (via
+  `EnrollmentJwtService`) and requires its `server_id` to match before activating
+  a tunnel — previously the token was accepted without validation, so any client
+  could open a tunnel by guessing a `server_id`.
+
 ### Fixed
 - **`PhlixMySQLConnection`: type-aware parameter binding for emulated prepares (`LIMIT`/`OFFSET` fix).** Emulated prepares (below) send bound params as strings by default, so `LIMIT :limit`/`OFFSET :offset` became `LIMIT '50'` and MySQL rejected them with a 1064 syntax error (e.g. `HeartbeatHandler` recent-server lookup, any paginated query). `execute()` is now overridden to bind each value with its natural PDO type (`int → PARAM_INT`, `bool → PARAM_BOOL`, `null → PARAM_NULL`, else `PARAM_STR`) — mirroring the parent's prepare/execute + one-shot 2006/2013 reconnect — so integer placeholders stay unquoted. Verified on the live hub: bound + positional + mixed `LIMIT`/`OFFSET` queries succeed and 120 concurrent claim POSTs stay corruption-free.
 - **`PhlixMySQLConnection`: force emulated + buffered prepared statements (the actual fix for the pairing/login 500s).** The per-connection mutex (below) serialises `query()` calls, but the hub still 500'd under concurrent requests with `Call to a member function bindParam() on false` / `HY093 Invalid parameter number`. Root cause: the parent connects with **native, unbuffered** prepares, and because mysqlnd's socket is coroutine-hooked under Swoole, each statement keeps per-statement server-side state on that socket which **leaks across coroutine yields** — wedging the shared connection so the next `prepare()` returns `false`. `connect()` now sets `PDO::ATTR_EMULATE_PREPARES = true` (prepare is client-side only, no socket round trip) and `PDO::MYSQL_ATTR_USE_BUFFERED_QUERY = true` (every result row is consumed immediately, so nothing pending survives a yield). Verified on the live hub: **150 concurrent claim POSTs with zero connection corruption** (was ~5-10% before). Parameterisation stays injection-safe (PDO still quotes bound values; charset is utf8mb4).

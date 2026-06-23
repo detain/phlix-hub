@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Relay;
 
+use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Relay\FrameDecoder;
@@ -12,12 +13,19 @@ use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use SplObjectStorage;
+use Throwable;
 use Workerman\Connection\ConnectionInterface;
 use Workerman\Connection\TcpConnection;
 
+use function base64_decode;
+use function count;
+use function explode;
+use function is_array;
+use function is_string;
 use function json_decode;
 use function json_encode;
 use function strlen;
+use function strtr;
 use function time;
 
 /**
@@ -78,6 +86,12 @@ final class Tunnel implements TunnelInterface
      * @param RelayWireCodecInterface      $codec      Wire codec for frame encoding/decoding.
      * @param StructuredLogger             $logger     Structured logger for relay events.
      * @param string|null                  $tunnelId   Optional tunnel UUID (generated if null).
+     * @param EnrollmentJwtService|null    $jwtService Enrollment-JWT validator. When provided, the
+     *                                                 HELLO's enrollment_jwt is cryptographically
+     *                                                 verified before the tunnel activates. Null
+     *                                                 (test-only) skips validation.
+     * @param RelayProxyManager|null       $proxyManager Receives HTTP_RESPONSE frames for the
+     *                                                    HTTP-over-relay proxy. Null disables proxying.
      */
     public function __construct(
         public readonly string $serverId,
@@ -86,6 +100,8 @@ final class Tunnel implements TunnelInterface
         private readonly RelayWireCodecInterface $codec,
         private readonly StructuredLogger $logger,
         ?string $tunnelId = null,
+        private readonly ?EnrollmentJwtService $jwtService = null,
+        private readonly ?RelayProxyManager $proxyManager = null,
     ) {
         $this->tunnelId = $tunnelId ?? $this->generateUuid();
         $this->clientConnections = new SplObjectStorage();
@@ -259,6 +275,20 @@ final class Tunnel implements TunnelInterface
             return;
         }
 
+        // Cryptographically validate the enrollment JWT before activating the
+        // tunnel. The JWT is Ed25519-signed by the hub at enrollment time, so a
+        // valid token proves the connecting server is the one the hub minted
+        // for this server_id. Without this check any client could open a tunnel
+        // by guessing a server_id (the previous behaviour — trusted blindly).
+        if ($this->jwtService !== null && !$this->validateHelloJwt((string) $hello['enrollment_jwt'])) {
+            $this->logger->warning('Relay: HELLO enrollment_jwt failed validation, rejecting tunnel', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+            ]);
+            $this->close('unauthorized');
+            return;
+        }
+
         // Register the session with RelaySessionManager
         $workerNode = $this->getWorkerNode();
         $this->relaySessionId = $this->sessionManager->registerServer($this->serverId, $workerNode);
@@ -291,9 +321,93 @@ final class Tunnel implements TunnelInterface
 
         match ($frame->type) {
             RelayFrameType::DATA => $this->sendToClient($frame->channelId(), $frame),
+            RelayFrameType::HTTP_RESPONSE => $this->onHttpResponse($frame),
             RelayFrameType::HEARTBEAT => $this->onHeartbeat($frame),
             default => $this->onUnexpectedFrameType($frame),
         };
+    }
+
+    /**
+     * Route an HTTP_RESPONSE frame to the relay proxy manager, which reassembles
+     * the streamed chunks and replies to the originating HTTP worker.
+     *
+     * @param RelayFrame $frame The HTTP_RESPONSE frame.
+     *
+     * @return void
+     */
+    private function onHttpResponse(RelayFrame $frame): void
+    {
+        if ($this->proxyManager === null) {
+            $this->logger->warning('Relay: HTTP_RESPONSE received but no proxy manager configured', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+            ]);
+            return;
+        }
+
+        $this->proxyManager->onResponseFrame($frame);
+    }
+
+    /**
+     * Validate the HELLO enrollment JWT against the hub's enrollment key.
+     *
+     * @param string $jwt The enrollment JWT from the HELLO payload.
+     *
+     * @return bool True when the token is valid and scoped to this server_id.
+     */
+    private function validateHelloJwt(string $jwt): bool
+    {
+        if ($this->jwtService === null) {
+            return true;
+        }
+
+        $kid = $this->extractKid($jwt);
+        if ($kid === null) {
+            return false;
+        }
+
+        $payload = $this->jwtService->validateEnrollmentJwt($jwt, $kid);
+        if ($payload === null) {
+            return false;
+        }
+
+        return ($payload['server_id'] ?? null) === $this->serverId;
+    }
+
+    /**
+     * Extract the `kid` from a JWT header without validating the token.
+     *
+     * @param string $token JWT string.
+     *
+     * @return string|null Key ID, or null when the header is malformed.
+     */
+    private function extractKid(string $token): ?string
+    {
+        $parts = explode('.', $token);
+        if (count($parts) !== 3) {
+            return null;
+        }
+
+        $decoded = base64_decode(strtr($parts[0], '-_', '+/'), true);
+        if ($decoded === false) {
+            return null;
+        }
+
+        try {
+            /** @var mixed $header */
+            $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return null;
+        }
+
+        if (!is_array($header)) {
+            return null;
+        }
+
+        /** @var mixed $kid */
+        $kid = $header['kid'] ?? null;
+
+        return is_string($kid) ? $kid : null;
     }
 
     /**
@@ -358,6 +472,9 @@ final class Tunnel implements TunnelInterface
 
         // Close all client connections with TYPE_DISCONNECTED
         $this->notifyClientsDisconnected('server_closed');
+
+        // Fail any in-flight proxy requests for this server.
+        $this->proxyManager?->failServer($this->serverId);
 
         // Close the session in the database
         if ($this->relaySessionId !== null) {
@@ -604,6 +721,9 @@ final class Tunnel implements TunnelInterface
 
         // Notify clients
         $this->notifyClientsDisconnected($reason);
+
+        // Fail any in-flight proxy requests for this server.
+        $this->proxyManager?->failServer($this->serverId);
 
         // Close server connection
         $this->serverWs->close();
