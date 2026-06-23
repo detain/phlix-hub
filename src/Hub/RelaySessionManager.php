@@ -54,6 +54,21 @@ class RelaySessionManager
             throw new InvalidArgumentException('SERVER_NOT_FOUND');
         }
 
+        // Supersede any prior open session(s) for this server before opening a
+        // new one. closeSession() is not always reached (worker restart, dropped
+        // connection), which left orphaned open rows accumulating in
+        // relay_sessions. Enforcing <= 1 open session per server keeps the
+        // dashboard's "active relays" count converged on the number of
+        // connected servers.
+        $this->db->query(
+            'UPDATE relay_sessions SET closed_at = NOW(), close_reason = :reason
+             WHERE server_id = :server_id AND closed_at IS NULL',
+            [
+                'reason' => 'superseded',
+                'server_id' => $serverId,
+            ],
+        );
+
         $sessionId = $this->generateUuid();
 
         $this->db->query(
@@ -171,6 +186,46 @@ class RelaySessionManager
             'session_id' => $sessionId,
             'reason' => $reason,
         ]);
+    }
+
+    /**
+     * Close open relay sessions that have had no recent frame activity.
+     *
+     * A live tunnel refreshes `last_frame_at` (via routeRequest, recordBytes*
+     * and touchLastFrame and the 30s heartbeat timer) well within this threshold,
+     * so genuinely connected servers are never reaped. This sweeps up orphaned
+     * open rows left behind when closeSession() was not reached (worker
+     * restart, dropped connection), keeping the dashboard's "active relays"
+     * count accurate. Multi-worker-safe: the single relay worker owns sessions
+     * and the UPDATE is idempotent.
+     *
+     * `last_frame_at` is stored as unix seconds; `opened_at` is a DATETIME, so
+     * it is wrapped in UNIX_TIMESTAMP() for sessions that never sent a frame.
+     *
+     * @param int $thresholdSeconds Sessions idle longer than this are closed.
+     *
+     * @return int Number of sessions closed (best-effort; 0 if not obtainable).
+     */
+    public function reapStaleSessions(int $thresholdSeconds = 180): int
+    {
+        /** @var mixed $result */
+        $result = $this->db->query(
+            "UPDATE relay_sessions SET closed_at = NOW(), close_reason = 'stale'
+             WHERE closed_at IS NULL
+               AND COALESCE(last_frame_at, UNIX_TIMESTAMP(opened_at)) < (UNIX_TIMESTAMP() - :threshold)",
+            ['threshold' => $thresholdSeconds],
+        );
+
+        $closed = is_numeric($result) ? (int) $result : 0;
+
+        if ($closed > 0) {
+            $this->logger->info('Relay: reaped stale sessions', [
+                'closed' => $closed,
+                'threshold_seconds' => $thresholdSeconds,
+            ]);
+        }
+
+        return $closed;
     }
 
     /**

@@ -308,6 +308,7 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             IdleReaper::class => factory(static function (
                 TunnelManager $tunnelManager,
+                RelaySessionManager $sessionManager,
             ) use ($appConfig): IdleReaper {
                 /** @var int $interval */
                 $interval = is_int($appConfig['relay_idle_reaper_interval'] ?? null)
@@ -323,8 +324,10 @@ final class HubServicesProvider implements ServiceProviderInterface
                     LoggerFactory::get(LogChannels::RELAY),
                     $interval,
                     $staleThreshold,
+                    $sessionManager,
                 );
-            })->parameter('tunnelManager', get(TunnelManager::class)),
+            })->parameter('tunnelManager', get(TunnelManager::class))
+                ->parameter('sessionManager', get(RelaySessionManager::class)),
 
             StaticZoneManager::class => factory(static function () use ($appConfig): StaticZoneManager {
                 $zoneDir = self::stringOr($appConfig, 'dns_zone_dir', '/home/phlix/data/dns/zones');

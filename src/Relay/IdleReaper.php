@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Relay;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\RelaySessionManager;
 use Workerman\Timer;
 
 /**
@@ -31,16 +32,19 @@ final class IdleReaper
     public const DEFAULT_STALE_THRESHOLD_SECONDS = 90;
 
     /**
-     * @param TunnelManagerInterface $tunnelManager       Manager owning the tunnels to scan.
-     * @param StructuredLogger       $logger              Structured logger for relay events.
-     * @param int                     $intervalSeconds     Interval between scans in seconds.
+     * @param TunnelManagerInterface  $tunnelManager        Manager owning the tunnels to scan.
+     * @param StructuredLogger        $logger               Structured logger for relay events.
+     * @param int                     $intervalSeconds      Interval between scans in seconds.
      * @param int                     $staleThresholdSeconds Seconds before a tunnel is considered stale.
+     * @param RelaySessionManager|null $sessionManager      Optional session manager whose orphaned
+     *                                                       open DB rows are reaped on each tick.
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
         private readonly StructuredLogger $logger,
         private readonly int $intervalSeconds = self::DEFAULT_INTERVAL_SECONDS,
         private readonly int $staleThresholdSeconds = self::DEFAULT_STALE_THRESHOLD_SECONDS,
+        private readonly ?RelaySessionManager $sessionManager = null,
     ) {
     }
 
@@ -110,6 +114,12 @@ final class IdleReaper
                 'reaped_count' => $reapedCount,
             ]);
         }
+
+        // Also reap orphaned open relay_sessions DB rows left behind when a
+        // session's close path was never reached (worker restart, dropped
+        // connection). This keeps the dashboard "active relays" count accurate
+        // even for rows that no longer have a live in-memory tunnel.
+        $this->sessionManager?->reapStaleSessions();
 
         return $reapedCount;
     }
