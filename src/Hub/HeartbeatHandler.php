@@ -105,6 +105,41 @@ class HeartbeatHandler
             'server_id' => $serverId,
             'version' => $heartbeat->version,
         ]);
+
+        // Store libraries reported by the server
+        if (!empty($heartbeat->libraries)) {
+            $this->updateServerLibraries($serverId, $heartbeat->libraries);
+        }
+    }
+
+    /**
+     * Update the cached libraries for a server.
+     *
+     * @param string $serverId Server UUID.
+     * @param list<array{library_id: string, library_name: string}> $libraries Library list.
+     */
+    private function updateServerLibraries(string $serverId, array $libraries): void
+    {
+        foreach ($libraries as $lib) {
+            /** @var string $libId */
+            $libId = $lib['library_id'];
+            /** @var string $libName */
+            $libName = $lib['library_name'];
+
+            // Upsert each library
+            $this->db->query(
+                'INSERT INTO server_libraries (id, server_id, library_id, library_name, created_at, updated_at)
+                 VALUES (:id, :server_id, :library_id, :library_name, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE library_name = :library_name_update, updated_at = NOW()',
+                [
+                    'id' => $this->generateUuid(),
+                    'server_id' => $serverId,
+                    'library_id' => $libId,
+                    'library_name' => $libName,
+                    'library_name_update' => $libName,
+                ],
+            );
+        }
     }
 
     /**
