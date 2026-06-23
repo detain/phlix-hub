@@ -33,12 +33,17 @@ class ServerInfoHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT s.id, s.user_id, s.server_name, s.version, s.last_seen_at, s.status,
+            'SELECT s.id, s.user_id, s.server_name, s.version,
+                    UNIX_TIMESTAMP(s.last_seen_at) AS last_seen_at, s.status,
                     s.hostname_candidates_json, s.created_at, s.subdomain,
                     EXISTS(
                         SELECT 1 FROM relay_sessions r
                         WHERE r.server_id = s.id AND r.closed_at IS NULL
-                    ) AS relay_active
+                    ) AS relay_active,
+                    (
+                        SELECT COUNT(*) FROM server_libraries sl
+                        WHERE sl.server_id = s.id
+                    ) AS library_count
              FROM servers s WHERE s.id = :id LIMIT 1',
             ['id' => $serverId],
         );
@@ -84,12 +89,17 @@ class ServerInfoHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT s.id, s.user_id, s.server_name, s.version, s.last_seen_at, s.status,
+            'SELECT s.id, s.user_id, s.server_name, s.version,
+                    UNIX_TIMESTAMP(s.last_seen_at) AS last_seen_at, s.status,
                     s.hostname_candidates_json, s.created_at,
                     EXISTS(
                         SELECT 1 FROM relay_sessions r
                         WHERE r.server_id = s.id AND r.closed_at IS NULL
-                    ) AS relay_active
+                    ) AS relay_active,
+                    (
+                        SELECT COUNT(*) FROM server_libraries sl
+                        WHERE sl.server_id = s.id
+                    ) AS library_count
              FROM servers s
              WHERE s.user_id = :user_id
              ORDER BY s.created_at DESC',
@@ -147,6 +157,8 @@ class ServerInfoHandler
         $relayActiveRaw = $row['relay_active'] ?? false;
         $relayActive = is_numeric($relayActiveRaw) ? (int) $relayActiveRaw === 1 : (bool) $relayActiveRaw;
 
+        $libraryCount = is_numeric($row['library_count'] ?? null) ? (int) $row['library_count'] : null;
+
         return new ServerInfoDto(
             serverId: $serverId,
             userId: $userId,
@@ -156,6 +168,7 @@ class ServerInfoHandler
             status: $status,
             hostnameCandidates: $hostnames,
             relayActive: $relayActive,
+            libraryCount: $libraryCount,
         );
     }
 }
