@@ -395,7 +395,6 @@ class LibrarySharingHandler
         }
         return $result;
     }
-    }
 
     /**
      * Check if a server is owned by a specific user.
