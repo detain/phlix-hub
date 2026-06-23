@@ -80,6 +80,59 @@ final class HeartbeatHandlerTest extends TestCase
         self::assertTrue(true);
     }
 
+    public function testHandleCachesReportedLibraries(): void
+    {
+        $serverId = 'server-libs-test';
+
+        $insertedLibraries = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use ($serverId, &$insertedLibraries) {
+                if (str_contains($sql, 'FOR UPDATE')) {
+                    return [['id' => $serverId]];
+                }
+                if (str_contains($sql, 'INSERT INTO server_libraries')) {
+                    $insertedLibraries[] = [
+                        'server_id' => $params['server_id'] ?? null,
+                        'library_id' => $params['library_id'] ?? null,
+                        'library_name' => $params['library_name'] ?? null,
+                    ];
+                }
+                return [];
+            }
+        );
+
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
+        $logger = $this->createMock(StructuredLogger::class);
+        $handler = new HeartbeatHandler($db, $jwtService, $logger);
+
+        $token = $jwtService->createEnrollmentJwt($serverId);
+        $heartbeat = new HeartbeatDto(
+            serverId: $serverId,
+            version: '0.11.0',
+            timestamp: time(),
+            uptimeSeconds: 100,
+            activeSessions: 0,
+            activeTranscodes: 0,
+            hostnameCandidates: [],
+            libraries: [
+                ['library_id' => 'lib-1', 'library_name' => 'Movies'],
+                ['library_id' => 'lib-2', 'library_name' => 'TV'],
+            ],
+        );
+
+        $handler->handle($serverId, $token, $heartbeat);
+
+        self::assertSame(
+            [
+                ['server_id' => $serverId, 'library_id' => 'lib-1', 'library_name' => 'Movies'],
+                ['server_id' => $serverId, 'library_id' => 'lib-2', 'library_name' => 'TV'],
+            ],
+            $insertedLibraries,
+        );
+    }
+
     public function testHandleThrowsOnInvalidEnrollmentJwt(): void
     {
         $db = $this->createMock(Connection::class);
