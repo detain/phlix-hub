@@ -330,6 +330,9 @@ class LibrarySharingHandler
     /**
      * Get distinct library_id/library_name pairs for a user's server.
      *
+     * If the user owns the server, returns all libraries from that server (via API).
+     * Otherwise returns libraries explicitly shared with the user.
+     *
      * @param string $ownerId  The user who owns the server.
      * @param string $serverId  The server UUID.
      *
@@ -337,6 +340,15 @@ class LibrarySharingHandler
      */
     public function getDistinctLibrariesForServer(string $ownerId, string $serverId): array
     {
+        // First check if user owns the server
+        $isOwner = $this->isServerOwnedByUser($serverId, $ownerId);
+
+        if ($isOwner) {
+            // Owner gets all libraries directly from the server via API
+            return $this->getLibrariesFromServer($serverId);
+        }
+
+        // Non-owner gets libraries from explicit shares
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
             'SELECT DISTINCT library_id, library_name
@@ -360,6 +372,101 @@ class LibrarySharingHandler
             }
         }
         return $result;
+    }
+
+    /**
+     * Get libraries directly from a server via API.
+     *
+     * @param string $serverId The server UUID.
+     *
+     * @return list<array{library_id: string, library_name: string}>
+     */
+    private function getLibrariesFromServer(string $serverId): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT hostname_candidates_json FROM servers WHERE id = :id LIMIT 1',
+            ['id' => $serverId],
+        );
+
+        if (empty($rows)) {
+            return [];
+        }
+
+        /** @var mixed $hostnameJson */
+        $hostnameJson = $rows[0]['hostname_candidates_json'] ?? null;
+        /** @var list<string> $hostnames */
+        $hostnames = [];
+        if (is_string($hostnameJson) && $hostnameJson !== '') {
+            /** @var mixed $decoded */
+            $decoded = json_decode($hostnameJson, true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $h) {
+                    if (is_string($h)) {
+                        // Strip protocol for port extraction
+                        $host = preg_replace('@^https?://@', '', rtrim($h, '/'));
+                        $hostnames[] = $h; // Keep full URL for API call
+                    }
+                }
+            }
+        }
+
+        // Try each hostname until one works
+        foreach ($hostnames as $baseUrl) {
+            // Convert https to http for local access if needed
+            $apiUrl = $baseUrl . '/api/v1/libraries';
+            // Try http if https fails (for local access)
+            $urlsToTry = [$apiUrl, str_replace('https://', 'http://', $apiUrl)];
+
+            foreach ($urlsToTry as $url) {
+                $context = stream_context_create([
+                    'http' => [
+                        'timeout' => 3,
+                        'ignore_errors' => true,
+                    ],
+                ]);
+                /** @var string|false $response */
+                $response = @file_get_contents($url, false, $context);
+                if ($response === false) {
+                    continue;
+                }
+
+                /** @var mixed $data */
+                $data = json_decode($response, true);
+                if (!is_array($data)) {
+                    continue;
+                }
+
+                // Check for libraries array in response
+                /** @var mixed $libraries */
+                $libraries = $data['libraries'] ?? $data['data'] ?? null;
+                if (!is_array($libraries)) {
+                    continue;
+                }
+
+                $result = [];
+                foreach ($libraries as $lib) {
+                    if (!is_array($lib)) {
+                        continue;
+                    }
+                    /** @var string $libId */
+                    $libId = is_string($lib['id'] ?? null) ? $lib['id'] : '';
+                    /** @var string $libName */
+                    $libName = is_string($lib['name'] ?? null) ? $lib['name'] : '';
+                    if ($libId !== '' && $libName !== '') {
+                        $result[] = [
+                            'library_id' => $libId,
+                            'library_name' => $libName,
+                        ];
+                    }
+                }
+                if (!empty($result)) {
+                    return $result;
+                }
+            }
+        }
+
+        return [];
     }
 
     /**
