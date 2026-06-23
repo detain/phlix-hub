@@ -37,6 +37,8 @@ use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\IdleReaper;
+use Phlix\Hub\Relay\RelayProxyBridge;
+use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
@@ -59,6 +61,7 @@ use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
 use Phlix\Hub\Http\Controllers\ServerDetailController;
+use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
@@ -267,14 +270,30 @@ final class HubServicesProvider implements ServiceProviderInterface
             TunnelManager::class => factory(static function (
                 RelaySessionManager $sessionManager,
                 RelayWireCodecInterface $codec,
+                EnrollmentJwtService $jwtService,
             ): TunnelManager {
                 return new TunnelManager(
                     $sessionManager,
                     $codec,
                     LoggerFactory::get(LogChannels::RELAY),
+                    $jwtService,
                 );
             })->parameter('sessionManager', get(RelaySessionManager::class))
-                ->parameter('codec', get(RelayWireCodecInterface::class)),
+                ->parameter('codec', get(RelayWireCodecInterface::class))
+                ->parameter('jwtService', get(EnrollmentJwtService::class)),
+
+            RelayProxyManager::class => factory(static function (
+                TunnelManagerInterface $tunnelManager,
+            ): RelayProxyManager {
+                return new RelayProxyManager(
+                    $tunnelManager,
+                    LoggerFactory::get(LogChannels::RELAY),
+                );
+            })->parameter('tunnelManager', get(TunnelManagerInterface::class)),
+
+            RelayProxyBridge::class => factory(static function (): RelayProxyBridge {
+                return new RelayProxyBridge(LoggerFactory::get(LogChannels::RELAY));
+            }),
 
             // Alias the interface to the concrete TunnelManager so callers
             // that depend on the abstraction (RelayWorker, ClientRelayWorker,
@@ -444,6 +463,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->parameter('relayManager', get(RelaySessionManager::class))
                 ->parameter('heartbeat', get(HeartbeatHandler::class))
                 ->parameter('tls', get(TlsCertificateManager::class)),
+
+            ServerProxyController::class => factory(static function (
+                ServerInfoHandler $serverInfo,
+                RelayProxyBridge $bridge,
+            ): ServerProxyController {
+                return new ServerProxyController($serverInfo, $bridge, LoggerFactory::get(LogChannels::RELAY));
+            })->parameter('serverInfo', get(ServerInfoHandler::class))
+                ->parameter('bridge', get(RelayProxyBridge::class)),
 
             HubSettingsController::class => factory(static function (
                 HubSettingsRepository $settings,

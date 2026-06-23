@@ -1,0 +1,55 @@
+<?php
+
+namespace Channel;
+
+/**
+ * Stub correcting workerman/channel's Client phpdoc: the package annotates
+ * `on()`/`watch()` callbacks as `@param callback` (an invalid type that
+ * resolves to a non-existent class `Channel\callback`), which makes PHPStan
+ * reject every valid callable argument. This stub restores the real `callable`
+ * type. It overrides only the phpdoc — runtime behaviour is unchanged.
+ */
+class Client
+{
+    /**
+     * @param string $ip
+     * @param int $port
+     * @return void
+     */
+    public static function connect($ip = '127.0.0.1', $port = 2206);
+
+    /**
+     * @param string $event
+     * @param callable $callback
+     * @return void
+     */
+    public static function on($event, $callback);
+
+    /**
+     * @param string|list<string> $events
+     * @return void
+     */
+    public static function subscribe($events);
+
+    /**
+     * @param string|list<string> $events
+     * @return void
+     */
+    public static function unsubscribe($events);
+
+    /**
+     * @param string|list<string> $events
+     * @param mixed $data
+     * @param bool $is_loop
+     * @return void
+     */
+    public static function publish($events, $data, $is_loop = false);
+
+    /**
+     * @param string|list<string> $channels
+     * @param callable $callback
+     * @param bool $autoReserve
+     * @return void
+     */
+    public static function watch($channels, $callback, $autoReserve = true);
+}

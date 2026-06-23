@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Relay;
 
+use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
@@ -11,7 +12,7 @@ use Generator;
 use Workerman\Connection\TcpConnection;
 
 use function gethostname;
-use function time;
+use function is_string;
 
 /**
  * Manages all active relay tunnels between the hub and servers.
@@ -30,11 +31,15 @@ final class TunnelManager implements TunnelManagerInterface
      * @param RelaySessionManager       $sessionManager Session manager for byte accounting.
      * @param RelayWireCodecInterface   $codec         Wire codec for frame encoding/decoding.
      * @param StructuredLogger          $logger        Structured logger for relay events.
+     * @param EnrollmentJwtService|null $jwtService    Enrollment-JWT validator passed to each tunnel
+     *                                                 so HELLO frames are cryptographically verified.
+     *                                                 Null (test-only) skips validation.
      */
     public function __construct(
         private readonly RelaySessionManager $sessionManager,
         private readonly RelayWireCodecInterface $codec,
         private readonly StructuredLogger $logger,
+        private readonly ?EnrollmentJwtService $jwtService = null,
     ) {
         $this->tunnels = [];
     }
@@ -43,6 +48,28 @@ final class TunnelManager implements TunnelManagerInterface
      * @var array<string, Tunnel> Active tunnels keyed by server ID.
      */
     private array $tunnels;
+
+    /**
+     * @var RelayProxyManager|null Proxy manager passed to each tunnel for HTTP-over-relay.
+     */
+    private ?RelayProxyManager $proxyManager = null;
+
+    /**
+     * Set the relay proxy manager that tunnels route HTTP_RESPONSE frames to.
+     *
+     * Wired once at relay-worker startup (it depends on this manager, so it is
+     * injected after construction to avoid a circular dependency).
+     *
+     * @param RelayProxyManager $proxyManager The proxy manager.
+     *
+     * @return void
+     *
+     * @since 0.10.0
+     */
+    public function setProxyManager(RelayProxyManager $proxyManager): void
+    {
+        $this->proxyManager = $proxyManager;
+    }
 
     /**
      * Accept a new server connection and create a tunnel.
@@ -75,6 +102,9 @@ final class TunnelManager implements TunnelManagerInterface
             $this->sessionManager,
             $this->codec,
             $this->logger,
+            null,
+            $this->jwtService,
+            $this->proxyManager,
         );
 
         $this->tunnels[$serverId] = $tunnel;

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Relay;
 
+use Channel\Client as ChannelClient;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
@@ -35,14 +38,18 @@ final class RelayWorker
     private static array $connTunnels = [];
 
     /**
-     * @param ContainerInterface $container PSR-11 container for resolving TunnelManager.
-     * @param int                 $port     Internal WS port for relay connections.
-     * @param int                 $count    Number of worker processes (default 1 for relay ordering).
+     * @param ContainerInterface $container   PSR-11 container for resolving TunnelManager.
+     * @param int                 $port        Internal WS port for relay connections.
+     * @param int                 $count       Number of worker processes (default 1 for relay ordering).
+     * @param string              $channelHost Host of the workerman/channel broker (cross-process proxy).
+     * @param int                 $channelPort Port of the workerman/channel broker.
      */
     public function __construct(
         private readonly ContainerInterface $container,
         private readonly int $port = 8802,
         private readonly int $count = 1,
+        private readonly string $channelHost = '127.0.0.1',
+        private readonly int $channelPort = RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
     ) {
     }
 
@@ -75,8 +82,54 @@ final class RelayWorker
         // Fired with each deframed WS message payload (HELLO text, then frames).
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
+        // Join the cross-process channel broker and wire the relay proxy so
+        // HTTP workers can route browser requests through the tunnels this
+        // worker owns.
+        $worker->onWorkerStart = [$this, 'onWorkerStart'];
 
         return $worker;
+    }
+
+    /**
+     * Worker-start hook: connect to the channel broker, attach the relay proxy
+     * manager to the tunnel registry, and subscribe to proxy requests.
+     *
+     * This is where the cross-process HTTP-over-relay proxy is wired: the proxy
+     * manager (which sends HTTP_REQUEST frames + reassembles HTTP_RESPONSE
+     * frames) lives in this process alongside the tunnels, and incoming proxy
+     * requests arrive via the channel broker.
+     *
+     * @return void
+     *
+     * @since 0.10.0
+     */
+    public function onWorkerStart(): void
+    {
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+
+        try {
+            ChannelClient::connect($this->channelHost, $this->channelPort);
+
+            /** @var mixed $tunnelManager */
+            $tunnelManager = $this->container->get(TunnelManager::class);
+            /** @var mixed $proxyManager */
+            $proxyManager = $this->container->get(RelayProxyManager::class);
+
+            if ($tunnelManager instanceof TunnelManager && $proxyManager instanceof RelayProxyManager) {
+                $tunnelManager->setProxyManager($proxyManager);
+                ChannelClient::on(RelayProxyProtocol::REQUEST_EVENT, [$proxyManager, 'onRequest']);
+                $logger->info('Relay proxy: relay worker joined channel broker', [
+                    'channel_host' => $this->channelHost,
+                    'channel_port' => $this->channelPort,
+                ]);
+            } else {
+                $logger->error('Relay proxy: could not resolve proxy manager / tunnel manager');
+            }
+        } catch (Throwable $e) {
+            $logger->error('Relay proxy: relay worker channel init failed', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
