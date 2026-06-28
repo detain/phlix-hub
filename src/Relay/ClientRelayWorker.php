@@ -7,24 +7,21 @@ namespace Phlix\Hub\Relay;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Http\Controllers\ClientMountController;
-use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Hub\ClientRelayTokenService;
+use Phlix\Hub\Hub\ServerInfoHandler;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Worker;
 
-use function base64_decode;
 use function count;
 use function explode;
-use function is_array;
 use function is_string;
-use function json_decode;
 use function preg_match;
 use function rawurldecode;
 use function spl_object_id;
 use function str_starts_with;
-use function strtr;
 use function substr;
 use function trim;
 
@@ -38,10 +35,15 @@ use function trim;
  *
  * Connection lifecycle:
  *   1. WS upgrade — parse `server_id` from the request path and extract the
- *      enrollment JWT (Authorization: Bearer, Sec-WebSocket-Protocol, or the
- *      `token` query parameter).
- *   2. Validate the JWT for that `server_id` via {@see EnrollmentJwtService}.
- *      On failure, close with WS code 4401 (application "unauthorized").
+ *      per-user hub relay token (Authorization: Bearer or
+ *      Sec-WebSocket-Protocol; the legacy `?token=` query path was REMOVED in
+ *      step S2b so credentials never land in access logs).
+ *   2. Validate the relay token via {@see ClientRelayTokenService::validate()},
+ *      confirm it is scoped to the path-derived `server_id`, and re-confirm the
+ *      resolved user OWNS that server via {@see ServerInfoHandler} — mirroring
+ *      the HTTP relay proxy's ownership gate. The server's long-lived 7-day
+ *      enrollment JWT is NO LONGER accepted as a client credential. On failure,
+ *      close with WS code 4401 (application "unauthorized").
  *   3. On success, delegate to {@see ClientMountController::onWebSocketConnect()}
  *      which binds the client to the matching server tunnel. If no tunnel is
  *      connected for the `server_id`, the connection is closed
@@ -134,9 +136,9 @@ final class ClientRelayWorker
             return;
         }
 
-        $jwt = self::extractJwt($request);
-        if ($jwt === null) {
-            $logger->warning('Relay: client WS rejected, missing enrollment JWT', [
+        $token = self::extractClientToken($request);
+        if ($token === null) {
+            $logger->warning('Relay: client WS rejected, missing relay token', [
                 'server_id' => $serverId,
             ]);
             $this->rejectUnauthorized($connection);
@@ -144,8 +146,8 @@ final class ClientRelayWorker
         }
 
         try {
-            if (!$this->validateClientAuth($jwt, $serverId)) {
-                $logger->warning('Relay: client WS rejected, invalid enrollment JWT', [
+            if (!$this->validateClientAuth($token, $serverId)) {
+                $logger->warning('Relay: client WS rejected, invalid relay token or ownership', [
                     'server_id' => $serverId,
                 ]);
                 $this->rejectUnauthorized($connection);
@@ -216,36 +218,65 @@ final class ClientRelayWorker
     }
 
     /**
-     * Validate a client's enrollment JWT for the requested server.
+     * Validate a client's per-user hub relay token for the requested server.
      *
-     * Reuses {@see EnrollmentJwtService::validateEnrollmentJwt()} — the same
-     * verification path used for the server-facing relay endpoint — rather
-     * than implementing any token parsing or crypto here. The JWT's
-     * `server_id` claim must match the path-derived server ID.
+     * This is the security boundary closed by step S2b. The client must
+     * present a short-lived, revocable, per-user relay token minted by
+     * {@see \Phlix\Hub\Http\Controllers\ClientRelayTokenController} — NOT the
+     * server's long-lived 7-day enrollment JWT. The check is three-fold and
+     * fails closed at every step:
      *
-     * @param string $jwt      The enrollment JWT presented by the client.
+     *   1. {@see ClientRelayTokenService::validate()} hashes the presented
+     *      token and looks up an active (non-expired, non-revoked) row,
+     *      returning the bound `user_id` + `server_id` (null on any failure).
+     *   2. The token's bound `server_id` must equal the path-derived
+     *      `$serverId`, so a token minted for server A cannot mount server B.
+     *   3. The resolved user must still OWN that server right now
+     *      (`server.user_id === token.user_id`), resolved via
+     *      {@see ServerInfoHandler::getServerInfo()} — mirroring the HTTP relay
+     *      proxy's ownership gate in
+     *      {@see \Phlix\Hub\Http\Controllers\ServerProxyController::proxy()}.
+     *
+     * Re-confirming ownership at mount (rather than trusting only the token's
+     * stored binding) means revoking ownership/transfer of the server cuts
+     * relay access immediately, even before the token expires.
+     *
+     * @param string $token    The per-user relay token presented by the client.
      * @param string $serverId The server ID parsed from the request path.
      *
-     * @return bool True when the token is valid and scoped to $serverId.
+     * @return bool True only when the token is valid, scoped to $serverId, and
+     *              the bound user still owns that server.
      */
-    public function validateClientAuth(string $jwt, string $serverId): bool
+    public function validateClientAuth(string $token, string $serverId): bool
     {
-        $jwtService = $this->container->get(EnrollmentJwtService::class);
-        if (!$jwtService instanceof EnrollmentJwtService) {
+        $tokenService = $this->container->get(ClientRelayTokenService::class);
+        if (!$tokenService instanceof ClientRelayTokenService) {
             return false;
         }
 
-        $kid = self::extractKid($jwt);
-        if ($kid === null) {
+        $bound = $tokenService->validate($token);
+        if ($bound === null) {
             return false;
         }
 
-        $payload = $jwtService->validateEnrollmentJwt($jwt, $kid);
-        if ($payload === null) {
+        // The token must be scoped to exactly the server being mounted.
+        if ($bound['server_id'] !== $serverId) {
             return false;
         }
 
-        return ($payload['server_id'] ?? null) === $serverId;
+        $serverInfo = $this->container->get(ServerInfoHandler::class);
+        if (!$serverInfo instanceof ServerInfoHandler) {
+            return false;
+        }
+
+        // Re-confirm current ownership: the bound user must still own the
+        // target server (mirrors ServerProxyController::proxy()).
+        $server = $serverInfo->getServerInfo($serverId);
+        if ($server === null) {
+            return false;
+        }
+
+        return $server->userId === $bound['user_id'];
     }
 
     /**
@@ -272,19 +303,23 @@ final class ClientRelayWorker
     }
 
     /**
-     * Extract the enrollment JWT from the WS upgrade request.
+     * Extract the per-user hub relay token from the WS upgrade request.
      *
      * Accepts the token in (priority order):
-     *   1. `Authorization: Bearer <jwt>`
-     *   2. `Sec-WebSocket-Protocol: bearer, <jwt>` (browser-friendly — browser
+     *   1. `Authorization: Bearer <token>`
+     *   2. `Sec-WebSocket-Protocol: bearer, <token>` (browser-friendly — browser
      *      WebSocket APIs cannot set arbitrary headers but can send subprotocols)
-     *   3. `?token=<jwt>` query parameter (last resort; logged-URL exposure)
+     *
+     * The legacy `?token=<…>` query-string path was REMOVED in step S2b: query
+     * strings routinely land in access/proxy logs and request histories, so a
+     * bearer credential must never travel there. Clients must use a header or
+     * the WebSocket subprotocol instead.
      *
      * @param WorkermanRequest $request The WS upgrade request.
      *
-     * @return string|null The raw JWT, or null when absent.
+     * @return string|null The raw relay token, or null when absent.
      */
-    public static function extractJwt(WorkermanRequest $request): ?string
+    public static function extractClientToken(WorkermanRequest $request): ?string
     {
         /** @var mixed $auth */
         $auth = $request->header('authorization');
@@ -299,19 +334,13 @@ final class ClientRelayWorker
         $proto = $request->header('sec-websocket-protocol');
         if (is_string($proto) && $proto !== '') {
             $parts = explode(',', $proto);
-            // Format: "bearer, <jwt>" — pick the segment that is not the marker.
+            // Format: "bearer, <token>" — pick the segment that is not the marker.
             foreach ($parts as $part) {
                 $candidate = trim($part);
                 if ($candidate !== '' && $candidate !== 'bearer') {
                     return $candidate;
                 }
             }
-        }
-
-        /** @var mixed $queryToken */
-        $queryToken = $request->get('token');
-        if (is_string($queryToken) && $queryToken !== '') {
-            return $queryToken;
         }
 
         return null;
@@ -357,44 +386,5 @@ final class ClientRelayWorker
         }
 
         return $controller instanceof ClientMountController ? $controller : null;
-    }
-
-    /**
-     * Extract the `kid` from a JWT header without validating the token.
-     *
-     * Mirrors the extraction in {@see \Phlix\Hub\Http\Controllers\RelayController}
-     * and {@see \Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware}.
-     *
-     * @param string $token JWT string.
-     *
-     * @return string|null Key ID, or null when the header is malformed.
-     */
-    private static function extractKid(string $token): ?string
-    {
-        $parts = explode('.', $token);
-        if (count($parts) !== 3) {
-            return null;
-        }
-
-        $decoded = base64_decode(strtr($parts[0], '-_', '+/'), true);
-        if ($decoded === false) {
-            return null;
-        }
-
-        try {
-            /** @var mixed $header */
-            $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            return null;
-        }
-
-        if (!is_array($header)) {
-            return null;
-        }
-
-        /** @var mixed $kid */
-        $kid = $header['kid'] ?? null;
-
-        return is_string($kid) ? $kid : null;
     }
 }

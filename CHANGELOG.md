@@ -28,6 +28,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   request/response delivery.
 
 ### Security
+- **Client relay mount now requires a per-user, revocable hub relay token (S2, closing half).**
+  `Relay\ClientRelayWorker` no longer accepts the media server's long-lived 7-day
+  **enrollment JWT** as a client credential. At WS mount (`/client/{server_id}`) it now
+  (1) validates the short-lived, revocable, per-user relay token via
+  `Hub\ClientRelayTokenService::validate()`, (2) requires the token's bound `server_id`
+  to equal the path-derived server, and (3) re-confirms the bound user still **owns** that
+  server via `Hub\ServerInfoHandler` — mirroring the HTTP relay proxy's ownership gate in
+  `ServerProxyController::proxy()`. A mount that presents only an enrollment JWT, a token
+  scoped to a different server, a token for a non-owned server, or a revoked/expired token
+  is rejected with WS close code 4401. The legacy `?token=` query-string credential path
+  was **removed** (`extractJwt` → `extractClientToken`), so bearer secrets never land in
+  access/proxy logs or request histories — the token must be presented via
+  `Authorization: Bearer` or the `Sec-WebSocket-Protocol` subprotocol. Builds on S2a (the
+  `client_relay_tokens` table, migration 032, and the mint endpoint).
 - **All bearer-ish ids are CSPRNG (S4).** Audited every id/secret mint point
   (`grep -rn 'mt_rand\|uniqid(\|rand(\|random_int(' src/`): there are no
   non-crypto RNG usages left in any id/secret path. The claim `id` — the
