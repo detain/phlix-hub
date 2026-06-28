@@ -326,6 +326,65 @@ final class RelayWorkerTest extends TestCase
         self::assertSame(0, RelayWorker::getActiveConnectionCount());
     }
 
+    // ---- Startup reconciliation (Step B7) ---------------------------------
+
+    public function testReconcileOrphanedSessionsClosesOrphansWhenNoTunnels(): void
+    {
+        // A real RelaySessionManager over a DB mock so we can assert the exact
+        // reconciliation UPDATE it issues. The registry has no live tunnels, so
+        // every open session is an orphan and must be closed.
+        $capturedSql = '';
+        $capturedParams = null;
+        $db = $this->createMock(\Workerman\MySQL\Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): int {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+                return 2;
+            },
+        );
+        $sessionManager = new RelaySessionManager($db, $this->logger);
+
+        // Empty tunnel registry (TunnelManager built in setUp has no tunnels).
+        $relay = new RelayWorker($this->buildContainerWithSessions($sessionManager), 0);
+        $relay->reconcileOrphanedSessions($this->tunnelManager, $this->logger);
+
+        self::assertStringContainsString('UPDATE relay_sessions SET closed_at = NOW()', $capturedSql);
+        self::assertStringContainsString('closed_at IS NULL', $capturedSql);
+        self::assertStringNotContainsString('NOT IN', $capturedSql);
+        self::assertSame(['reason' => 'reconciled_on_start'], $capturedParams);
+    }
+
+    public function testReconcileOrphanedSessionsPreservesLiveTunnelServers(): void
+    {
+        // Bring one tunnel ACTIVE in the registry, then reconcile: its server's
+        // open session must be excluded from the close (preserved), while every
+        // other open session is reconciled closed.
+        $capturedParams = null;
+        $db = $this->createMock(\Workerman\MySQL\Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedParams): int {
+                $capturedParams = $params;
+                return 0;
+            },
+        );
+        $sessionManager = new RelaySessionManager($db, $this->logger);
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+        $relay = new RelayWorker($this->buildContainerWithSessions($sessionManager), 0);
+        // HELLO brings a live tunnel for 'server-live' into the registry.
+        $relay->onMessage($serverWs, $this->encodeServerHello('server-live'));
+        self::assertInstanceOf(Tunnel::class, $this->tunnelManager->getTunnelForServer('server-live'));
+
+        $relay->reconcileOrphanedSessions($this->tunnelManager, $this->logger);
+
+        self::assertSame(
+            ['reason' => 'reconciled_on_start', 'live_0' => 'server-live'],
+            $capturedParams,
+        );
+    }
+
     // ---- Helpers ----------------------------------------------------------
 
     /**
@@ -358,24 +417,41 @@ final class RelayWorkerTest extends TestCase
      */
     private function buildContainer(): ContainerInterface
     {
+        return $this->buildContainerWithSessions($this->sessionManager);
+    }
+
+    /**
+     * PSR-11 container exposing the TunnelManager plus a specific
+     * RelaySessionManager (so the startup-reconciliation path can be exercised
+     * with a DB-backed session manager).
+     */
+    private function buildContainerWithSessions(RelaySessionManager $sessionManager): ContainerInterface
+    {
         $tunnelManager = $this->tunnelManager;
 
-        return new class ($tunnelManager) implements ContainerInterface {
-            public function __construct(private readonly TunnelManager $tunnelManager)
-            {
+        return new class ($tunnelManager, $sessionManager) implements ContainerInterface {
+            public function __construct(
+                private readonly TunnelManager $tunnelManager,
+                private readonly RelaySessionManager $sessionManager,
+            ) {
             }
 
             public function get(string $id): mixed
             {
                 return match ($id) {
                     TunnelManager::class, TunnelManagerInterface::class => $this->tunnelManager,
+                    RelaySessionManager::class => $this->sessionManager,
                     default => throw new \RuntimeException("Unknown service: {$id}"),
                 };
             }
 
             public function has(string $id): bool
             {
-                return in_array($id, [TunnelManager::class, TunnelManagerInterface::class], true);
+                return in_array($id, [
+                    TunnelManager::class,
+                    TunnelManagerInterface::class,
+                    RelaySessionManager::class,
+                ], true);
             }
         };
     }

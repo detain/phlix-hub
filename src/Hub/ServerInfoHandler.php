@@ -32,6 +32,14 @@ class ServerInfoHandler
     public function getServerInfo(string $serverId): ?ServerInfoDto
     {
         /** @var list<array<string, mixed>> $rows */
+        // `relay_active` here is derived from the open-session bookkeeping table
+        // for DISPLAY only (dashboard / server-detail badge). It can lag the
+        // truth after a relay-worker crash/restart, so it MUST NOT be treated as
+        // authorization to forward a proxy request: the authoritative liveness
+        // gate is the in-memory tunnel registry, cross-checked at admission by
+        // {@see \Phlix\Hub\Relay\RelayProxyManager::onRequest()} (no live tunnel
+        // → fast 503 `server.no_tunnel`). Step B7 also reconciles stale open
+        // rows on relay-worker start so this flag re-converges.
         $rows = $this->db->query(
             'SELECT s.id, s.user_id, s.server_name, s.version,
                     UNIX_TIMESTAMP(s.last_seen_at) AS last_seen_at, s.status,

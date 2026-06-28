@@ -115,6 +115,13 @@ final class RelayProxyManager
             return;
         }
 
+        // Authoritative request-time liveness cross-check. The in-memory tunnel
+        // registry — owned by this relay worker — is the source of truth for
+        // proxy admission, NOT the `relay_active` DB flag the HTTP worker saw
+        // (which can be stale after a crash/restart). If there is no live,
+        // active tunnel for this server we fail fast with 503 here rather than
+        // letting the request hang and time out into a 504 downstream. The
+        // distinct `server.no_tunnel` code marks this as the registry verdict.
         $tunnel = $this->tunnelManager->getTunnelForServer($serverId);
         if ($tunnel === null || $tunnel->getStatus() !== Tunnel::STATUS_ACTIVE) {
             $this->reply(
@@ -122,7 +129,7 @@ final class RelayProxyManager
                 $clientRequestId,
                 503,
                 [],
-                $this->errorBody('server.offline', 'No active relay tunnel for this server.'),
+                $this->errorBody('server.no_tunnel', 'No live relay tunnel for this server.'),
             );
             return;
         }

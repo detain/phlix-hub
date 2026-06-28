@@ -9,6 +9,8 @@ use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Relay\RelayProxyBridge;
+use Phlix\Hub\Relay\RelayProxyManager;
+use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 
@@ -350,5 +352,60 @@ final class ServerProxyControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
         $this->assertSame('gateway.timeout', $body['code'] ?? null);
+    }
+
+    /**
+     * Step B7: a stale `relay_active=1` (DB flag true) with NO live tunnel must
+     * yield a FAST 503, not a forward that times out into a 504. The DB flag is
+     * display-only; the authoritative liveness gate is the in-memory tunnel
+     * registry, cross-checked by RelayProxyManager at admission. This wires the
+     * full round-trip end to end: the controller forwards (relay_active=true),
+     * the bridge publishes to a real RelayProxyManager whose tunnel registry is
+     * EMPTY, and the manager replies 503 `server.no_tunnel` straight back —
+     * proving the registry, not the stale flag, decides admission.
+     */
+    public function test_stale_relay_active_with_no_live_tunnel_returns_503_not_504(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        // DB says the server is online (stale flag) — but there is no tunnel.
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        // Empty in-memory tunnel registry: no live tunnel for any server.
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn(null);
+
+        $bridge = null;
+        $proxyManager = null;
+        // The publisher routes the HTTP-worker request into the relay-worker's
+        // RelayProxyManager::onRequest (cross-process channel hop simulated
+        // in-process); the manager's reply is fed back via the bridge.
+        $publisher = function (string $event, array $data) use (&$bridge, &$proxyManager): void {
+            /** @var RelayProxyManager $proxyManager */
+            $proxyManager->onRequest($data);
+        };
+        $bridge = $this->bridge($publisher);
+        $proxyManager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            // The manager publishes its reply onto the bridge's reply event,
+            // which the bridge delivers to the waiting request coroutine.
+            static function (string $event, array $data) use (&$bridge): void {
+                /** @var RelayProxyBridge $bridge */
+                $bridge->onReply($data);
+            },
+        );
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/libraries'],
+        );
+
+        // Fast 503 with the registry's authoritative code — never a 504.
+        $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.no_tunnel', $body['code'] ?? null);
     }
 }

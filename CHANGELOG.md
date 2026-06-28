@@ -81,6 +81,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   key after rotating. The never-rotated single-key path is unchanged and writes
   no sidecar. A `Closure(): int` clock is now injectable into `Ed25519KeyManager`
   for deterministic overlap-expiry testing.
+- **Relay proxy admission is gated on the live tunnel registry, not the stale
+  `relay_active` DB flag (B7).** The `relay_active` column (derived from
+  `EXISTS(relay_sessions … closed_at IS NULL)`) can lag the truth after a
+  relay-worker crash/restart, where `Hub\RelaySessionManager::closeSession()`
+  is never reached and open rows are left behind. Previously
+  `ServerProxyController` trusted that stale flag and forwarded, so the request
+  hung until it timed out into a slow **504**. Now the in-memory tunnel registry
+  owned by the relay worker is the authoritative gate: `Relay\RelayProxyManager`
+  cross-checks `TunnelManager::getTunnelForServer()` at admission and, when there
+  is no live, ACTIVE tunnel, fails fast with **503** carrying the distinct code
+  `server.no_tunnel` (was the ambiguous `server.offline`) instead of forwarding.
+  On relay-worker start, `Relay\RelayWorker::onWorkerStart()` now reconciles
+  `relay_sessions` via the new
+  `RelaySessionManager::closeOrphanedSessions(list<string> $liveServerIds)`:
+  every open session whose `server_id` is not backed by a live tunnel is marked
+  closed (`close_reason = 'reconciled_on_start'`), so orphaned `relay_active=1`
+  rows left by a crash re-converge. The DB flag remains for display only
+  (dashboard / server-detail badge).
 
 ### Fixed
 - **`PhlixMySQLConnection`: type-aware parameter binding for emulated prepares (`LIMIT`/`OFFSET` fix).** Emulated prepares (below) send bound params as strings by default, so `LIMIT :limit`/`OFFSET :offset` became `LIMIT '50'` and MySQL rejected them with a 1064 syntax error (e.g. `HeartbeatHandler` recent-server lookup, any paginated query). `execute()` is now overridden to bind each value with its natural PDO type (`int → PARAM_INT`, `bool → PARAM_BOOL`, `null → PARAM_NULL`, else `PARAM_STR`) — mirroring the parent's prepare/execute + one-shot 2006/2013 reconnect — so integer placeholders stay unquoted. Verified on the live hub: bound + positional + mixed `LIMIT`/`OFFSET` queries succeed and 120 concurrent claim POSTs stay corruption-free.

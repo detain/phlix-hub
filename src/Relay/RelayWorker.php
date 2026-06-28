@@ -7,6 +7,8 @@ namespace Phlix\Hub\Relay;
 use Channel\Client as ChannelClient;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\RelaySessionManager;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
@@ -122,11 +124,60 @@ final class RelayWorker
                     'channel_host' => $this->channelHost,
                     'channel_port' => $this->channelPort,
                 ]);
+
+                // Startup reconciliation (Step B7): the relay worker owns every
+                // server tunnel, so on (re)start its in-memory registry is the
+                // source of truth. Close any `relay_sessions` row left open with
+                // no live tunnel behind it — orphans from a prior crash/restart
+                // that would otherwise keep `relay_active=1` stale and let the
+                // proxy forward into a 504. At a fresh start the live set is
+                // empty, so every open row is reconciled closed.
+                $this->reconcileOrphanedSessions($tunnelManager, $logger);
             } else {
                 $logger->error('Relay proxy: could not resolve proxy manager / tunnel manager');
             }
         } catch (Throwable $e) {
             $logger->error('Relay proxy: relay worker channel init failed', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Close orphaned `relay_sessions` against the live tunnel registry.
+     *
+     * Resolves {@see RelaySessionManager} from the container and asks it to
+     * close every open session whose `server_id` is not currently backed by a
+     * live tunnel in `$tunnelManager`. Best-effort: any failure is logged and
+     * swallowed so a reconciliation hiccup never blocks worker start. Separated
+     * from {@see onWorkerStart()} so it is unit-testable without the channel
+     * broker.
+     *
+     * @param TunnelManager  $tunnelManager The live tunnel registry.
+     * @param StructuredLogger $logger       Relay logger.
+     *
+     * @return void
+     *
+     * @since 0.11.0
+     */
+    public function reconcileOrphanedSessions(TunnelManager $tunnelManager, StructuredLogger $logger): void
+    {
+        try {
+            /** @var mixed $sessionManager */
+            $sessionManager = $this->container->get(RelaySessionManager::class);
+            if (!$sessionManager instanceof RelaySessionManager) {
+                $logger->error('Relay: could not resolve session manager for startup reconciliation');
+                return;
+            }
+
+            $liveServerIds = [];
+            foreach ($tunnelManager->allTunnels() as $serverId => $_tunnel) {
+                $liveServerIds[] = $serverId;
+            }
+
+            $sessionManager->closeOrphanedSessions($liveServerIds, 'reconciled_on_start');
+        } catch (Throwable $e) {
+            $logger->error('Relay: startup session reconciliation failed', [
                 'error' => $e->getMessage(),
             ]);
         }
