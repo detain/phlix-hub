@@ -139,96 +139,116 @@ class ClaimRequestHandler
 
         $now = time();
 
-        // claim_code is stored in its dashed display form (e.g. ABCD-1234);
-        // compare against the de-dashed stored value so the normalised input
-        // (separators removed) still matches.
-        /** @var list<array<string, mixed>> $rows */
-        $rows = $this->db->query(
-            "SELECT * FROM server_claims WHERE REPLACE(claim_code, '-', '') = :code FOR UPDATE",
-            ['code' => $normalizedCode],
-        );
+        // Wrap the SELECT … FOR UPDATE and the subsequent INSERT/UPDATE in an
+        // explicit transaction. Without it MySQL autocommit releases the
+        // FOR UPDATE row lock the instant the SELECT returns, so two
+        // coroutines could both read the same unclaimed row before either
+        // writes — defeating the ALREADY_CLAIMED guard (double-claim race).
+        // PhlixMySQLConnection::beginTrans() additionally holds the
+        // per-connection coroutine mutex for the whole transaction, so no
+        // other coroutine can interleave a query onto the shared socket
+        // between the read and the writes.
+        $this->db->beginTrans();
+        try {
+            // claim_code is stored in its dashed display form (e.g. ABCD-1234);
+            // compare against the de-dashed stored value so the normalised input
+            // (separators removed) still matches.
+            /** @var list<array<string, mixed>> $rows */
+            $rows = $this->db->query(
+                "SELECT * FROM server_claims WHERE REPLACE(claim_code, '-', '') = :code FOR UPDATE",
+                ['code' => $normalizedCode],
+            );
 
-        if (empty($rows)) {
-            $this->audit->logFailedAuth('CLAIM_CODE_NOT_FOUND', ['claim_code' => $normalizedCode]);
-            throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
+            if (empty($rows)) {
+                $this->audit->logFailedAuth('CLAIM_CODE_NOT_FOUND', ['claim_code' => $normalizedCode]);
+                throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
+            }
+            /** @var array<string, mixed> $row */
+            $row = $rows[0];
+            /** @var int */
+            $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
+            $claimedBy = $row['claimed_by'] ?? null;
+
+            if ($expiresAt < $now) {
+                $this->audit->logFailedAuth('CLAIM_CODE_EXPIRED', ['claim_code' => $normalizedCode]);
+                throw new InvalidArgumentException('CLAIM_CODE_EXPIRED');
+            }
+            if ($claimedBy !== null) {
+                $this->audit->logFailedAuth('CLAIM_CODE_ALREADY_CLAIMED', [
+                    'claim_code' => $normalizedCode,
+                    'claimed_by' => $claimedBy,
+                ]);
+                throw new InvalidArgumentException('CLAIM_CODE_ALREADY_CLAIMED');
+            }
+
+            $serverId = $this->generateUuid();
+            $nowUnix = time();
+
+            /** @var string */
+            $publicKeyJwk = is_string($row['public_key_jwk'] ?? null) ? $row['public_key_jwk'] : '';
+            /** @var string */
+            $hostnameCandidates = is_string($row['hostname_candidates_json'] ?? null)
+                ? $row['hostname_candidates_json']
+                : '[]';
+            /** @var string */
+            $serverName = is_string($row['server_name'] ?? null) ? $row['server_name'] : '';
+            /** @var string */
+            $version = is_string($row['version'] ?? null) ? $row['version'] : '';
+            /** @var string */
+            $claimRowId = is_string($row['id'] ?? null) ? $row['id'] : '';
+
+            $nowDateTime = date('Y-m-d H:i:s', $nowUnix);
+
+            $this->db->query(
+                'INSERT INTO servers
+                    (id, user_id, server_name, version, public_key_jwk, hostname_candidates_json,
+                     status, last_seen_at, created_at, enrolled_at)
+                 VALUES
+                    (:id, :user_id, :server_name, :version, :public_key_jwk, :hostname_candidates_json,
+                     \'online\', :last_seen_at, :created_at, :enrolled_at)',
+                [
+                    'id' => $serverId,
+                    'user_id' => $userId,
+                    'server_name' => $serverName,
+                    'version' => $version,
+                    'public_key_jwk' => $publicKeyJwk,
+                    'hostname_candidates_json' => $hostnameCandidates,
+                    // servers.last_seen_at / created_at are DATETIME columns.
+                    'last_seen_at' => $nowDateTime,
+                    'created_at' => $nowDateTime,
+                    // servers.enrolled_at is INT UNSIGNED (migration 012).
+                    'enrolled_at' => $nowUnix,
+                ],
+            );
+
+            // Mark the claim paired and record the new server id, instead of
+            // deleting the row. The headless server has no JWT yet and the
+            // enrollment material is delivered to it by polling
+            // GET /api/v1/server-claims/{id}; that poll regenerates the
+            // enrollment JWT from paired_server_id and then consumes the row.
+            $this->db->query(
+                'UPDATE server_claims
+                    SET status = \'paired\', claimed_by = :user_id, claimed_at = :claimed_at,
+                        paired_at = :paired_at, paired_server_id = :server_id
+                  WHERE id = :id',
+                [
+                    'user_id' => $userId,
+                    'claimed_at' => $nowUnix,
+                    'paired_at' => $nowUnix,
+                    'server_id' => $serverId,
+                    'id' => $claimRowId,
+                ],
+            );
+
+            $this->db->commitTrans();
+        } catch (\Throwable $e) {
+            $this->db->rollBackTrans();
+            throw $e;
         }
-        /** @var array<string, mixed> $row */
-        $row = $rows[0];
-        /** @var int */
-        $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
-        $claimedBy = $row['claimed_by'] ?? null;
 
-        if ($expiresAt < $now) {
-            $this->audit->logFailedAuth('CLAIM_CODE_EXPIRED', ['claim_code' => $normalizedCode]);
-            throw new InvalidArgumentException('CLAIM_CODE_EXPIRED');
-        }
-        if ($claimedBy !== null) {
-            $this->audit->logFailedAuth('CLAIM_CODE_ALREADY_CLAIMED', [
-                'claim_code' => $normalizedCode,
-                'claimed_by' => $claimedBy,
-            ]);
-            throw new InvalidArgumentException('CLAIM_CODE_ALREADY_CLAIMED');
-        }
-
-        $serverId = $this->generateUuid();
-        $nowUnix = time();
-
-        /** @var string */
-        $publicKeyJwk = is_string($row['public_key_jwk'] ?? null) ? $row['public_key_jwk'] : '';
-        /** @var string */
-        $hostnameCandidates = is_string($row['hostname_candidates_json'] ?? null)
-            ? $row['hostname_candidates_json']
-            : '[]';
-        /** @var string */
-        $serverName = is_string($row['server_name'] ?? null) ? $row['server_name'] : '';
-        /** @var string */
-        $version = is_string($row['version'] ?? null) ? $row['version'] : '';
-        /** @var string */
-        $claimRowId = is_string($row['id'] ?? null) ? $row['id'] : '';
-
-        $nowDateTime = date('Y-m-d H:i:s', $nowUnix);
-
-        $this->db->query(
-            'INSERT INTO servers
-                (id, user_id, server_name, version, public_key_jwk, hostname_candidates_json,
-                 status, last_seen_at, created_at, enrolled_at)
-             VALUES
-                (:id, :user_id, :server_name, :version, :public_key_jwk, :hostname_candidates_json,
-                 \'online\', :last_seen_at, :created_at, :enrolled_at)',
-            [
-                'id' => $serverId,
-                'user_id' => $userId,
-                'server_name' => $serverName,
-                'version' => $version,
-                'public_key_jwk' => $publicKeyJwk,
-                'hostname_candidates_json' => $hostnameCandidates,
-                // servers.last_seen_at / created_at are DATETIME columns.
-                'last_seen_at' => $nowDateTime,
-                'created_at' => $nowDateTime,
-                // servers.enrolled_at is INT UNSIGNED (migration 012).
-                'enrolled_at' => $nowUnix,
-            ],
-        );
-
-        // Mark the claim paired and record the new server id, instead of
-        // deleting the row. The headless server has no JWT yet and the
-        // enrollment material is delivered to it by polling
-        // GET /api/v1/server-claims/{id}; that poll regenerates the
-        // enrollment JWT from paired_server_id and then consumes the row.
-        $this->db->query(
-            'UPDATE server_claims
-                SET status = \'paired\', claimed_by = :user_id, claimed_at = :claimed_at,
-                    paired_at = :paired_at, paired_server_id = :server_id
-              WHERE id = :id',
-            [
-                'user_id' => $userId,
-                'claimed_at' => $nowUnix,
-                'paired_at' => $nowUnix,
-                'server_id' => $serverId,
-                'id' => $claimRowId,
-            ],
-        );
-
+        // JWT minting is read-only/CPU work — do it after committing so the
+        // transaction (and the per-connection coroutine mutex it holds) is
+        // released as soon as the row writes land.
         $jwtService = new EnrollmentJwtService($this->keyManager, $this->hubBaseUrl);
         $enrollmentJwt = $jwtService->createEnrollmentJwt($serverId);
 
