@@ -289,6 +289,50 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertFalse($forwarded);
     }
 
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function traversalPathProvider(): iterable
+    {
+        yield 'literal dot-dot into admin' => ['api/v1/libraries/../admin/users'];
+        yield 'double literal dot-dot into admin' => ['api/v1/media/../../admin/dashboard'];
+        yield 'percent-encoded dot-dot' => ['api/v1/media/%2e%2e/admin'];
+        yield 'upper percent-encoded dot-dot' => ['api/v1/media/%2E%2E/admin'];
+        yield 'encoded separator smuggling' => ['api/v1/libraries/..%2fadmin'];
+        yield 'bare encoded separator' => ['api/v1/media%2fadmin'];
+        yield 'trailing single dot' => ['api/v1/media/.'];
+        yield 'back-slash separator' => ['api/v1/libraries\\..\\admin'];
+    }
+
+    /**
+     * Dot-segment / traversal paths must be rejected with 403
+     * proxy.scope_denied BEFORE the allowlist runs and must never be forwarded
+     * over the relay bridge.
+     *
+     * @dataProvider traversalPathProvider
+     */
+    public function test_traversal_paths_return_403_and_are_not_forwarded(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(403, $response->statusCode, "Traversal path must be denied: {$path}");
+        $this->assertFalse($forwarded, "Traversal path must not reach the relay bridge: {$path}");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
     public function test_timeout_returns_504(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);

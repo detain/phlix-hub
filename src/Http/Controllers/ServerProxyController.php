@@ -12,11 +12,14 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
 use function base64_decode;
+use function explode;
 use function in_array;
 use function is_int;
 use function is_string;
 use function json_encode;
 use function ltrim;
+use function rawurldecode;
+use function str_contains;
 use function str_starts_with;
 use function strtolower;
 use function strtoupper;
@@ -103,6 +106,14 @@ final class ServerProxyController
      *
      * Keyed by HTTP method (upper-case); each value is a list of allowed path
      * prefixes (matched against the resolved `/`-prefixed forward path).
+     *
+     * NOTE: only GET/HEAD are listed. POST/PUT/DELETE (and any other method) are
+     * intentionally always-denied by the browse-scope gate — this is a
+     * READ-ONLY browse proxy. {@see self::isWithinBrowseScope()} returns false
+     * for any method absent from this map, so mutating requests fail closed with
+     * 403 `proxy.scope_denied` and are never forwarded over the tunnel. The POST
+     * route is still registered in {@see \Phlix\Hub\Application} so it routes to
+     * this controller (and gets a deliberate 403) rather than a bare 404.
      *
      * @var array<string, list<string>>
      */
@@ -204,6 +215,28 @@ final class ServerProxyController
 
         $path = '/' . ltrim($params['path'] ?? '', '/');
 
+        // Defence-in-depth: the hub pipeline performs NO path normalisation
+        // (FastRoute `{path:.*}`, Workerman path()/parse_url() leave dot
+        // segments intact), so a path like `/api/v1/libraries/../admin/users`
+        // would pass the prefix allowlist below yet resolve, server-side, to a
+        // privileged admin endpoint. Reject any path containing a dot-segment
+        // (raw or percent-encoded) or a back-slash BEFORE the allowlist runs so
+        // the proxy can never be used to traverse out of the browse scope.
+        if ($this->hasTraversalSegment($path)) {
+            $this->logger->info('Relay proxy: rejected traversal attempt', [
+                'server_id' => $serverId,
+                'user_id' => $userId,
+                'method' => $request->method,
+                'path' => $path,
+            ]);
+
+            return (new Response())->status(403)->json([
+                'error' => 'Forbidden',
+                'code' => 'proxy.scope_denied',
+                'message' => 'This method/path is not exposed through the relay proxy.',
+            ]);
+        }
+
         if (!$this->isWithinBrowseScope($request->method, $path)) {
             $this->logger->info('Relay proxy: rejected out-of-scope request', [
                 'server_id' => $serverId,
@@ -248,6 +281,52 @@ final class ServerProxyController
         }
 
         return $this->buildResponse($reply);
+    }
+
+    /**
+     * Detect any path-traversal / dot-segment smuggling in the raw forward
+     * path, in either literal or percent-encoded form.
+     *
+     * The hub does not normalise paths before forwarding, so a single dot
+     * segment (`.` / `..`) — or a percent-encoded variant such as `%2e`,
+     * `%2E`, `..%2f`, or `%2f` used to smuggle an extra separator — must be
+     * rejected outright. We decode percent-encoding once and re-scan, and also
+     * reject back-slashes (alternative separators on some stacks).
+     *
+     * @param string $path The raw `/`-prefixed forward path (un-normalised).
+     *
+     * @return bool True when the path contains a traversal/dot-segment.
+     */
+    private function hasTraversalSegment(string $path): bool
+    {
+        // A `%2f`/`%2F` in the raw path is an encoded separator used to smuggle
+        // an extra path segment past the single-pass split below; treat it as a
+        // traversal attempt regardless of what surrounds it.
+        $rawLower = strtolower($path);
+        if (str_contains($rawLower, '%2f') || str_contains($rawLower, '%5c')) {
+            return true;
+        }
+
+        // Back-slashes are never legitimate in our REST paths and act as
+        // separators on some downstream stacks.
+        if (str_contains($path, '\\')) {
+            return true;
+        }
+
+        // Scan both the raw path and its once-decoded form so `.`/`..` survive
+        // neither literally nor via `%2e`/`%2E` encoding.
+        foreach ([$path, rawurldecode($path)] as $candidate) {
+            if (str_contains($candidate, '\\')) {
+                return true;
+            }
+            foreach (explode('/', $candidate) as $segment) {
+                if ($segment === '.' || $segment === '..') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
