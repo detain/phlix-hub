@@ -19,6 +19,9 @@ use PHPUnit\Framework\TestCase;
 use Workerman\Connection\TcpConnection;
 
 use function base64_decode;
+use function json_decode;
+
+use const JSON_THROW_ON_ERROR;
 
 /**
  * @covers \Phlix\Hub\Relay\RelayProxyManager
@@ -95,6 +98,55 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame('reply.1', $this->published[0]['event']);
         $this->assertSame(503, $this->published[0]['data']['status']);
         $this->assertSame('req-1', $this->published[0]['data']['request_id']);
+
+        // Authoritative registry verdict: the body carries the distinct
+        // `server.no_tunnel` code so a stale `relay_active=1` cannot be mistaken
+        // for a real forward — it fails fast here instead of timing out (504).
+        $body = base64_decode((string) $this->published[0]['data']['body_b64'], true);
+        $this->assertIsString($body);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.no_tunnel', $decoded['code'] ?? null);
+    }
+
+    public function test_request_for_inactive_tunnel_publishes_503_no_tunnel(): void
+    {
+        // A tunnel object exists but is not in the ACTIVE status (e.g. closing).
+        // The registry cross-check still treats this as "no live tunnel" and
+        // fails fast with 503 server.no_tunnel rather than forwarding.
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnel->close('test_closing');
+
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-2',
+            'reply_event' => 'reply.2',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/api/v1/libraries',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        $this->assertCount(1, $this->published);
+        $this->assertSame(503, $this->published[0]['data']['status']);
+        $body = base64_decode((string) $this->published[0]['data']['body_b64'], true);
+        $this->assertIsString($body);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.no_tunnel', $decoded['code'] ?? null);
     }
 
     public function test_request_sends_http_request_frame_down_the_tunnel(): void

@@ -230,6 +230,65 @@ class RelaySessionManager
     }
 
     /**
+     * Reconcile open relay sessions against the live in-memory tunnel registry.
+     *
+     * The `relay_sessions` table (and the `relay_active` flag derived from it)
+     * is only a display/bookkeeping mirror of the authoritative signal — the
+     * in-memory tunnel registry owned by the single relay worker. When the relay
+     * worker crashes/restarts, {@see closeSession()} is never reached, so the
+     * open rows it left behind are orphans: a stale `relay_active=1` with no live
+     * tunnel behind it. Calling this on relay-worker start (when the registry is
+     * the source of truth) closes every open session whose `server_id` is NOT
+     * currently backed by a live tunnel, so the DB flag stops authorizing a
+     * forward that would only 504.
+     *
+     * `$liveServerIds` is the set of server UUIDs with a live tunnel right now
+     * (empty at a fresh worker start, where every open row is therefore an
+     * orphan). The DELETE-free UPDATE marks rows closed with `close_reason`,
+     * preserving byte-accounting history. Colon-free named placeholders are used
+     * for the IN-list (workerman/mysql prepends `:`).
+     *
+     * @param list<string> $liveServerIds Server UUIDs with a live tunnel.
+     * @param string       $reason        Close reason recorded on each orphan.
+     *
+     * @return int Number of orphan sessions closed (0 if not obtainable).
+     */
+    public function closeOrphanedSessions(array $liveServerIds, string $reason = 'orphaned'): int
+    {
+        $params = ['reason' => $reason];
+        $exclusion = '';
+
+        if ($liveServerIds !== []) {
+            $placeholders = [];
+            foreach (array_values(array_unique($liveServerIds)) as $i => $serverId) {
+                $key = 'live_' . $i;
+                $placeholders[] = ':' . $key;
+                $params[$key] = $serverId;
+            }
+            $exclusion = ' AND server_id NOT IN (' . implode(', ', $placeholders) . ')';
+        }
+
+        /** @var mixed $result */
+        $result = $this->db->query(
+            'UPDATE relay_sessions SET closed_at = NOW(), close_reason = :reason
+             WHERE closed_at IS NULL' . $exclusion,
+            $params,
+        );
+
+        $closed = is_numeric($result) ? (int) $result : 0;
+
+        if ($closed > 0) {
+            $this->logger->info('Relay: reconciled orphaned sessions on worker start', [
+                'closed' => $closed,
+                'live_tunnels' => count($liveServerIds),
+                'reason' => $reason,
+            ]);
+        }
+
+        return $closed;
+    }
+
+    /**
      * Get the active relay session for a server, if any.
      *
      * @param string $serverId Server UUID.

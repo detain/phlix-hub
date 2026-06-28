@@ -117,4 +117,93 @@ final class RelaySessionManagerTest extends TestCase
         $manager = new RelaySessionManager($db, $logger);
         self::assertSame(0, $manager->reapStaleSessions(90));
     }
+
+    public function testCloseOrphanedSessionsWithEmptyLiveSetClosesAllOpen(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): int {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+                return 3;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        // Worker just started with an empty registry → every open row is an orphan.
+        $closed = $manager->closeOrphanedSessions([], 'reconciled_on_start');
+
+        self::assertSame(3, $closed);
+        self::assertStringContainsString('UPDATE relay_sessions SET closed_at = NOW()', $capturedSql);
+        self::assertStringContainsString('close_reason = :reason', $capturedSql);
+        self::assertStringContainsString('closed_at IS NULL', $capturedSql);
+        // Empty live set → no exclusion clause; every open session is closed.
+        self::assertStringNotContainsString('NOT IN', $capturedSql);
+        self::assertSame(['reason' => 'reconciled_on_start'], $capturedParams);
+    }
+
+    public function testCloseOrphanedSessionsExcludesLiveTunnelServers(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): int {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+                return 1;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        // Two live tunnels — open sessions for those servers must be preserved;
+        // every other open session is closed as an orphan.
+        $closed = $manager->closeOrphanedSessions(['srv-a', 'srv-b']);
+
+        self::assertSame(1, $closed);
+        self::assertStringContainsString('server_id NOT IN (:live_0, :live_1)', $capturedSql);
+        self::assertSame(
+            ['reason' => 'orphaned', 'live_0' => 'srv-a', 'live_1' => 'srv-b'],
+            $capturedParams,
+        );
+    }
+
+    public function testCloseOrphanedSessionsDeduplicatesLiveServerIds(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedParams): int {
+                $capturedParams = $params;
+                return 0;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        $manager->closeOrphanedSessions(['srv-a', 'srv-a', 'srv-b']);
+
+        self::assertSame(
+            ['reason' => 'orphaned', 'live_0' => 'srv-a', 'live_1' => 'srv-b'],
+            $capturedParams,
+        );
+    }
+
+    public function testCloseOrphanedSessionsReturnsZeroWhenCountNotNumeric(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $db->method('query')->willReturn(null);
+
+        $manager = new RelaySessionManager($db, $logger);
+        self::assertSame(0, $manager->closeOrphanedSessions([]));
+    }
 }
