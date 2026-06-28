@@ -90,7 +90,7 @@
                     <a href="/federation">Federation</a>
                     <a href="/federation/shares">Shares</a>
                 {/if}
-                <form method="post" action="/logout" class="logout-form"><button type="submit">Log out</button></form>
+                <form method="post" action="/logout" class="logout-form">{include file="partials/csrf-field.tpl"}<button type="submit">Log out</button></form>
             {else}
                 <a href="/login">Log in</a>
                 <a href="/signup">Sign up</a>

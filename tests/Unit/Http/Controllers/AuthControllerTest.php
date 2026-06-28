@@ -10,6 +10,7 @@ use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Http\Middleware\CsrfMiddleware;
 use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 
@@ -28,7 +29,7 @@ final class AuthControllerTest extends TestCase
     {
         $renderer = $this->createMock(PageRenderer::class);
         $renderer->method('render')->willReturn('<html>stub</html>');
-        return new AuthController($auth, $renderer);
+        return new AuthController($auth, $renderer, new CsrfMiddleware());
     }
 
     private function authMgr(): AuthManager
@@ -85,7 +86,7 @@ final class AuthControllerTest extends TestCase
             }))
             ->willReturn('<html>error</html>');
 
-        $controller = new AuthController($mgr, $renderer);
+        $controller = new AuthController($mgr, $renderer, new CsrfMiddleware());
         $request = new Request();
         $request->method = 'POST';
         $request->path = '/signup';

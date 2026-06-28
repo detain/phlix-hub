@@ -41,6 +41,7 @@ use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Http\Middleware\CsrfMiddleware;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\Request;
@@ -106,9 +107,19 @@ final class Application
         // The redesigned Vue SPA is the front door — send the bare root to the
         // hub's home (My Servers) rather than the media-oriented browse landing.
         // Old SSR pages (/login, /signup, /my-servers, …) stay reachable directly.
+        // CSRF: issued on SSR GET form pages (login/signup) and re-stamped on
+        // every authenticated SSR page (the base-layout logout form), then
+        // validated on the SSR mutating POSTs below.
+        $csrf = $this->resolveCsrfMiddleware();
         $this->router->get('/', static fn (Request $r): Response => (new Response())->redirect('/app/servers'));
-        $this->router->get('/signup', static fn (Request $r): Response => $pages($r));
-        $this->router->get('/login', static fn (Request $r): Response => $pages($r));
+        $this->router->get(
+            '/signup',
+            static fn (Request $r): Response => $csrf->issue($r, $pages($r)),
+        );
+        $this->router->get(
+            '/login',
+            static fn (Request $r): Response => $csrf->issue($r, $pages($r)),
+        );
 
         // Shared Vue 3 SPA shell (Phase C) — no auth gate; SPA handles its own auth.
         /** @var string $publicRoot */
@@ -123,11 +134,15 @@ final class Application
             return $sharedUi->shell($r, $typedParams);
         });
 
-        // Auth form handlers (SSR).
+        // Auth form handlers (SSR). Each is gated by the double-submit CSRF
+        // middleware: a missing/mismatched `_csrf` field is rejected with 403
+        // before the controller runs.
         $auth = $this->resolveAuthController();
-        $this->router->post('/signup', static fn (Request $r): Response => $auth($r));
-        $this->router->post('/login', static fn (Request $r): Response => $auth($r));
-        $this->router->post('/logout', static fn (Request $r): Response => $auth($r));
+        $this->router->group('', static function (Router $r) use ($auth): void {
+            $r->post('/signup', static fn (Request $req): Response => $auth($req));
+            $r->post('/login', static fn (Request $req): Response => $auth($req));
+            $r->post('/logout', static fn (Request $req): Response => $auth($req));
+        }, [$csrf]);
 
         // JSON API. `/register` is the canonical signup path used by the shared
         // @phlix/ui SPA (and phlix-server); `/signup` is kept as an alias.
@@ -139,37 +154,43 @@ final class Application
 
         // Protected pages + API.
         $authMiddleware = $this->resolveAuthMiddleware();
-        $this->router->group('/my-servers', function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+
+        // SSR page renderer wrapped so the CSRF cookie + the logout form's
+        // hidden token (emitted via partials/csrf-field.tpl in the base
+        // layout) are stamped onto every authenticated page render.
+        $ssrPage = static fn (Request $req): Response => $csrf->issue($req, $pages($req));
+
+        $this->router->group('/my-servers', function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/claim-server', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/claim-server', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/invite-links', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/invite-links', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/hub-settings', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/hub-settings', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/audit-logs', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/audit-logs', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/logs', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/logs', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/federation', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
-            $r->get('/shares', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/federation', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
+            $r->get('/shares', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/servers/{id}', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/servers/{id}', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
         $me = $this->resolveMeController();
@@ -294,14 +315,16 @@ final class Application
         $authMiddleware = $this->resolveAuthMiddleware();
         $requestController = $this->resolveRequestController();
         $pages = $this->resolvePageController();
+        $csrf = $this->resolveCsrfMiddleware();
+        $ssrPage = static fn (Request $req): Response => $csrf->issue($req, $pages($req));
 
         // SSR pages.
-        $this->router->group('/requests', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/requests', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/admin/requests', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/admin/requests', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
         // User-scoped JSON API.
@@ -385,6 +408,15 @@ final class Application
             throw new \RuntimeException('Container returned an unexpected AuthController instance');
         }
         return $controller;
+    }
+
+    private function resolveCsrfMiddleware(): CsrfMiddleware
+    {
+        $middleware = $this->container->get(CsrfMiddleware::class);
+        if (!$middleware instanceof CsrfMiddleware) {
+            throw new \RuntimeException('Container returned an unexpected CsrfMiddleware instance');
+        }
+        return $middleware;
     }
 
     private function resolveMeController(): MeController
@@ -686,14 +718,16 @@ final class Application
     {
         $pages = $this->resolvePageController();
         $shareController = $this->resolveLibraryShareController();
+        $csrf = $this->resolveCsrfMiddleware();
+        $ssrPage = static fn (Request $req): Response => $csrf->issue($req, $pages($req));
 
         // SSR pages.
-        $this->router->group('/shared-with-me', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/shared-with-me', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/manage-shares', static function (Router $r) use ($pages): void {
-            $r->get('', static fn (Request $req): Response => $pages($req));
+        $this->router->group('/manage-shares', static function (Router $r) use ($ssrPage): void {
+            $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
         // JSON API for shares.
