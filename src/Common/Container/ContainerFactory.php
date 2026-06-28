@@ -6,6 +6,7 @@ namespace Phlix\Hub\Common\Container;
 
 use DI\ContainerBuilder;
 use Phlix\Hub\Common\Container\Providers\AuthServicesProvider;
+use Phlix\Hub\Common\Container\Providers\CommonServicesProvider;
 use Phlix\Hub\Common\Container\Providers\CoreServicesProvider;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Container\Providers\HttpServicesProvider;
@@ -86,6 +87,7 @@ final class ContainerFactory
     {
         return [
             new CoreServicesProvider(),
+            new CommonServicesProvider(),
             new AuthServicesProvider(),
             new HttpServicesProvider(),
             new HubServicesProvider(),
