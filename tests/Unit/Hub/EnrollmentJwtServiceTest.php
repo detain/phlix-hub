@@ -164,6 +164,57 @@ final class EnrollmentJwtServiceTest extends TestCase
     }
 
     /**
+     * S7: a JWT minted under the pre-rotation key must keep validating during
+     * the rotation overlap window, then be rejected once the window lapses,
+     * while a freshly-minted token under the new key validates throughout.
+     */
+    public function testEnrollmentJwtValidThroughRotationOverlapThenRejected(): void
+    {
+        $now = 5_000_000;
+        $clock = static function () use (&$now): int {
+            return $now;
+        };
+        $keyPath = $this->tmpDir . '/rotating-key.pem';
+        $km = new Ed25519KeyManager($keyPath, $clock);
+        $service = new EnrollmentJwtService($km, 'https://hub.example.com');
+
+        // Mint a 7-day enrollment JWT under the original key.
+        $token = $service->createEnrollmentJwt('server-rotate', 604800);
+        $oldKid = $km->getKid();
+
+        // Rotate: original key becomes the retained previous key.
+        $km->rotate();
+        $newKid = $km->getKid();
+        self::assertNotSame($oldKid, $newKid);
+
+        // During the overlap window the pre-rotation token still validates.
+        $payload = $service->validateEnrollmentJwt($token, $oldKid);
+        self::assertNotNull($payload, 'pre-rotation token must validate during overlap');
+        self::assertSame('server-rotate', $payload['server_id']);
+
+        // A token minted under the new key validates too.
+        $newToken = $service->createEnrollmentJwt('server-new', 604800);
+        self::assertNotNull(
+            $service->validateEnrollmentJwt($newToken, $newKid),
+            'current-key token must validate',
+        );
+
+        // Advance past the 24h overlap window (but the 7-day token has NOT yet
+        // expired) — the pre-rotation token must now be rejected on kid alone.
+        $now += Ed25519KeyManager::OVERLAP_TTL_SECONDS + 1;
+        self::assertNull(
+            $service->validateEnrollmentJwt($token, $oldKid),
+            'pre-rotation token must be rejected after overlap window lapses',
+        );
+
+        // The current-key token still validates after the overlap window.
+        self::assertNotNull(
+            $service->validateEnrollmentJwt($newToken, $newKid),
+            'current-key token must still validate after overlap window',
+        );
+    }
+
+    /**
      * S8: a token advertising `alg:none` must be rejected even though it is
      * otherwise correctly signed (Ed25519) over the forged header.
      */

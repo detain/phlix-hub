@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Closure;
 use RuntimeException;
 
 /**
@@ -24,10 +25,30 @@ use RuntimeException;
  * spurious ENROLLMENT_TOKEN_EXPIRED on heartbeat). Deriving the kid from the
  * key keeps it stable and ends that breakage.
  *
+ * Rotation overlap (S7): {@see rotate()} retains the PUBLIC half of the
+ * outgoing key (kid + raw public key) in a sidecar file alongside the new key,
+ * stamped with an expiry {@see OVERLAP_TTL_SECONDS} into the future. While that
+ * expiry is in the future, the previous key is still "active" for verification
+ * and is published in the JWKS, so 7-day enrollment JWTs minted before the
+ * rotation keep validating until they naturally expire. After the overlap
+ * window passes, the previous key is dropped (and its sidecar pruned) and its
+ * tokens are rejected. Only the public half is retained — the hub never signs
+ * with the old key after rotating, so the old private key is intentionally not
+ * kept.
+ *
+ * @phpstan-type ActiveKey array{kid: string, public: string, expiresAt: int|null}
+ *
  * @package Phlix\Hub\Hub
  */
 final class Ed25519KeyManager
 {
+    /**
+     * Overlap window during which a rotated-out key remains valid for
+     * verification and is still published in the JWKS. The class docblock and
+     * the original {@see rotate()} contract promise 24 hours.
+     */
+    public const int OVERLAP_TTL_SECONDS = 86400;
+
     private ?string $privateKey = null;
 
     private ?string $publicKey = null;
@@ -36,11 +57,25 @@ final class Ed25519KeyManager
     private ?string $kid = null;
 
     /**
-     * @param string $keyPath Absolute path to the PEM-encoded private key file.
+     * Cached previous-key record loaded from / persisted to the sidecar, or
+     * null when there is no retained previous key. Loaded lazily.
+     *
+     * @var ActiveKey|null|false `false` = not yet loaded, `null` = loaded but absent.
+     */
+    private array|null|false $previousKey = false;
+
+    /** @var Closure(): int Unix-time source; injectable for deterministic tests. */
+    private readonly Closure $clock;
+
+    /**
+     * @param string             $keyPath Absolute path to the PEM-encoded private key file.
+     * @param (Closure(): int)|null $clock   Unix-time source (defaults to {@see time()}).
      */
     public function __construct(
         private readonly string $keyPath,
+        ?Closure $clock = null,
     ) {
+        $this->clock = $clock ?? static fn (): int => time();
     }
 
     /**
@@ -82,15 +117,66 @@ final class Ed25519KeyManager
     public function getPublicKeyJwk(): array
     {
         $pair = $this->getOrCreateKeyPair();
-        $publicKey = $pair['public'];
-        return [
-            'kty' => 'OKP',
-            'crv' => 'Ed25519',
-            'x' => $this->base64UrlEncode($publicKey),
+        return $this->jwkFor($pair['public'], $this->getKid());
+    }
+
+    /**
+     * Get ALL currently-active public keys as JWK arrays: the current key plus
+     * any retained previous key still inside its overlap window.
+     *
+     * During the overlap after a {@see rotate()}, this returns two entries; once
+     * the previous key's overlap expires (or the hub never rotated), it returns
+     * just the current key.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function getPublicKeyJwks(): array
+    {
+        $jwks = [];
+        foreach ($this->getActivePublicKeys() as $key) {
+            $jwks[] = $this->jwkFor($key['public'], $key['kid']);
+        }
+        return $jwks;
+    }
+
+    /**
+     * Get all public keys valid for signature verification right now: the
+     * current key first, then a retained previous key if it is still within its
+     * overlap window. Used by {@see EnrollmentJwtService} to resolve a token's
+     * `kid` to the public key it was signed under.
+     *
+     * @return list<ActiveKey>
+     */
+    public function getActivePublicKeys(): array
+    {
+        $pair = $this->getOrCreateKeyPair();
+        $keys = [[
             'kid' => $this->getKid(),
-            'use' => 'sig',
-            'alg' => 'EdDSA',
-        ];
+            'public' => $pair['public'],
+            'expiresAt' => null,
+        ]];
+
+        $previous = $this->loadPreviousKey();
+        if ($previous !== null && $previous['kid'] !== $this->getKid()) {
+            $keys[] = $previous;
+        }
+
+        return $keys;
+    }
+
+    /**
+     * Resolve the raw public key for a given `kid` among the currently-active
+     * keys (current + non-expired previous), or null when the kid is unknown or
+     * its overlap window has lapsed.
+     */
+    public function getPublicKeyForKid(string $kid): ?string
+    {
+        foreach ($this->getActivePublicKeys() as $key) {
+            if ($key['kid'] === $kid) {
+                return $key['public'];
+            }
+        }
+        return null;
     }
 
     /**
@@ -103,24 +189,38 @@ final class Ed25519KeyManager
      */
     public function getKid(): string
     {
-        return $this->kid ??= $this->base64UrlEncode(
-            hash('sha256', $this->getOrCreateKeyPair()['public'], true),
-        );
+        return $this->kid ??= $this->fingerprint($this->getOrCreateKeyPair()['public']);
     }
 
     /**
-     * Rotate: generate a new keypair, store it, return the new KID.
+     * Rotate: retain the outgoing public key for overlap, generate a new
+     * keypair, store it, and persist the previous-key sidecar.
      *
-     * The old key should be retained for up to 24 hours for overlap
-     * validation during rotation.
+     * The outgoing key's PUBLIC half (kid + raw public key) is retained for
+     * {@see OVERLAP_TTL_SECONDS} (24h) so enrollment JWTs minted under it keep
+     * validating — and stay published in the JWKS — until they naturally
+     * expire. After that window the previous key is dropped on next access.
      */
     public function rotate(): void
     {
+        // Capture the outgoing key BEFORE we replace it.
+        $outgoing = $this->getOrCreateKeyPair();
+        $previous = [
+            'kid' => $this->getKid(),
+            'public' => $outgoing['public'],
+            'expiresAt' => $this->now() + self::OVERLAP_TTL_SECONDS,
+        ];
+
         $this->privateKey = null;
         $this->publicKey = null;
         // Cleared so getKid() re-derives the fingerprint from the new public key.
         $this->kid = null;
         $this->generateAndStore();
+
+        // Persist + cache the retained previous key (after the new key exists so
+        // the sidecar never points at the just-superseded current key).
+        $this->previousKey = $previous;
+        $this->storePreviousKey($previous);
     }
 
     /**
@@ -152,6 +252,158 @@ final class Ed25519KeyManager
 
         $this->privateKey = $secretKey;
         $this->publicKey = $publicKey;
+    }
+
+    /**
+     * Load the retained previous key from the sidecar, transparently pruning it
+     * once the overlap window has lapsed. Returns null when none is retained
+     * (the never-rotated case) or it has expired.
+     *
+     * @return ActiveKey|null
+     */
+    private function loadPreviousKey(): ?array
+    {
+        if ($this->previousKey === false) {
+            $this->previousKey = $this->readPreviousKeyFile();
+        }
+
+        if ($this->previousKey === null) {
+            return null;
+        }
+
+        $expiresAt = $this->previousKey['expiresAt'];
+        if ($expiresAt !== null && $expiresAt <= $this->now()) {
+            // Overlap window lapsed — drop the previous key for good.
+            $this->previousKey = null;
+            $this->deletePreviousKeyFile();
+            return null;
+        }
+
+        return $this->previousKey;
+    }
+
+    /**
+     * Read and validate the previous-key sidecar file.
+     *
+     * @return ActiveKey|null
+     */
+    private function readPreviousKeyFile(): ?array
+    {
+        $path = $this->previousKeyPath();
+        if (!is_file($path)) {
+            return null;
+        }
+
+        $raw = file_get_contents($path);
+        if ($raw === false) {
+            return null;
+        }
+
+        try {
+            /** @var mixed $decoded */
+            $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $kid = $decoded['kid'] ?? null;
+        $publicB64 = $decoded['public'] ?? null;
+        $expiresAt = $decoded['expiresAt'] ?? null;
+
+        if (!is_string($kid) || $kid === '' || !is_string($publicB64) || !is_int($expiresAt)) {
+            return null;
+        }
+
+        $public = $this->base64Decode($publicB64);
+        if (strlen($public) !== 32) {
+            return null;
+        }
+
+        return ['kid' => $kid, 'public' => $public, 'expiresAt' => $expiresAt];
+    }
+
+    /**
+     * Persist the retained previous key alongside the main key file.
+     *
+     * @param ActiveKey $previous
+     */
+    private function storePreviousKey(array $previous): void
+    {
+        $payload = json_encode([
+            'kid' => $previous['kid'],
+            'public' => $this->base64Encode($previous['public']),
+            'expiresAt' => $previous['expiresAt'],
+        ], JSON_THROW_ON_ERROR);
+
+        $path = $this->previousKeyPath();
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            if (!mkdir($dir, 0700, true) && !is_dir($dir)) {
+                throw new RuntimeException('Failed to create key directory: ' . $dir);
+            }
+        }
+
+        if (file_put_contents($path, $payload, LOCK_EX) === false) {
+            throw new RuntimeException('Failed to write previous-key file: ' . $path);
+        }
+        chmod($path, 0600);
+    }
+
+    /**
+     * Remove the previous-key sidecar (best-effort; an expired/absent file is
+     * not an error).
+     */
+    private function deletePreviousKeyFile(): void
+    {
+        $path = $this->previousKeyPath();
+        if (is_file($path)) {
+            @unlink($path);
+        }
+    }
+
+    /**
+     * Path of the previous-key sidecar, derived from the main key path.
+     */
+    private function previousKeyPath(): string
+    {
+        return $this->keyPath . '.previous.json';
+    }
+
+    /**
+     * Build a JWK array for a raw 32-byte Ed25519 public key + kid.
+     *
+     * @return array<string, mixed>
+     */
+    private function jwkFor(string $publicKey, string $kid): array
+    {
+        return [
+            'kty' => 'OKP',
+            'crv' => 'Ed25519',
+            'x' => $this->base64UrlEncode($publicKey),
+            'kid' => $kid,
+            'use' => 'sig',
+            'alg' => 'EdDSA',
+        ];
+    }
+
+    /**
+     * Deterministic kid fingerprint of a raw public key.
+     */
+    private function fingerprint(string $publicKey): string
+    {
+        return $this->base64UrlEncode(hash('sha256', $publicKey, true));
+    }
+
+    /**
+     * Current unix time from the injected clock.
+     */
+    private function now(): int
+    {
+        return ($this->clock)();
     }
 
     /**

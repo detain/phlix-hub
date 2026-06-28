@@ -78,6 +78,12 @@ class EnrollmentJwtService
     /**
      * Validate an enrollment JWT and return the decoded payload.
      *
+     * The `kid` is matched against the hub's currently-active signing keys: the
+     * current key OR a still-valid (non-expired) previous key retained during a
+     * rotation overlap window. The signature is then verified against the
+     * public key for the matched kid, so a 7-day enrollment JWT minted just
+     * before a rotation keeps validating until its overlap window lapses.
+     *
      * @param string $token        The JWT to validate.
      * @param string $expectedKid  Expected key ID (from the token header matched against known keys).
      *
@@ -85,7 +91,10 @@ class EnrollmentJwtService
      */
     public function validateEnrollmentJwt(string $token, string $expectedKid): ?array
     {
-        if ($expectedKid !== $this->keyManager->getKid()) {
+        // Resolve the kid to one of the hub's currently-active public keys
+        // (current or non-expired previous). An unknown/expired kid is rejected.
+        $publicKey = $this->keyManager->getPublicKeyForKid($expectedKid);
+        if ($publicKey === null || $publicKey === '') {
             return null;
         }
 
@@ -115,16 +124,20 @@ class EnrollmentJwtService
         if (isset($header['typ']) && $header['typ'] !== 'JWT') {
             return null;
         }
+        // The header kid must match the kid we resolved the key under, so an
+        // attacker can't present a token signed under key A while passing kid B.
+        if (($header['kid'] ?? null) !== $expectedKid) {
+            return null;
+        }
 
-        $keyPair = $this->keyManager->getOrCreateKeyPair();
         $signature = $this->base64UrlDecode($signatureEncoded);
 
-        if ($signature === '' || $keyPair['public'] === '') {
+        if ($signature === '') {
             return null;
         }
 
         $message = "{$headerEncoded}.{$payloadEncoded}";
-        if (!sodium_crypto_sign_verify_detached($signature, $message, $keyPair['public'])) {
+        if (!sodium_crypto_sign_verify_detached($signature, $message, $publicKey)) {
             return null;
         }
 

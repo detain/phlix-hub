@@ -60,6 +60,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `EnrollmentJwtService`) and requires its `server_id` to match before activating
   a tunnel — previously the token was accepted without validation, so any client
   could open a tunnel by guessing a `server_id`.
+- **Enrollment-key rotation now keeps a 24h overlap window (S7).** Previously
+  `Ed25519KeyManager::rotate()` discarded the old key the instant a new one was
+  generated, so every outstanding 7-day enrollment JWT was invalidated at the
+  next heartbeat (spurious `ENROLLMENT_TOKEN_EXPIRED`) the moment an operator
+  rotated. `rotate()` now retains the PUBLIC half of the outgoing key (kid + raw
+  public key) in a `<key>.previous.json` sidecar, stamped with a 24h overlap
+  expiry (`Ed25519KeyManager::OVERLAP_TTL_SECONDS`). During the overlap:
+  - `EnrollmentJwtService::validateEnrollmentJwt()` accepts a token whose `kid`
+    matches **either** the current key **or** the still-valid previous key, and
+    verifies the signature against the matched key's public half (it also now
+    pins the header `kid` to the resolved kid to block a key-confusion swap).
+  - the JWKS at `GET /.well-known/jwks.json` publishes **both** keys, so a
+    standards-compliant consumer (the media server) selects the right key by
+    `kid` and 7-day JWTs minted before the rotation keep validating until they
+    naturally expire.
+  After the overlap window lapses the previous key is dropped on next access
+  (active-key list, JWKS, and verification all reject it) and the sidecar is
+  pruned. Only the public half is retained — the hub never signs with the old
+  key after rotating. The never-rotated single-key path is unchanged and writes
+  no sidecar. A `Closure(): int` clock is now injectable into `Ed25519KeyManager`
+  for deterministic overlap-expiry testing.
 
 ### Fixed
 - **`PhlixMySQLConnection`: type-aware parameter binding for emulated prepares (`LIMIT`/`OFFSET` fix).** Emulated prepares (below) send bound params as strings by default, so `LIMIT :limit`/`OFFSET :offset` became `LIMIT '50'` and MySQL rejected them with a 1064 syntax error (e.g. `HeartbeatHandler` recent-server lookup, any paginated query). `execute()` is now overridden to bind each value with its natural PDO type (`int → PARAM_INT`, `bool → PARAM_BOOL`, `null → PARAM_NULL`, else `PARAM_STR`) — mirroring the parent's prepare/execute + one-shot 2006/2013 reconnect — so integer placeholders stay unquoted. Verified on the live hub: bound + positional + mixed `LIMIT`/`OFFSET` queries succeed and 120 concurrent claim POSTs stay corruption-free.
