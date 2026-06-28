@@ -111,6 +111,7 @@ final class AuthController
                 $identifier,
                 self::stringField($request, 'password'),
                 $request->remoteIp ?: 'unknown',
+                self::deviceId($request),
             );
             return $this->withSessionCookies(
                 (new Response())->redirect('/my-servers'),
@@ -189,6 +190,7 @@ final class AuthController
                 $identifier,
                 self::stringField($request, 'password'),
                 $request->remoteIp ?: 'unknown',
+                self::deviceId($request),
             );
             return (new Response())->json([
                 'access_token'  => $result['access_token'],
@@ -294,6 +296,22 @@ final class AuthController
          */
         $value = $request->body[$key] ?? null;
         return is_string($value) ? $value : '';
+    }
+
+    /**
+     * Resolve the opaque device/session identifier for a login. Prefers an
+     * explicit `device_id` body field; falls back to the client IP so the
+     * audit log still carries a stable per-client marker when the client
+     * does not supply one. Distinct from the rate-limit key, which is always
+     * the real client IP.
+     */
+    private static function deviceId(Request $request): string
+    {
+        $deviceId = self::stringField($request, 'device_id');
+        if ($deviceId !== '') {
+            return $deviceId;
+        }
+        return $request->remoteIp ?: 'unknown';
     }
 
     /**

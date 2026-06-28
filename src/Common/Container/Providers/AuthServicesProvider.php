@@ -13,6 +13,7 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
@@ -27,7 +28,9 @@ use function DI\get;
  *    `config('auth.secret')` (file).
  *  - {@see UserRepository} → autowired from {@see Connection}.
  *  - {@see AuditLogger} → singleton bound to {@see LogChannels::AUDIT}.
- *  - {@see AuthManager} → autowired with dispatcher optional.
+ *  - {@see AuthManager} → autowired with the {@see RateLimiterInterface}
+ *    (login attempt limiter, registered by {@see CommonServicesProvider})
+ *    injected and the dispatcher optional.
  *
  * @package Phlix\Hub\Common\Container\Providers
  */
@@ -69,10 +72,11 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 JwtHandler $jwt,
                 AuditLogger $audit,
                 StructuredLogger $logger,
+                RateLimiterInterface $rateLimiter,
                 ?EventDispatcherInterface $dispatcher,
                 Connection $db,
             ): AuthManager {
-                return new AuthManager($repo, $jwt, $audit, $logger, $dispatcher, $db);
+                return new AuthManager($repo, $jwt, $audit, $logger, $rateLimiter, $dispatcher, $db);
             })->parameter('logger', get('logger.' . LogChannels::AUTH))
                 ->parameter('dispatcher', null),
         ]);

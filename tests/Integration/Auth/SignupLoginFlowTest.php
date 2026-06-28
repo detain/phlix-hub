@@ -10,6 +10,7 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Shared\Auth\JwtClaims;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
@@ -70,6 +71,7 @@ final class SignupLoginFlowTest extends TestCase
             $this->jwt,
             new AuditLogger($auditLogger),
             $logger,
+            new RateLimiter(windowSeconds: 900, maxAttempts: 5, cap: 1000),
             null,
             $this->db,
         );
