@@ -27,6 +27,7 @@ use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Controllers\HubSettingsController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryController;
+use Phlix\Hub\Http\Controllers\ClientRelayTokenController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
 use Phlix\Hub\Http\Controllers\MeController;
 use Phlix\Hub\Http\Controllers\PageController;
@@ -199,6 +200,7 @@ final class Application
         $serverDetail = $this->resolveServerDetailController();
         $libraryController = $this->resolveLibraryController();
         $serverProxy = $this->resolveServerProxyController();
+        $relayToken = $this->resolveClientRelayTokenController();
         $this->router->group('/api/v1', function (Router $r) use (
             $me,
             $serverList,
@@ -206,6 +208,7 @@ final class Application
             $serverDetail,
             $libraryController,
             $serverProxy,
+            $relayToken,
         ): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
             // `/auth/me` is the path the shared @phlix/ui SPA calls (matches
@@ -240,6 +243,18 @@ final class Application
                     /** @var array<string, string> $typedParams */
                     $typedParams = $params;
                     return $serverDetail->getServerDetail($req, $typedParams);
+                },
+            );
+            // Mint a per-user, server-scoped, revocable client relay token
+            // (Step S2a). Owner-gated: 404 unknown / 403 not-owned. The
+            // plaintext token is returned exactly once. Worker enforcement +
+            // dropping the `?token=` query path is the S2b follow-up.
+            $r->post(
+                '/me/servers/{id}/relay-token',
+                static function (Request $req, array $params) use ($relayToken): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $relayToken->mint($req, $typedParams);
                 },
             );
             // HTTP-over-relay proxy: forward a browser request to a paired
@@ -457,6 +472,16 @@ final class Application
         $controller = $this->container->get(ServerProxyController::class);
         if (!$controller instanceof ServerProxyController) {
             throw new \RuntimeException('Container returned an unexpected ServerProxyController instance');
+        }
+
+        return $controller;
+    }
+
+    private function resolveClientRelayTokenController(): ClientRelayTokenController
+    {
+        $controller = $this->container->get(ClientRelayTokenController::class);
+        if (!$controller instanceof ClientRelayTokenController) {
+            throw new \RuntimeException('Container returned an unexpected ClientRelayTokenController instance');
         }
 
         return $controller;
