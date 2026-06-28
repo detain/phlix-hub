@@ -93,11 +93,24 @@ final class AuthMiddleware
 
     /**
      * Pull a token from the Authorization header first, then a cookie.
+     *
+     * The cookie path is honoured only for SSR/GET-style requests. For a
+     * MUTATING request on the JSON `/api/v1` surface (POST/PUT/PATCH/DELETE)
+     * the session cookie is deliberately ignored: those requests must carry
+     * an explicit `Authorization: Bearer` header. This closes the
+     * cookie-based CSRF vector on the API (a cross-site form/fetch can ride
+     * the cookie but cannot set an Authorization header), complementing the
+     * double-submit CSRF guard on the SSR forms ({@see CsrfMiddleware}).
      */
     private function extractToken(Request $request): ?string
     {
         if ($request->bearerToken !== null && $request->bearerToken !== '') {
             return $request->bearerToken;
+        }
+        if (self::isMutatingApiRequest($request)) {
+            // Bearer-only on the mutating API surface; do not fall back to
+            // the cookie.
+            return null;
         }
         $cookieHeader = $request->getHeader('Cookie');
         if ($cookieHeader === null) {
@@ -111,6 +124,22 @@ final class AuthMiddleware
             }
         }
         return null;
+    }
+
+    /**
+     * True when the request is a mutating call on the JSON `/api/v1`
+     * surface (POST/PUT/PATCH/DELETE under `/api/`). Such requests are
+     * Bearer-only — the session cookie is not accepted as authentication.
+     */
+    private static function isMutatingApiRequest(Request $request): bool
+    {
+        if (!str_starts_with($request->path, '/api/')) {
+            return false;
+        }
+        return match (strtoupper($request->method)) {
+            'POST', 'PUT', 'PATCH', 'DELETE' => true,
+            default => false,
+        };
     }
 
     /**

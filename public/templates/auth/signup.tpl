@@ -8,6 +8,7 @@
         <div class="error">{$error|escape:'html'}</div>
     {/if}
     <form method="post" action="/signup">
+        {include file="partials/csrf-field.tpl"}
         <div>
             <label for="username">Username</label>
             <input id="username" name="username" type="text" required minlength="3" maxlength="50" value="{$username|default:''|escape:'html'}">

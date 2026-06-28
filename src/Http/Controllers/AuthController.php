@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Http\Middleware\CsrfMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Events\Auth\UserLoggedOut;
@@ -29,12 +30,17 @@ use Throwable;
 final class AuthController
 {
     /**
-     * @param AuthManager  $auth     Orchestrator.
-     * @param PageRenderer $renderer Smarty wrapper for SSR templates.
+     * @param AuthManager    $auth     Orchestrator.
+     * @param PageRenderer   $renderer Smarty wrapper for SSR templates.
+     * @param CsrfMiddleware $csrf     Re-stamps the CSRF cookie + hidden
+     *                                 field when an SSR form is re-rendered
+     *                                 after a validation/auth error so the
+     *                                 retry submission carries a valid token.
      */
     public function __construct(
         private readonly AuthManager $auth,
         private readonly PageRenderer $renderer,
+        private readonly CsrfMiddleware $csrf,
     ) {
     }
 
@@ -78,21 +84,21 @@ final class AuthController
                 self::asString($result['refresh_token']),
             );
         } catch (InvalidArgumentException $e) {
-            return (new Response())->html(
+            return $this->csrf->issue($request, (new Response())->html(
                 $this->renderer->render('auth/signup.tpl', [
                     'error'    => $e->getMessage(),
                     'username' => self::stringField($request, 'username'),
                     'email'    => self::stringField($request, 'email'),
                 ]),
                 400,
-            );
+            ));
         } catch (Throwable $e) {
-            return (new Response())->html(
+            return $this->csrf->issue($request, (new Response())->html(
                 $this->renderer->render('auth/signup.tpl', [
                     'error' => 'Unable to create account: ' . $e->getMessage(),
                 ]),
                 500,
-            );
+            ));
         }
     }
 
@@ -119,20 +125,20 @@ final class AuthController
                 self::asString($result['refresh_token']),
             );
         } catch (InvalidArgumentException $e) {
-            return (new Response())->html(
+            return $this->csrf->issue($request, (new Response())->html(
                 $this->renderer->render('auth/login.tpl', [
                     'error'    => $e->getMessage(),
                     'username' => self::stringField($request, 'username'),
                 ]),
                 401,
-            );
+            ));
         } catch (Throwable $e) {
-            return (new Response())->html(
+            return $this->csrf->issue($request, (new Response())->html(
                 $this->renderer->render('auth/login.tpl', [
                     'error' => 'Login failed: ' . $e->getMessage(),
                 ]),
                 500,
-            );
+            ));
         }
     }
 
@@ -268,9 +274,14 @@ final class AuthController
     {
         $accessTtl = $this->auth->jwt()->getAccessTtl();
         $refreshTtl = $this->auth->jwt()->getRefreshTtl();
+        // Session cookies are HttpOnly + Secure (the latter via the
+        // Response::cookie() default) + SameSite=Strict: the auth flow only
+        // performs same-site redirects (`/login` -> `/my-servers`,
+        // `/logout` -> `/`), so Strict is safe and gives the strongest
+        // cross-site protection.
         return $response
-            ->cookie(AuthMiddleware::COOKIE_ACCESS, $accessToken, $accessTtl)
-            ->cookie(AuthMiddleware::COOKIE_REFRESH, $refreshToken, $refreshTtl);
+            ->cookie(AuthMiddleware::COOKIE_ACCESS, $accessToken, $accessTtl, '/', true, null, 'Strict')
+            ->cookie(AuthMiddleware::COOKIE_REFRESH, $refreshToken, $refreshTtl, '/', true, null, 'Strict');
     }
 
     /**
@@ -279,8 +290,8 @@ final class AuthController
     private function withClearedCookies(Response $response): Response
     {
         return $response
-            ->cookie(AuthMiddleware::COOKIE_ACCESS, '', 0)
-            ->cookie(AuthMiddleware::COOKIE_REFRESH, '', 0);
+            ->cookie(AuthMiddleware::COOKIE_ACCESS, '', 0, '/', true, null, 'Strict')
+            ->cookie(AuthMiddleware::COOKIE_REFRESH, '', 0, '/', true, null, 'Strict');
     }
 
     /**
