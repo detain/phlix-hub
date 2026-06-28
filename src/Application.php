@@ -251,6 +251,12 @@ final class Application
                 return $serverProxy->proxy($req, $typedParams);
             };
             $r->get('/servers/{id}/proxy/{path:.*}', $proxyHandler);
+            // POST/PUT/DELETE are intentionally NOT in the browse-scope
+            // allowlist (ServerProxyController::BROWSE_SCOPE_ALLOWLIST has only
+            // GET/HEAD keys): this is a read-only browse proxy. The POST route
+            // stays registered so a POST reaches the controller and gets a
+            // deliberate 403 `proxy.scope_denied` (fails closed) rather than a
+            // bare 404 — do NOT expand the allowlist to make it forward.
             $r->post('/servers/{id}/proxy/{path:.*}', $proxyHandler);
         }, [$authMiddleware]);
 
