@@ -53,6 +53,7 @@ final class MigrationFileTest extends TestCase
             '029_audit_logs.sql',
             '030_fix_server_claim_pairing.sql',
             '031_server_libraries.sql',
+            '032_client_relay_tokens.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);

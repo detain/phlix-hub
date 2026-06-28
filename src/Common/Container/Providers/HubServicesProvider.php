@@ -21,6 +21,7 @@ use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Http\Controllers\LogController;
 use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\ClaimRequestHandler;
+use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\DeregisterHandler;
 use Phlix\Hub\Hub\DnsAliasManager;
 use Phlix\Hub\Hub\Dns\StaticZoneManager;
@@ -54,6 +55,7 @@ use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
+use Phlix\Hub\Http\Controllers\ClientRelayTokenController;
 use Phlix\Hub\Http\Controllers\FederationRelayController;
 use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Relay\FederationWorker;
@@ -164,6 +166,28 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): ServerInfoHandler {
                 return new ServerInfoHandler($db);
             })->parameter('db', get(Connection::class)),
+
+            // Per-user, server-scoped, revocable client relay token store
+            // (Step S2a). TTL configurable via `relay_token_ttl` (seconds);
+            // defaults to one hour. Only the SHA-256 hash is persisted.
+            ClientRelayTokenService::class => factory(static function (
+                Connection $db,
+            ) use ($appConfig): ClientRelayTokenService {
+                $ttl = is_int($appConfig['relay_token_ttl'] ?? null)
+                    ? (int) $appConfig['relay_token_ttl']
+                    : ClientRelayTokenService::DEFAULT_TTL_SECONDS;
+                return new ClientRelayTokenService($db, $ttl);
+            })->parameter('db', get(Connection::class)),
+
+            ClientRelayTokenController::class => factory(static function (
+                ClientRelayTokenService $tokens,
+                ServerInfoHandler $serverInfo,
+                AuditLogger $audit,
+            ): ClientRelayTokenController {
+                return new ClientRelayTokenController($tokens, $serverInfo, $audit);
+            })->parameter('tokens', get(ClientRelayTokenService::class))
+                ->parameter('serverInfo', get(ServerInfoHandler::class))
+                ->parameter('audit', get(AuditLogger::class)),
 
             DeregisterHandler::class => factory(static function (
                 Connection $db,
