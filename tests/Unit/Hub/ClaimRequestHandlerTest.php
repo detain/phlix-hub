@@ -22,6 +22,15 @@ use Workerman\MySQL\Connection;
  */
 final class ClaimRequestHandlerTest extends TestCase
 {
+    /**
+     * Canonical RFC-4122 v4 UUID: 8-4-4-4-12 lowercase hex, version nibble
+     * `4`, variant nibble one of 8/9/a/b. The claim `id` doubles as the
+     * unguessable poll secret a headless server uses to fetch its enrollment
+     * JWT, so it MUST be a >=128-bit CSPRNG value of this exact shape (S4).
+     */
+    private const string UUID_V4_REGEX =
+        '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/';
+
     private string $tmpDir;
 
     protected function setUp(): void
@@ -127,6 +136,7 @@ final class ClaimRequestHandlerTest extends TestCase
     public function testHandleNewClaimInsertsPendingClaim(): void
     {
         $db = $this->createMock(Connection::class);
+        $inserted = [];
         $db->method('query')
             ->willReturnCallback(function (string $sql, array $params) use (&$inserted) {
                 if (str_contains($sql, 'INSERT INTO server_claims')) {
@@ -155,6 +165,63 @@ final class ClaimRequestHandlerTest extends TestCase
         self::assertSame(600, $response->expiresIn);
         self::assertNotEmpty($response->claimId);
         self::assertSame('https://hub.example.com', $response->hubBaseUrl);
+
+        // S4: the claim id (the poll secret) must be a CSPRNG UUID v4 and the
+        // value persisted to server_claims.id must be that same value.
+        self::assertMatchesRegularExpression(self::UUID_V4_REGEX, $response->claimId);
+        self::assertIsArray($inserted);
+        self::assertSame($response->claimId, $inserted['id']);
+        self::assertMatchesRegularExpression(self::UUID_V4_REGEX, (string) $inserted['id']);
+    }
+
+    /**
+     * S4 regression: the claim `id` poll secret is a high-entropy CSPRNG value.
+     *
+     * A non-crypto RNG (mt_rand/uniqid) or a sequential/low-entropy id would
+     * let an attacker guess a pending claim's id and steal the freshly-minted
+     * enrollment JWT. Mint a large sample and assert every id is a canonical
+     * UUID v4 (128-bit, version/variant pinned) and that all draws are unique
+     * — the observable signature of {@see \Phlix\Hub\Common\Support\Ids::uuidV4()}.
+     */
+    public function testHandleNewClaimMintsCsprngClaimIds(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $captured = [];
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, array $params) use (&$captured) {
+                if (str_contains($sql, 'INSERT INTO server_claims')) {
+                    $captured[] = (string) $params['id'];
+                }
+                return [];
+            });
+
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $logger = $this->createMock(StructuredLogger::class);
+        $audit = $this->createMock(AuditLogger::class);
+        $handler = new ClaimRequestHandler($db, $keyManager, $logger, $audit, 'https://hub.example.com');
+
+        $draws = 500;
+        for ($i = 0; $i < $draws; $i++) {
+            $request = new ClaimRequest(
+                serverName: 'Server ' . $i,
+                version: '0.11.0',
+                publicKeysJwk: $this->validEd25519Jwk(),
+                hostnameCandidates: [],
+                protocolVersion: 'v1',
+            );
+            $response = $handler->handleNewClaim($request);
+            self::assertMatchesRegularExpression(self::UUID_V4_REGEX, $response->claimId);
+        }
+
+        self::assertCount($draws, $captured);
+        foreach ($captured as $id) {
+            self::assertMatchesRegularExpression(self::UUID_V4_REGEX, $id);
+        }
+        self::assertCount(
+            $draws,
+            array_unique($captured),
+            'Every claim id draw must be unique (CSPRNG, no collisions).',
+        );
     }
 
     public function testHandleNewClaimReturnsExistingCodeForDuplicateRequest(): void
