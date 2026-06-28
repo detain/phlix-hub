@@ -126,9 +126,13 @@ class Response
      * @param string $value    Cookie value (empty string + max_age=0 to clear).
      * @param int    $maxAge   Lifetime in seconds.
      * @param string $path     Path scope. Default "/".
-     * @param bool   $httpOnly HttpOnly flag. Default true.
-     * @param bool   $secure   Secure flag. Default false in dev.
-     * @param string $sameSite SameSite policy ("Strict"/"Lax"/"None"). Default "Lax".
+     * @param bool      $httpOnly HttpOnly flag. Default true.
+     * @param bool|null $secure   Secure flag. When null (the default) the
+     *                            cookie is emitted with `Secure` unless the
+     *                            `HUB_COOKIE_INSECURE=1` env override is set
+     *                            (local plain-HTTP dev only). Pass an explicit
+     *                            bool to force the flag regardless of env.
+     * @param string    $sameSite SameSite policy ("Strict"/"Lax"/"None"). Default "Lax".
      *
      * @return self
      */
@@ -138,7 +142,7 @@ class Response
         int $maxAge = 0,
         string $path = '/',
         bool $httpOnly = true,
-        bool $secure = false,
+        ?bool $secure = null,
         string $sameSite = 'Lax',
     ): self {
         $this->cookies[] = [
@@ -147,10 +151,28 @@ class Response
             'max_age'   => $maxAge,
             'path'      => $path,
             'http_only' => $httpOnly,
-            'secure'    => $secure,
+            'secure'    => $secure ?? self::secureCookiesDefault(),
             'same_site' => $sameSite,
         ];
         return $this;
+    }
+
+    /**
+     * Resolve the default `Secure` cookie flag.
+     *
+     * Cookies are emitted with `Secure` by default (the hub is served over
+     * HTTPS in every real deployment). The single escape hatch is the
+     * `HUB_COOKIE_INSECURE=1` environment variable, intended ONLY for local
+     * plain-HTTP development where the browser would otherwise refuse to
+     * store a `Secure` cookie over `http://`.
+     */
+    private static function secureCookiesDefault(): bool
+    {
+        $override = getenv('HUB_COOKIE_INSECURE');
+        if ($override === '1' || $override === 'true') {
+            return false;
+        }
+        return true;
     }
 
     /**

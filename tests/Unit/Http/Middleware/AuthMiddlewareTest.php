@@ -166,6 +166,77 @@ final class AuthMiddlewareTest extends TestCase
         self::assertSame('u-c', $request->userId);
     }
 
+    /**
+     * Step S3: a MUTATING `/api/v1` request authenticated ONLY by the
+     * session cookie (no Authorization header) must be rejected — the API
+     * surface is bearer-only for state-changing methods, closing the
+     * cookie-based CSRF vector.
+     */
+    public function testMutatingApiRequestWithOnlyCookieIsRejected(): void
+    {
+        $jwt = new JwtHandler(self::SECRET);
+        $token = $jwt->createAccessToken('u-api');
+
+        $repo = $this->createMock(UserRepository::class);
+        // findById must never be reached because the cookie is ignored.
+        $repo->expects(self::never())->method('findById');
+
+        $mw = new AuthMiddleware($jwt, $repo);
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/me/shares';
+        $request->headers = ['COOKIE' => AuthMiddleware::COOKIE_ACCESS . '=' . $token];
+
+        $response = $mw($request);
+        self::assertNotNull($response);
+        self::assertSame(401, $response->statusCode);
+        self::assertStringContainsString('auth.required', $response->body);
+    }
+
+    /**
+     * Conversely, a MUTATING `/api/v1` request with a valid Bearer header
+     * still authenticates (the header path is unaffected).
+     */
+    public function testMutatingApiRequestWithBearerStillAuthenticates(): void
+    {
+        $jwt = new JwtHandler(self::SECRET);
+        $token = $jwt->createAccessToken('u-api2');
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(['id' => 'u-api2', 'username' => 'api']);
+
+        $mw = new AuthMiddleware($jwt, $repo);
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/me/shares';
+        $request->bearerToken = $token;
+
+        self::assertNull($mw($request));
+        self::assertSame('u-api2', $request->userId);
+    }
+
+    /**
+     * A non-mutating (GET) `/api/v1` request authenticated by cookie is
+     * still accepted — the cookie path stays valid for reads.
+     */
+    public function testGetApiRequestWithCookieIsStillAccepted(): void
+    {
+        $jwt = new JwtHandler(self::SECRET);
+        $token = $jwt->createAccessToken('u-get');
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->willReturn(['id' => 'u-get', 'username' => 'getter']);
+
+        $mw = new AuthMiddleware($jwt, $repo);
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/me';
+        $request->headers = ['COOKIE' => AuthMiddleware::COOKIE_ACCESS . '=' . $token];
+
+        self::assertNull($mw($request));
+        self::assertSame('u-get', $request->userId);
+    }
+
     public function testIsJsonRequestDetectsApiPrefix(): void
     {
         $request = new Request();

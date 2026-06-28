@@ -19,6 +19,7 @@ use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Http\Middleware\CsrfMiddleware;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -57,8 +58,13 @@ final class HttpServicesProvider implements ServiceProviderInterface
             AuthController::class => factory(static function (
                 AuthManager $auth,
                 PageRenderer $renderer,
+                CsrfMiddleware $csrf,
             ): AuthController {
-                return new AuthController($auth, $renderer);
+                return new AuthController($auth, $renderer, $csrf);
+            }),
+
+            CsrfMiddleware::class => factory(static function (): CsrfMiddleware {
+                return new CsrfMiddleware();
             }),
 
             PageController::class => factory(static function (
