@@ -77,4 +77,39 @@ final class JwksControllerTest extends TestCase
 
         self::assertStringContainsString('max-age=3600', $response->headers['Cache-Control']);
     }
+
+    /**
+     * S7: during a rotation overlap the JWKS lists BOTH kids; after the overlap
+     * window lapses only the current kid remains.
+     */
+    public function testJwksListsBothKidsDuringOverlapThenOneAfter(): void
+    {
+        $now = 7_000_000;
+        $clock = static function () use (&$now): int {
+            return $now;
+        };
+        $keyPath = $this->tmpDir . '/rotating-key.pem';
+        $keyManager = new Ed25519KeyManager($keyPath, $clock);
+        $keyManager->getOrCreateKeyPair();
+        $oldKid = $keyManager->getKid();
+
+        $keyManager->rotate();
+        $newKid = $keyManager->getKid();
+
+        $controller = new HubJwksController($keyManager);
+
+        // During overlap: two keys, both kids.
+        $body = json_decode($controller(new Request())->body, true);
+        self::assertIsArray($body);
+        self::assertCount(2, $body['keys']);
+        $kids = array_map(static fn (array $k): string => (string) $k['kid'], $body['keys']);
+        self::assertEqualsCanonicalizing([$newKid, $oldKid], $kids);
+
+        // After the overlap window lapses: only the current kid.
+        $now += Ed25519KeyManager::OVERLAP_TTL_SECONDS + 1;
+        $bodyAfter = json_decode($controller(new Request())->body, true);
+        self::assertIsArray($bodyAfter);
+        self::assertCount(1, $bodyAfter['keys']);
+        self::assertSame($newKid, $bodyAfter['keys'][0]['kid']);
+    }
 }
