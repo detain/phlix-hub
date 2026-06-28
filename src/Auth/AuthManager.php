@@ -7,6 +7,7 @@ namespace Phlix\Hub\Auth;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Shared\Auth\JwtClaims;
 use Phlix\Shared\Events\Auth\UserCreated;
 use Phlix\Shared\Events\Auth\UserLoggedIn;
@@ -31,17 +32,16 @@ use Workerman\MySQL\Connection;
  */
 class AuthManager
 {
-    private const int RATE_LIMIT_MAX_ATTEMPTS = 5;
-    private const int RATE_LIMIT_WINDOW_SECONDS = 900; // 15 minutes
-
-    /** @var array<string, array{attempts: int, reset_at: int}> Static rate limit storage per IP */
-    private static array $rateLimitStore = [];
-
     /**
      * @param UserRepository                $userRepository
      * @param JwtHandler                    $jwtHandler
      * @param AuditLogger                   $auditLogger
      * @param StructuredLogger              $logger
+     * @param RateLimiterInterface          $rateLimiter     Bounded, TTL-windowed login
+     *                                                       attempt counter keyed by the
+     *                                                       real client IP (finding B1 —
+     *                                                       replaces the old unbounded
+     *                                                       `static array` map).
      * @param EventDispatcherInterface|null $eventDispatcher Optional PSR-14 dispatcher.
      * @param Connection|null               $db              Optional DB handle so the
      *                                                       first-user admin promotion
@@ -52,73 +52,56 @@ class AuthManager
         private readonly JwtHandler $jwtHandler,
         private readonly AuditLogger $auditLogger,
         private readonly StructuredLogger $logger,
+        private readonly RateLimiterInterface $rateLimiter,
         private readonly ?EventDispatcherInterface $eventDispatcher = null,
         private readonly ?Connection $db = null,
     ) {
     }
 
     /**
-     * Get the client IP address for rate limiting.
+     * Build the per-IP rate-limit bucket key. Empty/unknown IPs collapse to
+     * a single shared bucket rather than going unlimited.
      */
-    private function getClientIp(): string
+    private static function rateLimitKey(string $clientIp): string
     {
-        /** @var mixed $ip */
-        $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
-        return is_string($ip) ? $ip : '127.0.0.1';
+        $ip = $clientIp !== '' ? $clientIp : 'unknown';
+        return 'auth:login:' . $ip;
     }
 
     /**
-     * Check if the client IP has exceeded the rate limit.
+     * Reject the attempt if the client IP is already over the limit, WITHOUT
+     * recording an attempt (the attempt itself is counted only on failure via
+     * {@see recordFailedAttempt()}). Preserves the historical semantics: once
+     * the threshold of failures within the window is reached, subsequent
+     * attempts are blocked until the window resets.
      *
-     * @throws RateLimitException When rate limit is exceeded
+     * @throws RateLimitException When the rate limit is exceeded.
      */
-    private function checkRateLimit(string $ip): void
+    private function checkRateLimit(string $clientIp): void
     {
-        $now = time();
-
-        if (!isset(self::$rateLimitStore[$ip])) {
-            return;
-        }
-
-        $record = self::$rateLimitStore[$ip];
-
-        if ($record['reset_at'] <= $now) {
-            unset(self::$rateLimitStore[$ip]);
-            return;
-        }
-
-        if ($record['attempts'] >= self::RATE_LIMIT_MAX_ATTEMPTS) {
+        $state = $this->rateLimiter->peek(self::rateLimitKey($clientIp));
+        if ($state->limited) {
             throw new RateLimitException(
-                resetAt: $record['reset_at'],
-                remaining: 0
+                resetAt: $state->resetAt,
+                remaining: 0,
             );
         }
     }
 
     /**
-     * Record a failed authentication attempt for rate limiting.
+     * Record a failed authentication attempt for the client IP.
      */
-    private function recordFailedAttempt(string $ip): void
+    private function recordFailedAttempt(string $clientIp): void
     {
-        $now = time();
-
-        if (!isset(self::$rateLimitStore[$ip]) || self::$rateLimitStore[$ip]['reset_at'] <= $now) {
-            self::$rateLimitStore[$ip] = [
-                'attempts' => 1,
-                'reset_at' => $now + self::RATE_LIMIT_WINDOW_SECONDS,
-            ];
-            return;
-        }
-
-        self::$rateLimitStore[$ip]['attempts']++;
+        $this->rateLimiter->hit(self::rateLimitKey($clientIp));
     }
 
     /**
-     * Clear rate limit data for a client IP after successful auth.
+     * Clear rate-limit data for a client IP after successful auth.
      */
-    private function clearRateLimit(string $ip): void
+    private function clearRateLimit(string $clientIp): void
     {
-        unset(self::$rateLimitStore[$ip]);
+        $this->rateLimiter->reset(self::rateLimitKey($clientIp));
     }
 
     /**
@@ -209,15 +192,17 @@ class AuthManager
      *
      * @param string $usernameOrEmail Either the username or the email — looked up against both indexes.
      * @param string $password        Plain password.
+     * @param string $clientIp        Real client IP (from `Request::$remoteIp`); the key the
+     *                                login limiter buckets on. Distinct from `$deviceId`.
      * @param string $deviceId        Opaque device/session identifier (no formal session rows yet).
      *
      * @return array{access_token:string,refresh_token:string,token_type:string,expires_in:int,user:array<string,mixed>,claims:array<string,mixed>}
      *
      * @throws InvalidArgumentException When the credentials do not match.
+     * @throws RateLimitException       When the client IP has exceeded the login rate limit.
      */
-    public function login(string $usernameOrEmail, string $password, string $deviceId): array
+    public function login(string $usernameOrEmail, string $password, string $clientIp, string $deviceId = ''): array
     {
-        $clientIp = $this->getClientIp();
         $this->checkRateLimit($clientIp);
 
         $user = $this->userRepository->findByUsername($usernameOrEmail);

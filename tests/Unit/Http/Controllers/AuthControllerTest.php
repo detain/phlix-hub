@@ -105,7 +105,7 @@ final class AuthControllerTest extends TestCase
         $mgr->method('jwt')->willReturn($jwt);
         $mgr->expects(self::once())
             ->method('login')
-            ->with('alice', 'pwd', self::anything())
+            ->with('alice', 'pwd', self::anything(), self::anything())
             ->willReturn([
                 'access_token' => $access, 'refresh_token' => $refresh,
                 'token_type' => 'Bearer', 'expires_in' => 3600,
@@ -130,7 +130,7 @@ final class AuthControllerTest extends TestCase
         $mgr->method('jwt')->willReturn($jwt);
         $mgr->expects(self::once())
             ->method('login')
-            ->with('a@example.com', 'pwd', self::anything())
+            ->with('a@example.com', 'pwd', self::anything(), self::anything())
             ->willReturn([
                 'access_token' => $jwt->createAccessToken('u-3'),
                 'refresh_token' => $jwt->createRefreshToken('u-3'),
