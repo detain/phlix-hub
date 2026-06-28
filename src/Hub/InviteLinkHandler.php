@@ -153,39 +153,14 @@ class InviteLinkHandler
         $claimsData = $claims->toPayload();
         /** @var mixed $inviteTokenRaw */
         $inviteTokenRaw = $claimsData['token'] ?? null;
-        /** @var mixed $ownerIdRaw */
-        $ownerIdRaw = $claimsData['owner_id'] ?? null;
-        /** @var mixed $serverIdRaw */
-        $serverIdRaw = $claimsData['server_id'] ?? null;
-        /** @var mixed $libraryIdRaw */
-        $libraryIdRaw = $claimsData['library_id'] ?? null;
-        /** @var mixed $permissionRaw */
-        $permissionRaw = $claimsData['permission'] ?? 'read';
-        /** @var mixed $maxUsesRaw */
-        $maxUsesRaw = $claimsData['max_uses'] ?? 1;
-        /** @var mixed $expiresAtRaw */
-        $expiresAtRaw = $claimsData['expires_at'] ?? null;
 
-        if (
-            !is_string($inviteTokenRaw)
-            || !is_string($ownerIdRaw)
-            || !is_string($serverIdRaw)
-        ) {
+        // The opaque invite token (whose sha256 is stored as `token_hash`) is the
+        // `token` claim when the JWT carries one; otherwise the redeem argument is
+        // itself the opaque token. Either way it must be a non-empty string.
+        $inviteToken = is_string($inviteTokenRaw) && $inviteTokenRaw !== '' ? $inviteTokenRaw : $token;
+        if ($inviteToken === '') {
             throw new InvalidArgumentException('Malformed invite token', 400);
         }
-
-        /** @var string $inviteToken */
-        $inviteToken = $inviteTokenRaw;
-        /** @var string $ownerId */
-        $ownerId = $ownerIdRaw;
-        /** @var string $serverId */
-        $serverId = $serverIdRaw;
-        /** @var string|null $libraryId */
-        $libraryId = is_string($libraryIdRaw) ? $libraryIdRaw : null;
-        /** @var string $permission */
-        $permission = is_string($permissionRaw) ? $permissionRaw : 'read';
-        /** @var int $maxUses */
-        $maxUses = is_numeric($maxUsesRaw) ? (int) $maxUsesRaw : 1;
 
         $tokenHash = hash('sha256', $inviteToken);
 
@@ -200,7 +175,16 @@ class InviteLinkHandler
         }
 
         $row = $rows[0];
-        $useCount = is_numeric($row['use_count'] ?? null) ? (int) $row['use_count'] : 0;
+
+        // The invite_links row is the authoritative record for ownership, target
+        // and permission — token claims only mirror it. Read them from the row so
+        // the conditional UPDATE below and the resulting share both agree with the
+        // persisted invite (token claims may legitimately omit these; the row
+        // never does).
+        $ownerId = is_string($row['owner_user_id'] ?? null) ? (string) $row['owner_user_id'] : '';
+        $serverId = is_string($row['server_id'] ?? null) ? (string) $row['server_id'] : '';
+        $libraryId = is_string($row['library_id'] ?? null) ? (string) $row['library_id'] : null;
+        $permission = is_string($row['permission'] ?? null) ? (string) $row['permission'] : 'read';
         $rowExpiresAt = isset($row['expires_at']) && is_numeric($row['expires_at'])
             ? (int) $row['expires_at']
             : null;
@@ -209,18 +193,42 @@ class InviteLinkHandler
             throw new InvalidArgumentException('Invite link has expired', 410);
         }
 
-        if ($useCount >= $maxUses) {
-            throw new InvalidArgumentException('Invite link has been exhausted', 410);
-        }
-
         if ($redeemerUserId === $ownerId) {
             throw new InvalidArgumentException('Cannot redeem your own invite link', 400);
         }
 
-        $this->db->query(
-            'UPDATE invite_links SET use_count = use_count + 1 WHERE token_hash = :token_hash',
-            ['token_hash' => $tokenHash],
+        // Atomic single-use claim. The previous code read `use_count`, decided the
+        // invite was still valid, then UPDATEd `use_count = use_count + 1` in a
+        // SEPARATE statement — a check-then-act race where two concurrent
+        // redemptions could both pass the read and both increment, redeeming a
+        // `max_uses = 1` invite twice. Collapse the decision and the increment
+        // into ONE conditional UPDATE that the database evaluates atomically:
+        // the row is incremented if and only if it still has uses left and has
+        // not expired. `use_count < max_uses` compares the columns DB-side (the
+        // authoritative source), and the expiry predicate is re-checked in the
+        // WHERE so an invite that expires between the SELECT and the UPDATE is
+        // not claimed. Exactly one of N concurrent redemptions will see one
+        // affected row; the losers see zero. Affected-rows is reported correctly
+        // under the connection's emulated + buffered prepares (see B4).
+        // workerman's Connection::query() returns the PDOStatement rowCount for
+        // UPDATE statements (an int); narrow the mixed return defensively.
+        /** @var mixed $updateResult */
+        $updateResult = $this->db->query(
+            'UPDATE invite_links
+                SET use_count = use_count + 1
+             WHERE token_hash = :token_hash
+               AND use_count < max_uses
+               AND (expires_at IS NULL OR expires_at > :now)',
+            ['token_hash' => $tokenHash, 'now' => time()],
         );
+        $affected = is_numeric($updateResult) ? (int) $updateResult : 0;
+
+        if ($affected !== 1) {
+            // Zero affected rows: another redemption already consumed the last
+            // use, or the invite expired/was revoked in the race window. Reject
+            // with the same error an exhausted invite has always returned.
+            throw new InvalidArgumentException('Invite link has been exhausted', 410);
+        }
 
         $serverName = $this->getServerName($serverId);
         /** @var string $libraryName */
