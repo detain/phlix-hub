@@ -12,7 +12,11 @@ use Phlix\Hub\Http\Response;
  * Serves the hub's signing JWKS at GET /.well-known/jwks.json.
  *
  * This is the public endpoint servers use to fetch the hub's Ed25519
- * public key for validating enrollment JWTs.
+ * public key(s) for validating enrollment JWTs. During a key-rotation overlap
+ * window it publishes BOTH the current key and the retained previous key, so
+ * 7-day enrollment JWTs minted before the rotation keep validating until they
+ * naturally expire; once the previous key's overlap lapses only the current
+ * key is published.
  *
  * @package Phlix\Hub\Http\Controllers
  */
@@ -34,6 +38,6 @@ final class HubJwksController
         return (new Response())
             ->header('Content-Type', 'application/json')
             ->header('Cache-Control', 'public, max-age=3600')
-            ->json(['keys' => [$this->keyManager->getPublicKeyJwk()]]);
+            ->json(['keys' => $this->keyManager->getPublicKeyJwks()]);
     }
 }
