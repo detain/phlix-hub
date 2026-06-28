@@ -7,29 +7,40 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Http\Controllers\ClientMountController;
-use Phlix\Hub\Hub\Ed25519KeyManager;
-use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
+use Phlix\Shared\Hub\ServerInfoDto;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
+use Workerman\MySQL\Connection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
+
+use function hash;
 
 /**
  * Unit tests for {@see ClientRelayWorker} — the client-facing relay path.
  *
- * Covers JWT accept/reject, path parsing, JWT extraction from the upgrade
- * request, binding to an existing tunnel, the no-tunnel-available close, and
- * a DATA frame round-trip through the router to the server tunnel.
+ * Covers per-user relay-token accept/reject (step S2b), path parsing, token
+ * extraction from the upgrade request (header / subprotocol only — the legacy
+ * `?token=` query path was removed), ownership enforcement at mount, binding
+ * to an existing tunnel, the no-tunnel-available close, and a DATA frame
+ * round-trip through the router to the server tunnel.
+ *
+ * The worker no longer accepts the server's long-lived enrollment JWT as a
+ * client credential. It validates a short-lived, revocable, per-user hub relay
+ * token via {@see ClientRelayTokenService} and re-confirms the bound user owns
+ * the target server via {@see ServerInfoHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
  *
@@ -37,14 +48,30 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  */
 final class ClientRelayWorkerTest extends TestCase
 {
+    /** Server id used by the "owned, online" happy-path fixtures. */
+    private const OWNER_USER_ID = 'user-owner-1';
+
     private string $tmpDir;
-    private Ed25519KeyManager $keyManager;
-    private EnrollmentJwtService $jwtService;
     private RelaySessionManager $sessionManager;
     private RelayWireCodecInterface $codec;
     private StructuredLogger $logger;
     private TunnelManager $tunnelManager;
     private ClientMountController $controller;
+
+    /**
+     * Map of plaintext relay token => bound {user_id, server_id} the fake
+     * token service treats as ACTIVE (not expired, not revoked).
+     *
+     * @var array<string, array{user_id: string, server_id: string}>
+     */
+    private array $activeTokens = [];
+
+    /**
+     * Map of server_id => owning user_id used by the fake ServerInfoHandler.
+     *
+     * @var array<string, string>
+     */
+    private array $serverOwners = [];
 
     protected function setUp(): void
     {
@@ -64,9 +91,6 @@ final class ClientRelayWorkerTest extends TestCase
         );
         LoggerFactory::reset();
         LoggerFactory::init($loggerConfig);
-
-        $this->keyManager = new Ed25519KeyManager($this->tmpDir . '/signing-key.pem');
-        $this->jwtService = new EnrollmentJwtService($this->keyManager, 'https://hub.example.com');
 
         $this->logger = $this->createMock(StructuredLogger::class);
         $this->sessionManager = $this->createMock(RelaySessionManager::class);
@@ -118,38 +142,42 @@ final class ClientRelayWorkerTest extends TestCase
         self::assertNull(ClientRelayWorker::parseServerId('/client/a/b'));
     }
 
-    // ---- JWT extraction --------------------------------------------------
+    // ---- Token extraction ------------------------------------------------
 
-    public function testExtractJwtFromAuthorizationHeader(): void
+    public function testExtractClientTokenFromAuthorizationHeader(): void
     {
-        $request = $this->makeUpgradeRequest('/client/s1', ['Authorization' => 'Bearer my.jwt.token']);
-        self::assertSame('my.jwt.token', ClientRelayWorker::extractJwt($request));
+        $request = $this->makeUpgradeRequest('/client/s1', ['Authorization' => 'Bearer relay-tok-123']);
+        self::assertSame('relay-tok-123', ClientRelayWorker::extractClientToken($request));
     }
 
-    public function testExtractJwtFromSecWebSocketProtocol(): void
+    public function testExtractClientTokenFromSecWebSocketProtocol(): void
     {
-        $request = $this->makeUpgradeRequest('/client/s1', ['Sec-WebSocket-Protocol' => 'bearer, my.jwt.token']);
-        self::assertSame('my.jwt.token', ClientRelayWorker::extractJwt($request));
+        $request = $this->makeUpgradeRequest('/client/s1', ['Sec-WebSocket-Protocol' => 'bearer, relay-tok-123']);
+        self::assertSame('relay-tok-123', ClientRelayWorker::extractClientToken($request));
     }
 
-    public function testExtractJwtFromQueryParam(): void
+    public function testExtractClientTokenIgnoresQueryParam(): void
     {
-        $request = $this->makeUpgradeRequest('/client/s1?token=query.jwt.token');
-        self::assertSame('query.jwt.token', ClientRelayWorker::extractJwt($request));
+        // The legacy `?token=` query path was removed in S2b so secrets never
+        // land in access logs — it must NOT be honoured even when present.
+        $request = $this->makeUpgradeRequest('/client/s1?token=query.tok');
+        self::assertNull(ClientRelayWorker::extractClientToken($request));
     }
 
-    public function testExtractJwtReturnsNullWhenAbsent(): void
+    public function testExtractClientTokenReturnsNullWhenAbsent(): void
     {
         $request = $this->makeUpgradeRequest('/client/s1');
-        self::assertNull(ClientRelayWorker::extractJwt($request));
+        self::assertNull(ClientRelayWorker::extractClientToken($request));
     }
 
-    // ---- JWT validation --------------------------------------------------
+    // ---- Token validation + ownership -----------------------------------
 
-    public function testValidateClientAuthAcceptsValidToken(): void
+    public function testValidateClientAuthAcceptsValidOwnedToken(): void
     {
         $serverId = 'server-uuid-aaa';
-        $token = $this->jwtService->createEnrollmentJwt($serverId);
+        $token = 'valid-relay-token';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
         $worker = new ClientRelayWorker($this->buildContainer());
 
@@ -158,43 +186,71 @@ final class ClientRelayWorkerTest extends TestCase
 
     public function testValidateClientAuthRejectsServerIdMismatch(): void
     {
-        $token = $this->jwtService->createEnrollmentJwt('server-uuid-aaa');
+        // Token is minted for server A but presented at server B's mount path.
+        $token = 'token-for-server-a';
+        $this->grantToken($token, self::OWNER_USER_ID, 'server-a');
+        $this->setServerOwner('server-a', self::OWNER_USER_ID);
+        $this->setServerOwner('server-b', self::OWNER_USER_ID);
+
         $worker = new ClientRelayWorker($this->buildContainer());
 
-        self::assertFalse($worker->validateClientAuth($token, 'a-different-server'));
+        self::assertFalse($worker->validateClientAuth($token, 'server-b'));
     }
 
-    public function testValidateClientAuthRejectsGarbageToken(): void
+    public function testValidateClientAuthRejectsNonOwnedServer(): void
     {
+        // Token is valid and scoped to the server, but the server is now owned
+        // by someone else — mount must be rejected.
+        $serverId = 'server-uuid-shared';
+        $token = 'valid-but-not-owner';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, 'a-different-owner');
+
         $worker = new ClientRelayWorker($this->buildContainer());
 
-        self::assertFalse($worker->validateClientAuth('not.a.jwt', 'server-uuid-aaa'));
-        self::assertFalse($worker->validateClientAuth('garbage', 'server-uuid-aaa'));
+        self::assertFalse($worker->validateClientAuth($token, $serverId));
     }
 
-    public function testValidateClientAuthRejectsTamperedToken(): void
+    public function testValidateClientAuthRejectsUnknownOrRevokedToken(): void
     {
-        $token = $this->jwtService->createEnrollmentJwt('server-uuid-aaa');
-
-        // Re-sign-proof tampering: replace the payload segment with a forged
-        // one (same server_id) but keep the original signature. The Ed25519
-        // signature no longer covers the new message, so validation must fail.
-        [$header, , $signature] = explode('.', $token);
-        $forgedPayload = rtrim(strtr(base64_encode(
-            json_encode([
-                'iss' => 'phlix-hub',
-                'sub' => 'server-uuid-aaa',
-                'aud' => 'server',
-                'exp' => time() + 3600,
-                'iat' => time(),
-                'server_id' => 'server-uuid-aaa',
-            ], JSON_THROW_ON_ERROR),
-        ), '+/', '-_'), '=');
-        $tampered = "{$header}.{$forgedPayload}.{$signature}";
+        // No token granted => the fake service returns null (covers unknown,
+        // expired, and revoked — all return null from validate()).
+        $serverId = 'server-uuid-aaa';
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
         $worker = new ClientRelayWorker($this->buildContainer());
 
-        self::assertFalse($worker->validateClientAuth($tampered, 'server-uuid-aaa'));
+        self::assertFalse($worker->validateClientAuth('never-minted', $serverId));
+        self::assertFalse($worker->validateClientAuth('', $serverId));
+    }
+
+    public function testValidateClientAuthRejectsRevokedToken(): void
+    {
+        // Mint then revoke the token before the mount: validate() must fail.
+        $serverId = 'server-uuid-rev';
+        $token = 'soon-to-be-revoked';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        $worker = new ClientRelayWorker($this->buildContainer());
+        self::assertTrue($worker->validateClientAuth($token, $serverId));
+
+        // Revoke: drop it from the active set.
+        unset($this->activeTokens[hash('sha256', $token)]);
+
+        self::assertFalse($worker->validateClientAuth($token, $serverId));
+    }
+
+    public function testValidateClientAuthRejectsEnrollmentJwt(): void
+    {
+        // A JWT-looking credential is NOT a relay token — it is unknown to the
+        // token table and must be rejected (closes the S2 hole).
+        $serverId = 'server-uuid-aaa';
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        $worker = new ClientRelayWorker($this->buildContainer());
+
+        self::assertFalse($worker->validateClientAuth('header.payload.signature', $serverId));
     }
 
     // ---- WS connect: rejection paths ------------------------------------
@@ -210,7 +266,7 @@ final class ClientRelayWorkerTest extends TestCase
         $worker->onWebSocketConnect($connection, $request);
     }
 
-    public function testOnWebSocketConnectRejectsMissingJwt(): void
+    public function testOnWebSocketConnectRejectsMissingToken(): void
     {
         $worker = new ClientRelayWorker($this->buildContainer());
         $request = $this->makeUpgradeRequest('/client/server-uuid-aaa');
@@ -223,11 +279,36 @@ final class ClientRelayWorkerTest extends TestCase
         $worker->onWebSocketConnect($connection, $request);
     }
 
-    public function testOnWebSocketConnectRejectsInvalidJwt(): void
+    public function testOnWebSocketConnectRejectsEnrollmentJwtOnly(): void
     {
+        // Presenting only the server enrollment JWT (no relay token) is the
+        // exact attack S2 closes: it must be rejected.
+        $serverId = 'server-uuid-aaa';
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
         $worker = new ClientRelayWorker($this->buildContainer());
-        $request = $this->makeUpgradeRequest('/client/server-uuid-aaa', [
-            'Authorization' => 'Bearer not.a.valid.jwt',
+        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
+            'Authorization' => 'Bearer header.payload.signature',
+        ]);
+
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->expects($this->once())
+            ->method('close')
+            ->with((string) ClientRelayWorker::CLOSE_UNAUTHORIZED, true);
+
+        $worker->onWebSocketConnect($connection, $request);
+    }
+
+    public function testOnWebSocketConnectRejectsNonOwnedServer(): void
+    {
+        $serverId = 'server-uuid-foreign';
+        $token = 'valid-token-foreign';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, 'a-different-owner');
+
+        $worker = new ClientRelayWorker($this->buildContainer());
+        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
+            'Authorization' => 'Bearer ' . $token,
         ]);
 
         $connection = $this->createMock(TcpConnection::class);
@@ -241,7 +322,9 @@ final class ClientRelayWorkerTest extends TestCase
     public function testOnWebSocketConnectClosesWhenNoTunnelAvailable(): void
     {
         $serverId = 'server-uuid-offline';
-        $token = $this->jwtService->createEnrollmentJwt($serverId);
+        $token = 'valid-token-offline';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
         $worker = new ClientRelayWorker($this->buildContainer());
         $request = $this->makeUpgradeRequest('/client/' . $serverId, [
@@ -262,7 +345,9 @@ final class ClientRelayWorkerTest extends TestCase
     public function testOnWebSocketConnectBindsToActiveTunnel(): void
     {
         $serverId = 'server-uuid-online';
-        $token = $this->jwtService->createEnrollmentJwt($serverId);
+        $token = 'valid-token-online';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
         // Bring up an ACTIVE tunnel for this server.
         $serverWs = $this->createMock(TcpConnection::class);
@@ -290,7 +375,9 @@ final class ClientRelayWorkerTest extends TestCase
     public function testClientDataFrameIsRelayedToServerTunnel(): void
     {
         $serverId = 'server-uuid-relay';
-        $token = $this->jwtService->createEnrollmentJwt($serverId);
+        $token = 'valid-token-relay';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
         $serverWs = $this->createMock(TcpConnection::class);
         $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
@@ -339,7 +426,9 @@ final class ClientRelayWorkerTest extends TestCase
     public function testOnCloseDetachesClientAndNotifiesServer(): void
     {
         $serverId = 'server-uuid-close';
-        $token = $this->jwtService->createEnrollmentJwt($serverId);
+        $token = 'valid-token-close';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
         $serverWs = $this->createMock(TcpConnection::class);
         $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
@@ -366,19 +455,97 @@ final class ClientRelayWorkerTest extends TestCase
     // ---- Helpers ---------------------------------------------------------
 
     /**
+     * Mark a plaintext token as ACTIVE and bound to (userId, serverId) in the
+     * fake token service.
+     */
+    private function grantToken(string $token, string $userId, string $serverId): void
+    {
+        $this->activeTokens[hash('sha256', $token)] = [
+            'user_id' => $userId,
+            'server_id' => $serverId,
+        ];
+    }
+
+    /**
+     * Record that $serverId is owned by $userId for the fake ServerInfoHandler.
+     */
+    private function setServerOwner(string $serverId, string $userId): void
+    {
+        $this->serverOwners[$serverId] = $userId;
+    }
+
+    /**
+     * Build a real {@see ClientRelayTokenService} over a mock Connection whose
+     * `query()` resolves the active-token lookup against {@see $activeTokens}.
+     *
+     * The service's validate() SQL filters by `token_hash` (a colon-free named
+     * param) and expects a `[{user_id, server_id}]` row shape.
+     */
+    private function buildTokenService(): ClientRelayTokenService
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []): array {
+                if (!str_contains($sql, 'SELECT')) {
+                    return [];
+                }
+                $hash = $params['token_hash'] ?? null;
+                if (is_string($hash) && isset($this->activeTokens[$hash])) {
+                    return [$this->activeTokens[$hash]];
+                }
+                return [];
+            },
+        );
+
+        return new ClientRelayTokenService($db);
+    }
+
+    /**
+     * Build a {@see ServerInfoHandler} test double whose getServerInfo()
+     * resolves ownership from {@see $serverOwners}.
+     */
+    private function buildServerInfoHandler(): ServerInfoHandler
+    {
+        $handler = $this->createMock(ServerInfoHandler::class);
+        $handler->method('getServerInfo')->willReturnCallback(
+            function (string $serverId): ?ServerInfoDto {
+                if (!isset($this->serverOwners[$serverId])) {
+                    return null;
+                }
+
+                return new ServerInfoDto(
+                    serverId: $serverId,
+                    userId: $this->serverOwners[$serverId],
+                    serverName: 'Test Server',
+                    version: '1.0.0',
+                    lastSeenAt: null,
+                    status: 'online',
+                    hostnameCandidates: [],
+                    relayActive: true,
+                    libraryCount: null,
+                );
+            },
+        );
+
+        return $handler;
+    }
+
+    /**
      * Build a minimal PSR-11 container exposing the relay services the
      * worker and controller resolve.
      */
     private function buildContainer(): ContainerInterface
     {
-        $jwtService = $this->jwtService;
+        $tokenService = $this->buildTokenService();
+        $serverInfo = $this->buildServerInfoHandler();
         $tunnelManager = $this->tunnelManager;
         $controllerFactory = fn (): ClientMountController => $this->controller;
 
-        return new class ($jwtService, $tunnelManager, $controllerFactory) implements ContainerInterface {
+        return new class ($tokenService, $serverInfo, $tunnelManager, $controllerFactory) implements ContainerInterface {
             /** @param callable():ClientMountController $controllerFactory */
             public function __construct(
-                private readonly EnrollmentJwtService $jwtService,
+                private readonly ClientRelayTokenService $tokenService,
+                private readonly ServerInfoHandler $serverInfo,
                 private readonly TunnelManager $tunnelManager,
                 private $controllerFactory,
             ) {
@@ -387,7 +554,8 @@ final class ClientRelayWorkerTest extends TestCase
             public function get(string $id): mixed
             {
                 return match ($id) {
-                    EnrollmentJwtService::class => $this->jwtService,
+                    ClientRelayTokenService::class => $this->tokenService,
+                    ServerInfoHandler::class => $this->serverInfo,
                     TunnelManager::class, TunnelManagerInterface::class => $this->tunnelManager,
                     ClientMountController::class => ($this->controllerFactory)(),
                     default => throw new \RuntimeException("Unknown service: {$id}"),
@@ -397,7 +565,8 @@ final class ClientRelayWorkerTest extends TestCase
             public function has(string $id): bool
             {
                 return in_array($id, [
-                    EnrollmentJwtService::class,
+                    ClientRelayTokenService::class,
+                    ServerInfoHandler::class,
                     TunnelManager::class,
                     TunnelManagerInterface::class,
                     ClientMountController::class,
