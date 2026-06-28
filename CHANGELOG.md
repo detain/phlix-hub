@@ -28,6 +28,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   request/response delivery.
 
 ### Security
+- **All bearer-ish ids are CSPRNG (S4).** Audited every id/secret mint point
+  (`grep -rn 'mt_rand\|uniqid(\|rand(\|random_int(' src/`): there are no
+  non-crypto RNG usages left in any id/secret path. The claim `id` — the
+  unguessable poll secret a headless server uses to fetch its one-time
+  enrollment JWT from `GET /api/v1/server-claims/{id}` — is a 128-bit CSPRNG
+  RFC-4122 v4 UUID minted via `Common\Support\Ids::uuidV4()` (`random_bytes(16)`),
+  as are the server, heartbeat, relay-session, client-mount, federation, invite,
+  audit, request, and user ids consolidated under `Ids` in Q1. Added a focused
+  regression test (`ClaimRequestHandlerTest::testHandleNewClaimMintsCsprngClaimIds`)
+  asserting the persisted claim id is canonical-UUIDv4-shaped and unique across a
+  large sample (the observable signature of a CSPRNG mint), plus a shape assertion
+  on the single-claim insert path. The remaining `random_int()` callers are the
+  display-only claim code and admin reset-password generator — both already CSPRNG.
 - **Relay tunnel HELLO now cryptographically validates the `enrollment_jwt`.**
   `Relay\Tunnel` verifies the Ed25519-signed enrollment JWT (via
   `EnrollmentJwtService`) and requires its `server_id` to match before activating
