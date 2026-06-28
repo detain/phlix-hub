@@ -28,6 +28,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   request/response delivery.
 
 ### Security
+- **Invite-link redemption is now atomic single-use (B5).** `Hub\InviteLinkHandler::redeemInviteLink()`
+  previously read `use_count`, decided the invite was still valid, then issued a SEPARATE
+  unconditional `UPDATE … use_count + 1` — a check-then-act race in which two concurrent
+  redemptions could both pass the read and both increment, redeeming a `max_uses = 1`
+  invite twice. The read-decide-then-increment is replaced by ONE conditional UPDATE the
+  database evaluates atomically — `UPDATE invite_links SET use_count = use_count + 1 WHERE
+  token_hash = :token_hash AND use_count < max_uses AND (expires_at IS NULL OR expires_at >
+  :now)` — so of N concurrent redemptions exactly `max_uses - use_count` affect a row and
+  the rest affect zero. Zero affected rows is treated as "already used / expired / invalid"
+  and rejected with the existing exhausted error (410); the share is granted only on exactly
+  one affected row. The invite metadata (owner/server/library/permission) is read from the
+  authoritative `invite_links` row so the claim and the resulting share always agree with the
+  persisted invite. Multi-use invites still allow up to `max_uses` redemptions; expired,
+  not-found, and self-redeem cases keep their existing errors.
 - **Client relay mount now requires a per-user, revocable hub relay token (S2, closing half).**
   `Relay\ClientRelayWorker` no longer accepts the media server's long-lived 7-day
   **enrollment JWT** as a client credential. At WS mount (`/client/{server_id}`) it now
