@@ -44,6 +44,16 @@ final class ServerProxyControllerTest extends TestCase
         return $req;
     }
 
+    /**
+     * @param array<string, string> $headers
+     */
+    private function requestWith(string $method, ?string $userId, array $headers): Request
+    {
+        $req = $this->request($method, $userId);
+        $req->headers = $headers;
+        return $req;
+    }
+
     private function controller(ServerInfoHandler $info, RelayProxyBridge $bridge): ServerProxyController
     {
         return new ServerProxyController($info, $bridge, $this->createMock(StructuredLogger::class));
@@ -130,6 +140,153 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('/api/v1/libraries', $forwarded['path']);
         $this->assertSame('user-1', $forwarded['headers']['X-Phlix-Relay-User'] ?? null);
         $this->assertSame('1', $forwarded['headers']['X-Phlix-Relay'] ?? null);
+    }
+
+    public function test_forged_trust_headers_are_overwritten_by_hub_values(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body_b64' => base64_encode('{}'),
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+
+        // Client tries to pre-set every trust/forwarding marker, in mixed case.
+        $req = $this->requestWith('GET', 'user-1', [
+            'Accept' => 'application/json',
+            'X-Phlix-Relay' => 'evil',
+            'X-Phlix-Relay-User' => 'admin-attacker',
+            'x-phlix-relay-foo' => 'sneaky',
+            'X-Forwarded-For' => '10.0.0.1',
+            'x-forwarded-host' => 'attacker.example',
+            'X-Real-IP' => '10.0.0.2',
+        ]);
+        $req->remoteIp = '203.0.113.7';
+
+        $response = $controller->proxy($req, ['id' => 'srv-1', 'path' => 'api/v1/libraries']);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertIsArray($forwarded);
+        /** @var array<string, string> $fwdHeaders */
+        $fwdHeaders = $forwarded['headers'];
+
+        // Trust markers reflect the hub's authenticated values, not the client's.
+        $this->assertSame('1', $fwdHeaders['X-Phlix-Relay'] ?? null);
+        $this->assertSame('user-1', $fwdHeaders['X-Phlix-Relay-User'] ?? null);
+        $this->assertSame('203.0.113.7', $fwdHeaders['X-Forwarded-For'] ?? null);
+
+        // No client-supplied trust/forwarding header survives in any case.
+        $this->assertArrayNotHasKey('x-phlix-relay-foo', $fwdHeaders);
+        $this->assertArrayNotHasKey('x-forwarded-host', $fwdHeaders);
+        $this->assertArrayNotHasKey('X-Real-IP', $fwdHeaders);
+        $this->assertArrayNotHasKey('x-real-ip', $fwdHeaders);
+        // The hub value 'admin-attacker' must never appear.
+        $this->assertNotSame('admin-attacker', $fwdHeaders['X-Phlix-Relay-User'] ?? null);
+    }
+
+    public function test_disallowed_method_path_returns_403_and_is_not_forwarded(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/admin/users'],
+        );
+
+        $this->assertSame(403, $response->statusCode);
+        $this->assertFalse($forwarded, 'Out-of-scope request must not reach the relay bridge.');
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    public function test_disallowed_admin_get_returns_403(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/admin/dashboard'],
+        );
+
+        $this->assertSame(403, $response->statusCode);
+        $this->assertFalse($forwarded);
+    }
+
+    public function test_allowed_browse_subpath_is_forwarded(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body_b64' => base64_encode('{"id":"abc"}'),
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/media/abc'],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertIsArray($forwarded);
+        $this->assertSame('/api/v1/media/abc', $forwarded['path']);
+    }
+
+    public function test_sibling_prefix_is_not_treated_as_in_scope(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        // `/api/v1/mediaXYZ` shares a prefix with `/api/v1/media` but is a sibling.
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/mediaXYZ'],
+        );
+
+        $this->assertSame(403, $response->statusCode);
+        $this->assertFalse($forwarded);
     }
 
     public function test_timeout_returns_504(): void

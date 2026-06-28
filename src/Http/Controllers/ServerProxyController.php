@@ -17,7 +17,9 @@ use function is_int;
 use function is_string;
 use function json_encode;
 use function ltrim;
+use function str_starts_with;
 use function strtolower;
+use function strtoupper;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -61,6 +63,72 @@ final class ServerProxyController
         'upgrade',
         'authorization',
         'cookie',
+        // Trust markers + forwarding headers: a client must never be able to
+        // pre-set these — the hub stamps its own authenticated values in
+        // buildForwardHeaders() AFTER stripping. Any inbound copy (in any case)
+        // is dropped here so a forged X-Phlix-Relay-User / X-Forwarded-For can
+        // never reach the server. See {@see self::TRUST_MARKER_PREFIXES}.
+        'x-phlix-relay',
+        'x-phlix-relay-user',
+        'x-forwarded-for',
+        'x-forwarded-host',
+        'x-forwarded-proto',
+        'x-forwarded-port',
+        'x-real-ip',
+    ];
+
+    /**
+     * Inbound header-name prefixes (lower-case) that are never forwarded from
+     * the client regardless of suffix. Catches arbitrary `x-forwarded-*` and
+     * `x-phlix-relay*` variants the explicit list above might not enumerate, so
+     * no client-supplied trust/forwarding marker can survive into the tunnel.
+     *
+     * @var list<string>
+     */
+    private const STRIPPED_REQUEST_HEADER_PREFIXES = [
+        'x-forwarded-',
+        'x-phlix-relay',
+    ];
+
+    /**
+     * Browse-scope allowlist: the only method + path-prefix combinations the
+     * relay proxy is permitted to forward to a paired media server.
+     *
+     * The proxy exists to expose read-only browse traffic (libraries, media
+     * lists/detail, search, images/posters, OPDS catalog) to an authenticated,
+     * server-owning hub user. Anything outside this set — notably admin,
+     * mutating, scan/transcode, or streaming endpoints — is rejected with 403
+     * `proxy.scope_denied` BEFORE forwarding, so a compromised/confused client
+     * cannot use the hub as a deputy to reach privileged server APIs.
+     *
+     * Keyed by HTTP method (upper-case); each value is a list of allowed path
+     * prefixes (matched against the resolved `/`-prefixed forward path).
+     *
+     * @var array<string, list<string>>
+     */
+    private const BROWSE_SCOPE_ALLOWLIST = [
+        'GET' => [
+            '/api/v1/libraries',
+            '/api/v1/media',
+            '/api/v1/search',
+            '/api/v1/collections',
+            '/api/v1/genres',
+            '/api/v1/studios',
+            '/api/v1/people',
+            '/api/v1/images',
+            '/api/v1/opds',
+        ],
+        'HEAD' => [
+            '/api/v1/libraries',
+            '/api/v1/media',
+            '/api/v1/search',
+            '/api/v1/collections',
+            '/api/v1/genres',
+            '/api/v1/studios',
+            '/api/v1/people',
+            '/api/v1/images',
+            '/api/v1/opds',
+        ],
     ];
 
     /**
@@ -135,6 +203,22 @@ final class ServerProxyController
         }
 
         $path = '/' . ltrim($params['path'] ?? '', '/');
+
+        if (!$this->isWithinBrowseScope($request->method, $path)) {
+            $this->logger->info('Relay proxy: rejected out-of-scope request', [
+                'server_id' => $serverId,
+                'user_id' => $userId,
+                'method' => $request->method,
+                'path' => $path,
+            ]);
+
+            return (new Response())->status(403)->json([
+                'error' => 'Forbidden',
+                'code' => 'proxy.scope_denied',
+                'message' => 'This method/path is not exposed through the relay proxy.',
+            ]);
+        }
+
         $headers = $this->buildForwardHeaders($request, $userId);
         $body = $this->reconstructBody($request);
 
@@ -167,6 +251,34 @@ final class ServerProxyController
     }
 
     /**
+     * Determine whether a method + resolved path is within the browse-scope
+     * allowlist the proxy is permitted to forward.
+     *
+     * @param string $method The inbound HTTP method.
+     * @param string $path   The resolved `/`-prefixed forward path.
+     *
+     * @return bool True when the request may be forwarded.
+     */
+    private function isWithinBrowseScope(string $method, string $path): bool
+    {
+        $allowedPrefixes = self::BROWSE_SCOPE_ALLOWLIST[strtoupper($method)] ?? null;
+        if ($allowedPrefixes === null) {
+            return false;
+        }
+
+        foreach ($allowedPrefixes as $prefix) {
+            // Match either an exact collection path or a sub-path under it
+            // (e.g. `/api/v1/media/abc`), never a sibling like
+            // `/api/v1/mediaXYZ`.
+            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Build the header set forwarded to the server over the tunnel.
      *
      * @param Request $request The inbound request.
@@ -181,7 +293,7 @@ final class ServerProxyController
             if (!is_string($name) || !is_string($value)) {
                 continue;
             }
-            if (in_array(strtolower($name), self::STRIPPED_REQUEST_HEADERS, true)) {
+            if ($this->isStrippedRequestHeader($name)) {
                 continue;
             }
             $headers[$name] = $value;
@@ -196,6 +308,30 @@ final class ServerProxyController
         }
 
         return $headers;
+    }
+
+    /**
+     * Decide whether an inbound request header must be dropped before
+     * forwarding. Combines the explicit {@see self::STRIPPED_REQUEST_HEADERS}
+     * list with the {@see self::STRIPPED_REQUEST_HEADER_PREFIXES} families so no
+     * client-supplied trust marker or forwarding header survives.
+     *
+     * @param string $name The inbound header name (any case).
+     *
+     * @return bool True when the header must not be forwarded.
+     */
+    private function isStrippedRequestHeader(string $name): bool
+    {
+        $lower = strtolower($name);
+        if (in_array($lower, self::STRIPPED_REQUEST_HEADERS, true)) {
+            return true;
+        }
+        foreach (self::STRIPPED_REQUEST_HEADER_PREFIXES as $prefix) {
+            if (str_starts_with($lower, $prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
