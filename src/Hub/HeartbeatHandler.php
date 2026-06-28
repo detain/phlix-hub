@@ -60,57 +60,75 @@ class HeartbeatHandler
         }
 
         $now = time();
-        /** @var list<array<string, mixed>> $rows */
-        $rows = $this->db->query(
-            'SELECT id FROM servers WHERE id = :id FOR UPDATE',
-            ['id' => $serverId],
-        );
-
-        if (empty($rows)) {
-            throw new InvalidArgumentException('SERVER_NOT_FOUND');
-        }
-
         $hostnameJson = json_encode($heartbeat->hostnameCandidates, JSON_THROW_ON_ERROR);
 
-        $this->db->query(
-            "UPDATE servers SET status = 'online', last_seen_at = :last_seen_at, version = :version,
-             hostname_candidates_json = :hostname_candidates_json WHERE id = :id",
-            [
-                // servers.last_seen_at is a DATETIME column.
-                'last_seen_at' => date('Y-m-d H:i:s', $now),
-                'version' => $heartbeat->version,
-                'hostname_candidates_json' => $hostnameJson,
-                'id' => $serverId,
-            ],
-        );
+        // Wrap the SELECT … FOR UPDATE existence check and the dependent
+        // UPDATE/INSERT in an explicit transaction. Under autocommit the
+        // FOR UPDATE row lock would be released the instant the SELECT
+        // returned, so it could not actually serialise a concurrent
+        // deregister/update of the same server against this heartbeat;
+        // PhlixMySQLConnection::beginTrans() additionally holds the
+        // per-connection coroutine mutex for the whole transaction so no
+        // other coroutine can interleave a query onto the shared socket
+        // between the existence check and the writes.
+        $this->db->beginTrans();
+        try {
+            /** @var list<array<string, mixed>> $rows */
+            $rows = $this->db->query(
+                'SELECT id FROM servers WHERE id = :id FOR UPDATE',
+                ['id' => $serverId],
+            );
 
-        $this->db->query(
-            "INSERT INTO server_heartbeats (id, server_id, version, uptime_seconds, active_sessions,
-             active_transcodes, hostname_candidates_json, received_at)
-             VALUES (:id, :server_id, :version, :uptime_seconds, :active_sessions, :active_transcodes,
-             :hostname_candidates_json, :received_at)",
-            [
-                'id' => $this->generateUuid(),
-                'server_id' => $serverId,
-                'version' => $heartbeat->version,
-                'uptime_seconds' => $heartbeat->uptimeSeconds,
-                'active_sessions' => $heartbeat->activeSessions,
-                'active_transcodes' => $heartbeat->activeTranscodes,
-                'hostname_candidates_json' => $hostnameJson,
-                // server_heartbeats.received_at is a DATETIME column.
-                'received_at' => date('Y-m-d H:i:s', $now),
-            ],
-        );
+            if (empty($rows)) {
+                throw new InvalidArgumentException('SERVER_NOT_FOUND');
+            }
+
+            $this->db->query(
+                "UPDATE servers SET status = 'online', last_seen_at = :last_seen_at, version = :version,
+                 hostname_candidates_json = :hostname_candidates_json WHERE id = :id",
+                [
+                    // servers.last_seen_at is a DATETIME column.
+                    'last_seen_at' => date('Y-m-d H:i:s', $now),
+                    'version' => $heartbeat->version,
+                    'hostname_candidates_json' => $hostnameJson,
+                    'id' => $serverId,
+                ],
+            );
+
+            $this->db->query(
+                "INSERT INTO server_heartbeats (id, server_id, version, uptime_seconds, active_sessions,
+                 active_transcodes, hostname_candidates_json, received_at)
+                 VALUES (:id, :server_id, :version, :uptime_seconds, :active_sessions, :active_transcodes,
+                 :hostname_candidates_json, :received_at)",
+                [
+                    'id' => $this->generateUuid(),
+                    'server_id' => $serverId,
+                    'version' => $heartbeat->version,
+                    'uptime_seconds' => $heartbeat->uptimeSeconds,
+                    'active_sessions' => $heartbeat->activeSessions,
+                    'active_transcodes' => $heartbeat->activeTranscodes,
+                    'hostname_candidates_json' => $hostnameJson,
+                    // server_heartbeats.received_at is a DATETIME column.
+                    'received_at' => date('Y-m-d H:i:s', $now),
+                ],
+            );
+
+            // Store libraries reported by the server (same transaction so the
+            // cached library list is consistent with the heartbeat row).
+            if (!empty($heartbeat->libraries)) {
+                $this->updateServerLibraries($serverId, $heartbeat->libraries);
+            }
+
+            $this->db->commitTrans();
+        } catch (\Throwable $e) {
+            $this->db->rollBackTrans();
+            throw $e;
+        }
 
         $this->logger->debug('Heartbeat received', [
             'server_id' => $serverId,
             'version' => $heartbeat->version,
         ]);
-
-        // Store libraries reported by the server
-        if (!empty($heartbeat->libraries)) {
-            $this->updateServerLibraries($serverId, $heartbeat->libraries);
-        }
     }
 
     /**

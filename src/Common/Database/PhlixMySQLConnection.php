@@ -67,6 +67,36 @@ use Workerman\MySQL\Connection;
  * This is the fix that actually eliminated the pairing/login 500s (#3's mutex
  * alone did not).
  *
+ * ## 5. Transaction-scoped coroutine mutex (`beginTrans()`/`commitTrans()`/`rollBackTrans()`)
+ *
+ * The #3 mutex makes a SINGLE `query()` atomic w.r.t. other coroutines, but
+ * an explicit multi-statement transaction (`beginTrans()` … several queries …
+ * `commitTrans()`) — or a `SELECT … FOR UPDATE` immediately followed by an
+ * `UPDATE` — releases the mutex BETWEEN statements. On the shared socket a
+ * second coroutine's query can then interleave INTO THE MIDDLE of the first
+ * coroutine's open transaction: it runs on the same PDO/socket, so its
+ * statement executes inside the first coroutine's transaction (and its own
+ * `commitTrans()`/autocommit can commit or roll back the first coroutine's
+ * uncommitted work), corrupting transaction and row-lock semantics
+ * (e.g. defeating the `FOR UPDATE` double-claim guard).
+ *
+ * {@see beginTrans()} therefore acquires the #3 mutex for the WHOLE
+ * transaction and {@see commitTrans()}/{@see rollBackTrans()} release it —
+ * always, including on exception paths (try/finally). While one coroutine
+ * holds the transaction, any other coroutine's `query()`/`beginTrans()`
+ * blocks on the same Channel until the holder commits or rolls back.
+ *
+ * Re-entrancy: the transaction holder is tracked in the SAME
+ * {@see $queryLockHolder} field the per-query mutex uses, so a `query()`
+ * issued BY the transaction-holding coroutine sees `queryLockHolder === cid`
+ * and runs reentrantly without re-acquiring (it would otherwise deadlock
+ * against its own transaction). A separate {@see $inTransaction} flag marks
+ * "this coroutine's lock is held by an open transaction, not a single query",
+ * so per-`query()` release leaves the transaction lock intact and only
+ * `commitTrans()`/`rollBackTrans()` releases it. Outside a coroutine (CLI
+ * migrations, cron; coroutine id `< 0`) there is no concurrency, so
+ * transactions run directly with no Channel — exactly like {@see query()}.
+ *
  * @psalm-suppress PropertyNotSetInConstructor
  *   The parent Connection declares untyped query-builder properties
  *   (e.g. `$table`) it only initialises lazily; our constructor just forwards
@@ -86,6 +116,20 @@ final class PhlixMySQLConnection extends Connection
 
     /** @var int Coroutine id currently holding {@see $queryLock}, or -1 when free. */
     private int $queryLockHolder = -1;
+
+    /**
+     * True when {@see $queryLock} is held for the duration of an explicit
+     * transaction ({@see beginTrans()}) rather than a single {@see query()}.
+     *
+     * While set, the holding coroutine's `query()` calls run reentrantly (they
+     * see {@see $queryLockHolder} === their cid) and their per-query release is
+     * a no-op, so the lock survives every statement until the matching
+     * {@see commitTrans()}/{@see rollBackTrans()} releases it. Reset to false
+     * the instant the transaction lock is released.
+     *
+     * @var bool
+     */
+    private bool $inTransaction = false;
 
     /**
      * Force emulated + fully-buffered prepared statements.
@@ -321,6 +365,123 @@ final class PhlixMySQLConnection extends Connection
         if ($this->queryLock !== null) {
             $this->queryLock->push(true);
         }
+    }
+
+    /**
+     * Begin an explicit transaction, holding the per-connection coroutine
+     * mutex for its WHOLE duration so no other coroutine can interleave a
+     * query onto the shared socket mid-transaction. See class docblock (#5).
+     *
+     * The mutex is acquired BEFORE `parent::beginTrans()` so the lock spans
+     * the `START TRANSACTION` itself. If the parent throws (e.g. a connection
+     * error it cannot recover), the lock is released again so the connection
+     * is not wedged. On success {@see $inTransaction} is set, which makes the
+     * holder's subsequent {@see query()} calls reentrant (they do not
+     * re-acquire) and their per-query release a no-op — the lock survives
+     * until {@see commitTrans()}/{@see rollBackTrans()}.
+     *
+     * Outside a coroutine (cid `< 0`: CLI migrations, cron) there is no
+     * concurrency and no Channel, so the parent runs directly.
+     *
+     * @return bool The parent's PDO::beginTransaction() result.
+     */
+    public function beginTrans()
+    {
+        $cid = $this->currentCoroutineId();
+        if ($cid < 0) {
+            return parent::beginTrans();
+        }
+
+        // Reentrant begin (already inside this coroutine's transaction): do
+        // NOT re-acquire — the parent's nested PDO::beginTransaction() would
+        // throw, and re-acquiring our own held lock would deadlock. Forward
+        // to the parent so its own "already in transaction" semantics apply.
+        if ($this->queryLockHolder === $cid) {
+            return parent::beginTrans();
+        }
+
+        $this->acquireQueryLock($cid);
+        try {
+            $result = parent::beginTrans();
+        } catch (\Throwable $e) {
+            // The transaction never opened — drop the lock we just took so the
+            // shared socket is not held hostage by a half-started transaction.
+            $this->inTransaction = false;
+            $this->releaseQueryLock();
+            throw $e;
+        }
+        $this->inTransaction = true;
+        return $result;
+    }
+
+    /**
+     * Commit the explicit transaction and ALWAYS release the transaction-scoped
+     * mutex afterwards (try/finally), including if the commit itself throws —
+     * a wedged lock would block every other coroutine on this connection.
+     *
+     * Idempotent w.r.t. the lock: if this coroutine no longer holds the
+     * transaction lock (e.g. a prior error path already released it via
+     * {@see rollBackTrans()}), the release is a guarded no-op.
+     *
+     * Outside a coroutine the parent runs directly (no lock to release).
+     *
+     * @return bool The parent's PDO::commit() result.
+     */
+    public function commitTrans()
+    {
+        $cid = $this->currentCoroutineId();
+        if ($cid < 0) {
+            return parent::commitTrans();
+        }
+        try {
+            return parent::commitTrans();
+        } finally {
+            $this->endTransaction($cid);
+        }
+    }
+
+    /**
+     * Roll back the explicit transaction and ALWAYS release the
+     * transaction-scoped mutex afterwards (try/finally), including on the
+     * exception path. Must stay idempotent: our own {@see execute()} override
+     * (and the parent's) call `rollBackTrans()` from inside a failing
+     * `query()` that runs reentrantly within a transaction, and the caller's
+     * own `catch` block then calls it AGAIN — the second call (and any call
+     * when no transaction lock is held) is a guarded no-op for the lock. The
+     * parent already guards the PDO rollback with `inTransaction()`.
+     *
+     * Outside a coroutine the parent runs directly (no lock to release).
+     *
+     * @return bool The parent's PDO::rollBack() result (true when no tx open).
+     */
+    public function rollBackTrans()
+    {
+        $cid = $this->currentCoroutineId();
+        if ($cid < 0) {
+            return parent::rollBackTrans();
+        }
+        try {
+            return parent::rollBackTrans();
+        } finally {
+            $this->endTransaction($cid);
+        }
+    }
+
+    /**
+     * Release the transaction-scoped mutex held by {@see beginTrans()} for the
+     * given coroutine, if (and only if) this coroutine currently holds it as a
+     * transaction. Guarded so duplicate commit/rollback calls — or a rollback
+     * triggered from inside a reentrant query before the caller's own
+     * rollback — release the lock exactly once and never touch a lock held by
+     * a different coroutine or by a plain (non-transaction) query.
+     */
+    private function endTransaction(int $cid): void
+    {
+        if (!$this->inTransaction || $this->queryLockHolder !== $cid) {
+            return;
+        }
+        $this->inTransaction = false;
+        $this->releaseQueryLock();
     }
 
     /**
