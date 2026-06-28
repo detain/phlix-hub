@@ -29,6 +29,11 @@ use Throwable;
 final class JwtHandler
 {
     /**
+     * The only signing algorithm this handler mints or accepts.
+     */
+    private const string ALGORITHM = 'HS256';
+
+    /**
      * Secret used for HMAC signing. Must be at least 32 bytes for HS256.
      */
     private string $secretKey;
@@ -235,7 +240,7 @@ final class JwtHandler
      */
     private function encode(array $payload): string
     {
-        $header = ['alg' => 'HS256', 'typ' => 'JWT'];
+        $header = ['alg' => self::ALGORITHM, 'typ' => 'JWT'];
         $headerEncoded = $this->base64UrlEncode(json_encode($header, JSON_THROW_ON_ERROR));
         $payloadEncoded = $this->base64UrlEncode(json_encode($payload, JSON_THROW_ON_ERROR));
         $signature = hash_hmac('sha256', "{$headerEncoded}.{$payloadEncoded}", $this->secretKey, true);
@@ -258,6 +263,21 @@ final class JwtHandler
             throw new InvalidArgumentException('Malformed JWT (expected 3 dot-separated segments).');
         }
         [$headerEncoded, $payloadEncoded, $signature] = $parts;
+
+        // Pin alg/typ from the header BEFORE verifying the signature so an
+        // attacker can't downgrade to `alg:none` or confuse us into using a
+        // different algorithm (alg-confusion). Defense-in-depth: we only ever
+        // sign with HS256, so anything else is rejected outright.
+        $header = json_decode($this->base64UrlDecode($headerEncoded), true, 512, JSON_THROW_ON_ERROR);
+        if (!is_array($header)) {
+            throw new InvalidArgumentException('JWT header did not decode to an object.');
+        }
+        if (($header['alg'] ?? null) !== self::ALGORITHM) {
+            throw new InvalidArgumentException('Unexpected JWT alg (expected HS256).');
+        }
+        if (isset($header['typ']) && $header['typ'] !== 'JWT') {
+            throw new InvalidArgumentException('Unexpected JWT typ (expected JWT).');
+        }
 
         $expectedSignature = $this->base64UrlEncode(
             hash_hmac('sha256', "{$headerEncoded}.{$payloadEncoded}", $this->secretKey, true),

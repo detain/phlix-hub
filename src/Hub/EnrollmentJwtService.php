@@ -96,6 +96,26 @@ class EnrollmentJwtService
 
         [$headerEncoded, $payloadEncoded, $signatureEncoded] = $parts;
 
+        // Pin alg/typ from the header BEFORE verifying the signature so a
+        // forged token can't downgrade to `alg:none` or swap in a different
+        // algorithm (alg-confusion). We only ever sign enrollment JWTs with
+        // EdDSA, so reject anything else outright.
+        try {
+            /** @var mixed $header */
+            $header = json_decode($this->base64UrlDecode($headerEncoded), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+        if (!is_array($header)) {
+            return null;
+        }
+        if (($header['alg'] ?? null) !== self::ALGORITHM) {
+            return null;
+        }
+        if (isset($header['typ']) && $header['typ'] !== 'JWT') {
+            return null;
+        }
+
         $keyPair = $this->keyManager->getOrCreateKeyPair();
         $signature = $this->base64UrlDecode($signatureEncoded);
 

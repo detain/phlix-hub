@@ -162,4 +162,64 @@ final class EnrollmentJwtServiceTest extends TestCase
         $payload = $service->validateEnrollmentJwt($token, $km->getKid());
         self::assertNull($payload);
     }
+
+    /**
+     * S8: a token advertising `alg:none` must be rejected even though it is
+     * otherwise correctly signed (Ed25519) over the forged header.
+     */
+    public function testValidateRejectsAlgNoneToken(): void
+    {
+        $kid = $this->keyManager->getKid();
+        $token = $this->forgeSignedToken(['alg' => 'none', 'typ' => 'JWT', 'kid' => $kid], 'server-none');
+        self::assertNull($this->service->validateEnrollmentJwt($token, $kid));
+    }
+
+    /**
+     * S8: a token advertising a mismatched algorithm (e.g. HS256) must be
+     * rejected — defends against alg-confusion / downgrade.
+     */
+    public function testValidateRejectsMismatchedAlgToken(): void
+    {
+        $kid = $this->keyManager->getKid();
+        $token = $this->forgeSignedToken(['alg' => 'HS256', 'typ' => 'JWT', 'kid' => $kid], 'server-hs256');
+        self::assertNull($this->service->validateEnrollmentJwt($token, $kid));
+    }
+
+    /**
+     * S8: a non-`JWT` `typ` must be rejected.
+     */
+    public function testValidateRejectsUnexpectedTypHeader(): void
+    {
+        $kid = $this->keyManager->getKid();
+        $token = $this->forgeSignedToken(['alg' => 'EdDSA', 'typ' => 'JWE', 'kid' => $kid], 'server-jwe');
+        self::assertNull($this->service->validateEnrollmentJwt($token, $kid));
+    }
+
+    /**
+     * Forge a JWT with an attacker-chosen header but a VALID Ed25519
+     * signature over that header+payload, so only the alg/typ pin (not the
+     * signature check) can reject it.
+     *
+     * @param array<string, string> $header
+     */
+    private function forgeSignedToken(array $header, string $serverId): string
+    {
+        $b64 = static fn (string $d): string => rtrim(strtr(base64_encode($d), '+/', '-_'), '=');
+        $now = time();
+        $payload = [
+            'iss' => 'phlix-hub',
+            'sub' => $serverId,
+            'aud' => 'server',
+            'exp' => $now + 3600,
+            'iat' => $now,
+            'kid' => $header['kid'] ?? '',
+            'hub_base_url' => 'https://hub.example.com',
+            'server_id' => $serverId,
+        ];
+        $h = $b64((string) json_encode($header));
+        $p = $b64((string) json_encode($payload));
+        $keyPair = $this->keyManager->getOrCreateKeyPair();
+        $sig = sodium_crypto_sign_detached("{$h}.{$p}", $keyPair['private']);
+        return "{$h}.{$p}." . $b64($sig);
+    }
 }
