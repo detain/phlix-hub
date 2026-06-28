@@ -8,6 +8,7 @@ use DI\ContainerBuilder;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Container\MissingJwtSecretException;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\LogChannels;
@@ -36,6 +37,35 @@ use function DI\get;
  */
 final class AuthServicesProvider implements ServiceProviderInterface
 {
+    /**
+     * Env flag that explicitly opts a non-dev/local environment into the
+     * insecure random dev-secret fallback. Set to a truthy value
+     * ("1"/"true"/"yes"/"on") ONLY for local development. Production must
+     * provide a real `HUB_JWT_SECRET`.
+     */
+    public const DEV_SECRET_ENV_FLAG = 'HUB_JWT_ALLOW_DEV_SECRET';
+
+    /**
+     * Test seam for the loud dev-fallback warning. Defaults to the AUTH
+     * channel logger; tests may swap in a spy so no output leaks under
+     * PHPUnit's strict output checking.
+     *
+     * @var (callable(string): void)|null
+     */
+    private static $devFallbackWarner = null;
+
+    /**
+     * Override the dev-fallback warning sink (tests only).
+     *
+     * @param (callable(string): void)|null $warner
+     *
+     * @internal
+     */
+    public static function setDevFallbackWarner(?callable $warner): void
+    {
+        self::$devFallbackWarner = $warner;
+    }
+
     /**
      * @inheritDoc
      */
@@ -83,12 +113,24 @@ final class AuthServicesProvider implements ServiceProviderInterface
     }
 
     /**
-     * Pull the JWT secret from env first, then config. Generate a process-
-     * local random secret as a last resort so the container still boots in
-     * dev (logged as a warning on first use). NEVER rely on the fallback
-     * in production — set HUB_JWT_SECRET.
+     * Pull the JWT secret from env first, then config.
+     *
+     * When neither a `HUB_JWT_SECRET` env (≥32 bytes) nor a `secret` config
+     * value (≥32 bytes) is present:
+     *  - In production (the env is NOT dev/local and the dev-secret flag is
+     *    not set) this THROWS {@see MissingJwtSecretException}, so the hub
+     *    refuses to boot rather than silently minting a random per-process
+     *    secret (which would invalidate tokens on restart and, with
+     *    `workers > 1`, mint a different secret per worker → intermittent
+     *    auth failures).
+     *  - In development (env `dev`/`local`, or the explicit
+     *    {@see self::DEV_SECRET_ENV_FLAG} truthy) it falls back to a random
+     *    secret and logs a loud warning.
      *
      * @param array<string, mixed> $authConfig
+     *
+     * @throws MissingJwtSecretException When no secret is configured in a
+     *                                   non-development environment.
      */
     private static function resolveSecret(array $authConfig): string
     {
@@ -104,8 +146,72 @@ final class AuthServicesProvider implements ServiceProviderInterface
         if (is_string($configured) && strlen($configured) >= 32) {
             return $configured;
         }
-        // Dev fallback only.
+
+        if (!self::devFallbackAllowed()) {
+            throw new MissingJwtSecretException(
+                'No JWT secret configured: set the HUB_JWT_SECRET environment variable '
+                . '(at least 32 bytes) or the auth.secret config value. The insecure '
+                . 'random fallback is only available in development (APP_ENV/HUB_ENV '
+                . 'dev|local, or ' . self::DEV_SECRET_ENV_FLAG . '=1).',
+            );
+        }
+
+        self::warnDevFallback();
         return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * Is the insecure random dev-secret fallback permitted in this
+     * environment? True only when the runtime env is `dev`/`local` or the
+     * explicit {@see self::DEV_SECRET_ENV_FLAG} is truthy.
+     */
+    private static function devFallbackAllowed(): bool
+    {
+        if (self::isTruthyEnv(self::DEV_SECRET_ENV_FLAG)) {
+            return true;
+        }
+
+        foreach (['APP_ENV', 'HUB_ENV'] as $key) {
+            $value = getenv($key);
+            if (is_string($value)) {
+                $normalized = strtolower(trim($value));
+                if ($normalized === 'dev' || $normalized === 'development' || $normalized === 'local') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Truthy-env test for boolean-ish flags ("1"/"true"/"yes"/"on").
+     */
+    private static function isTruthyEnv(string $key): bool
+    {
+        $value = getenv($key);
+        if (!is_string($value)) {
+            return false;
+        }
+        return in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true);
+    }
+
+    /**
+     * Emit the loud warning for the dev-only random-secret fallback through
+     * the test seam (default: AUTH-channel structured logger).
+     */
+    private static function warnDevFallback(): void
+    {
+        $message = 'HUB_JWT_SECRET is not set; using an insecure random per-process JWT '
+            . 'secret. This is for development only — tokens will not survive a restart '
+            . 'and will break across multiple workers. Set HUB_JWT_SECRET in production.';
+
+        if (self::$devFallbackWarner !== null) {
+            (self::$devFallbackWarner)($message);
+            return;
+        }
+
+        LoggerFactory::get(LogChannels::AUTH)->warning($message);
     }
 
     /**

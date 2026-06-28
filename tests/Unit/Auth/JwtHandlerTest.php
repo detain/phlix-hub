@@ -134,4 +134,62 @@ final class JwtHandlerTest extends TestCase
         self::assertNotNull($claims);
         self::assertNull($claims->nbf);
     }
+
+    /**
+     * S8: a token whose header advertises `alg:none` (an unsigned token) must
+     * be rejected before any signature work, even if it carries a payload the
+     * handler would otherwise accept.
+     */
+    public function testValidateRejectsAlgNoneToken(): void
+    {
+        $handler = new JwtHandler(self::SECRET);
+        $token = $this->forgeToken(['alg' => 'none', 'typ' => 'JWT'], 'user-none');
+        self::assertNull($handler->validateToken($token));
+    }
+
+    /**
+     * S8: a token whose header advertises a different (but real) algorithm
+     * must be rejected — defends against alg-confusion downgrade.
+     */
+    public function testValidateRejectsMismatchedAlgToken(): void
+    {
+        $handler = new JwtHandler(self::SECRET);
+        $token = $this->forgeToken(['alg' => 'RS256', 'typ' => 'JWT'], 'user-rs256');
+        self::assertNull($handler->validateToken($token));
+    }
+
+    /**
+     * S8: a non-`JWT` `typ` (e.g. a JWE/unexpected type) must be rejected.
+     */
+    public function testValidateRejectsUnexpectedTypHeader(): void
+    {
+        $handler = new JwtHandler(self::SECRET);
+        $token = $this->forgeToken(['alg' => 'HS256', 'typ' => 'JWE'], 'user-jwe');
+        self::assertNull($handler->validateToken($token));
+    }
+
+    /**
+     * Build a JWT with an attacker-chosen header but a VALID HS256 signature
+     * over that header — so only the alg/typ pin (not the signature check)
+     * can reject it.
+     *
+     * @param array<string, string> $header
+     */
+    private function forgeToken(array $header, string $userId): string
+    {
+        $b64 = static fn (string $d): string => rtrim(strtr(base64_encode($d), '+/', '-_'), '=');
+        $now = time();
+        $payload = [
+            'iss' => 'phlix-hub',
+            'aud' => 'hub',
+            'sub' => $userId,
+            'iat' => $now,
+            'exp' => $now + 3600,
+            'type' => 'access',
+        ];
+        $h = $b64((string) json_encode($header));
+        $p = $b64((string) json_encode($payload));
+        $sig = $b64(hash_hmac('sha256', "{$h}.{$p}", self::SECRET, true));
+        return "{$h}.{$p}.{$sig}";
+    }
 }
