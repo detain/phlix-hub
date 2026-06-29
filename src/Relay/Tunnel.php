@@ -7,6 +7,7 @@ namespace Phlix\Hub\Relay;
 use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Jwt\JwtHeader;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
@@ -362,7 +363,7 @@ final class Tunnel implements TunnelInterface
             return true;
         }
 
-        $kid = $this->extractKid($jwt);
+        $kid = JwtHeader::kid($jwt);
         if ($kid === null) {
             return false;
         }
@@ -373,42 +374,6 @@ final class Tunnel implements TunnelInterface
         }
 
         return ($payload['server_id'] ?? null) === $this->serverId;
-    }
-
-    /**
-     * Extract the `kid` from a JWT header without validating the token.
-     *
-     * @param string $token JWT string.
-     *
-     * @return string|null Key ID, or null when the header is malformed.
-     */
-    private function extractKid(string $token): ?string
-    {
-        $parts = explode('.', $token);
-        if (count($parts) !== 3) {
-            return null;
-        }
-
-        $decoded = base64_decode(strtr($parts[0], '-_', '+/'), true);
-        if ($decoded === false) {
-            return null;
-        }
-
-        try {
-            /** @var mixed $header */
-            $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            return null;
-        }
-
-        if (!is_array($header)) {
-            return null;
-        }
-
-        /** @var mixed $kid */
-        $kid = $header['kid'] ?? null;
-
-        return is_string($kid) ? $kid : null;
     }
 
     /**

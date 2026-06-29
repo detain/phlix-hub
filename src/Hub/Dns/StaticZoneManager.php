@@ -33,9 +33,14 @@ class StaticZoneManager
      *
      * @return void
      *
+     * @throws \RuntimeException When $name, $type, or $value fails validation.
      */
     public function addRecord(string $zone, string $name, string $type, string $value): void
     {
+        $this->validateRecordLabel($name);
+        $this->validateRecordType($type);
+        $this->validateRecordValue($value);
+
         $zoneFile = $this->getZonePath($zone);
         $this->ensureZoneDirExists($zone);
 
@@ -52,6 +57,76 @@ class StaticZoneManager
         }
 
         file_put_contents($zoneFile, $content . $line . "\n", LOCK_EX);
+    }
+
+    /**
+     * Validate a DNS record label (name) against RFC 1123 / LDH rules.
+     *
+     * A label must:
+     *  - Be 1–63 characters long
+     *  - Contain only LDH (letters, digits, hyphens)
+     *  - Not start or end with a hyphen
+     *
+     * @param string $label The record label to validate.
+     *
+     * @throws \RuntimeException When the label is invalid.
+     */
+    private function validateRecordLabel(string $label): void
+    {
+        if ($label === '' || strlen($label) > 63) {
+            throw new \RuntimeException('DNS label must be 1–63 characters');
+        }
+
+        // RFC 1123: each label is alphanumerics and hyphens, not starting/ending with hyphen.
+        if (!preg_match('/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i', $label)) {
+            throw new \RuntimeException('DNS label contains invalid characters or starts/ends with a hyphen');
+        }
+    }
+
+    /**
+     * Validate a DNS record type string.
+     *
+     * Permitted types are the standard DNS record types that are safe to
+     * write into a zone file (alphanumeric, 1–10 chars).
+     *
+     * @param string $type The record type to validate.
+     *
+     * @throws \RuntimeException When the type is invalid.
+     */
+    private function validateRecordType(string $type): void
+    {
+        if ($type === '' || strlen($type) > 10) {
+            throw new \RuntimeException('DNS record type must be 1–10 characters');
+        }
+
+        // Restrict to well-known DNS record types to prevent injecting
+        // arbitrary text that could be interpreted as directives.
+        static $allowed = [
+            'A' => true, 'AAAA' => true, 'CNAME' => true, 'TXT' => true,
+            'MX' => true, 'NS' => true, 'SOA' => true, 'PTR' => true,
+            'SRV' => true, 'SPF' => true, 'CAA' => true, 'DNAME' => true,
+            'TLSA' => true, 'URI' => true,
+        ];
+
+        if (!isset($allowed[strtoupper($type)])) {
+            throw new \RuntimeException('DNS record type is not a recognised standard type');
+        }
+    }
+
+    /**
+     * Validate a DNS record value has no control characters.
+     *
+     * Prevents injecting extra zone file lines via embedded CR/LF in the value.
+     *
+     * @param string $value The record value to validate.
+     *
+     * @throws \RuntimeException When the value contains control characters.
+     */
+    private function validateRecordValue(string $value): void
+    {
+        if (strpbrk($value, "\r\n") !== false) {
+            throw new \RuntimeException('DNS record value must not contain newline characters');
+        }
     }
 
     /**

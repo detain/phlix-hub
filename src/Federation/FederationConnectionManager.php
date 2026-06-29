@@ -40,6 +40,19 @@ final class FederationConnectionManager
      */
     public function addConnection(string $hubId, ConnectionInterface $conn): void
     {
+        // Close and clean up any prior connection for this hubId before
+        // overwriting. Guard against re-adding the same connection object
+        // (e.g. the same WS object that was just closed and hasn't been
+        // garbage-collected yet).
+        if (isset($this->connections[$hubId])) {
+            $existing = $this->connections[$hubId];
+            $existingId = spl_object_id($existing);
+            if ($existingId !== spl_object_id($conn)) {
+                $existing->close();
+                unset($this->reverseMap[$existingId]);
+            }
+        }
+
         $connId = spl_object_id($conn);
         $this->connections[$hubId] = $conn;
         $this->reverseMap[$connId] = $hubId;
