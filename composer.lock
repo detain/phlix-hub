@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "25984884c87d72780300748121e866a8",
+    "content-hash": "ff121e48e879cf11e3d81cca46254af3",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -6340,5 +6340,5 @@
         "php": "^8.3"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.6.0"
+    "plugin-api-version": "2.9.0"
 }

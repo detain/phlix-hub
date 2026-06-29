@@ -15,13 +15,34 @@ use Workerman\MySQL\Connection;
  * Responsibilities:
  *   - Register a new relay session when a server connects
  *   - Route an inbound HTTP request to the correct server via its relay session
- *   - Track bytes sent/received per session
+ *   - Track bytes sent/received per session (batched in-memory, flushed on timer or close)
  *   - Close a relay session when the server disconnects
  *
  * @package Phlix\Hub\Hub
  */
 class RelaySessionManager
 {
+    /**
+     * In-memory accumulator: sessionId => bytes to add to bytes_out.
+     *
+     * @var array<string, int>
+     */
+    private array $pendingBytesOut = [];
+
+    /**
+     * In-memory accumulator: sessionId => bytes to add to bytes_in.
+     *
+     * @var array<string, int>
+     */
+    private array $pendingBytesIn = [];
+
+    /**
+     * In-memory accumulator: sessionId => UNIX timestamp for last_frame_at.
+     *
+     * @var array<string, int>
+     */
+    private array $pendingLastFrameAt = [];
+
     /**
      * @param Connection       $db     MySQL connection.
      * @param StructuredLogger $logger Application logger.
@@ -129,21 +150,21 @@ class RelaySessionManager
         /** @var array<string, mixed> $session */
         $session = $rows[0];
 
-        $bodyLen = strlen($body);
-        $this->db->query(
-            'UPDATE relay_sessions SET bytes_in = bytes_in + :bytes_in,
-             last_frame_at = UNIX_TIMESTAMP() WHERE id = :id',
-            [
-                'bytes_in' => $bodyLen,
-                'id' => $session['id'],
-            ],
-        );
+        // Use in-memory accumulation instead of immediate DB write.
+        /** @var string $sessionId */
+        $sessionId = $session['id'];
+        $this->recordBytesIn($sessionId, strlen($body));
 
         return $session;
     }
 
     /**
      * Record bytes sent to a server over its relay session.
+     *
+     * Accumulates in memory and flushes to the DB on the next periodic tick
+     * (via {@see flushAll}) or on session close (via {@see flushSession}).
+     * This replaces a per-frame UPDATE and eliminates the dominant relay-path
+     * DB write under high frame rates.
      *
      * @param string $sessionId Relay session UUID.
      * @param int    $bytes     Number of bytes sent.
@@ -153,18 +174,15 @@ class RelaySessionManager
      */
     public function recordBytesOut(string $sessionId, int $bytes): void
     {
-        $this->db->query(
-            'UPDATE relay_sessions SET bytes_out = bytes_out + :bytes,
-             last_frame_at = UNIX_TIMESTAMP() WHERE id = :id',
-            [
-                'bytes' => $bytes,
-                'id' => $sessionId,
-            ],
-        );
+        $this->pendingBytesOut[$sessionId] = ($this->pendingBytesOut[$sessionId] ?? 0) + $bytes;
+        $this->pendingLastFrameAt[$sessionId] = time();
     }
 
     /**
      * Close a relay session.
+     *
+     * Flushes any pending byte counts for this session before closing so that
+     * final accounting is not lost.
      *
      * @param string $sessionId   Relay session UUID.
      * @param string $reason       Human-readable close reason.
@@ -174,6 +192,8 @@ class RelaySessionManager
      */
     public function closeSession(string $sessionId, string $reason): void
     {
+        $this->flushSession($sessionId);
+
         $this->db->query(
             'UPDATE relay_sessions SET closed_at = NOW(), close_reason = :reason
              WHERE id = :id',
@@ -312,6 +332,9 @@ class RelaySessionManager
     /**
      * Record bytes sent from a client to the server through the tunnel.
      *
+     * Accumulates in memory and flushes to the DB on the next periodic tick
+     * (via {@see flushAll}) or on session close (via {@see flushSession}).
+     *
      * @param string $sessionId Relay session UUID.
      * @param int    $bytes     Number of bytes received.
      *
@@ -320,14 +343,8 @@ class RelaySessionManager
      */
     public function recordBytesIn(string $sessionId, int $bytes): void
     {
-        $this->db->query(
-            'UPDATE relay_sessions SET bytes_in = bytes_in + :bytes,
-             last_frame_at = UNIX_TIMESTAMP() WHERE id = :id',
-            [
-                'bytes' => $bytes,
-                'id' => $sessionId,
-            ],
-        );
+        $this->pendingBytesIn[$sessionId] = ($this->pendingBytesIn[$sessionId] ?? 0) + $bytes;
+        $this->pendingLastFrameAt[$sessionId] = time();
     }
 
     /**
@@ -336,6 +353,9 @@ class RelaySessionManager
      * Used for HEARTBEAT frames where we want to update activity but
      * not count the heartbeat as data traffic.
      *
+     * Accumulates in memory and flushes to the DB on the next periodic tick
+     * (via {@see flushAll}) or on session close (via {@see flushSession}).
+     *
      * @param string $sessionId Relay session UUID.
      *
      * @return void
@@ -343,12 +363,96 @@ class RelaySessionManager
      */
     public function touchLastFrame(string $sessionId): void
     {
-        $this->db->query(
-            'UPDATE relay_sessions SET last_frame_at = UNIX_TIMESTAMP() WHERE id = :id',
-            [
-                'id' => $sessionId,
-            ],
+        $this->pendingLastFrameAt[$sessionId] = time();
+    }
+
+    /**
+     * Flush accumulated byte counters and last-frame timestamps for a session
+     * to the database with a single atomic UPDATE.
+     *
+     * Uses `bytes_out = bytes_out + :delta` and `bytes_in = bytes_in + :delta`
+     * so concurrent increments from other coroutines are not clobbered.
+     * Clears the session's entries from all three accumulator maps after the
+     * flush so they are never double-counted.
+     *
+     * Idempotent: if there is nothing to flush for this session, the UPDATE
+     * touches zero rows and the maps are cleared regardless.
+     *
+     * @param string $sessionId Relay session UUID.
+     *
+     * @return void
+     */
+    public function flushSession(string $sessionId): void
+    {
+        $deltaOut = $this->pendingBytesOut[$sessionId] ?? 0;
+        $deltaIn = $this->pendingBytesIn[$sessionId] ?? 0;
+        $lastFrameAt = $this->pendingLastFrameAt[$sessionId] ?? null;
+
+        // Clear accumulators before the DB write so any subsequent accumulate
+        // between this write and the return is not lost (it will be in the
+        // next flush).
+        unset(
+            $this->pendingBytesOut[$sessionId],
+            $this->pendingBytesIn[$sessionId],
+            $this->pendingLastFrameAt[$sessionId],
         );
+
+        // Nothing to do — skip the query entirely.
+        if ($deltaOut === 0 && $deltaIn === 0 && $lastFrameAt === null) {
+            return;
+        }
+
+        // Build a minimal UPDATE that covers whatever is present.
+        $sets = [];
+        $params = ['id' => $sessionId];
+
+        if ($deltaOut > 0) {
+            $sets[] = 'bytes_out = bytes_out + :bytes_out';
+            $params['bytes_out'] = $deltaOut;
+        }
+
+        if ($deltaIn > 0) {
+            $sets[] = 'bytes_in = bytes_in + :bytes_in';
+            $params['bytes_in'] = $deltaIn;
+        }
+
+        if ($lastFrameAt !== null) {
+            $sets[] = 'last_frame_at = :last_frame_at';
+            $params['last_frame_at'] = $lastFrameAt;
+        }
+
+        if ($sets === []) {
+            return;
+        }
+
+        $this->db->query(
+            'UPDATE relay_sessions SET ' . implode(', ', $sets) . ' WHERE id = :id',
+            $params,
+        );
+    }
+
+    /**
+     * Flush all pending (in-memory) byte counters and timestamps for every
+     * active session to the database.
+     *
+     * Called by the periodic timer (e.g. from {@see \Phlix\Hub\Relay\IdleReaper})
+     * so that pending counts do not grow unboundedly even for sessions that
+     * have not been closed.
+     *
+     * @return void
+     */
+    public function flushAll(): void
+    {
+        // Flush every session that has accumulated data.
+        $sessionIds = array_unique(array_merge(
+            array_keys($this->pendingBytesOut),
+            array_keys($this->pendingBytesIn),
+            array_keys($this->pendingLastFrameAt),
+        ));
+
+        foreach ($sessionIds as $sessionId) {
+            $this->flushSession($sessionId);
+        }
     }
 
     /**

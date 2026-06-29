@@ -35,6 +35,7 @@ use Phlix\Hub\Hub\LibrarySharingHandler;
 use Phlix\Hub\Hub\RelayRouter;
 use Phlix\Hub\Hub\RelayServerHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\ServerReaper;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\IdleReaper;
@@ -352,6 +353,31 @@ final class HubServicesProvider implements ServiceProviderInterface
                 );
             })->parameter('tunnelManager', get(TunnelManager::class))
                 ->parameter('sessionManager', get(RelaySessionManager::class)),
+
+            ServerReaper::class => factory(static function (
+                Connection $db,
+            ) use ($appConfig): ServerReaper {
+                /** @var int $interval */
+                $interval = is_int($appConfig['server_reaper_interval'] ?? null)
+                    ? (int) $appConfig['server_reaper_interval']
+                    : ServerReaper::DEFAULT_INTERVAL_SECONDS;
+                /** @var int $offlineThreshold */
+                $offlineThreshold = is_int($appConfig['server_offline_threshold'] ?? null)
+                    ? (int) $appConfig['server_offline_threshold']
+                    : ServerReaper::DEFAULT_OFFLINE_THRESHOLD_SECONDS;
+                /** @var int $retention */
+                $retention = is_int($appConfig['heartbeat_retention_days'] ?? null)
+                    ? (int) $appConfig['heartbeat_retention_days']
+                    : ServerReaper::DEFAULT_HEARTBEAT_RETENTION_DAYS;
+
+                return new ServerReaper(
+                    $db,
+                    LoggerFactory::get(LogChannels::HUB),
+                    $interval,
+                    $offlineThreshold,
+                    $retention,
+                );
+            })->parameter('db', get(Connection::class)),
 
             StaticZoneManager::class => factory(static function () use ($appConfig): StaticZoneManager {
                 $zoneDir = self::stringOr($appConfig, 'dns_zone_dir', '/home/phlix/data/dns/zones');
@@ -699,6 +725,18 @@ final class HubServicesProvider implements ServiceProviderInterface
             }
         } catch (\Throwable) {
             // IdleReaper not available in this context — skip
+        }
+
+        // Start the server offline-reaper and heartbeat-retention sweep.
+        // Both B2 and P2 run on this single timer.
+        try {
+            /** @var mixed $serverReaper */
+            $serverReaper = $container->get(ServerReaper::class);
+            if ($serverReaper instanceof ServerReaper) {
+                $serverReaper->start();
+            }
+        } catch (\Throwable) {
+            // ServerReaper not available in this context — skip
         }
 
         // Set up heartbeat timer for active tunnels
