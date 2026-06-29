@@ -89,29 +89,37 @@ class ServerInfoHandler
     /**
      * Get all servers owned by a user.
      *
-     * @param string $userId User UUID.
+     * @param string  $userId User UUID.
+     * @param int<0, max>|null $limit  Maximum number of results to return (default 1000).
+     * @param int<0, max>       $offset Number of results to skip (default 0).
      *
      * @return list<ServerInfoDto>
      */
-    public function getServersForUser(string $userId): array
+    public function getServersForUser(string $userId, ?int $limit = 1000, int $offset = 0): array
     {
+        if ($limit < 0) {
+            $limit = 1000;
+        }
+        if ($offset < 0) {
+            $offset = 0;
+        }
+
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
             'SELECT s.id, s.user_id, s.server_name, s.version,
                     UNIX_TIMESTAMP(s.last_seen_at) AS last_seen_at, s.status,
                     s.hostname_candidates_json, s.created_at,
-                    EXISTS(
-                        SELECT 1 FROM relay_sessions r
-                        WHERE r.server_id = s.id AND r.closed_at IS NULL
-                    ) AS relay_active,
-                    (
-                        SELECT COUNT(*) FROM server_libraries sl
-                        WHERE sl.server_id = s.id
-                    ) AS library_count
+                    (r.server_id IS NOT NULL) AS relay_active,
+                    COUNT(DISTINCT sl.id) AS library_count
              FROM servers s
+             LEFT JOIN relay_sessions r ON r.server_id = s.id AND r.closed_at IS NULL
+             LEFT JOIN server_libraries sl ON sl.server_id = s.id
              WHERE s.user_id = :user_id
-             ORDER BY s.created_at DESC',
-            ['user_id' => $userId],
+             GROUP BY s.id, s.user_id, s.server_name, s.version,
+                      s.last_seen_at, s.status, s.hostname_candidates_json, s.created_at
+             ORDER BY s.created_at DESC
+             LIMIT :limit OFFSET :offset',
+            ['user_id' => $userId, 'limit' => $limit, 'offset' => $offset],
         );
 
         $dtos = [];

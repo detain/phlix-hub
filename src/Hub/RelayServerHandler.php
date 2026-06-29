@@ -6,6 +6,7 @@ namespace Phlix\Hub\Hub;
 
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Jwt\JwtHeader;
 
 /**
  * Handles relay server WebSocket connections and frame multiplexing.
@@ -65,7 +66,7 @@ final class RelayServerHandler
      */
     public function onConnect(string $serverId, string $enrollmentJwt): string
     {
-        $kid = $this->extractKid($enrollmentJwt);
+        $kid = JwtHeader::kid($enrollmentJwt);
         if ($kid === null) {
             throw new InvalidArgumentException('INVALID_TOKEN');
         }
@@ -138,34 +139,5 @@ final class RelayServerHandler
             'session_id' => $sessionId,
             'reason' => $reason,
         ]);
-    }
-
-    /**
-     * Extract the `kid` from a JWT header.
-     *
-     * @param string $token JWT string.
-     *
-     * @return string|null Key ID or null.
-     */
-    private function extractKid(string $token): ?string
-    {
-        $parts = explode('.', $token);
-        if (count($parts) !== 3) {
-            return null;
-        }
-
-        try {
-            $decoded = base64_decode(strtr($parts[0], '-_', '+/'), true);
-            if ($decoded === false) {
-                return null;
-            }
-            /** @var array<string, mixed> $header */
-            $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-            /** @var string|null $kid */
-            $kid = $header['kid'] ?? null;
-            return is_string($kid) ? $kid : null;
-        } catch (\JsonException) {
-            return null;
-        }
     }
 }

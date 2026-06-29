@@ -272,6 +272,14 @@ class TlsCertificateManager
      * No shell, no escapeshellcmd. Argument values cannot be
      * misinterpreted as flags or redirection.
      *
+     * NOTE: This method blocks the calling coroutine/worker while waiting
+     * for the child process to complete. In the current build, ACME automated
+     * certificate provisioning is NOT implemented ({@see NOT_IMPLEMENTED_MESSAGE});
+     * operators must provision certs out-of-band. If ACME is enabled in a
+     * future build, this call should be moved to a dedicated maintenance
+     * worker or run inside a Swoole coroutine so it does not stall
+     * request-serving workers (see P1 / findings plan).
+     *
      * @param list<string> $argv     Argv (argv[0] is the program).
      * @param string|null  $stdin    Optional stdin payload.
      * @param int          $exitCode Out-param: child exit code.

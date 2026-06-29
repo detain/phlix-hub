@@ -7,6 +7,7 @@ namespace Phlix\Hub\Hub;
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Jwt\JwtHeader;
 use Phlix\Shared\Hub\HeartbeatDto;
 use Phlix\Shared\Hub\LibraryRef;
 use Workerman\MySQL\Connection;
@@ -47,7 +48,7 @@ class HeartbeatHandler
      */
     public function handle(string $serverId, string $enrollmentJwt, HeartbeatDto $heartbeat): void
     {
-        $tokenKid = $this->extractKidFromToken($enrollmentJwt);
+        $tokenKid = JwtHeader::kid($enrollmentJwt);
         if ($tokenKid === null) {
             throw new InvalidArgumentException('ENROLLMENT_TOKEN_EXPIRED');
         }
@@ -209,35 +210,6 @@ class HeartbeatHandler
             ];
         }
         return $result;
-    }
-
-    /**
-     * Extract the `kid` from a JWT header without validating the token.
-     *
-     * @param string $token The JWT to extract from.
-     *
-     * @return string|null Key ID or null when header is malformed.
-     */
-    private function extractKidFromToken(string $token): ?string
-    {
-        $parts = explode('.', $token);
-        if (count($parts) !== 3) {
-            return null;
-        }
-
-        try {
-            $decoded = base64_decode(strtr($parts[0], '-_', '+/'), true);
-            if ($decoded === false) {
-                return null;
-            }
-            /** @var array<string, mixed> $header */
-            $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-            /** @var string|null */
-            $kid = $header['kid'] ?? null;
-            return is_string($kid) ? $kid : null;
-        } catch (\JsonException) {
-            return null;
-        }
     }
 
     /**
