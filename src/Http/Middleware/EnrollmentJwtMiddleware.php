@@ -7,6 +7,7 @@ namespace Phlix\Hub\Http\Middleware;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
+use Phlix\Hub\Jwt\JwtHeader;
 
 /**
  * Validates Ed25519 enrollment JWTs on server-facing routes.
@@ -38,7 +39,7 @@ final class EnrollmentJwtMiddleware
             return $this->unauthorized('ENROLLMENT_TOKEN_EXPIRED');
         }
 
-        $kid = $this->extractKid($token);
+        $kid = JwtHeader::kid($token);
         if ($kid === null) {
             return $this->unauthorized('ENROLLMENT_TOKEN_EXPIRED');
         }
@@ -53,33 +54,6 @@ final class EnrollmentJwtMiddleware
         $request->serverId = is_string($serverId) ? $serverId : null;
 
         return null;
-    }
-
-    /**
-     * Extract the `kid` from a JWT header without validating the token.
-     *
-     * @return string|null Key ID or null when header is malformed.
-     */
-    private function extractKid(string $token): ?string
-    {
-        $parts = explode('.', $token);
-        if (count($parts) !== 3) {
-            return null;
-        }
-
-        try {
-            $decoded = base64_decode(strtr($parts[0], '-_', '+/'), true);
-            if ($decoded === false) {
-                return null;
-            }
-            /** @var array<string, mixed> $header */
-            $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-            /** @var string|null */
-            $kid = $header['kid'] ?? null;
-            return is_string($kid) ? $kid : null;
-        } catch (\JsonException) {
-            return null;
-        }
     }
 
     /**

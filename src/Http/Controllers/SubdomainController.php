@@ -9,6 +9,7 @@ use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
+use Phlix\Hub\Jwt\JwtHeader;
 
 /**
  * Handles subdomain allocation and revocation for enrolled servers.
@@ -66,7 +67,7 @@ final class SubdomainController
         $enrollmentJwt = substr($authHeader, 7);
 
         try {
-            $kid = $this->extractKid($enrollmentJwt);
+            $kid = JwtHeader::kid($enrollmentJwt);
             if ($kid === null) {
                 return $this->unauthorized('Invalid token format');
             }
@@ -186,7 +187,7 @@ final class SubdomainController
         $enrollmentJwt = substr($authHeader, 7);
 
         try {
-            $kid = $this->extractKid($enrollmentJwt);
+            $kid = JwtHeader::kid($enrollmentJwt);
             if ($kid === null) {
                 return $this->unauthorized('Invalid token format');
             }
@@ -221,34 +222,5 @@ final class SubdomainController
             'error' => 'UNAUTHORIZED',
             'message' => $message,
         ]);
-    }
-
-    /**
-     * Extract the `kid` from a JWT header.
-     *
-     * @param string $token JWT string.
-     *
-     * @return string|null Key ID or null.
-     */
-    private function extractKid(string $token): ?string
-    {
-        $parts = explode('.', $token);
-        if (count($parts) !== 3) {
-            return null;
-        }
-
-        try {
-            $decoded = base64_decode(strtr($parts[0], '-_', '+/'), true);
-            if ($decoded === false) {
-                return null;
-            }
-            /** @var array<string, mixed> $header */
-            $header = json_decode($decoded, true, 2, JSON_THROW_ON_ERROR);
-            /** @var string|null $kid */
-            $kid = $header['kid'] ?? null;
-            return is_string($kid) ? $kid : null;
-        } catch (\JsonException) {
-            return null;
-        }
     }
 }

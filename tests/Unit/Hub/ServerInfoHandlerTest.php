@@ -93,7 +93,7 @@ final class ServerInfoHandlerTest extends TestCase
         $handler->getServersForUser('user-1');
 
         self::assertStringContainsString('UNIX_TIMESTAMP(s.last_seen_at) AS last_seen_at', $captured);
-        self::assertStringContainsString('FROM server_libraries sl', $captured);
+        self::assertStringContainsString('LEFT JOIN server_libraries sl ON sl.server_id = s.id', $captured);
         self::assertStringContainsString('AS library_count', $captured);
     }
 
