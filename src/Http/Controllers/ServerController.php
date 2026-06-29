@@ -68,7 +68,7 @@ final class ServerController
         }
 
         try {
-            $heartbeat = HeartbeatDto::fromPayload($request->body);
+            $heartbeat = HeartbeatDto::fromPayload($request->body, true);
         } catch (\InvalidArgumentException $e) {
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',

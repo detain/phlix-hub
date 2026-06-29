@@ -9,6 +9,7 @@ use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Shared\Hub\HeartbeatDto;
+use Phlix\Shared\Hub\LibraryRef;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -117,8 +118,8 @@ final class HeartbeatHandlerTest extends TestCase
             activeTranscodes: 0,
             hostnameCandidates: [],
             libraries: [
-                ['library_id' => 'lib-1', 'library_name' => 'Movies'],
-                ['library_id' => 'lib-2', 'library_name' => 'TV'],
+                LibraryRef::fromPayload(['library_id' => 'lib-1', 'library_name' => 'Movies']),
+                LibraryRef::fromPayload(['library_id' => 'lib-2', 'library_name' => 'TV']),
             ],
         );
 
