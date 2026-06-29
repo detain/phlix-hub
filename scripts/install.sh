@@ -190,6 +190,32 @@ confirm() {
 rand_hex() { openssl rand -hex "${1:-32}"; }
 rand_pass() { openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
+# Idempotently ensure an env file contains `KEY=VALUE`. Used by the --update
+# path to backfill keys that newer code requires but an older install never
+# wrote (e.g. HUB_JWT_SECRET, which the hub now refuses to boot without in
+# production). A line is matched on `^KEY=` so a key present but blank
+# (`KEY=`) is treated as MISSING and rewritten — an empty required secret is
+# as fatal as an absent one.
+#
+# Usage: phlix_ensure_env_key <env_file> <KEY> <VALUE> [comment]
+phlix_ensure_env_key() {
+  local file="$1" key="$2" value="$3" comment="${4:-}"
+  [ -f "$file" ] || return 0
+  # Present AND non-empty? Leave the operator's value untouched.
+  if grep -qE "^${key}=.+" "$file" 2>/dev/null; then
+    return 0
+  fi
+  # Drop any blank `KEY=` line so we don't end up with a duplicate.
+  if grep -qE "^${key}=" "$file" 2>/dev/null; then
+    sed -i "/^${key}=/d" "$file"
+  fi
+  {
+    [ -n "$comment" ] && printf '# %s\n' "$comment"
+    printf '%s=%s\n' "$key" "$value"
+  } >> "$file"
+  info "Backfilled missing $key into $file"
+}
+
 # ---------------------------------------------------------------------------
 # Swoole + php-uv (compiled from source)
 #
@@ -1041,7 +1067,18 @@ do_update() {
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
-  # 6. Restart the service. We don't touch the env file.
+  # 5b. Backfill env keys that newer code requires but an older install never
+  # wrote. HUB_JWT_SECRET is a hard boot requirement in production
+  # (AuthServicesProvider resolveSecret) — an install that predates it would now
+  # refuse to start. Generate a unique secret and append it (idempotent: a real,
+  # non-empty HUB_JWT_SECRET is preserved). The env file is owned root:root 0600.
+  log "Ensuring required env keys are present"
+  phlix_ensure_env_key "$ENV_FILE" HUB_JWT_SECRET "$(rand_hex 32)" \
+    "JWT signing secret (REQUIRED) — HS256 access/refresh tokens; must be stable across restarts."
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
+  chown root:root "$ENV_FILE" 2>/dev/null || true
+
+  # 6. Restart the service.
   if [ -f "$SERVICE_FILE" ]; then
     log "Restarting phlix-hub service"
     systemctl daemon-reload >/dev/null 2>&1 || true
