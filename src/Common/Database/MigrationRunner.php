@@ -152,35 +152,99 @@ class MigrationRunner
     }
 
     /**
-     * Split a SQL blob into individual executable statements, dropping
-     * blank lines and `--` comments. Naive `;` split — fine for hub
-     * migrations which never include stored-routine bodies.
+     * Split a SQL blob into individual executable statements on `;`
+     * boundaries, correctly ignoring any `;` that appears inside a string
+     * literal (single/double quoted), a backtick-quoted identifier, a line
+     * comment (`-- ...` or `# ...`) or a C-style block comment.
+     *
+     * A naive `explode(';', $sql)` shreds statements whose column COMMENT text
+     * contains a semicolon — e.g. migration 032's
+     * `COMMENT 'Hard expiry; the token is invalid once this passes'` — leaving
+     * the DDL truncated mid-string and failing with a 1064 syntax error. This
+     * single-pass scanner is quote/comment aware so such files
+     * apply cleanly. Comment text is stripped; string/identifier contents
+     * (including any embedded `;`) are preserved verbatim.
      *
      * @return list<string>
      */
     private function splitStatements(string $sql): array
     {
-        $lines = preg_split('/\r?\n/', $sql);
-        if ($lines === false) {
-            return [];
-        }
-        $clean = [];
-        foreach ($lines as $line) {
-            $trimmed = trim($line);
-            if ($trimmed === '' || str_starts_with($trimmed, '--')) {
-                continue;
-            }
-            $clean[] = $line;
-        }
-        $joined = implode("\n", $clean);
-        $parts = explode(';', $joined);
         $statements = [];
-        foreach ($parts as $part) {
-            $trimmed = trim($part);
-            if ($trimmed !== '') {
-                $statements[] = $trimmed;
+        $buffer = '';
+        $len = strlen($sql);
+        // Current lexical context: '' (top level), "'"/'"'/'`' (in quote),
+        // '--' (line comment) or '/*' (block comment).
+        $context = '';
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $sql[$i];
+            $next = $i + 1 < $len ? $sql[$i + 1] : '';
+
+            switch ($context) {
+                case "'":
+                case '"':
+                case '`':
+                    $buffer .= $ch;
+                    if ($ch === $context && $next === $context) {
+                        // Doubled quote ('' / "" / ``) — an escaped quote.
+                        $buffer .= $next;
+                        $i++;
+                    } elseif ($ch === '\\' && $context !== '`' && $next !== '') {
+                        // Backslash escape inside a string literal.
+                        $buffer .= $next;
+                        $i++;
+                    } elseif ($ch === $context) {
+                        $context = '';
+                    }
+                    break;
+
+                case '--':
+                    // Line comment: drop characters until end of line.
+                    if ($ch === "\n") {
+                        $buffer .= $ch;
+                        $context = '';
+                    }
+                    break;
+
+                case '/*':
+                    // Block comment: drop characters until the closing */.
+                    if ($ch === '*' && $next === '/') {
+                        $i++;
+                        $context = '';
+                    }
+                    break;
+
+                default:
+                    if ($ch === '-' && $next === '-') {
+                        $context = '--';
+                        $i++;
+                    } elseif ($ch === '#') {
+                        // MySQL '#' line comment.
+                        $context = '--';
+                    } elseif ($ch === '/' && $next === '*') {
+                        $context = '/*';
+                        $i++;
+                    } elseif ($ch === "'" || $ch === '"' || $ch === '`') {
+                        $context = $ch;
+                        $buffer .= $ch;
+                    } elseif ($ch === ';') {
+                        $trimmed = trim($buffer);
+                        if ($trimmed !== '') {
+                            $statements[] = $trimmed;
+                        }
+                        $buffer = '';
+                    } else {
+                        $buffer .= $ch;
+                    }
+                    break;
             }
         }
+
+        $trimmed = trim($buffer);
+        if ($trimmed !== '') {
+            $statements[] = $trimmed;
+        }
+
         return $statements;
     }
 

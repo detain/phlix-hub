@@ -190,6 +190,46 @@ final class MigrationRunnerTest extends TestCase
         self::assertStringContainsString('CREATE TABLE bar', $exec[1]);
     }
 
+    public function testRunDoesNotSplitOnSemicolonInsideStringLiteral(): void
+    {
+        // Regression: a `;` inside a column COMMENT string literal previously
+        // shredded the CREATE TABLE into two broken fragments (1064 syntax
+        // error). The statement must reach the DB intact, comment and all.
+        $sql = "-- migration: 001\n"
+            . "CREATE TABLE foo (\n"
+            . "    id INT COMMENT 'Hard expiry; the token is invalid once this passes'\n"
+            . ");\n";
+        file_put_contents($this->migrationsDir . '/001_a.sql', $sql);
+
+        $db = $this->createMock(Connection::class);
+        $statements = [];
+        $callIndex = 0;
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$statements, &$callIndex) {
+                $callIndex++;
+                if ($callIndex === 2) {
+                    // listApplied
+                    return [];
+                }
+                $statements[] = $sql;
+                return null;
+            });
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        $runner->run();
+
+        $exec = array_values(array_filter(
+            $statements,
+            static fn ($s): bool => is_string($s) && str_contains($s, 'CREATE TABLE foo'),
+        ));
+        self::assertCount(1, $exec, 'CREATE TABLE must be a single un-split statement');
+        self::assertStringContainsString(
+            "COMMENT 'Hard expiry; the token is invalid once this passes'",
+            $exec[0],
+            'The full COMMENT string (including its embedded semicolon) must survive splitting',
+        );
+    }
+
     public function testRunRecordsAppliedFilename(): void
     {
         file_put_contents($this->migrationsDir . '/001_users.sql', 'CREATE TABLE foo (id INT);');
