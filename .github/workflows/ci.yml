@@ -116,7 +116,9 @@ jobs:
         run: composer install --no-interaction --prefer-dist
 
       - name: Run PHPUnit
-        run: ./vendor/bin/phpunit --colors=always
+        # Use php -d max_execution_time=0 to prevent PHP's default 30s timeout
+        # which causes SIGALRM (exit 142) in long-running test suites with Xdebug coverage.
+        run: php -d max_execution_time=0 ./vendor/bin/phpunit --colors=always
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
