@@ -8,6 +8,7 @@ use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Shared\Hub\HeartbeatDto;
+use Phlix\Shared\Hub\LibraryRef;
 use Workerman\MySQL\Connection;
 
 /**
@@ -134,17 +135,12 @@ class HeartbeatHandler
     /**
      * Update the cached libraries for a server.
      *
-     * @param string $serverId Server UUID.
-     * @param list<array{library_id: string, library_name: string}> $libraries Library list.
+     * @param string             $serverId  Server UUID.
+     * @param list<LibraryRef>    $libraries Library list.
      */
     private function updateServerLibraries(string $serverId, array $libraries): void
     {
-        foreach ($libraries as $lib) {
-            /** @var string $libId */
-            $libId = $lib['library_id'];
-            /** @var string $libName */
-            $libName = $lib['library_name'];
-
+        foreach ($libraries as $ref) {
             // Upsert each library
             $this->db->query(
                 'INSERT INTO server_libraries (id, server_id, library_id, library_name, created_at, updated_at)
@@ -153,9 +149,9 @@ class HeartbeatHandler
                 [
                     'id' => $this->generateUuid(),
                     'server_id' => $serverId,
-                    'library_id' => $libId,
-                    'library_name' => $libName,
-                    'library_name_update' => $libName,
+                    'library_id' => $ref->libraryId,
+                    'library_name' => $ref->libraryName,
+                    'library_name_update' => $ref->libraryName,
                 ],
             );
         }

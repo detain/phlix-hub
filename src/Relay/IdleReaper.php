@@ -121,6 +121,12 @@ final class IdleReaper
         // even for rows that no longer have a live in-memory tunnel.
         $this->sessionManager?->reapStaleSessions();
 
+        // Flush all pending byte counters and last-frame timestamps from the
+        // in-memory accumulators to the database.  This runs on the same
+        // 60-second tick so the relay-path DB write is bounded to one flush
+        // per session per tick instead of one UPDATE per frame.
+        $this->sessionManager?->flushAll();
+
         return $reapedCount;
     }
 
