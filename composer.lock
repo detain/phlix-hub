@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "ff121e48e879cf11e3d81cca46254af3",
+    "content-hash": "807693db221cb300f774fe9f4f13f716",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -284,30 +284,34 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.10.1",
+            "version": "v0.11.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "956c3fe94be1107cccabbeaf831e1b75162c186a"
+                "reference": "c7627ab385f5d65a5f2f73058c860e213cd94a4e"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/956c3fe94be1107cccabbeaf831e1b75162c186a",
-                "reference": "956c3fe94be1107cccabbeaf831e1b75162c186a",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/c7627ab385f5d65a5f2f73058c860e213cd94a4e",
+                "reference": "c7627ab385f5d65a5f2f73058c860e213cd94a4e",
                 "shasum": ""
             },
             "require": {
-                "ext-curl": "*",
                 "php": "^8.3",
                 "psr/container": "^2.0",
                 "psr/event-dispatcher": "^1.0",
                 "psr/log": "^3.0"
             },
             "require-dev": {
+                "ext-curl": "*",
                 "phpstan/phpstan": "^2.0",
                 "phpunit/phpunit": "^10.0",
                 "squizlabs/php_codesniffer": "^3.10",
                 "vimeo/psalm": "^5.0"
+            },
+            "suggest": {
+                "ext-curl": "Required only for the bundled blocking Arr\\Transport\\CurlArrTransport (CLI/test use). Event-loop (Workerman/Webman) consumers should inject an async ArrTransportInterface instead and do not need ext-curl.",
+                "workerman/http-client": "Event-loop (Workerman/Webman) consumers should inject a workerman/http-client-backed Arr\\Transport\\ArrTransportInterface so *arr API calls do not block the worker; the bundled CurlArrTransport is blocking and for CLI/test only."
             },
             "type": "library",
             "autoload": {
@@ -337,12 +341,12 @@
             "license": [
                 "MIT"
             ],
-            "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O.",
+            "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
             "support": {
-                "source": "https://github.com/detain/phlix-shared/tree/v0.10.1",
+                "source": "https://github.com/detain/phlix-shared/tree/v0.11.0",
                 "issues": "https://github.com/detain/phlix-shared/issues"
             },
-            "time": "2026-06-23T18:56:11+00:00"
+            "time": "2026-06-28T17:25:38+00:00"
         },
         {
             "name": "doctrine/inflector",
