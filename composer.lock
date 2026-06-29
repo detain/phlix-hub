@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "807693db221cb300f774fe9f4f13f716",
+    "content-hash": "c96589194218f4ddd2f0d2e594ecae97",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -284,20 +284,21 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.11.0",
+            "version": "v0.12.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "c7627ab385f5d65a5f2f73058c860e213cd94a4e"
+                "reference": "ec21cf9e6a894154fc343b8aae9ab8b0e34a5ad2"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/c7627ab385f5d65a5f2f73058c860e213cd94a4e",
-                "reference": "c7627ab385f5d65a5f2f73058c860e213cd94a4e",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/ec21cf9e6a894154fc343b8aae9ab8b0e34a5ad2",
+                "reference": "ec21cf9e6a894154fc343b8aae9ab8b0e34a5ad2",
                 "shasum": ""
             },
             "require": {
                 "php": "^8.3",
+                "psr/clock": "^1.0",
                 "psr/container": "^2.0",
                 "psr/event-dispatcher": "^1.0",
                 "psr/log": "^3.0"
@@ -343,10 +344,10 @@
             ],
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
             "support": {
-                "source": "https://github.com/detain/phlix-shared/tree/v0.11.0",
+                "source": "https://github.com/detain/phlix-shared/tree/v0.12.0",
                 "issues": "https://github.com/detain/phlix-shared/issues"
             },
-            "time": "2026-06-28T17:25:38+00:00"
+            "time": "2026-06-29T20:51:50+00:00"
         },
         {
             "name": "doctrine/inflector",
@@ -834,6 +835,54 @@
                 }
             ],
             "time": "2025-08-16T11:10:48+00:00"
+        },
+        {
+            "name": "psr/clock",
+            "version": "1.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/php-fig/clock.git",
+                "reference": "e41a24703d4560fd0acb709162f73b8adfc3aa0d"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/php-fig/clock/zipball/e41a24703d4560fd0acb709162f73b8adfc3aa0d",
+                "reference": "e41a24703d4560fd0acb709162f73b8adfc3aa0d",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^7.0 || ^8.0"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Psr\\Clock\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "PHP-FIG",
+                    "homepage": "https://www.php-fig.org/"
+                }
+            ],
+            "description": "Common interface for reading the clock.",
+            "homepage": "https://github.com/php-fig/clock",
+            "keywords": [
+                "clock",
+                "now",
+                "psr",
+                "psr-20",
+                "time"
+            ],
+            "support": {
+                "issues": "https://github.com/php-fig/clock/issues",
+                "source": "https://github.com/php-fig/clock/tree/1.0.0"
+            },
+            "time": "2022-11-25T14:36:26+00:00"
         },
         {
             "name": "psr/container",
