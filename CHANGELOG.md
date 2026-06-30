@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **`web-ui`: bumped `@phlix/ui` `v0.55.0` → `v0.56.0` and rebuilt the committed SPA
+  bundle (`public/assets/app/`) (Wave 0 bump).** Keeps the hub's shared SPA in lockstep
+  with the media server. Picks up the shared admin **Duplicates** page and the
+  **Metadata** settings tab's per-media-type source-priority editor (server-only admin
+  surfaces — they have no effect on the hub itself, which has no library/scan subsystem,
+  but the bump keeps both consumers on one `@phlix/ui` version). `package.json`/
+  `package-lock.json` pin the new git tag; the Vite bundle was regenerated. No hub PHP
+  changed.
 - **HTTP-over-relay proxy: `GET|POST /api/v1/servers/{id}/proxy/{path:.*}`.** Lets a
   browser on the hub fetch a paired media server's API over the existing reverse
   tunnel (Phase 1 of hub inline media browsing). The endpoint authenticates the
