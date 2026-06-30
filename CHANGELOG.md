@@ -7,6 +7,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **`web-ui`: bumped `@phlix/ui` `v0.56.0` → `v0.57.0` and rebuilt the committed SPA
+  bundle (`public/assets/app/`) (Wave 1 bump).** Keeps the hub's shared SPA in lockstep
+  with the media server. Picks up the per-user favorites wiring (`MediaCard` favorite
+  button, Browse "Favorites" row, Browse/Detail persistence + hydrate), the multi-level
+  **Love** control (`LoveButton.vue` 4-state component on cards + detail), and the player
+  favorite/Love controls. `package.json`/`package-lock.json` pin the new `v0.57.0` git
+  tag; the Vite bundle was regenerated. No hub PHP changed.
+
+  **Known limitation — favorite/Love writes degrade through the relay proxy** (tracked
+  as [#122](https://github.com/detain/phlix-hub/issues/122)): the hub's media relay proxy
+  allowlists **`GET`/`HEAD` only**, so when a server is browsed *through the hub*, the
+  favorites/Love **writes** do not persist — `POST .../favorite` returns
+  `403 proxy.scope_denied` and `PUT .../like` + `DELETE .../favorite` are not routed.
+  These controls work normally over a **direct** session to the server. A future fix is a
+  separate POST-capable command path reusing the per-user relay token (not a browse-scope
+  allowlist widening).
+
+### Known issues
+- **Relay proxy is `GET`/`HEAD`-only — favorite/Love writes do not persist over the hub
+  relay** ([#122](https://github.com/detain/phlix-hub/issues/122)). See the v0.57.0 bump
+  note above. Direct sessions are unaffected.
+
 - **`web-ui`: bumped `@phlix/ui` `v0.55.0` → `v0.56.0` and rebuilt the committed SPA
   bundle (`public/assets/app/`) (Wave 0 bump).** Keeps the hub's shared SPA in lockstep
   with the media server. Picks up the shared admin **Duplicates** page and the
