@@ -1247,6 +1247,10 @@ fi
 log "Installing PHP dependencies"
 ( cd "$INSTALL_PATH" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction )
 mkdir -p "$INSTALL_PATH/.logs"
+# HOME for the service points here (see the unit's Environment=HOME); create it up
+# front so Swoole can lazily create $INSTALL_PATH/var/.swoole under a dir the
+# service user owns.
+mkdir -p "$INSTALL_PATH/var"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
 
 # ---------------------------------------------------------------------------
@@ -1320,6 +1324,13 @@ Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
 EnvironmentFile=${ENV_FILE}
+# Swoole's RemoteObject bridge (used when a coroutine runs a hooked stream op,
+# e.g. an outbound HTTPS fetch) writes a lock to \$HOME/.swoole. The service user
+# is created with 'useradd --system --no-create-home', so \$HOME is / (unwritable)
+# and Swoole throws "failed to open lock file[…/.swoole/remote-object-server.lock]".
+# Point HOME at a writable install path (\${INSTALL_PATH}/var) so the lock lands
+# there. (Mirrors the phlix-server fix.)
+Environment="HOME=${INSTALL_PATH}/var"
 WorkingDirectory=${INSTALL_PATH}
 # start.php is the Workerman bootstrap (webman-style — see start.php
 # for the full pattern). public/index.php no longer exists; public/ is
