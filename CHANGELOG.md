@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **Relay: a re-handshake on an active tunnel no longer spams uncaught `InvalidFrameTypeException`s**
+  (`src/Relay/Tunnel.php`). When a server re-sends its JSON `HELLO`/`HELLO_ACK` on an
+  already-ACTIVE tunnel (a reconnect race, or a framing desync), the binary `FrameDecoder`
+  reads the 5th byte of `{"type"` — `'p'` — as frame type `0x70` and threw
+  `InvalidFrameTypeException`. That propagated **uncaught** out of the Workerman message
+  callback (a full stack trace per bad frame) and left the tunnel wedged in a desynced state,
+  re-throwing on every subsequent frame. `onServerMessage()` now catches it, logs one
+  warning, and closes the tunnel cleanly so the server reconnects and re-handshakes from a
+  known-good state.
+- **Relay logs: no more false "A possible infinite logging loop was detected and aborted"**
+  (`src/Common/Logger/StructuredLogger.php`). Monolog's loop guard keys recursion depth on the
+  current PHP `Fiber`, but Swoole coroutines are not Fibers — so under `SWOOLE_HOOK_ALL` a
+  handler's file write yields the coroutine mid-`addRecord`, a concurrent coroutine re-enters
+  the shared singleton logger, and the shared depth counter trips the guard into a false
+  positive that **drops the record**. No handler or processor emits its own log (so there is no
+  real cycle), so the guard is now disabled via `Logger::useLoggingLoopDetection(false)`.
+
 ### Security
 - **systemd unit hardened to phlix-server parity (and then some)** (`scripts/install.sh`,
   `start.php`). The hub unit previously ran with almost no sandboxing. It now applies the
