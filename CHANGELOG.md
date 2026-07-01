@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+- **systemd unit hardened to phlix-server parity (and then some)** (`scripts/install.sh`,
+  `start.php`). The hub unit previously ran with almost no sandboxing. It now applies the
+  same protections as the media server — `ProtectSystem=strict`, `ProtectHome=true`,
+  `NoNewPrivileges`, `PrivateTmp`, `RestrictNamespaces`, `LockPersonality`, `RemoveIPC`,
+  a restrictive `ReadWritePaths` (`.logs/`, `var/`, `config/` only), plus `ExecReload`/
+  `ExecStop`, start-rate limiting, and journal logging — and goes further with
+  `ProtectKernelTunables/Modules`, `ProtectControlGroups`, `ProtectHostname`,
+  `ProtectClock`, `RestrictSUIDSGID`, and `RestrictRealtime`. Unlike the server, the
+  **install root stays read-only**: `start.php` now pins Workerman's pid/status files into
+  `var/` (their defaults land in the read-only root, and `saveMasterPid()` throws if it
+  can't write). Deliberately omits `MemoryDenyWriteExecute`/`PrivateDevices`/
+  `SystemCallFilter` (would break PHP JIT/opcache or Swoole's io_uring). Verified in a
+  `systemd-run` sandbox on the target host: writes to the three ReadWritePaths succeed, a
+  write to the install root is denied, and Swoole's HOME-based lock dir is writable.
+
 ### Fixed
 - **systemd: set `HOME` to a writable path so Swoole's RemoteObject lock can't fail**
   (`scripts/install.sh`). The hub service user is created with
