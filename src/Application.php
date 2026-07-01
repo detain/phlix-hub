@@ -39,6 +39,7 @@ use Phlix\Hub\Http\Controllers\ServerDetailController;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
+use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
@@ -323,6 +324,9 @@ final class Application
 
         // Media request routes.
         $this->registerRequestRoutes();
+
+        // Metrics routes (admin-only API, S4).
+        $this->registerMetricsRoutes();
     }
 
     /**
@@ -999,6 +1003,15 @@ final class Application
         return $controller;
     }
 
+    private function resolveMetricsController(): MetricsController
+    {
+        $controller = $this->container->get(MetricsController::class);
+        if (!$controller instanceof MetricsController) {
+            throw new \RuntimeException('Container returned an unexpected MetricsController instance');
+        }
+        return $controller;
+    }
+
     /**
      * Register federation management REST routes.
      *
@@ -1125,6 +1138,44 @@ final class Application
             throw new \RuntimeException('Container returned an unexpected FederationController instance');
         }
         return $controller;
+    }
+
+    /**
+     * Wire metrics REST API routes (admin-only) under `/api/v1/admin/metrics/`.
+     *
+     * `GET /api/v1/admin/metrics/snapshot`   → current metrics snapshot
+     * `GET /api/v1/admin/metrics/history`    → historical metrics time-series
+     * `GET /api/v1/admin/metrics/connections` → live tunnel connections
+     * `GET /api/v1/admin/metrics/routes`     → top routes by request count
+     */
+    private function registerMetricsRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveMetricsController();
+
+        $this->router->group('/api/v1/admin/metrics', static function (Router $r) use ($controller): void {
+            $r->get('/snapshot', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->snapshot($req, $typedParams);
+            });
+            $r->get('/history', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->history($req, $typedParams);
+            });
+            $r->get('/connections', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->connections($req, $typedParams);
+            });
+            $r->get('/routes', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->routes($req, $typedParams);
+            });
+        }, [$authMiddleware, $adminMiddleware]);
     }
 
     /**

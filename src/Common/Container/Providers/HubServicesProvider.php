@@ -59,8 +59,10 @@ use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\ClientRelayTokenController;
 use Phlix\Hub\Http\Controllers\FederationRelayController;
 use Phlix\Hub\Http\Controllers\RelayController;
+use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Http\Controllers\RequestController;
+use Phlix\Hub\Stats\Metrics\MetricsRepositoryInterface;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
 use Phlix\Hub\Http\Controllers\ServerDetailController;
@@ -668,6 +670,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
                 ->parameter('adminDel', get(FederationAdminDelegationRepository::class))
                 ->parameter('audit', get(AuditLogger::class)),
+
+            // Metrics API controller (S4). Read by Application::registerMetricsRoutes().
+            MetricsController::class => factory(static function (
+                MetricsRepositoryInterface $repo,
+            ): MetricsController {
+                return new MetricsController($repo);
+            })->parameter('repo', get(MetricsRepositoryInterface::class)),
         ]);
     }
 
@@ -689,15 +698,24 @@ final class HubServicesProvider implements ServiceProviderInterface
     private static ?ContainerInterface $container = null;
 
     /**
-     * Set the static container instance for use in boot().
+     * Application config array for use in boot().
+     *
+     * @var array<string, mixed>
+     */
+    private static array $appConfig = [];
+
+    /**
+     * Set the static container instance and app config for use in boot().
      *
      * @param ContainerInterface $container PSR-11 container.
+     * @param array<string, mixed> $appConfig Application configuration.
      *
      * @return void
      */
-    public static function setContainer(ContainerInterface $container): void
+    public static function setContainer(ContainerInterface $container, array $appConfig): void
     {
         self::$container = $container;
+        self::$appConfig = $appConfig;
     }
 
     /**
@@ -787,6 +805,30 @@ final class HubServicesProvider implements ServiceProviderInterface
             }
         } catch (\Throwable) {
             // FederationSessionManager not available in this context — skip
+        }
+
+        // Metrics flush timer (S4): drain the in-memory registry to MySQL
+        // on the configured interval, using the fixed 'hub-relay' worker id.
+        try {
+            /** @var mixed $flushService */
+            $flushService = $container->get(\Phlix\Hub\Stats\Metrics\MetricsFlushService::class);
+            if ($flushService instanceof \Phlix\Hub\Stats\Metrics\MetricsFlushService) {
+                /** @var array<string, mixed> $metricsConfig */
+                $metricsConfig = is_array(self::$appConfig['metrics'] ?? null) ? self::$appConfig['metrics'] : [];
+                /** @var int $flushInterval */
+                $flushInterval = is_int($metricsConfig['flush_interval_seconds'] ?? null)
+                    ? (int) $metricsConfig['flush_interval_seconds']
+                    : 5;
+
+                Timer::add(
+                    $flushInterval,
+                    static function () use ($flushService): void {
+                        $flushService->flush(0, time());
+                    },
+                );
+            }
+        } catch (\Throwable) {
+            // MetricsFlushService not available in this context — skip
         }
 
         // Bootstrap leaf hub WS connection to master hub

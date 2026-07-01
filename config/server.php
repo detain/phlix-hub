@@ -45,4 +45,26 @@ return [
             'enabled' => filter_var(getenv('HUB_RADARR_ENABLED') ?: '0', FILTER_VALIDATE_BOOLEAN),
         ],
     ],
+
+    // Metrics / live-traffic telemetry (S4). See config/metrics.php for defaults;
+    // this array is threaded into the DI container and also read directly by
+    // HubServicesProvider::boot() for the flush timer interval.
+    'metrics' => (static function (): array {
+        $envBool = static fn (string $k, bool $d): bool => in_array(
+            strtolower(getenv($k) ?: ''),
+            ['1', 'true', 'yes', 'on'],
+            true
+        ) ?: $d;
+        $envInt = static fn (string $k, int $d): int => is_numeric(getenv($k) ?? '') ? (int) getenv($k) : $d;
+
+        return [
+            'enabled'                  => $envBool('PHLIX_HUB_METRICS_ENABLED', true),
+            'flush_interval_seconds'   => $envInt('PHLIX_HUB_METRICS_FLUSH_INTERVAL', 5),
+            'bucket_seconds'           => $envInt('PHLIX_HUB_METRICS_BUCKET_SECONDS', 10),
+            'retention_days'           => $envInt('PHLIX_HUB_METRICS_RETENTION_DAYS', 7),
+            'connection_ttl_seconds'   => $envInt('PHLIX_HUB_METRICS_CONNECTION_TTL', 15),
+            'route_cardinality_cap'    => $envInt('PHLIX_HUB_METRICS_ROUTE_CAP', 200),
+            'latency_buckets_ms'       => [10, 50, 100, 250, 500, 1000, 2500, 5000],
+        ];
+    })(),
 ];

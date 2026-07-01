@@ -10,6 +10,7 @@ use Phlix\Hub\Common\Container\Providers\CommonServicesProvider;
 use Phlix\Hub\Common\Container\Providers\CoreServicesProvider;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Container\Providers\HttpServicesProvider;
+use Phlix\Hub\Common\Container\Providers\MetricsServicesProvider;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -90,6 +91,7 @@ final class ContainerFactory
             new CommonServicesProvider(),
             new AuthServicesProvider(),
             new HttpServicesProvider(),
+            new MetricsServicesProvider(),
             new HubServicesProvider(),
         ];
     }
