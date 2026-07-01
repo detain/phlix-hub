@@ -22,15 +22,18 @@ use function json_decode;
  */
 final class ServerProxyControllerTest extends TestCase
 {
-    private function dto(string $userId, bool $relayActive): ServerInfoDto
-    {
+    private function dto(
+        string $userId,
+        bool $relayActive,
+        string $status = ServerInfoDto::STATUS_ONLINE,
+    ): ServerInfoDto {
         return new ServerInfoDto(
             'srv-1',
             $userId,
             'My Server',
             '1.0.0',
             null,
-            ServerInfoDto::STATUS_ONLINE,
+            $status,
             [],
             $relayActive,
         );
@@ -95,14 +98,51 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame(403, $response->statusCode);
     }
 
-    public function test_offline_server_returns_503(): void
+    public function test_online_server_without_relay_tunnel_returns_503_relay_unavailable(): void
     {
+        // status=online (heartbeating) but no open relay session → the tunnel
+        // simply isn't connected. The proxy must still refuse (503) but with the
+        // actionable `server.relay_unavailable` code so the UI can explain why.
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getServerInfo')->willReturn($this->dto('user-1', false));
-        $controller = $this->controller($info, $this->bridge(static fn () => null));
+        $info->method('getServerInfo')->willReturn(
+            $this->dto('user-1', false, ServerInfoDto::STATUS_ONLINE),
+        );
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
 
         $response = $controller->proxy($this->request('GET', 'user-1'), ['id' => 'srv-1', 'path' => 'api/v1/libraries']);
+
         $this->assertSame(503, $response->statusCode);
+        $this->assertFalse($forwarded, 'No tunnel → nothing may be forwarded over the relay bridge.');
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.relay_unavailable', $body['code'] ?? null);
+    }
+
+    public function test_offline_server_returns_503_server_offline(): void
+    {
+        // status != online (genuinely down) AND no relay session → the classic
+        // "server is offline" case keeps its `server.offline` code.
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn(
+            $this->dto('user-1', false, ServerInfoDto::STATUS_OFFLINE),
+        );
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy($this->request('GET', 'user-1'), ['id' => 'srv-1', 'path' => 'api/v1/libraries']);
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertFalse($forwarded, 'Offline server → nothing may be forwarded over the relay bridge.');
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.offline', $body['code'] ?? null);
     }
 
     public function test_successful_proxy_returns_server_response(): void

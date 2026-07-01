@@ -10,6 +10,7 @@ use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
+use Phlix\Shared\Hub\ServerInfoDto;
 
 use function base64_decode;
 use function explode;
@@ -206,10 +207,30 @@ final class ServerProxyController
         }
 
         if (!$server->relayActive) {
+            // Distinguish "the server is heartbeating but its secure relay
+            // tunnel isn't connected" from "the server is genuinely down".
+            // `status` and `relayActive` are set by INDEPENDENT paths: a
+            // heartbeat flips `status='online'` (HeartbeatHandler) but never
+            // opens a relay session, while `relayActive` is derived from an
+            // open `relay_sessions` row created only when the server's reverse
+            // tunnel connects+authenticates on :8802 (Tunnel::handleHelloFrame
+            // → RelaySessionManager::registerServer). So an online server can
+            // legitimately have no tunnel. Either way we still REFUSE to proxy
+            // (the tunnel is the trust boundary and there is nothing to forward
+            // to) — only the code/message differ so the UI can explain why.
+            if ($server->status === ServerInfoDto::STATUS_ONLINE) {
+                return (new Response())->status(503)->json([
+                    'error' => 'Relay tunnel unavailable',
+                    'code' => 'server.relay_unavailable',
+                    'message' => 'This server is online but its secure relay tunnel isn\'t connected. '
+                        . 'Browsing over the hub isn\'t available until the tunnel reconnects.',
+                ]);
+            }
+
             return (new Response())->status(503)->json([
                 'error' => 'Server offline',
                 'code' => 'server.offline',
-                'message' => 'No active relay tunnel for this server.',
+                'message' => 'Server is offline.',
             ]);
         }
 
