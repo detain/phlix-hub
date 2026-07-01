@@ -707,4 +707,35 @@ class TunnelTest extends TestCase
 
         $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
     }
+
+    public function test_active_tunnel_closes_cleanly_on_undecodable_frame(): void
+    {
+        // A JSON HELLO/HELLO_ACK ({"type":...) arriving on an already-ACTIVE
+        // tunnel is read by the binary FrameDecoder as frame type 0x70 ('p', the
+        // 5th byte of `{"type"`). This must NOT bubble the InvalidFrameTypeException
+        // out of the Workerman message callback; the tunnel must close cleanly so
+        // the server reconnects and re-handshakes.
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $this->logger
+            ->expects($this->once())
+            ->method('warning')
+            ->with(
+                'Relay: undecodable frame from server, closing tunnel to resync',
+                $this->callback(static fn (array $ctx): bool => isset($ctx['error'])
+                    && str_contains((string) $ctx['error'], '0x70')),
+            );
+
+        // Does not throw (the assertion below is only reached if it returned).
+        $tunnel->onServerMessage('{"type":"hello","enrollment_jwt":"a.b.c","server_id":"server-123"}');
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
 }

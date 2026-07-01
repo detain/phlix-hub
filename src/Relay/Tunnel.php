@@ -217,7 +217,25 @@ final class Tunnel implements TunnelInterface
             $this->serverDecoder = new FrameDecoder();
         }
 
-        $frame = $this->serverDecoder->decode($data);
+        try {
+            $frame = $this->serverDecoder->decode($data);
+        } catch (InvalidFrameTypeException $e) {
+            // A server that re-handshakes on its existing connection (or a framing
+            // desync during a reconnect race) sends a JSON HELLO/HELLO_ACK on an
+            // already-ACTIVE tunnel — the 5th byte ('p' of `{"type"`) is read here
+            // as frame type 0x70. Letting this bubble out of the Workerman message
+            // callback logs a full stack trace per bad frame AND leaves the tunnel
+            // wedged in a desynced state (every subsequent frame re-throws). Tear
+            // the tunnel down cleanly instead so the server reconnects and
+            // re-handshakes from a known-good state.
+            $this->logger->warning('Relay: undecodable frame from server, closing tunnel to resync', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'error' => $e->getMessage(),
+            ]);
+            $this->close('invalid_frame');
+            return;
+        }
 
         if ($frame === null) {
             // Incomplete frame — continue buffering
