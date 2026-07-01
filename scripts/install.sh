@@ -1317,12 +1317,17 @@ log "Installing systemd service"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Phlix Hub
+Documentation=https://docs.phlix.media
 After=network.target mysql.service
+Wants=mysql.service
+StartLimitIntervalSec=500
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
+WorkingDirectory=${INSTALL_PATH}
 EnvironmentFile=${ENV_FILE}
 # Swoole's RemoteObject bridge (used when a coroutine runs a hooked stream op,
 # e.g. an outbound HTTPS fetch) writes a lock to \$HOME/.swoole. The service user
@@ -1331,18 +1336,63 @@ EnvironmentFile=${ENV_FILE}
 # Point HOME at a writable install path (\${INSTALL_PATH}/var) so the lock lands
 # there. (Mirrors the phlix-server fix.)
 Environment="HOME=${INSTALL_PATH}/var"
-WorkingDirectory=${INSTALL_PATH}
 # start.php is the Workerman bootstrap (webman-style — see start.php
 # for the full pattern). public/index.php no longer exists; public/ is
 # a pure document root containing only static assets + templates.
 ExecStart=/usr/bin/php ${INSTALL_PATH}/start.php start
+ExecReload=/bin/kill -SIGUSR1 \$MAINPID
+ExecStop=/bin/kill -SIGTERM \$MAINPID
 Restart=on-failure
-RestartSec=5
+RestartSec=5s
+TimeoutStopSec=30
+TimeoutStartSec=30
+
 # Swoole 6's io_uring event loop pins locked memory; the default 8 MB
 # RLIMIT_MEMLOCK is too small for the worker pool, so io_uring init fails
 # with ENOMEM and workers intermittently drop connections (random 502s).
 # Lift the cap so io_uring initialises cleanly.
 LimitMEMLOCK=infinity
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=phlix-hub
+
+# ---- Sandbox hardening (parity with phlix-server, then some) --------------
+# The install root stays READ-ONLY: everything the hub writes at runtime is
+# pinned under one of the ReadWritePaths below —
+#   .logs/  : app/error/hub/relay/audit + workerman logs (config/logger.php,
+#             start.php Worker::\$logFile)
+#   var/    : Swoole RemoteObject lock (HOME), Smarty compile/cache
+#             (HttpServicesProvider var/smarty/{compile,cache}), the DI
+#             container compile dir (ContainerFactory var/cache/container), and
+#             Workerman's pid/status files (start.php pins them into var/ — the
+#             defaults land in the read-only root and saveMasterPid() would
+#             throw "can not save pid to …").
+#   config/ : the Ed25519 hub signing key (HubServicesProvider writes
+#             config/hub-signing-key.pem, mode 0600) — same class of write that
+#             needed config/ added to the server's ReadWritePaths.
+# NOTE: the optional DNS-alias feature (StaticZoneManager) defaults its zone dir
+# to /home/phlix/data/dns/zones, which ProtectHome hides; operators enabling it
+# must point 'dns_zone_dir' at a path listed here (or add one).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${INSTALL_PATH}/.logs ${INSTALL_PATH}/var ${INSTALL_PATH}/config
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+# Extra kernel/privilege protections (beyond the server's current set) — all
+# safe for a userland PHP+Swoole network service; deliberately NOT setting
+# MemoryDenyWriteExecute (breaks PHP JIT/opcache), PrivateDevices, or
+# SystemCallFilter (io_uring is syscall-sensitive — see the reboot incident).
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
 
 [Install]
 WantedBy=multi-user.target
