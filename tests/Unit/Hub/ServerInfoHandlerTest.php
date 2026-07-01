@@ -210,4 +210,38 @@ final class ServerInfoHandlerTest extends TestCase
         self::assertSame('server-1', $result[0]->serverId);
         self::assertSame('server-2', $result[1]->serverId);
     }
+
+    /**
+     * The `GET /api/v1/me/servers` list payload MUST expose both `status` and
+     * `relayActive` so the SPA can gate the "Browse" button on a live tunnel
+     * (relayActive) rather than on heartbeat liveness (status) alone — the two
+     * are set by independent paths and can disagree.
+     */
+    public function testGetServersForUserPayloadExposesStatusAndRelayActive(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            [
+                'id' => 'server-1',
+                'user_id' => 'user-2',
+                'server_name' => 'Server A',
+                'version' => '0.11.0',
+                'last_seen_at' => time(),
+                'status' => 'online',
+                'hostname_candidates_json' => '[]',
+                'created_at' => time(),
+                // Heartbeating (status=online) but no open relay session.
+                'relay_active' => 0,
+                'library_count' => 3,
+            ],
+        ]);
+
+        $handler = new ServerInfoHandler($db);
+        $payload = $handler->getServersForUser('user-2')[0]->toPayload();
+
+        self::assertArrayHasKey('status', $payload);
+        self::assertArrayHasKey('relayActive', $payload);
+        self::assertSame('online', $payload['status']);
+        self::assertFalse($payload['relayActive']);
+    }
 }

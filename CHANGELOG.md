@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **Relay proxy: clearer "relay tunnel unavailable" error when Browse is used on an
+  online-but-untunnelled server** (`src/Http/Controllers/ServerProxyController.php`).
+  A server's `status` (set to `online` by heartbeats in `HeartbeatHandler`) and its
+  `relayActive` flag (derived from an open `relay_sessions` row, created only when the
+  reverse tunnel connects+authenticates on `:8802`) are set by **independent** paths and
+  can legitimately disagree: a server can heartbeat fine yet have no relay tunnel. The
+  hub "My Servers" SPA previously gated Browse on `status` alone, so it enabled Browse on
+  such a server and the proxy then returned a bare `503 server.offline` ("No active relay
+  tunnel"). The proxy now distinguishes the two cases: when `status='online'` but the
+  tunnel is absent it returns `503 server.relay_unavailable` with an actionable message
+  ("This server is online but its secure relay tunnel isn't connected…"); when the server
+  is genuinely down it keeps `503 server.offline` ("Server is offline."). The security
+  invariant is unchanged — the proxy still refuses to forward when there is no open relay
+  tunnel (the tunnel is the trust boundary). No relay-session lifecycle bug was found:
+  `relayActive` faithfully reflects tunnel presence; the fix is the clearer contract plus
+  SPA gating on `relayActive` (handled in `web-ui`). The `GET /api/v1/me/servers` list
+  payload already exposes both `status` and `relayActive` (`ServerInfoDto::toPayload()`),
+  so the SPA can gate the Browse button on `relayActive`.
+
 ### Added
 - **`web-ui`: bumped `@phlix/ui` `v0.56.0` → `v0.57.0` and rebuilt the committed SPA
   bundle (`public/assets/app/`) (Wave 1 bump).** Keeps the hub's shared SPA in lockstep
