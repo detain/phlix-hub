@@ -127,7 +127,7 @@ $serverConfig['public_root']        = __DIR__ . '/public';
 $container = ContainerFactory::create($serverConfig);
 
 // Register the container for runtime timer wiring in HubServicesProvider::boot()
-HubServicesProvider::setContainer($container);
+HubServicesProvider::setContainer($container, $serverConfig);
 
 // -----------------------------------------------------------------------------
 // 4. Boot all workers (HTTP + server-relay + client-relay) and runAll()
