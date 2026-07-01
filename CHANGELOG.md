@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- **systemd: set `HOME` to a writable path so Swoole's RemoteObject lock can't fail**
+  (`scripts/install.sh`). The hub service user is created with
+  `useradd --system --no-create-home`, so its `$HOME` is `/` (unwritable). When a
+  coroutine runs a hooked stream op (e.g. an outbound HTTPS fetch), Swoole's
+  `RemoteObject` bridge writes a lock to `$HOME/.swoole/remote-object-server.lock` and
+  throws `failed to open lock file[…]` → the request 500s. The unit now sets
+  `Environment="HOME=${INSTALL_PATH}/var"` (a service-user-owned dir, created up front),
+  so the lock lands somewhere writable. Mirrors the phlix-server fix.
 - **Relay proxy: clearer "relay tunnel unavailable" error when Browse is used on an
   online-but-untunnelled server** (`src/Http/Controllers/ServerProxyController.php`).
   A server's `status` (set to `online` by heartbeats in `HeartbeatHandler`) and its
