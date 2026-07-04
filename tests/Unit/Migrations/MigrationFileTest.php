@@ -54,6 +54,7 @@ final class MigrationFileTest extends TestCase
             '030_fix_server_claim_pairing.sql',
             '031_server_libraries.sql',
             '032_client_relay_tokens.sql',
+            '033_metrics_schema.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
@@ -155,10 +156,19 @@ final class MigrationFileTest extends TestCase
             $this->addToAssertionCount(1);
             return;
         }
+        if (!self::declaresIdColumn($contents)) {
+            // Natural-/composite-key table: the surrogate `id CHAR(36)` UUID
+            // convention only applies to entity tables that declare an `id`
+            // column. Telemetry rollups keyed by (bucket_started_at, worker_id)
+            // and a live snapshot keyed by connection_id (033_metrics_schema)
+            // legitimately have no `id` column and are exempt.
+            $this->addToAssertionCount(1);
+            return;
+        }
         self::assertMatchesRegularExpression(
             '/\bid\s+CHAR\(36\)\s+NOT NULL/i',
             $contents,
-            basename($file) . ' must use CHAR(36) NOT NULL for primary keys',
+            basename($file) . ' must use CHAR(36) NOT NULL for id primary keys',
         );
     }
 
@@ -172,5 +182,18 @@ final class MigrationFileTest extends TestCase
     private static function definesNewTable(string $contents): bool
     {
         return stripos($contents, 'CREATE TABLE') !== false;
+    }
+
+    /**
+     * Whether this migration declares an `id` column — the surrogate-UUID
+     * primary-key convention. Tables that instead use a natural or composite
+     * primary key (e.g. telemetry rollups keyed by time-bucket + worker) declare
+     * no `id` column and are exempt from the CHAR(36) rule. Matches an `id`
+     * column definition at the start of a line (allowing leading whitespace),
+     * so `user_id` / `session_id` / `connection_id` columns do NOT count.
+     */
+    private static function declaresIdColumn(string $contents): bool
+    {
+        return preg_match('/^\s*id\s+/im', $contents) === 1;
     }
 }
