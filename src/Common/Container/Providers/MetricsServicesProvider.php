@@ -10,9 +10,11 @@ use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
 use Phlix\Hub\Stats\Metrics\MetricsRepository;
+use Phlix\Hub\Stats\Metrics\MetricsRepositoryInterface;
 use Psr\Container\ContainerInterface;
 
 use function DI\factory;
+use function DI\get;
 
 /**
  * Registers the metrics / live-traffic telemetry subsystem
@@ -95,6 +97,16 @@ final class MetricsServicesProvider implements ServiceProviderInterface
                     return new MetricsRepository($config);
                 }
             ),
+
+            // Bind the read-side interface to the concrete repository. The admin
+            // MetricsController type-hints MetricsRepositoryInterface (and the
+            // HubServicesProvider MetricsController factory resolves it via
+            // get(MetricsRepositoryInterface::class)); without this alias PHP-DI
+            // tries to instantiate the interface directly and fatals at boot with
+            // "MetricsRepositoryInterface cannot be resolved: the class is not
+            // instantiable" (Application::registerMetricsRoutes resolves the
+            // controller eagerly). The alias reuses the shared concrete singleton.
+            MetricsRepositoryInterface::class => get(MetricsRepository::class),
         ]);
     }
 

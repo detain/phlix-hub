@@ -1,4 +1,4 @@
--- Migration: 033_metrics_schema.sql
+-- migration: 033_metrics_schema
 -- Step S4: Metrics / relay-tunnel traffic telemetry
 -- Creates the three tables backing the hub's in-process telemetry subsystem
 -- (Phlix\Hub\Stats\Metrics): per-tunnel time-bucket rollups, per-route rollups,

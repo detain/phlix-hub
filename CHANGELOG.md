@@ -23,6 +23,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the shared singleton logger, and the shared depth counter trips the guard into a false
   positive that **drops the record**. No handler or processor emits its own log (so there is no
   real cycle), so the guard is now disabled via `Logger::useLoggingLoopDetection(false)`.
+- **Metrics: hub no longer fatals at boot with "MetricsRepositoryInterface … not instantiable"**
+  (`src/Common/Container/Providers/MetricsServicesProvider.php`). The S4 metrics provider registered
+  the concrete `MetricsRepository` but never bound the read-side `MetricsRepositoryInterface`, while
+  the admin `MetricsController` type-hints the interface and `Application::registerMetricsRoutes()`
+  resolves the controller **eagerly at boot** — so PHP-DI tried to instantiate the interface and
+  killed the process (`status=255/EXCEPTION`). The provider now aliases
+  `MetricsRepositoryInterface::class => get(MetricsRepository::class)` (reusing the shared singleton).
+  Also conforms `migrations/033_metrics_schema.sql` to the migration-file conventions (lowercase
+  `-- migration:` header; registered in `MigrationFileTest`; the telemetry rollup tables use natural
+  composite keys, so the `id CHAR(36)` rule now applies only to tables that declare an `id` column).
 
 ### Security
 - **systemd unit hardened to phlix-server parity (and then some)** (`scripts/install.sh`,
