@@ -101,7 +101,7 @@ final class MetricsRegistry
 
         $bounds = [];
         foreach ($latencyBucketsMs as $bound) {
-            $bounds[] = (int) $bound;
+            $bounds[] = $bound;
         }
         sort($bounds);
         $this->latencyBucketsMs = $bounds !== [] ? $bounds : [10, 50, 100, 250, 500, 1000, 2500, 5000];
@@ -147,7 +147,7 @@ final class MetricsRegistry
                 'histogram'       => $this->emptyHistogram(),
             ];
         }
-        $overall = &$this->buckets[$bucketTs];
+        $overall = $this->buckets[$bucketTs];
         $overall['request_count']++;
         if ($isError) {
             $overall['error_count']++;
@@ -159,7 +159,7 @@ final class MetricsRegistry
         $overall['bytes_in']  += $bytesIn;
         $overall['bytes_out'] += $bytesOut;
         $overall['histogram'][$this->histogramIndex($elapsed)]++;
-        unset($overall);
+        $this->buckets[$bucketTs] = $overall;
 
         // --- Per-route bucket (cardinality-capped) ---
         $normMethod = strtoupper(substr($method, 0, 8));
@@ -176,7 +176,7 @@ final class MetricsRegistry
                 'duration_ms_max' => 0,
             ];
         }
-        $r = &$this->routeBuckets[$bucketTs][$key];
+        $r = $this->routeBuckets[$bucketTs][$key];
         $r['request_count']++;
         if ($isError) {
             $r['error_count']++;
@@ -185,7 +185,7 @@ final class MetricsRegistry
         if ($elapsed > $r['duration_ms_max']) {
             $r['duration_ms_max'] = $elapsed;
         }
-        unset($r);
+        $this->routeBuckets[$bucketTs][$key] = $r;
     }
 
     /**

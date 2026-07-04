@@ -85,7 +85,6 @@ final class MetricsRepository implements MetricsRepositoryInterface
 
         $db = ConnectionPool::getConnection();
 
-        /** @var array<int, array<string, mixed>> $rows */
         $rows = $db->query(
             "SELECT
                  COALESCE(SUM(request_count), 0)   AS request_count,
@@ -155,7 +154,6 @@ final class MetricsRepository implements MetricsRepositoryInterface
 
         $db = ConnectionPool::getConnection();
 
-        /** @var array<int, array<string, mixed>> $rows */
         $rows = $db->query(
             "SELECT
                  FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(bucket_started_at) / :res) * :res) AS bucket,
@@ -231,7 +229,6 @@ final class MetricsRepository implements MetricsRepositoryInterface
 
         $db = ConnectionPool::getConnection();
 
-        /** @var array<int, array<string, mixed>> $rows */
         $rows = $db->query(
             "SELECT connection_id, kind, user_id, remote_ip, session_id, media_item_id,
                     bytes_in, bytes_out, bytes_in_rate, bytes_out_rate, opened_at, last_seen_at
@@ -287,7 +284,6 @@ final class MetricsRepository implements MetricsRepositoryInterface
 
         $db = ConnectionPool::getConnection();
 
-        /** @var array<int, array<string, mixed>> $rows */
         $rows = $db->query(
             "SELECT
                  method,
@@ -333,7 +329,6 @@ final class MetricsRepository implements MetricsRepositoryInterface
     {
         $db = ConnectionPool::getConnection();
 
-        /** @var array<int, array<string, mixed>> $rows */
         $rows = $db->query(
             "SELECT COUNT(*) AS c
              FROM metrics_connections
@@ -355,6 +350,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
      */
     private function cfgInt(array $config, string $key, int $default): int
     {
+        /** @var mixed $v */
         $v = $config[$key] ?? null;
         if (is_int($v)) {
             return $v;
