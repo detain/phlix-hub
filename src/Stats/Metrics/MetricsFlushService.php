@@ -289,13 +289,20 @@ final class MetricsFlushService
             $outRate = max(0, intdiv($c['bytes_out'] - $prev['out'], $this->flushIntervalSeconds));
             $this->previousBytes[$id] = ['in' => $c['bytes_in'], 'out' => $c['bytes_out']];
 
+            // NOTE: the byte placeholders are :bytes_in_val / :bytes_out_val, NOT
+            // :bytes_in / :bytes_out. Under emulated prepares (which this hub's
+            // PhlixMySQLConnection requires — native prepares corrupt across
+            // coroutine yields) a named placeholder that is a strict PREFIX of
+            // another in the same statement (:bytes_in ⊂ :bytes_in_rate) makes PDO
+            // rewrite the wrong token and throw SQLSTATE[HY093] "parameter was not
+            // defined". Keep no placeholder name a prefix of another here.
             $db->query(
                 "INSERT INTO metrics_connections
                  (connection_id, worker_id, kind, user_id, remote_ip, session_id,
                   media_item_id, bytes_in, bytes_out, bytes_in_rate, bytes_out_rate,
                   opened_at, last_seen_at)
                  VALUES (:id, :worker_id, :kind, :user_id, :remote_ip, :session_id,
-                         :media_item_id, :bytes_in, :bytes_out, :bytes_in_rate, :bytes_out_rate,
+                         :media_item_id, :bytes_in_val, :bytes_out_val, :bytes_in_rate, :bytes_out_rate,
                          :opened_at, :last_seen_at)
                  ON DUPLICATE KEY UPDATE
                      kind           = VALUES(kind),
@@ -316,8 +323,8 @@ final class MetricsFlushService
                     ':remote_ip'      => $c['remote_ip'],
                     ':session_id'     => $c['session_id'],
                     ':media_item_id'  => $c['media_item_id'],
-                    ':bytes_in'       => $c['bytes_in'],
-                    ':bytes_out'      => $c['bytes_out'],
+                    ':bytes_in_val'   => $c['bytes_in'],
+                    ':bytes_out_val'  => $c['bytes_out'],
                     ':bytes_in_rate'  => $inRate,
                     ':bytes_out_rate' => $outRate,
                     ':opened_at'     => $this->datetime($c['opened_at']),
