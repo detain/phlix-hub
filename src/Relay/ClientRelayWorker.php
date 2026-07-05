@@ -6,23 +6,30 @@ namespace Phlix\Hub\Relay;
 
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
+use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
+use Workerman\Timer;
 use Workerman\Worker;
 
 use function count;
 use function explode;
+use function intdiv;
 use function is_string;
+use function max;
 use function preg_match;
 use function rawurldecode;
 use function spl_object_id;
 use function str_starts_with;
 use function substr;
+use function time;
 use function trim;
 
 /**
@@ -78,6 +85,41 @@ final class ClientRelayWorker
     private static array $connServerIds = [];
 
     /**
+     * Live client connections keyed by {@see spl_object_id()}, so the metrics
+     * touch timer (armed in {@see onWorkerStart()}) can iterate them and push
+     * each one's cumulative `bytesRead`/`bytesWritten` into the registry between
+     * flushes. The worker previously kept only {@see $connServerIds}; the touch
+     * timer needs the live {@see TcpConnection} objects themselves. Populated
+     * only while metrics is enabled, and cleared on close.
+     *
+     * @var array<int, TcpConnection>
+     */
+    private static array $liveConnections = [];
+
+    /**
+     * Map of connection ID ({@see spl_object_id()}) => stable metrics
+     * connection id (a per-connection UUID).
+     *
+     * `spl_object_id()` is reused once a connection object is destroyed, so it
+     * is unsafe as the registry key across a connection's whole lifetime (a new
+     * connection could reuse a departed one's id and collide its metrics row).
+     * A UUID minted at open time keeps each `metrics_connections` row stable
+     * from {@see openConnection} through the final {@see onClose()} touch.
+     *
+     * @var array<int, string>
+     */
+    private static array $connMetricsIds = [];
+
+    /**
+     * This worker's metrics collector, resolved in {@see onWorkerStart()} when
+     * metrics is enabled. Null keeps every connection hook a no-op (so a
+     * disabled subsystem carries zero per-connection bookkeeping).
+     *
+     * @var MetricsCollector|null
+     */
+    private ?MetricsCollector $metrics = null;
+
+    /**
      * @param ContainerInterface $container PSR-11 container for resolving services.
      * @param int                $port      Client-facing WS port (default 8803).
      * @param int                $count     Number of worker processes.
@@ -106,8 +148,70 @@ final class ClientRelayWorker
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
+        // Per-worker metrics wiring: resolve this worker's collector and arm the
+        // flush + live-connection touch timers (see onWorkerStart()).
+        $worker->onWorkerStart = [$this, 'onWorkerStart'];
 
         return $worker;
+    }
+
+    /**
+     * Worker-start hook: resolve this worker's metrics collector and arm its
+     * flush + live-connection touch timers.
+     *
+     * Must be per-worker here (NOT in the master via a service provider) so the
+     * connection hooks feed the SAME {@see \Phlix\Hub\Stats\Metrics\MetricsRegistry}
+     * instance the flush drains. Unlike {@see RelayWorker::onWorkerStart()} the
+     * client worker owns no tunnels and joins no channel broker, so this hook is
+     * metrics-only. Guarded end-to-end so a metrics failure never breaks the
+     * client relay worker; when metrics is disabled {@see $metrics} stays null
+     * and every connection hook no-ops.
+     *
+     * @return void
+     */
+    public function onWorkerStart(): void
+    {
+        try {
+            /** @var mixed $collector */
+            $collector = $this->container->get(MetricsCollector::class);
+            if (!$collector instanceof MetricsCollector || !$collector->isEnabled()) {
+                return;
+            }
+
+            $this->metrics = $collector;
+
+            /** @var mixed $flushService */
+            $flushService = $this->container->get(MetricsFlushService::class);
+            if (!$flushService instanceof MetricsFlushService) {
+                return;
+            }
+
+            $flushInterval = $flushService->flushIntervalSeconds();
+            Timer::add($flushInterval, static function () use ($flushService): void {
+                $flushService->flush(0, time());
+            });
+
+            // Push each live client connection's current cumulative bytes into
+            // the registry between flushes so the live-connection panel shows
+            // real throughput for the whole connection lifetime (not a zero row
+            // until it closes). Touch at least twice per flush window. spl_object_id
+            // maps to the stable metrics id via self::$connMetricsIds so a reused
+            // object id can never write to a departed connection's row.
+            $touchInterval = max(1, intdiv($flushInterval, 2));
+            Timer::add($touchInterval, static function () use ($collector): void {
+                foreach (self::$liveConnections as $connId => $conn) {
+                    $metricsId = self::$connMetricsIds[$connId] ?? null;
+                    if ($metricsId === null) {
+                        continue;
+                    }
+                    $collector->touchConnection($metricsId, $conn->bytesRead, $conn->bytesWritten);
+                }
+            });
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error('Metrics: client relay worker timer init failed', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -146,7 +250,8 @@ final class ClientRelayWorker
         }
 
         try {
-            if (!$this->validateClientAuth($token, $serverId)) {
+            $userId = $this->validateClientAuth($token, $serverId);
+            if ($userId === null) {
                 $logger->warning('Relay: client WS rejected, invalid relay token or ownership', [
                     'server_id' => $serverId,
                 ]);
@@ -165,15 +270,50 @@ final class ClientRelayWorker
 
             self::$connServerIds[$connId] = $serverId;
 
+            // S4 metrics: register this client connection as a live connection so
+            // the touch timer can push its cumulative byte counts into the
+            // registry between flushes, and record the opening row now. Guarded on
+            // the collector (resolved in onWorkerStart) so a disabled subsystem
+            // mints no id and populates no maps — zero per-connection overhead.
+            // Copied to a local so the null-narrowing survives the intervening
+            // getRemoteIp() call under strict static analysis.
+            $metrics = $this->metrics;
+            if ($metrics !== null) {
+                $metricsId = Ids::uuidV4();
+                self::$connMetricsIds[$connId] = $metricsId;
+                self::$liveConnections[$connId] = $connection;
+                // kind 'stream': unlike the server tunnel (RelayWorker uses
+                // 'websocket' — a control-plane frame multiplexer), a client relay
+                // connection IS the media playback path (the fallback used when a
+                // direct signed URL is unavailable). sessionId is null (the client
+                // relay keeps no relay_sessions row); mediaItemId carries the
+                // server_id being reached — the best per-connection correlator
+                // available at mount time.
+                $metrics->openConnection(
+                    $metricsId,
+                    'stream',
+                    $userId,
+                    $connection->getRemoteIp(),
+                    null,
+                    $serverId,
+                );
+            }
+
             // Bind the client to the matching tunnel. The controller closes
-            // the connection itself if no active tunnel exists (server_offline).
+            // the connection itself if no active tunnel exists (server_offline);
+            // the metrics row is then left for onClose's final touch + the flush
+            // TTL to reap (mirrors RelayWorker / the server's WS close hook).
             $controller->onWebSocketConnect($connection, $request, $serverId);
         } catch (Throwable $e) {
             $logger->error('Relay: client WS connect error', [
                 'server_id' => $serverId,
                 'error' => $e->getMessage(),
             ]);
-            unset(self::$connServerIds[$connId]);
+            unset(
+                self::$connServerIds[$connId],
+                self::$liveConnections[$connId],
+                self::$connMetricsIds[$connId],
+            );
             $connection->close('', true);
         }
     }
@@ -208,6 +348,16 @@ final class ClientRelayWorker
     {
         $connId = spl_object_id($connection);
         unset(self::$connServerIds[$connId]);
+
+        // S4 metrics: record the FINAL cumulative byte counts. Deliberately NOT
+        // closeConnection() — that would drop the registry row before the next
+        // flush persists it; the flush service TTL-prunes the now-idle row
+        // afterwards (mirrors RelayWorker::onClose + the server's WS close hook).
+        $metricsId = self::$connMetricsIds[$connId] ?? null;
+        if ($metricsId !== null) {
+            $this->metrics?->touchConnection($metricsId, $connection->bytesRead, $connection->bytesWritten);
+        }
+        unset(self::$liveConnections[$connId], self::$connMetricsIds[$connId]);
 
         $controller = $this->resolveController();
         if ($controller === null) {
@@ -244,39 +394,46 @@ final class ClientRelayWorker
      * @param string $token    The per-user relay token presented by the client.
      * @param string $serverId The server ID parsed from the request path.
      *
-     * @return bool True only when the token is valid, scoped to $serverId, and
-     *              the bound user still owns that server.
+     * @return string|null The authenticated (owning) user id when the token is
+     *                     valid, scoped to $serverId, and the bound user still
+     *                     owns that server; null otherwise (fail-closed). The id
+     *                     is surfaced so {@see onWebSocketConnect()} can attribute
+     *                     the metrics connection row to the user.
      */
-    public function validateClientAuth(string $token, string $serverId): bool
+    public function validateClientAuth(string $token, string $serverId): ?string
     {
         $tokenService = $this->container->get(ClientRelayTokenService::class);
         if (!$tokenService instanceof ClientRelayTokenService) {
-            return false;
+            return null;
         }
 
         $bound = $tokenService->validate($token);
         if ($bound === null) {
-            return false;
+            return null;
         }
 
         // The token must be scoped to exactly the server being mounted.
         if ($bound['server_id'] !== $serverId) {
-            return false;
+            return null;
         }
 
         $serverInfo = $this->container->get(ServerInfoHandler::class);
         if (!$serverInfo instanceof ServerInfoHandler) {
-            return false;
+            return null;
         }
 
         // Re-confirm current ownership: the bound user must still own the
         // target server (mirrors ServerProxyController::proxy()).
         $server = $serverInfo->getServerInfo($serverId);
         if ($server === null) {
-            return false;
+            return null;
         }
 
-        return $server->userId === $bound['user_id'];
+        if ($server->userId !== $bound['user_id']) {
+            return null;
+        }
+
+        return $bound['user_id'];
     }
 
     /**
@@ -354,6 +511,23 @@ final class ClientRelayWorker
     public static function getActiveConnectionCount(): int
     {
         return count(self::$connServerIds);
+    }
+
+    /**
+     * Clear all static per-worker connection maps.
+     *
+     * Intended for test isolation only — the maps are process-global, so tests
+     * that assert {@see getActiveConnectionCount()} or the metrics open/close
+     * bookkeeping must reset them between cases. Production never needs this
+     * (entries are removed on close).
+     *
+     * @return void
+     */
+    public static function reset(): void
+    {
+        self::$connServerIds = [];
+        self::$liveConnections = [];
+        self::$connMetricsIds = [];
     }
 
     /**

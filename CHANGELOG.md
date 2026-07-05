@@ -79,6 +79,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   so the SPA can gate the Browse button on `relayActive`.
 
 ### Added
+- **Metrics: the client-facing relay worker (`:8803`) now produces live-connection
+  telemetry** (`src/Relay/ClientRelayWorker.php`). Completes the S4 producer wiring
+  begun for HTTP requests + relay **server** tunnels (`RelayWorker`, `:8802`).
+  `ClientRelayWorker` gained an `onWorkerStart` that resolves this worker's
+  `MetricsCollector` + `MetricsFlushService` and arms the flush timer plus a
+  live-connection **touch** timer. Each authenticated client mount now opens a
+  `metrics_connections` row (`kind='stream'`, attributed to the owning user,
+  correlated by `server_id`), its cumulative `bytesRead`/`bytesWritten` are pushed
+  into the registry between flushes, and a **final touch** is left on close (NOT an
+  immediate delete) so the next flush persists real totals before the TTL prunes the
+  idle row. Live connections are tracked in a per-worker map keyed by a stable
+  per-connection UUID because `spl_object_id()` is reused after a connection is
+  destroyed and is unsafe as the registry key. To attribute the row,
+  `ClientRelayWorker::validateClientAuth()` now returns the resolved owner `user_id`
+  (or `null` on failure) instead of a bare `bool`. The hub relay is the **fallback**
+  playback path (primary is direct signed URLs), so these connections are relatively
+  rare; the wiring is guarded end-to-end, so with metrics disabled the connection
+  hooks are pure no-ops.
 - **`web-ui`: bumped `@phlix/ui` `v0.56.0` → `v0.57.0` and rebuilt the committed SPA
   bundle (`public/assets/app/`) (Wave 1 bump).** Keeps the hub's shared SPA in lockstep
   with the media server. Picks up the per-user favorites wiring (`MediaCard` favorite
