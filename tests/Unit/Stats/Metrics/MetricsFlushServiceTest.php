@@ -398,6 +398,9 @@ final class MetricsFlushServiceTest extends TestCase
         $reflPool = new \ReflectionClass(\Phlix\Hub\Common\Database\ConnectionPool::class);
         $connProp = $reflPool->getProperty('connections');
         $connProp->setAccessible(true);
-        $connProp->setValue(null, ['mysql' => $conn]);
+        // The flush uses the dedicated 'metrics' connection (see
+        // MetricsFlushService::CONNECTION); register the mock under both so the
+        // test exercises the same handle the flush resolves.
+        $connProp->setValue(null, ['mysql' => $conn, 'metrics' => $conn]);
     }
 }

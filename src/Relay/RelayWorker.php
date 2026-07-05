@@ -179,8 +179,14 @@ final class RelayWorker
                 $flushService = $this->container->get(MetricsFlushService::class);
                 if ($flushService instanceof MetricsFlushService) {
                     $flushInterval = $flushService->flushIntervalSeconds();
-                    Timer::add($flushInterval, static function () use ($flushService): void {
-                        $flushService->flush(0, time());
+                    Timer::add($flushInterval, static function () use ($flushService, $logger): void {
+                        // Best-effort: a transient DB error on a flush tick must
+                        // never escape the timer and crash the relay worker.
+                        try {
+                            $flushService->flush(0, time());
+                        } catch (Throwable $e) {
+                            $logger->warning('Metrics: relay flush tick failed', ['error' => $e->getMessage()]);
+                        }
                     });
                     // Push each live tunnel's current cumulative bytes into the
                     // registry between flushes so the live-connection panel shows

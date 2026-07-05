@@ -188,7 +188,16 @@ final class ClientRelayWorker
 
             $flushInterval = $flushService->flushIntervalSeconds();
             Timer::add($flushInterval, static function () use ($flushService): void {
-                $flushService->flush(0, time());
+                // Best-effort: a transient DB error on a flush tick must never
+                // escape the timer and crash the client-relay worker.
+                try {
+                    $flushService->flush(0, time());
+                } catch (Throwable $e) {
+                    LoggerFactory::get(LogChannels::RELAY)->warning(
+                        'Metrics: client-relay flush tick failed',
+                        ['error' => $e->getMessage()],
+                    );
+                }
             });
 
             // Push each live client connection's current cumulative bytes into
