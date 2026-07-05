@@ -9,10 +9,13 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
+use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
+use Workerman\Timer;
 use Workerman\Worker;
 
 use function count;
@@ -38,6 +41,14 @@ final class RelayWorker
      * @var array<int, Tunnel>
      */
     private static array $connTunnels = [];
+
+    /**
+     * This worker's metrics collector, resolved in {@see onWorkerStart()} when
+     * metrics is enabled. Null keeps every connection hook a no-op.
+     *
+     * @var MetricsCollector|null
+     */
+    private ?MetricsCollector $metrics = null;
 
     /**
      * @param ContainerInterface $container   PSR-11 container for resolving TunnelManager.
@@ -144,6 +155,51 @@ final class RelayWorker
             }
         } catch (Throwable $e) {
             $logger->error('Relay proxy: relay worker channel init failed', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        // S4 metrics: resolve this worker's collector and arm its flush timer +
+        // a live-connection touch timer. Must be per-worker here (NOT in the
+        // master via HubServicesProvider::boot()) so the tunnel connection hooks
+        // feed the same registry instance the flush drains. Guarded so a metrics
+        // failure never breaks the relay worker.
+        try {
+            /** @var mixed $collector */
+            $collector = $this->container->get(MetricsCollector::class);
+            /** @var mixed $touchTunnelManager */
+            $touchTunnelManager = $this->container->get(TunnelManager::class);
+            if (
+                $collector instanceof MetricsCollector
+                && $collector->isEnabled()
+                && $touchTunnelManager instanceof TunnelManager
+            ) {
+                $this->metrics = $collector;
+                /** @var mixed $flushService */
+                $flushService = $this->container->get(MetricsFlushService::class);
+                if ($flushService instanceof MetricsFlushService) {
+                    $flushInterval = $flushService->flushIntervalSeconds();
+                    Timer::add($flushInterval, static function () use ($flushService): void {
+                        $flushService->flush(0, time());
+                    });
+                    // Push each live tunnel's current cumulative bytes into the
+                    // registry between flushes so the live-connection panel shows
+                    // real throughput for the whole tunnel lifetime (not a zero
+                    // row until it closes). Touch at least twice per flush window.
+                    $touchInterval = max(1, intdiv($flushInterval, 2));
+                    Timer::add($touchInterval, static function () use ($touchTunnelManager, $collector): void {
+                        foreach ($touchTunnelManager->allTunnels() as $tunnel) {
+                            if (!$tunnel instanceof Tunnel) {
+                                continue;
+                            }
+                            $ws = $tunnel->serverWs;
+                            $collector->touchConnection($tunnel->tunnelId, $ws->bytesRead, $ws->bytesWritten);
+                        }
+                    });
+                }
+            }
+        } catch (Throwable $e) {
+            $logger->error('Metrics: relay worker timer init failed', [
                 'error' => $e->getMessage(),
             ]);
         }
@@ -279,6 +335,18 @@ final class RelayWorker
 
             // Let the tunnel process the HELLO (validates + transitions state)
             $tunnel->onServerMessage($data);
+
+            // S4 metrics: register the tunnel as a live connection. Its byte
+            // counts are pushed by the periodic touch timer (see onWorkerStart)
+            // and a final touch on close.
+            $this->metrics?->openConnection(
+                $tunnel->tunnelId,
+                'websocket',
+                null,
+                $connection->getRemoteIp(),
+                $tunnel->relaySessionId,
+                null,
+            );
         } catch (Throwable $e) {
             $connection->close('internal_error');
         }
@@ -296,7 +364,19 @@ final class RelayWorker
         $connId = spl_object_id($connection);
 
         if (isset(self::$connTunnels[$connId])) {
-            self::$connTunnels[$connId]->onServerClose();
+            $tunnel = self::$connTunnels[$connId];
+
+            // S4 metrics: record the FINAL cumulative byte counts. Deliberately
+            // NOT closeConnection() — that would drop the registry row before the
+            // next flush persists it; the flush service TTL-prunes the now-idle
+            // row afterwards (mirrors the server's WS close hook).
+            $this->metrics?->touchConnection(
+                $tunnel->tunnelId,
+                $connection->bytesRead,
+                $connection->bytesWritten,
+            );
+
+            $tunnel->onServerClose();
             unset(self::$connTunnels[$connId]);
         }
     }
