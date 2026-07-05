@@ -56,6 +56,21 @@ final class MetricsFlushService
     }
 
     /**
+     * The flush cadence in seconds — also the per-connection rate denominator.
+     *
+     * Producing workers arm their flush {@see \Workerman\Timer} at exactly this
+     * interval so the timer cadence matches the rate maths inside
+     * {@see flushConnections()} (otherwise per-connection byte rates would be
+     * scaled wrong when `flush_interval_seconds` is overridden from its default).
+     *
+     * @return int Seconds between flushes (>= 1).
+     */
+    public function flushIntervalSeconds(): int
+    {
+        return $this->flushIntervalSeconds;
+    }
+
+    /**
      * Drain the registry and persist rollups + live connections for the hub relay.
      *
      * Upserts overall + per-route rollups (accumulating VALUES into existing rows)
@@ -87,6 +102,11 @@ final class MetricsFlushService
         $ticksPerMinute = max(1, (int) round(60 / $this->flushIntervalSeconds));
         if ($this->flushTick % $ticksPerMinute === 0) {
             $this->prune($nowTs);
+            // Evict connections from the in-RAM map once they age past the same
+            // TTL the persisted rows use, so the registry stays bounded after a
+            // relay tunnel closes (the close hook leaves a FINAL touch rather
+            // than an immediate delete, mirroring the server).
+            $registry->pruneStaleConnections($nowTs - $this->connectionTtlSeconds);
         }
     }
 

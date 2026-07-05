@@ -49,10 +49,13 @@ use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
+use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
+use Workerman\Timer;
 use Workerman\Worker;
 
 /**
@@ -1220,7 +1223,20 @@ final class Application
         // unique reply event so relayed responses are delivered back to the
         // coroutine that issued the proxy request.
         $proxyContainer = $this->container;
-        $worker->onWorkerStart = static function () use ($channelHost, $channelPort, $proxyContainer): void {
+
+        // Per-worker metrics collector, resolved inside onWorkerStart and shared
+        // into the request hook by reference. The flush timer MUST be armed AND
+        // the collector resolved per-worker here — NOT in the master via
+        // HubServicesProvider::boot() — or the request hook would feed a
+        // different registry instance than the flush timer drains.
+        $sharedCollector = null;
+
+        $worker->onWorkerStart = static function () use (
+            $channelHost,
+            $channelPort,
+            $proxyContainer,
+            &$sharedCollector,
+        ): void {
             try {
                 ChannelClient::connect($channelHost, $channelPort);
                 /** @var mixed $bridge */
@@ -1236,6 +1252,30 @@ final class Application
                 }
             } catch (Throwable $e) {
                 LoggerFactory::get(LogChannels::RELAY)->error('Relay proxy: HTTP worker channel init failed', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // Resolve this worker's metrics collector + arm its flush timer.
+            // Guarded so a metrics failure never breaks the HTTP worker.
+            try {
+                /** @var mixed $collector */
+                $collector = $proxyContainer->get(MetricsCollector::class);
+                if ($collector instanceof MetricsCollector && $collector->isEnabled()) {
+                    $sharedCollector = $collector;
+                    /** @var mixed $flushService */
+                    $flushService = $proxyContainer->get(MetricsFlushService::class);
+                    if ($flushService instanceof MetricsFlushService) {
+                        Timer::add(
+                            $flushService->flushIntervalSeconds(),
+                            static function () use ($flushService): void {
+                                $flushService->flush(0, time());
+                            },
+                        );
+                    }
+                }
+            } catch (Throwable $e) {
+                LoggerFactory::get(LogChannels::RELAY)->error('Metrics: HTTP worker flush timer init failed', [
                     'error' => $e->getMessage(),
                 ]);
             }
@@ -1261,7 +1301,14 @@ final class Application
             $router,
             $logger,
             $publicRoot,
+            &$sharedCollector,
         ): void {
+            /** @var MetricsCollector|null $collector */
+            $collector = $sharedCollector;
+            $startTime = $collector !== null ? microtime(true) : 0.0;
+            $startBytesRead = $collector !== null ? $connection->bytesRead : 0;
+            $startBytesWritten = $collector !== null ? $connection->bytesWritten : 0;
+            $status = 200;
             try {
                 // 1. Static-file fast path. Serve files under public/
                 //    directly (CSS, JS, images, fonts). Refuses traversal
@@ -1321,8 +1368,10 @@ final class Application
                 // 2. Dynamic dispatch via the router.
                 $hubRequest = Request::fromWorkerman($request);
                 $response = $router->dispatch($hubRequest);
+                $status = $response->statusCode;
                 $connection->send($response->toWorkermanResponse());
             } catch (Throwable $e) {
+                $status = 500;
                 $logger?->error('Unhandled exception in hub request', [
                     'exception' => $e::class,
                     'message' => $e->getMessage(),
@@ -1333,6 +1382,22 @@ final class Application
                     ->status(500)
                     ->json(['error' => 'Internal Server Error', 'message' => $e->getMessage()]);
                 $connection->send($error->toWorkermanResponse());
+            } finally {
+                // Record the request on EVERY path (success, static file, early
+                // return, or exception), mirroring the server's HttpHandler.
+                if ($collector !== null) {
+                    $bytesIn = (int) max(0, $connection->bytesRead - $startBytesRead);
+                    $bytesOut = (int) max(0, $connection->bytesWritten - $startBytesWritten);
+                    $elapsedMs = (microtime(true) - $startTime) * 1000;
+                    $collector->recordRequest(
+                        $request->method(),
+                        self::routeTemplate($request->path()),
+                        $status,
+                        $elapsedMs,
+                        $bytesIn,
+                        $bytesOut,
+                    );
+                }
             }
         };
 
@@ -1370,6 +1435,54 @@ final class Application
         $clientRelayWorker->start();
 
         Worker::runAll();
+    }
+
+    /**
+     * Collapse high-cardinality path segments (numeric ids, UUIDs, long tokens
+     * mixing letters and digits) to `{id}` so the per-route metrics table stays
+     * bounded. Mirrors the server's HttpHandler::routeTemplate().
+     *
+     * @param string $path Raw request path.
+     *
+     * @return string Route template with variable segments collapsed.
+     */
+    private static function routeTemplate(string $path): string
+    {
+        if ($path === '' || $path === '/') {
+            return '/';
+        }
+
+        $segments = explode('/', $path);
+        foreach ($segments as $i => $segment) {
+            if ($segment !== '' && self::isVariableSegment($segment)) {
+                $segments[$i] = '{id}';
+            }
+        }
+
+        return implode('/', $segments);
+    }
+
+    /**
+     * Whether a path segment looks like a variable id (numeric, canonical UUID,
+     * or a long token mixing letters and digits) rather than a stable path word
+     * such as "api", "v1", or "health".
+     *
+     * @param string $segment Single path segment.
+     *
+     * @return bool
+     */
+    private static function isVariableSegment(string $segment): bool
+    {
+        if (ctype_digit($segment)) {
+            return true;
+        }
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $segment) === 1) {
+            return true;
+        }
+
+        return strlen($segment) >= 8
+            && preg_match('/[A-Za-z]/', $segment) === 1
+            && preg_match('/\d/', $segment) === 1;
     }
 
     /**

@@ -253,6 +253,69 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(0, $conn[0]['params'][':bytes_out_rate']);
     }
 
+    public function test_flush_interval_seconds_exposes_configured_cadence(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+
+        $this->assertSame(5, $this->service($collector)->flushIntervalSeconds());
+        $this->assertSame(
+            10,
+            $this->service($collector, ['flush_interval_seconds' => 10])->flushIntervalSeconds()
+        );
+        // Clamped to a 1s minimum (rate denominator must never be zero).
+        $this->assertSame(
+            1,
+            $this->service($collector, ['flush_interval_seconds' => 0])->flushIntervalSeconds()
+        );
+    }
+
+    public function test_prune_tick_evicts_stale_registry_connections(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+        $service = $this->service($collector, [
+            'flush_interval_seconds' => 5,
+            'connection_ttl_seconds' => 15,
+        ]);
+
+        // Idle connection, last seen at t=900, never touched again.
+        $registry->openConnection('stale-1', 'websocket', null, null, null, null, 900);
+
+        // 12 flushes at the 5s cadence trip the once-a-minute prune tick. At the
+        // 12th flush (nowTs=1012) the registry cutoff is 1012-15=997 > 900, so
+        // the idle connection is evicted from the in-RAM map — not merely DELETEd
+        // from the table (which the pre-existing prune() already did).
+        for ($i = 1; $i <= 12; $i++) {
+            $service->flush(1, 1000 + $i);
+        }
+
+        $this->assertArrayNotHasKey('stale-1', $registry->snapshotConnections());
+    }
+
+    public function test_prune_tick_keeps_live_registry_connections(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+        $service = $this->service($collector, [
+            'flush_interval_seconds' => 5,
+            'connection_ttl_seconds' => 15,
+        ]);
+
+        $registry->openConnection('live-1', 'websocket', null, null, null, null, 900);
+
+        // Touched forward every cycle so its last_seen stays inside the TTL
+        // window — it must survive the prune tick.
+        for ($i = 1; $i <= 12; $i++) {
+            $registry->touchConnection('live-1', $i * 10, $i * 20, 1000 + $i);
+            $service->flush(1, 1000 + $i);
+        }
+
+        $this->assertArrayHasKey('live-1', $registry->snapshotConnections());
+    }
+
     /**
      * Mock ConnectionPool::getConnection() to return our mock connection.
      */
