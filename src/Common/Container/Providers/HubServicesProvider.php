@@ -716,11 +716,16 @@ final class HubServicesProvider implements ServiceProviderInterface
     }
 
     /**
-     * Boot the hub services that require runtime timer wiring.
+     * Boot the hub services that must be wired in the MASTER process, before
+     * {@see \Workerman\Worker::runAll()} forks the workers.
      *
-     * Starts the IdleReaper timer, sets up the 30-second heartbeat
-     * timer for active tunnels, and starts the FederationWorker for
-     * hub-to-hub WebSocket connections.
+     * That is limited to work which genuinely belongs pre-fork: creating the
+     * {@see FederationWorker} (a Worker must be constructed before runAll) and
+     * bootstrapping the leaf→master federation WS connection.
+     *
+     * The periodic DB-touching maintenance timers (idle reaper, server reaper,
+     * tunnel heartbeat, federation-session reaper) are deliberately NOT armed
+     * here — see the inline note below and {@see startMaintenanceTimers()}.
      *
      * @return void
      */
@@ -731,77 +736,26 @@ final class HubServicesProvider implements ServiceProviderInterface
             return;
         }
 
-        // Start the idle reaper timer if available
-        try {
-            /** @var mixed $idleReaper */
-            $idleReaper = $container->get(IdleReaper::class);
-            if ($idleReaper instanceof IdleReaper) {
-                $idleReaper->start();
-            }
-        } catch (\Throwable) {
-            // IdleReaper not available in this context — skip
-        }
+        // The periodic maintenance timers (idle-tunnel reaper, server offline /
+        // heartbeat-retention reaper, tunnel heartbeat, federation-session
+        // reaper) are deliberately NOT armed here. boot() runs in the MASTER
+        // process, where Workerman\Timer::add has no event loop yet and falls
+        // back to the pcntl signal scheduler, so the callbacks fire with NO
+        // Swoole coroutine context (cid<0). At cid<0 PhlixMySQLConnection::query()
+        // BYPASSES its per-connection mutex, so a reaper query lands mid-flight on
+        // the shared socket a request coroutine holds a transaction on → 2014 /
+        // "There is already an active transaction" → heartbeat/claim/auth 500s.
+        // They are armed instead — ONCE, at cid>=0 — from within the running
+        // relay worker's event loop by {@see startMaintenanceTimers()} (called in
+        // {@see \Phlix\Hub\Relay\RelayWorker::onWorkerStart()}).
 
-        // Start the server offline-reaper and heartbeat-retention sweep.
-        // Both B2 and P2 run on this single timer.
-        try {
-            /** @var mixed $serverReaper */
-            $serverReaper = $container->get(ServerReaper::class);
-            if ($serverReaper instanceof ServerReaper) {
-                $serverReaper->start();
-            }
-        } catch (\Throwable) {
-            // ServerReaper not available in this context — skip
-        }
-
-        // Set up heartbeat timer for active tunnels
-        try {
-            /** @var mixed $tunnelManager */
-            $tunnelManager = $container->get(TunnelManager::class);
-            if ($tunnelManager instanceof TunnelManager) {
-                /** @var int Heartbeat interval in seconds (30 from plan) */
-                $heartbeatInterval = 30;
-
-                Timer::add(
-                    $heartbeatInterval,
-                    static function () use ($tunnelManager): void {
-                        foreach ($tunnelManager->allTunnels() as $tunnel) {
-                            $tunnel->sendHeartbeat();
-                        }
-                    },
-                );
-            }
-        } catch (\Throwable) {
-            // TunnelManager not available in this context — skip
-        }
-
-        // Start the federation WebSocket worker for hub-to-hub connections
+        // Start the federation WebSocket worker for hub-to-hub connections. This
+        // creates a Worker, which MUST happen in the master before runAll().
         try {
             $federationWorker = new FederationWorker($container);
             $federationWorker->start();
         } catch (\Throwable) {
             // FederationWorker not available in this context — skip
-        }
-
-        // Set up periodic reaping of dead federation sessions
-        try {
-            /** @var mixed $federationSessionMgr */
-            $federationSessionMgr = $container->get(FederationSessionManager::class);
-            if ($federationSessionMgr instanceof FederationSessionManager) {
-                /** @var int Reaping interval in seconds (matches IdleReaper: 60s) */
-                $reapInterval = 60;
-                /** @var int Dead threshold in seconds (no heartbeat) */
-                $deadThreshold = 60;
-
-                Timer::add(
-                    $reapInterval,
-                    static function () use ($federationSessionMgr, $deadThreshold): void {
-                        $federationSessionMgr->reapDeadSessions($deadThreshold);
-                    },
-                );
-            }
-        } catch (\Throwable) {
-            // FederationSessionManager not available in this context — skip
         }
 
         // Metrics flush timer: deliberately NOT armed here. boot() runs in the
@@ -820,6 +774,101 @@ final class HubServicesProvider implements ServiceProviderInterface
             }
         } catch (\Throwable) {
             // FederationPeerManager not available in this context — skip
+        }
+    }
+
+    /**
+     * Arm the hub's periodic maintenance timers from WITHIN a running worker's
+     * event loop, so {@see \Workerman\Timer::add()} takes the Swoole event-loop
+     * path (Timer\Swoole → Coroutine::create) and every callback fires inside a
+     * coroutine (cid>=0). That keeps each reaper's DB queries serialised behind
+     * {@see \Phlix\Hub\Common\Database\PhlixMySQLConnection}'s per-connection
+     * mutex, alongside the request coroutines.
+     *
+     * Arming them in {@see boot()} instead — the master process, before the
+     * event loop exists — used Workerman's pcntl signal-timer fallback, whose
+     * callbacks run with NO coroutine context (cid<0). At cid<0 the connection
+     * mutex is bypassed, so a reaper query barged into a request coroutine's
+     * in-flight transaction on the shared socket → "SQLSTATE[HY000] 2014
+     * unbuffered queries active" → corrupted transaction → the next
+     * beginTrans() throwing "There is already an active transaction" →
+     * heartbeat/claim/auth 500s (the 2026-06/07 production incident).
+     *
+     * Call this ONCE, from {@see \Phlix\Hub\Relay\RelayWorker::onWorkerStart()}:
+     * the relay worker is count=1 (so each timer runs once hub-wide, not once
+     * per HTTP worker) and it already owns the {@see TunnelManager} the idle
+     * reaper and tunnel-heartbeat loop scan.
+     *
+     * Each timer is armed independently and guarded, so one unavailable service
+     * never blocks the others.
+     *
+     * @param ContainerInterface $container Worker-local PSR-11 container.
+     *
+     * @return void
+     */
+    public static function startMaintenanceTimers(ContainerInterface $container): void
+    {
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+
+        // Idle-tunnel reaper: closes tunnels idle past the window and reaps
+        // stale relay sessions (via its RelaySessionManager).
+        try {
+            /** @var mixed $idleReaper */
+            $idleReaper = $container->get(IdleReaper::class);
+            if ($idleReaper instanceof IdleReaper) {
+                $idleReaper->start();
+            }
+        } catch (\Throwable $e) {
+            $logger->error('Maintenance: failed to start IdleReaper timer', ['error' => $e->getMessage()]);
+        }
+
+        // Server offline-reaper + heartbeat-retention sweep (B2 + P2 on one timer).
+        try {
+            /** @var mixed $serverReaper */
+            $serverReaper = $container->get(ServerReaper::class);
+            if ($serverReaper instanceof ServerReaper) {
+                $serverReaper->start();
+            }
+        } catch (\Throwable $e) {
+            $logger->error('Maintenance: failed to start ServerReaper timer', ['error' => $e->getMessage()]);
+        }
+
+        // Tunnel heartbeat: ping every active tunnel every 30s.
+        try {
+            /** @var mixed $tunnelManager */
+            $tunnelManager = $container->get(TunnelManager::class);
+            if ($tunnelManager instanceof TunnelManager) {
+                Timer::add(
+                    30,
+                    static function () use ($tunnelManager): void {
+                        foreach ($tunnelManager->allTunnels() as $tunnel) {
+                            $tunnel->sendHeartbeat();
+                        }
+                    },
+                );
+            }
+        } catch (\Throwable $e) {
+            $logger->error('Maintenance: failed to start tunnel-heartbeat timer', ['error' => $e->getMessage()]);
+        }
+
+        // Federation session reaper: drop federation sessions with no heartbeat
+        // for 60s, swept every 60s.
+        try {
+            /** @var mixed $federationSessionMgr */
+            $federationSessionMgr = $container->get(FederationSessionManager::class);
+            if ($federationSessionMgr instanceof FederationSessionManager) {
+                Timer::add(
+                    60,
+                    static function () use ($federationSessionMgr): void {
+                        $federationSessionMgr->reapDeadSessions(60);
+                    },
+                );
+            }
+        } catch (\Throwable $e) {
+            $logger->error(
+                'Maintenance: failed to start federation-session reaper timer',
+                ['error' => $e->getMessage()],
+            );
         }
     }
 }
