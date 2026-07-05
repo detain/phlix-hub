@@ -50,11 +50,18 @@ return [
     // this array is threaded into the DI container and also read directly by
     // HubServicesProvider::boot() for the flush timer interval.
     'metrics' => (static function (): array {
-        $envBool = static fn (string $k, bool $d): bool => in_array(
-            strtolower(getenv($k) ?: ''),
-            ['1', 'true', 'yes', 'on'],
-            true
-        ) ?: $d;
+        // NB: must NOT be written `in_array(...) ?: $d` — in_array() returns
+        // false for "false"/"0"/"no"/"off", and `false ?: $d` then falls back to
+        // the default, so that form can NEVER return false (it hard-wires the
+        // flag on and defeats PHLIX_HUB_METRICS_ENABLED=false). Explicit branch:
+        // unset/empty → default, otherwise honour the truthy/falsy value.
+        $envBool = static function (string $k, bool $d): bool {
+            $raw = getenv($k);
+            if ($raw === false || $raw === '') {
+                return $d;
+            }
+            return in_array(strtolower($raw), ['1', 'true', 'yes', 'on'], true);
+        };
         $envInt = static fn (string $k, int $d): int => is_numeric(getenv($k) ?? '') ? (int) getenv($k) : $d;
 
         return [
