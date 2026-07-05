@@ -106,9 +106,12 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(600, $p[':duration_ms_max']);
         $this->assertSame(150, $p[':bytes_in']);
         $this->assertSame(950, $p[':bytes_out']);
-        $this->assertSame(1, $p[':h_le_10']);
-        $this->assertSame(1, $p[':h_le_1000']);
-        $this->assertSame(0, $p[':h_gt_5000']);
+        // Histogram bind placeholders are :h0..:h8 (prefix-collision-safe); the
+        // COLUMNS keep their h_le_* names. :h0 = <=10ms bucket, :h5 = <=1000ms,
+        // :h8 = >5000ms overflow.
+        $this->assertSame(1, $p[':h0']);
+        $this->assertSame(1, $p[':h5']);
+        $this->assertSame(0, $p[':h8']);
     }
 
     public function test_flush_upserts_route_rollup(): void
@@ -253,34 +256,38 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(0, $conn[0]['params'][':bytes_out_rate']);
     }
 
-    public function test_connection_insert_has_no_prefix_colliding_bind_params(): void
+    public function test_no_metrics_insert_has_prefix_colliding_bind_params(): void
     {
         // Regression: under emulated prepares (which PhlixMySQLConnection requires)
-        // a named placeholder that is a strict prefix of another in the same
+        // a named placeholder that is a strict PREFIX of another in the same
         // statement makes PDO rewrite the wrong token and throw SQLSTATE[HY093]
-        // "parameter was not defined". This crash-looped the relay worker once the
-        // producers were wired. Guard that the metrics_connections INSERT never
-        // reintroduces such a pair (e.g. :bytes_in vs :bytes_in_rate).
+        // "parameter was not defined". This crash-looped the workers once the
+        // producers were wired — :bytes_in ⊂ :bytes_in_rate (connections) AND
+        // :h_le_10 ⊂ :h_le_100 ⊂ :h_le_1000 … (rollup). Guard EVERY metrics UPSERT
+        // against ever reintroducing such a pair.
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
         $this->mockConnectionPool($this->mockConnection());
 
+        $registry->recordRequest('GET', '/api/v1/x', 200, 5.0, 10, 20, 1000);   // -> rollup + route_rollup
         $registry->openConnection('c-1', 'websocket', null, '1.2.3.4', null, null, 1000);
-        $registry->touchConnection('c-1', 100, 200, 1004);
+        $registry->touchConnection('c-1', 100, 200, 1004);                       // -> connections
         $this->service($collector)->flush(1, 1005);
 
-        $insert = $this->queriesMatching('INSERT INTO metrics_connections');
-        $this->assertCount(1, $insert);
+        $inserts = $this->queriesMatching('INSERT INTO');
+        $this->assertNotEmpty($inserts, 'expected rollup + route + connection INSERTs');
 
-        $keys = array_keys($insert[0]['params']);
-        foreach ($keys as $a) {
-            foreach ($keys as $b) {
-                if ($a !== $b) {
-                    $this->assertStringStartsNotWith(
-                        $a,
-                        $b,
-                        "bind param '$a' is a prefix of '$b' — breaks emulated prepares"
-                    );
+        foreach ($inserts as $q) {
+            $keys = array_keys($q['params']);
+            foreach ($keys as $a) {
+                foreach ($keys as $b) {
+                    if ($a !== $b) {
+                        $this->assertStringStartsNotWith(
+                            $a,
+                            $b,
+                            "bind param '$a' is a prefix of '$b' — breaks emulated prepares"
+                        );
+                    }
                 }
             }
         }
