@@ -16,6 +16,9 @@ use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
+use Phlix\Hub\Stats\Metrics\MetricsFlushService;
+use Phlix\Hub\Stats\Metrics\MetricsRegistry;
 use Phlix\Shared\Hub\ServerInfoDto;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
@@ -77,6 +80,10 @@ final class ClientRelayWorkerTest extends TestCase
     {
         parent::setUp();
 
+        // The worker's connection/metrics maps are process-global statics; reset
+        // so a prior test's leftovers cannot leak into this case.
+        ClientRelayWorker::reset();
+
         $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-client-relay-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
 
@@ -105,6 +112,7 @@ final class ClientRelayWorkerTest extends TestCase
     {
         parent::tearDown();
 
+        ClientRelayWorker::reset();
         LoggerFactory::reset();
 
         $files = glob($this->tmpDir . '/*');
@@ -181,7 +189,9 @@ final class ClientRelayWorkerTest extends TestCase
 
         $worker = new ClientRelayWorker($this->buildContainer());
 
-        self::assertTrue($worker->validateClientAuth($token, $serverId));
+        // Returns the resolved (owning) user id on success so the caller can
+        // attribute the metrics connection row to the user.
+        self::assertSame(self::OWNER_USER_ID, $worker->validateClientAuth($token, $serverId));
     }
 
     public function testValidateClientAuthRejectsServerIdMismatch(): void
@@ -194,7 +204,7 @@ final class ClientRelayWorkerTest extends TestCase
 
         $worker = new ClientRelayWorker($this->buildContainer());
 
-        self::assertFalse($worker->validateClientAuth($token, 'server-b'));
+        self::assertNull($worker->validateClientAuth($token, 'server-b'));
     }
 
     public function testValidateClientAuthRejectsNonOwnedServer(): void
@@ -208,7 +218,7 @@ final class ClientRelayWorkerTest extends TestCase
 
         $worker = new ClientRelayWorker($this->buildContainer());
 
-        self::assertFalse($worker->validateClientAuth($token, $serverId));
+        self::assertNull($worker->validateClientAuth($token, $serverId));
     }
 
     public function testValidateClientAuthRejectsUnknownOrRevokedToken(): void
@@ -220,8 +230,8 @@ final class ClientRelayWorkerTest extends TestCase
 
         $worker = new ClientRelayWorker($this->buildContainer());
 
-        self::assertFalse($worker->validateClientAuth('never-minted', $serverId));
-        self::assertFalse($worker->validateClientAuth('', $serverId));
+        self::assertNull($worker->validateClientAuth('never-minted', $serverId));
+        self::assertNull($worker->validateClientAuth('', $serverId));
     }
 
     public function testValidateClientAuthRejectsRevokedToken(): void
@@ -233,12 +243,12 @@ final class ClientRelayWorkerTest extends TestCase
         $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
         $worker = new ClientRelayWorker($this->buildContainer());
-        self::assertTrue($worker->validateClientAuth($token, $serverId));
+        self::assertSame(self::OWNER_USER_ID, $worker->validateClientAuth($token, $serverId));
 
         // Revoke: drop it from the active set.
         unset($this->activeTokens[hash('sha256', $token)]);
 
-        self::assertFalse($worker->validateClientAuth($token, $serverId));
+        self::assertNull($worker->validateClientAuth($token, $serverId));
     }
 
     public function testValidateClientAuthRejectsEnrollmentJwt(): void
@@ -250,7 +260,7 @@ final class ClientRelayWorkerTest extends TestCase
 
         $worker = new ClientRelayWorker($this->buildContainer());
 
-        self::assertFalse($worker->validateClientAuth('header.payload.signature', $serverId));
+        self::assertNull($worker->validateClientAuth('header.payload.signature', $serverId));
     }
 
     // ---- WS connect: rejection paths ------------------------------------
@@ -452,6 +462,143 @@ final class ClientRelayWorkerTest extends TestCase
         self::assertCount(0, $tunnel->clientConnections);
     }
 
+    // ---- start(): worker wiring -----------------------------------------
+
+    public function testStartWiresWorkerStartAndConnectionHandlers(): void
+    {
+        $worker = new ClientRelayWorker($this->buildContainer(), 0);
+        $wm = $worker->start();
+
+        // onWorkerStart must be bound so the per-worker metrics collector +
+        // flush/touch timers get resolved/armed when the worker boots.
+        self::assertSame([$worker, 'onWorkerStart'], $wm->onWorkerStart);
+        self::assertSame([$worker, 'onWebSocketConnect'], $wm->onWebSocketConnect);
+        self::assertSame([$worker, 'onMessage'], $wm->onMessage);
+        self::assertSame([$worker, 'onClose'], $wm->onClose);
+        self::assertSame('phlix-hub-client-relay-ws', $wm->name);
+    }
+
+    // ---- S4 metrics: open / final-touch ---------------------------------
+
+    public function testOnWebSocketConnectRecordsStreamConnectionWhenMetricsEnabled(): void
+    {
+        $serverId = 'server-uuid-metrics';
+        $token = 'valid-token-metrics';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        // Bring up an ACTIVE tunnel so the mount binds (not server_offline).
+        $serverWs = $this->createMock(TcpConnection::class);
+        $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
+        $tunnel->relaySessionId = 'session-123';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $registry = new MetricsRegistry();
+        $collector = new MetricsCollector($registry, true);
+        $flush = new MetricsFlushService($collector, []);
+
+        $worker = new ClientRelayWorker($this->buildContainer($collector, $flush));
+        // Resolves + stores the collector (and arms the flush/touch timers, which
+        // the test bootstrap's no-op SIGALRM handler renders harmless off-loop).
+        $worker->onWorkerStart();
+
+        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
+            'Authorization' => 'Bearer ' . $token,
+        ]);
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('getRemoteIp')->willReturn('203.0.113.7');
+
+        $worker->onWebSocketConnect($clientWs, $request);
+
+        $rows = array_values($registry->snapshotConnections());
+        self::assertCount(1, $rows);
+        // Client relay connections are the media playback path → kind 'stream',
+        // attributed to the owning user, no relay session, correlated by server id.
+        self::assertSame('stream', $rows[0]['kind']);
+        self::assertSame(self::OWNER_USER_ID, $rows[0]['user_id']);
+        self::assertSame('203.0.113.7', $rows[0]['remote_ip']);
+        self::assertNull($rows[0]['session_id']);
+        self::assertSame($serverId, $rows[0]['media_item_id']);
+
+        // Tracked live so the touch timer can iterate it between flushes.
+        self::assertSame(1, ClientRelayWorker::getActiveConnectionCount());
+    }
+
+    public function testOnCloseLeavesFinalTouchInsteadOfDroppingTheRow(): void
+    {
+        $serverId = 'server-uuid-metrics-close';
+        $token = 'valid-token-metrics-close';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+        $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
+        $tunnel->relaySessionId = 'session-123';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $registry = new MetricsRegistry();
+        $collector = new MetricsCollector($registry, true);
+        $flush = new MetricsFlushService($collector, []);
+
+        $worker = new ClientRelayWorker($this->buildContainer($collector, $flush));
+        $worker->onWorkerStart();
+
+        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
+            'Authorization' => 'Bearer ' . $token,
+        ]);
+        $clientWs = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect($clientWs, $request);
+
+        // Simulate cumulative traffic on the connection, then close it.
+        $clientWs->bytesRead = 4096;
+        $clientWs->bytesWritten = 8192;
+        $worker->onClose($clientWs);
+
+        // onClose records a FINAL touch (updated cumulative bytes) rather than
+        // closeConnection() — the row survives for the next flush to persist,
+        // and the flush service TTL-prunes the now-idle row afterwards.
+        $rows = array_values($registry->snapshotConnections());
+        self::assertCount(1, $rows);
+        self::assertSame(4096, $rows[0]['bytes_in']);
+        self::assertSame(8192, $rows[0]['bytes_out']);
+
+        // The live/id maps are cleared so the touch timer stops touching it.
+        self::assertSame(0, ClientRelayWorker::getActiveConnectionCount());
+    }
+
+    public function testMetricsAreNoOpWhenCollectorUnavailable(): void
+    {
+        // No metrics services in the container → onWorkerStart resolves nothing
+        // (guarded) and the connection hooks stay pure no-ops: the mount still
+        // binds and no registry state is created.
+        $serverId = 'server-uuid-no-metrics';
+        $token = 'valid-token-no-metrics';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
+        $tunnel->relaySessionId = 'session-123';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $worker = new ClientRelayWorker($this->buildContainer());
+        $worker->onWorkerStart();
+
+        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
+            'Authorization' => 'Bearer ' . $token,
+        ]);
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->expects($this->never())->method('close');
+
+        $worker->onWebSocketConnect($clientWs, $request);
+        self::assertCount(1, $tunnel->clientConnections);
+
+        // Closing must not raise even though nothing was recorded.
+        $worker->onClose($clientWs);
+        self::assertCount(0, $tunnel->clientConnections);
+    }
+
     // ---- Helpers ---------------------------------------------------------
 
     /**
@@ -533,21 +680,41 @@ final class ClientRelayWorkerTest extends TestCase
     /**
      * Build a minimal PSR-11 container exposing the relay services the
      * worker and controller resolve.
+     *
+     * When $metrics / $flush are supplied the container also resolves
+     * {@see MetricsCollector} / {@see MetricsFlushService}, so the worker's
+     * {@see ClientRelayWorker::onWorkerStart()} metrics wiring can be exercised.
+     * Left null (the default) they are unknown services — matching production
+     * when metrics is disabled.
+     *
+     * @param MetricsCollector|null    $metrics Collector to expose (or null).
+     * @param MetricsFlushService|null $flush   Flush service to expose (or null).
      */
-    private function buildContainer(): ContainerInterface
-    {
+    private function buildContainer(
+        ?MetricsCollector $metrics = null,
+        ?MetricsFlushService $flush = null,
+    ): ContainerInterface {
         $tokenService = $this->buildTokenService();
         $serverInfo = $this->buildServerInfoHandler();
         $tunnelManager = $this->tunnelManager;
         $controllerFactory = fn (): ClientMountController => $this->controller;
 
-        return new class ($tokenService, $serverInfo, $tunnelManager, $controllerFactory) implements ContainerInterface {
+        return new class (
+            $tokenService,
+            $serverInfo,
+            $tunnelManager,
+            $controllerFactory,
+            $metrics,
+            $flush,
+        ) implements ContainerInterface {
             /** @param callable():ClientMountController $controllerFactory */
             public function __construct(
                 private readonly ClientRelayTokenService $tokenService,
                 private readonly ServerInfoHandler $serverInfo,
                 private readonly TunnelManager $tunnelManager,
                 private $controllerFactory,
+                private readonly ?MetricsCollector $metrics,
+                private readonly ?MetricsFlushService $flush,
             ) {
             }
 
@@ -558,19 +725,31 @@ final class ClientRelayWorkerTest extends TestCase
                     ServerInfoHandler::class => $this->serverInfo,
                     TunnelManager::class, TunnelManagerInterface::class => $this->tunnelManager,
                     ClientMountController::class => ($this->controllerFactory)(),
+                    MetricsCollector::class => $this->metrics
+                        ?? throw new \RuntimeException("Unknown service: {$id}"),
+                    MetricsFlushService::class => $this->flush
+                        ?? throw new \RuntimeException("Unknown service: {$id}"),
                     default => throw new \RuntimeException("Unknown service: {$id}"),
                 };
             }
 
             public function has(string $id): bool
             {
-                return in_array($id, [
+                $known = [
                     ClientRelayTokenService::class,
                     ServerInfoHandler::class,
                     TunnelManager::class,
                     TunnelManagerInterface::class,
                     ClientMountController::class,
-                ], true);
+                ];
+                if ($this->metrics !== null) {
+                    $known[] = MetricsCollector::class;
+                }
+                if ($this->flush !== null) {
+                    $known[] = MetricsFlushService::class;
+                }
+
+                return in_array($id, $known, true);
             }
         };
     }
