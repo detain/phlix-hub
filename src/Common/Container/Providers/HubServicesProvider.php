@@ -46,6 +46,7 @@ use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
@@ -135,28 +136,33 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('keyManager', get(Ed25519KeyManager::class)),
 
             ClaimRequestHandler::class => factory(static function (
-                Connection $db,
                 Ed25519KeyManager $keyManager,
                 AuditLogger $audit,
             ) use ($hubBaseUrl): ClaimRequestHandler {
                 return new ClaimRequestHandler(
-                    $db,
+                    // Dedicated 'txn' connection: isolates the claim transaction
+                    // from the cid<0 maintenance reapers on 'mysql' that would
+                    // otherwise trip 2014 / "already active transaction" (see
+                    // config/database.php).
+                    ConnectionPool::getConnection('txn'),
                     $keyManager,
                     LoggerFactory::get(LogChannels::HUB),
                     $audit,
                     $hubBaseUrl,
                 );
-            })->parameter('db', get(Connection::class))
-                ->parameter('keyManager', get(Ed25519KeyManager::class))
+            })->parameter('keyManager', get(Ed25519KeyManager::class))
                 ->parameter('audit', get(AuditLogger::class)),
 
             HeartbeatHandler::class => factory(static function (
-                Connection $db,
                 EnrollmentJwtService $jwtService,
             ): HeartbeatHandler {
-                return new HeartbeatHandler($db, $jwtService, LoggerFactory::get(LogChannels::HUB));
-            })->parameter('db', get(Connection::class))
-                ->parameter('jwtService', get(EnrollmentJwtService::class)),
+                // Dedicated 'txn' connection (see ClaimRequestHandler above).
+                return new HeartbeatHandler(
+                    ConnectionPool::getConnection('txn'),
+                    $jwtService,
+                    LoggerFactory::get(LogChannels::HUB),
+                );
+            })->parameter('jwtService', get(EnrollmentJwtService::class)),
 
             HubSettingsRepository::class => factory(static function (
                 Connection $db,
