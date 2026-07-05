@@ -119,7 +119,13 @@ final class RelayWorker
 
             if ($tunnelManager instanceof TunnelManager && $proxyManager instanceof RelayProxyManager) {
                 $tunnelManager->setProxyManager($proxyManager);
-                ChannelClient::on(RelayProxyProtocol::REQUEST_EVENT, [$proxyManager, 'onRequest']);
+                // The vendor Channel\Client::on() callback is typed with the
+                // legacy `callback` pseudo-type, which Psalm resolves to an
+                // (undefined) Channel\callback class that neither an array nor a
+                // Closure can satisfy. The runtime only does is_callable(), so a
+                // first-class callable is correct here.
+                /** @psalm-suppress InvalidArgument */
+                ChannelClient::on(RelayProxyProtocol::REQUEST_EVENT, $proxyManager->onRequest(...));
                 $logger->info('Relay proxy: relay worker joined channel broker', [
                     'channel_host' => $this->channelHost,
                     'channel_port' => $this->channelPort,

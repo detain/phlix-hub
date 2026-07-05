@@ -265,8 +265,8 @@ final class MetricsFlushService
 
         foreach ($connections as $id => $c) {
             $prev    = $this->previousBytes[$id] ?? ['in' => $c['bytes_in'], 'out' => $c['bytes_out']];
-            $inRate  = (int) max(0, intdiv($c['bytes_in'] - $prev['in'], $this->flushIntervalSeconds));
-            $outRate = (int) max(0, intdiv($c['bytes_out'] - $prev['out'], $this->flushIntervalSeconds));
+            $inRate  = max(0, intdiv($c['bytes_in'] - $prev['in'], $this->flushIntervalSeconds));
+            $outRate = max(0, intdiv($c['bytes_out'] - $prev['out'], $this->flushIntervalSeconds));
             $this->previousBytes[$id] = ['in' => $c['bytes_in'], 'out' => $c['bytes_out']];
 
             $db->query(
@@ -337,6 +337,7 @@ final class MetricsFlushService
      */
     private function cfgInt(array $config, string $key, int $default): int
     {
+        /** @var mixed $v */
         $v = $config[$key] ?? null;
         if (is_int($v)) {
             return $v;

@@ -389,7 +389,7 @@ final class PhlixMySQLConnection extends Connection
     {
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
-            return parent::beginTrans();
+            return (bool) parent::beginTrans();
         }
 
         // Reentrant begin (already inside this coroutine's transaction): do
@@ -397,12 +397,12 @@ final class PhlixMySQLConnection extends Connection
         // throw, and re-acquiring our own held lock would deadlock. Forward
         // to the parent so its own "already in transaction" semantics apply.
         if ($this->queryLockHolder === $cid) {
-            return parent::beginTrans();
+            return (bool) parent::beginTrans();
         }
 
         $this->acquireQueryLock($cid);
         try {
-            $result = parent::beginTrans();
+            $result = (bool) parent::beginTrans();
         } catch (\Throwable $e) {
             // The transaction never opened — drop the lock we just took so the
             // shared socket is not held hostage by a half-started transaction.
@@ -431,10 +431,10 @@ final class PhlixMySQLConnection extends Connection
     {
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
-            return parent::commitTrans();
+            return (bool) parent::commitTrans();
         }
         try {
-            return parent::commitTrans();
+            return (bool) parent::commitTrans();
         } finally {
             $this->endTransaction($cid);
         }
@@ -458,10 +458,10 @@ final class PhlixMySQLConnection extends Connection
     {
         $cid = $this->currentCoroutineId();
         if ($cid < 0) {
-            return parent::rollBackTrans();
+            return (bool) parent::rollBackTrans();
         }
         try {
-            return parent::rollBackTrans();
+            return (bool) parent::rollBackTrans();
         } finally {
             $this->endTransaction($cid);
         }

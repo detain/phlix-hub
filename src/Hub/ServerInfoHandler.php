@@ -89,9 +89,9 @@ class ServerInfoHandler
     /**
      * Get all servers owned by a user.
      *
-     * @param string  $userId User UUID.
-     * @param int<0, max>|null $limit  Maximum number of results to return (default 1000).
-     * @param int<0, max>       $offset Number of results to skip (default 0).
+     * @param string   $userId User UUID.
+     * @param int|null  $limit  Maximum number of results to return (default 1000).
+     * @param int       $offset Number of results to skip (default 0).
      *
      * @return list<ServerInfoDto>
      */
