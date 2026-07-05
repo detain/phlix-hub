@@ -119,7 +119,11 @@ final class RelayWorker
 
             if ($tunnelManager instanceof TunnelManager && $proxyManager instanceof RelayProxyManager) {
                 $tunnelManager->setProxyManager($proxyManager);
-                ChannelClient::on(RelayProxyProtocol::REQUEST_EVENT, [$proxyManager, 'onRequest']);
+                // First-class callable (not [$obj, 'method']): the vendor
+                // Channel\Client::on() callback is typed with the legacy
+                // `callback` pseudo-type, which Psalm rejects a literal array
+                // against but accepts a Closure for.
+                ChannelClient::on(RelayProxyProtocol::REQUEST_EVENT, $proxyManager->onRequest(...));
                 $logger->info('Relay proxy: relay worker joined channel broker', [
                     'channel_host' => $this->channelHost,
                     'channel_port' => $this->channelPort,

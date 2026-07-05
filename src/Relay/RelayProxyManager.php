@@ -106,9 +106,9 @@ final class RelayProxyManager
             return;
         }
 
-        $replyEvent = is_string($data['reply_event'] ?? null) ? $data['reply_event'] : '';
-        $clientRequestId = is_string($data['request_id'] ?? null) ? $data['request_id'] : '';
-        $serverId = is_string($data['server_id'] ?? null) ? $data['server_id'] : '';
+        $replyEvent = self::asString($data['reply_event'] ?? null);
+        $clientRequestId = self::asString($data['request_id'] ?? null);
+        $serverId = self::asString($data['server_id'] ?? null);
 
         if ($replyEvent === '' || $clientRequestId === '' || $serverId === '') {
             $this->logger->warning('Relay proxy: malformed proxy request payload');
@@ -134,22 +134,16 @@ final class RelayProxyManager
             return;
         }
 
-        $headers = [];
-        if (isset($data['headers']) && is_array($data['headers'])) {
-            foreach ($data['headers'] as $name => $value) {
-                if (is_string($name) && is_string($value)) {
-                    $headers[$name] = $value;
-                }
-            }
-        }
+        $headers = self::stringMap($data['headers'] ?? null);
 
-        $bodyB64 = is_string($data['body_b64'] ?? null) ? $data['body_b64'] : '';
-        $body = $bodyB64 === '' ? '' : (base64_decode($bodyB64, true) ?: '');
+        $bodyB64 = self::asString($data['body_b64'] ?? null);
+        $decoded = $bodyB64 === '' ? '' : base64_decode($bodyB64, true);
+        $body = is_string($decoded) ? $decoded : '';
 
         $envelope = new RelayHttpRequest(
-            is_string($data['method'] ?? null) ? $data['method'] : 'GET',
-            is_string($data['path'] ?? null) ? $data['path'] : '/',
-            is_string($data['query'] ?? null) ? $data['query'] : '',
+            self::asString($data['method'] ?? null, 'GET'),
+            self::asString($data['path'] ?? null, '/'),
+            self::asString($data['query'] ?? null, ''),
             $headers,
             $body,
         );
@@ -390,5 +384,44 @@ final class RelayProxyManager
             : $this->nextRequestId + 1;
 
         return $id;
+    }
+
+    /**
+     * Coerce a mixed value from the untyped published payload into a string,
+     * falling back to the given default when it is not a string.
+     *
+     * @param mixed  $value   The raw payload field.
+     * @param string $default Value to use when $value is not a string.
+     *
+     * @return string
+     */
+    private static function asString(mixed $value, string $default = ''): string
+    {
+        return is_string($value) ? $value : $default;
+    }
+
+    /**
+     * Coerce a mixed value into a string→string map, dropping any entry whose
+     * key or value is not a string.
+     *
+     * @param mixed $value The raw payload field (expected to be a map).
+     *
+     * @return array<string, string>
+     */
+    private static function stringMap(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $out = [];
+        /** @var mixed $item */
+        foreach ($value as $name => $item) {
+            if (is_string($name) && is_string($item)) {
+                $out[$name] = $item;
+            }
+        }
+
+        return $out;
     }
 }

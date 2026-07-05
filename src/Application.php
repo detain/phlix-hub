@@ -1226,7 +1226,12 @@ final class Application
                 /** @var mixed $bridge */
                 $bridge = $proxyContainer->get(RelayProxyBridge::class);
                 if ($bridge instanceof RelayProxyBridge) {
-                    ChannelClient::on($bridge->replyEvent(), [$bridge, 'onReply']);
+                    // First-class callable (not [$obj, 'method']): the vendor
+                    // Channel\Client::on() docblock types its callback as the
+                    // legacy `callback` pseudo-type, which Psalm resolves to an
+                    // (undefined) Channel\callback class — a literal array is
+                    // rejected against it, a Closure is not.
+                    ChannelClient::on($bridge->replyEvent(), $bridge->onReply(...));
                 }
             } catch (Throwable $e) {
                 LoggerFactory::get(LogChannels::RELAY)->error('Relay proxy: HTTP worker channel init failed', [

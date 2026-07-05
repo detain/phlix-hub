@@ -389,10 +389,9 @@ final class ServerProxyController
     private function buildForwardHeaders(Request $request, string $userId): array
     {
         $headers = [];
+        // Request::$headers is typed array<string, string>, so no is_string()
+        // guard is needed here (Psalm flags one as a dead contradiction).
         foreach ($request->headers as $name => $value) {
-            if (!is_string($name) || !is_string($value)) {
-                continue;
-            }
             if ($this->isStrippedRequestHeader($name)) {
                 continue;
             }
@@ -466,7 +465,9 @@ final class ServerProxyController
      */
     private function buildResponse(array $reply): Response
     {
-        $status = is_int($reply['status'] ?? null) ? $reply['status'] : 502;
+        /** @var mixed $rawStatus */
+        $rawStatus = $reply['status'] ?? null;
+        $status = is_int($rawStatus) ? $rawStatus : 502;
 
         $response = (new Response())->status($status);
 
@@ -482,8 +483,11 @@ final class ServerProxyController
             }
         }
 
-        $bodyB64 = is_string($reply['body_b64'] ?? null) ? $reply['body_b64'] : '';
-        $response->body = $bodyB64 === '' ? '' : (base64_decode($bodyB64, true) ?: '');
+        /** @var mixed $rawBody */
+        $rawBody = $reply['body_b64'] ?? null;
+        $bodyB64 = is_string($rawBody) ? $rawBody : '';
+        $decoded = $bodyB64 === '' ? '' : base64_decode($bodyB64, true);
+        $response->body = is_string($decoded) ? $decoded : '';
 
         return $response;
     }
