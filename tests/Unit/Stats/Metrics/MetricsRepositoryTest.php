@@ -300,7 +300,7 @@ final class MetricsRepositoryTest extends TestCase
         $snap = $repo->snapshot(10);
 
         $this->assertSame(2, $snap['active_connections']);
-        $this->assertSame([':ttl' => 42], $captured);
+        $this->assertSame(['ttl' => 42], $captured);
     }
 
     public function test_all_read_queries_are_select_leading(): void
