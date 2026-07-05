@@ -163,6 +163,12 @@ final class MetricsFlushService
 
         foreach ($buckets as $b) {
             $h = $b['histogram'];
+            // The histogram bind placeholders are :h0..:h8, NOT :h_le_10..:h_gt_5000
+            // (the columns keep their names). Numeric-suffixed names collide by
+            // prefix — :h_le_10 ⊂ :h_le_100 ⊂ :h_le_1000, :h_le_50 ⊂ :h_le_500 ⊂
+            // :h_le_5000, :h_le_250 ⊂ :h_le_2500 — which PDO mis-rewrites under
+            // emulated prepares (SQLSTATE[HY093]). Keep no placeholder a prefix of
+            // another. See flushConnections() for the same trap.
             $db->query(
                 "INSERT INTO metrics_rollup
                  (bucket_started_at, worker_id, request_count, error_count,
@@ -171,8 +177,8 @@ final class MetricsFlushService
                   h_le_1000, h_le_2500, h_le_5000, h_gt_5000)
                  VALUES (:bucket, :worker_id, :request_count, :error_count,
                          :duration_ms_sum, :duration_ms_max, :bytes_in, :bytes_out,
-                         :h_le_10, :h_le_50, :h_le_100, :h_le_250, :h_le_500,
-                         :h_le_1000, :h_le_2500, :h_le_5000, :h_gt_5000)
+                         :h0, :h1, :h2, :h3, :h4,
+                         :h5, :h6, :h7, :h8)
                  ON DUPLICATE KEY UPDATE
                      request_count   = request_count + VALUES(request_count),
                      error_count     = error_count + VALUES(error_count),
@@ -198,15 +204,15 @@ final class MetricsFlushService
                     ':duration_ms_max' => $b['duration_ms_max'],
                     ':bytes_in'        => $b['bytes_in'],
                     ':bytes_out'       => $b['bytes_out'],
-                    ':h_le_10'         => $h[10] ?? 0,
-                    ':h_le_50'         => $h[50] ?? 0,
-                    ':h_le_100'        => $h[100] ?? 0,
-                    ':h_le_250'        => $h[250] ?? 0,
-                    ':h_le_500'        => $h[500] ?? 0,
-                    ':h_le_1000'       => $h[1000] ?? 0,
-                    ':h_le_2500'       => $h[2500] ?? 0,
-                    ':h_le_5000'       => $h[5000] ?? 0,
-                    ':h_gt_5000'       => $h[-1] ?? 0,
+                    ':h0'              => $h[10] ?? 0,
+                    ':h1'              => $h[50] ?? 0,
+                    ':h2'              => $h[100] ?? 0,
+                    ':h3'              => $h[250] ?? 0,
+                    ':h4'              => $h[500] ?? 0,
+                    ':h5'              => $h[1000] ?? 0,
+                    ':h6'              => $h[2500] ?? 0,
+                    ':h7'              => $h[5000] ?? 0,
+                    ':h8'              => $h[-1] ?? 0,
                 ]
             );
         }
