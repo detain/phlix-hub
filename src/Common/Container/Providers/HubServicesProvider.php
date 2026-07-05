@@ -698,24 +698,15 @@ final class HubServicesProvider implements ServiceProviderInterface
     private static ?ContainerInterface $container = null;
 
     /**
-     * Application config array for use in boot().
-     *
-     * @var array<string, mixed>
-     */
-    private static array $appConfig = [];
-
-    /**
-     * Set the static container instance and app config for use in boot().
+     * Set the static container instance used by boot().
      *
      * @param ContainerInterface $container PSR-11 container.
-     * @param array<string, mixed> $appConfig Application configuration.
      *
      * @return void
      */
-    public static function setContainer(ContainerInterface $container, array $appConfig): void
+    public static function setContainer(ContainerInterface $container): void
     {
         self::$container = $container;
-        self::$appConfig = $appConfig;
     }
 
     /**
@@ -807,29 +798,12 @@ final class HubServicesProvider implements ServiceProviderInterface
             // FederationSessionManager not available in this context — skip
         }
 
-        // Metrics flush timer (S4): drain the in-memory registry to MySQL
-        // on the configured interval, using the fixed 'hub-relay' worker id.
-        try {
-            /** @var mixed $flushService */
-            $flushService = $container->get(\Phlix\Hub\Stats\Metrics\MetricsFlushService::class);
-            if ($flushService instanceof \Phlix\Hub\Stats\Metrics\MetricsFlushService) {
-                /** @var array<string, mixed> $metricsConfig */
-                $metricsConfig = is_array(self::$appConfig['metrics'] ?? null) ? self::$appConfig['metrics'] : [];
-                /** @var int $flushInterval */
-                $flushInterval = is_int($metricsConfig['flush_interval_seconds'] ?? null)
-                    ? (int) $metricsConfig['flush_interval_seconds']
-                    : 5;
-
-                Timer::add(
-                    $flushInterval,
-                    static function () use ($flushService): void {
-                        $flushService->flush(0, time());
-                    },
-                );
-            }
-        } catch (\Throwable) {
-            // MetricsFlushService not available in this context — skip
-        }
+        // Metrics flush timer: deliberately NOT armed here. boot() runs in the
+        // MASTER process (pre-fork), so a flush timer + collector resolved here
+        // would drain a different registry instance than the per-worker request
+        // and connection hooks populate. Each producing worker instead resolves
+        // its own collector AND arms its own flush timer inside onWorkerStart
+        // (see Application::run()'s HTTP worker and RelayWorker::onWorkerStart()).
 
         // Bootstrap leaf hub WS connection to master hub
         try {

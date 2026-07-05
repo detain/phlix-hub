@@ -265,6 +265,34 @@ final class MetricsRegistryTest extends TestCase
         $this->assertNotEmpty($reg->snapshotConnections());
     }
 
+    public function test_prune_stale_connections_evicts_by_last_seen(): void
+    {
+        $reg = $this->registry(10);
+        // 'old' last seen at t=1000; 'fresh' touched forward to t=2000.
+        $reg->openConnection('old', 'websocket', null, null, null, null, 1000);
+        $reg->openConnection('fresh', 'websocket', null, null, null, null, 1000);
+        $reg->touchConnection('fresh', 10, 20, 2000);
+
+        // Cutoff 1500: 'old' (last_seen 1000 < 1500) is evicted, 'fresh' (2000) stays.
+        $reg->pruneStaleConnections(1500);
+
+        $snap = $reg->snapshotConnections();
+        $this->assertArrayNotHasKey('old', $snap);
+        $this->assertArrayHasKey('fresh', $snap);
+    }
+
+    public function test_prune_stale_connections_keeps_all_when_none_expired(): void
+    {
+        $reg = $this->registry(10);
+        $reg->openConnection('a', 'websocket', null, null, null, null, 3000);
+        $reg->openConnection('b', 'websocket', null, null, null, null, 3000);
+
+        // Cutoff strictly below both last_seen values — nothing ages out.
+        $reg->pruneStaleConnections(2999);
+
+        $this->assertCount(2, $reg->snapshotConnections());
+    }
+
     public function test_latency_bounds_are_sorted_and_exposed(): void
     {
         $reg = new MetricsRegistry(10, [500, 10, 100], 200);

@@ -270,6 +270,31 @@ final class MetricsRegistry
     }
 
     /**
+     * Drop connections whose {@see touchConnection()} last_seen_at has aged past
+     * the given cutoff.
+     *
+     * Called by {@see MetricsFlushService} on its prune tick with `now - ttl`, so
+     * connections that stopped being touched (a closed relay tunnel / departed
+     * client) are evicted from the in-RAM map after the same TTL the persisted
+     * `metrics_connections` rows use. Live connections are touched every cycle
+     * and so never age out. This keeps the map bounded now that the relay close
+     * hook records a FINAL touch (letting the next flush persist the real totals)
+     * instead of deleting the row immediately.
+     *
+     * @param int $cutoffTs Unix timestamp; entries with last_seen_at < this go.
+     *
+     * @return void
+     */
+    public function pruneStaleConnections(int $cutoffTs): void
+    {
+        foreach ($this->connections as $id => $connection) {
+            if ($connection['last_seen_at'] < $cutoffTs) {
+                unset($this->connections[$id]);
+            }
+        }
+    }
+
+    /**
      * Drain and RESET all accumulated rollups since the last drain.
      *
      * @param int $nowTs Unix timestamp of the drain (accepted for symmetry; not used).
