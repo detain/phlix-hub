@@ -158,8 +158,8 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(1, $second);
         $this->assertSame(500, $second[0]['params'][':bytes_in_rate']);
         $this->assertSame(2000, $second[0]['params'][':bytes_out_rate']);
-        $this->assertSame(3500, $second[0]['params'][':bytes_in']);
-        $this->assertSame(15000, $second[0]['params'][':bytes_out']);
+        $this->assertSame(3500, $second[0]['params'][':bytes_in_val']);
+        $this->assertSame(15000, $second[0]['params'][':bytes_out_val']);
     }
 
     public function test_connection_rate_never_negative(): void
@@ -251,6 +251,39 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(1, $conn);
         $this->assertSame(0, $conn[0]['params'][':bytes_in_rate']);
         $this->assertSame(0, $conn[0]['params'][':bytes_out_rate']);
+    }
+
+    public function test_connection_insert_has_no_prefix_colliding_bind_params(): void
+    {
+        // Regression: under emulated prepares (which PhlixMySQLConnection requires)
+        // a named placeholder that is a strict prefix of another in the same
+        // statement makes PDO rewrite the wrong token and throw SQLSTATE[HY093]
+        // "parameter was not defined". This crash-looped the relay worker once the
+        // producers were wired. Guard that the metrics_connections INSERT never
+        // reintroduces such a pair (e.g. :bytes_in vs :bytes_in_rate).
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+
+        $registry->openConnection('c-1', 'websocket', null, '1.2.3.4', null, null, 1000);
+        $registry->touchConnection('c-1', 100, 200, 1004);
+        $this->service($collector)->flush(1, 1005);
+
+        $insert = $this->queriesMatching('INSERT INTO metrics_connections');
+        $this->assertCount(1, $insert);
+
+        $keys = array_keys($insert[0]['params']);
+        foreach ($keys as $a) {
+            foreach ($keys as $b) {
+                if ($a !== $b) {
+                    $this->assertStringStartsNotWith(
+                        $a,
+                        $b,
+                        "bind param '$a' is a prefix of '$b' — breaks emulated prepares"
+                    );
+                }
+            }
+        }
     }
 
     public function test_flush_interval_seconds_exposes_configured_cadence(): void
