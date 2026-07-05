@@ -1386,8 +1386,8 @@ final class Application
                 // Record the request on EVERY path (success, static file, early
                 // return, or exception), mirroring the server's HttpHandler.
                 if ($collector !== null) {
-                    $bytesIn = (int) max(0, $connection->bytesRead - $startBytesRead);
-                    $bytesOut = (int) max(0, $connection->bytesWritten - $startBytesWritten);
+                    $bytesIn = max(0, $connection->bytesRead - $startBytesRead);
+                    $bytesOut = max(0, $connection->bytesWritten - $startBytesWritten);
                     $elapsedMs = (microtime(true) - $startTime) * 1000;
                     $collector->recordRequest(
                         $request->method(),
