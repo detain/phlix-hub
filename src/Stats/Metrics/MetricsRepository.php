@@ -100,7 +100,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
                  COALESCE(SUM(h_gt_5000), 0) AS h_gt_5000
              FROM metrics_rollup
              WHERE bucket_started_at >= (NOW() - INTERVAL :window SECOND)",
-            [':window' => $windowSeconds]
+            ['window' => $windowSeconds]
         );
 
         $row = $rows[0] ?? [];
@@ -171,8 +171,8 @@ final class MetricsRepository implements MetricsRepositoryInterface
              GROUP BY FLOOR(UNIX_TIMESTAMP(bucket_started_at) / :res)
              ORDER BY bucket ASC",
             [
-                ':res' => $resolutionSeconds,
-                ':minutes' => $minutes,
+                'res' => $resolutionSeconds,
+                'minutes' => $minutes,
             ]
         );
 
@@ -226,7 +226,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
              FROM metrics_connections
              WHERE last_seen_at > (NOW() - INTERVAL :ttl SECOND)
              ORDER BY bytes_out_rate DESC",
-            [':ttl' => $ttlSeconds]
+            ['ttl' => $ttlSeconds]
         );
 
         $out = [];
@@ -283,7 +283,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
              GROUP BY method, route
              ORDER BY request_count DESC
              LIMIT :limit",
-            [':minutes' => $minutes, ':limit' => $limit]
+            ['minutes' => $minutes, 'limit' => $limit]
         );
 
         $out = [];
@@ -314,7 +314,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
             "SELECT COUNT(*) AS c
              FROM metrics_connections
              WHERE last_seen_at > (NOW() - INTERVAL :ttl SECOND)",
-            [':ttl' => $this->connectionTtlSeconds]
+            ['ttl' => $this->connectionTtlSeconds]
         );
         $row = $rows[0] ?? [];
         return $this->toInt($row['c'] ?? 0);

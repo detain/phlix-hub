@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Stats\Metrics;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
+use Phlix\Hub\Tests\Support\BindingContractConnection;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -98,20 +99,20 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertStringContainsString('duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max))', $q['sql']);
 
         $p = $q['params'];
-        $this->assertSame(date('Y-m-d H:i:s', 1000), $p[':bucket']);
-        $this->assertSame('hub-relay', $p[':worker_id']);
-        $this->assertSame(2, $p[':request_count']);
-        $this->assertSame(1, $p[':error_count']);
-        $this->assertSame(605, $p[':duration_ms_sum']);
-        $this->assertSame(600, $p[':duration_ms_max']);
-        $this->assertSame(150, $p[':bytes_in']);
-        $this->assertSame(950, $p[':bytes_out']);
+        $this->assertSame(date('Y-m-d H:i:s', 1000), $p['bucket']);
+        $this->assertSame('hub-relay', $p['worker_id']);
+        $this->assertSame(2, $p['request_count']);
+        $this->assertSame(1, $p['error_count']);
+        $this->assertSame(605, $p['duration_ms_sum']);
+        $this->assertSame(600, $p['duration_ms_max']);
+        $this->assertSame(150, $p['bytes_in']);
+        $this->assertSame(950, $p['bytes_out']);
         // Histogram bind placeholders are :h0..:h8 (prefix-collision-safe); the
         // COLUMNS keep their h_le_* names. :h0 = <=10ms bucket, :h5 = <=1000ms,
         // :h8 = >5000ms overflow.
-        $this->assertSame(1, $p[':h0']);
-        $this->assertSame(1, $p[':h5']);
-        $this->assertSame(0, $p[':h8']);
+        $this->assertSame(1, $p['h0']);
+        $this->assertSame(1, $p['h5']);
+        $this->assertSame(0, $p['h8']);
     }
 
     public function test_flush_upserts_route_rollup(): void
@@ -128,11 +129,11 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(1, $routes);
 
         $p = $routes[0]['params'];
-        $this->assertSame(date('Y-m-d H:i:s', 1000), $p[':bucket']);
-        $this->assertSame('hub-relay', $p[':worker_id']);
-        $this->assertSame('POST', $p[':method']);
-        $this->assertSame('/api/v1/media', $p[':route']);
-        $this->assertSame(1, $p[':request_count']);
+        $this->assertSame(date('Y-m-d H:i:s', 1000), $p['bucket']);
+        $this->assertSame('hub-relay', $p['worker_id']);
+        $this->assertSame('POST', $p['method']);
+        $this->assertSame('/api/v1/media', $p['route']);
+        $this->assertSame(1, $p['request_count']);
     }
 
     public function test_connection_rate_is_zero_on_first_flush_and_delta_on_second(): void
@@ -149,8 +150,8 @@ final class MetricsFlushServiceTest extends TestCase
 
         $first = $this->queriesMatching('INSERT INTO metrics_connections');
         $this->assertCount(1, $first);
-        $this->assertSame(0, $first[0]['params'][':bytes_in_rate']);
-        $this->assertSame(0, $first[0]['params'][':bytes_out_rate']);
+        $this->assertSame(0, $first[0]['params']['bytes_in_rate']);
+        $this->assertSame(0, $first[0]['params']['bytes_out_rate']);
 
         // Second flush 5s later.
         $this->queries = [];
@@ -159,10 +160,10 @@ final class MetricsFlushServiceTest extends TestCase
 
         $second = $this->queriesMatching('INSERT INTO metrics_connections');
         $this->assertCount(1, $second);
-        $this->assertSame(500, $second[0]['params'][':bytes_in_rate']);
-        $this->assertSame(2000, $second[0]['params'][':bytes_out_rate']);
-        $this->assertSame(3500, $second[0]['params'][':bytes_in_val']);
-        $this->assertSame(15000, $second[0]['params'][':bytes_out_val']);
+        $this->assertSame(500, $second[0]['params']['bytes_in_rate']);
+        $this->assertSame(2000, $second[0]['params']['bytes_out_rate']);
+        $this->assertSame(3500, $second[0]['params']['bytes_in_val']);
+        $this->assertSame(15000, $second[0]['params']['bytes_out_val']);
     }
 
     public function test_connection_rate_never_negative(): void
@@ -181,8 +182,8 @@ final class MetricsFlushServiceTest extends TestCase
         $service->flush(1, 1010);
 
         $conn = $this->queriesMatching('INSERT INTO metrics_connections');
-        $this->assertGreaterThanOrEqual(0, $conn[0]['params'][':bytes_in_rate']);
-        $this->assertGreaterThanOrEqual(0, $conn[0]['params'][':bytes_out_rate']);
+        $this->assertGreaterThanOrEqual(0, $conn[0]['params']['bytes_in_rate']);
+        $this->assertGreaterThanOrEqual(0, $conn[0]['params']['bytes_out_rate']);
     }
 
     public function test_prune_emits_three_deletes_with_cutoffs(): void
@@ -207,8 +208,8 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(1, $rollupDeletes);
         $this->assertCount(1, $routeDeletes);
 
-        $this->assertSame(date('Y-m-d H:i:s', $now - 15), $connDeletes[0]['params'][':cutoff']);
-        $this->assertSame(date('Y-m-d H:i:s', $now - 7 * 86400), $rollupDeletes[0]['params'][':cutoff']);
+        $this->assertSame(date('Y-m-d H:i:s', $now - 15), $connDeletes[0]['params']['cutoff']);
+        $this->assertSame(date('Y-m-d H:i:s', $now - 7 * 86400), $rollupDeletes[0]['params']['cutoff']);
     }
 
     public function test_prune_is_throttled_across_flushes(): void
@@ -252,8 +253,8 @@ final class MetricsFlushServiceTest extends TestCase
 
         $conn = $this->queriesMatching('INSERT INTO metrics_connections');
         $this->assertCount(1, $conn);
-        $this->assertSame(0, $conn[0]['params'][':bytes_in_rate']);
-        $this->assertSame(0, $conn[0]['params'][':bytes_out_rate']);
+        $this->assertSame(0, $conn[0]['params']['bytes_in_rate']);
+        $this->assertSame(0, $conn[0]['params']['bytes_out_rate']);
     }
 
     public function test_no_metrics_insert_has_prefix_colliding_bind_params(): void
@@ -291,6 +292,39 @@ final class MetricsFlushServiceTest extends TestCase
                 }
             }
         }
+    }
+
+    public function test_flush_queries_honour_the_workerman_binding_contract(): void
+    {
+        // The real proof: BindingContractConnection replays workerman's bind()
+        // rule — every :placeholder must have a colon-FREE key, and a ':'-prefixed
+        // key throws SQLSTATE[HY093] (the double-colon bug that crash-looped the
+        // relay + HTTP workers in production). Drive a full flush (rollup + route +
+        // connection UPSERTs) AND a prune tick (the three DELETEs) through it: any
+        // mis-keyed query would throw here.
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $conn      = new BindingContractConnection();
+        $this->mockConnectionPool($conn);
+
+        $registry->recordRequest('GET', '/api/v1/x', 200, 5.0, 10, 20, 1000);
+        $registry->openConnection('c-1', 'websocket', null, '1.2.3.4', null, null, 1000);
+        $registry->touchConnection('c-1', 100, 200, 1004);
+
+        // 12 flushes at the 5s cadence trip the once-a-minute prune tick.
+        $service = $this->service($collector, ['flush_interval_seconds' => 5]);
+        for ($i = 1; $i <= 12; $i++) {
+            $service->flush(1, 1000 + $i);
+        }
+
+        // Reaching here means no HY093 was thrown; assert the writes + prune ran.
+        $sqls = array_map(static fn (array $c): string => $c['sql'], $conn->calls);
+        $has  = static fn (string $needle): bool
+            => $sqls !== [] && array_filter($sqls, static fn (string $s): bool => str_contains($s, $needle)) !== [];
+        $this->assertTrue($has('INSERT INTO metrics_rollup'));
+        $this->assertTrue($has('INSERT INTO metrics_route_rollup'));
+        $this->assertTrue($has('INSERT INTO metrics_connections'));
+        $this->assertTrue($has('DELETE FROM metrics_connections'));
     }
 
     public function test_flush_interval_seconds_exposes_configured_cadence(): void
