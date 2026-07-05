@@ -83,10 +83,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
     {
         $windowSeconds = max(1, $windowSeconds);
 
-        $db = ConnectionPool::getConnection();
-
-        /** @var array<int, array<string, mixed>> $rows */
-        $rows = $db->query(
+        $rows = $this->select(
             "SELECT
                  COALESCE(SUM(request_count), 0)   AS request_count,
                  COALESCE(SUM(error_count), 0)     AS error_count,
@@ -106,7 +103,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
             [':window' => $windowSeconds]
         );
 
-        $row = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : [];
+        $row = $rows[0] ?? [];
 
         $requests = $this->toInt($row['request_count'] ?? 0);
         $errors   = $this->toInt($row['error_count'] ?? 0);
@@ -153,10 +150,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
         $minutes            = max(1, $minutes);
         $resolutionSeconds   = max(1, $resolutionSeconds);
 
-        $db = ConnectionPool::getConnection();
-
-        /** @var array<int, array<string, mixed>> $rows */
-        $rows = $db->query(
+        $rows = $this->select(
             "SELECT
                  FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(bucket_started_at) / :res) * :res) AS bucket,
                  COALESCE(SUM(bytes_in), 0)      AS bytes_in,
@@ -183,10 +177,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
         );
 
         $out = [];
-        foreach ((is_array($rows) ? $rows : []) as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
+        foreach ($rows as $row) {
             $histogram = [];
             foreach (self::HISTOGRAM as $h) {
                 $histogram[$h['col']] = $this->toInt($row[$h['col']] ?? 0);
@@ -229,10 +220,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
     {
         $ttlSeconds = max(1, $ttlSeconds);
 
-        $db = ConnectionPool::getConnection();
-
-        /** @var array<int, array<string, mixed>> $rows */
-        $rows = $db->query(
+        $rows = $this->select(
             "SELECT connection_id, kind, user_id, remote_ip, session_id, media_item_id,
                     bytes_in, bytes_out, bytes_in_rate, bytes_out_rate, opened_at, last_seen_at
              FROM metrics_connections
@@ -242,10 +230,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
         );
 
         $out = [];
-        foreach ((is_array($rows) ? $rows : []) as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
+        foreach ($rows as $row) {
             $out[] = [
                 'connection_id'  => $this->toString($row['connection_id'] ?? ''),
                 'kind'           => $this->toString($row['kind'] ?? 'http'),
@@ -285,10 +270,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
         $minutes = max(1, $minutes);
         $limit   = max(1, $limit);
 
-        $db = ConnectionPool::getConnection();
-
-        /** @var array<int, array<string, mixed>> $rows */
-        $rows = $db->query(
+        $rows = $this->select(
             "SELECT
                  method,
                  route,
@@ -305,10 +287,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
         );
 
         $out = [];
-        foreach ((is_array($rows) ? $rows : []) as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
+        foreach ($rows as $row) {
             $count = $this->toInt($row['request_count'] ?? 0);
             $sum   = $this->toInt($row['duration_ms_sum'] ?? 0);
             $out[] = [
@@ -331,16 +310,13 @@ final class MetricsRepository implements MetricsRepositoryInterface
      */
     private function countLiveConnections(): int
     {
-        $db = ConnectionPool::getConnection();
-
-        /** @var array<int, array<string, mixed>> $rows */
-        $rows = $db->query(
+        $rows = $this->select(
             "SELECT COUNT(*) AS c
              FROM metrics_connections
              WHERE last_seen_at > (NOW() - INTERVAL :ttl SECOND)",
             [':ttl' => $this->connectionTtlSeconds]
         );
-        $row = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : [];
+        $row = $rows[0] ?? [];
         return $this->toInt($row['c'] ?? 0);
     }
 
@@ -355,6 +331,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
      */
     private function cfgInt(array $config, string $key, int $default): int
     {
+        /** @var mixed $v */
         $v = $config[$key] ?? null;
         if (is_int($v)) {
             return $v;
@@ -393,6 +370,36 @@ final class MetricsRepository implements MetricsRepositoryInterface
         }
 
         return self::HISTOGRAM[count(self::HISTOGRAM) - 1]['le'];
+    }
+
+    /**
+     * Run a SELECT and return its result rows as associative arrays.
+     *
+     * Centralises the guarding of the untyped {@see Connection::query()} return
+     * (which is `mixed`): a non-array result (a failed query) yields an empty
+     * list, and every element is guaranteed to be an associative array, so
+     * callers get a fully-typed list without per-call `is_array()` narrowing.
+     *
+     * @param array<string, scalar|null> $params Named `:param` bindings.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function select(string $sql, array $params): array
+    {
+        $db = ConnectionPool::getConnection();
+        /** @var mixed $result */
+        $result = $db->query($sql, $params);
+        $out = [];
+        if (is_array($result)) {
+            /** @var mixed $row */
+            foreach ($result as $row) {
+                if (is_array($row)) {
+                    /** @var array<string, mixed> $row */
+                    $out[] = $row;
+                }
+            }
+        }
+        return $out;
     }
 
     /**

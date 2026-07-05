@@ -123,21 +123,22 @@ final class MetricsServicesProvider implements ServiceProviderInterface
      */
     private function resolveConfig(array $appConfig): array
     {
+        /** @var mixed $raw */
         $raw = $appConfig['metrics'] ?? null;
         if (!is_array($raw)) {
             /** @var mixed $included */
-            $included = @include __DIR__ . '/../../../../../config/metrics.php';
+            $included = @include __DIR__ . '/../../../../config/metrics.php';
             $raw = is_array($included) ? $included : [];
         }
 
+        // Keep only string-keyed entries (a config array), dropping any numeric
+        // keys. array_filter avoids a per-entry mixed offset assignment.
         /** @var array<string, mixed> $out */
-        $out = [];
-        /** @var mixed $value */
-        foreach ($raw as $key => $value) {
-            if (is_string($key)) {
-                $out[$key] = $value;
-            }
-        }
+        $out = array_filter(
+            $raw,
+            static fn (int|string $key): bool => is_string($key),
+            ARRAY_FILTER_USE_KEY,
+        );
 
         return $out;
     }
@@ -153,6 +154,7 @@ final class MetricsServicesProvider implements ServiceProviderInterface
      */
     private function cfgBool(array $config, string $key, bool $default): bool
     {
+        /** @var mixed $v */
         $v = $config[$key] ?? null;
         if (is_bool($v)) {
             return $v;
@@ -177,6 +179,7 @@ final class MetricsServicesProvider implements ServiceProviderInterface
      */
     private function cfgInt(array $config, string $key, int $default): int
     {
+        /** @var mixed $v */
         $v = $config[$key] ?? null;
         if (is_int($v)) {
             return $v;
