@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Relay;
 
 use Channel\Client as ChannelClient;
+use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
@@ -209,6 +210,21 @@ final class RelayWorker
                 'error' => $e->getMessage(),
             ]);
         }
+
+        // Arm the hub's periodic maintenance timers HERE, inside this running
+        // worker's event loop, rather than in HubServicesProvider::boot() (the
+        // master, pre-fork). Two reasons this is the correct home:
+        //   1. cid>=0 — inside the event loop Workerman\Timer::add takes the
+        //      Swoole path so each callback fires in a coroutine, keeping its DB
+        //      queries behind PhlixMySQLConnection's per-connection mutex. Armed
+        //      in boot() they ran on the pcntl signal scheduler (cid<0), bypassed
+        //      the mutex, and collided with request transactions on the shared
+        //      socket → 2014 / "already active transaction" heartbeat 500s.
+        //   2. count=1 — the relay worker is a singleton (unlike the N HTTP
+        //      workers) and already owns the TunnelManager the idle reaper and
+        //      tunnel-heartbeat loop scan, so each reaper runs exactly once
+        //      hub-wide.
+        HubServicesProvider::startMaintenanceTimers($this->container);
     }
 
     /**

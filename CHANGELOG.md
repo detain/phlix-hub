@@ -7,6 +7,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- **Heartbeat/claim/auth 500s: the maintenance reapers now run inside a worker's event loop (cid≥0), not the master's signal scheduler**
+  (`src/Common/Container/Providers/HubServicesProvider.php`, `src/Relay/RelayWorker.php`). Root-cause
+  fix for the production incident (`PDOException: There is already an active transaction` +
+  `SQLSTATE[HY000] 2014 … unbuffered queries active`, ~90×/day since 2026-06-22) that the dedicated
+  `'txn'` connection only mitigated for the transactional handlers. The idle-tunnel reaper, server
+  offline/heartbeat-retention reaper, tunnel heartbeat, and federation-session reaper were armed in
+  `HubServicesProvider::boot()`, which runs in the **master** before `Worker::runAll()`. There
+  `Workerman\Timer::add` has no event loop yet and falls back to the pcntl signal (`SIGALRM`)
+  scheduler, so each callback fired with **no Swoole coroutine context** (`cid<0`). At `cid<0`
+  `PhlixMySQLConnection::query()` takes its direct passthrough and **bypasses the per-connection
+  coroutine mutex**, so a reaper query barged onto the shared socket mid-flight while a request
+  coroutine held a transaction → error 2014 → corrupted transaction → the next `beginTrans()`
+  throwing "already active transaction". The four timers now arm via
+  `HubServicesProvider::startMaintenanceTimers()`, called once from `RelayWorker::onWorkerStart()`
+  — inside the running worker's event loop (`cid≥0`, so every reaper query is mutex-serialised) and
+  in the single `count=1` relay worker that already owns the `TunnelManager` they scan (so each
+  reaper runs exactly once hub-wide, no longer once per HTTP worker). `boot()` retains only the true
+  master-pre-fork concerns (creating the `FederationWorker`, the leaf→master federation WS connect).
+  Each timer is guarded independently so one unavailable service never blocks the others.
 - **Relay: a re-handshake on an active tunnel no longer spams uncaught `InvalidFrameTypeException`s**
   (`src/Relay/Tunnel.php`). When a server re-sends its JSON `HELLO`/`HELLO_ACK` on an
   already-ACTIVE tunnel (a reconnect race, or a framing desync), the binary `FrameDecoder`
