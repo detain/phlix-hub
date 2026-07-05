@@ -69,8 +69,9 @@ final class RelayProxyBridge
         $this->publisher = $publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
         };
+        $pid = getmypid();
         $this->replyEvent = $replyEvent
-            ?? ('phlix.relay.proxy.reply.' . (getmypid() ?: 0) . '.' . bin2hex(random_bytes(4)));
+            ?? ('phlix.relay.proxy.reply.' . ($pid === false ? 0 : $pid) . '.' . bin2hex(random_bytes(4)));
     }
 
     /**

@@ -1226,11 +1226,12 @@ final class Application
                 /** @var mixed $bridge */
                 $bridge = $proxyContainer->get(RelayProxyBridge::class);
                 if ($bridge instanceof RelayProxyBridge) {
-                    // First-class callable (not [$obj, 'method']): the vendor
-                    // Channel\Client::on() docblock types its callback as the
-                    // legacy `callback` pseudo-type, which Psalm resolves to an
-                    // (undefined) Channel\callback class — a literal array is
-                    // rejected against it, a Closure is not.
+                    // The vendor Channel\Client::on() docblock types its callback
+                    // as the legacy `callback` pseudo-type, which Psalm resolves
+                    // to an (undefined) Channel\callback class that neither an
+                    // array nor a Closure can satisfy. The runtime only does
+                    // is_callable(), so a first-class callable is correct here.
+                    /** @psalm-suppress InvalidArgument */
                     ChannelClient::on($bridge->replyEvent(), $bridge->onReply(...));
                 }
             } catch (Throwable $e) {
