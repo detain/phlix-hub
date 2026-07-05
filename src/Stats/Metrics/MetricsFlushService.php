@@ -20,6 +20,16 @@ use Phlix\Hub\Common\Database\ConnectionPool;
  */
 final class MetricsFlushService
 {
+    /**
+     * Named {@see \Phlix\Hub\Common\Database\ConnectionPool} connection the flush
+     * uses — deliberately its OWN, isolated from the shared 'mysql' connection.
+     * The flush runs from a Workerman Timer with no coroutine context, so its
+     * query() bypasses the per-connection coroutine mutex; sharing 'mysql' let it
+     * barge into request coroutines' in-flight queries and trip SQLSTATE[HY000]
+     * 2014 ("unbuffered queries active"). See config/database.php.
+     */
+    private const CONNECTION = 'metrics';
+
     /** @var MetricsCollector Owns the registry this service drains. */
     private MetricsCollector $collector;
 
@@ -119,7 +129,7 @@ final class MetricsFlushService
      */
     public function prune(int $nowTs): void
     {
-        $db            = ConnectionPool::getConnection();
+        $db            = ConnectionPool::getConnection(self::CONNECTION);
         $connCutoff    = $this->datetime($nowTs - $this->connectionTtlSeconds);
         $rollupCutoff  = $this->datetime($nowTs - ($this->retentionDays * 86400));
 
@@ -159,7 +169,7 @@ final class MetricsFlushService
             return;
         }
 
-        $db = ConnectionPool::getConnection();
+        $db = ConnectionPool::getConnection(self::CONNECTION);
 
         foreach ($buckets as $b) {
             $h = $b['histogram'];
@@ -239,7 +249,7 @@ final class MetricsFlushService
             return;
         }
 
-        $db = ConnectionPool::getConnection();
+        $db = ConnectionPool::getConnection(self::CONNECTION);
 
         foreach ($routes as $r) {
             $db->query(
@@ -287,7 +297,7 @@ final class MetricsFlushService
      */
     private function flushConnections(array $connections, int $nowTs): void
     {
-        $db = ConnectionPool::getConnection();
+        $db = ConnectionPool::getConnection(self::CONNECTION);
 
         foreach ($connections as $id => $c) {
             $prev    = $this->previousBytes[$id] ?? ['in' => $c['bytes_in'], 'out' => $c['bytes_out']];

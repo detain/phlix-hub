@@ -1269,7 +1269,17 @@ final class Application
                         Timer::add(
                             $flushService->flushIntervalSeconds(),
                             static function () use ($flushService): void {
-                                $flushService->flush(0, time());
+                                // Best-effort: a transient DB error on a flush tick
+                                // must never escape the timer and crash/flood the
+                                // worker — log it and let the next tick retry.
+                                try {
+                                    $flushService->flush(0, time());
+                                } catch (Throwable $e) {
+                                    LoggerFactory::get(LogChannels::RELAY)->warning(
+                                        'Metrics: HTTP worker flush tick failed',
+                                        ['error' => $e->getMessage()],
+                                    );
+                                }
                             },
                         );
                     }
