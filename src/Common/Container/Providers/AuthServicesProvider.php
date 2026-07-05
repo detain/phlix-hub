@@ -10,6 +10,7 @@ use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Container\MissingJwtSecretException;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
@@ -104,9 +105,20 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 StructuredLogger $logger,
                 RateLimiterInterface $rateLimiter,
                 ?EventDispatcherInterface $dispatcher,
-                Connection $db,
             ): AuthManager {
-                return new AuthManager($repo, $jwt, $audit, $logger, $rateLimiter, $dispatcher, $db);
+                // Dedicated 'txn' connection: AuthManager wraps login/register in
+                // an explicit transaction, so isolate it from the cid<0
+                // maintenance reapers on 'mysql' that would otherwise trip 2014 /
+                // "already active transaction" (see config/database.php).
+                return new AuthManager(
+                    $repo,
+                    $jwt,
+                    $audit,
+                    $logger,
+                    $rateLimiter,
+                    $dispatcher,
+                    ConnectionPool::getConnection('txn'),
+                );
             })->parameter('logger', get('logger.' . LogChannels::AUTH))
                 ->parameter('dispatcher', null),
         ]);
