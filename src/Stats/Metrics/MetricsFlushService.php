@@ -125,15 +125,15 @@ final class MetricsFlushService
 
         $db->query(
             "DELETE FROM metrics_connections WHERE last_seen_at < :cutoff",
-            [':cutoff' => $connCutoff]
+            ['cutoff' => $connCutoff]
         );
         $db->query(
             "DELETE FROM metrics_rollup WHERE bucket_started_at < :cutoff",
-            [':cutoff' => $rollupCutoff]
+            ['cutoff' => $rollupCutoff]
         );
         $db->query(
             "DELETE FROM metrics_route_rollup WHERE bucket_started_at < :cutoff",
-            [':cutoff' => $rollupCutoff]
+            ['cutoff' => $rollupCutoff]
         );
     }
 
@@ -196,23 +196,23 @@ final class MetricsFlushService
                      h_le_5000       = h_le_5000 + VALUES(h_le_5000),
                      h_gt_5000       = h_gt_5000 + VALUES(h_gt_5000)",
                 [
-                    ':bucket'          => $this->datetime($b['bucket_started_at']),
-                    ':worker_id'       => 'hub-relay',
-                    ':request_count'   => $b['request_count'],
-                    ':error_count'     => $b['error_count'],
-                    ':duration_ms_sum' => $b['duration_ms_sum'],
-                    ':duration_ms_max' => $b['duration_ms_max'],
-                    ':bytes_in'        => $b['bytes_in'],
-                    ':bytes_out'       => $b['bytes_out'],
-                    ':h0'              => $h[10] ?? 0,
-                    ':h1'              => $h[50] ?? 0,
-                    ':h2'              => $h[100] ?? 0,
-                    ':h3'              => $h[250] ?? 0,
-                    ':h4'              => $h[500] ?? 0,
-                    ':h5'              => $h[1000] ?? 0,
-                    ':h6'              => $h[2500] ?? 0,
-                    ':h7'              => $h[5000] ?? 0,
-                    ':h8'              => $h[-1] ?? 0,
+                    'bucket'          => $this->datetime($b['bucket_started_at']),
+                    'worker_id'       => 'hub-relay',
+                    'request_count'   => $b['request_count'],
+                    'error_count'     => $b['error_count'],
+                    'duration_ms_sum' => $b['duration_ms_sum'],
+                    'duration_ms_max' => $b['duration_ms_max'],
+                    'bytes_in'        => $b['bytes_in'],
+                    'bytes_out'       => $b['bytes_out'],
+                    'h0'              => $h[10] ?? 0,
+                    'h1'              => $h[50] ?? 0,
+                    'h2'              => $h[100] ?? 0,
+                    'h3'              => $h[250] ?? 0,
+                    'h4'              => $h[500] ?? 0,
+                    'h5'              => $h[1000] ?? 0,
+                    'h6'              => $h[2500] ?? 0,
+                    'h7'              => $h[5000] ?? 0,
+                    'h8'              => $h[-1] ?? 0,
                 ]
             );
         }
@@ -254,14 +254,14 @@ final class MetricsFlushService
                      duration_ms_sum = duration_ms_sum + VALUES(duration_ms_sum),
                      duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max))",
                 [
-                    ':bucket'          => $this->datetime($r['bucket_started_at']),
-                    ':worker_id'       => 'hub-relay',
-                    ':method'          => $r['method'],
-                    ':route'           => $r['route'],
-                    ':request_count'   => $r['request_count'],
-                    ':error_count'     => $r['error_count'],
-                    ':duration_ms_sum' => $r['duration_ms_sum'],
-                    ':duration_ms_max' => $r['duration_ms_max'],
+                    'bucket'          => $this->datetime($r['bucket_started_at']),
+                    'worker_id'       => 'hub-relay',
+                    'method'          => $r['method'],
+                    'route'           => $r['route'],
+                    'request_count'   => $r['request_count'],
+                    'error_count'     => $r['error_count'],
+                    'duration_ms_sum' => $r['duration_ms_sum'],
+                    'duration_ms_max' => $r['duration_ms_max'],
                 ]
             );
         }
@@ -322,19 +322,19 @@ final class MetricsFlushService
                      bytes_out_rate = VALUES(bytes_out_rate),
                      last_seen_at   = VALUES(last_seen_at)",
                 [
-                    ':id'             => $id,
-                    ':worker_id'      => 'hub-relay',
-                    ':kind'           => $c['kind'],
-                    ':user_id'        => $c['user_id'],
-                    ':remote_ip'      => $c['remote_ip'],
-                    ':session_id'     => $c['session_id'],
-                    ':media_item_id'  => $c['media_item_id'],
-                    ':bytes_in_val'   => $c['bytes_in'],
-                    ':bytes_out_val'  => $c['bytes_out'],
-                    ':bytes_in_rate'  => $inRate,
-                    ':bytes_out_rate' => $outRate,
-                    ':opened_at'     => $this->datetime($c['opened_at']),
-                    ':last_seen_at'  => $this->datetime($c['last_seen_at']),
+                    'id'             => $id,
+                    'worker_id'      => 'hub-relay',
+                    'kind'           => $c['kind'],
+                    'user_id'        => $c['user_id'],
+                    'remote_ip'      => $c['remote_ip'],
+                    'session_id'     => $c['session_id'],
+                    'media_item_id'  => $c['media_item_id'],
+                    'bytes_in_val'   => $c['bytes_in'],
+                    'bytes_out_val'  => $c['bytes_out'],
+                    'bytes_in_rate'  => $inRate,
+                    'bytes_out_rate' => $outRate,
+                    'opened_at'     => $this->datetime($c['opened_at']),
+                    'last_seen_at'  => $this->datetime($c['last_seen_at']),
                 ]
             );
         }
