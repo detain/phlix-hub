@@ -192,6 +192,14 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertSame(1, $h['errors']);
         $this->assertSame(10, $h['p50_ms']);
         $this->assertSame(100, $h['p95_ms']);
+
+        // Guard the ONLY_FULL_GROUP_BY fix (see the query's inline comment): the
+        // history query must GROUP BY the `bucket` SELECT alias, never the raw
+        // FLOOR(UNIX_TIMESTAMP(...) / :res) expression — MySQL 8's default
+        // sql_mode rejects the latter with error 1055 and the admin charts 500.
+        $historySql = implode("\n", $this->seenSql);
+        $this->assertStringContainsString('GROUP BY bucket', $historySql);
+        $this->assertStringNotContainsString('GROUP BY FLOOR', $historySql);
     }
 
     public function test_live_connections_hydrates_rows(): void
