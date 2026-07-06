@@ -150,6 +150,14 @@ final class MetricsRepository implements MetricsRepositoryInterface
         $minutes            = max(1, $minutes);
         $resolutionSeconds   = max(1, $resolutionSeconds);
 
+        // GROUP BY the `bucket` SELECT alias — NOT the raw
+        // `FLOOR(UNIX_TIMESTAMP(bucket_started_at) / :res)` expression. Under
+        // sql_mode=ONLY_FULL_GROUP_BY (MySQL 8 default) the checker does not
+        // recognise the bucket column buried inside the SELECT's
+        // FROM_UNIXTIME(FLOOR(...) * :res) as functionally dependent on that inner
+        // GROUP BY expression, so it rejects the whole query with error 1055 and
+        // the admin metrics endpoint 500s. Grouping by the alias makes the grouped
+        // value IS the selected value, which satisfies the dependency check.
         $rows = $this->select(
             "SELECT
                  FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(bucket_started_at) / :res) * :res) AS bucket,
@@ -168,7 +176,7 @@ final class MetricsRepository implements MetricsRepositoryInterface
                  COALESCE(SUM(h_gt_5000), 0) AS h_gt_5000
              FROM metrics_rollup
              WHERE bucket_started_at >= (NOW() - INTERVAL :minutes MINUTE)
-             GROUP BY FLOOR(UNIX_TIMESTAMP(bucket_started_at) / :res)
+             GROUP BY bucket
              ORDER BY bucket ASC",
             [
                 'res' => $resolutionSeconds,
