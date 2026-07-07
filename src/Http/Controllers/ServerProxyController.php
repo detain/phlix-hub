@@ -232,10 +232,46 @@ final class ServerProxyController
     ];
 
     /**
+     * Forward-path prefixes whose GET/HEAD responses can block on the paired
+     * server's on-demand segment encoder, so they get the longer, encode-ceiling
+     * aligned reply timeout ({@see RelayProxyProtocol::STREAMING_TIMEOUT_SECONDS})
+     * instead of the default.
+     *
+     * `/hls` and `/dash` cover the transcoded playback surface: a cold segment
+     * (`seg-*.ts` / `*.m4s`) is fully decoded+encoded before the server emits its
+     * first byte (up to {@see RelayProxyProtocol::SEGMENT_ENCODE_CEILING_SECONDS}
+     * under load), so a 30s reply timeout — equal to that ceiling — races the
+     * server and 504s a slow-but-successful first segment. Playlists under the
+     * same prefixes respond in milliseconds, so the wider timeout is a harmless
+     * upper bound for them.
+     *
+     * Deliberately EXCLUDED: `/media` (the direct-play byte stream is served from
+     * disk via the server's `withFile()` — fast first byte, no encode — and is
+     * range-requested, so it keeps the tighter default and its buffering window
+     * is not widened) and `/api/v1/transcode` (status polling is a quick JSON
+     * read). Matched with the same exact-or-`/`-subpath rule as
+     * {@see self::BROWSE_SCOPE_ALLOWLIST} — never a bare sibling like `/hlsX`.
+     *
+     * @var list<string>
+     */
+    private const STREAMING_TIMEOUT_PREFIXES = [
+        '/hls',
+        '/dash',
+    ];
+
+    /**
      * @param ServerInfoHandler $serverInfo Resolves server ownership + relay status.
      * @param RelayProxyBridge  $bridge     Cross-process bridge to the relay worker.
      * @param StructuredLogger  $logger     Relay logger.
-     * @param int               $timeoutSeconds Seconds to await the server response.
+     * @param int               $timeoutSeconds Default seconds to await the server
+     *        response for small/quick reads (JSON browse, transcode-job status,
+     *        the transcode-START POST). GET/HEAD under a playback-read prefix
+     *        ({@see self::STREAMING_TIMEOUT_PREFIXES}) — HLS/DASH segments AND
+     *        their playlists alike, since the match is by path prefix, not
+     *        filename — instead await the wider, encode-ceiling-aligned
+     *        {@see RelayProxyProtocol::STREAMING_TIMEOUT_SECONDS} so a slow first
+     *        segment does not 504; playlists simply respond fast enough that the
+     *        wider bound is harmless for them.
      */
     public function __construct(
         private readonly ServerInfoHandler $serverInfo,
@@ -365,7 +401,7 @@ final class ServerProxyController
             $request->queryString,
             $headers,
             $body,
-            (float) $this->timeoutSeconds,
+            $this->replyTimeoutForPath($request->method, $path),
         );
 
         if ($reply === null) {
@@ -465,6 +501,53 @@ final class ServerProxyController
         }
 
         return false;
+    }
+
+    /**
+     * Resolve the reply timeout (seconds) to await for a given method + path.
+     *
+     * GET/HEAD under a playback-read prefix ({@see self::STREAMING_TIMEOUT_PREFIXES})
+     * await the wider {@see RelayProxyProtocol::STREAMING_TIMEOUT_SECONDS} —
+     * provably above the server's on-demand segment-encode ceiling
+     * ({@see RelayProxyProtocol::SEGMENT_ENCODE_CEILING_SECONDS}) plus
+     * tunnel-transfer time — to avoid 504-ing a slow-but-successful first
+     * segment. The match is by path PREFIX, not filename, so a prefix's
+     * playlists ride the same wider bound as its segments — harmlessly, since
+     * playlists respond in milliseconds either way. Every other read (JSON
+     * browse, transcode-job status) and the transcode-START POST keep the
+     * injected default (`$this->timeoutSeconds`). When a higher-than-streaming
+     * default is injected it is honoured (we never SHORTEN a request by
+     * classifying it as a stream).
+     *
+     * This same value is forwarded to the relay worker (via
+     * {@see RelayProxyBridge::request()}) so its per-request completion timer
+     * uses the identical ceiling — otherwise the relay worker's own timer would
+     * 504 a streaming request at the default before the browser-facing wait
+     * elapsed.
+     *
+     * @param string $method The inbound HTTP method.
+     * @param string $path   The resolved `/`-prefixed forward path.
+     *
+     * @return float Seconds to await the relayed response.
+     */
+    private function replyTimeoutForPath(string $method, string $path): float
+    {
+        $default = (float) $this->timeoutSeconds;
+
+        $method = strtoupper($method);
+        if ($method !== 'GET' && $method !== 'HEAD') {
+            return $default;
+        }
+
+        foreach (self::STREAMING_TIMEOUT_PREFIXES as $prefix) {
+            // Exact collection path or a `/`-delimited sub-path under it — never
+            // a bare sibling like `/hlsX` (mirrors isWithinBrowseScope()).
+            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
+                return max($default, (float) RelayProxyProtocol::STREAMING_TIMEOUT_SECONDS);
+            }
+        }
+
+        return $default;
     }
 
     /**

@@ -13,6 +13,7 @@ use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 use function base64_encode;
 use function json_decode;
@@ -973,5 +974,191 @@ final class ServerProxyControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
         $this->assertSame('server.no_tunnel', $body['code'] ?? null);
+    }
+
+    // ---------------------------------------------------------------------
+    // D3: per-path reply-timeout alignment. Playback-read segment/playlist
+    // paths (`/hls`, `/dash`) block on the paired server's on-demand segment
+    // encoder, so GET/HEAD to them award the wider streaming ceiling
+    // (STREAMING_TIMEOUT_SECONDS = 60s); every other read + the transcode-START
+    // POST keep the injected default (DEFAULT_TIMEOUT_SECONDS = 30s). The
+    // controller forwards the classified value to the relay bridge so the relay
+    // worker's completion timer matches the browser-facing wait.
+    // ---------------------------------------------------------------------
+
+    /**
+     * IN-SCOPE reply-timeout matrix: paths that clear the browse-scope gate and
+     * are forwarded, with the exact reply timeout the controller hands to the
+     * relay bridge. Streaming reads → 60.0; every other read + the write → 30.0.
+     *
+     * @return iterable<string, array{0: string, 1: string, 2: float}>
+     */
+    public static function forwardedTimeoutProvider(): iterable
+    {
+        foreach (['GET', 'HEAD'] as $method) {
+            // Playback-read segments AND playlists ride the wider ceiling.
+            yield "{$method} hls variant playlist -> 60" => [$method, 'hls/job-abc/media_v3.m3u8', 60.0];
+            yield "{$method} hls segment -> 60" => [$method, 'hls/job-abc/seg-00007.ts', 60.0];
+            yield "{$method} dash manifest -> 60" => [$method, 'dash/job-abc/manifest.mpd', 60.0];
+            // Direct-play stream, status polling and JSON browse keep the default.
+            yield "{$method} media direct-play stream -> 30" => [$method, 'media/item-123/stream', 30.0];
+            yield "{$method} transcode job status -> 30" => [$method, 'api/v1/transcode/job-abc/status', 30.0];
+            yield "{$method} json browse -> 30" => [$method, 'api/v1/media', 30.0];
+        }
+
+        // The single permitted write (transcode START) keeps the default — only
+        // GET/HEAD to a streaming prefix are widened.
+        yield 'POST transcode-start -> 30' => ['POST', 'api/v1/media/item-123/transcode', 30.0];
+    }
+
+    /**
+     * The reply timeout the controller classifies for a request is forwarded to
+     * the relay bridge verbatim (the bridge threads it into the published
+     * envelope so the relay worker arms an identical completion timer). This is
+     * the end-to-end, public-surface proof: drive `proxy()` and capture the
+     * `timeout` field of the forwarded envelope.
+     *
+     * @dataProvider forwardedTimeoutProvider
+     */
+    public function test_reply_timeout_is_forwarded_to_the_relay_bridge(
+        string $method,
+        string $path,
+        float $expected,
+    ): void {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/octet-stream'],
+                'body_b64' => base64_encode('payload'),
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request($method, 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertIsArray($forwarded, "{$method} /{$path} must be forwarded over the relay bridge");
+        $this->assertSame(
+            $expected,
+            $forwarded['timeout'] ?? null,
+            "{$method} /{$path} must forward a {$expected}s reply timeout to the relay bridge",
+        );
+    }
+
+    /**
+     * Full classifier matrix for the private `replyTimeoutForPath()` — including
+     * cases the end-to-end path cannot observe. A bare sibling of a streaming
+     * prefix (`/hlsX`, `/dashboard`) is scope-DENIED (403) so it never reaches
+     * the bridge, yet the classifier must still map it to the default (never the
+     * wider ceiling); likewise a non-GET/HEAD method against a streaming path.
+     * Reflection lets us assert the classifier directly for every case.
+     *
+     * @return iterable<string, array{0: string, 1: string, 2: float}>
+     */
+    public static function replyTimeoutClassifierProvider(): iterable
+    {
+        // Streaming prefixes: exact collection path + representative sub-paths.
+        yield 'GET /hls exact' => ['GET', '/hls', 60.0];
+        yield 'GET hls variant playlist' => ['GET', '/hls/job-abc/media_v3.m3u8', 60.0];
+        yield 'GET hls segment' => ['GET', '/hls/job-abc/seg-00007.ts', 60.0];
+        yield 'HEAD hls segment' => ['HEAD', '/hls/job-abc/seg-00007.ts', 60.0];
+        yield 'GET /dash exact' => ['GET', '/dash', 60.0];
+        yield 'GET dash manifest' => ['GET', '/dash/job-abc/manifest.mpd', 60.0];
+        yield 'HEAD dash manifest' => ['HEAD', '/dash/job-abc/manifest.mpd', 60.0];
+        // Method is upper-cased before the gate, so a lower-case verb still wins.
+        yield 'lower-case get hls segment' => ['get', '/hls/job-abc/seg-00007.ts', 60.0];
+
+        // Non-streaming allowed reads keep the tight default.
+        yield 'GET media direct-play stream' => ['GET', '/media/item-123/stream', 30.0];
+        yield 'HEAD media stream' => ['HEAD', '/media/item-123/stream', 30.0];
+        yield 'GET transcode status' => ['GET', '/api/v1/transcode/job-abc/status', 30.0];
+        yield 'GET json browse' => ['GET', '/api/v1/media', 30.0];
+
+        // Bare siblings share a textual prefix but are NOT sub-paths → default,
+        // never the wider streaming ceiling (mirrors the browse-scope rule).
+        yield 'GET hlsX sibling' => ['GET', '/hlsX/job/master.m3u8', 30.0];
+        yield 'GET dashboard sibling' => ['GET', '/dashboard', 30.0];
+        yield 'GET dashX sibling' => ['GET', '/dashX/x', 30.0];
+
+        // Method gate: only GET/HEAD are widened; every other verb keeps default
+        // even on a real streaming path.
+        yield 'POST hls segment' => ['POST', '/hls/job-abc/seg-00007.ts', 30.0];
+        yield 'PUT dash manifest' => ['PUT', '/dash/job-abc/manifest.mpd', 30.0];
+        yield 'DELETE hls segment' => ['DELETE', '/hls/job-abc/seg-00007.ts', 30.0];
+        yield 'POST transcode-start' => ['POST', '/api/v1/media/item-123/transcode', 30.0];
+    }
+
+    /**
+     * @dataProvider replyTimeoutClassifierProvider
+     */
+    public function test_reply_timeout_for_path_classifier(string $method, string $path, float $expected): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'replyTimeoutForPath');
+        $reflected->setAccessible(true);
+        /** @var float $timeout */
+        $timeout = $reflected->invoke($controller, $method, $path);
+
+        $this->assertSame($expected, $timeout, "{$method} {$path}");
+    }
+
+    /**
+     * A default injected ABOVE the streaming ceiling is honoured for BOTH
+     * families: classifying a path as a stream must never SHORTEN a longer
+     * injected wait (the controller takes the max of the default and the
+     * streaming ceiling).
+     */
+    public function test_reply_timeout_never_shortens_a_higher_injected_default(): void
+    {
+        $controller = new ServerProxyController(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+            $this->createMock(StructuredLogger::class),
+            90,
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'replyTimeoutForPath');
+        $reflected->setAccessible(true);
+
+        $this->assertSame(90.0, $reflected->invoke($controller, 'GET', '/hls/job/seg-1.ts'));
+        $this->assertSame(90.0, $reflected->invoke($controller, 'GET', '/api/v1/media'));
+    }
+
+    /**
+     * A default injected BELOW the streaming ceiling is widened to the ceiling
+     * for a streaming path (max), while non-streaming reads keep the tighter
+     * injected default.
+     */
+    public function test_reply_timeout_widens_a_lower_injected_default_only_for_streaming(): void
+    {
+        $controller = new ServerProxyController(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+            $this->createMock(StructuredLogger::class),
+            10,
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'replyTimeoutForPath');
+        $reflected->setAccessible(true);
+
+        $this->assertSame(60.0, $reflected->invoke($controller, 'GET', '/dash/job/manifest.mpd'));
+        $this->assertSame(10.0, $reflected->invoke($controller, 'GET', '/api/v1/media'));
     }
 }
