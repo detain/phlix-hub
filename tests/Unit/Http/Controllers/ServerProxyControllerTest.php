@@ -332,6 +332,223 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
+     * D1 accept matrix: GET and HEAD to representative playback-read paths under
+     * the newly-allowed `/hls`, `/dash`, `/media`, `/api/v1/transcode` prefixes
+     * must pass the scope gate and be forwarded verbatim over the relay bridge.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function acceptedStreamingScopeProvider(): iterable
+    {
+        $paths = [
+            'hls master playlist' => 'hls/job-abc/master.m3u8',
+            'hls variant playlist' => 'hls/job-abc/media_v3.m3u8',
+            'hls segment' => 'hls/job-abc/seg-00007.ts',
+            'dash manifest' => 'dash/job-abc/manifest.mpd',
+            'media direct-play stream' => 'media/item-123/stream',
+            'transcode job status' => 'api/v1/transcode/job-abc/status',
+        ];
+
+        foreach (['GET', 'HEAD'] as $method) {
+            foreach ($paths as $label => $path) {
+                yield "{$method} {$label}" => [$method, $path];
+            }
+        }
+    }
+
+    /**
+     * A GET/HEAD to a real streaming path must clear the scope gate and reach the
+     * relay bridge with the path + method intact (players issue HEAD to probe
+     * segment size / range support before a ranged GET).
+     *
+     * @dataProvider acceptedStreamingScopeProvider
+     */
+    public function test_streaming_reads_pass_scope_gate_and_are_forwarded(string $method, string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/octet-stream'],
+                'body_b64' => base64_encode('payload'),
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request($method, 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(200, $response->statusCode, "{$method} /{$path} must pass the browse-scope gate");
+        $this->assertIsArray($forwarded, "{$method} /{$path} must be forwarded over the relay bridge");
+        $this->assertSame('/' . $path, $forwarded['path']);
+        $this->assertSame($method, $forwarded['method']);
+    }
+
+    /**
+     * D1 method-denial matrix: mutating methods against the same streaming paths
+     * (and the admin `POST /media/merge` sibling) stay always-denied — this is a
+     * READ-ONLY proxy, so any method absent from the allowlist fails closed.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function deniedMutatingStreamingProvider(): iterable
+    {
+        $paths = [
+            'media transcode START' => 'media/item-123/transcode',
+            'media merge (admin)' => 'media/merge',
+            'hls segment' => 'hls/job-abc/seg-00007.ts',
+            'dash manifest' => 'dash/job-abc/manifest.mpd',
+            'media stream' => 'media/item-123/stream',
+            'transcode status' => 'api/v1/transcode/job-abc/status',
+        ];
+
+        foreach (['POST', 'PUT', 'DELETE'] as $method) {
+            foreach ($paths as $label => $path) {
+                yield "{$method} {$label}" => [$method, $path];
+            }
+        }
+    }
+
+    /**
+     * Non-GET/HEAD methods must never reach a streaming path: the browse-scope
+     * gate returns 403 `proxy.scope_denied` and nothing is forwarded.
+     *
+     * @dataProvider deniedMutatingStreamingProvider
+     */
+    public function test_mutating_methods_on_streaming_paths_return_403_and_are_not_forwarded(
+        string $method,
+        string $path,
+    ): void {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request($method, 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(403, $response->statusCode, "{$method} /{$path} must be denied");
+        $this->assertFalse($forwarded, "{$method} /{$path} must not reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * D1 sibling-prefix denial: a path that merely shares a textual prefix with a
+     * newly-allowed streaming collection is NOT a sub-path of it and must be
+     * denied — the gate matches an exact path or a `/`-delimited sub-path only,
+     * never a bare sibling like `/hlsX` or `/dashboard`.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function siblingStreamingPrefixProvider(): iterable
+    {
+        yield 'hlsX sibling of /hls' => ['hlsX/job/master.m3u8'];
+        yield 'media-secret sibling of /media' => ['media-secret/item/stream'];
+        yield 'dashboard sibling of /dash' => ['dashboard'];
+        yield 'transcodeX sibling of /api/v1/transcode' => ['api/v1/transcodeX/job/status'];
+    }
+
+    /**
+     * @dataProvider siblingStreamingPrefixProvider
+     */
+    public function test_sibling_streaming_prefixes_are_denied(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(403, $response->statusCode, "Sibling prefix /{$path} must be denied");
+        $this->assertFalse($forwarded, "Sibling prefix /{$path} must not reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * Ownership is enforced BEFORE the scope gate: a streaming path against a
+     * server the user does not own returns 403 `server.not_owned` (not
+     * `proxy.scope_denied`) and is never forwarded — the widened allowlist does
+     * not weaken the ownership boundary.
+     */
+    public function test_streaming_path_on_unowned_server_returns_403_not_owned(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('someone-else', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'hls/job-abc/master.m3u8'],
+        );
+
+        $this->assertSame(403, $response->statusCode);
+        $this->assertFalse($forwarded, 'Unowned server → nothing may be forwarded, even for a streaming path.');
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.not_owned', $body['code'] ?? null);
+    }
+
+    /**
+     * Relay-liveness is enforced BEFORE the scope gate: a streaming path against
+     * an offline server with no live tunnel fails closed with 503
+     * `server.offline` and is never forwarded.
+     */
+    public function test_streaming_path_on_offline_server_fails_closed_503(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn(
+            $this->dto('user-1', false, ServerInfoDto::STATUS_OFFLINE),
+        );
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'dash/job-abc/manifest.mpd'],
+        );
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertFalse($forwarded, 'Offline server → nothing may be forwarded, even for a streaming path.');
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.offline', $body['code'] ?? null);
+    }
+
+    /**
      * @return iterable<string, array{0: string}>
      */
     public static function traversalPathProvider(): iterable
@@ -344,6 +561,13 @@ final class ServerProxyControllerTest extends TestCase
         yield 'bare encoded separator' => ['api/v1/media%2fadmin'];
         yield 'trailing single dot' => ['api/v1/media/.'];
         yield 'back-slash separator' => ['api/v1/libraries\\..\\admin'];
+        // D1 new-prefix streaming paths: the traversal guard runs BEFORE the
+        // (now-widened) allowlist, so a dot-segment or encoded separator riding a
+        // streaming prefix is still rejected and can never reach a server path.
+        yield 'hls streaming dot-dot into admin' => ['hls/job-abc/../../api/v1/admin/users'];
+        yield 'media streaming percent-encoded dot-dot' => ['media/%2e%2e/api/v1/admin'];
+        yield 'dash streaming encoded separator' => ['dash/job-abc/..%2fadmin'];
+        yield 'transcode streaming bare encoded separator' => ['api/v1/transcode%2fadmin'];
     }
 
     /**

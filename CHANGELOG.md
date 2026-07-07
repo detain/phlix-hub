@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **Relay proxy: browse-scope allowlist now passes through read-only streaming playback of a
+  paired server's media, not just JSON browse** (`src/Http/Controllers/ServerProxyController.php`).
+  `BROWSE_SCOPE_ALLOWLIST` gains four GET/HEAD path prefixes alongside the existing JSON-browse set:
+  `/hls` (the multi-variant master playlist, per-variant `media_v{V}.m3u8` playlists, and `seg-*.ts`
+  segments), `/dash` (the MPD manifest and its segments), `/media` (the direct-play byte stream —
+  only `/media/{id}/stream`; its one mutating sibling, `POST /media/merge`, stays unreachable), and
+  `/api/v1/transcode` (job-status polling at `/api/v1/transcode/{jobId}/status`). A signed-in owner
+  can now play a paired server's media through the hub relay, not just browse its catalog. The
+  existing ownership (404 `server.not_found` → 403 `server.not_owned`), relay-online (503
+  `server.relay_unavailable`/`server.offline`), and path-traversal (`hasTraversalSegment()`) gates
+  all run unchanged before the widened allowlist is consulted, and every mutating method — including
+  transcode-**start**, which stays POST-only — still fails closed with 403 `proxy.scope_denied`.
+  Buffer-free streaming of large response bodies through the hub, and the transcode-start POST
+  itself, are separate follow-on steps.
+
 ### Fixed
 - **Heartbeat/claim/auth 500s: the maintenance reapers now run inside a worker's event loop (cid≥0), not the master's signal scheduler**
   (`src/Common/Container/Providers/HubServicesProvider.php`, `src/Relay/RelayWorker.php`). Root-cause
