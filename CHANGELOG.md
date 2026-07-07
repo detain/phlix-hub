@@ -7,20 +7,41 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Relay proxy: a signed-in owner can now START an on-demand transcode on a paired server
+  through the hub relay, not just poll one already running**
+  (`src/Http/Controllers/ServerProxyController.php`). `POST /api/v1/media/{id}/transcode` is
+  the proxy's first (and only) permitted write — matched by a new, fully-anchored pattern
+  layer, `BROWSE_SCOPE_PATTERNS['POST'] = '#^/api/v1/media/[^/]+/transcode$#'`, checked
+  *after* the existing GET/HEAD prefix allowlist. It is a separate mechanism from
+  `BROWSE_SCOPE_ALLOWLIST` because the media id sits in the *middle* of the path, which a
+  prefix match can't express. The request's query string (so `?profile=` reaches the
+  server's quality selector) and headers such as `X-Phlix-Device-Type` forward unchanged, as
+  for any other proxied request. Every other mutating route — the item's
+  `favorite`/`rating`/`like`/`watched`/`unwatched`/`poster`/`match/apply` siblings, and the
+  admin `POST /api/v1/admin/media/merge` — still fails closed with 403 `proxy.scope_denied`;
+  the existing ownership (404 `server.not_found` → 403 `server.not_owned`), relay-online (503
+  `server.relay_unavailable`/`server.offline`), and path-traversal (`hasTraversalSegment()`)
+  gates all run unchanged before the widened scope check. Buffer-free streaming of large
+  proxied responses (segments/manifests) is still a separate, later step.
+
+### Added
 - **Relay proxy: browse-scope allowlist now passes through read-only streaming playback of a
   paired server's media, not just JSON browse** (`src/Http/Controllers/ServerProxyController.php`).
   `BROWSE_SCOPE_ALLOWLIST` gains four GET/HEAD path prefixes alongside the existing JSON-browse set:
   `/hls` (the multi-variant master playlist, per-variant `media_v{V}.m3u8` playlists, and `seg-*.ts`
   segments), `/dash` (the MPD manifest and its segments), `/media` (the direct-play byte stream —
-  only `/media/{id}/stream`; its one mutating sibling, `POST /media/merge`, stays unreachable), and
+  the only route registered under bare `/media/` at all; the admin merge endpoint lives at a
+  different prefix, `POST /api/v1/admin/media/merge`, and stays unreachable either way), and
   `/api/v1/transcode` (job-status polling at `/api/v1/transcode/{jobId}/status`). A signed-in owner
   can now play a paired server's media through the hub relay, not just browse its catalog. The
   existing ownership (404 `server.not_found` → 403 `server.not_owned`), relay-online (503
   `server.relay_unavailable`/`server.offline`), and path-traversal (`hasTraversalSegment()`) gates
-  all run unchanged before the widened allowlist is consulted, and every mutating method — including
-  transcode-**start**, which stays POST-only — still fails closed with 403 `proxy.scope_denied`.
-  Buffer-free streaming of large response bodies through the hub, and the transcode-start POST
-  itself, are separate follow-on steps.
+  all run unchanged before the widened allowlist is consulted, and — **at the time this landed** —
+  every mutating method, including transcode-start, still failed closed with 403
+  `proxy.scope_denied`. **Update (D2, see the newer Added entry above):** transcode-**start**
+  (`POST /api/v1/media/{id}/transcode` only) is now the proxy's one narrowly-scoped exception and
+  is forwarded; every other mutating method/path is unaffected and still fails closed.
+  Buffer-free streaming of large response bodies through the hub is still a separate follow-on step.
 
 ### Fixed
 - **Heartbeat/claim/auth 500s: the maintenance reapers now run inside a worker's event loop (cid≥0), not the master's signal scheduler**
@@ -147,12 +168,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `403 proxy.scope_denied` and `PUT .../like` + `DELETE .../favorite` are not routed.
   These controls work normally over a **direct** session to the server. A future fix is a
   separate POST-capable command path reusing the per-user relay token (not a browse-scope
-  allowlist widening).
+  allowlist widening). A later, unrelated step (D2) added exactly one narrow exception to
+  the browse-scope gate — a transcode-start `POST` — which does not touch favorites/Love/rating.
 
 ### Known issues
-- **Relay proxy is `GET`/`HEAD`-only — favorite/Love writes do not persist over the hub
-  relay** ([#122](https://github.com/detain/phlix-hub/issues/122)). See the v0.57.0 bump
-  note above. Direct sessions are unaffected.
+- **Relay proxy is `GET`/`HEAD`-only for media-state writes — favorite/Love writes do not
+  persist over the hub relay** ([#122](https://github.com/detain/phlix-hub/issues/122)). See
+  the v0.57.0 bump note above. Direct sessions are unaffected. (Since D2, the proxy's only
+  non-GET/HEAD route is that single, unrelated transcode-start `POST` — see the newer Added
+  entry above.)
 
 - **`web-ui`: bumped `@phlix/ui` `v0.55.0` → `v0.56.0` and rebuilt the committed SPA
   bundle (`public/assets/app/`) (Wave 0 bump).** Keeps the hub's shared SPA in lockstep
