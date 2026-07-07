@@ -548,6 +548,308 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('server.offline', $body['code'] ?? null);
     }
 
+    // ---------------------------------------------------------------------
+    // D2: transcode-START POST — the single permitted write. The prefix
+    // BROWSE_SCOPE_ALLOWLIST cannot express `/api/v1/media/{id}/transcode`
+    // (variable id in the MIDDLE), so it is matched by the anchored
+    // BROWSE_SCOPE_PATTERNS PCRE instead. These tests prove the one write
+    // passes and is forwarded (incl. its `?profile=` query string), every
+    // mutating sibling stays 403, the `^…$`/`[^/]+` anchoring is tight, and the
+    // ownership/liveness/auth gates still run BEFORE the scope gate for POST.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Accept matrix: `POST /api/v1/media/{id}/transcode` for an owned, online
+     * server with a live tunnel passes the scope gate and is forwarded verbatim.
+     * The id is a single `[^/]+` segment, so a plain slug and a full UUID both
+     * match.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function acceptedTranscodeStartProvider(): iterable
+    {
+        yield 'slug id' => ['item-123', '/api/v1/media/item-123/transcode'];
+        yield 'uuid id' => [
+            '550e8400-e29b-41d4-a716-446655440000',
+            '/api/v1/media/550e8400-e29b-41d4-a716-446655440000/transcode',
+        ];
+    }
+
+    /**
+     * The transcode-start POST clears the scope gate and reaches the relay
+     * bridge with the exact server route + POST method intact (the server's
+     * `TranscodeController::start` is `POST /api/v1/media/{id}/transcode`).
+     *
+     * @dataProvider acceptedTranscodeStartProvider
+     */
+    public function test_transcode_start_post_passes_scope_gate_and_is_forwarded(
+        string $id,
+        string $expectedPath,
+    ): void {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 202,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body_b64' => base64_encode('{"jobId":"job-1"}'),
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => "api/v1/media/{$id}/transcode"],
+        );
+
+        $this->assertSame(202, $response->statusCode, 'transcode-start POST must pass the browse-scope gate');
+        $this->assertIsArray($forwarded, 'transcode-start POST must be forwarded over the relay bridge');
+        $this->assertSame($expectedPath, $forwarded['path']);
+        $this->assertSame('POST', $forwarded['method']);
+        // No query on this request → an empty query string is forwarded.
+        $this->assertSame('', $forwarded['query']);
+    }
+
+    /**
+     * The server's `TranscodeController::start` reads the requested profile from
+     * the QUERY STRING (`?profile=web`), not the body, so the proxy must forward
+     * the raw query string intact alongside the POST.
+     */
+    public function test_transcode_start_post_forwards_query_string(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 202,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body_b64' => base64_encode('{"jobId":"job-1"}'),
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $request = $this->request('POST', 'user-1');
+        $request->queryString = 'profile=web';
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $request,
+            ['id' => 'srv-1', 'path' => 'api/v1/media/item-123/transcode'],
+        );
+
+        $this->assertSame(202, $response->statusCode);
+        $this->assertIsArray($forwarded);
+        $this->assertSame('/api/v1/media/item-123/transcode', $forwarded['path']);
+        $this->assertSame('POST', $forwarded['method']);
+        // The `?profile=web` selector must survive to the server unchanged.
+        $this->assertSame('profile=web', $forwarded['query']);
+    }
+
+    /**
+     * The transcode pattern must NOT open any other `/api/v1/media/{id}/*`
+     * mutation, nor the admin `POST /media/merge`. Each is a real server write
+     * route that stays 403 `proxy.scope_denied` and is never forwarded.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function deniedSiblingMediaPostProvider(): iterable
+    {
+        yield 'favorite' => ['api/v1/media/item-123/favorite'];
+        yield 'rating' => ['api/v1/media/item-123/rating'];
+        yield 'like' => ['api/v1/media/item-123/like'];
+        yield 'watched' => ['api/v1/media/item-123/watched'];
+        yield 'unwatched' => ['api/v1/media/item-123/unwatched'];
+        yield 'poster' => ['api/v1/media/item-123/poster'];
+        yield 'match apply' => ['api/v1/media/item-123/match/apply'];
+        yield 'media merge (admin)' => ['media/merge'];
+    }
+
+    /**
+     * @dataProvider deniedSiblingMediaPostProvider
+     */
+    public function test_sibling_media_post_routes_are_denied(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(403, $response->statusCode, "POST /{$path} must be denied");
+        $this->assertFalse($forwarded, "POST /{$path} must not reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * Anchoring edge cases: the pattern is fully anchored (`^…$`) with a single
+     * `[^/]+` id segment, so a trailing extra segment, an empty id (double
+     * slash), and a `transcode`-prefixed-but-longer final segment all fail to
+     * match and stay denied.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function deniedTranscodeEdgeProvider(): iterable
+    {
+        yield 'trailing extra segment' => ['api/v1/media/x/transcode/y'];
+        yield 'empty id (double slash)' => ['api/v1/media//transcode'];
+        yield 'transcode-prefixed longer segment' => ['api/v1/media/x/transcodeX'];
+    }
+
+    /**
+     * @dataProvider deniedTranscodeEdgeProvider
+     */
+    public function test_transcode_regex_edge_paths_are_denied(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(403, $response->statusCode, "POST /{$path} must not match the anchored transcode pattern");
+        $this->assertFalse($forwarded, "POST /{$path} must not reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * Ownership runs BEFORE the scope gate: a valid transcode-start POST against
+     * a server the user does not own returns 403 `server.not_owned` (not
+     * `proxy.scope_denied`) and is never forwarded — the new write does not
+     * weaken the ownership boundary.
+     */
+    public function test_transcode_start_post_on_unowned_server_returns_403_not_owned(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('someone-else', true));
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/media/item-123/transcode'],
+        );
+
+        $this->assertSame(403, $response->statusCode);
+        $this->assertFalse($forwarded, 'Unowned server → the transcode-start POST may not be forwarded.');
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.not_owned', $body['code'] ?? null);
+    }
+
+    /**
+     * Relay-liveness runs BEFORE the scope gate: a transcode-start POST against
+     * an offline server with no live tunnel fails closed with 503
+     * `server.offline` and is never forwarded.
+     */
+    public function test_transcode_start_post_on_offline_server_fails_closed_503(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn(
+            $this->dto('user-1', false, ServerInfoDto::STATUS_OFFLINE),
+        );
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/media/item-123/transcode'],
+        );
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertFalse($forwarded, 'Offline server → the transcode-start POST may not be forwarded.');
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.offline', $body['code'] ?? null);
+    }
+
+    /**
+     * An online server whose secure tunnel isn't connected fails closed with the
+     * actionable 503 `server.relay_unavailable` for the transcode-start POST too
+     * — the liveness gate precedes the scope gate for every method.
+     */
+    public function test_transcode_start_post_on_online_server_without_tunnel_returns_503_relay_unavailable(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn(
+            $this->dto('user-1', false, ServerInfoDto::STATUS_ONLINE),
+        );
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/media/item-123/transcode'],
+        );
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertFalse($forwarded);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.relay_unavailable', $body['code'] ?? null);
+    }
+
+    /**
+     * Auth runs FIRST: an unauthenticated transcode-start POST returns 401
+     * `auth.required` before ownership, liveness, or scope are ever consulted.
+     */
+    public function test_transcode_start_post_unauthenticated_returns_401(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $controller = $this->controller($info, $this->bridge(static fn () => null));
+
+        $response = $controller->proxy(
+            $this->request('POST', null),
+            ['id' => 'srv-1', 'path' => 'api/v1/media/item-123/transcode'],
+        );
+
+        $this->assertSame(401, $response->statusCode);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('auth.required', $body['code'] ?? null);
+    }
+
     /**
      * @return iterable<string, array{0: string}>
      */

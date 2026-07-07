@@ -19,6 +19,7 @@ use function is_int;
 use function is_string;
 use function json_encode;
 use function ltrim;
+use function preg_match;
 use function rawurldecode;
 use function str_contains;
 use function str_starts_with;
@@ -38,8 +39,12 @@ use const JSON_THROW_ON_ERROR;
  *
  * Scope: read-only traffic only — JSON browse (libraries, media lists, detail,
  * search) PLUS playback reads (HLS/DASH playlists + segments, the direct-play
- * byte stream, and transcode-job status polling). See {@see self::BROWSE_SCOPE_ALLOWLIST}
- * for the exact GET/HEAD path prefixes; all mutating methods fail closed.
+ * byte stream, and transcode-job status polling) — with ONE narrowly-scoped
+ * write exception: starting an on-demand transcode
+ * (`POST /api/v1/media/{id}/transcode`), which a player needs before it can
+ * stream an incompatible title. See {@see self::BROWSE_SCOPE_ALLOWLIST} for the
+ * GET/HEAD path prefixes and {@see self::BROWSE_SCOPE_PATTERNS} for the exact,
+ * anchored POST pattern; every other mutating method/path fails closed.
  *
  * @package Phlix\Hub\Http\Controllers
  * @since 0.10.0
@@ -104,11 +109,12 @@ final class ServerProxyController
      * hub user in two families: (1) JSON browse — libraries, media lists/detail,
      * search, images/posters, OPDS catalog; and (2) playback reads — the HLS and
      * DASH playlists + segments, the direct-play byte stream, and transcode-job
-     * status polling. Anything outside this set — notably admin, mutating, scan,
-     * or transcode-START (a POST added under a later step) endpoints — is
-     * rejected with 403 `proxy.scope_denied` BEFORE forwarding, so a
-     * compromised/confused client cannot use the hub as a deputy to reach
-     * privileged server APIs.
+     * status polling. Anything outside this set — notably admin, mutating, or
+     * scan endpoints — is rejected with 403 `proxy.scope_denied` BEFORE
+     * forwarding, so a compromised/confused client cannot use the hub as a
+     * deputy to reach privileged server APIs. (The one permitted write — the
+     * transcode-START POST — lives in {@see self::BROWSE_SCOPE_PATTERNS}, since
+     * its id is a variable middle segment a prefix cannot express.)
      *
      * Keyed by HTTP method (upper-case); each value is a list of allowed path
      * prefixes matched against the resolved `/`-prefixed forward path by
@@ -117,13 +123,13 @@ final class ServerProxyController
      * ride a widened prefix: {@see self::hasTraversalSegment()} rejects any
      * dot-segment or encoded separator BEFORE this allowlist is consulted.
      *
-     * NOTE: only GET/HEAD are listed. POST/PUT/DELETE (and any other method) are
-     * intentionally always-denied by the browse-scope gate — this is a
-     * READ-ONLY proxy. {@see self::isWithinBrowseScope()} returns false for any
-     * method absent from this map, so mutating requests fail closed with 403
-     * `proxy.scope_denied` and are never forwarded over the tunnel. The POST
-     * route is still registered in {@see \Phlix\Hub\Application} so it routes to
-     * this controller (and gets a deliberate 403) rather than a bare 404.
+     * NOTE: only GET/HEAD are listed HERE. The only permitted non-GET/HEAD
+     * request is the single anchored POST in {@see self::BROWSE_SCOPE_PATTERNS};
+     * every other PUT/DELETE/PATCH (and any unlisted method/path) is
+     * intentionally denied by the browse-scope gate. Denied mutating routes are
+     * still registered in {@see \Phlix\Hub\Application} so they route to this
+     * controller (and get a deliberate 403 via {@see self::isWithinBrowseScope()})
+     * rather than a bare 404.
      *
      * @var array<string, list<string>>
      */
@@ -145,10 +151,10 @@ final class ServerProxyController
             // (`media_v{V}.m3u8`), init/segment (`seg-*.ts`, `*.m4s`), subtitle
             // sidecar and the master manifest under a per-job directory. `/media`
             // covers ONLY the direct-play byte stream `/media/{id}/stream` — the
-            // sole GET handler under bare `/media/`; its one mutating sibling
-            // (`POST /media/merge`, admin) can never be reached because
-            // non-GET/HEAD methods are always denied. `/api/v1/transcode` covers
-            // only `/api/v1/transcode/{jobId}/status`.
+            // ONLY route registered under bare `/media/` at all (mutating or not).
+            // The admin merge endpoint lives at `/api/v1/admin/media/merge` (a
+            // different prefix, and denied by the method gate regardless).
+            // `/api/v1/transcode` covers only `/api/v1/transcode/{jobId}/status`.
             '/hls',
             '/dash',
             '/media',
@@ -171,6 +177,44 @@ final class ServerProxyController
             '/dash',
             '/media',
             '/api/v1/transcode',
+        ],
+    ];
+
+    /**
+     * Exact-match scope patterns for the narrow set of NON-prefix routes the
+     * proxy may forward — currently the single permitted write.
+     *
+     * The prefix-based {@see self::BROWSE_SCOPE_ALLOWLIST} cannot express a route
+     * whose variable segment sits in the MIDDLE of the path. Starting an
+     * on-demand transcode is exactly such a route — the server registers it (in
+     * `Phlix\Server\Http\Controllers\TranscodeController::start`) as
+     * `POST /api/v1/media/{id}/transcode`, the id being a media UUID — and a
+     * player must be able to start it over the hub before it can stream an
+     * incompatible title. Each entry is a FULLY-ANCHORED (`^…$`) PCRE with the id
+     * captured as a single `[^/]+` segment, so the match is exact: it accepts
+     * ONLY `/api/v1/media/{id}/transcode` with nothing before or after it.
+     *
+     * This deliberately does NOT match the media item's OTHER mutating siblings —
+     * `POST /api/v1/media/{id}/favorite`, `PUT …/rating`, `PUT …/like`,
+     * `POST …/watched`|`/unwatched`, `POST …/match/apply`, `PUT …/poster` — nor
+     * the admin `POST /api/v1/admin/media/merge`: the trailing literal `/transcode$`
+     * plus the single-segment `[^/]+` id forbid every one of them, so they all stay 403
+     * `proxy.scope_denied`. Path traversal is impossible here for the same reason
+     * as the prefix allowlist: {@see self::hasTraversalSegment()} rejects any
+     * dot-segment or encoded separator BEFORE this map is consulted.
+     *
+     * Keyed by HTTP method (upper-case); matched by
+     * {@see self::isWithinBrowseScope()} AFTER the prefix allowlist.
+     *
+     * @var array<string, list<string>>
+     */
+    private const BROWSE_SCOPE_PATTERNS = [
+        'POST' => [
+            // Transcode-START ONLY. Anchored (`^…$`) + single-segment `[^/]+` id
+            // so no other `/api/v1/media/{id}/*` POST (favorite/rating/like/
+            // watched/unwatched/match/poster) and no `/api/v1/admin/media/merge`
+            // can match.
+            '#^/api/v1/media/[^/]+/transcode$#',
         ],
     ];
 
@@ -382,8 +426,14 @@ final class ServerProxyController
     }
 
     /**
-     * Determine whether a method + resolved path is within the browse-scope
-     * allowlist the proxy is permitted to forward.
+     * Determine whether a method + resolved path is within the browse-scope the
+     * proxy is permitted to forward.
+     *
+     * Two layers, checked in order: the prefix
+     * {@see self::BROWSE_SCOPE_ALLOWLIST} (GET/HEAD read families) and the
+     * exact-match {@see self::BROWSE_SCOPE_PATTERNS} (the sole permitted write,
+     * transcode-START). A request is in scope when it matches EITHER layer for
+     * its method; every other method/path returns false and fails closed.
      *
      * @param string $method The inbound HTTP method.
      * @param string $path   The resolved `/`-prefixed forward path.
@@ -392,16 +442,24 @@ final class ServerProxyController
      */
     private function isWithinBrowseScope(string $method, string $path): bool
     {
-        $allowedPrefixes = self::BROWSE_SCOPE_ALLOWLIST[strtoupper($method)] ?? null;
-        if ($allowedPrefixes === null) {
-            return false;
-        }
+        $method = strtoupper($method);
 
+        $allowedPrefixes = self::BROWSE_SCOPE_ALLOWLIST[$method] ?? [];
         foreach ($allowedPrefixes as $prefix) {
             // Match either an exact collection path or a sub-path under it
             // (e.g. `/api/v1/media/abc`), never a sibling like
             // `/api/v1/mediaXYZ`.
             if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
+                return true;
+            }
+        }
+
+        // Exact, fully-anchored patterns for the narrow non-prefix routes
+        // (currently only the transcode-START POST). Anchoring + a single-segment
+        // id guarantees no other `/api/v1/media/{id}/*` mutation can match.
+        $allowedPatterns = self::BROWSE_SCOPE_PATTERNS[$method] ?? [];
+        foreach ($allowedPatterns as $pattern) {
+            if (preg_match($pattern, $path) === 1) {
                 return true;
             }
         }
