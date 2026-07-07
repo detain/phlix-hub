@@ -10,6 +10,7 @@ use Phlix\Hub\Relay\RelayProxyProtocol;
 use PHPUnit\Framework\TestCase;
 
 use function base64_decode;
+use function base64_encode;
 
 /**
  * @covers \Phlix\Hub\Relay\RelayProxyBridge
@@ -91,5 +92,49 @@ final class RelayProxyBridgeTest extends TestCase
         // Should not throw.
         $bridge->onReply(['request_id' => 'nope', 'status' => 200]);
         $this->assertTrue(true);
+    }
+
+    /**
+     * @return iterable<string, array{0: float}>
+     */
+    public static function forwardedTimeoutProvider(): iterable
+    {
+        yield 'default 30s' => [30.0];
+        yield 'streaming ceiling 60s' => [60.0];
+        yield 'fractional' => [42.5];
+    }
+
+    /**
+     * D3: the caller's per-request reply timeout must round-trip into the
+     * published envelope so the relay worker (`RelayProxyManager`) can arm an
+     * identical completion timer — otherwise the worker's own timer would 504 a
+     * slow playback-read segment at the default before the browser-facing wait
+     * elapsed. The value is threaded through the exact channel/publish seam the
+     * existing envelope test uses.
+     *
+     * @dataProvider forwardedTimeoutProvider
+     */
+    public function test_request_forwards_the_timeout_in_the_published_envelope(float $timeout): void
+    {
+        /** @var array<string, mixed>|null $publishedData */
+        $publishedData = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$publishedData): void {
+            $publishedData = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => [],
+                'body_b64' => base64_encode(''),
+            ]);
+        };
+        $bridge = new RelayProxyBridge($this->createMock(StructuredLogger::class), $publisher);
+
+        $bridge->request('srv-1', 'GET', '/hls/job/seg-00007.ts', '', [], '', $timeout);
+
+        $this->assertIsArray($publishedData);
+        $this->assertArrayHasKey('timeout', $publishedData);
+        $this->assertSame($timeout, $publishedData['timeout']);
     }
 }

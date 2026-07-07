@@ -18,6 +18,7 @@ use Workerman\Timer;
 use function base64_decode;
 use function base64_encode;
 use function is_array;
+use function is_numeric;
 use function is_string;
 use function json_encode;
 use function strlen;
@@ -76,7 +77,10 @@ final class RelayProxyManager
     /**
      * @param TunnelManagerInterface                              $tunnelManager Tunnel registry (lookup + send).
      * @param StructuredLogger                                    $logger        Relay logger.
-     * @param int                                                 $timeoutSeconds Per-request timeout.
+     * @param int                                                 $timeoutSeconds Fallback
+     *        completion-timer timeout (seconds), used only when a published
+     *        request's `timeout` field ({@see asTimeout()}) is absent or
+     *        non-positive.
      * @param (callable(string, array<string, mixed>): void)|null $publisher     Channel publisher
      *        (defaults to {@see ChannelClient::publish()}; overridable for tests).
      */
@@ -173,9 +177,13 @@ final class RelayProxyManager
         }
 
         $requestId = $this->allocateRequestId();
+        // Per-request completion ceiling forwarded by the HTTP worker so this
+        // timer matches the browser-facing wait (playback-read segments carry
+        // the wider streaming timeout). Absent/invalid → the injected default.
+        $timeout = $this->asTimeout($data['timeout'] ?? null);
         $timerId = null;
         try {
-            $timerId = Timer::add($this->timeoutSeconds, function () use ($requestId): void {
+            $timerId = Timer::add($timeout, function () use ($requestId): void {
                 $this->onTimeout($requestId);
             }, [], false);
         } catch (Throwable) {
@@ -398,6 +406,32 @@ final class RelayProxyManager
     private static function asString(mixed $value, string $default = ''): string
     {
         return is_string($value) ? $value : $default;
+    }
+
+    /**
+     * Coerce the per-request timeout from the published payload into a positive
+     * float, falling back to this worker's injected default when the field is
+     * absent or non-positive.
+     *
+     * Keeps the completion timer aligned with the HTTP worker's browser-facing
+     * wait: a playback-read segment carries the wider streaming ceiling, while a
+     * legacy HTTP worker that omits the field (or sends garbage) keeps the
+     * historical default and behaviour is unchanged.
+     *
+     * @param mixed $value The raw payload `timeout` field.
+     *
+     * @return float Seconds for the completion timer.
+     */
+    private function asTimeout(mixed $value): float
+    {
+        if (is_numeric($value)) {
+            $seconds = (float) $value;
+            if ($seconds > 0.0) {
+                return $seconds;
+            }
+        }
+
+        return (float) $this->timeoutSeconds;
     }
 
     /**
