@@ -124,6 +124,11 @@ final class RelayProxyBridge
             'query' => $query,
             'headers' => $headers,
             'body_b64' => base64_encode($body),
+            // Forward the caller's per-request ceiling so the relay worker's
+            // completion timer uses the identical bound (playback-read segments
+            // get the wider streaming timeout). Absent/invalid → the relay
+            // worker falls back to its injected default, preserving old behaviour.
+            'timeout' => $timeout,
         ]);
 
         try {

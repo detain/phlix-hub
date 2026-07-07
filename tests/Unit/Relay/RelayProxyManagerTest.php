@@ -16,7 +16,11 @@ use Phlix\Shared\Relay\RelayHttpRequest;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+use ReflectionProperty;
 use Workerman\Connection\TcpConnection;
+use Workerman\Events\EventInterface;
+use Workerman\Timer;
 
 use function base64_decode;
 use function json_decode;
@@ -310,5 +314,173 @@ final class RelayProxyManagerTest extends TestCase
 
         $this->assertCount(1, $this->published);
         $this->assertSame(503, $this->published[0]['data']['status']);
+    }
+
+    // ---------------------------------------------------------------------
+    // D3: per-request completion-timer timeout. The HTTP worker threads its
+    // browser-facing reply timeout into the published payload's `timeout`
+    // field; `onRequest()` coerces it via `asTimeout()` and arms the completion
+    // `Timer` with it, so a playback-read segment (wider streaming ceiling) is
+    // not 504'd by this worker before the browser-facing wait elapses. A legacy
+    // worker that omits the field (or sends garbage) keeps the injected default.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Base proxy-request payload; `$overrides` (union-first) tweak individual
+     * fields — e.g. add/replace `timeout`, or omit it entirely for the default.
+     *
+     * @param array<string, mixed> $overrides
+     *
+     * @return array<string, mixed>
+     */
+    private function proxyPayload(array $overrides = []): array
+    {
+        return $overrides + [
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/hls/job-abc/seg-00007.ts',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ];
+    }
+
+    /**
+     * `asTimeout()` coercion matrix. A valid, positive numeric (float / int /
+     * numeric string) is used verbatim; anything absent, null, non-positive or
+     * non-numeric falls back to the injected default (30s here).
+     *
+     * @return iterable<string, array{0: mixed, 1: float}>
+     */
+    public static function timeoutCoercionProvider(): iterable
+    {
+        // Valid, positive numerics → used verbatim.
+        yield 'positive float' => [60.0, 60.0];
+        yield 'positive int' => [45, 45.0];
+        yield 'numeric string (int)' => ['60', 60.0];
+        yield 'numeric string (float)' => ['42.5', 42.5];
+
+        // Absent / null / non-positive / non-numeric → injected default (30s).
+        yield 'null' => [null, 30.0];
+        yield 'zero int' => [0, 30.0];
+        yield 'zero float' => [0.0, 30.0];
+        yield 'negative int' => [-5, 30.0];
+        yield 'negative float' => [-0.5, 30.0];
+        yield 'non-numeric string' => ['soon', 30.0];
+        yield 'empty string' => ['', 30.0];
+        yield 'bool true' => [true, 30.0];
+        yield 'array' => [[60], 30.0];
+    }
+
+    /**
+     * @dataProvider timeoutCoercionProvider
+     */
+    public function test_as_timeout_coerces_the_payload_field(mixed $value, float $expected): void
+    {
+        $manager = new RelayProxyManager(
+            $this->createMock(TunnelManagerInterface::class),
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $reflected = new ReflectionMethod(RelayProxyManager::class, 'asTimeout');
+        $reflected->setAccessible(true);
+        /** @var float $timeout */
+        $timeout = $reflected->invoke($manager, $value);
+
+        $this->assertSame($expected, $timeout);
+    }
+
+    /**
+     * The fallback reads the INJECTED default, not a hardcoded 30 — a manager
+     * built with a different default returns that on every non-positive /
+     * non-numeric / absent value, while a valid value still wins.
+     */
+    public function test_as_timeout_falls_back_to_the_injected_default(): void
+    {
+        $manager = new RelayProxyManager(
+            $this->createMock(TunnelManagerInterface::class),
+            $this->createMock(StructuredLogger::class),
+            45,
+            $this->publisher(),
+        );
+
+        $reflected = new ReflectionMethod(RelayProxyManager::class, 'asTimeout');
+        $reflected->setAccessible(true);
+
+        $this->assertSame(45.0, $reflected->invoke($manager, null));
+        $this->assertSame(45.0, $reflected->invoke($manager, 0));
+        $this->assertSame(45.0, $reflected->invoke($manager, -10));
+        $this->assertSame(45.0, $reflected->invoke($manager, 'nope'));
+        $this->assertSame(60.0, $reflected->invoke($manager, 60));
+    }
+
+    /**
+     * End-to-end wiring: `onRequest()` must arm its completion `Timer` with the
+     * COERCED timeout. Workerman's `Timer::add(..., persistent:false)` delegates
+     * to the installed event loop's `delay($interval, ...)`, so installing a
+     * stub `EventInterface` lets us observe the exact interval `onRequest()`
+     * passes. (Outside a running loop `Timer::add()` throws and `onRequest()`
+     * swallows it, so this seam is required to see the value at all.) `Tunnel`
+     * arms no timers, so the sole `delay()` per `onRequest()` is the completion
+     * timer. The stub is restored in `finally` so no global state leaks.
+     */
+    public function test_on_request_arms_completion_timer_with_the_coerced_timeout(): void
+    {
+        /** @var list<float> $captured */
+        $captured = [];
+        $event = $this->createMock(EventInterface::class);
+        $event->method('delay')->willReturnCallback(
+            static function (float $interval, callable $func, array $args = []) use (&$captured): int {
+                $captured[] = $interval;
+                return 4242;
+            },
+        );
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $eventProp = new ReflectionProperty(Timer::class, 'event');
+        $eventProp->setAccessible(true);
+        /** @var EventInterface|null $original */
+        $original = $eventProp->getValue();
+        $eventProp->setValue(null, $event);
+
+        try {
+            // A valid streaming timeout arms the completion timer verbatim.
+            $captured = [];
+            $manager->onRequest($this->proxyPayload(['timeout' => 60]));
+            $this->assertSame([60.0], $captured, 'a valid timeout arms the completion timer verbatim');
+
+            // An absent field falls back to the injected default (30s).
+            $captured = [];
+            $manager->onRequest($this->proxyPayload());
+            $this->assertSame([30.0], $captured, 'an absent timeout falls back to the injected default');
+
+            // A negative value falls back to the injected default (30s).
+            $captured = [];
+            $manager->onRequest($this->proxyPayload(['timeout' => -5]));
+            $this->assertSame([30.0], $captured, 'a negative timeout falls back to the injected default');
+
+            // A non-numeric value falls back to the injected default (30s).
+            $captured = [];
+            $manager->onRequest($this->proxyPayload(['timeout' => 'bogus']));
+            $this->assertSame([30.0], $captured, 'a non-numeric timeout falls back to the injected default');
+        } finally {
+            $eventProp->setValue(null, $original);
+        }
     }
 }

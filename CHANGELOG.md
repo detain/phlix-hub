@@ -6,6 +6,39 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **Relay proxy: HLS/DASH playback reads through the hub no longer 504 a slow-but-successful
+  first on-demand segment** (`src/Http/Controllers/ServerProxyController.php`,
+  `src/Relay/RelayProxyProtocol.php`, `src/Relay/RelayProxyBridge.php`,
+  `src/Relay/RelayProxyManager.php`). GET/HEAD requests under the `/hls` and `/dash`
+  prefixes — the multi-variant master and per-variant playlists *and* their segments,
+  matched by path prefix rather than filename — now await a wider, path-scoped reply
+  timeout, the new `RelayProxyProtocol::STREAMING_TIMEOUT_SECONDS` (60s), instead of the
+  flat `DEFAULT_TIMEOUT_SECONDS` (30s) every proxied read previously shared. 60s clears the
+  paired server's own on-demand segment-encode first-byte ceiling — the new
+  `RelayProxyProtocol::SEGMENT_ENCODE_CEILING_SECONDS`, mirroring phlix-server
+  `TranscodeManager::SEGMENT_MAX_WAIT_MS` (30_000ms) — plus margin for moving the segment
+  body across the tunnel, while staying under the hls.js client's own `maxLoadTimeMs`
+  (120_000ms) fragment abandon-and-retry threshold: a cold HEVC transcode's
+  slow-but-successful first segment, fetched through a paired hub, is no longer
+  prematurely cut off with a 504 while the server is still successfully producing it. The
+  new `ServerProxyController::replyTimeoutForPath()` classifies the timeout by an
+  exact-or-`/`-subpath match — the same rule `BROWSE_SCOPE_ALLOWLIST` uses, so a sibling
+  like `/hlsX` is never mis-classified — and the chosen value is threaded all the way
+  through: `RelayProxyBridge::request()` now forwards it as a `timeout` field on the
+  published request envelope, and the relay worker's own completion `Timer`
+  (`RelayProxyManager::asTimeout()`) uses that same value. Previously only the HTTP
+  worker's own channel wait respected a per-request timeout; the relay worker that
+  actually owns the tunnel still timed every request out at its injected default, undoing
+  any widening on the controller side. An absent or non-positive `timeout` field falls
+  back to the worker's configured default, so older callers are unaffected. Every other
+  proxied path — JSON browse, `/media/{id}/stream` direct-play,
+  `/api/v1/transcode/{jobId}/status` polling, and the transcode-start POST — is untouched
+  and keeps the 30s default. **Buffer-free streaming of large segment/manifest bodies
+  through the hub (so the relay stops fully buffering a response before forwarding it) is
+  a separate, still-pending step** — this change only widens how long the hub is willing
+  to wait for that still-fully-buffered response to complete.
+
 ### Added
 - **Relay proxy: a signed-in owner can now START an on-demand transcode on a paired server
   through the hub relay, not just poll one already running**
