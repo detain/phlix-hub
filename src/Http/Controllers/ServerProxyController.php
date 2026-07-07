@@ -36,8 +36,10 @@ use const JSON_THROW_ON_ERROR;
  * {@see RelayProxyBridge} which round-trips it through the relay-ws worker (the
  * process that owns the tunnel) and returns the server's response.
  *
- * Scope (Phase 1): JSON/browse traffic — libraries, media lists, detail. Binary
- * media streaming over the tunnel is a later phase.
+ * Scope: read-only traffic only — JSON browse (libraries, media lists, detail,
+ * search) PLUS playback reads (HLS/DASH playlists + segments, the direct-play
+ * byte stream, and transcode-job status polling). See {@see self::BROWSE_SCOPE_ALLOWLIST}
+ * for the exact GET/HEAD path prefixes; all mutating methods fail closed.
  *
  * @package Phlix\Hub\Http\Controllers
  * @since 0.10.0
@@ -98,21 +100,28 @@ final class ServerProxyController
      * Browse-scope allowlist: the only method + path-prefix combinations the
      * relay proxy is permitted to forward to a paired media server.
      *
-     * The proxy exists to expose read-only browse traffic (libraries, media
-     * lists/detail, search, images/posters, OPDS catalog) to an authenticated,
-     * server-owning hub user. Anything outside this set — notably admin,
-     * mutating, scan/transcode, or streaming endpoints — is rejected with 403
-     * `proxy.scope_denied` BEFORE forwarding, so a compromised/confused client
-     * cannot use the hub as a deputy to reach privileged server APIs.
+     * The proxy exposes READ-ONLY traffic to an authenticated, server-owning
+     * hub user in two families: (1) JSON browse — libraries, media lists/detail,
+     * search, images/posters, OPDS catalog; and (2) playback reads — the HLS and
+     * DASH playlists + segments, the direct-play byte stream, and transcode-job
+     * status polling. Anything outside this set — notably admin, mutating, scan,
+     * or transcode-START (a POST added under a later step) endpoints — is
+     * rejected with 403 `proxy.scope_denied` BEFORE forwarding, so a
+     * compromised/confused client cannot use the hub as a deputy to reach
+     * privileged server APIs.
      *
      * Keyed by HTTP method (upper-case); each value is a list of allowed path
-     * prefixes (matched against the resolved `/`-prefixed forward path).
+     * prefixes matched against the resolved `/`-prefixed forward path by
+     * {@see self::isWithinBrowseScope()} (exact match, or a `/`-delimited
+     * sub-path — never a bare sibling like `/hlsX`). Path traversal can never
+     * ride a widened prefix: {@see self::hasTraversalSegment()} rejects any
+     * dot-segment or encoded separator BEFORE this allowlist is consulted.
      *
      * NOTE: only GET/HEAD are listed. POST/PUT/DELETE (and any other method) are
      * intentionally always-denied by the browse-scope gate — this is a
-     * READ-ONLY browse proxy. {@see self::isWithinBrowseScope()} returns false
-     * for any method absent from this map, so mutating requests fail closed with
-     * 403 `proxy.scope_denied` and are never forwarded over the tunnel. The POST
+     * READ-ONLY proxy. {@see self::isWithinBrowseScope()} returns false for any
+     * method absent from this map, so mutating requests fail closed with 403
+     * `proxy.scope_denied` and are never forwarded over the tunnel. The POST
      * route is still registered in {@see \Phlix\Hub\Application} so it routes to
      * this controller (and gets a deliberate 403) rather than a bare 404.
      *
@@ -120,6 +129,7 @@ final class ServerProxyController
      */
     private const BROWSE_SCOPE_ALLOWLIST = [
         'GET' => [
+            // Browse / metadata (JSON).
             '/api/v1/libraries',
             '/api/v1/media',
             '/api/v1/search',
@@ -129,8 +139,23 @@ final class ServerProxyController
             '/api/v1/people',
             '/api/v1/images',
             '/api/v1/opds',
+            // Playback reads (bytes). The server exposes HLS/DASH and the direct
+            // byte stream at the ROOT (not under /api/v1), so the forward tail is
+            // bare. `/hls` + `/dash` cover every per-variant playlist
+            // (`media_v{V}.m3u8`), init/segment (`seg-*.ts`, `*.m4s`), subtitle
+            // sidecar and the master manifest under a per-job directory. `/media`
+            // covers ONLY the direct-play byte stream `/media/{id}/stream` — the
+            // sole GET handler under bare `/media/`; its one mutating sibling
+            // (`POST /media/merge`, admin) can never be reached because
+            // non-GET/HEAD methods are always denied. `/api/v1/transcode` covers
+            // only `/api/v1/transcode/{jobId}/status`.
+            '/hls',
+            '/dash',
+            '/media',
+            '/api/v1/transcode',
         ],
         'HEAD' => [
+            // Browse / metadata (JSON).
             '/api/v1/libraries',
             '/api/v1/media',
             '/api/v1/search',
@@ -140,6 +165,12 @@ final class ServerProxyController
             '/api/v1/people',
             '/api/v1/images',
             '/api/v1/opds',
+            // Playback reads — mirror of the GET block (players issue HEAD to
+            // probe segment size / range support before a ranged GET).
+            '/hls',
+            '/dash',
+            '/media',
+            '/api/v1/transcode',
         ],
     ];
 
