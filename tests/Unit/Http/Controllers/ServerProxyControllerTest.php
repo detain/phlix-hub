@@ -8,12 +8,14 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use Workerman\Connection\TcpConnection;
 
 use function base64_encode;
 use function json_decode;
@@ -68,6 +70,48 @@ final class ServerProxyControllerTest extends TestCase
     private function bridge(?callable $publisher): RelayProxyBridge
     {
         return new RelayProxyBridge($this->createMock(StructuredLogger::class), $publisher);
+    }
+
+    /**
+     * A test double for the browser connection that records everything written.
+     * The real {@see TcpConnection} needs a live socket; this subclass skips the
+     * parent constructor and captures {@see self::send()} payloads instead.
+     */
+    private function fakeConnection()
+    {
+        return new class extends TcpConnection {
+            /** @var list<string> */
+            public array $written = [];
+
+            public function __construct()
+            {
+                // Intentionally skips the parent constructor: no live socket is
+                // needed — send() just records what would go on the wire.
+            }
+
+            public function send(mixed $sendBuffer, bool $raw = false): bool
+            {
+                $this->written[] = (string) $sendBuffer;
+                return true;
+            }
+        };
+    }
+
+    /**
+     * Drive a streamed response: the controller returns a producer closure the
+     * HTTP worker would invoke with the live connection. For streaming (`/hls`,
+     * `/dash`, `/media`) paths this is where the request is actually forwarded
+     * and the body written; for buffered paths it is a no-op. Returns the fake
+     * connection the stream wrote to (no declared return type so PHPStan keeps
+     * the anonymous class's `$written` property visible).
+     */
+    private function drive(Response $response)
+    {
+        $connection = $this->fakeConnection();
+        if ($response->streamProducer !== null) {
+            ($response->streamProducer)($connection);
+        }
+        return $connection;
     }
 
     public function test_unauthenticated_returns_401(): void
@@ -390,10 +434,56 @@ final class ServerProxyControllerTest extends TestCase
             ['id' => 'srv-1', 'path' => $path],
         );
 
+        // Byte-serving reads (/hls, /dash, /media) are streamed: forwarding
+        // happens when the HTTP worker drives the producer with the connection.
+        // Status polling stays buffered (forwarded synchronously in proxy()).
+        $this->drive($response);
+
         $this->assertSame(200, $response->statusCode, "{$method} /{$path} must pass the browse-scope gate");
         $this->assertIsArray($forwarded, "{$method} /{$path} must be forwarded over the relay bridge");
         $this->assertSame('/' . $path, $forwarded['path']);
         $this->assertSame($method, $forwarded['method']);
+    }
+
+    public function test_streaming_read_returns_a_producer_and_streams_body_to_the_connection(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getServerInfo')->willReturn($this->dto('user-1', true));
+
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge): void {
+            /** @var RelayProxyBridge $bridge */
+            $id = $data['request_id'];
+            // Relay worker streams the segment back as phased frames.
+            $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 200, 'headers' => [
+                'Content-Type' => 'video/mp2t',
+                'Content-Length' => '6',
+            ]]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('foo')]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('bar')]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'hls/job-abc/seg-00007.ts'],
+        );
+
+        // A streaming path defers to a producer instead of a buffered body.
+        $this->assertNotNull($response->streamProducer);
+        $this->assertSame('', $response->body);
+
+        $connection = $this->drive($response);
+
+        // Head (with the server's Content-Length preserved) + the raw body bytes
+        // streamed fragment-by-fragment — never buffered into one blob.
+        $written = $connection->written;
+        $this->assertStringContainsString('HTTP/1.1 200 OK', $written[0]);
+        $this->assertStringContainsString('Content-Length: 6', $written[0]);
+        $this->assertSame('foo', $written[1]);
+        $this->assertSame('bar', $written[2]);
     }
 
     /**
@@ -1048,6 +1138,10 @@ final class ServerProxyControllerTest extends TestCase
             $this->request($method, 'user-1'),
             ['id' => 'srv-1', 'path' => $path],
         );
+
+        // Streaming reads forward from inside the producer; buffered ones already
+        // forwarded synchronously. drive() invokes the producer when present.
+        $this->drive($response);
 
         $this->assertSame(200, $response->statusCode);
         $this->assertIsArray($forwarded, "{$method} /{$path} must be forwarded over the relay bridge");

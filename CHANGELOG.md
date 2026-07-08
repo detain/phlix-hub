@@ -6,6 +6,103 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+- **Relay proxy: large HLS/DASH/direct-play response bodies now stream through the hub
+  instead of being fully buffered first (D3, streaming half — closes out Track D
+  alongside D1/D2)** (`src/Http/Controllers/ServerProxyController.php`,
+  `src/Http/Response.php`, `src/Application.php`, `src/Relay/RelayProxyBridge.php`,
+  `src/Relay/RelayProxyManager.php`; **new** `src/Relay/RelayResponseSink.php`,
+  `src/Http/ConnectionResponseSink.php`). Previously the browse-proxy buffered every
+  response body at **two** hops: the relay worker reassembled every `HTTP_RESPONSE`
+  BODY frame into one blob before publishing it on `END`, and the HTTP worker then
+  base64-decoded that whole blob before forwarding it to the browser. For a multi-MB
+  HLS/DASH segment (× concurrent viewers, all funnelled through the single relay
+  worker) that was a real resident-memory spike, and it defeated S3's origin-side
+  streaming work (`phlix-server` #431, `TranscodeFileServer::serveJobFile()` via
+  Workerman `withFile()`). The proxy now reuses the **existing** chunked
+  `RelayHttpResponseCodec` HEAD/BODY/END frame protocol end-to-end so nothing buffers a
+  whole body anywhere:
+  - `ServerProxyController` classifies GET/HEAD under `/hls`, `/dash`, `/media` (a
+    **path-based** heuristic — the hub can't know a body's size before the first frame
+    arrives, and these are exactly the byte-serving route families) as streaming;
+    JSON browse, `/api/v1/transcode/{jobId}/status` polling, and the transcode-start
+    `POST` are unaffected and stay on the original buffered
+    `bridge->request()`/`buildResponse()` path, byte-for-byte unchanged.
+  - A streaming request returns a deferred producer
+    (`Response::stream()`/`$streamProducer`) instead of a built body; `Application`'s
+    message dispatch invokes it with the live browser `TcpConnection` — connection
+    ownership stays in the worker layer, the controller never touches the socket.
+  - `RelayProxyManager` publishes each `HTTP_RESPONSE` frame individually
+    (`{phase:'head'}` once, `{phase:'body'}` per fragment with **no accumulation**,
+    `{phase:'end'}`) instead of reassembling a whole body; `RelayProxyBridge::stream()`
+    consumes the phased channel and drives the new **`RelayResponseSink`** contract
+    (`head()`/`write()`/`end()`/`abort()`) — a transport-agnostic sink interface so the
+    relay/bridge layer knows nothing about HTTP wire framing.
+  - **`ConnectionResponseSink`** (the concrete sink) writes each fragment straight to
+    the socket: fixed-length framing that preserves the origin's real
+    `Content-Length`/`Content-Range`/`206` verbatim when the server sent a
+    `Content-Length` (every HLS/DASH segment and every direct-play `withFile()`
+    response does, post-S3) — so `<video>` Range seeking keeps working straight
+    through the hub — or chunked transfer-encoding when the length is unknown.
+    Hop-by-hop headers (`connection`/`keep-alive`/`transfer-encoding`) are dropped;
+    header names/values are CRLF-checked against header-injection.
+  - **Back-pressure is end-to-end, not unbounded:** the sink installs
+    `onBufferFull`/`onBufferDrain` on the browser connection (the producing coroutine
+    parks on a resume channel until the socket send buffer drains), and the
+    relay→HTTP transport channel is capacity-bounded (32 fragments, ≈2 MB), so a
+    stalled consumer stops draining the channel and blocks the upstream push.
+  - **Timeout semantics changed from total-transfer to time-to-first-byte-then-
+    inactivity.** The prior 60s timeout (`RelayProxyProtocol::STREAMING_TIMEOUT_SECONDS`,
+    shipped in the D3 timeout-align half, hub v0.2.0) was a total-transfer cap —
+    correct only because the old model delivered a reply once, on `END`. A true stream
+    now awaits only the head frame under that same per-path timeout
+    (`replyTimeoutForPath()` — 60s for `/hls`/`/dash`, 30s for `/media`), then re-arms an
+    **inactivity** timer (`RelayProxyManager::touchStreamTimer()`, throttled to ≤1/s) on
+    every subsequent frame — so a steadily-flowing body streams past the old fixed
+    ceiling and only a genuine mid-transfer stall trips it, bounded by an absolute
+    900s (`MAX_STREAM_DURATION_SECONDS`) safety ceiling. This also fixes a **latent**
+    bug folded in from the same change: `/media/{id}/stream` (large, un-ranged
+    direct-play through the hub) previously truncated at a 30-second **total**-transfer
+    timeout; it is now first-byte + inactivity, and direct-play's first byte is
+    effectively instant (server `withFile()`), so the truncation is gone.
+  - **`RelayResponseSink::abort()` — a real wire-corruption bug this contract exists to
+    prevent.** Caught during review (round 2): without it, a mid-stream exception
+    occurring *after* the response head was already written to the browser connection
+    could fall through to the ordinary error path and write a **second**, fully
+    buffered error response onto the same connection — corrupting HTTP framing for
+    that request. Every sink implementation now exposes `abort()` (force-close the
+    connection, detach back-pressure hooks, MUST NOT throw even if the underlying
+    close throws) and callers track `$headSent` to route a post-head failure through
+    `abort()` instead of a second buffered write; `Application::onMessage` also carries
+    a defense-in-depth backstop for this case. `RelayProxyManager::onTimeout()`/
+    `failServer()` end an already-started stream (publish `{phase:'end'}`) rather than
+    substituting a fresh 504/503 body once the head is on the wire, for the same
+    reason.
+  - Reviewed across four independent rounds — round 1 found 1 MAJOR (a channel
+    resource leak) + 2 MINOR + 2 INFO findings (all fixed); round 2 (the deeper
+    re-review) found the `abort()` wire-corruption bug above plus a test-fidelity gap
+    and an INFO follow-up marker (all fixed); rounds 3–4 found one documentation-only
+    MINOR finding, then **`NO FINDINGS`**. TestEngineer's fresh coverage pass closed 4
+    genuine gaps in the new code (`ConnectionResponseSink::abort()` was previously
+    exercised only through a fake sink; the `touchStreamTimer()` re-arm branch and the
+    `onTimeout()` started-stream branch were previously untested) — final per-file
+    coverage: `ConnectionResponseSink.php` 98.9%, `RelayProxyBridge.php` 94.4%,
+    `RelayProxyManager.php` 79.7% (raised, not regressed — a large pre-existing
+    untested block predates this change), `ServerProxyController.php` 97.4%.
+  - **This closes out Track D's D1–D3s scope** (streaming GET/HEAD allowlisting,
+    transcode-start POST, and now true streaming pass-through with the timeout fix).
+    A separate D4-style version bump (`src/Version.php` + this CHANGELOG's version
+    heading) follows once this lands on `master`.
+  - **Known caveat: `psalm` is un-runnable on the development box used for every
+    review/test round** — it requires PHP ≥8.3.16 and the box runs PHP 8.3.6. All
+    other local gates (`phpstan` L9 no-baseline, `phpcs` PSR-12, full `phpunit`,
+    `composer validate --strict`) are green. This is a PHP-version gate, not a code
+    finding — `psalm` must be confirmed clean on CI / the live box (PHP 8.5.4) before
+    this change is considered fully verified.
+  - See the "Hub relay: streaming pass-through (D1–D3s)" section of
+    [`phlix-docs` — Stream Quality / ABR](https://detain.github.io/phlix-docs/developers/stream-quality-abr)
+    for the full architecture write-up.
+
 ## [0.2.0] — 2026-07-07
 
 ### Fixed

@@ -22,8 +22,11 @@ use Workerman\Connection\TcpConnection;
 use Workerman\Events\EventInterface;
 use Workerman\Timer;
 
+use function array_key_last;
 use function base64_decode;
+use function count;
 use function json_decode;
+use function microtime;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -258,6 +261,377 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame(200, $reply['data']['status']);
         $this->assertSame(['Content-Type' => 'application/json'], $reply['data']['headers']);
         $this->assertSame('{"ok":true}!!', base64_decode((string) $reply['data']['body_b64'], true));
+    }
+
+    public function test_streaming_response_publishes_phased_frames_without_buffering(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/hls/job-abc/seg-00007.ts',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        $head = new RelayHttpResponseHead(200, ['Content-Type' => 'video/mp2t', 'Content-Length' => '6'], 6);
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead($head),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('foo'),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('bar'),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        // Each frame is published as its own phase — nothing is buffered into a
+        // single blob (unlike the buffered path, which publishes exactly once).
+        $this->assertCount(4, $this->published);
+        $this->assertSame('head', $this->published[0]['data']['phase']);
+        $this->assertSame(200, $this->published[0]['data']['status']);
+        $this->assertSame('video/mp2t', $this->published[0]['data']['headers']['Content-Type'] ?? null);
+        $this->assertSame('6', $this->published[0]['data']['headers']['Content-Length'] ?? null);
+
+        $this->assertSame('body', $this->published[1]['data']['phase']);
+        $this->assertSame('foo', base64_decode((string) $this->published[1]['data']['body_b64'], true));
+        $this->assertSame('body', $this->published[2]['data']['phase']);
+        $this->assertSame('bar', base64_decode((string) $this->published[2]['data']['body_b64'], true));
+
+        $this->assertSame('end', $this->published[3]['data']['phase']);
+        $this->assertArrayNotHasKey('body_b64', $this->published[3]['data']);
+
+        // Every phase carries the HTTP worker's request id for routing.
+        foreach ($this->published as $entry) {
+            $this->assertSame('req-1', $entry['data']['request_id']);
+            $this->assertSame('reply.1', $entry['event']);
+        }
+    }
+
+    public function test_fail_server_ends_a_started_stream_instead_of_publishing_503(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/hls/job-abc/seg-00007.ts',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        // Head already streamed to the browser.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '10'], 10)),
+        ));
+
+        $manager->failServer('srv-1');
+
+        // The head phase + a terminating end phase — NOT a fresh 503 body (which
+        // could not be substituted after the head was already sent).
+        $this->assertCount(2, $this->published);
+        $this->assertSame('head', $this->published[0]['data']['phase']);
+        $this->assertSame('end', $this->published[1]['data']['phase']);
+        $this->assertArrayNotHasKey('status', $this->published[1]['data']);
+    }
+
+    /**
+     * Regression for the MINOR finding: a steadily-dripping response keeps
+     * re-arming the pure per-frame inactivity timer forever, so an absolute
+     * duration ceiling is enforced independently of activity. Rather than
+     * actually sleeping past the (multi-minute) ceiling, the pending entry's
+     * `stream_opened_at` is rewritten into the past via reflection to simulate
+     * "this stream has been open a long time" — the next arriving frame must
+     * then terminate the stream instead of re-arming the inactivity timer.
+     */
+    public function test_absolute_stream_duration_ceiling_terminates_a_steadily_dripping_response(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/hls/job-abc/seg-00007.ts',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        // Rewrite the entry's clock fields into the distant past — simulates a
+        // stream that has been open far beyond the absolute ceiling without
+        // actually sleeping the test.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $pending[$requestId]['stream_opened_at'] = microtime(true) - 3600.0;
+        $pending[$requestId]['timer_armed_at'] = microtime(true) - 3600.0;
+        $pendingProp->setValue($manager, $pending);
+
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+        ));
+        // Activity arrives — which would normally re-arm the pure inactivity
+        // timer — but the absolute ceiling must terminate instead.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('x'),
+        ));
+
+        $this->assertSame('end', $this->published[array_key_last($this->published)]['data']['phase'] ?? null);
+
+        // The pending entry is gone: a further frame for the same request id is
+        // now dropped as unknown/closed rather than continuing to stream.
+        $countAfterTermination = count($this->published);
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('y'),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+        $this->assertCount($countAfterTermination, $this->published);
+    }
+
+    public function test_inactivity_timeout_ends_a_started_stream_instead_of_publishing_504(): void
+    {
+        // Covers the onTimeout() streaming branch: once the head has been
+        // streamed to the browser, a per-frame inactivity cutoff must terminate
+        // the stream with an END phase — NOT a fresh 504 body (which can no
+        // longer be substituted after the head is on the wire). This is the
+        // pure-inactivity sibling of the absolute-duration ceiling test above,
+        // and of failServer()'s started-stream branch.
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/hls/job-abc/seg-00007.ts',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        // Head streamed to the browser → stream_started = true.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '10'], 10)),
+        ));
+
+        // Fire the inactivity timer directly (no real event loop in PHPUnit).
+        $onTimeout = new ReflectionMethod(RelayProxyManager::class, 'onTimeout');
+        $onTimeout->setAccessible(true);
+        $onTimeout->invoke($manager, $requestId);
+
+        // Exactly the real head phase (status 200) + a terminating end phase —
+        // NOT a fresh 504 body substituted after the head was already on the wire.
+        $this->assertCount(2, $this->published);
+        $this->assertSame('head', $this->published[0]['data']['phase']);
+        $this->assertSame(200, $this->published[0]['data']['status']);
+        $this->assertSame('end', $this->published[1]['data']['phase']);
+        $this->assertArrayNotHasKey('status', $this->published[1]['data'], 'the terminating end phase must carry no status body');
+
+        // The pending entry is torn down: further frames for it are dropped.
+        $countAfter = count($this->published);
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('late'),
+        ));
+        $this->assertCount($countAfter, $this->published);
+    }
+
+    public function test_streaming_activity_rearms_the_inactivity_timer_within_the_limits(): void
+    {
+        // Covers touchStreamTimer()'s re-arm branch (the feature that lets a
+        // large, steadily-flowing body stream past the old fixed timeout): once
+        // the per-frame throttle window has elapsed and the absolute ceiling is
+        // NOT yet reached, a new response frame must re-arm the completion timer
+        // and stamp a fresh timer_armed_at — rather than either terminating
+        // (the absolute-ceiling test) or short-circuiting on the throttle guard
+        // (every other fast test, where frames arrive < 1s apart).
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/media/item/stream',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+        ));
+
+        // Push the last re-arm past the throttle window (so the next frame
+        // actually re-arms) while keeping the stream comfortably inside the
+        // absolute-duration ceiling (so it is NOT terminated).
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $staleArmedAt = microtime(true) - 5.0; // > 1s throttle window
+        $pending[$requestId]['timer_armed_at'] = $staleArmedAt;
+        $pending[$requestId]['stream_opened_at'] = microtime(true) - 5.0; // well under the 900s ceiling
+        $pendingProp->setValue($manager, $pending);
+
+        $publishedBefore = count($this->published);
+
+        // A body frame arrives → touchStreamTimer must re-arm (not terminate).
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('x'),
+        ));
+
+        // The stream is still alive: the only new publish is the body phase,
+        // and no terminating end phase was emitted.
+        $this->assertSame($publishedBefore + 1, count($this->published));
+        $this->assertSame('body', $this->published[array_key_last($this->published)]['data']['phase']);
+
+        // The re-arm branch ran: the entry survives and timer_armed_at advanced
+        // past the stale value we injected (proving it was NOT the throttle
+        // early-return and NOT the terminate-and-unset ceiling branch).
+        /** @var array<int, array<string, mixed>> $after */
+        $after = $pendingProp->getValue($manager);
+        $this->assertArrayHasKey($requestId, $after, 'a re-armed stream must remain pending');
+        $this->assertGreaterThan($staleArmedAt, $after[$requestId]['timer_armed_at']);
     }
 
     public function test_response_for_unknown_request_is_dropped(): void
