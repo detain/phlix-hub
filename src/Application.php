@@ -1385,7 +1385,60 @@ final class Application
                 $hubRequest = Request::fromWorkerman($request);
                 $response = $router->dispatch($hubRequest);
                 $status = $response->statusCode;
-                $connection->send($response->toWorkermanResponse());
+                if ($response->streamProducer !== null) {
+                    // The response is streamed straight to the socket in
+                    // fragments (relay pass-through of a large media body) rather
+                    // than sent as one buffered blob. The producer owns the whole
+                    // on-the-wire response from here.
+                    //
+                    // A producer can fail AFTER it has already written real
+                    // bytes (status line/headers, maybe body) directly to
+                    // `$connection` — the outer `catch` below sends a fresh
+                    // BUFFERED 500 response, which would land on top of those
+                    // bytes and corrupt the wire framing for this connection
+                    // (and any request reusing it, if kept-alive). A streaming
+                    // producer is therefore expected to contain its own failure
+                    // handling (see `RelayProxyBridge::stream()`'s try/catch,
+                    // which distinguishes "bytes may already be on the wire" —
+                    // force-close via the sink's `abort()` — from "nothing
+                    // written yet" — safe to rethrow). This `catch` is a
+                    // defense-in-depth backstop UNDERNEATH that: from here
+                    // alone we cannot tell which of those two cases a
+                    // propagated exception represents, so on ANY exception we
+                    // force-close the connection directly rather than risk
+                    // sending a second response.
+                    //
+                    // Net effect: this backstop unconditionally intercepts
+                    // every streaming-producer exception before the outer
+                    // `catch` ever sees it, so the outer buffered-500 JSON
+                    // response is UNREACHABLE for a streaming producer — even
+                    // for the "nothing written yet, would have been safe to
+                    // send a graceful 500" case. That is an accepted
+                    // simplification, not a defect: a raw connection reset and
+                    // a 500 response are both "this request/fragment failed"
+                    // outcomes to the client either way (hls.js/native-HLS
+                    // retries a failed segment fetch the same way for both),
+                    // and today's only producer (`RelayProxyBridge::stream()`)
+                    // never lets a POST-`head()` exception reach here at all —
+                    // this backstop's real job is the (currently unreachable)
+                    // case of a future producer that doesn't self-guard. See
+                    // `RelayProxyBridge::stream()`'s matching comment and
+                    // `quality_worklog.md` D3s round-3 (Finding D).
+                    try {
+                        ($response->streamProducer)($connection);
+                    } catch (Throwable $e) {
+                        $status = 500;
+                        $logger?->error('Unhandled exception in streaming response producer', [
+                            'exception' => $e::class,
+                            'message' => $e->getMessage(),
+                            'file' => $e->getFile(),
+                            'line' => $e->getLine(),
+                        ]);
+                        $connection->close();
+                    }
+                } else {
+                    $connection->send($response->toWorkermanResponse());
+                }
             } catch (Throwable $e) {
                 $status = 500;
                 $logger?->error('Unhandled exception in hub request', [

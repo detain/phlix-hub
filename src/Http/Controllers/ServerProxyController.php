@@ -6,11 +6,13 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\ConnectionResponseSink;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Hub\ServerInfoDto;
+use Workerman\Connection\TcpConnection;
 
 use function base64_decode;
 use function explode;
@@ -260,6 +262,34 @@ final class ServerProxyController
     ];
 
     /**
+     * Forward-path prefixes whose GET/HEAD responses are streamed straight to
+     * the browser fragment-by-fragment ({@see self::buildStreamingResponse()})
+     * instead of being buffered whole ({@see self::buildResponse()}).
+     *
+     * These are the byte-serving families whose bodies can be large: `/hls` and
+     * `/dash` (per-variant playlists + on-demand `seg-*.ts`/`*.m4s` segments,
+     * multiple MB each) and `/media` (the direct-play byte stream, which can be
+     * an entire multi-GB file). Streaming them removes the per-request whole-body
+     * memory spike the buffered proxy incurred on both the relay worker and the
+     * HTTP worker, and lets a large direct-play response run past the old
+     * total-body reply timeout (a slow un-ranged stream used to truncate). Tiny
+     * playlists under `/hls`/`/dash` are matched too, but streaming them is
+     * harmless — they emit a fragment or two and complete immediately.
+     *
+     * Deliberately EXCLUDED: JSON browse, `/api/v1/transcode/{jobId}/status`
+     * polling, and the transcode-START POST — all small and simplest kept on the
+     * buffered path. Matched with the same exact-or-`/`-subpath rule as
+     * {@see self::BROWSE_SCOPE_ALLOWLIST}.
+     *
+     * @var list<string>
+     */
+    private const STREAMING_BODY_PREFIXES = [
+        '/hls',
+        '/dash',
+        '/media',
+    ];
+
+    /**
      * @param ServerInfoHandler $serverInfo Resolves server ownership + relay status.
      * @param RelayProxyBridge  $bridge     Cross-process bridge to the relay worker.
      * @param StructuredLogger  $logger     Relay logger.
@@ -394,6 +424,23 @@ final class ServerProxyController
             'path' => $path,
         ]);
 
+        $timeout = $this->replyTimeoutForPath($request->method, $path);
+
+        // Large byte-serving reads (HLS/DASH segments, direct-play stream) are
+        // streamed straight to the browser without buffering the whole body on
+        // the hub; everything else keeps the simple buffered round-trip.
+        if ($this->isStreamingPath($request->method, $path)) {
+            return $this->buildStreamingResponse(
+                $serverId,
+                $request->method,
+                $path,
+                $request->queryString,
+                $headers,
+                $body,
+                $timeout,
+            );
+        }
+
         $reply = $this->bridge->request(
             $serverId,
             $request->method,
@@ -401,7 +448,7 @@ final class ServerProxyController
             $request->queryString,
             $headers,
             $body,
-            $this->replyTimeoutForPath($request->method, $path),
+            $timeout,
         );
 
         if ($reply === null) {
@@ -413,6 +460,91 @@ final class ServerProxyController
         }
 
         return $this->buildResponse($reply);
+    }
+
+    /**
+     * Whether a method + resolved path should be streamed to the browser
+     * fragment-by-fragment rather than buffered whole.
+     *
+     * Only GET/HEAD under a {@see self::STREAMING_BODY_PREFIXES} family qualify;
+     * these paths already passed the browse-scope gate (so a mutating method
+     * never reaches here). The match uses the same exact-or-`/`-subpath rule as
+     * the allowlist — never a bare sibling like `/hlsX`.
+     *
+     * @param string $method The inbound HTTP method.
+     * @param string $path   The resolved `/`-prefixed forward path.
+     *
+     * @return bool True when the response should be streamed.
+     */
+    private function isStreamingPath(string $method, string $path): bool
+    {
+        $method = strtoupper($method);
+        if ($method !== 'GET' && $method !== 'HEAD') {
+            return false;
+        }
+
+        foreach (self::STREAMING_BODY_PREFIXES as $prefix) {
+            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Build a streaming pass-through response.
+     *
+     * Returns a {@see Response} carrying a producer closure the HTTP worker
+     * invokes with the live browser connection. The closure drives
+     * {@see RelayProxyBridge::stream()}, which forwards each response fragment to
+     * a {@see ConnectionResponseSink} the moment it arrives from the paired
+     * server — so a multi-MB segment (or a whole direct-play file) never has to
+     * be buffered on the hub before the first byte reaches the client.
+     *
+     * @param string                $serverId Target server UUID.
+     * @param string                $method   HTTP method.
+     * @param string                $path     Resolved `/`-prefixed forward path.
+     * @param string                $query    Raw query string (no leading '?').
+     * @param array<string, string> $headers  Forwarded request headers.
+     * @param string                $body     Raw request body.
+     * @param float                 $timeout  Per-phase relay wait (seconds).
+     *
+     * @return Response
+     */
+    private function buildStreamingResponse(
+        string $serverId,
+        string $method,
+        string $path,
+        string $query,
+        array $headers,
+        string $body,
+        float $timeout,
+    ): Response {
+        $bridge = $this->bridge;
+        $producer = static function (TcpConnection $connection) use (
+            $bridge,
+            $serverId,
+            $method,
+            $path,
+            $query,
+            $headers,
+            $body,
+            $timeout,
+        ): void {
+            $bridge->stream(
+                $serverId,
+                $method,
+                $path,
+                $query,
+                $headers,
+                $body,
+                $timeout,
+                new ConnectionResponseSink($connection, $method),
+            );
+        };
+
+        return (new Response())->status(200)->stream($producer);
     }
 
     /**
