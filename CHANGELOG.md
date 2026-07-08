@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Changed
+- **web-ui: bumped `@phlix/ui` pin from `v0.73.1` to `v0.74.0`** (F2) and rebuilt the
+  committed `public/assets/app/**` bundle. Brings the stream-quality/ABR player UI
+  (Track E: hls.js level API, `QualityMenu`, Auto/pinned-rung selection, visual + a11y
+  baselines) to the hub's inline browse-via-relay SPA. No hub-side code change; content
+  hashes in the rebuilt bundle churn on every rebuild (Vite/Rollup non-determinism,
+  not a regression) — verified via smoke-import against the installed `@phlix/ui`
+  package instead of raw diffing (`createPhlixApp`/`Player`/`QualityMenu` resolve to
+  real exports, `package.json` `main`/`module`/`types` targets all exist).
 - **Relay proxy: large HLS/DASH/direct-play response bodies now stream through the hub
   instead of being fully buffered first (D3, streaming half — closes out Track D
   alongside D1/D2)** (`src/Http/Controllers/ServerProxyController.php`,
