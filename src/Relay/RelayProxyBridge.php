@@ -310,7 +310,10 @@ final class RelayProxyBridge
                 }
 
                 /** @var array<string, mixed> $message */
-                $phase = is_string($message['phase'] ?? null) ? $message['phase'] : '';
+                $phase = '';
+                if (array_key_exists('phase', $message) && is_string($message['phase'])) {
+                    $phase = $message['phase'];
+                }
 
                 if ($phase === 'body') {
                     $decoded = $this->decodeBody($message);
@@ -415,8 +418,10 @@ final class RelayProxyBridge
      */
     private function replyStatus(array $message): int
     {
-        $status = $message['status'] ?? null;
-        return is_int($status) ? $status : 502;
+        if (array_key_exists('status', $message) && is_int($message['status'])) {
+            return $message['status'];
+        }
+        return 502;
     }
 
     /**
