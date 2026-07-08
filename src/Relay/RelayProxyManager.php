@@ -21,6 +21,7 @@ use function is_array;
 use function is_numeric;
 use function is_string;
 use function json_encode;
+use function microtime;
 use function strlen;
 
 use const JSON_THROW_ON_ERROR;
@@ -51,6 +52,35 @@ final class RelayProxyManager
     private const MAX_REQUEST_ID = 0xFFFFFFFF;
 
     /**
+     * Minimum seconds between completion-timer re-arms for a streaming request.
+     * The timer is re-armed on response activity so it behaves as an *inactivity*
+     * bound rather than a total-transfer one, but re-arming per ~64 KB frame
+     * would churn the event loop; this throttles it to at most once per interval.
+     */
+    private const STREAM_TIMER_REARM_THROTTLE_SECONDS = 1.0;
+
+    /**
+     * Absolute ceiling (seconds) on how long a single streaming response may
+     * remain open, regardless of activity.
+     *
+     * {@see self::touchStreamTimer()} re-arms the completion timer on every
+     * response frame, so the per-frame bound alone is a pure *inactivity*
+     * timeout — a steadily-dripping origin (a pathologically slow encode, or a
+     * compromised/misbehaving paired server sending one byte every
+     * `<timeout>s`) could otherwise keep re-arming it forever and hold the
+     * browser connection, this pending entry, and the underlying server-side
+     * transfer open indefinitely. This is defense-in-depth on top of that: once
+     * a stream has been open this long it is terminated even if frames are
+     * still actively arriving. Deliberately generous (15 minutes — well beyond
+     * any real HLS/DASH segment or direct-play transfer) so it never clips a
+     * legitimate slow-but-finite transfer; it exists purely to bound the
+     * pathological/malicious case. Low risk in today's threat model (the origin
+     * is the authenticated owner's own paired server), so a generous bound is
+     * appropriate.
+     */
+    private const MAX_STREAM_DURATION_SECONDS = 900.0;
+
+    /**
      * @var int Next request id to allocate.
      */
     private int $nextRequestId = self::FIRST_REQUEST_ID;
@@ -58,13 +88,32 @@ final class RelayProxyManager
     /**
      * In-flight proxy requests keyed by request id.
      *
+     * @todo Cancel-frame gap, deliberately deferred (D3s round 1 Finding 4):
+     *       when a streaming entry's browser side is abandoned,
+     *       `RelayProxyBridge::stream()` closes its own channel but this entry
+     *       stays pending here and frames keep being published (into what is
+     *       now a closed channel, dropped at O(1) cost — no leak) until the
+     *       origin sends END or an inactivity/absolute-duration ceiling fires.
+     *       There is currently no cancel signal to tell the tunnel/paired
+     *       server to stop transferring early — only a wasted-bandwidth/CPU
+     *       cost, bounded by those same ceilings, not a correctness issue. A
+     *       future lightweight `HTTP_CANCEL {requestId}` relay frame (emitted
+     *       from the bridge's "browser gone" branch) would let this entry be
+     *       torn down immediately instead of waiting out a ceiling. See
+     *       `quality_worklog.md` D3s round-1 Finding 4 disposition.
+     *
      * @var array<int, array{
      *     reply_event: string,
      *     request_id: string,
      *     server_id: string,
      *     head: RelayHttpResponseHead|null,
      *     body: string,
-     *     timer: int|null
+     *     timer: int|null,
+     *     stream: bool,
+     *     stream_started: bool,
+     *     timeout: float,
+     *     timer_armed_at: float,
+     *     stream_opened_at: float
      * }>
      */
     private array $pending = [];
@@ -181,6 +230,10 @@ final class RelayProxyManager
         // timer matches the browser-facing wait (playback-read segments carry
         // the wider streaming timeout). Absent/invalid → the injected default.
         $timeout = $this->asTimeout($data['timeout'] ?? null);
+        // Streaming requests forward the response as phased frames (head/body/
+        // end) instead of one reassembled blob, so the hub never buffers the
+        // whole body. Absent/false → the historical buffered behaviour.
+        $stream = ($data['stream'] ?? null) === true;
         $timerId = null;
         try {
             $timerId = Timer::add($timeout, function () use ($requestId): void {
@@ -192,6 +245,7 @@ final class RelayProxyManager
             $timerId = null;
         }
 
+        $now = microtime(true);
         $this->pending[$requestId] = [
             'reply_event' => $replyEvent,
             'request_id' => $clientRequestId,
@@ -199,6 +253,11 @@ final class RelayProxyManager
             'head' => null,
             'body' => '',
             'timer' => is_int($timerId) ? $timerId : null,
+            'stream' => $stream,
+            'stream_started' => false,
+            'timeout' => $timeout,
+            'timer_armed_at' => $now,
+            'stream_opened_at' => $now,
         ];
 
         $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, $requestId, $json));
@@ -240,24 +299,56 @@ final class RelayProxyManager
             return;
         }
 
+        $streaming = $this->pending[$requestId]['stream'];
+
         if ($chunk->kind === RelayHttpResponseChunk::KIND_HEAD) {
+            if ($streaming) {
+                $head = $chunk->head;
+                $this->pending[$requestId]['stream_started'] = true;
+                $this->publishPhaseHead(
+                    $this->pending[$requestId]['reply_event'],
+                    $this->pending[$requestId]['request_id'],
+                    $head !== null ? $head->status : 502,
+                    $head !== null ? $head->headers : [],
+                );
+                $this->touchStreamTimer($requestId);
+                return;
+            }
             $this->pending[$requestId]['head'] = $chunk->head;
             return;
         }
 
         if ($chunk->kind === RelayHttpResponseChunk::KIND_BODY) {
+            if ($streaming) {
+                $this->publishPhaseBody(
+                    $this->pending[$requestId]['reply_event'],
+                    $this->pending[$requestId]['request_id'],
+                    $chunk->body,
+                );
+                $this->touchStreamTimer($requestId);
+                return;
+            }
             $this->pending[$requestId]['body'] .= $chunk->body;
             return;
         }
 
-        // KIND_END — assemble and publish.
+        // KIND_END.
         $entry = $this->pending[$requestId];
+        $this->cancelTimer($requestId);
+        unset($this->pending[$requestId]);
+
+        if ($streaming) {
+            $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);
+            $this->logger->info('Relay proxy: completed streamed response from server', [
+                'request_id' => $requestId,
+            ]);
+            return;
+        }
+
+        // Buffered path — assemble and publish the whole body at once.
         $head = $entry['head'];
         $status = $head !== null ? $head->status : 502;
         $headers = $head !== null ? $head->headers : [];
-
-        $this->cancelTimer($requestId);
-        unset($this->pending[$requestId]);
 
         $this->reply($entry['reply_event'], $entry['request_id'], $status, $headers, $entry['body']);
 
@@ -285,6 +376,12 @@ final class RelayProxyManager
             }
             $this->cancelTimer($requestId);
             unset($this->pending[$requestId]);
+            if ($entry['stream'] && $entry['stream_started']) {
+                // The head (and some body) already reached the browser — a fresh
+                // 503 body cannot be substituted, so just terminate the stream.
+                $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);
+                continue;
+            }
             $this->reply(
                 $entry['reply_event'],
                 $entry['request_id'],
@@ -309,6 +406,20 @@ final class RelayProxyManager
             return;
         }
         unset($this->pending[$requestId]);
+
+        if ($entry['stream'] && $entry['stream_started']) {
+            // Head already streamed to the browser — terminate the stream rather
+            // than emit a fresh 504 body. This fires as an *inactivity* cutoff:
+            // the timer is re-armed on each response frame, so it only trips when
+            // the server genuinely stalls mid-transfer.
+            $this->logger->warning('Relay proxy: streamed response stalled, terminating', [
+                'request_id' => $requestId,
+                'server_id' => $entry['server_id'],
+            ]);
+            $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);
+            return;
+        }
+
         $this->logger->warning('Relay proxy: request timed out awaiting server', [
             'request_id' => $requestId,
             'server_id' => $entry['server_id'],
@@ -320,6 +431,117 @@ final class RelayProxyManager
             [],
             $this->errorBody('gateway.timeout', 'The server did not respond in time.'),
         );
+    }
+
+    /**
+     * Re-arm the completion timer for a streaming request so it behaves as an
+     * inactivity cutoff (reset on each response frame) instead of a total-transfer
+     * ceiling — this is what lets a large, steadily-flowing body stream past the
+     * old fixed timeout. Throttled to at most once per
+     * {@see self::STREAM_TIMER_REARM_THROTTLE_SECONDS} so per-frame churn stays
+     * off the event loop.
+     *
+     * Also enforces {@see self::MAX_STREAM_DURATION_SECONDS} as an absolute
+     * ceiling: a stream that has been open that long is terminated here
+     * (instead of re-armed) even though frames are still actively arriving —
+     * defense-in-depth against a steadily-dripping origin that would otherwise
+     * keep resetting the pure inactivity bound forever.
+     *
+     * @param int $requestId The relay request id.
+     *
+     * @return void
+     */
+    private function touchStreamTimer(int $requestId): void
+    {
+        if (!isset($this->pending[$requestId])) {
+            return;
+        }
+        $entry = $this->pending[$requestId];
+        $now = microtime(true);
+
+        if ($now - $entry['stream_opened_at'] >= self::MAX_STREAM_DURATION_SECONDS) {
+            $this->cancelTimer($requestId);
+            unset($this->pending[$requestId]);
+            $this->logger->warning('Relay proxy: streamed response exceeded absolute max duration, terminating', [
+                'request_id' => $requestId,
+                'server_id' => $entry['server_id'],
+            ]);
+            $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);
+            return;
+        }
+
+        if ($now - $entry['timer_armed_at'] < self::STREAM_TIMER_REARM_THROTTLE_SECONDS) {
+            return;
+        }
+
+        $this->cancelTimer($requestId);
+        $timerId = null;
+        try {
+            $timerId = Timer::add($entry['timeout'], function () use ($requestId): void {
+                $this->onTimeout($requestId);
+            }, [], false);
+        } catch (Throwable) {
+            $timerId = null;
+        }
+        // Reassign the whole entry (not a partial sub-key write) so the array
+        // shape is preserved for static analysis after the intervening calls.
+        $entry['timer'] = is_int($timerId) ? $timerId : null;
+        $entry['timer_armed_at'] = $now;
+        $this->pending[$requestId] = $entry;
+    }
+
+    /**
+     * Publish a streaming HEAD phase back to the originating HTTP worker.
+     *
+     * @param string                $replyEvent      Per-request reply event.
+     * @param string                $clientRequestId The HTTP worker's request id.
+     * @param int                   $status          HTTP status code.
+     * @param array<string, string> $headers         Response headers.
+     *
+     * @return void
+     */
+    private function publishPhaseHead(string $replyEvent, string $clientRequestId, int $status, array $headers): void
+    {
+        ($this->publisher)($replyEvent, [
+            'request_id' => $clientRequestId,
+            'phase' => 'head',
+            'status' => $status,
+            'headers' => $headers,
+        ]);
+    }
+
+    /**
+     * Publish a streaming BODY phase (one fragment) back to the HTTP worker.
+     *
+     * @param string $replyEvent      Per-request reply event.
+     * @param string $clientRequestId The HTTP worker's request id.
+     * @param string $chunk           Raw body fragment.
+     *
+     * @return void
+     */
+    private function publishPhaseBody(string $replyEvent, string $clientRequestId, string $chunk): void
+    {
+        ($this->publisher)($replyEvent, [
+            'request_id' => $clientRequestId,
+            'phase' => 'body',
+            'body_b64' => base64_encode($chunk),
+        ]);
+    }
+
+    /**
+     * Publish the streaming END phase back to the HTTP worker.
+     *
+     * @param string $replyEvent      Per-request reply event.
+     * @param string $clientRequestId The HTTP worker's request id.
+     *
+     * @return void
+     */
+    private function publishPhaseEnd(string $replyEvent, string $clientRequestId): void
+    {
+        ($this->publisher)($replyEvent, [
+            'request_id' => $clientRequestId,
+            'phase' => 'end',
+        ]);
     }
 
     /**

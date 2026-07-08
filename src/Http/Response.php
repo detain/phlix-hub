@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http;
 
+use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
 
 /**
@@ -32,6 +33,35 @@ class Response
     public array $cookies = [];
 
     public string $body = '';
+
+    /**
+     * Optional incremental-streaming producer.
+     *
+     * When set, the HTTP worker invokes it with the live browser
+     * {@see TcpConnection} to write the response body directly to the socket in
+     * fragments, instead of sending the buffered {@see self::$body}. The relay
+     * proxy uses this to pass a large media body (HLS/DASH segment, direct-play
+     * stream) straight through without buffering the whole body on the hub. The
+     * producer owns the entire on-the-wire response once invoked (status line,
+     * headers, body, terminator).
+     *
+     * @var (callable(TcpConnection): void)|null
+     */
+    public $streamProducer = null;
+
+    /**
+     * Mark this response as an incrementally-streamed response.
+     *
+     * @param callable(TcpConnection): void $producer Writes the response to the
+     *        browser connection fragment-by-fragment.
+     *
+     * @return self
+     */
+    public function stream(callable $producer): self
+    {
+        $this->streamProducer = $producer;
+        return $this;
+    }
 
     /**
      * Set the HTTP status code.
