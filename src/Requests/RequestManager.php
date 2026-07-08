@@ -1,5 +1,12 @@
 <?php
 
+/**
+ * Phlix hub component: Requests.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MIT
+ */
+
 declare(strict_types=1);
 
 namespace Phlix\Hub\Requests;
