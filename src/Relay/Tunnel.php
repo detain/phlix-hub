@@ -349,6 +349,7 @@ final class Tunnel implements TunnelInterface
         match ($frame->type) {
             RelayFrameType::DATA => $this->sendToClient($frame->channelId(), $frame),
             RelayFrameType::HTTP_RESPONSE => $this->onHttpResponse($frame),
+            RelayFrameType::HTTP_CANCEL => $this->onHttpCancel($frame),
             RelayFrameType::HEARTBEAT => $this->onHeartbeat($frame),
             default => $this->onUnexpectedFrameType($frame),
         };
@@ -373,6 +374,27 @@ final class Tunnel implements TunnelInterface
         }
 
         $this->proxyManager->onResponseFrame($frame);
+    }
+
+    /**
+     * Handle an HTTP_CANCEL frame arriving from a server.
+     *
+     * This would only occur if a server sent a cancel acknowledgement. The
+     * cancel is always initiated by the hub, so this is a no-op with a debug
+     * log. It exists for symmetry and to prevent the unexpected-frame
+     * close path.
+     *
+     * @param RelayFrame $frame The HTTP_CANCEL frame (request id in seq).
+     *
+     * @return void
+     */
+    private function onHttpCancel(RelayFrame $frame): void
+    {
+        $this->logger->debug('Relay: HTTP_CANCEL received from server', [
+            'server_id' => $this->serverId,
+            'tunnel_id' => $this->tunnelId,
+            'request_id' => $frame->channelId(),
+        ]);
     }
 
     /**
@@ -747,6 +769,32 @@ final class Tunnel implements TunnelInterface
         $this->logger->debug('Relay: heartbeat sent to server', [
             'server_id' => $this->serverId,
             'tunnel_id' => $this->tunnelId,
+        ]);
+    }
+
+    /**
+     * Send an HTTP_CANCEL frame to the server for a given relay request id.
+     *
+     * Issued by RelayProxyManager when the browser abandons a streaming request
+     * so the server can stop transferring bytes for that request early.
+     *
+     * @param int $requestId The relay (not client) request id to cancel.
+     *
+     * @return void
+     */
+    public function sendCancel(int $requestId): void
+    {
+        if ($this->status !== self::STATUS_ACTIVE) {
+            return;
+        }
+
+        $cancelFrame = new RelayFrame(RelayFrameType::HTTP_CANCEL, $requestId, '');
+        $this->sendToServer($cancelFrame);
+
+        $this->logger->debug('Relay: HTTP_CANCEL sent to server', [
+            'server_id' => $this->serverId,
+            'tunnel_id' => $this->tunnelId,
+            'request_id' => $requestId,
         ]);
     }
 

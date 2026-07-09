@@ -33,6 +33,13 @@ final class RelayProxyProtocol
     public const REQUEST_EVENT = 'phlix.relay.proxy.request';
 
     /**
+     * Channel event the HTTP workers publish cancel requests on; the relay-ws
+     * worker subscribes to it. Published when the browser aborts a streaming
+     * request so the server can stop transferring early.
+     */
+    public const CANCEL_EVENT = 'phlix.relay.proxy.cancel';
+
+    /**
      * Default localhost port the `workerman/channel` broker listens on.
      */
     public const DEFAULT_CHANNEL_PORT = 2206;
