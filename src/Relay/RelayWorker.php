@@ -145,6 +145,8 @@ final class RelayWorker
                 // first-class callable is correct here.
                 /** @psalm-suppress InvalidArgument */
                 ChannelClient::on(RelayProxyProtocol::REQUEST_EVENT, $proxyManager->onRequest(...));
+                /** @psalm-suppress InvalidArgument */
+                ChannelClient::on(RelayProxyProtocol::CANCEL_EVENT, $proxyManager->onCancel(...));
                 $logger->info('Relay proxy: relay worker joined channel broker', [
                     'channel_host' => $this->channelHost,
                     'channel_port' => $this->channelPort,
