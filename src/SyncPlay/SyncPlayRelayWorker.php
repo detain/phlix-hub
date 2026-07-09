@@ -170,7 +170,7 @@ final class SyncPlayRelayWorker
             return;
         }
 
-        $type = $message['type'] ?? null;
+        $type = is_string($message['type'] ?? null) ? $message['type'] : null;
 
         switch ($type) {
             case 'group_join':
@@ -258,8 +258,8 @@ final class SyncPlayRelayWorker
 
         // Join new room
         $client->room = $room;
-        $displayName = $message['display_name'] ?? 'Anonymous';
-        $client->displayName = is_string($displayName) ? $displayName : 'Anonymous';
+        $displayName = is_string($message['display_name'] ?? null) ? $message['display_name'] : 'Anonymous';
+        $client->displayName = $displayName;
 
         if (!isset(self::$rooms[$room])) {
             self::$rooms[$room] = [];
