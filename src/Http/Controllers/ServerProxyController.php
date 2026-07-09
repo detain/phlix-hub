@@ -227,6 +227,19 @@ final class ServerProxyController
             // - audio manifest:       /hls/{job_id}/audio/{lang}/manifest.m3u8
             '#^/hls/[^/]+/audio/[^/]+/.+\.m4s$#',
             '#^/hls/[^/]+/audio/[^/]+/manifest\.m3u8$#',
+
+            // Chapter thumbnails — served as image files from the server.
+            // Covers: /transcodes/chapters/{itemId}/{index}.jpg and .png
+            '#^/transcodes/chapters/[^/]+/\d+\.(jpg|png)$#',
+
+            // Trickplay sprite sheet and timeline JSON generated during transcoding.
+            // Covers: /transcodes/trickplay/{jobId}/sprite.jpg|png
+            '#^/transcodes/trickplay/[^/]+/sprite\.(jpg|png)$#',
+            // Covers: /transcodes/trickplay/{jobId}/timeline.json
+            '#^/transcodes/trickplay/[^/]+/timeline\.json$#',
+
+            // Alternative chapter path under /media/{itemId}/chapters/{index}.jpg|png.
+            '#^/media/[^/]+/chapters/\d+\.(jpg|png)$#',
         ],
         'POST' => [
             // Transcode-START ONLY. Anchored (`^…$`) + single-segment `[^/]+` id
