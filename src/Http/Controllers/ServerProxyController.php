@@ -219,6 +219,11 @@ final class ServerProxyController
      */
     private const BROWSE_SCOPE_PATTERNS = [
         'GET' => [
+            // P3B-S7: Audio track selection is handled by the URL-driven HLS selection mechanism.
+            // Client selects audio track by fetching /hls/{job_id}/audio/{lang}/manifest.m3u8.
+            // The hub proxies all /hls/* paths including audio sub-paths (patterns below).
+            // No special relay protocol message is needed for audio track switching.
+
             // Per-audio HLS rendition paths (P3B-S3: multiple audio tracks over HLS).
             // These are sub-paths under /hls/ but need explicit anchoring to ensure
             // exact match semantics rather than prefix match. Covers:
@@ -735,6 +740,9 @@ final class ServerProxyController
         // Trust markers: the hub has authenticated the user and verified
         // ownership, so the server runs the request as this user.
         $headers['X-Phlix-Relay'] = '1';
+        // P5-S5: Parental controls are enforced by the server via AccessScheduleMiddleware.
+        // The hub relays user identity via X-Phlix-Relay-User header so the server
+        // can apply the authenticated user's parental control profile.
         $headers['X-Phlix-Relay-User'] = $userId;
         if ($request->remoteIp !== '') {
             $headers['X-Forwarded-For'] = $request->remoteIp;
