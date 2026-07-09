@@ -325,22 +325,15 @@ final class RelayProxyBridge
                 if ($phase === 'body') {
                     $decoded = $this->decodeBody($message);
                     if ($decoded !== '' && $sink->body($decoded) === false) {
-                        // Browser gone — stop consuming. The `finally` drops the
+                        // Browser gone — stop consuming and cancel the relay
+                        // request so the paired server stops transferring bytes
+                        // for this now-orphaned stream. The `finally` drops the
                         // pending entry so any later phases from the relay
                         // worker are discarded by onReply().
-                        //
-                        // @todo Deliberately deferred (D3s round 1, Finding 4):
-                        // no cancel frame tells RelayProxyManager/the paired
-                        // server to stop shipping bytes for this now-orphaned
-                        // request. The resource-leak/hang risk this would
-                        // otherwise cause is already eliminated — every further
-                        // frame lands on the closed channel below and is
-                        // dropped at O(1) cost by onReply()'s bounded push — so
-                        // this is a wasted-transfer inefficiency only (bounded
-                        // by the inactivity/absolute-duration ceilings in
-                        // RelayProxyManager), not a leak. A lightweight
-                        // `HTTP_CANCEL {requestId}` relay frame emitted here
-                        // would close that gap.
+                        ($this->publisher)(RelayProxyProtocol::CANCEL_EVENT, [
+                            'request_id' => $requestId,
+                            'server_id' => $serverId,
+                        ]);
                         return;
                     }
                     continue;

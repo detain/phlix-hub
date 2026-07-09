@@ -400,6 +400,92 @@ final class RelayProxyManager
     }
 
     /**
+     * Cancel an in-flight request and signal the server to stop transferring.
+     *
+     * Called when the browser abandons a streaming request so the server can
+     * stop CPU/bandwidth work on a request whose response can no longer be
+     * delivered. The pending entry is removed immediately; any subsequent
+     * frames from the server for this request are dropped at O(1) cost.
+     *
+     * @param int $requestId The hub-assigned relay request id to cancel.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function cancelRequest(int $requestId): void
+    {
+        $entry = $this->pending[$requestId] ?? null;
+        if ($entry === null) {
+            // Already timed out / completed / cancelled — nothing to do.
+            return;
+        }
+
+        $this->cancelTimer($requestId);
+        unset($this->pending[$requestId]);
+
+        $tunnel = $this->tunnelManager->getTunnelForServer($entry['server_id']);
+        if ($tunnel !== null && $tunnel->getStatus() === Tunnel::STATUS_ACTIVE) {
+            $tunnel->sendCancel($requestId);
+        }
+
+        $this->logger->info('Relay proxy: request cancelled', [
+            'request_id' => $requestId,
+            'server_id' => $entry['server_id'],
+            'stream' => $entry['stream'],
+            'stream_started' => $entry['stream_started'],
+        ]);
+    }
+
+    /**
+     * Handle a CANCEL_EVENT from an HTTP worker (browser abandoned the request).
+     *
+     * The published payload carries `server_id` and the HTTP-worker's internal
+     * `request_id` (the client's `bin2hex(random_bytes(16))`), not the hub's
+     * relay request id. We look up the pending entry by that client request id
+     * to find the relay request id, then call {@see cancelRequest()}.
+     *
+     * @param mixed $data The published cancel payload.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function onCancel(mixed $data): void
+    {
+        if (!is_array($data)) {
+            return;
+        }
+
+        $clientRequestId = self::asString($data['request_id'] ?? null);
+        $serverId = self::asString($data['server_id'] ?? null);
+
+        if ($clientRequestId === '' || $serverId === '') {
+            $this->logger->warning('Relay proxy: malformed cancel payload');
+            return;
+        }
+
+        // Find the pending entry by client request id.
+        $relayRequestId = null;
+        foreach ($this->pending as $id => $entry) {
+            if ($entry['request_id'] === $clientRequestId && $entry['server_id'] === $serverId) {
+                $relayRequestId = $id;
+                break;
+            }
+        }
+
+        if ($relayRequestId === null) {
+            $this->logger->debug('Relay proxy: cancel for unknown/completed request, dropping', [
+                'client_request_id' => $clientRequestId,
+                'server_id' => $serverId,
+            ]);
+            return;
+        }
+
+        $this->cancelRequest($relayRequestId);
+    }
+
+    /**
      * Time out an in-flight request that never completed.
      *
      * @param int $requestId The relay request id.
