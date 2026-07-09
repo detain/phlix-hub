@@ -170,7 +170,8 @@ final class SyncPlayRelayWorker
             return;
         }
 
-        $messageType = $message['type'] ?? null;
+        /** @var mixed $messageType */
+        $messageType = $message['type'];
         $type = is_string($messageType) ? $messageType : null;
 
         switch ($type) {
@@ -259,7 +260,8 @@ final class SyncPlayRelayWorker
 
         // Join new room
         $client->room = $room;
-        $messageDisplayName = $message['display_name'] ?? null;
+        /** @var mixed $messageDisplayName */
+        $messageDisplayName = $message['display_name'];
         $displayName = is_string($messageDisplayName) ? $messageDisplayName : 'Anonymous';
         $client->displayName = $displayName;
 
