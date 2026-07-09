@@ -218,6 +218,16 @@ final class ServerProxyController
      * @var array<string, list<string>>
      */
     private const BROWSE_SCOPE_PATTERNS = [
+        'GET' => [
+            // Per-audio HLS rendition paths (P3B-S3: multiple audio tracks over HLS).
+            // These are sub-paths under /hls/ but need explicit anchoring to ensure
+            // exact match semantics rather than prefix match. Covers:
+            // - audio segment files:   /hls/{job_id}/audio/{lang}/segment_{n}.m4s
+            // - init segment:         /hls/{job_id}/audio/{lang}/init.m4s
+            // - audio manifest:       /hls/{job_id}/audio/{lang}/manifest.m3u8
+            '#^/hls/[^/]+/audio/[^/]+/.+\.m4s$#',
+            '#^/hls/[^/]+/audio/[^/]+/manifest\.m3u8$#',
+        ],
         'POST' => [
             // Transcode-START ONLY. Anchored (`^…$`) + single-segment `[^/]+` id
             // so no other `/api/v1/media/{id}/*` POST (favorite/rating/like/
