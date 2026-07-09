@@ -23,6 +23,7 @@ use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
+use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
@@ -1509,6 +1510,17 @@ final class Application
             : (int) (is_numeric($clientRelayPortRaw) ? $clientRelayPortRaw : ClientRelayWorker::DEFAULT_PORT);
         $clientRelayWorker = new ClientRelayWorker($this->container, $clientRelayPort);
         $clientRelayWorker->start();
+
+        // Start the SyncPlay relay WebSocket worker on port 8804. Remote
+        // SyncPlay clients connect here (GET /syncplay/{server_id}) to
+        // participate in synchronized playback sessions through the hub.
+        /** @var mixed $syncplayPortRaw */
+        $syncplayPortRaw = $this->config['syncplay_port'] ?? SyncPlayRelayWorker::DEFAULT_PORT;
+        $syncplayPort = is_int($syncplayPortRaw)
+            ? $syncplayPortRaw
+            : (int) (is_numeric($syncplayPortRaw) ? $syncplayPortRaw : SyncPlayRelayWorker::DEFAULT_PORT);
+        $syncplayWorker = new SyncPlayRelayWorker($syncplayPort);
+        $syncplayWorker->start();
 
         Worker::runAll();
     }
