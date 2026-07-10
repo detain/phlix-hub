@@ -1067,6 +1067,32 @@ do_update() {
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
+  # 5a. Retrofit the restart-race port gate (2026-07-10 incident) into units
+  # written by older installs: the old master can hold its listen ports for
+  # seconds-to-minutes after SIGTERM, the new master then crash-loops on
+  # "Address already in use". Insert an ExecStartPre wait (see the unit
+  # template below and scripts/wait-for-free-ports.sh for the rationale,
+  # incl. why SO_REUSEPORT is NOT a safe alternative) and align the timing
+  # knobs with the current template. Idempotent — guarded on the marker.
+  if [ -f "$SERVICE_FILE" ] && ! grep -q 'wait-for-free-ports' "$SERVICE_FILE" 2>/dev/null; then
+    log "Adding restart-race port gate (ExecStartPre) to systemd unit"
+    local gate_hub_port="${env_hub_port:-8800}"
+    # Relay/channel ports are fixed defaults in src/Application.php +
+    # HubServicesProvider (no env override exists): 8802 servers, 8803
+    # clients, 8804 syncplay, 8805 federation, 2206 channel broker.
+    sed -i "\\|^ExecStart=|i\\
+# Restart-race gate: wait for the OLD master to release its listen ports\\
+# before booting (see scripts/wait-for-free-ports.sh + install.sh template).\\
+ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t 90 ${gate_hub_port} 8802 8803 8804 8805 2206" "$SERVICE_FILE"
+    # TimeoutStartSec must cover the up-to-90 s gate; RestartSec=3 s retries
+    # promptly; StartLimitBurst=10 so slow-release loops (~93 s/attempt)
+    # cannot trip start-limit-hit inside StartLimitIntervalSec=500.
+    sed -i 's|^TimeoutStartSec=30$|TimeoutStartSec=120|' "$SERVICE_FILE"
+    sed -i 's|^RestartSec=5s$|RestartSec=3s|' "$SERVICE_FILE"
+    sed -i 's|^StartLimitBurst=5$|StartLimitBurst=10|' "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
   # 5b. Backfill env keys that newer code requires but an older install never
   # wrote. HUB_JWT_SECRET is a hard boot requirement in production
   # (AuthServicesProvider resolveSecret) — an install that predates it would now
@@ -1321,7 +1347,11 @@ Documentation=https://docs.phlix.media
 After=network.target mysql.service
 Wants=mysql.service
 StartLimitIntervalSec=500
-StartLimitBurst=5
+# Burst of 10 (not 5): with the ExecStartPre port gate below each failed
+# start attempt takes up to ~93 s (90 s wait + bind), so 5 failures would fit
+# inside a 500 s window and trip start-limit-hit — leaving the hub down until
+# a manual 'systemctl reset-failed'. 10 attempts can never fit in 500 s.
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -1336,6 +1366,20 @@ EnvironmentFile=${ENV_FILE}
 # Point HOME at a writable install path (\${INSTALL_PATH}/var) so the lock lands
 # there. (Mirrors the phlix-server fix.)
 Environment="HOME=${INSTALL_PATH}/var"
+# Restart-race gate (2026-07-10 incident): on restart the OLD master can
+# hold its listen sockets for seconds-to-minutes after SIGTERM. If the new
+# master starts before they're released, Worker::runAll() throws
+# "Address already in use" and the unit crash-loops while the hub is down.
+# Wait (up to 90 s) for :HTTP + relay WS workers (:8802 servers, :8803
+# clients, :8804 syncplay, :8805 federation — fixed defaults in
+# src/Application.php + HubServicesProvider) + :2206 channel broker to be
+# free before booting. On timeout the script still exits 0 — the bind then
+# fails fast and Restart=on-failure sends us back through this gate.
+# NOTE: SO_REUSEPORT (Workerman \$reusePort) is deliberately NOT used as an
+# alternative fix — during the stop/start overlap BOTH masters would accept
+# on the same ports, splitting relay tunnels and WS sessions between a dying
+# process and the new one. This ExecStartPre gate is the correct fix.
+ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t 90 ${HUB_PORT} ${RELAY_PORT} ${CLIENT_RELAY_PORT} 8804 8805 2206
 # start.php is the Workerman bootstrap (webman-style — see start.php
 # for the full pattern). public/index.php no longer exists; public/ is
 # a pure document root containing only static assets + templates.
@@ -1343,9 +1387,10 @@ ExecStart=/usr/bin/php ${INSTALL_PATH}/start.php start
 ExecReload=/bin/kill -SIGUSR1 \$MAINPID
 ExecStop=/bin/kill -SIGTERM \$MAINPID
 Restart=on-failure
-RestartSec=5s
+RestartSec=3s
 TimeoutStopSec=30
-TimeoutStartSec=30
+# Must cover the up-to-90 s ExecStartPre port gate plus worker boot.
+TimeoutStartSec=120
 
 # Swoole 6's io_uring event loop pins locked memory; the default 8 MB
 # RLIMIT_MEMLOCK is too small for the worker pool, so io_uring init fails
