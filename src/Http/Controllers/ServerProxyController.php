@@ -228,9 +228,8 @@ final class ServerProxyController
             '#^/hls/[^/]+/media_a[0-9]+\.m3u8$#',
             '#^/hls/[^/]+/seg-a[0-9]+-[0-9]+\.ts$#',
 
-            // Chapter thumbnails — served as image files from the server.
-            // Covers: /transcodes/chapters/{itemId}/{index}.jpg and .png
-            '#^/transcodes/chapters/[^/]+/\d+\.(jpg|png)$#',
+            // Chapter thumbnails — served via the server API at GET /api/v1/media/{id}/chapters/{index}/thumbnail
+            '#^/api/v1/media/[^/]+/chapters/\d+/thumbnail$#',
 
             // Trickplay sprite sheet and timeline JSON served by TrickplayController.
             // Covers: /trickplay/{jobId}/sprite.jpg|png
@@ -242,8 +241,6 @@ final class ServerProxyController
             // Covers: /trickplay/{jobId}/index.xml (BIF index)
             '#^/trickplay/[^/]+/index\.xml$#',
 
-            // Alternative chapter path under /media/{itemId}/chapters/{index}.jpg|png.
-            '#^/media/[^/]+/chapters/\d+\.(jpg|png)$#',
         ],
         'POST' => [
             // Transcode-START ONLY. Anchored (`^…$`) + single-segment `[^/]+` id
