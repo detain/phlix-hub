@@ -90,6 +90,10 @@ final class FederationWorker
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
 
+        // Close DB connections in onWorkerStop (still in coroutine context) so
+        // hooked PDO sockets aren't destroyed at RSHUTDOWN outside a coroutine.
+        \Phlix\Hub\Common\Database\ConnectionPool::armWorkerStopCleanup($worker);
+
         return $worker;
     }
 

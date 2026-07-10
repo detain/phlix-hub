@@ -108,6 +108,10 @@ final class RelayWorker
         // worker owns.
         $worker->onWorkerStart = [$this, 'onWorkerStart'];
 
+        // Close DB connections in onWorkerStop (still in coroutine context) so
+        // hooked PDO sockets aren't destroyed at RSHUTDOWN outside a coroutine.
+        \Phlix\Hub\Common\Database\ConnectionPool::armWorkerStopCleanup($worker);
+
         return $worker;
     }
 
