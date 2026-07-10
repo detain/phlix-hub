@@ -53,7 +53,7 @@ final class FederationWorker
     /**
      * Default port for federation WS connections (master side).
      */
-    public const DEFAULT_PORT = 8804;
+    public const DEFAULT_PORT = 8805;
 
     /**
      * Map of connection ID => hub ID, set at WS-connect time so later
@@ -65,7 +65,7 @@ final class FederationWorker
 
     /**
      * @param ContainerInterface $container PSR-11 container for resolving services.
-     * @param int                $port      Federation WS port (default 8804).
+     * @param int                $port      Federation WS port (default 8805).
      * @param int                $count     Number of worker processes.
      */
     public function __construct(
