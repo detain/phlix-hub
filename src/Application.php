@@ -1233,6 +1233,10 @@ final class Application
         $worker->count = $workers;
         $worker->name = 'phlix-hub-http';
 
+        // Close DB connections in onWorkerStop (still in coroutine context) so
+        // hooked PDO sockets aren't destroyed at RSHUTDOWN outside a coroutine.
+        \Phlix\Hub\Common\Database\ConnectionPool::armWorkerStopCleanup($worker);
+
         // Each HTTP worker joins the channel broker and subscribes to its own
         // unique reply event so relayed responses are delivered back to the
         // coroutine that issued the proxy request.
