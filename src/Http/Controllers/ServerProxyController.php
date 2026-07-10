@@ -220,28 +220,27 @@ final class ServerProxyController
     private const BROWSE_SCOPE_PATTERNS = [
         'GET' => [
             // P3B-S7: Audio track selection is handled by the URL-driven HLS selection mechanism.
-            // Client selects audio track by fetching /hls/{job_id}/audio/{lang}/manifest.m3u8.
-            // The hub proxies all /hls/* paths including audio sub-paths (patterns below).
-            // No special relay protocol message is needed for audio track switching.
-
-            // Per-audio HLS rendition paths (P3B-S3: multiple audio tracks over HLS).
-            // These are sub-paths under /hls/ but need explicit anchoring to ensure
-            // exact match semantics rather than prefix match. Covers:
-            // - audio segment files:   /hls/{job_id}/audio/{lang}/segment_{n}.m4s
-            // - init segment:         /hls/{job_id}/audio/{lang}/init.m4s
-            // - audio manifest:       /hls/{job_id}/audio/{lang}/manifest.m3u8
-            '#^/hls/[^/]+/audio/[^/]+/.+\.m4s$#',
-            '#^/hls/[^/]+/audio/[^/]+/manifest\.m3u8$#',
+            // The server emits audio-only HLS playlists as media_a{N}.m3u8 (flat files in job dir),
+            // e.g. /hls/{job_id}/media_a0.m3u8. The master manifest references them via
+            // URI="media_a0.m3u8" (relative URL resolved from master manifest directory).
+            // Audio segments are seg-a{A}-NNNNN.ts (e.g. seg-a0-00001.ts).
+            // The /hls prefix already covers these; explicit patterns below document actual structure.
+            '#^/hls/[^/]+/media_a[0-9]+\.m3u8$#',
+            '#^/hls/[^/]+/seg-a[0-9]+-[0-9]+\.ts$#',
 
             // Chapter thumbnails — served as image files from the server.
             // Covers: /transcodes/chapters/{itemId}/{index}.jpg and .png
             '#^/transcodes/chapters/[^/]+/\d+\.(jpg|png)$#',
 
-            // Trickplay sprite sheet and timeline JSON generated during transcoding.
-            // Covers: /transcodes/trickplay/{jobId}/sprite.jpg|png
-            '#^/transcodes/trickplay/[^/]+/sprite\.(jpg|png)$#',
-            // Covers: /transcodes/trickplay/{jobId}/timeline.json
-            '#^/transcodes/trickplay/[^/]+/timeline\.json$#',
+            // Trickplay sprite sheet and timeline JSON served by TrickplayController.
+            // Covers: /trickplay/{jobId}/sprite.jpg|png
+            '#^/trickplay/[^/]+/sprite\.(jpg|png)$#',
+            // Covers: /trickplay/{jobId}/timeline.json
+            '#^/trickplay/[^/]+/timeline\.json$#',
+            // Covers: /trickplay/{jobId}/thumb-{index}.jpg (BIF thumbnails)
+            '#^/trickplay/[^/]+/thumb-[0-9]+\.(jpg|png)$#',
+            // Covers: /trickplay/{jobId}/index.xml (BIF index)
+            '#^/trickplay/[^/]+/index\.xml$#',
 
             // Alternative chapter path under /media/{itemId}/chapters/{index}.jpg|png.
             '#^/media/[^/]+/chapters/\d+\.(jpg|png)$#',
