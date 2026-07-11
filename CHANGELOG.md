@@ -27,7 +27,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   channel broker now passes raw binary body fragments directly instead of base64-encoding
   them. This removes the 33% byte inflation and two CPU encoding/decoding passes per
   fragment on every relayed response, reducing loopback bandwidth and CPU overhead on
-  the hub worker.
+   the hub worker.
+- **Relay proxy: `onReply()` now uses non-blocking delivery, preventing Head-Of-Line
+  blocking on slow consumers (HB-1.3)**
+  (`src/Relay/RelayProxyBridge.php`).
+  `onReply()` is the **single shared subscriber** for every in-flight request on this
+  HTTP worker, so its push must never block. The delivery strategy is now two-phase:
+  first it attempts a non-blocking push (timeout 0) directly into the consumer's
+  channel; if the channel is temporarily full (consumer draining slowly) and a
+  coroutine context is available, it spawns a dedicated fiber to perform the bounded
+  push — the stuck consumer blocks only its own fiber, not the shared subscriber. When
+  no coroutine context exists (e.g. a `pcntl` signal handler), the reply is dropped
+  immediately to avoid blocking. Previously a single slow consumer could add up to
+  45 seconds of latency to every unrelated concurrent request on the same worker.
 - **web-ui: bumped `@phlix/ui` pin from `v0.73.1` to `v0.74.0`** (F2) and rebuilt the
   committed `public/assets/app/**` bundle. Brings the stream-quality/ABR player UI
   (Track E: hls.js level API, `QualityMenu`, Auto/pinned-rung selection, visual + a11y
