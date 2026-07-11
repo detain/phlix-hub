@@ -201,6 +201,24 @@ final class Tunnel implements TunnelInterface
     private const BACKPRESSURE_WAIT_SECONDS = 30.0;
 
     /**
+     * Maximum number of high-priority frames that may be queued while waiting
+     * for the server to drain its send buffer. Prevents unbounded memory growth
+     * if backpressure persists. Control frames (CLIENT_CONNECT/DISCONNECT,
+     * HEARTBEAT, CANCEL) and HTTP_REQUEST_HEAD / HTTP_REQUEST_END frames are
+     * queued here so they are always sent before bulk BODY chunks.
+     */
+    private const MAX_HIGH_PRIORITY_QUEUE = 256;
+
+    /**
+     * High-priority frame queue. These frames (control + small JSON) are always
+     * sent before any low-priority (body-chunk) frames to prevent a large
+     * transfer from stalling browse/segment requests.
+     *
+     * @var list<RelayFrame>
+     */
+    private array $pendingHighPriorityFrames = [];
+
+    /**
      * @var int Number of clients with backpressure (send buffer full). When > 0,
      *          serverWs->pauseRecv() has been called to stop receiving from the
      *          server. Each client's onBufferDrain decrements this; when it hits 0,
@@ -521,6 +539,56 @@ final class Tunnel implements TunnelInterface
     }
 
     /**
+     * Flush the high-priority frame queue, sending all queued frames in FIFO order.
+     * If the server's send buffer is full, backpressure is applied and the
+     * queue is left intact so the next call can retry.
+     */
+    private function flushHighPriorityQueue(): void
+    {
+        while (!empty($this->pendingHighPriorityFrames)) {
+            $frame = array_shift($this->pendingHighPriorityFrames);
+            $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
+            if ($this->serverWs->send($encoded) === false) {
+                array_unshift($this->pendingHighPriorityFrames, $frame);
+                $this->handleServerSendBackpressure();
+                return;
+            }
+            $this->bytesOut += strlen($encoded);
+            if ($this->relaySessionId !== null) {
+                $this->sessionManager->recordBytesOut($this->relaySessionId, strlen($encoded));
+            }
+        }
+    }
+
+    /**
+     * Classify a frame for priority queue placement.
+     *
+     * CONTROL priority (true) — enqueued and always flushed before low-priority:
+     *   - All non-HTTP_REQUEST frames (CLIENT_CONNECT/DISCONNECT, HEARTBEAT,
+     *     CANCEL, etc.)
+     *   - HTTP_REQUEST frames carrying KIND_HEAD ('head') or KIND_END ('end')
+     *
+     * BODY priority (false) — sent after flushing the high-priority queue:
+     *   - HTTP_REQUEST KIND_BODY ('body') chunks; these are the large bulk-data
+     *     frames that could starve control traffic if not paced.
+     *
+     * @param RelayFrame $frame
+     *
+     * @return bool true = high-priority (control/JSON), false = low-priority (body)
+     */
+    private function isHighPriorityFrame(RelayFrame $frame): bool
+    {
+        if ($frame->type !== RelayFrameType::HTTP_REQUEST) {
+            return true;
+        }
+        $decoded = json_decode($frame->payload, true, 3, JSON_THROW_ON_ERROR);
+        if (!is_array($decoded) || !isset($decoded['kind'])) {
+            return true;
+        }
+        return ($decoded['kind'] ?? '') !== 'body';
+    }
+
+    /**
      * Send a frame to the server.
      *
      * @param RelayFrame $frame Frame to send.
@@ -538,7 +606,44 @@ final class Tunnel implements TunnelInterface
             return;
         }
 
+        $isHighPriority = $this->isHighPriorityFrame($frame);
+
+        // HB-3.3: When sending a LOW-PRIORITY body chunk, always drain any
+        // pending HIGH-PRIORITY control frames first. This prevents a large
+        // media transfer from stalling browse/segment requests on the same
+        // server tunnel — the fairness requirement.
+        if (!$isHighPriority) {
+            $this->flushHighPriorityQueue();
+        }
+
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
+
+        // HIGH-PRIORITY frames (control/JSON): send immediately unless server
+        // send buffer is full. In that case, queue it so it can be drained when
+        // backpressure clears (low-priority frames trigger the drain).
+        // LOW-PRIORITY frames (body chunks): sent directly after high-priority
+        // queue is drained.
+        if ($isHighPriority) {
+            if ($this->serverWs->send($encoded) === false) {
+                if (count($this->pendingHighPriorityFrames) >= self::MAX_HIGH_PRIORITY_QUEUE) {
+                    $this->logger->warning('Relay: high-priority queue full, dropping control frame', [
+                        'server_id' => $this->serverId,
+                        'tunnel_id' => $this->tunnelId,
+                        'queue_size' => count($this->pendingHighPriorityFrames),
+                    ]);
+                    $this->handleServerSendBackpressure();
+                    return;
+                }
+                $this->pendingHighPriorityFrames[] = $frame;
+                $this->handleServerSendBackpressure();
+                return;
+            }
+            $this->bytesOut += strlen($encoded);
+            if ($this->relaySessionId !== null) {
+                $this->sessionManager->recordBytesOut($this->relaySessionId, strlen($encoded));
+            }
+            return;
+        }
 
         // Apply backpressure if the server's send buffer is full. The tunnel
         // assumes reliable delivery — if we can't apply backpressure, close
@@ -548,10 +653,8 @@ final class Tunnel implements TunnelInterface
             return;
         }
 
-        // Track local byte counter for diagnostics
         $this->bytesOut += strlen($encoded);
 
-        // Record bytes sent to the server in session manager (DB)
         if ($this->relaySessionId !== null) {
             $this->sessionManager->recordBytesOut($this->relaySessionId, strlen($encoded));
         }
