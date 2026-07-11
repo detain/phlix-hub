@@ -198,9 +198,7 @@ final class ServerProxyController
         'DELETE' => [
             '/api/v1/playlists',
         ],
-        'POST' => [
-            '/api/v1/media',
-        ],
+
     ];
 
     /**
@@ -257,10 +255,13 @@ final class ServerProxyController
         ],
         'POST' => [
             // Transcode-START ONLY. Anchored (`^…$`) + single-segment `[^/]+` id
-            // so no other `/api/v1/media/{id}/*` POST (favorite/rating/like/
-            // watched/unwatched/match/poster) and no `/api/v1/admin/media/merge`
-            // can match.
+            // so no other `/api/v1/media/{id}/*` POST (favorite/rating/like_level/
+            // match/poster) and no `/api/v1/admin/media/merge` can match.
             '#^/api/v1/media/[^/]+/transcode$#',
+            // HB-3.1: watched/unwatched toggles — anchored to prevent any other
+            // sub-path (e.g. match/apply) from matching via a broad prefix.
+            '#^/api/v1/media/[^/]+/watched$#',
+            '#^/api/v1/media/[^/]+/unwatched$#',
         ],
     ];
 

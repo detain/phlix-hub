@@ -73,10 +73,10 @@ php bin/phlix migrate
 - [x] HB-2.1  request-body chunking over tunnel (enable bodied relay)  (commits: phlix-shared:216ea5d, phlix-hub:7b71c190)  DONE
 - [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  (commit: 7c30723)  DONE
 - [x] HB-2.3  cap FrameDecoder buffer  (commit: ec17c9cc)  DONE
-- [ ] HB-2.4  O(1) cancel index
-- [ ] HB-2.5  static-asset caching headers + realpath memo
-- [ ] HB-2.6  dedicated maintenance worker for reapers
-- [ ] HB-3.1  write-over-relay (PUT/DELETE/PATCH)
+- [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
+- [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE
+- [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE
+- [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix)  DONE
 - [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin
 - [ ] HB-3.3  per-channel tunnel flow control/fairness
 - [ ] HB-3.4  bandwidth accounting + per-user quotas

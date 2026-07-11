@@ -752,28 +752,22 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * The transcode pattern must NOT open any other `/api/v1/media/{id}/*`
-     * mutation, nor the admin `POST /media/merge`. Each is a real server write
-     * route that stays 403 `proxy.scope_denied` and is never forwarded.
+     * HB-3.1: watched/unwatched via POST and favorite/rating/like_level/poster
+     * via PUT are now allowed scope-wise. Only match/apply and admin routes
+     * stay 403 `proxy.scope_denied`.
      *
      * @return iterable<string, array{0: string}>
      */
-    public static function deniedSiblingMediaPostProvider(): iterable
+    public static function stillDeniedSiblingMediaPostProvider(): iterable
     {
-        yield 'favorite' => ['api/v1/media/item-123/favorite'];
-        yield 'rating' => ['api/v1/media/item-123/rating'];
-        yield 'like' => ['api/v1/media/item-123/like'];
-        yield 'watched' => ['api/v1/media/item-123/watched'];
-        yield 'unwatched' => ['api/v1/media/item-123/unwatched'];
-        yield 'poster' => ['api/v1/media/item-123/poster'];
         yield 'match apply' => ['api/v1/media/item-123/match/apply'];
         yield 'media merge (admin)' => ['media/merge'];
     }
 
     /**
-     * @dataProvider deniedSiblingMediaPostProvider
+     * @dataProvider stillDeniedSiblingMediaPostProvider
      */
-    public function test_sibling_media_post_routes_are_denied(string $path): void
+    public function test_sibling_media_post_routes_still_denied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
@@ -793,6 +787,81 @@ final class ServerProxyControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
         $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * HB-3.1: favorite, rating, like_level, and poster are allowed via PUT.
+     * They forward over the relay bridge and the server returns the result.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function allowedSiblingMediaPutProvider(): iterable
+    {
+        yield 'favorite' => ['/api/v1/media/item-123/favorite'];
+        yield 'rating' => ['/api/v1/media/item-123/rating'];
+        yield 'like_level' => ['/api/v1/media/item-123/like_level'];
+        yield 'poster' => ['/api/v1/media/item-123/poster'];
+    }
+
+    /**
+     * @dataProvider allowedSiblingMediaPutProvider
+     */
+    public function test_sibling_media_put_routes_are_allowed(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = $d;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('PUT', 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(504, $response->statusCode, "PUT /{$path} must be forwarded");
+        $this->assertIsArray($forwarded, "PUT /{$path} must reach the relay bridge");
+        $this->assertSame($path, $forwarded['path']);
+        $this->assertSame('PUT', $forwarded['method']);
+    }
+
+    /**
+     * HB-3.1: watched and unwatched are allowed via POST.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function allowedSiblingMediaPostWatchedProvider(): iterable
+    {
+        yield 'watched' => ['/api/v1/media/item-123/watched'];
+        yield 'unwatched' => ['/api/v1/media/item-123/unwatched'];
+    }
+
+    /**
+     * @dataProvider allowedSiblingMediaPostWatchedProvider
+     */
+    public function test_sibling_media_post_watched_unwatched_are_allowed(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = $d;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(504, $response->statusCode, "POST /{$path} must be forwarded");
+        $this->assertIsArray($forwarded, "POST /{$path} must reach the relay bridge");
+        $this->assertSame($path, $forwarded['path']);
+        $this->assertSame('POST', $forwarded['method']);
     }
 
     /**
