@@ -13,6 +13,7 @@ namespace Phlix\Hub\Relay;
 
 use Channel\Client as ChannelClient;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Swoole\Coroutine;
 use Throwable;
 use Workerman\Coroutine\Channel;
 
@@ -486,12 +487,18 @@ final class RelayProxyBridge
      *
      * Wired as the {@see replyEvent()} subscriber in the worker's
      * `onWorkerStart`. This is the SINGLE shared subscriber for every in-flight
-     * request on this worker (see {@see self::REPLY_PUSH_TIMEOUT_SECONDS}), so
-     * the push is bounded: if it cannot complete within the bound — the
-     * consumer is gone/stuck and its channel is either closed (push fails
-     * immediately) or genuinely full for too long — the reply is dropped and
-     * this request id stops being tracked, rather than stalling delivery to
-     * every OTHER in-flight request on this worker indefinitely.
+     * request on this worker, so the push must NEVER block indefinitely or for
+     * a long bounded time — doing so would stall delivery of every OTHER
+     * in-flight request while the single shared subscriber waits on one stuck
+     * consumer (Head-Of-Line blocking).
+     *
+     * Strategy: push with timeout 0 (non-blocking). If the channel is
+     * temporarily full (consumer is slow but not gone), hand just that
+     * delivery to its own fiber with the full timeout — the stuck consumer
+     * blocks its own fiber, not the shared subscriber. If the channel is
+     * closed (consumer gone), the push fails immediately (timeout-0 on a
+     * closed channel returns false), and we drop the reply and untrack the
+     * request.
      *
      * @param mixed $data The published reply/phase payload.
      *
@@ -518,15 +525,59 @@ final class RelayProxyBridge
         }
 
         /** @var array<string, mixed> $data */
-        if ($channel->push($data, self::REPLY_PUSH_TIMEOUT_SECONDS) === false) {
-            // The consumer never drained (closed channel, or genuinely stuck
-            // beyond the bound) — drop this payload and stop tracking the
-            // request so any further replies for it are dropped immediately
-            // too, instead of retrying the same doomed push.
-            unset($this->pending[$requestId]);
-            $this->logger->warning('Relay proxy: dropped reply — consumer channel unavailable', [
-                'request_id' => $requestId,
-            ]);
+        // Try non-blocking first so the shared subscriber never stalls.
+        if ($channel->push($data, 0.0) === true) {
+            return;
         }
+
+        // Channel is full (or closed). If we can create a fiber, hand this
+        // one delivery to its own fiber so it can block on the full channel
+        // without blocking the shared subscriber. If no coroutine context is
+        // available (cid < 0, e.g. pcntl signal handler), fall through to the
+        // drop path — we cannot safely block there.
+        $cid = Coroutine::getCid();
+        if ($cid > 0) {
+            Coroutine::create(function () use ($channel, $data, $requestId): void {
+                $this->deliverReplyInFiber($channel, $data, $requestId);
+            });
+            return;
+        }
+
+        // No coroutine context — drop to avoid blocking the signal handler.
+        $this->dropReply($requestId);
+    }
+
+    /**
+     * Push a reply from within a dedicated fiber.
+     *
+     * This fiber blocks on the full channel so the stuck consumer's slow
+     * drain only delays its own replies, not other requests' replies.
+     *
+     * @param Channel                 $channel  The consumer's channel.
+     * @param array<string, mixed>     $data     The reply/phase payload.
+     * @param string                  $requestId Used for logging if drop occurs.
+     *
+     * @return void
+     */
+    private function deliverReplyInFiber(Channel $channel, array $data, string $requestId): void
+    {
+        if ($channel->push($data, self::REPLY_PUSH_TIMEOUT_SECONDS) === false) {
+            $this->dropReply($requestId);
+        }
+    }
+
+    /**
+     * Drop a reply and stop tracking its request.
+     *
+     * @param string $requestId The request to stop tracking.
+     *
+     * @return void
+     */
+    private function dropReply(string $requestId): void
+    {
+        unset($this->pending[$requestId]);
+        $this->logger->warning('Relay proxy: dropped reply — consumer channel unavailable', [
+            'request_id' => $requestId,
+        ]);
     }
 }
