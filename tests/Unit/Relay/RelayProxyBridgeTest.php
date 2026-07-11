@@ -500,11 +500,19 @@ final class RelayProxyBridgeTest extends TestCase
      */
     public function test_on_reply_spawns_fiber_when_channel_full(): void
     {
-        $fakeChannel = new class (1) extends Channel {
+        $fakeChannel = new class (false) extends Channel {
             /** @var list<float> */
             public array $pushTimeouts = [];
             /** @var int */
             public int $pushCount = 0;
+            /** @var bool */
+            public bool $pushResult;
+
+            public function __construct(bool $pushResult = false)
+            {
+                $this->pushResult = $pushResult;
+                parent::__construct(1);
+            }
 
             public function push(mixed $data, float $timeout = -1): bool
             {
@@ -529,7 +537,6 @@ final class RelayProxyBridgeTest extends TestCase
         // triggering the drop.
         // Note: in plain PHPUnit the fiber won't actually run (no Swoole loop),
         // but the code path up to the fiber creation is exercised.
-        $fakeChannel->pushResult = false; // fiber's push fails → dropped
         $bridge->onReply(['request_id' => 'req-1', 'phase' => 'body', 'body' => 'x']);
 
         // Phase 1: non-blocking probe
