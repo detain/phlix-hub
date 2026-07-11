@@ -63,13 +63,13 @@ php bin/phlix migrate
 
 ## Progress
 - [ ] HB-0.1  restore idle reaper (remove lastFrameAt self-refresh)
-- [ ] HB-0.2  wire invite-link redeem route
+- [x] HB-0.2  wire invite-link redeem route  (commits: f057aaf, 3a7067d)  DONE
 - [ ] HB-0.3  short-circuit HEAD over relay proxy
 - [x] HB-0.4  add subdomain to ServerInfoDto, drop redundant query  (commits: phlix-shared:008fcc1, phlix-hub:489ec7d)  DONE
-- [ ] HB-1.1  drop base64 on internal channel-broker body path
-- [ ] HB-1.2  raw tunnel data-plane backpressure
+- [x] HB-1.1  drop base64 on internal channel-broker body path  (commits: e7ef677, 49913e7, d16b567)  DONE
+- [x] HB-1.2  raw tunnel data-plane backpressure  (commits: 2a2b421, 0aed3e0, b1140b1)  DONE
 - [x] HB-1.3  non-blocking onReply delivery  (commits: e3cb349, 8ea42ae, 8d45c85)  DONE
-- [ ] HB-1.4  lean owner/status queries on hot paths
+- [x] HB-1.4  lean owner/status queries on hot paths  (commits: c0461ed, 2f81f37, e5ce01e)  DONE
 - [ ] HB-2.1  request-body chunking over tunnel (enable bodied relay)
 - [ ] HB-2.2  validate HELLO JWT before displacing incumbent tunnel
 - [ ] HB-2.3  cap FrameDecoder buffer

@@ -1528,7 +1528,11 @@ final class Application
         $syncplayPort = is_int($syncplayPortRaw)
             ? $syncplayPortRaw
             : (int) (is_numeric($syncplayPortRaw) ? $syncplayPortRaw : SyncPlayRelayWorker::DEFAULT_PORT);
-        $syncplayWorker = new SyncPlayRelayWorker($syncplayPort);
+        $syncplayWorker = new SyncPlayRelayWorker(
+            $syncplayPort,
+            1,
+            $this->container,
+        );
         $syncplayWorker->start();
 
         Worker::runAll();

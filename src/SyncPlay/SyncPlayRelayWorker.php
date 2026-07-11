@@ -11,8 +11,11 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\SyncPlay;
 
+use Psr\Container\ContainerInterface;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Hub\ClientRelayTokenService;
+use Phlix\Hub\Hub\ServerInfoHandler;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -59,12 +62,14 @@ final class SyncPlayRelayWorker
     private static array $rooms = [];
 
     /**
-     * @param int $port  SyncPlay WS port (default 8804).
-     * @param int $count Number of worker processes.
+     * @param int               $port    SyncPlay WS port (default 8804).
+     * @param int               $count   Number of worker processes.
+     * @param ContainerInterface $container PSR-11 container for lazy service access.
      */
     public function __construct(
-        private readonly int $port = self::DEFAULT_PORT,
-        private readonly int $count = 1,
+        private readonly int $port,
+        private readonly int $count,
+        private readonly ContainerInterface $container,
     ) {
     }
 
@@ -111,6 +116,9 @@ final class SyncPlayRelayWorker
     /**
      * Handle WebSocket upgrade for SyncPlay client.
      *
+     * SV-4.7: Requires valid relay token + server ownership. Unauthenticated
+     * clients may connect but cannot join rooms or control playback.
+     *
      * @param TcpConnection    $connection Client connection.
      * @param WorkermanRequest $request    WS upgrade request.
      *
@@ -133,19 +141,90 @@ final class SyncPlayRelayWorker
         $connId = spl_object_id($connection);
         $clientId = self::generateClientId();
 
-        // Create client state
+        // SV-4.7: Authenticate via relay token (same scheme as ClientRelayWorker).
+        $token = $_GET['token'] ?? null;
+        $userId = null;
+        if (is_string($token) && $token !== '') {
+            $userId = $this->validateClientAuth($token, $serverId);
+        }
+
+        if ($userId === null) {
+            $logger->warning('SyncPlay: rejected connection, invalid or missing relay token', [
+                'server_id' => $serverId,
+            ]);
+            $this->rejectUnauthorized($connection);
+            return;
+        }
+
+        // Create client state with authenticated userId
         $client = new SyncPlayClient(
             $connection,
             $serverId,
             $clientId,
+            $userId,
         );
 
         self::$clients[$connId] = $client;
 
-        $logger->info('SyncPlay: client connected', [
+        $logger->info('SyncPlay: client connected (authenticated)', [
             'client_id' => $clientId,
             'server_id' => $serverId,
+            'user_id' => $userId,
         ]);
+    }
+
+    /**
+     * Validate a client relay token for SyncPlay access.
+     *
+     * Mirrors the validation in {@see ClientRelayWorker::validateClientAuth()}.
+     *
+     * @param string $token    The relay token from query param.
+     * @param string $serverId The server_id the client wants to join.
+     *
+     * @return string|null The authenticated user id, or null on failure.
+     */
+    private function validateClientAuth(string $token, string $serverId): ?string
+    {
+        // Fetch auth services from container lazily (same pattern as ClientRelayWorker)
+        /** @var ClientRelayTokenService $tokenService */
+        $tokenService = $this->container->get(ClientRelayTokenService::class);
+        /** @var ServerInfoHandler $serverInfo */
+        $serverInfo = $this->container->get(ServerInfoHandler::class);
+
+        // Validate token with ClientRelayTokenService
+        $bound = $tokenService->validate($token);
+        if ($bound === null) {
+            return null;
+        }
+
+        // Token must be scoped to the requested server
+        if ($bound['server_id'] !== $serverId) {
+            return null;
+        }
+
+        // Re-confirm current ownership: the bound user must still own the server
+        $owner = $serverInfo->getOwnerAndStatus($serverId);
+        if ($owner === null) {
+            return null;
+        }
+
+        if ($owner['userId'] !== $bound['user_id']) {
+            return null;
+        }
+
+        return $bound['user_id'];
+    }
+
+    /**
+     * Reject an unauthenticated connection.
+     *
+     * @param TcpConnection $connection The connection to close.
+     *
+     * @return void
+     */
+    private function rejectUnauthorized(TcpConnection $connection): void
+    {
+        $connection->close('', true);
     }
 
     /**
@@ -246,6 +325,16 @@ final class SyncPlayRelayWorker
      */
     private function handleGroupJoin(SyncPlayClient $client, array $message): void
     {
+        // SV-4.7: Require authentication to join a SyncPlay room.
+        if ($client->userId === null) {
+            $logger = LoggerFactory::get(LogChannels::RELAY);
+            $logger->warning('SyncPlay: rejected group_join from unauthenticated client', [
+                'client_id' => $client->clientId,
+            ]);
+            $client->connection->close('', true);
+            return;
+        }
+
         $room = $message['room'] ?? null;
         if ($room === null) {
             return;
