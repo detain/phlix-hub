@@ -202,9 +202,10 @@ final class InviteLinkController
     }
 
     /**
-     * `POST /api/v1/me/invite-links/{token}/redeem` — redeem an invite link.
+     * `POST /api/v1/me/invite-links/{token}/redeem` — redeem an invite link and create a library share.
      *
      * @param array<string, string> $params Route parameters including `token`.
+     * @return Response 201 with the created LibraryShare payload, or 401/400/404/410 on failure.
      */
     public function redeem(Request $request, array $params): Response
     {

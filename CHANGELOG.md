@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **Invite links: `POST /api/v1/me/invite-links/{token}/redeem` — accept an invite link and create a library share**
+  (`src/Http/Controllers/InviteLinkController.php`, `src/Application.php`). An authenticated user can
+  redeem a valid, unexpired invite link token and receive a library share grant for the invited
+  library and permission level. Double-redeem (exhausted or expired token) is rejected with 410.
+  The endpoint is auth-gated via `AuthMiddleware` and delegates to the existing
+  `InviteLinkHandler::redeemInviteLink()` handler.
+
 ### Changed
 - **web-ui: bumped `@phlix/ui` pin from `v0.73.1` to `v0.74.0`** (F2) and rebuilt the
   committed `public/assets/app/**` bundle. Brings the stream-quality/ABR player UI

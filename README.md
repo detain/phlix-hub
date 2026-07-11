@@ -648,6 +648,7 @@ routes require a `Bearer` access token (or session cookie for SSR pages).
 | `POST`/`GET` | `/api/v1/me/shares` | Create / list library shares |
 | `PATCH`/`DELETE` | `/api/v1/me/shares/{id}` | Update / delete a share |
 | `POST`/`GET` | `/api/v1/me/invite-links` | Create / list invite links |
+| `POST` | `/api/v1/me/invite-links/{token}/redeem` | Redeem an invite link and create a library share (protected) |
 | `GET` | `/invite/{token}` | Accept an invite (public page) |
 | `POST`/`GET` | `/api/v1/me/requests` | Create / list media requests |
 | `GET` | `/api/v1/admin/requests` | Admin request queue |
