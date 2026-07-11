@@ -10,6 +10,7 @@ use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 class FrameDecoderTest extends TestCase
 {
@@ -270,5 +271,33 @@ class FrameDecoderTest extends TestCase
         $this->expectExceptionCode(1011);
 
         $this->decoder->decode($invalidFrame);
+    }
+
+    public function test_buffer_overflow_closes_tunnel(): void
+    {
+        $decoder = new FrameDecoder();
+
+        // Start with partial header indicating max-length payload (7 bytes header, len=65535)
+        // This simulates an attacker sending dribbling data with a large length prefix
+        $partialHeader = pack('N', 1) . chr(RelayFrameType::DATA->value) . pack('n', 65535);
+        $decoder->decode($partialHeader);
+
+        // Feed small chunks that won't complete the frame - use 0x01 bytes which don't
+        // form a valid frame type at any offset, allowing buffer to accumulate
+        $chunk = str_repeat("\x01", 5000);
+
+        // Keep feeding until buffer exceeds 128KB (MAX_BUFFER_SIZE = 131072)
+        // The RuntimeException should be thrown when buffer size exceeds the limit
+        $exceptionThrown = false;
+        while (!$exceptionThrown) {
+            try {
+                $decoder->decode($chunk);
+            } catch (RuntimeException $e) {
+                $this->assertSame('invalid_frame', $e->getMessage());
+                $exceptionThrown = true;
+            }
+        }
+
+        $this->assertTrue($exceptionThrown, 'RuntimeException should be thrown when buffer exceeds 128KB');
     }
 }

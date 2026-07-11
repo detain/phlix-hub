@@ -39,6 +39,11 @@ use function unpack;
 final class FrameDecoder implements RelayWireCodecInterface
 {
     /**
+     * Maximum buffer size (128 KB = 2× max frame size).
+     */
+    private const MAX_BUFFER_SIZE = 131072;
+
+    /**
      * Internal buffer for accumulating incoming bytes.
      *
      * @var string
@@ -102,6 +107,10 @@ final class FrameDecoder implements RelayWireCodecInterface
     {
         // Append new data to buffer
         $this->buffer .= $bytes;
+
+        if (strlen($this->buffer) > self::MAX_BUFFER_SIZE) {
+            throw new \RuntimeException('invalid_frame');
+        }
 
         // Minimum frame is 7 bytes: 4 (seq) + 1 (type) + 2 (len) = 7
         if (strlen($this->buffer) < 7) {
