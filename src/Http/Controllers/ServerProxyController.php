@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\ConnectionResponseSink;
 use Phlix\Hub\Relay\RelayProxyBridge;
@@ -335,10 +336,11 @@ final class ServerProxyController
     ];
 
     /**
-     * @param ServerInfoHandler $serverInfo Resolves server ownership + relay status.
-     * @param RelayProxyBridge  $bridge     Cross-process bridge to the relay worker.
-     * @param StructuredLogger  $logger     Relay logger.
-     * @param int               $timeoutSeconds Default seconds to await the server
+     * @param ServerInfoHandler    $serverInfo    Resolves server ownership + relay status.
+     * @param RelayProxyBridge     $bridge        Cross-process bridge to the relay worker.
+     * @param StructuredLogger     $logger        Relay logger.
+     * @param RelaySessionManager  $sessionManager Tracks per-user bandwidth quotas.
+     * @param int                  $timeoutSeconds Default seconds to await the server
      *        response for small/quick reads (JSON browse, transcode-job status,
      *        the transcode-START POST). GET/HEAD under a playback-read prefix
      *        ({@see self::STREAMING_TIMEOUT_PREFIXES}) — HLS/DASH segments AND
@@ -352,6 +354,7 @@ final class ServerProxyController
         private readonly ServerInfoHandler $serverInfo,
         private readonly RelayProxyBridge $bridge,
         private readonly StructuredLogger $logger,
+        private readonly RelaySessionManager $sessionManager,
         private readonly int $timeoutSeconds = RelayProxyProtocol::DEFAULT_TIMEOUT_SECONDS,
     ) {
     }
@@ -417,6 +420,19 @@ final class ServerProxyController
                 'error' => 'Server offline',
                 'code' => 'server.offline',
                 'message' => 'Server is offline.',
+            ]);
+        }
+
+        // HB-3.4: check per-user bandwidth quota before forwarding.
+        // Best-effort check: rejects users who are already over their monthly
+        // upload cap. A refined per-request estimate may be added later.
+        $quotaCheck = $this->sessionManager->checkUserQuota($userId, 0);
+        if (!$quotaCheck['allowed']) {
+            return (new Response())->status(503)->json([
+                'error' => [
+                    'code' => 'quota.exceeded',
+                    'message' => $quotaCheck['reason'] ?? 'Bandwidth quota exceeded.',
+                ],
             ]);
         }
 
@@ -486,6 +502,10 @@ final class ServerProxyController
             );
         }
 
+        // HB-3.4: record outbound bytes before sending the request.
+        // Headers are ~500-2000 bytes; using a conservative estimate.
+        $this->sessionManager->recordUserBandwidth($userId, 0, strlen($body) + 1024);
+
         $reply = $this->bridge->request(
             $serverId,
             $request->method,
@@ -502,6 +522,14 @@ final class ServerProxyController
                 'code' => 'gateway.timeout',
                 'message' => 'The server did not respond over the relay in time.',
             ]);
+        }
+
+        // HB-3.4: record inbound bytes after receiving the response.
+        // At this point $reply is array (null case returned early at line 519).
+        // Use array_key_exists to satisfy PHPStan without triggering
+        // "already narrowed" while also verifying the structure.
+        if (array_key_exists('body', $reply) && is_string($reply['body'])) {
+            $this->sessionManager->recordUserBandwidth($userId, strlen($reply['body']) + 512, 0);
         }
 
         return $this->buildResponse($reply);

@@ -481,4 +481,166 @@ class RelaySessionManager
     {
         return Ids::uuidV4();
     }
+
+    /**
+     * Record per-user bandwidth usage for the current calendar month.
+     *
+     * Uses INSERT ... ON DUPLICATE KEY UPDATE so the row is created on the
+     * first write of the period and subsequently updated in-place.
+     *
+     * @param string $userId   Hub user UUID.
+     * @param int    $bytesIn  Bytes received from the server (downloaded by user).
+     * @param int    $bytesOut Bytes sent to the server (uploaded by user).
+     *
+     * @return void
+     */
+    public function recordUserBandwidth(string $userId, int $bytesIn, int $bytesOut): void
+    {
+        $periodStart = $this->currentPeriodStart();
+
+        $this->db->query(
+            'INSERT INTO relay_user_quotas (user_id, period_start, bytes_in, bytes_out)
+             VALUES (:user_id, :period_start, :bytes_in, :bytes_out)
+             ON DUPLICATE KEY UPDATE
+                 bytes_in = bytes_in + VALUES(bytes_in),
+                 bytes_out = bytes_out + VALUES(bytes_out)',
+            [
+                'user_id' => $userId,
+                'period_start' => $periodStart,
+                'bytes_in' => $bytesIn,
+                'bytes_out' => $bytesOut,
+            ],
+        );
+    }
+
+    /**
+     * Get the current month's bandwidth record for a user.
+     *
+     * @param string $userId Hub user UUID.
+     *
+     * @return array{bytes_in: int, bytes_out: int, quota_bytes_in: int, quota_bytes_out: int}|null
+     *                      Null when no record exists for the current period.
+     */
+    public function getUserBandwidth(string $userId): ?array
+    {
+        $periodStart = $this->currentPeriodStart();
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT bytes_in, bytes_out, quota_bytes_in, quota_bytes_out
+             FROM relay_user_quotas
+             WHERE user_id = :user_id AND period_start = :period_start
+             LIMIT 1',
+            [
+                'user_id' => $userId,
+                'period_start' => $periodStart,
+            ],
+        );
+
+        if ($rows === []) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $row */
+        $row = $rows[0];
+
+        return [
+            'bytes_in' => is_numeric($row['bytes_in'] ?? null) ? (int) $row['bytes_in'] : 0,
+            'bytes_out' => is_numeric($row['bytes_out'] ?? null) ? (int) $row['bytes_out'] : 0,
+            'quota_bytes_in' => is_numeric($row['quota_bytes_in'] ?? null) ? (int) $row['quota_bytes_in'] : 0,
+            'quota_bytes_out' => is_numeric($row['quota_bytes_out'] ?? null) ? (int) $row['quota_bytes_out'] : 0,
+        ];
+    }
+
+    /**
+     * Set or update the bandwidth quota for a user for the current month.
+     *
+     * @param string $userId        Hub user UUID.
+     * @param int    $quotaBytesIn  Monthly download cap (0 = unlimited).
+     * @param int    $quotaBytesOut Monthly upload cap (0 = unlimited).
+     *
+     * @return void
+     */
+    public function setUserQuota(string $userId, int $quotaBytesIn, int $quotaBytesOut): void
+    {
+        $periodStart = $this->currentPeriodStart();
+
+        $this->db->query(
+            'INSERT INTO relay_user_quotas (user_id, period_start, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out)
+             VALUES (:user_id, :period_start, 0, 0, :quota_bytes_in, :quota_bytes_out)
+             ON DUPLICATE KEY UPDATE
+                 quota_bytes_in = VALUES(quota_bytes_in),
+                 quota_bytes_out = VALUES(quota_bytes_out)',
+            [
+                'user_id' => $userId,
+                'period_start' => $periodStart,
+                'quota_bytes_in' => $quotaBytesIn,
+                'quota_bytes_out' => $quotaBytesOut,
+            ],
+        );
+    }
+
+    /**
+     * Check whether a user is currently within their bandwidth quota.
+     *
+     * For the initial implementation the check is best-effort: if the user
+     * has no quota row or both quotas are 0 (unlimited), they are allowed.
+     * A more refined check accounting for the estimated bytes of an in-flight
+     * request may be added later.
+     *
+     * @param string $userId          Hub user UUID.
+     * @param int    $additionalBytesOut Ignored in the simplified implementation.
+     *
+     * @return array{allowed: bool, reason: string|null}
+     */
+    public function checkUserQuota(string $userId, int $additionalBytesOut = 0): array
+    {
+        $periodStart = $this->currentPeriodStart();
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT bytes_out, quota_bytes_out FROM relay_user_quotas
+             WHERE user_id = :user_id AND period_start = :period_start
+             LIMIT 1',
+            [
+                'user_id' => $userId,
+                'period_start' => $periodStart,
+            ],
+        );
+
+        // No record means no quota set — allow.
+        if ($rows === []) {
+            return ['allowed' => true, 'reason' => null];
+        }
+
+        /** @var array<string, mixed> $row */
+        $row = $rows[0];
+
+        $bytesOut = is_numeric($row['bytes_out'] ?? null) ? (int) $row['bytes_out'] : 0;
+        $quotaBytesOut = is_numeric($row['quota_bytes_out'] ?? null) ? (int) $row['quota_bytes_out'] : 0;
+
+        // Unlimited when both caps are 0.
+        if ($quotaBytesOut === 0) {
+            return ['allowed' => true, 'reason' => null];
+        }
+
+        if ($bytesOut >= $quotaBytesOut) {
+            return [
+                'allowed' => false,
+                'reason' => 'User has reached their monthly bandwidth quota.',
+            ];
+        }
+
+        return ['allowed' => true, 'reason' => null];
+    }
+
+    /**
+     * Return the first day of the current calendar month as a DATE string.
+     *
+     * @return string YYYY-MM-DD format.
+     */
+    private function currentPeriodStart(): string
+    {
+        return date('Y-m-01');
+    }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Request;
@@ -62,9 +63,16 @@ final class ServerProxyControllerTest extends TestCase
         return $req;
     }
 
-    private function controller(ServerInfoHandler $info, RelayProxyBridge $bridge): ServerProxyController
+    private function controller(ServerInfoHandler $info, RelayProxyBridge $bridge, ?RelaySessionManager $sessionManager = null): ServerProxyController
     {
-        return new ServerProxyController($info, $bridge, $this->createMock(StructuredLogger::class));
+        if ($sessionManager === null) {
+            $sessionManager = $this->createMock(RelaySessionManager::class);
+            // Default: quota check always allows (quota not exceeded).
+            $sessionManager->method('checkUserQuota')->willReturn(
+                ['allowed' => true, 'reason' => null],
+            );
+        }
+        return new ServerProxyController($info, $bridge, $this->createMock(StructuredLogger::class), $sessionManager);
     }
 
     private function bridge(?callable $publisher): RelayProxyBridge
@@ -1294,6 +1302,7 @@ final class ServerProxyControllerTest extends TestCase
             $this->createMock(ServerInfoHandler::class),
             $this->bridge(static fn () => null),
             $this->createMock(StructuredLogger::class),
+            $this->createMock(RelaySessionManager::class),
             90,
         );
 
@@ -1315,6 +1324,7 @@ final class ServerProxyControllerTest extends TestCase
             $this->createMock(ServerInfoHandler::class),
             $this->bridge(static fn () => null),
             $this->createMock(StructuredLogger::class),
+            $this->createMock(RelaySessionManager::class),
             10,
         );
 

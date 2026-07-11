@@ -368,4 +368,148 @@ final class RelaySessionManagerTest extends TestCase
         self::assertStringContainsString("close_reason = :reason", $calls[1]['sql']);
         self::assertSame('normal', $calls[1]['params']['reason']);
     }
+
+    public function testRecordUserBandwidthAccumulates(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): void {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        $manager->recordUserBandwidth('user-abc', 2048, 512);
+
+        self::assertStringContainsString('INSERT INTO relay_user_quotas', $capturedSql);
+        self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
+        self::assertStringContainsString('bytes_in = bytes_in + VALUES(bytes_in)', $capturedSql);
+        self::assertStringContainsString('bytes_out = bytes_out + VALUES(bytes_out)', $capturedSql);
+
+        self::assertSame('user-abc', $capturedParams['user_id']);
+        self::assertSame(date('Y-m-01'), $capturedParams['period_start']);
+        self::assertSame(2048, $capturedParams['bytes_in']);
+        self::assertSame(512, $capturedParams['bytes_out']);
+    }
+
+    public function testGetUserBandwidthReturnsCurrentMonthNoData(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        // No data → null
+        $db->method('query')->willReturn([]);
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->getUserBandwidth('user-no-data');
+        self::assertNull($result);
+    }
+
+    public function testGetUserBandwidthReturnsCurrentMonthWithData(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        // With data → correct values
+        $db->method('query')->willReturn([
+            [
+                'bytes_in' => '1024000',
+                'bytes_out' => '512000',
+                'quota_bytes_in' => '5242880',
+                'quota_bytes_out' => '2097152',
+            ],
+        ]);
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->getUserBandwidth('user-with-data');
+
+        self::assertNotNull($result);
+        self::assertSame(1024000, $result['bytes_in']);
+        self::assertSame(512000, $result['bytes_out']);
+        self::assertSame(5242880, $result['quota_bytes_in']);
+        self::assertSame(2097152, $result['quota_bytes_out']);
+    }
+
+    public function testSetUserQuota(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): void {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        $manager->setUserQuota('user-xyz', 10485760, 5242880);
+
+        self::assertStringContainsString('INSERT INTO relay_user_quotas', $capturedSql);
+        self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
+        self::assertStringContainsString('quota_bytes_in = VALUES(quota_bytes_in)', $capturedSql);
+        self::assertStringContainsString('quota_bytes_out = VALUES(quota_bytes_out)', $capturedSql);
+
+        self::assertSame('user-xyz', $capturedParams['user_id']);
+        self::assertSame(date('Y-m-01'), $capturedParams['period_start']);
+        self::assertSame(10485760, $capturedParams['quota_bytes_in']);
+        self::assertSame(5242880, $capturedParams['quota_bytes_out']);
+    }
+
+    public function testCheckUserQuotaUnlimitedIsAllowed(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        // No quota row at all → unlimited → allowed
+        $db->method('query')->willReturn([]);
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->checkUserQuota('user-no-quota');
+
+        self::assertTrue($result['allowed']);
+        self::assertNull($result['reason']);
+    }
+
+    public function testCheckUserQuotaOverLimitIsDenied(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        // bytes_out >= quota_bytes_out → denied
+        $db->method('query')->willReturn([
+            ['bytes_out' => '5242880', 'quota_bytes_out' => '5242880'],
+        ]);
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->checkUserQuota('user-over', 0);
+
+        self::assertFalse($result['allowed']);
+        self::assertNotNull($result['reason']);
+        self::assertStringContainsString('quota', $result['reason']);
+    }
+
+    public function testCheckUserQuotaUnderLimitIsAllowed(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        // bytes_out < quota_bytes_out → allowed
+        $db->method('query')->willReturn([
+            ['bytes_out' => '1048576', 'quota_bytes_out' => '5242880'],
+        ]);
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->checkUserQuota('user-under', 0);
+
+        self::assertTrue($result['allowed']);
+        self::assertNull($result['reason']);
+    }
 }

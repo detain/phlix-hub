@@ -535,10 +535,12 @@ final class HubServicesProvider implements ServiceProviderInterface
             ServerProxyController::class => factory(static function (
                 ServerInfoHandler $serverInfo,
                 RelayProxyBridge $bridge,
+                RelaySessionManager $sessionManager,
             ): ServerProxyController {
-                return new ServerProxyController($serverInfo, $bridge, LoggerFactory::get(LogChannels::RELAY));
+                return new ServerProxyController($serverInfo, $bridge, LoggerFactory::get(LogChannels::RELAY), $sessionManager);
             })->parameter('serverInfo', get(ServerInfoHandler::class))
-                ->parameter('bridge', get(RelayProxyBridge::class)),
+                ->parameter('bridge', get(RelayProxyBridge::class))
+                ->parameter('sessionManager', get(RelaySessionManager::class)),
 
             HubSettingsController::class => factory(static function (
                 HubSettingsRepository $settings,

@@ -76,10 +76,10 @@ php bin/phlix migrate
 - [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
 - [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE
 - [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE
-- [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix)  DONE
+- [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE
 - [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin
-- [ ] HB-3.3  per-channel tunnel flow control/fairness
-- [ ] HB-3.4  bandwidth accounting + per-user quotas
+- [x] HB-3.3  per-channel tunnel flow control/fairness  (commit: cbc29cc)  DONE
+- [x] HB-3.4  bandwidth accounting + per-user quotas  (commit: TBD)  DONE
 - [ ] HB-4.1  relay observability metrics
 - [ ] HB-4.2  client_relay_tokens retention sweep
 - [ ] HB-4.3  server_heartbeats growth control
