@@ -40,6 +40,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   no coroutine context exists (e.g. a `pcntl` signal handler), the reply is dropped
   immediately to avoid blocking. Previously a single slow consumer could add up to
   45 seconds of latency to every unrelated concurrent request on the same worker.
+- **Hot-path queries: lean `getOwnerAndStatus()` replaces heavier `getServerInfo()` + `findById()` on relay and auth paths (HB-1.4)**
+  (`src/Hub/ServerInfoHandler.php`, `src/Http/Middleware/AuthMiddleware.php`,
+  `src/Auth/UserRepository.php`, `src/Relay/ClientRelayWorker.php`,
+  `src/Http/Controllers/ServerProxyController.php`). The relay and auth hot paths
+  no longer load a full `ServerInfo` with all columns or a full `User` record when
+  only ownership and online status are needed:
+  - `ServerInfoHandler::getOwnerAndStatus(serverId)` queries only `id`, `user_id`,
+    and `status` plus an `EXISTS(SELECT 1 FROM relay_sessions …)` check — no
+    `COUNT(*)` subquery, no joining the `user` table.
+  - `AuthMiddleware` replaced its `UserRepository::findById()` call with a new
+    `userExists(userId)` that only checks `SELECT 1 FROM users WHERE id = ?` with
+    a 5-second TTL cache — the user record itself is never needed on these paths.
+  - `getServerInfo()` is retained for the dashboard and server-detail views where
+    the full object is genuinely required.
+  This reduces per-request DB payload on every heartbeat, client-mount, and
+  proxied request where ownership is checked.
 - **web-ui: bumped `@phlix/ui` pin from `v0.73.1` to `v0.74.0`** (F2) and rebuilt the
   committed `public/assets/app/**` bundle. Brings the stream-quality/ABR player UI
   (Track E: hls.js level API, `QualityMenu`, Auto/pinned-rung selection, visual + a11y
