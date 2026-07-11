@@ -109,7 +109,7 @@ final class RelayProxyManagerTest extends TestCase
         // Authoritative registry verdict: the body carries the distinct
         // `server.no_tunnel` code so a stale `relay_active=1` cannot be mistaken
         // for a real forward — it fails fast here instead of timing out (504).
-        $body = base64_decode((string) $this->published[0]['data']['body_b64'], true);
+        $body = $this->published[0]['data']['body'];
         $this->assertIsString($body);
         /** @var array<string, mixed> $decoded */
         $decoded = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
@@ -149,7 +149,7 @@ final class RelayProxyManagerTest extends TestCase
 
         $this->assertCount(1, $this->published);
         $this->assertSame(503, $this->published[0]['data']['status']);
-        $body = base64_decode((string) $this->published[0]['data']['body_b64'], true);
+        $body = $this->published[0]['data']['body'];
         $this->assertIsString($body);
         /** @var array<string, mixed> $decoded */
         $decoded = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
@@ -260,7 +260,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame('reply.1', $reply['event']);
         $this->assertSame(200, $reply['data']['status']);
         $this->assertSame(['Content-Type' => 'application/json'], $reply['data']['headers']);
-        $this->assertSame('{"ok":true}!!', base64_decode((string) $reply['data']['body_b64'], true));
+        $this->assertSame('{"ok":true}!!', $reply['data']['body']);
     }
 
     public function test_streaming_response_publishes_phased_frames_without_buffering(): void
@@ -330,12 +330,12 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame('6', $this->published[0]['data']['headers']['Content-Length'] ?? null);
 
         $this->assertSame('body', $this->published[1]['data']['phase']);
-        $this->assertSame('foo', base64_decode((string) $this->published[1]['data']['body_b64'], true));
+        $this->assertSame('foo', $this->published[1]['data']['body']);
         $this->assertSame('body', $this->published[2]['data']['phase']);
-        $this->assertSame('bar', base64_decode((string) $this->published[2]['data']['body_b64'], true));
+        $this->assertSame('bar', $this->published[2]['data']['body']);
 
         $this->assertSame('end', $this->published[3]['data']['phase']);
-        $this->assertArrayNotHasKey('body_b64', $this->published[3]['data']);
+        $this->assertArrayNotHasKey('body', $this->published[3]['data']);
 
         // Every phase carries the HTTP worker's request id for routing.
         foreach ($this->published as $entry) {

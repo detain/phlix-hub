@@ -205,7 +205,7 @@ final class ServerProxyControllerTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 200,
                 'headers' => ['Content-Type' => 'application/json', 'Transfer-Encoding' => 'chunked'],
-                'body_b64' => base64_encode('{"libraries":[]}'),
+                'body' => '{"libraries":[]}',
             ]);
         };
         $bridge = $this->bridge($publisher);
@@ -244,7 +244,7 @@ final class ServerProxyControllerTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 200,
                 'headers' => ['Content-Type' => 'application/json'],
-                'body_b64' => base64_encode('{}'),
+                'body' => '{}',
             ]);
         };
         $bridge = $this->bridge($publisher);
@@ -340,7 +340,7 @@ final class ServerProxyControllerTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 200,
                 'headers' => ['Content-Type' => 'application/json'],
-                'body_b64' => base64_encode('{"id":"abc"}'),
+                'body' => '{"id":"abc"}',
             ]);
         };
         $bridge = $this->bridge($publisher);
@@ -423,7 +423,7 @@ final class ServerProxyControllerTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 200,
                 'headers' => ['Content-Type' => 'application/octet-stream'],
-                'body_b64' => base64_encode('payload'),
+                'body' => 'payload',
             ]);
         };
         $bridge = $this->bridge($publisher);
@@ -459,8 +459,8 @@ final class ServerProxyControllerTest extends TestCase
                 'Content-Type' => 'video/mp2t',
                 'Content-Length' => '6',
             ]]);
-            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('foo')]);
-            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('bar')]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'foo']);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'bar']);
             $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
         };
         $bridge = $this->bridge($publisher);
@@ -690,7 +690,7 @@ final class ServerProxyControllerTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 202,
                 'headers' => ['Content-Type' => 'application/json'],
-                'body_b64' => base64_encode('{"jobId":"job-1"}'),
+                'body' => '{"jobId":"job-1"}',
             ]);
         };
         $bridge = $this->bridge($publisher);
@@ -729,7 +729,7 @@ final class ServerProxyControllerTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 202,
                 'headers' => ['Content-Type' => 'application/json'],
-                'body_b64' => base64_encode('{"jobId":"job-1"}'),
+                'body' => '{"jobId":"job-1"}',
             ]);
         };
         $bridge = $this->bridge($publisher);
@@ -1128,7 +1128,7 @@ final class ServerProxyControllerTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 200,
                 'headers' => ['Content-Type' => 'application/octet-stream'],
-                'body_b64' => base64_encode('payload'),
+                'body' => 'payload',
             ]);
         };
         $bridge = $this->bridge($publisher);

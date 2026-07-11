@@ -654,7 +654,7 @@ final class RelayProxyManager
             'request_id' => $clientRequestId,
             'status' => $status,
             'headers' => $headers,
-            'body_b64' => base64_encode($body),
+            'body' => $body,
         ]);
     }
 

@@ -54,7 +54,7 @@ final class RelayProxyBridgeTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 200,
                 'headers' => ['Content-Type' => 'application/json'],
-                'body_b64' => base64_encode('{"ok":true}'),
+                'body' => '{"ok":true}',
             ]);
         };
 
@@ -80,7 +80,7 @@ final class RelayProxyBridgeTest extends TestCase
 
         $this->assertIsArray($result);
         $this->assertSame(200, $result['status']);
-        $this->assertSame('{"ok":true}', base64_decode((string) $result['body_b64'], true));
+        $this->assertSame('{"ok":true}', $result['body']);
     }
 
     public function test_request_returns_null_when_no_reply_arrives(): void
@@ -137,7 +137,7 @@ final class RelayProxyBridgeTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 200,
                 'headers' => [],
-                'body_b64' => base64_encode(''),
+                'body' => '',
             ]);
         };
         $bridge = new RelayProxyBridge($this->createMock(StructuredLogger::class), $publisher);
@@ -246,8 +246,8 @@ final class RelayProxyBridgeTest extends TestCase
             /** @var RelayProxyBridge $bridge */
             $id = $data['request_id'];
             $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 200, 'headers' => ['Content-Length' => '6']]);
-            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('foo')]);
-            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('bar')]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'foo']);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'bar']);
             $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
         };
         $bridge = new RelayProxyBridge($this->createMock(StructuredLogger::class), $publisher);
@@ -280,7 +280,7 @@ final class RelayProxyBridgeTest extends TestCase
                 'request_id' => $data['request_id'],
                 'status' => 503,
                 'headers' => ['Content-Type' => 'application/json'],
-                'body_b64' => base64_encode('{"code":"server.no_tunnel"}'),
+                'body' => '{"code":"server.no_tunnel"}',
             ]);
         };
         $bridge = new RelayProxyBridge($this->createMock(StructuredLogger::class), $publisher);
@@ -321,8 +321,8 @@ final class RelayProxyBridgeTest extends TestCase
             /** @var RelayProxyBridge $bridge */
             $id = $data['request_id'];
             $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 200, 'headers' => []]);
-            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('first')]);
-            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('second')]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'first']);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'second']);
             $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
         };
         $bridge = new RelayProxyBridge($this->createMock(StructuredLogger::class), $publisher);
@@ -386,7 +386,7 @@ final class RelayProxyBridgeTest extends TestCase
             // Flood far beyond the channel's bounded capacity, all before
             // stream() ever starts popping.
             for ($i = 0; $i < 50; $i++) {
-                $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('x')]);
+                $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'x']);
             }
             $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
         };
@@ -454,7 +454,7 @@ final class RelayProxyBridgeTest extends TestCase
         // The push "fails" (models: channel closed, or genuinely stuck beyond
         // the bound) — onReply() must drop the reply and stop tracking it.
         $fakeChannel->pushResult = false;
-        $bridge->onReply(['request_id' => 'req-1', 'phase' => 'body', 'body_b64' => base64_encode('x')]);
+        $bridge->onReply(['request_id' => 'req-1', 'phase' => 'body', 'body' => 'x']);
 
         $this->assertCount(1, $fakeChannel->pushTimeouts);
         // 45.0 == RelayProxyBridge::REPLY_PUSH_TIMEOUT_SECONDS (private; kept
@@ -517,7 +517,7 @@ final class RelayProxyBridgeTest extends TestCase
             /** @var RelayProxyBridge $bridge */
             $id = $data['request_id'];
             $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 200, 'headers' => []]);
-            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body_b64' => base64_encode('x')]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'x']);
         };
         $bridge = new RelayProxyBridge($this->createMock(StructuredLogger::class), $publisher);
 

@@ -797,7 +797,7 @@ final class ServerProxyController
     /**
      * Build the browser-facing response from a relay reply payload.
      *
-     * @param array<string, mixed> $reply Relay reply (status/headers/body_b64).
+     * @param array<string, mixed> $reply Relay reply (status/headers/body).
      *
      * @return Response
      */
@@ -822,10 +822,8 @@ final class ServerProxyController
         }
 
         /** @var mixed $rawBody */
-        $rawBody = $reply['body_b64'] ?? null;
-        $bodyB64 = is_string($rawBody) ? $rawBody : '';
-        $decoded = $bodyB64 === '' ? '' : base64_decode($bodyB64, true);
-        $response->body = is_string($decoded) ? $decoded : '';
+        $rawBody = $reply['body'] ?? null;
+        $response->body = is_string($rawBody) ? $rawBody : '';
 
         return $response;
     }
