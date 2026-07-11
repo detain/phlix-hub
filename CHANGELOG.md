@@ -7,6 +7,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Tunnel data-plane backpressure (HB-1.2)** (`src/Relay/Tunnel.php`, `src/Relay/ClientConnection.php`).
+  When `send()` returns `false` because the socket send buffer is full, the tunnel now applies
+  real backpressure: it pauses reads on the opposite connection (`pauseRecv()`) and resumes them
+  when the `onBufferDrain` event fires. A 30-second timeout closes the tunnel if buffer drain
+  never arrives. No data frames are silently dropped — the tunnel treats frame loss as a fatal
+  protocol error rather than recoverable overload.
 - **Invite links: `POST /api/v1/me/invite-links/{token}/redeem` — accept an invite link and create a library share**
   (`src/Http/Controllers/InviteLinkController.php`, `src/Application.php`). An authenticated user can
   redeem a valid, unexpired invite link token and receive a library share grant for the invited

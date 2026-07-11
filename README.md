@@ -66,7 +66,9 @@ You can use the public Hub or run your own — the same codebase powers both.
   per-server public keys (JWK).
 - **Reverse-tunnel relay** — servers hold an outbound WebSocket to the Hub; remote clients are
   multiplexed down that tunnel over a compact binary frame protocol. Idle tunnels are reaped and
-  liveness is tracked with heartbeats.
+  liveness is tracked with heartbeats. The tunnel data-plane applies real backpressure:
+  when the send buffer is full, the upstream reader is paused and resumed only when the buffer
+  drains, preventing silent frame drops on slow streams.
 - **Subdomain allocation** — each enrolled server can be assigned `&lt;subdomain&gt;.&lt;public-domain&gt;`
   for clean, per-server URLs.
 - **Library sharing** — share a specific library on one of your servers with another Hub user,
