@@ -95,6 +95,17 @@ final class RelayProxyManager
     private int $nextRequestId = self::FIRST_REQUEST_ID;
 
     /**
+     * O(1) lookup map: clientRequestId → relayRequestId.
+     *
+     * Populated in {@see onRequest()} and cleared when the request completes
+     * (onReply, onCancel, onTimeout, failServer). Enables O(1) cancel lookups
+     * instead of the prior O(N) linear scan through $pending.
+     *
+     * @var array<string, int>
+     */
+    private array $clientToRelayRequestId = [];
+
+    /**
      * In-flight proxy requests keyed by request id.
      *
      * @todo Cancel-frame gap, deliberately deferred (D3s round 1 Finding 4):
@@ -257,6 +268,7 @@ final class RelayProxyManager
             'timer_armed_at' => $now,
             'stream_opened_at' => $now,
         ];
+        $this->clientToRelayRequestId[$clientRequestId] = $requestId;
 
         // Use chunked sending when the body is large enough that the
         // base64-encoded JSON would exceed the 65535-byte frame limit.
@@ -368,7 +380,7 @@ final class RelayProxyManager
         // KIND_END.
         $entry = $this->pending[$requestId];
         $this->cancelTimer($requestId);
-        unset($this->pending[$requestId]);
+        unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
 
         if ($streaming) {
             $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);
@@ -408,7 +420,7 @@ final class RelayProxyManager
                 continue;
             }
             $this->cancelTimer($requestId);
-            unset($this->pending[$requestId]);
+            unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
             if ($entry['stream'] && $entry['stream_started']) {
                 // The head (and some body) already reached the browser — a fresh
                 // 503 body cannot be substituted, so just terminate the stream.
@@ -491,16 +503,9 @@ final class RelayProxyManager
             return;
         }
 
-        // Find the pending entry by client request id.
-        $relayRequestId = null;
-        foreach ($this->pending as $id => $entry) {
-            if ($entry['request_id'] === $clientRequestId && $entry['server_id'] === $serverId) {
-                $relayRequestId = $id;
-                break;
-            }
-        }
-
-        if ($relayRequestId === null) {
+        // O(1) lookup via the clientRequestId → relayRequestId map.
+        $relayRequestId = $this->clientToRelayRequestId[$clientRequestId] ?? null;
+        if ($relayRequestId === null || !isset($this->pending[$relayRequestId])) {
             $this->logger->debug('Relay proxy: cancel for unknown/completed request, dropping', [
                 'client_request_id' => $clientRequestId,
                 'server_id' => $serverId,
@@ -508,6 +513,18 @@ final class RelayProxyManager
             return;
         }
 
+        // If the server_id in the pending entry doesn't match the cancelling
+        // server, this is a cross-server cancel race (e.g. a second server came
+        // online with the same id) — ignore it.
+        if ($this->pending[$relayRequestId]['server_id'] !== $serverId) {
+            $this->logger->debug('Relay proxy: cancel server_id mismatch, dropping', [
+                'client_request_id' => $clientRequestId,
+                'server_id' => $serverId,
+            ]);
+            return;
+        }
+
+        unset($this->clientToRelayRequestId[$clientRequestId]);
         $this->cancelRequest($relayRequestId);
     }
 
@@ -524,7 +541,7 @@ final class RelayProxyManager
         if ($entry === null) {
             return;
         }
-        unset($this->pending[$requestId]);
+        unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
 
         if ($entry['stream'] && $entry['stream_started']) {
             // Head already streamed to the browser — terminate the stream rather
@@ -580,7 +597,7 @@ final class RelayProxyManager
 
         if ($now - $entry['stream_opened_at'] >= self::MAX_STREAM_DURATION_SECONDS) {
             $this->cancelTimer($requestId);
-            unset($this->pending[$requestId]);
+            unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
             $this->logger->warning('Relay proxy: streamed response exceeded absolute max duration, terminating', [
                 'request_id' => $requestId,
                 'server_id' => $entry['server_id'],

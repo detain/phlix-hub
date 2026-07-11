@@ -857,4 +857,315 @@ final class RelayProxyManagerTest extends TestCase
             $eventProp->setValue(null, $original);
         }
     }
+
+    // ---------------------------------------------------------------------
+    // HB-2.4: O(1) cancel index
+    // ---------------------------------------------------------------------
+
+    /**
+     * Verifies that onCancel uses O(1) map lookup rather than a linear scan.
+     * The manager is populated with many pending entries; cancelling one
+     * specific clientRequestId must remove only that entry from pending,
+     * leaving all others intact.
+     */
+    public function test_cancel_uses_o1_lookup(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        // Inject a large batch of pending entries via reflection so onCancel
+        // must find ours among many — proving it uses the O(1) map, not a scan.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        $clientToRelayProp = new ReflectionProperty(RelayProxyManager::class, 'clientToRelayRequestId');
+        $clientToRelayProp->setAccessible(true);
+
+        // Build many unrelated pending entries (each with a distinct
+        // clientRequestId so they don't clash in the map).
+        $hubRequestId = 0x80000001;
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = [];
+        /** @var array<string, int> $clientToRelay */
+        $clientToRelay = [];
+        for ($i = 0; $i < 100; $i++) {
+            $cid = 'distractor-req-' . $i;
+            $pending[$hubRequestId + $i] = [
+                'reply_event' => 'reply.distract',
+                'request_id' => $cid,
+                'server_id' => 'srv-1',
+                'head' => null,
+                'body' => '',
+                'timer' => null,
+                'stream' => false,
+                'stream_started' => false,
+                'timeout' => 30.0,
+                'timer_armed_at' => microtime(true),
+                'stream_opened_at' => microtime(true),
+            ];
+            $clientToRelay[$cid] = $hubRequestId + $i;
+        }
+
+        // Our actual target entry.
+        $targetClientId = 'target-req';
+        $targetRelayId = 0xFFFFFFFF;
+        $pending[$targetRelayId] = [
+            'reply_event' => 'reply.target',
+            'request_id' => $targetClientId,
+            'server_id' => 'srv-1',
+            'head' => null,
+            'body' => '',
+            'timer' => null,
+            'stream' => false,
+            'stream_started' => false,
+            'timeout' => 30.0,
+            'timer_armed_at' => microtime(true),
+            'stream_opened_at' => microtime(true),
+        ];
+        $clientToRelay[$targetClientId] = $targetRelayId;
+
+        $pendingProp->setValue($manager, $pending);
+        $clientToRelayProp->setValue($manager, $clientToRelay);
+
+        // Cancel the target entry via its clientRequestId — O(1) lookup.
+        $manager->onCancel([
+            'request_id' => $targetClientId,
+            'server_id' => 'srv-1',
+        ]);
+
+        // The target must be gone from pending; all 100 distractors must remain.
+        /** @var array<int, array<string, mixed>> $remaining */
+        $remaining = $pendingProp->getValue($manager);
+        $this->assertArrayNotHasKey($targetRelayId, $remaining);
+        $this->assertCount(100, $remaining, 'all 100 distractor entries must remain after O(1) cancel');
+
+        // The map must also be clean.
+        /** @var array<string, int> $map */
+        $map = $clientToRelayProp->getValue($manager);
+        $this->assertArrayNotHasKey($targetClientId, $map);
+        $this->assertCount(100, $map, 'map must have 100 distractor entries remaining');
+    }
+
+    /**
+     * Verifies the clientRequestId → relayRequestId map is cleared when a
+     * request completes via onResponseFrame END (buffered path).
+     */
+    public function test_client_to_relay_map_cleared_on_response_end(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $clientToRelayProp = new ReflectionProperty(RelayProxyManager::class, 'clientToRelayRequestId');
+        $clientToRelayProp->setAccessible(true);
+
+        $manager->onRequest([
+            'request_id' => 'req-test',
+            'reply_event' => 'reply.test',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        /** @var array<string, int> $mapBefore */
+        $mapBefore = $clientToRelayProp->getValue($manager);
+        $this->assertArrayHasKey('req-test', $mapBefore, 'map must have entry before END');
+
+        // Complete via onResponseFrame END (buffered path).
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $requestId = $reqFrame->seq;
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        /** @var array<string, int> $mapAfter */
+        $mapAfter = $clientToRelayProp->getValue($manager);
+        $this->assertArrayNotHasKey('req-test', $mapAfter, 'map must be cleared after END');
+    }
+
+    /**
+     * Verifies the clientRequestId → relayRequestId map is cleared on timeout.
+     */
+    public function test_client_to_relay_map_cleared_on_timeout(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $clientToRelayProp = new ReflectionProperty(RelayProxyManager::class, 'clientToRelayRequestId');
+        $clientToRelayProp->setAccessible(true);
+
+        $manager->onRequest([
+            'request_id' => 'req-timeout',
+            'reply_event' => 'reply.timeout',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        /** @var array<string, int> $mapBefore */
+        $mapBefore = $clientToRelayProp->getValue($manager);
+        $this->assertArrayHasKey('req-timeout', $mapBefore, 'map must have entry before timeout');
+
+        // Fire the timeout handler directly (no event loop in PHPUnit).
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $requestId = (int) (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+
+        $onTimeout = new ReflectionMethod(RelayProxyManager::class, 'onTimeout');
+        $onTimeout->setAccessible(true);
+        $onTimeout->invoke($manager, $requestId);
+
+        /** @var array<string, int> $mapAfter */
+        $mapAfter = $clientToRelayProp->getValue($manager);
+        $this->assertArrayNotHasKey('req-timeout', $mapAfter, 'map must be cleared after timeout');
+    }
+
+    /**
+     * Verifies the clientRequestId → relayRequestId map is cleared when
+     * failServer removes pending entries for a server.
+     */
+    public function test_client_to_relay_map_cleared_on_fail_server(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-fail', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $clientToRelayProp = new ReflectionProperty(RelayProxyManager::class, 'clientToRelayRequestId');
+        $clientToRelayProp->setAccessible(true);
+
+        $manager->onRequest([
+            'request_id' => 'req-fail',
+            'reply_event' => 'reply.fail',
+            'server_id' => 'srv-fail',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        /** @var array<string, int> $mapBefore */
+        $mapBefore = $clientToRelayProp->getValue($manager);
+        $this->assertArrayHasKey('req-fail', $mapBefore, 'map must have entry before failServer');
+
+        $manager->failServer('srv-fail');
+
+        /** @var array<string, int> $mapAfter */
+        $mapAfter = $clientToRelayProp->getValue($manager);
+        $this->assertArrayNotHasKey('req-fail', $mapAfter, 'map must be cleared after failServer');
+    }
+
+    /**
+     * Verifies the clientRequestId → relayRequestId map is cleared when
+     * onCancel successfully cancels an in-flight request.
+     */
+    public function test_client_to_relay_map_cleared_on_cancel(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-cancel', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $clientToRelayProp = new ReflectionProperty(RelayProxyManager::class, 'clientToRelayRequestId');
+        $clientToRelayProp->setAccessible(true);
+
+        $manager->onRequest([
+            'request_id' => 'req-cancel',
+            'reply_event' => 'reply.cancel',
+            'server_id' => 'srv-cancel',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        /** @var array<string, int> $mapBefore */
+        $mapBefore = $clientToRelayProp->getValue($manager);
+        $this->assertArrayHasKey('req-cancel', $mapBefore, 'map must have entry before onCancel');
+
+        $manager->onCancel([
+            'request_id' => 'req-cancel',
+            'server_id' => 'srv-cancel',
+        ]);
+
+        /** @var array<string, int> $mapAfter */
+        $mapAfter = $clientToRelayProp->getValue($manager);
+        $this->assertArrayNotHasKey('req-cancel', $mapAfter, 'map must be cleared after onCancel');
+    }
 }
