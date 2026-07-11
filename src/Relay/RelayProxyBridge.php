@@ -448,20 +448,19 @@ final class RelayProxyBridge
     }
 
     /**
-     * Decode the base64 body of a reply/phase message.
+     * Extract the raw body of a reply/phase message.
      *
      * @param array<string, mixed> $message
      *
-     * @return string Raw body bytes ('' when absent or undecodable).
+     * @return string Raw body bytes ('' when absent).
      */
     private function decodeBody(array $message): string
     {
-        $bodyB64 = $message['body_b64'] ?? null;
-        if (!is_string($bodyB64) || $bodyB64 === '') {
+        $body = $message['body'] ?? null;
+        if (!is_string($body) || $body === '') {
             return '';
         }
-        $decoded = base64_decode($bodyB64, true);
-        return is_string($decoded) ? $decoded : '';
+        return $body;
     }
 
     /**

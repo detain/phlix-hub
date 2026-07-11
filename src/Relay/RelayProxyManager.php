@@ -617,7 +617,7 @@ final class RelayProxyManager
         ($this->publisher)($replyEvent, [
             'request_id' => $clientRequestId,
             'phase' => 'body',
-            'body_b64' => base64_encode($chunk),
+            'body' => $chunk,
         ]);
     }
 
