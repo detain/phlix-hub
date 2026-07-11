@@ -83,32 +83,44 @@ class RelaySessionManager
             throw new InvalidArgumentException('SERVER_NOT_FOUND');
         }
 
-        // Supersede any prior open session(s) for this server before opening a
-        // new one. closeSession() is not always reached (worker restart, dropped
-        // connection), which left orphaned open rows accumulating in
-        // relay_sessions. Enforcing <= 1 open session per server keeps the
-        // dashboard's "active relays" count converged on the number of
-        // connected servers.
-        $this->db->query(
-            'UPDATE relay_sessions SET closed_at = NOW(), close_reason = :reason
-             WHERE server_id = :server_id AND closed_at IS NULL',
-            [
-                'reason' => 'superseded',
-                'server_id' => $serverId,
-            ],
-        );
+        // Wrap UPDATE + INSERT in an explicit transaction so they are atomic.
+        // Without it, a crash after the UPDATE but before the INSERT would leave
+        // the server with no open session (the UPDATE already closed the old one
+        // and the INSERT never happened), causing the relay to be unreachable.
+        $this->db->beginTrans();
+        try {
+            // Supersede any prior open session(s) for this server before opening a
+            // new one. closeSession() is not always reached (worker restart, dropped
+            // connection), which left orphaned open rows accumulating in
+            // relay_sessions. Enforcing <= 1 open session per server keeps the
+            // dashboard's "active relays" count converged on the number of
+            // connected servers.
+            $this->db->query(
+                'UPDATE relay_sessions SET closed_at = NOW(), close_reason = :reason
+                 WHERE server_id = :server_id AND closed_at IS NULL',
+                [
+                    'reason' => 'superseded',
+                    'server_id' => $serverId,
+                ],
+            );
 
-        $sessionId = $this->generateUuid();
+            $sessionId = $this->generateUuid();
 
-        $this->db->query(
-            'INSERT INTO relay_sessions (id, server_id, worker_node, opened_at, bytes_in, bytes_out)
-             VALUES (:id, :server_id, :worker_node, NOW(), 0, 0)',
-            [
-                'id' => $sessionId,
-                'server_id' => $serverId,
-                'worker_node' => $workerNode,
-            ],
-        );
+            $this->db->query(
+                'INSERT INTO relay_sessions (id, server_id, worker_node, opened_at, bytes_in, bytes_out)
+                 VALUES (:id, :server_id, :worker_node, NOW(), 0, 0)',
+                [
+                    'id' => $sessionId,
+                    'server_id' => $serverId,
+                    'worker_node' => $workerNode,
+                ],
+            );
+
+            $this->db->commitTrans();
+        } catch (\Throwable $e) {
+            $this->db->rollBackTrans();
+            throw $e;
+        }
 
         $this->logger->info('Relay session registered', [
             'session_id' => $sessionId,

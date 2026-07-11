@@ -57,6 +57,19 @@ final class TunnelManager implements TunnelManagerInterface
     private array $tunnels;
 
     /**
+     * Incumbent tunnels awaiting displacement after JWT validation.
+     *
+     * When a new server HELLO arrives for a server_id that already has a tunnel,
+     * the incumbent is stored here (not yet closed). It is only closed once the
+     * new tunnel's JWT validation succeeds in {@see finalizeServerConnection()}.
+     * This prevents an attacker from displacing an incumbent tunnel before
+     * their JWT is validated (HB-2.2).
+     *
+     * @var array<string, Tunnel>
+     */
+    private array $closingTunnels = [];
+
+    /**
      * @var RelayProxyManager|null Proxy manager passed to each tunnel for HTTP-over-relay.
      */
     private ?RelayProxyManager $proxyManager = null;
@@ -91,12 +104,15 @@ final class TunnelManager implements TunnelManagerInterface
      */
     public function acceptServer(string $serverId, TcpConnection $serverWs): Tunnel
     {
-        // If a tunnel already exists for this server, close it first (server reconnect)
+        // If a tunnel already exists for this server, store it as an incumbent
+        // pending displacement — DO NOT close it yet. The JWT must be validated
+        // first (HB-2.2). The incumbent is only closed after the new tunnel
+        // successfully validates its HELLO JWT in finalizeServerConnection().
         if (isset($this->tunnels[$serverId])) {
-            $this->logger->info('Relay: closing existing tunnel for reconnecting server', [
+            $this->logger->info('Relay: incumbent tunnel stored for displacement after JWT validation', [
                 'server_id' => $serverId,
             ]);
-            $this->closeTunnel($serverId, 'server_replaced');
+            $this->closingTunnels[$serverId] = $this->tunnels[$serverId];
         }
 
         $hostname = @gethostname();
@@ -214,6 +230,38 @@ final class TunnelManager implements TunnelManagerInterface
             'tunnel_id' => $tunnel->tunnelId,
             'reason' => $reason,
         ]);
+    }
+
+    /**
+     * Finalize a server connection after successful JWT validation.
+     *
+     * Called by {@see RelayWorker::handleHello()} after the tunnel's
+     * `onServerMessage()` completes without throwing — meaning the HELLO
+     * JWT was valid and the tunnel transitioned to ACTIVE. At that point
+     * the incumbent tunnel (stored during `acceptServer()`) can be safely
+     * closed since the new connection has proven itself.
+     *
+     * If the new tunnel fails JWT validation and its connection is closed
+     * before this method is called, the incumbent remains active in
+     * `$closingTunnels` and is never touched.
+     *
+     * @param string $serverId Server UUID.
+     *
+     * @return void
+     */
+    public function finalizeServerConnection(string $serverId): void
+    {
+        if (!isset($this->closingTunnels[$serverId])) {
+            return;
+        }
+
+        $this->logger->info('Relay: JWT validated, closing incumbent tunnel', [
+            'server_id' => $serverId,
+        ]);
+
+        $incumbent = $this->closingTunnels[$serverId];
+        $incumbent->close('server_replaced');
+        unset($this->closingTunnels[$serverId]);
     }
 
     /**

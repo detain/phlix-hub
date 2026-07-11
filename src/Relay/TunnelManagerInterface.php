@@ -100,4 +100,18 @@ interface TunnelManagerInterface
      * @return void
      */
     public function removeTunnel(string $serverId): void;
+
+    /**
+     * Finalize a server connection after successful JWT validation.
+     *
+     * Called after a tunnel's HELLO JWT is validated (transitioning to ACTIVE)
+     * to close the incumbent tunnel that was stored during acceptServer().
+     * This implements the HB-2.2 security fix: incumbent displacement is
+     * deferred until the new connection has proven itself via JWT validation.
+     *
+     * @param string $serverId Server UUID.
+     *
+     * @return void
+     */
+    public function finalizeServerConnection(string $serverId): void;
 }

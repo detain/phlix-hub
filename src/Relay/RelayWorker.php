@@ -368,8 +368,16 @@ final class RelayWorker
             $tunnel = $tunnelManager->acceptServer($serverId, $connection);
             self::$connTunnels[$connId] = $tunnel;
 
-            // Let the tunnel process the HELLO (validates + transitions state)
+            // Let the tunnel process the HELLO (validates + transitions state).
+            // If onServerMessage() throws (invalid JWT, malformed HELLO, etc.)
+            // the catch block closes the connection and the incumbent tunnel
+            // (stored in closingTunnels) remains untouched.
             $tunnel->onServerMessage($data);
+
+            // JWT validated successfully — the new tunnel is now ACTIVE.
+            // Safe to displace the incumbent tunnel that was stored when
+            // acceptServer() was called (HB-2.2).
+            $tunnelManager->finalizeServerConnection($serverId);
 
             // S4 metrics: register the tunnel as a live connection. Its byte
             // counts are pushed by the periodic touch timer (see onWorkerStart)
