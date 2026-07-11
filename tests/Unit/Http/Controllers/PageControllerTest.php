@@ -36,7 +36,7 @@ final class PageControllerTest extends TestCase
                 ->willReturn('<html>rendered</html>');
         }
         $auth = $this->createMock(AuthManager::class);
-        $auth->method('getCurrentUser')->willReturn(['id' => 'u-1', 'username' => 'alice']);
+        $auth->method('getCurrentUser')->willReturn(['id' => 'u-1', 'username' => 'alice', 'is_admin' => 1]);
         $serverInfo = $this->createMock(ServerInfoHandler::class);
         $serverInfo->method('getServersForUser')->willReturn([]);
         return new PageController($renderer, $auth, $serverInfo, $this->adminMiddleware());
@@ -204,6 +204,7 @@ final class PageControllerTest extends TestCase
             ->willReturn('<html>admin</html>');
 
         $auth = $this->createMock(AuthManager::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 'u-1', 'username' => 'alice', 'is_admin' => 1]);
         $serverInfo = $this->createMock(ServerInfoHandler::class);
 
         $users = $this->createMock(UserRepository::class);
@@ -214,7 +215,6 @@ final class PageControllerTest extends TestCase
         $request = new Request();
         $request->path = '/admin/requests';
         $request->userId = 'u-1';
-        $request->user = ['id' => 'u-1', 'is_admin' => 1];
 
         $response = $controller($request);
         self::assertSame(200, $response->statusCode);

@@ -62,6 +62,16 @@ final class AuthMiddleware
     private static array $userExistsCache = [];
 
     /**
+     * Reset the user-existence cache between test runs.
+     *
+     * @internal Tests call this via setUp() to prevent cache pollution.
+     */
+    public static function resetCache(): void
+    {
+        self::$userExistsCache = [];
+    }
+
+    /**
      * TTL for entries in the user-existence cache (seconds).
      */
     private const int USER_EXISTS_CACHE_TTL = 5;

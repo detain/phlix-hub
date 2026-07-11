@@ -25,13 +25,13 @@ final class AuthMiddlewareTest extends TestCase
     private const SECRET = 'this-is-a-32-byte-or-larger-test-secret';
 
     /**
-     * Reset the coroutine-local request context between tests so the
-     * Context-publication assertions don't see leakage from a prior
-     * test (step 0.2c).
+     * Reset the coroutine-local request context and the user-existence
+     * cache between tests so neither leaks state into the next case.
      */
     protected function setUp(): void
     {
         Context::destroy();
+        AuthMiddleware::resetCache();
     }
 
     public function testMissingTokenReturns401ForApiRoute(): void
@@ -71,6 +71,7 @@ final class AuthMiddlewareTest extends TestCase
         $token = $jwt->createAccessToken('u-7');
 
         $repo = $this->createMock(UserRepository::class);
+        $repo->method('userExists')->with('u-7')->willReturn(true);
         $repo->method('findById')->with('u-7')->willReturn([
             'id' => 'u-7', 'username' => 'alice', 'password_hash' => 'secret',
         ]);
@@ -84,9 +85,9 @@ final class AuthMiddlewareTest extends TestCase
         $result = $mw($request);
         self::assertNull($result);
         self::assertSame('u-7', $request->userId);
-        self::assertIsArray($request->user);
-        self::assertSame('alice', $request->user['username'] ?? null);
-        self::assertArrayNotHasKey('password_hash', $request->user);
+        // HB-1.4: middleware only calls userExists() (lightweight) and sets
+        // userId + claims. The full user row is loaded by downstream
+        // controllers that need it via AuthManager::getCurrentUser().
         self::assertNotNull($request->claims);
         self::assertSame('u-7', $request->claims->sub);
     }
@@ -133,7 +134,7 @@ final class AuthMiddlewareTest extends TestCase
         $token = $jwt->createAccessToken('u-missing');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->method('findById')->willReturn(null);
+        $repo->method('userExists')->willReturn(false);
 
         $mw = new AuthMiddleware($jwt, $repo);
         $request = new Request();
@@ -153,6 +154,7 @@ final class AuthMiddlewareTest extends TestCase
         $token = $jwt->createAccessToken('u-c');
 
         $repo = $this->createMock(UserRepository::class);
+        $repo->method('userExists')->with('u-c')->willReturn(true);
         $repo->method('findById')->willReturn(['id' => 'u-c', 'username' => 'cookie']);
 
         $mw = new AuthMiddleware($jwt, $repo);
@@ -203,6 +205,7 @@ final class AuthMiddlewareTest extends TestCase
         $token = $jwt->createAccessToken('u-api2');
 
         $repo = $this->createMock(UserRepository::class);
+        $repo->method('userExists')->with('u-api2')->willReturn(true);
         $repo->method('findById')->willReturn(['id' => 'u-api2', 'username' => 'api']);
 
         $mw = new AuthMiddleware($jwt, $repo);
@@ -225,6 +228,7 @@ final class AuthMiddlewareTest extends TestCase
         $token = $jwt->createAccessToken('u-get');
 
         $repo = $this->createMock(UserRepository::class);
+        $repo->method('userExists')->with('u-get')->willReturn(true);
         $repo->method('findById')->willReturn(['id' => 'u-get', 'username' => 'getter']);
 
         $mw = new AuthMiddleware($jwt, $repo);
@@ -283,6 +287,7 @@ final class AuthMiddlewareTest extends TestCase
         $token = $jwt->createAccessToken('u-ctx');
 
         $repo = $this->createMock(UserRepository::class);
+        $repo->method('userExists')->with('u-ctx')->willReturn(true);
         $repo->method('findById')->with('u-ctx')->willReturn([
             'id' => 'u-ctx', 'username' => 'ctx-user', 'password_hash' => 'secret',
         ]);
@@ -333,7 +338,7 @@ final class AuthMiddlewareTest extends TestCase
         Context::destroy();
         $jwt = new JwtHandler(self::SECRET);
         $token = $jwt->createAccessToken('u-missing');
-        $repo->method('findById')->willReturn(null);
+        $repo->method('userExists')->willReturn(false);
         $mw2 = new AuthMiddleware($jwt, $repo);
         $request = new Request();
         $request->method = 'GET';

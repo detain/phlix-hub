@@ -648,29 +648,23 @@ final class ClientRelayWorkerTest extends TestCase
     }
 
     /**
-     * Build a {@see ServerInfoHandler} test double whose getServerInfo()
+     * Build a {@see ServerInfoHandler} test double whose getOwnerAndStatus()
      * resolves ownership from {@see $serverOwners}.
      */
     private function buildServerInfoHandler(): ServerInfoHandler
     {
         $handler = $this->createMock(ServerInfoHandler::class);
-        $handler->method('getServerInfo')->willReturnCallback(
-            function (string $serverId): ?ServerInfoDto {
+        $handler->method('getOwnerAndStatus')->willReturnCallback(
+            function (string $serverId): ?array {
                 if (!isset($this->serverOwners[$serverId])) {
                     return null;
                 }
 
-                return new ServerInfoDto(
-                    serverId: $serverId,
-                    userId: $this->serverOwners[$serverId],
-                    serverName: 'Test Server',
-                    version: '1.0.0',
-                    lastSeenAt: null,
-                    status: 'online',
-                    hostnameCandidates: [],
-                    relayActive: true,
-                    libraryCount: null,
-                );
+                return [
+                    'userId' => $this->serverOwners[$serverId],
+                    'status' => 'online',
+                    'relayActive' => true,
+                ];
             },
         );
 
