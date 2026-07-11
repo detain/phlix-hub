@@ -295,18 +295,14 @@ final class Application
                 return $serverProxy->proxy($req, $typedParams);
             };
             $r->get('/servers/{id}/proxy/{path:.*}', $proxyHandler);
-            // POST/PUT/DELETE are intentionally NOT in the browse-scope
-            // allowlist (ServerProxyController::BROWSE_SCOPE_ALLOWLIST has only
-            // GET/HEAD keys): this is a read-only browse proxy, with ONE narrow
-            // exception (D2) — a fully-anchored POST pattern in
-            // ServerProxyController::BROWSE_SCOPE_PATTERNS that matches only the
-            // transcode-start route. The POST route stays registered so every
-            // other POST still reaches the controller and gets a deliberate 403
-            // `proxy.scope_denied` (fails closed) rather than a bare 404 — do NOT
-            // expand BROWSE_SCOPE_ALLOWLIST itself to make more of them forward;
-            // any further non-GET/HEAD exception belongs in BROWSE_SCOPE_PATTERNS,
-            // anchored just as narrowly. PUT/DELETE/PATCH are not registered as
-            // routes at all here, so they never reach this handler.
+            $r->put('/servers/{id}/proxy/{path:.*}', $proxyHandler);
+            $r->delete('/servers/{id}/proxy/{path:.*}', $proxyHandler);
+            $r->patch('/servers/{id}/proxy/{path:.*}', $proxyHandler);
+            // POST is registered so non-allowlisted POSTs still reach the
+            // controller and get a deliberate 403 `proxy.scope_denied` (fails
+            // closed) rather than a bare 404. BROWSE_SCOPE_ALLOWLIST contains
+            // the permitted write method + path entries (favorite, rating,
+            // like_level, watched, playlist, poster).
             $r->post('/servers/{id}/proxy/{path:.*}', $proxyHandler);
         }, [$authMiddleware]);
 

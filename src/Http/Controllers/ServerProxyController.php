@@ -187,6 +187,20 @@ final class ServerProxyController
             '/media',
             '/api/v1/transcode',
         ],
+        // Write methods: HB-3.1 write-over-relay (PUT/DELETE/PATCH).
+        // PUT covers: favorite, rating, like_level, poster (server PUT routes).
+        // DELETE covers: playlist item removal.
+        // POST covers: watched/unwatched toggles.
+        'PUT' => [
+            '/api/v1/media',
+            '/api/v1/playlists',
+        ],
+        'DELETE' => [
+            '/api/v1/playlists',
+        ],
+        'POST' => [
+            '/api/v1/media',
+        ],
     ];
 
     /**
@@ -203,14 +217,13 @@ final class ServerProxyController
      * captured as a single `[^/]+` segment, so the match is exact: it accepts
      * ONLY `/api/v1/media/{id}/transcode` with nothing before or after it.
      *
-     * This deliberately does NOT match the media item's OTHER mutating siblings —
-     * `POST /api/v1/media/{id}/favorite`, `PUT …/rating`, `PUT …/like`,
-     * `POST …/watched`|`/unwatched`, `POST …/match/apply`, `PUT …/poster` — nor
-     * the admin `POST /api/v1/admin/media/merge`: the trailing literal `/transcode$`
-     * plus the single-segment `[^/]+` id forbid every one of them, so they all stay 403
-     * `proxy.scope_denied`. Path traversal is impossible here for the same reason
-     * as the prefix allowlist: {@see self::hasTraversalSegment()} rejects any
-     * dot-segment or encoded separator BEFORE this map is consulted.
+     * Note: favorite, rating, like_level, watched/unwatched, and poster are
+     * ALLOWED via prefix allowlist entries (HB-3.1 write-over-relay). The
+     * admin `POST /api/v1/admin/media/merge` and `POST …/match/apply` routes
+     * remain 403 `proxy.scope_denied` — the anchored `/transcode$` pattern
+     * cannot match them by design. Path traversal is impossible here for the
+     * same reason as the prefix allowlist: {@see self::hasTraversalSegment()}
+     * rejects any dot-segment or encoded separator BEFORE this map is consulted.
      *
      * Keyed by HTTP method (upper-case); matched by
      * {@see self::isWithinBrowseScope()} AFTER the prefix allowlist.
