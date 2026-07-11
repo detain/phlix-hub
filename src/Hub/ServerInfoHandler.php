@@ -71,29 +71,6 @@ class ServerInfoHandler
     }
 
     /**
-     * Get the subdomain for a server.
-     *
-     * @param string $serverId Server UUID.
-     *
-     * @return string|null Subdomain label or null when not found/no subdomain.
-     */
-    public function getServerSubdomain(string $serverId): ?string
-    {
-        /** @var list<array<string, mixed>> $rows */
-        $rows = $this->db->query(
-            'SELECT subdomain FROM servers WHERE id = :id LIMIT 1',
-            ['id' => $serverId],
-        );
-
-        if (!isset($rows[0])) {
-            return null;
-        }
-
-        /** @var string|null */
-        return is_string($rows[0]['subdomain'] ?? null) ? $rows[0]['subdomain'] : null;
-    }
-
-    /**
      * Get all servers owned by a user.
      *
      * @param string   $userId User UUID.
@@ -115,7 +92,7 @@ class ServerInfoHandler
         $rows = $this->db->query(
             'SELECT s.id, s.user_id, s.server_name, s.version,
                     UNIX_TIMESTAMP(s.last_seen_at) AS last_seen_at, s.status,
-                    s.hostname_candidates_json, s.created_at,
+                    s.hostname_candidates_json, s.created_at, s.subdomain,
                     (r.server_id IS NOT NULL) AS relay_active,
                     COUNT(DISTINCT sl.id) AS library_count
              FROM servers s
@@ -123,7 +100,8 @@ class ServerInfoHandler
              LEFT JOIN server_libraries sl ON sl.server_id = s.id
              WHERE s.user_id = :user_id
              GROUP BY s.id, s.user_id, s.server_name, s.version,
-                      s.last_seen_at, s.status, s.hostname_candidates_json, s.created_at
+                      s.last_seen_at, s.status, s.hostname_candidates_json,
+                      s.created_at, s.subdomain
              ORDER BY s.created_at DESC
              LIMIT :limit OFFSET :offset',
             ['user_id' => $userId, 'limit' => $limit, 'offset' => $offset],
@@ -182,6 +160,8 @@ class ServerInfoHandler
 
         $libraryCount = is_numeric($row['library_count'] ?? null) ? (int) $row['library_count'] : null;
 
+        $subdomain = is_string($row['subdomain'] ?? null) && $row['subdomain'] !== '' ? $row['subdomain'] : null;
+
         return new ServerInfoDto(
             serverId: $serverId,
             userId: $userId,
@@ -192,6 +172,7 @@ class ServerInfoHandler
             hostnameCandidates: $hostnames,
             relayActive: $relayActive,
             libraryCount: $libraryCount,
+            subdomain: $subdomain,
         );
     }
 }

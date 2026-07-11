@@ -28,7 +28,7 @@ final class ServerManageController
 {
     /**
      * @param ServerInfoHandler $serverInfo   Used to fetch server info and verify ownership.
-     * @param Connection        $db           Used to delete the server row and look up the subdomain.
+     * @param Connection        $db           Used to delete the server row.
      * @param string            $publicDomain Public domain used to build relay URLs (e.g. `phlix.media`).
      */
     public function __construct(
@@ -120,7 +120,7 @@ final class ServerManageController
 
         $directUrl = $this->bestDirectUrl($server->hostnameCandidates);
         $relayActive = $server->relayActive;
-        $relayUrl = $this->buildRelayUrl($serverId, $relayActive);
+        $relayUrl = $this->buildRelayUrl($server->subdomain, $relayActive);
 
         return (new Response())->json([
             'server_id'    => $serverId,
@@ -155,32 +155,18 @@ final class ServerManageController
      * 008 / `DnsAliasManager`). Otherwise returns null — clients should
      * not be handed a URL that is structurally complete but unreachable.
      *
-     * @param string $serverId    Server UUID.
-     * @param bool   $relayActive Whether the relay tunnel is currently open.
+     * @param string|null $subdomain Subdomain from ServerInfoDto (already loaded).
+     * @param bool        $relayActive Whether the relay tunnel is currently open.
      *
      * @return string|null Full https URL or null when relay is unreachable.
      */
-    private function buildRelayUrl(string $serverId, bool $relayActive): ?string
+    private function buildRelayUrl(?string $subdomain, bool $relayActive): ?string
     {
         if (!$relayActive) {
             return null;
         }
 
-        // TODO: eliminate this second query once ServerInfoDto carries `subdomain`
-        // (requires a phlix-shared bump — see missing.md §1.3).
-        /** @var list<array<string, mixed>> $rows */
-        $rows = $this->db->query(
-            'SELECT subdomain FROM servers WHERE id = :id LIMIT 1',
-            ['id' => $serverId],
-        );
-
-        if (!isset($rows[0])) {
-            return null;
-        }
-
-        /** @var mixed $subdomainRaw */
-        $subdomainRaw = $rows[0]['subdomain'] ?? null;
-        if (!is_string($subdomainRaw) || $subdomainRaw === '') {
+        if (!is_string($subdomain) || $subdomain === '') {
             return null;
         }
 
@@ -188,6 +174,6 @@ final class ServerManageController
             return null;
         }
 
-        return 'https://' . $subdomainRaw . '.' . $this->publicDomain;
+        return 'https://' . $subdomain . '.' . $this->publicDomain;
     }
 }

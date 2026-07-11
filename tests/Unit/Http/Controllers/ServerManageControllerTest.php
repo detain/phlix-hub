@@ -274,19 +274,13 @@ final class ServerManageControllerTest extends TestCase
             status: 'online',
             hostnameCandidates: [],
             relayActive: true,
+            subdomain: 'abc12345',
         );
 
         $serverInfo = $this->createMock(ServerInfoHandler::class);
         $serverInfo->method('getServerInfo')->with('server-4')->willReturn($dto);
 
         $db = $this->createMock(Connection::class);
-        $db->expects(self::once())
-            ->method('query')
-            ->with(
-                self::stringContains('SELECT subdomain FROM servers'),
-                self::callback(fn ($args): bool => $args['id'] === 'server-4'),
-            )
-            ->willReturn([['subdomain' => 'abc12345']]);
 
         $ctrl = $this->controller($serverInfo, $db, 'phlix.media');
 
@@ -312,15 +306,13 @@ final class ServerManageControllerTest extends TestCase
             status: 'online',
             hostnameCandidates: [],
             relayActive: true,
+            subdomain: null,
         );
 
         $serverInfo = $this->createMock(ServerInfoHandler::class);
         $serverInfo->method('getServerInfo')->with('server-5')->willReturn($dto);
 
         $db = $this->createMock(Connection::class);
-        $db->expects(self::once())
-            ->method('query')
-            ->willReturn([['subdomain' => null]]);
 
         $ctrl = $this->controller($serverInfo, $db);
 
@@ -346,6 +338,7 @@ final class ServerManageControllerTest extends TestCase
             status: 'online',
             hostnameCandidates: [],
             relayActive: true,
+            subdomain: 'abc12345',
         );
 
         $serverInfo = $this->createMock(ServerInfoHandler::class);
@@ -354,7 +347,6 @@ final class ServerManageControllerTest extends TestCase
         // Subdomain IS present — we want to prove the publicDomain guard
         // is the one catching this, not the subdomain guard.
         $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturn([['subdomain' => 'abc12345']]);
 
         $ctrl = $this->controller($serverInfo, $db, '');
 
@@ -379,13 +371,13 @@ final class ServerManageControllerTest extends TestCase
             status: 'online',
             hostnameCandidates: [],
             relayActive: true,
+            subdomain: 'srv007',
         );
 
         $serverInfo = $this->createMock(ServerInfoHandler::class);
         $serverInfo->method('getServerInfo')->with('server-6')->willReturn($dto);
 
         $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturn([['subdomain' => 'srv007']]);
 
         $ctrl = $this->controller($serverInfo, $db, 'example.test');
 

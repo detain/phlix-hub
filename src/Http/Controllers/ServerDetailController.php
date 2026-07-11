@@ -95,8 +95,7 @@ final class ServerDetailController
         $relaySession = $this->relayManager->getActiveSession($serverId);
         $heartbeatHistory = $this->heartbeat->getHeartbeatHistory($serverId, 20);
 
-        // Get subdomain and TLS status
-        $subdomain = $this->serverInfo->getServerSubdomain($serverId);
+        $subdomain = $server->subdomain;
         $envPublicDomain = getenv('HUB_PUBLIC_DOMAIN');
         $publicDomain = ($envPublicDomain !== false && $envPublicDomain !== '')
             ? $envPublicDomain
