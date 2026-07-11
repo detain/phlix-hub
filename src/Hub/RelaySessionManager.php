@@ -21,7 +21,6 @@ use Workerman\MySQL\Connection;
  *
  * Responsibilities:
  *   - Register a new relay session when a server connects
- *   - Route an inbound HTTP request to the correct server via its relay session
  *   - Track bytes sent/received per session (batched in-memory, flushed on timer or close)
  *   - Close a relay session when the server disconnects
  *
@@ -132,52 +131,6 @@ class RelaySessionManager
     }
 
     /**
-     * Route an inbound HTTP request to the server via its relay session.
-     *
-     * Returns the relay session record if the server is connected, or null if no
-     * active session exists for this server.
-     *
-     * @param string $serverId   The target server UUID.
-     * @param string $method     HTTP method.
-     * @param string $path       HTTP request path.
-     * @param array<string, string> $headers HTTP headers.
-     * @param string $body       HTTP request body.
-     *
-     * @return array<string, mixed>|null Relay session record or null if not connected.
-     *
-     */
-    public function routeRequest(
-        string $serverId,
-        string $method,
-        string $path,
-        array $headers,
-        string $body,
-    ): ?array {
-        /** @var list<array<string, mixed>> $rows */
-        $rows = $this->db->query(
-            'SELECT rs.*, s.status FROM relay_sessions rs
-             JOIN servers s ON s.id = rs.server_id
-             WHERE rs.server_id = :server_id AND rs.closed_at IS NULL
-             LIMIT 1',
-            ['server_id' => $serverId],
-        );
-
-        if (empty($rows)) {
-            return null;
-        }
-
-        /** @var array<string, mixed> $session */
-        $session = $rows[0];
-
-        // Use in-memory accumulation instead of immediate DB write.
-        /** @var string $sessionId */
-        $sessionId = $session['id'];
-        $this->recordBytesIn($sessionId, strlen($body));
-
-        return $session;
-    }
-
-    /**
      * Record bytes sent to a server over its relay session.
      *
      * Accumulates in memory and flushes to the DB on the next periodic tick
@@ -231,8 +184,8 @@ class RelaySessionManager
     /**
      * Close open relay sessions that have had no recent frame activity.
      *
-     * A live tunnel refreshes `last_frame_at` (via routeRequest, recordBytes*
-     * and touchLastFrame and the 30s heartbeat timer) well within this threshold,
+     * A live tunnel refreshes `last_frame_at` (via touchLastFrame, recordBytesIn/recordBytesOut,
+     * and the 30s heartbeat timer) well within this threshold,
      * so genuinely connected servers are never reaped. This sweeps up orphaned
      * open rows left behind when closeSession() was not reached (worker
      * restart, dropped connection), keeping the dashboard's "active relays"

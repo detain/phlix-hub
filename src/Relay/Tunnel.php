@@ -1131,6 +1131,16 @@ final class Tunnel implements TunnelInterface
     }
 
     /**
+     * Get the current FrameDecoder buffer size in bytes.
+     *
+     * @return int Bytes currently buffered (0 if no decoding in progress).
+     */
+    public function getDecodeBufferSize(): int
+    {
+        return $this->serverDecoder !== null ? $this->serverDecoder->getBufferSize() : 0;
+    }
+
+    /**
      * Get total bytes sent to the server through this tunnel.
      *
      * @return int Bytes out counter.

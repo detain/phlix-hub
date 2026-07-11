@@ -6,6 +6,8 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\RelaySessionManager;
@@ -105,7 +107,23 @@ final class ClientRelayWorkerTest extends TestCase
 
         $this->codec = new FrameDecoder();
         $this->tunnelManager = new TunnelManager($this->sessionManager, $this->codec, $this->logger);
-        $this->controller = new ClientMountController($this->buildContainer());
+        // Rate limiter that never limits for tests.
+        $rateLimiter = new class implements RateLimiterInterface {
+            public function hit(string $key): RateLimitState
+            {
+                return new RateLimitState(1, 4, time() + 900, false, 5);
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                return new RateLimitState(0, 5, 0, false, 5);
+            }
+        };
+        $this->controller = new ClientMountController($this->buildContainer(), $rateLimiter);
     }
 
     protected function tearDown(): void
@@ -692,6 +710,22 @@ final class ClientRelayWorkerTest extends TestCase
         $serverInfo = $this->buildServerInfoHandler();
         $tunnelManager = $this->tunnelManager;
         $controllerFactory = fn (): ClientMountController => $this->controller;
+        // Default: rate limiter always returns non-limited state.
+        $rateLimiter = new class implements RateLimiterInterface {
+            public function hit(string $key): RateLimitState
+            {
+                return new RateLimitState(1, 4, time() + 900, false, 5);
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                return new RateLimitState(0, 5, 0, false, 5);
+            }
+        };
 
         return new class (
             $tokenService,
@@ -700,6 +734,7 @@ final class ClientRelayWorkerTest extends TestCase
             $controllerFactory,
             $metrics,
             $flush,
+            $rateLimiter,
         ) implements ContainerInterface {
             /** @param callable():ClientMountController $controllerFactory */
             public function __construct(
@@ -709,6 +744,7 @@ final class ClientRelayWorkerTest extends TestCase
                 private $controllerFactory,
                 private readonly ?MetricsCollector $metrics,
                 private readonly ?MetricsFlushService $flush,
+                private readonly RateLimiterInterface $rateLimiter,
             ) {
             }
 
@@ -723,6 +759,7 @@ final class ClientRelayWorkerTest extends TestCase
                         ?? throw new \RuntimeException("Unknown service: {$id}"),
                     MetricsFlushService::class => $this->flush
                         ?? throw new \RuntimeException("Unknown service: {$id}"),
+                    RateLimiterInterface::class => $this->rateLimiter,
                     default => throw new \RuntimeException("Unknown service: {$id}"),
                 };
             }
@@ -735,6 +772,7 @@ final class ClientRelayWorkerTest extends TestCase
                     TunnelManager::class,
                     TunnelManagerInterface::class,
                     ClientMountController::class,
+                    RateLimiterInterface::class,
                 ];
                 if ($this->metrics !== null) {
                     $known[] = MetricsCollector::class;

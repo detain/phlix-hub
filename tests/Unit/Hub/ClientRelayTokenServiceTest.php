@@ -181,4 +181,37 @@ final class ClientRelayTokenServiceTest extends TestCase
             $result['expires_at'],
         );
     }
+
+    public function test_prune_expired_tokens_issues_correct_delete_query(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $capturedSql = '';
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): int {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+                return 7;
+            },
+        );
+
+        $service = new ClientRelayTokenService($db);
+        $deleted = $service->pruneExpiredTokens();
+
+        $this->assertSame(7, $deleted);
+        $this->assertStringContainsString('DELETE FROM client_relay_tokens', $capturedSql);
+        $this->assertStringContainsString('expires_at < NOW() - INTERVAL 1 DAY', $capturedSql);
+        $this->assertStringContainsString('revoked_at IS NOT NULL', $capturedSql);
+        // No params needed for this query.
+        $this->assertNull($capturedParams);
+    }
+
+    public function test_prune_expired_tokens_returns_zero_when_result_not_int(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(null);
+
+        $service = new ClientRelayTokenService($db);
+        $this->assertSame(0, $service->pruneExpiredTokens());
+    }
 }

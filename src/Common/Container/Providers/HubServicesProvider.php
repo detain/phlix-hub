@@ -54,6 +54,7 @@ use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Common\Database\ConnectionPool;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
@@ -162,14 +163,17 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             HeartbeatHandler::class => factory(static function (
                 EnrollmentJwtService $jwtService,
+                RateLimiterInterface $rateLimiter,
             ): HeartbeatHandler {
                 // Dedicated 'txn' connection (see ClaimRequestHandler above).
                 return new HeartbeatHandler(
                     ConnectionPool::getConnection('txn'),
                     $jwtService,
                     LoggerFactory::get(LogChannels::HUB),
+                    $rateLimiter,
                 );
-            })->parameter('jwtService', get(EnrollmentJwtService::class)),
+            })->parameter('jwtService', get(EnrollmentJwtService::class))
+                ->parameter('rateLimiter', get(RateLimiterInterface::class)),
 
             HubSettingsRepository::class => factory(static function (
                 Connection $db,
@@ -233,9 +237,11 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             HubJwksController::class => factory(static function (
                 Ed25519KeyManager $keyManager,
+                RateLimiterInterface $rateLimiter,
             ): HubJwksController {
-                return new HubJwksController($keyManager);
-            })->parameter('keyManager', get(Ed25519KeyManager::class)),
+                return new HubJwksController($keyManager, $rateLimiter);
+            })->parameter('keyManager', get(Ed25519KeyManager::class))
+                ->parameter('rateLimiter', get(RateLimiterInterface::class)),
 
             ServerClaimController::class => factory(static function (
                 ClaimRequestHandler $handler,
@@ -287,9 +293,11 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             ClientMountController::class => factory(static function (
                 ContainerInterface $container,
+                RateLimiterInterface $rateLimiter,
             ): ClientMountController {
-                return new ClientMountController($container);
-            }),
+                return new ClientMountController($container, $rateLimiter);
+            })->parameter('container', get(ContainerInterface::class))
+                ->parameter('rateLimiter', get(RateLimiterInterface::class)),
 
             FrameDecoder::class => factory(static function (): FrameDecoder {
                 return new FrameDecoder();
@@ -349,6 +357,8 @@ final class HubServicesProvider implements ServiceProviderInterface
             IdleReaper::class => factory(static function (
                 TunnelManager $tunnelManager,
                 RelaySessionManager $sessionManager,
+                HeartbeatHandler $heartbeatHandler,
+                ClientRelayTokenService $clientRelayTokenService,
             ) use ($appConfig): IdleReaper {
                 /** @var int $interval */
                 $interval = is_int($appConfig['relay_idle_reaper_interval'] ?? null)
@@ -365,9 +375,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $interval,
                     $staleThreshold,
                     $sessionManager,
+                    $heartbeatHandler,
+                    $clientRelayTokenService,
                 );
             })->parameter('tunnelManager', get(TunnelManager::class))
-                ->parameter('sessionManager', get(RelaySessionManager::class)),
+                ->parameter('sessionManager', get(RelaySessionManager::class))
+                ->parameter('heartbeatHandler', get(HeartbeatHandler::class))
+                ->parameter('clientRelayTokenService', get(ClientRelayTokenService::class)),
 
             ServerReaper::class => factory(static function (
                 Connection $db,
@@ -536,11 +550,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ServerInfoHandler $serverInfo,
                 RelayProxyBridge $bridge,
                 RelaySessionManager $sessionManager,
+                RateLimiterInterface $rateLimiter,
             ): ServerProxyController {
-                return new ServerProxyController($serverInfo, $bridge, LoggerFactory::get(LogChannels::RELAY), $sessionManager);
+                return new ServerProxyController($serverInfo, $bridge, LoggerFactory::get(LogChannels::RELAY), $sessionManager, $rateLimiter);
             })->parameter('serverInfo', get(ServerInfoHandler::class))
                 ->parameter('bridge', get(RelayProxyBridge::class))
-                ->parameter('sessionManager', get(RelaySessionManager::class)),
+                ->parameter('sessionManager', get(RelaySessionManager::class))
+                ->parameter('rateLimiter', get(RateLimiterInterface::class)),
 
             HubSettingsController::class => factory(static function (
                 HubSettingsRepository $settings,

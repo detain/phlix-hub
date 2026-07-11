@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Generator;
+use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\TunnelInterface;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
+use Workerman\MySQL\Connection;
 
 class IdleReaperTest extends TestCase
 {
@@ -280,6 +282,63 @@ class IdleReaperTest extends TestCase
             ->willReturn($this->createTunnelGenerator([]));
 
         // No session manager passed; tick() must complete cleanly.
+        $reaper = new IdleReaper(
+            $tunnelManager,
+            $this->logger,
+            60,
+            90,
+        );
+
+        $this->assertSame(0, $reaper->tick());
+    }
+
+    public function test_tick_prunes_expired_tokens_when_client_relay_token_service_wired(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager
+            ->method('allTunnels')
+            ->willReturn($this->createTunnelGenerator([]));
+
+        // ClientRelayTokenService is final, so we use a real instance with a
+        // mock DB to verify pruneExpiredTokens() is called with correct SQL.
+        $db = $this->createMock(Connection::class);
+        $capturedSql = '';
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql): int {
+                $capturedSql = $sql;
+                return 5; // 5 rows pruned
+            },
+        );
+
+        $clientRelayTokenService = new ClientRelayTokenService($db);
+
+        $reaper = new IdleReaper(
+            $tunnelManager,
+            $this->logger,
+            60,
+            90,
+            null, // sessionManager
+            null, // heartbeatHandler
+            $clientRelayTokenService,
+        );
+
+        $reapedCount = $reaper->tick();
+
+        // The tunnel reaping returns 0 (no tunnels), but the token prune ran.
+        $this->assertSame(0, $reapedCount);
+        $this->assertStringContainsString('DELETE FROM client_relay_tokens', $capturedSql);
+        $this->assertStringContainsString('expires_at < NOW() - INTERVAL 1 DAY', $capturedSql);
+        $this->assertStringContainsString('revoked_at IS NOT NULL', $capturedSql);
+    }
+
+    public function test_tick_is_noop_for_client_relay_tokens_when_service_null(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager
+            ->method('allTunnels')
+            ->willReturn($this->createTunnelGenerator([]));
+
+        // No token service passed; tick() must complete cleanly.
         $reaper = new IdleReaper(
             $tunnelManager,
             $this->logger,

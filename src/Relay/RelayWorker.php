@@ -207,13 +207,20 @@ final class RelayWorker
                     // row until it closes). Touch at least twice per flush window.
                     $touchInterval = max(1, intdiv($flushInterval, 2));
                     Timer::add($touchInterval, static function () use ($touchTunnelManager, $collector): void {
+                        $maxBufferSize = 0;
                         foreach ($touchTunnelManager->allTunnels() as $tunnel) {
                             if (!$tunnel instanceof Tunnel) {
                                 continue;
                             }
                             $ws = $tunnel->serverWs;
                             $collector->touchConnection($tunnel->tunnelId, $ws->bytesRead, $ws->bytesWritten);
+                            $bufSize = $tunnel->getDecodeBufferSize();
+                            if ($bufSize > $maxBufferSize) {
+                                $maxBufferSize = $bufSize;
+                            }
                         }
+                        // Record the maximum decode buffer size across all tunnels.
+                        $collector->setRelayDecodeBufferSize($maxBufferSize);
                     });
                 }
             }

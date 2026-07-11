@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Hub;
 
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Request;
@@ -25,7 +27,12 @@ final class JwksControllerTest extends TestCase
         parent::setUp();
         $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-jwks-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
+        $this->rateLimiter = $this->createMock(RateLimiterInterface::class);
+        $this->rateLimiter->method('hit')->willReturn(new RateLimitState(1, 4, time() + 900, false, 5));
     }
+
+    /** @var RateLimiterInterface */
+    private $rateLimiter;
 
     protected function tearDown(): void
     {
@@ -45,7 +52,7 @@ final class JwksControllerTest extends TestCase
     {
         $keyPath = $this->tmpDir . '/key.pem';
         $keyManager = new Ed25519KeyManager($keyPath);
-        $controller = new HubJwksController($keyManager);
+        $controller = new HubJwksController($keyManager, $this->rateLimiter);
 
         $request = new Request();
         $response = $controller($request);
@@ -70,7 +77,7 @@ final class JwksControllerTest extends TestCase
     {
         $keyPath = $this->tmpDir . '/key.pem';
         $keyManager = new Ed25519KeyManager($keyPath);
-        $controller = new HubJwksController($keyManager);
+        $controller = new HubJwksController($keyManager, $this->rateLimiter);
 
         $request = new Request();
         $response = $controller($request);
@@ -96,7 +103,7 @@ final class JwksControllerTest extends TestCase
         $keyManager->rotate();
         $newKid = $keyManager->getKid();
 
-        $controller = new HubJwksController($keyManager);
+        $controller = new HubJwksController($keyManager, $this->rateLimiter);
 
         // During overlap: two keys, both kids.
         $body = json_decode($controller(new Request())->body, true);

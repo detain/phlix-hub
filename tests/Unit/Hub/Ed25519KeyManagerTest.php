@@ -154,7 +154,9 @@ final class Ed25519KeyManagerTest extends TestCase
 
     /**
      * S7: once the overlap window lapses the previous key is dropped — gone from
-     * active keys, the JWKS, and unresolvable by kid — and the sidecar pruned.
+     * active keys, the JWKS, and unresolvable by kid. The sidecar is NOT pruned
+     * on the hot path (no unlink during verification) — it is left on disk and
+     * can be cleaned up via {@see Ed25519KeyManager::purgeExpiredPreviousKey()}.
      */
     public function testPreviousKeyDroppedAfterOverlapExpiry(): void
     {
@@ -182,9 +184,42 @@ final class Ed25519KeyManagerTest extends TestCase
         self::assertSame([$newKid], $activeKids);
         self::assertCount(1, $manager->getPublicKeyJwks());
 
+        // Sidecar is NOT deleted on the verification path (no I/O on hot path).
+        self::assertTrue(
+            is_file($this->keyPath . '.previous.json'),
+            'expired previous-key sidecar must NOT be pruned on verification path — use purgeExpiredPreviousKey()',
+        );
+    }
+
+    /**
+     * S7: {@see Ed25519KeyManager::purgeExpiredPreviousKey()} removes the sidecar
+     * when the overlap window has lapsed.
+     */
+    public function testPurgeExpiredPreviousKeyRemovesSidecar(): void
+    {
+        $now = 2_000_000;
+        $clock = static function () use (&$now): int {
+            return $now;
+        };
+        $manager = new Ed25519KeyManager($this->keyPath, $clock);
+        $manager->getOrCreateKeyPair();
+        $oldKid = $manager->getKid();
+        $manager->rotate();
+        $newKid = $manager->getKid();
+
+        // Advance past the 24h overlap window.
+        $now += Ed25519KeyManager::OVERLAP_TTL_SECONDS + 1;
+
+        // Before purge: old kid not served but file still exists.
+        self::assertNull($manager->getPublicKeyForKid($oldKid), 'previous kid must not be served after expiry');
+        self::assertNotNull($manager->getPublicKeyForKid($newKid), 'current kid must still be served');
+        self::assertTrue(is_file($this->keyPath . '.previous.json'));
+
+        // Purge removes the sidecar.
+        $manager->purgeExpiredPreviousKey();
         self::assertFalse(
             is_file($this->keyPath . '.previous.json'),
-            'expired previous-key sidecar must be pruned',
+            'purgeExpiredPreviousKey() must remove the expired sidecar',
         );
     }
 

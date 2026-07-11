@@ -13,6 +13,7 @@ namespace Phlix\Hub\Relay;
 
 use Channel\Client as ChannelClient;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
@@ -61,33 +62,35 @@ final class RelayProxyManager
     private const MAX_REQUEST_ID = 0xFFFFFFFF;
 
     /**
-     * Minimum seconds between completion-timer re-arms for a streaming request.
-     * The timer is re-armed on response activity so it behaves as an *inactivity*
-     * bound rather than a total-transfer one, but re-arming per ~64 KB frame
-     * would churn the event loop; this throttles it to at most once per interval.
-     */
-    private const STREAM_TIMER_REARM_THROTTLE_SECONDS = 1.0;
-
-    /**
      * Absolute ceiling (seconds) on how long a single streaming response may
      * remain open, regardless of activity.
      *
-     * {@see self::touchStreamTimer()} re-arms the completion timer on every
-     * response frame, so the per-frame bound alone is a pure *inactivity*
-     * timeout — a steadily-dripping origin (a pathologically slow encode, or a
+     * The per-request timer (inactivity timeout) is now replaced by a single
+     * sweep timer that runs periodically and checks ALL pending entries. A
+     * steadily-dripping origin (a pathologically slow encode, or a
      * compromised/misbehaving paired server sending one byte every
-     * `<timeout>s`) could otherwise keep re-arming it forever and hold the
+     * `<timeout>s`) could otherwise keep the entry alive forever and hold the
      * browser connection, this pending entry, and the underlying server-side
-     * transfer open indefinitely. This is defense-in-depth on top of that: once
-     * a stream has been open this long it is terminated even if frames are
-     * still actively arriving. Deliberately generous (15 minutes — well beyond
-     * any real HLS/DASH segment or direct-play transfer) so it never clips a
-     * legitimate slow-but-finite transfer; it exists purely to bound the
+     * transfer open indefinitely. This is defense-in-depth: once a stream has
+     * been open this long it is terminated even if the inactivity timeout has
+     * not yet fired. Deliberately generous (15 minutes — well beyond any real
+     * HLS/DASH segment or direct-play transfer) so it never clips a legitimate
+     * slow-but-finite transfer; it exists purely to bound the
      * pathological/malicious case. Low risk in today's threat model (the origin
      * is the authenticated owner's own paired server), so a generous bound is
      * appropriate.
      */
     private const MAX_STREAM_DURATION_SECONDS = 900.0;
+
+    /**
+     * Interval (seconds) between sweep timer runs.
+     *
+     * The sweep timer is a single periodic timer that checks ALL pending entries
+     * for inactivity timeouts and absolute duration exceeded. This replaces the
+     * previous per-request timer approach which created/destroyed timers on every
+     * response frame for streaming requests.
+     */
+    private const SWEEP_INTERVAL_SECONDS = 2.0;
 
     /**
      * @var int Next request id to allocate.
@@ -128,12 +131,11 @@ final class RelayProxyManager
      *     server_id: string,
      *     head: RelayHttpResponseHead|null,
      *     body: string,
-     *     timer: int|null,
      *     stream: bool,
      *     stream_started: bool,
      *     timeout: float,
-     *     timer_armed_at: float,
-     *     stream_opened_at: float
+     *     stream_opened_at: float,
+     *     sent_at: float
      * }>
      */
     private array $pending = [];
@@ -144,6 +146,11 @@ final class RelayProxyManager
     private $publisher;
 
     /**
+     * @var MetricsCollector|null
+     */
+    private ?MetricsCollector $metrics;
+
+    /**
      * @param TunnelManagerInterface                              $tunnelManager Tunnel registry (lookup + send).
      * @param StructuredLogger                                    $logger        Relay logger.
      * @param int                                                 $timeoutSeconds Fallback
@@ -152,16 +159,30 @@ final class RelayProxyManager
      *        non-positive.
      * @param (callable(string, array<string, mixed>): void)|null $publisher     Channel publisher
      *        (defaults to {@see ChannelClient::publish()}; overridable for tests).
+     * @param MetricsCollector|null                               $metrics       Relay metrics collector (optional; no-op when null).
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
         private readonly StructuredLogger $logger,
         private readonly int $timeoutSeconds = RelayProxyProtocol::DEFAULT_TIMEOUT_SECONDS,
         ?callable $publisher = null,
+        ?MetricsCollector $metrics = null,
     ) {
         $this->publisher = $publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
         };
+        $this->metrics = $metrics;
+
+        // Single sweep timer that periodically checks all pending entries for
+        // inactivity timeouts and absolute duration exceeded.
+        try {
+            Timer::add(self::SWEEP_INTERVAL_SECONDS, function (): void {
+                $this->sweepStreamTimers();
+            }, [], true);
+        } catch (Throwable) {
+            // Timer unavailable (e.g. outside the event loop / tests) — the
+            // sweep will not run. In tests, call sweepStreamTimers() directly.
+        }
     }
 
     /**
@@ -235,24 +256,14 @@ final class RelayProxyManager
         }
 
         $requestId = $this->allocateRequestId();
-        // Per-request completion ceiling forwarded by the HTTP worker so this
-        // timer matches the browser-facing wait (playback-read segments carry
-        // the wider streaming timeout). Absent/invalid → the injected default.
+        // Per-request completion ceiling forwarded by the HTTP worker so the
+        // sweep timer matches the browser-facing wait (playback-read segments
+        // carry the wider streaming timeout). Absent/invalid → the injected default.
         $timeout = $this->asTimeout($data['timeout'] ?? null);
         // Streaming requests forward the response as phased frames (head/body/
         // end) instead of one reassembled blob, so the hub never buffers the
         // whole body. Absent/false → the historical buffered behaviour.
         $stream = ($data['stream'] ?? null) === true;
-        $timerId = null;
-        try {
-            $timerId = Timer::add($timeout, function () use ($requestId): void {
-                $this->onTimeout($requestId);
-            }, [], false);
-        } catch (Throwable) {
-            // Timer unavailable (e.g. outside the event loop / tests) — proceed
-            // without a timeout guard.
-            $timerId = null;
-        }
 
         $now = microtime(true);
         $this->pending[$requestId] = [
@@ -261,14 +272,14 @@ final class RelayProxyManager
             'server_id' => $serverId,
             'head' => null,
             'body' => '',
-            'timer' => is_int($timerId) ? $timerId : null,
             'stream' => $stream,
             'stream_started' => false,
             'timeout' => $timeout,
-            'timer_armed_at' => $now,
             'stream_opened_at' => $now,
+            'sent_at' => $now,
         ];
         $this->clientToRelayRequestId[$clientRequestId] = $requestId;
+        $this->metrics?->setRelayPendingRequests(count($this->pending));
 
         // Use chunked sending when the body is large enough that the
         // base64-encoded JSON would exceed the 65535-byte frame limit.
@@ -331,6 +342,7 @@ final class RelayProxyManager
             $this->logger->warning('Relay proxy: HTTP_RESPONSE for unknown/closed request, dropping', [
                 'request_id' => $requestId,
             ]);
+            $this->metrics?->recordRelayReplyDrop();
             return;
         }
 
@@ -356,7 +368,6 @@ final class RelayProxyManager
                     $head !== null ? $head->status : 502,
                     $head !== null ? $head->headers : [],
                 );
-                $this->touchStreamTimer($requestId);
                 return;
             }
             $this->pending[$requestId]['head'] = $chunk->head;
@@ -370,7 +381,6 @@ final class RelayProxyManager
                     $this->pending[$requestId]['request_id'],
                     $chunk->body,
                 );
-                $this->touchStreamTimer($requestId);
                 return;
             }
             $this->pending[$requestId]['body'] .= $chunk->body;
@@ -379,8 +389,8 @@ final class RelayProxyManager
 
         // KIND_END.
         $entry = $this->pending[$requestId];
-        $this->cancelTimer($requestId);
         unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
+        $this->metrics?->setRelayPendingRequests(count($this->pending));
 
         if ($streaming) {
             $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);
@@ -394,6 +404,12 @@ final class RelayProxyManager
         $head = $entry['head'];
         $status = $head !== null ? $head->status : 502;
         $headers = $head !== null ? $head->headers : [];
+
+        // Record relay latency for buffered requests (time from send to first response byte).
+        if (isset($entry['sent_at'])) {
+            $latencyMs = (microtime(true) - $entry['sent_at']) * 1000.0;
+            $this->metrics?->recordRelayLatency($latencyMs);
+        }
 
         $this->reply($entry['reply_event'], $entry['request_id'], $status, $headers, $entry['body']);
 
@@ -419,8 +435,8 @@ final class RelayProxyManager
             if ($entry['server_id'] !== $serverId) {
                 continue;
             }
-            $this->cancelTimer($requestId);
             unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
+            $this->metrics?->recordRelayError(503);
             if ($entry['stream'] && $entry['stream_started']) {
                 // The head (and some body) already reached the browser — a fresh
                 // 503 body cannot be substituted, so just terminate the stream.
@@ -435,6 +451,7 @@ final class RelayProxyManager
                 $this->errorBody('server.offline', 'The relay tunnel closed before the response completed.'),
             );
         }
+        $this->metrics?->setRelayPendingRequests(count($this->pending));
     }
 
     /**
@@ -459,8 +476,8 @@ final class RelayProxyManager
             return;
         }
 
-        $this->cancelTimer($requestId);
         unset($this->pending[$requestId]);
+        $this->metrics?->setRelayPendingRequests(count($this->pending));
 
         $tunnel = $this->tunnelManager->getTunnelForServer($entry['server_id']);
         if ($tunnel !== null && $tunnel->getStatus() === Tunnel::STATUS_ACTIVE) {
@@ -542,6 +559,8 @@ final class RelayProxyManager
             return;
         }
         unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
+        $this->metrics?->setRelayPendingRequests(count($this->pending));
+        $this->metrics?->recordRelayError(504);
 
         if ($entry['stream'] && $entry['stream_started']) {
             // Head already streamed to the browser — terminate the stream rather
@@ -570,60 +589,49 @@ final class RelayProxyManager
     }
 
     /**
-     * Re-arm the completion timer for a streaming request so it behaves as an
-     * inactivity cutoff (reset on each response frame) instead of a total-transfer
-     * ceiling — this is what lets a large, steadily-flowing body stream past the
-     * old fixed timeout. Throttled to at most once per
-     * {@see self::STREAM_TIMER_REARM_THROTTLE_SECONDS} so per-frame churn stays
-     * off the event loop.
+     * Sweep all pending entries and time out any that have exceeded their
+     * inactivity timeout or absolute maximum duration.
      *
-     * Also enforces {@see self::MAX_STREAM_DURATION_SECONDS} as an absolute
-     * ceiling: a stream that has been open that long is terminated here
-     * (instead of re-armed) even though frames are still actively arriving —
-     * defense-in-depth against a steadily-dripping origin that would otherwise
-     * keep resetting the pure inactivity bound forever.
-     *
-     * @param int $requestId The relay request id.
+     * This is called periodically by a single sweep timer (every
+     * {@see self::SWEEP_INTERVAL_SECONDS}) instead of per-entry timers that were
+     * re-armed on every response frame (which caused timer churn for streaming
+     * responses with many frames per second).
      *
      * @return void
      */
-    private function touchStreamTimer(int $requestId): void
+    private function sweepStreamTimers(): void
     {
-        if (!isset($this->pending[$requestId])) {
+        if ($this->pending === []) {
             return;
         }
-        $entry = $this->pending[$requestId];
+
         $now = microtime(true);
+        // Iterate over a snapshot of keys so that if failServer() modifies
+        // $this->pending mid-sweep, we process all entries that existed when
+        // the sweep started (failServer's modifications won't cause keys to be
+        // skipped or double-processed).
+        foreach (array_keys($this->pending) as $requestId) {
+            $entry = $this->pending[$requestId] ?? null;
+            if ($entry === null) {
+                // Already completed / cancelled / timed out — nothing to do.
+                continue;
+            }
 
-        if ($now - $entry['stream_opened_at'] >= self::MAX_STREAM_DURATION_SECONDS) {
-            $this->cancelTimer($requestId);
-            unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
-            $this->logger->warning('Relay proxy: streamed response exceeded absolute max duration, terminating', [
-                'request_id' => $requestId,
-                'server_id' => $entry['server_id'],
-            ]);
-            $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);
-            return;
-        }
-
-        if ($now - $entry['timer_armed_at'] < self::STREAM_TIMER_REARM_THROTTLE_SECONDS) {
-            return;
-        }
-
-        $this->cancelTimer($requestId);
-        $timerId = null;
-        try {
-            $timerId = Timer::add($entry['timeout'], function () use ($requestId): void {
+            // Absolute duration ceiling for streaming entries: once a stream
+            // has been open this long it is terminated even if frames are still
+            // actively arriving (defense-in-depth against a steadily-dripping
+            // origin that would otherwise keep resetting the inactivity bound).
+            if ($entry['stream'] && ($now - $entry['stream_opened_at'] >= self::MAX_STREAM_DURATION_SECONDS)) {
                 $this->onTimeout($requestId);
-            }, [], false);
-        } catch (Throwable) {
-            $timerId = null;
+                continue;
+            }
+
+            // Inactivity timeout: if the server hasn't sent any data for longer
+            // than the per-request timeout, the entry is timed out.
+            if ($now - $entry['sent_at'] >= $entry['timeout']) {
+                $this->onTimeout($requestId);
+            }
         }
-        // Reassign the whole entry (not a partial sub-key write) so the array
-        // shape is preserved for static analysis after the intervening calls.
-        $entry['timer'] = is_int($timerId) ? $timerId : null;
-        $entry['timer_armed_at'] = $now;
-        $this->pending[$requestId] = $entry;
     }
 
     /**
@@ -715,25 +723,6 @@ final class RelayProxyManager
             return json_encode(['error' => $message, 'code' => $code], JSON_THROW_ON_ERROR);
         } catch (Throwable) {
             return '{"error":"relay error"}';
-        }
-    }
-
-    /**
-     * Cancel the timeout timer for a request, if any.
-     *
-     * @param int $requestId The relay request id.
-     *
-     * @return void
-     */
-    private function cancelTimer(int $requestId): void
-    {
-        $timerId = $this->pending[$requestId]['timer'] ?? null;
-        if (is_int($timerId)) {
-            try {
-                Timer::del($timerId);
-            } catch (Throwable) {
-                // ignore
-            }
         }
     }
 

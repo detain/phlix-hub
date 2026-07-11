@@ -281,8 +281,10 @@ final class Ed25519KeyManager
         $expiresAt = $this->previousKey['expiresAt'];
         if ($expiresAt !== null && $expiresAt <= $this->now()) {
             // Overlap window lapsed — drop the previous key for good.
+            // NOTE: we do NOT delete the sidecar file here (unlink is I/O on the
+            // hot verification path). The file will be overwritten on the next
+            // rotate(), or can be cleaned up via purgeExpiredPreviousKey().
             $this->previousKey = null;
-            $this->deletePreviousKeyFile();
             return null;
         }
 
@@ -369,6 +371,27 @@ final class Ed25519KeyManager
         $path = $this->previousKeyPath();
         if (is_file($path)) {
             @unlink($path);
+        }
+    }
+
+    /**
+     * Purge the previous-key sidecar if it has expired.
+     *
+     * This is NOT called automatically on the verification path (loadPreviousKey
+     * does not unlink on expiry) to avoid I/O on every JWT check. Call this
+     * from a periodic maintenance timer or during non-peak hours.
+     */
+    public function purgeExpiredPreviousKey(): void
+    {
+        $record = $this->readPreviousKeyFile();
+        if ($record === null) {
+            return;
+        }
+
+        $expiresAt = $record['expiresAt'];
+        if ($expiresAt !== null && $expiresAt <= $this->now()) {
+            $this->previousKey = false;
+            $this->deletePreviousKeyFile();
         }
     }
 

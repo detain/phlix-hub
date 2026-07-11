@@ -209,6 +209,29 @@ final class ClientRelayTokenService
     }
 
     /**
+     * Prune expired, already-revoked tokens older than 1 day.
+     *
+     * Runs the retention sweep on each idle-reaper tick so that rows are
+     * cleaned up without extra cron or manual maintenance. Only tokens that
+     * are both expired AND revoked are removed — a revoked-but-not-yet-expired
+     * token is kept until natural expiry so audit logs can still reference it.
+     *
+     * @return int Number of rows deleted.
+     *
+     * @since HB-4.2
+     */
+    public function pruneExpiredTokens(): int
+    {
+        $result = $this->db->query(
+            'DELETE FROM client_relay_tokens'
+                . ' WHERE expires_at < NOW() - INTERVAL 1 DAY'
+                . ' AND revoked_at IS NOT NULL',
+        );
+
+        return is_int($result) ? $result : 0;
+    }
+
+    /**
      * Compute the storage hash of a plaintext token.
      *
      * @param string $token Plaintext token.

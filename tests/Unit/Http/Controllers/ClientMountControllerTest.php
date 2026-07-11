@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Relay\ClientRelayWorker;
@@ -47,7 +49,24 @@ final class ClientMountControllerTest extends TestCase
             }
         };
 
-        $this->controller = new ClientMountController($container);
+        // Default: rate limiter always returns non-limited state.
+        $rateLimiter = new class implements RateLimiterInterface {
+            public function hit(string $key): RateLimitState
+            {
+                return new RateLimitState(1, 4, time() + 900, false, 5);
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                return new RateLimitState(0, 5, 0, false, 5);
+            }
+        };
+
+        $this->controller = new ClientMountController($container, $rateLimiter);
     }
 
     public function testReturns400WhenServerIdMissing(): void

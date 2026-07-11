@@ -396,13 +396,14 @@ final class RelayProxyManagerTest extends TestCase
     }
 
     /**
-     * Regression for the MINOR finding: a steadily-dripping response keeps
-     * re-arming the pure per-frame inactivity timer forever, so an absolute
-     * duration ceiling is enforced independently of activity. Rather than
+     * Regression for the MINOR finding: a steadily-dripping response could
+     * keep the entry alive forever via constant re-arming, so an absolute
+     * duration ceiling is enforced independently of activity. The sweep timer
+     * (HB-4.8) checks MAX_STREAM_DURATION_SECONDS on each pass. Rather than
      * actually sleeping past the (multi-minute) ceiling, the pending entry's
      * `stream_opened_at` is rewritten into the past via reflection to simulate
-     * "this stream has been open a long time" — the next arriving frame must
-     * then terminate the stream instead of re-arming the inactivity timer.
+     * "this stream has been open a long time" — the sweep must then terminate
+     * the stream.
      */
     public function test_absolute_stream_duration_ceiling_terminates_a_steadily_dripping_response(): void
     {
@@ -440,29 +441,28 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
-        // Rewrite the entry's clock fields into the distant past — simulates a
-        // stream that has been open far beyond the absolute ceiling without
-        // actually sleeping the test.
+        // Rewrite the entry's clock into the distant past — simulates a stream
+        // that has been open far beyond the absolute ceiling without actually
+        // sleeping the test.
         $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
         $pendingProp->setAccessible(true);
         /** @var array<int, array<string, mixed>> $pending */
         $pending = $pendingProp->getValue($manager);
         $pending[$requestId]['stream_opened_at'] = microtime(true) - 3600.0;
-        $pending[$requestId]['timer_armed_at'] = microtime(true) - 3600.0;
+        $pending[$requestId]['sent_at'] = microtime(true) - 3600.0;
         $pendingProp->setValue($manager, $pending);
 
+        // Simulate the head arriving (stream_started = true).
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
         ));
-        // Activity arrives — which would normally re-arm the pure inactivity
-        // timer — but the absolute ceiling must terminate instead.
-        $manager->onResponseFrame(new RelayFrame(
-            RelayFrameType::HTTP_RESPONSE,
-            $requestId,
-            RelayHttpResponseCodec::encodeBody('x'),
-        ));
+
+        // Run the sweep — it must detect the exceeded absolute duration.
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
 
         $this->assertSame('end', $this->published[array_key_last($this->published)]['data']['phase'] ?? null);
 
@@ -552,15 +552,15 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount($countAfter, $this->published);
     }
 
-    public function test_streaming_activity_rearms_the_inactivity_timer_within_the_limits(): void
+    /**
+     * With the HB-4.8 sweep approach, streaming frames do NOT re-arm any
+     * per-request timer — the sweep periodically checks all entries. This test
+     * verifies that a stream that is still within both its inactivity timeout
+     * and absolute duration ceiling remains pending after frames arrive, and
+     * the sweep does NOT prematurely terminate it.
+     */
+    public function test_streaming_frames_preserve_pending_entry_until_sweep_timeout(): void
     {
-        // Covers touchStreamTimer()'s re-arm branch (the feature that lets a
-        // large, steadily-flowing body stream past the old fixed timeout): once
-        // the per-frame throttle window has elapsed and the absolute ceiling is
-        // NOT yet reached, a new response frame must re-arm the completion timer
-        // and stamp a fresh timer_armed_at — rather than either terminating
-        // (the absolute-ceiling test) or short-circuiting on the throttle guard
-        // (every other fast test, where frames arrive < 1s apart).
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
         $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
@@ -593,45 +593,52 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+
+        // Stream is well within both the inactivity timeout and absolute ceiling.
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $this->assertArrayHasKey($requestId, $pending, 'entry must be pending before frames');
+        $this->assertArrayNotHasKey('timer', $pending[$requestId], 'HB-4.8: no per-request timer field');
+        $this->assertArrayNotHasKey('timer_armed_at', $pending[$requestId], 'HB-4.8: no timer_armed_at field');
+
+        // Send head frame.
+        $publishedBefore = count($this->published);
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
         ));
 
-        // Push the last re-arm past the throttle window (so the next frame
-        // actually re-arms) while keeping the stream comfortably inside the
-        // absolute-duration ceiling (so it is NOT terminated).
-        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
-        $pendingProp->setAccessible(true);
-        /** @var array<int, array<string, mixed>> $pending */
-        $pending = $pendingProp->getValue($manager);
-        $staleArmedAt = microtime(true) - 5.0; // > 1s throttle window
-        $pending[$requestId]['timer_armed_at'] = $staleArmedAt;
-        $pending[$requestId]['stream_opened_at'] = microtime(true) - 5.0; // well under the 900s ceiling
-        $pendingProp->setValue($manager, $pending);
+        // The head phase is published; no terminating end phase.
+        $this->assertSame($publishedBefore + 1, count($this->published));
+        $this->assertSame('head', $this->published[array_key_last($this->published)]['data']['phase']);
 
+        // Send body frame.
         $publishedBefore = count($this->published);
-
-        // A body frame arrives → touchStreamTimer must re-arm (not terminate).
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('x'),
         ));
 
-        // The stream is still alive: the only new publish is the body phase,
-        // and no terminating end phase was emitted.
+        // The body phase is published; no terminating end phase.
         $this->assertSame($publishedBefore + 1, count($this->published));
         $this->assertSame('body', $this->published[array_key_last($this->published)]['data']['phase']);
 
-        // The re-arm branch ran: the entry survives and timer_armed_at advanced
-        // past the stale value we injected (proving it was NOT the throttle
-        // early-return and NOT the terminate-and-unset ceiling branch).
+        // Entry is still pending (no sweep timeout yet).
         /** @var array<int, array<string, mixed>> $after */
         $after = $pendingProp->getValue($manager);
-        $this->assertArrayHasKey($requestId, $after, 'a re-armed stream must remain pending');
-        $this->assertGreaterThan($staleArmedAt, $after[$requestId]['timer_armed_at']);
+        $this->assertArrayHasKey($requestId, $after, 'stream must remain pending after frames');
+
+        // Run the sweep — it must NOT terminate this fresh entry.
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
+
+        // No new publishes — entry is still alive.
+        $this->assertCount($publishedBefore + 1, $this->published);
     }
 
     public function test_response_for_unknown_request_is_dropped(): void
@@ -793,29 +800,18 @@ final class RelayProxyManagerTest extends TestCase
     }
 
     /**
-     * End-to-end wiring: `onRequest()` must arm its completion `Timer` with the
-     * COERCED timeout. Workerman's `Timer::add(..., persistent:false)` delegates
-     * to the installed event loop's `delay($interval, ...)`, so installing a
-     * stub `EventInterface` lets us observe the exact interval `onRequest()`
-     * passes. (Outside a running loop `Timer::add()` throws and `onRequest()`
-     * swallows it, so this seam is required to see the value at all.) `Tunnel`
-     * arms no timers, so the sole `delay()` per `onRequest()` is the completion
-     * timer. The stub is restored in `finally` so no global state leaks.
+     * HB-4.8 sweep approach: onRequest() stores the COERCED timeout in the
+     * pending entry; the sweep timer uses it to determine inactivity expiry.
+     * This tests that the coerced timeout is stored correctly for the sweep.
      */
-    public function test_on_request_arms_completion_timer_with_the_coerced_timeout(): void
+    public function test_on_request_stores_coerced_timeout_in_pending_entry(): void
     {
-        /** @var list<float> $captured */
-        $captured = [];
-        $event = $this->createMock(EventInterface::class);
-        $event->method('delay')->willReturnCallback(
-            static function (float $interval, callable $func, array $args = []) use (&$captured): int {
-                $captured[] = $interval;
-                return 4242;
-            },
-        );
-
+        $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
-        $serverWs->method('send')->willReturn(true);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
         $tunnel = $this->activeTunnel('srv-1', $serverWs);
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
         $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
@@ -827,35 +823,28 @@ final class RelayProxyManagerTest extends TestCase
             $this->publisher(),
         );
 
-        $eventProp = new ReflectionProperty(Timer::class, 'event');
-        $eventProp->setAccessible(true);
-        /** @var EventInterface|null $original */
-        $original = $eventProp->getValue();
-        $eventProp->setValue(null, $event);
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
 
-        try {
-            // A valid streaming timeout arms the completion timer verbatim.
-            $captured = [];
-            $manager->onRequest($this->proxyPayload(['timeout' => 60]));
-            $this->assertSame([60.0], $captured, 'a valid timeout arms the completion timer verbatim');
+        // A valid streaming timeout is stored verbatim.
+        $manager->onRequest($this->proxyPayload(['timeout' => 60]));
+        $pending = $pendingProp->getValue($manager);
+        $this->assertSame(60.0, end($pending)['timeout'], 'a valid timeout is stored verbatim');
 
-            // An absent field falls back to the injected default (30s).
-            $captured = [];
-            $manager->onRequest($this->proxyPayload());
-            $this->assertSame([30.0], $captured, 'an absent timeout falls back to the injected default');
+        // An absent field falls back to the injected default (30s).
+        $manager->onRequest($this->proxyPayload());
+        $pending = $pendingProp->getValue($manager);
+        $this->assertSame(30.0, end($pending)['timeout'], 'an absent timeout falls back to the injected default');
 
-            // A negative value falls back to the injected default (30s).
-            $captured = [];
-            $manager->onRequest($this->proxyPayload(['timeout' => -5]));
-            $this->assertSame([30.0], $captured, 'a negative timeout falls back to the injected default');
+        // A negative value falls back to the injected default (30s).
+        $manager->onRequest($this->proxyPayload(['timeout' => -5]));
+        $pending = $pendingProp->getValue($manager);
+        $this->assertSame(30.0, end($pending)['timeout'], 'a negative timeout falls back to the injected default');
 
-            // A non-numeric value falls back to the injected default (30s).
-            $captured = [];
-            $manager->onRequest($this->proxyPayload(['timeout' => 'bogus']));
-            $this->assertSame([30.0], $captured, 'a non-numeric timeout falls back to the injected default');
-        } finally {
-            $eventProp->setValue(null, $original);
-        }
+        // A non-numeric value falls back to the injected default (30s).
+        $manager->onRequest($this->proxyPayload(['timeout' => 'bogus']));
+        $pending = $pendingProp->getValue($manager);
+        $this->assertSame(30.0, end($pending)['timeout'], 'a non-numeric timeout falls back to the injected default');
     }
 
     // ---------------------------------------------------------------------
@@ -909,11 +898,9 @@ final class RelayProxyManagerTest extends TestCase
                 'server_id' => 'srv-1',
                 'head' => null,
                 'body' => '',
-                'timer' => null,
                 'stream' => false,
                 'stream_started' => false,
                 'timeout' => 30.0,
-                'timer_armed_at' => microtime(true),
                 'stream_opened_at' => microtime(true),
             ];
             $clientToRelay[$cid] = $hubRequestId + $i;
@@ -928,11 +915,9 @@ final class RelayProxyManagerTest extends TestCase
             'server_id' => 'srv-1',
             'head' => null,
             'body' => '',
-            'timer' => null,
             'stream' => false,
             'stream_started' => false,
             'timeout' => 30.0,
-            'timer_armed_at' => microtime(true),
             'stream_opened_at' => microtime(true),
         ];
         $clientToRelay[$targetClientId] = $targetRelayId;
@@ -1167,5 +1152,265 @@ final class RelayProxyManagerTest extends TestCase
         /** @var array<string, int> $mapAfter */
         $mapAfter = $clientToRelayProp->getValue($manager);
         $this->assertArrayNotHasKey('req-cancel', $mapAfter, 'map must be cleared after onCancel');
+    }
+
+    // ---------------------------------------------------------------------
+    // HB-4.8: Batch sweep timer (replaces per-request timer churn)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Verifies that sweepStreamTimers() times out a request that has exceeded
+     * its inactivity timeout (sent_at + timeout).
+     */
+    public function test_sweep_times_out_inactive_request(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-timeout',
+            'reply_event' => 'reply.timeout',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'timeout' => 30,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $requestId = $reqFrame->seq;
+
+        // Rewind the sent_at clock to simulate a request that's been waiting
+        // longer than its timeout.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $pending[$requestId]['sent_at'] = microtime(true) - 60.0; // 60s ago > 30s timeout
+        $pendingProp->setValue($manager, $pending);
+
+        // Run the sweep.
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
+
+        // The entry must be timed out: a 504 reply is published.
+        $this->assertCount(1, $this->published);
+        $this->assertSame(504, $this->published[0]['data']['status']);
+
+        // The pending entry is gone.
+        /** @var array<int, array<string, mixed>> $remaining */
+        $remaining = $pendingProp->getValue($manager);
+        $this->assertArrayNotHasKey($requestId, $remaining);
+    }
+
+    /**
+     * Verifies that sweepStreamTimers() terminates a streaming entry that has
+     * exceeded MAX_STREAM_DURATION_SECONDS (absolute duration ceiling).
+     */
+    public function test_sweep_terminates_stream_exceeding_absolute_duration(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-stream',
+            'reply_event' => 'reply.stream',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/hls/seg.ts',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $requestId = $reqFrame->seq;
+
+        // Send HEAD first so stream_started = true (END phase requires this).
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+        ));
+
+        // Simulate a stream that has been open far beyond the absolute ceiling.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $pending[$requestId]['stream_opened_at'] = microtime(true) - 3600.0; // 1 hour ago > 900s ceiling
+        $pending[$requestId]['sent_at'] = microtime(true) - 3600.0;
+        $pendingProp->setValue($manager, $pending);
+
+        // Run the sweep.
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
+
+        // The entry is terminated with an END phase (stream already started).
+        $this->assertCount(2, $this->published);
+        $this->assertSame('head', $this->published[0]['data']['phase']);
+        $this->assertSame('end', $this->published[1]['data']['phase']);
+
+        // The pending entry is gone.
+        /** @var array<int, array<string, mixed>> $remaining */
+        $remaining = $pendingProp->getValue($manager);
+        $this->assertArrayNotHasKey($requestId, $remaining);
+    }
+
+    /**
+     * Verifies that sweepStreamTimers() does NOT affect a request that is
+     * still within its timeout window.
+     */
+    public function test_sweep_does_not_affect_active_requests(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-active',
+            'reply_event' => 'reply.active',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'timeout' => 30,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $requestId = $reqFrame->seq;
+
+        // Run the sweep on a fresh request (well within timeout).
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
+
+        // No reply published — the request is still alive.
+        $this->assertCount(0, $this->published);
+
+        // The pending entry is still present.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $this->assertArrayHasKey($requestId, $pending);
+    }
+
+    /**
+     * Verifies that sweepStreamTimers() handles an empty pending array without
+     * errors (early return).
+     */
+    public function test_sweep_handles_empty_pending(): void
+    {
+        $manager = new RelayProxyManager(
+            $this->createMock(TunnelManagerInterface::class),
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+
+        // Must not throw.
+        $sweep->invoke($manager);
+
+        $this->assertCount(0, $this->published);
+    }
+
+    /**
+     * Verifies that sweepStreamTimers() gracefully skips an entry that has
+     * already been removed by another mechanism (e.g. failServer, cancelRequest).
+     */
+    public function test_sweep_skips_already_removed_entries(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-removed',
+            'reply_event' => 'reply.removed',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        // Remove the entry via failServer before the sweep runs.
+        $manager->failServer('srv-1');
+
+        // Run the sweep — must not throw and must not publish anything for
+        // the already-removed entry.
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
+
+        // failServer published 503; sweep must not have published anything else.
+        $this->assertCount(1, $this->published);
+        $this->assertSame(503, $this->published[0]['data']['status']);
     }
 }

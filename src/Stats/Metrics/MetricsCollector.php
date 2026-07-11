@@ -145,6 +145,79 @@ final class MetricsCollector
     }
 
     /**
+     * Set the current count of in-flight relay-proxy requests.
+     *
+     * @param int $count Current pending request count.
+     *
+     * @return void
+     */
+    public function setRelayPendingRequests(int $count): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+        $this->registry->setRelayPendingRequests($count);
+    }
+
+    /**
+     * Record a relay HTTP_RESPONSE frame that arrived for an unknown/closed request.
+     *
+     * @return void
+     */
+    public function recordRelayReplyDrop(): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+        $this->registry->recordRelayReplyDrop();
+    }
+
+    /**
+     * Record the round-trip latency of a completed relay proxy request.
+     *
+     * @param float $ms Latency in milliseconds.
+     *
+     * @return void
+     */
+    public function recordRelayLatency(float $ms): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+        $this->registry->recordRelayLatency($ms, $this->now());
+    }
+
+    /**
+     * Record a relay proxy error with the given HTTP status code.
+     *
+     * @param int $statusCode HTTP status code.
+     *
+     * @return void
+     */
+    public function recordRelayError(int $statusCode): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+        $this->registry->recordRelayError($statusCode);
+    }
+
+    /**
+     * Set the current FrameDecoder buffer size in bytes.
+     *
+     * @param int $bytes Buffer byte length.
+     *
+     * @return void
+     */
+    public function setRelayDecodeBufferSize(int $bytes): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+        $this->registry->setRelayDecodeBufferSize($bytes);
+    }
+
+    /**
      * Whether the subsystem is enabled.
      *
      * @return bool

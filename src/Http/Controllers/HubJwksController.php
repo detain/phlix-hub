@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -30,10 +32,12 @@ use Phlix\Hub\Http\Response;
 final class HubJwksController
 {
     /**
-     * @param Ed25519KeyManager $keyManager Hub's key manager.
+     * @param Ed25519KeyManager    $keyManager   Hub's key manager.
+     * @param RateLimiterInterface $rateLimiter  Bounded, TTL-windowed rate limiter keyed by client IP.
      */
     public function __construct(
         private readonly Ed25519KeyManager $keyManager,
+        private readonly RateLimiterInterface $rateLimiter,
     ) {
     }
 
@@ -42,6 +46,17 @@ final class HubJwksController
      */
     public function __invoke(Request $request): Response
     {
+        // HB-4.6: rate limit by client IP since JWKS is unauthenticated
+        // and a flood of requests could be a DoS vector.
+        $ip = $request->remoteIp !== '' ? $request->remoteIp : 'unknown';
+        $state = $this->rateLimiter->hit('jwks:' . $ip);
+        if ($state->limited) {
+            throw new RateLimitException(
+                resetAt: $state->resetAt,
+                remaining: 0,
+            );
+        }
+
         return (new Response())
             ->header('Content-Type', 'application/json')
             ->header('Cache-Control', 'public, max-age=3600')

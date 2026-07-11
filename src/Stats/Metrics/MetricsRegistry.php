@@ -45,6 +45,28 @@ final class MetricsRegistry
      */
     private array $latencyBucketsMs;
 
+    /** @var int Current count of in-flight relay proxy requests (gauge). */
+    private int $relayPendingRequests = 0;
+
+    /** @var int Cumulative count of HTTP_RESPONSE frames dropped for unknown/closed requests. */
+    private int $relayReplyDrops = 0;
+
+    /**
+     * Per-bucket relay-latency histogram (time from HTTP_REQUEST sent to first HTTP_RESPONSE byte).
+     *
+     * @var array<int, array<int, int>>
+     */
+    private array $relayLatencyHistogram = [];
+
+    /** @var int Cumulative count of relay proxy requests that returned 503. */
+    private int $relayError503 = 0;
+
+    /** @var int Cumulative count of relay proxy requests that returned 504. */
+    private int $relayError504 = 0;
+
+    /** @var int Current FrameDecoder buffer size in bytes (gauge, updated on each decode call). */
+    private int $relayDecodeBufferBytes = 0;
+
     /** @var int Max distinct (method,route) pairs per bucket before folding to OTHER_ROUTE. */
     private int $routeCardinalityCap;
 
@@ -489,5 +511,129 @@ final class MetricsRegistry
     {
         $kind = strtolower($kind);
         return in_array($kind, ['http', 'websocket', 'stream'], true) ? $kind : 'http';
+    }
+
+    /**
+     * Set the current in-flight relay-proxy request count.
+     *
+     * @param int $count Current pending request count.
+     *
+     * @return void
+     */
+    public function setRelayPendingRequests(int $count): void
+    {
+        $this->relayPendingRequests = $count;
+    }
+
+    /**
+     * Record a relay HTTP_RESPONSE frame that was dropped because the request
+     * is unknown (already completed, timed out, or cancelled).
+     *
+     * @return void
+     */
+    public function recordRelayReplyDrop(): void
+    {
+        $this->relayReplyDrops++;
+    }
+
+    /**
+     * Record the round-trip latency of a completed relay proxy request.
+     *
+     * @param float $ms Latency in milliseconds (time from sending HTTP_REQUEST
+     *                  frame to receiving the first HTTP_RESPONSE byte).
+     * @param int   $nowTs Unix timestamp of the recording.
+     *
+     * @return void
+     */
+    public function recordRelayLatency(float $ms, int $nowTs): void
+    {
+        $bucketTs = $this->bucketFor($nowTs);
+        if (!isset($this->relayLatencyHistogram[$bucketTs])) {
+            $h = [];
+            foreach ($this->latencyBucketsMs as $bound) {
+                $h[$bound] = 0;
+            }
+            $h[-1] = 0;
+            $this->relayLatencyHistogram[$bucketTs] = $h;
+        }
+        $elapsed = (int) round($ms);
+        $index = -1;
+        foreach ($this->latencyBucketsMs as $bound) {
+            if ($elapsed <= $bound) {
+                $index = $bound;
+                break;
+            }
+        }
+        $this->relayLatencyHistogram[$bucketTs][$index]++;
+    }
+
+    /**
+     * Record a relay proxy error response with the given HTTP status code.
+     *
+     * Only 503 and 504 are tracked individually; all other non-2xx codes
+     * are folded into a single `other` counter.
+     *
+     * @param int $statusCode HTTP status code returned to the client.
+     *
+     * @return void
+     */
+    public function recordRelayError(int $statusCode): void
+    {
+        if ($statusCode === 503) {
+            $this->relayError503++;
+        } elseif ($statusCode === 504) {
+            $this->relayError504++;
+        }
+    }
+
+    /**
+     * Set the current FrameDecoder buffer size in bytes.
+     *
+     * @param int $bytes Current buffer byte length.
+     *
+     * @return void
+     */
+    public function setRelayDecodeBufferSize(int $bytes): void
+    {
+        $this->relayDecodeBufferBytes = $bytes;
+    }
+
+    /**
+     * Drain and RESET all accumulated relay-specific metrics.
+     *
+     * Returns a snapshot of all relay counters and gauges; the accumulator
+     * state is cleared after drain so the next period starts from zero.
+     *
+     * @param int $nowTs Unix timestamp of the drain.
+     *
+     * @return array{
+     *     pending_requests: int,
+     *     reply_drops: int,
+     *     latency_histogram: array<int, array<int, int>>,
+     *     error_503: int,
+     *     error_504: int,
+     *     decode_buffer_bytes: int
+     * }
+     */
+    public function drainRelayMetrics(int $nowTs): array
+    {
+        $latencyHistogram = $this->relayLatencyHistogram;
+        $snapshot = [
+            'pending_requests' => $this->relayPendingRequests,
+            'reply_drops' => $this->relayReplyDrops,
+            'latency_histogram' => $latencyHistogram,
+            'error_503' => $this->relayError503,
+            'error_504' => $this->relayError504,
+            'decode_buffer_bytes' => $this->relayDecodeBufferBytes,
+        ];
+
+        $this->relayPendingRequests = 0;
+        $this->relayReplyDrops = 0;
+        $this->relayLatencyHistogram = [];
+        $this->relayError503 = 0;
+        $this->relayError504 = 0;
+        $this->relayDecodeBufferBytes = 0;
+
+        return $snapshot;
     }
 }

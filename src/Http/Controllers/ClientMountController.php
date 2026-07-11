@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
@@ -54,10 +56,12 @@ final class ClientMountController
     private static array $connDecoders = [];
 
     /**
-     * @param ContainerInterface $container PSR-11 container for resolving TunnelManager.
+     * @param ContainerInterface    $container   PSR-11 container for resolving TunnelManager.
+     * @param RateLimiterInterface $rateLimiter Bounded, TTL-windowed rate limiter keyed by client IP.
      */
     public function __construct(
         private readonly ContainerInterface $container,
+        private readonly RateLimiterInterface $rateLimiter,
     ) {
     }
 
@@ -75,6 +79,16 @@ final class ClientMountController
      */
     public function handle(Request $request, array $params): Response
     {
+        // HB-4.6: rate limit by client IP before any other processing.
+        $ip = $request->remoteIp !== '' ? $request->remoteIp : 'unknown';
+        $state = $this->rateLimiter->hit('client_mount:' . $ip);
+        if ($state->limited) {
+            throw new RateLimitException(
+                resetAt: $state->resetAt,
+                remaining: 0,
+            );
+        }
+
         $serverId = $params['server_id'] ?? '';
 
         if ($serverId === '') {

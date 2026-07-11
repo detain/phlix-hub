@@ -11,7 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\ConnectionResponseSink;
@@ -340,6 +342,7 @@ final class ServerProxyController
      * @param RelayProxyBridge     $bridge        Cross-process bridge to the relay worker.
      * @param StructuredLogger     $logger        Relay logger.
      * @param RelaySessionManager  $sessionManager Tracks per-user bandwidth quotas.
+     * @param RateLimiterInterface $rateLimiter   Bounded, TTL-windowed rate limiter keyed by client IP.
      * @param int                  $timeoutSeconds Default seconds to await the server
      *        response for small/quick reads (JSON browse, transcode-job status,
      *        the transcode-START POST). GET/HEAD under a playback-read prefix
@@ -355,6 +358,7 @@ final class ServerProxyController
         private readonly RelayProxyBridge $bridge,
         private readonly StructuredLogger $logger,
         private readonly RelaySessionManager $sessionManager,
+        private readonly RateLimiterInterface $rateLimiter,
         private readonly int $timeoutSeconds = RelayProxyProtocol::DEFAULT_TIMEOUT_SECONDS,
     ) {
     }
@@ -371,6 +375,16 @@ final class ServerProxyController
      */
     public function proxy(Request $request, array $params): Response
     {
+        // HB-4.6: rate limit by client IP before any other processing.
+        $ip = $request->remoteIp !== '' ? $request->remoteIp : 'unknown';
+        $state = $this->rateLimiter->hit('proxy:' . $ip);
+        if ($state->limited) {
+            throw new RateLimitException(
+                resetAt: $state->resetAt,
+                remaining: 0,
+            );
+        }
+
         $userId = $request->userId ?? '';
         if ($userId === '') {
             return (new Response())->status(401)->json([

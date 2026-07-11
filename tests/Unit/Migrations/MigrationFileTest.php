@@ -57,6 +57,8 @@ final class MigrationFileTest extends TestCase
             '033_metrics_schema.sql',
             '034_add_server_heartbeats_received_at_index.sql',
             '035_relay_user_quotas.sql',
+            '036_relay_observability_metrics.sql',
+            '037_server_library_hashes.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);

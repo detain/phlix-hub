@@ -89,11 +89,18 @@ final class MetricsServicesProvider implements ServiceProviderInterface
 
             // Drains the registry to MySQL on the flush timer. Shares the same
             // collector and reads its own tuning knobs from the raw config array.
+            // Uses a static variable to ensure one MetricsFlushService per worker
+            // (PHP-DI 7.0 has no singleton() helper). This keeps flushTick counter
+            // stable for prune throttling and previousBytes rate-tracking state.
             MetricsFlushService::class => factory(
                 static function (ContainerInterface $c) use ($config): MetricsFlushService {
-                    /** @var MetricsCollector $collector */
-                    $collector = $c->get(MetricsCollector::class);
-                    return new MetricsFlushService($collector, $config);
+                    static $instance = null;
+                    if ($instance === null) {
+                        /** @var MetricsCollector $collector */
+                        $collector = $c->get(MetricsCollector::class);
+                        $instance = new MetricsFlushService($collector, $config);
+                    }
+                    return $instance;
                 }
             ),
 

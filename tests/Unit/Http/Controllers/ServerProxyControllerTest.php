@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
@@ -72,7 +74,16 @@ final class ServerProxyControllerTest extends TestCase
                 ['allowed' => true, 'reason' => null],
             );
         }
-        return new ServerProxyController($info, $bridge, $this->createMock(StructuredLogger::class), $sessionManager);
+        // Default: rate limiter always returns non-limited state.
+        $rateLimiter = $this->createMock(RateLimiterInterface::class);
+        $rateLimiter->method('hit')->willReturn(new RateLimitState(
+            count: 1,
+            remaining: 4,
+            resetAt: time() + 900,
+            limited: false,
+            limit: 5,
+        ));
+        return new ServerProxyController($info, $bridge, $this->createMock(StructuredLogger::class), $sessionManager, $rateLimiter);
     }
 
     private function bridge(?callable $publisher): RelayProxyBridge
@@ -1298,11 +1309,14 @@ final class ServerProxyControllerTest extends TestCase
      */
     public function test_reply_timeout_never_shortens_a_higher_injected_default(): void
     {
+        $rateLimiter = $this->createMock(RateLimiterInterface::class);
+        $rateLimiter->method('hit')->willReturn(new RateLimitState(1, 4, time() + 900, false, 5));
         $controller = new ServerProxyController(
             $this->createMock(ServerInfoHandler::class),
             $this->bridge(static fn () => null),
             $this->createMock(StructuredLogger::class),
             $this->createMock(RelaySessionManager::class),
+            $rateLimiter,
             90,
         );
 
@@ -1320,11 +1334,14 @@ final class ServerProxyControllerTest extends TestCase
      */
     public function test_reply_timeout_widens_a_lower_injected_default_only_for_streaming(): void
     {
+        $rateLimiter = $this->createMock(RateLimiterInterface::class);
+        $rateLimiter->method('hit')->willReturn(new RateLimitState(1, 4, time() + 900, false, 5));
         $controller = new ServerProxyController(
             $this->createMock(ServerInfoHandler::class),
             $this->bridge(static fn () => null),
             $this->createMock(StructuredLogger::class),
             $this->createMock(RelaySessionManager::class),
+            $rateLimiter,
             10,
         );
 

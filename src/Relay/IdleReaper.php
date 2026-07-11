@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Hub\Relay;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\ClientRelayTokenService;
+use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Workerman\Timer;
 
@@ -39,12 +41,18 @@ final class IdleReaper
     public const DEFAULT_STALE_THRESHOLD_SECONDS = 90;
 
     /**
-     * @param TunnelManagerInterface  $tunnelManager        Manager owning the tunnels to scan.
-     * @param StructuredLogger        $logger               Structured logger for relay events.
-     * @param int                     $intervalSeconds      Interval between scans in seconds.
-     * @param int                     $staleThresholdSeconds Seconds before a tunnel is considered stale.
-     * @param RelaySessionManager|null $sessionManager      Optional session manager whose orphaned
-     *                                                       open DB rows are reaped on each tick.
+     * @param TunnelManagerInterface      $tunnelManager        Manager owning the tunnels to scan.
+     * @param StructuredLogger            $logger               Structured logger for relay events.
+     * @param int                         $intervalSeconds      Interval between scans in seconds.
+     * @param int                         $staleThresholdSeconds Seconds before a tunnel is considered stale.
+     * @param RelaySessionManager|null     $sessionManager       Optional session manager whose orphaned
+     *                                                            open DB rows are reaped on each tick.
+     * @param ClientRelayTokenService|null $clientRelayTokenService Optional token service whose
+     *                                                            expired revoked tokens are pruned
+     *                                                            on each tick (HB-4.2).
+     * @param HeartbeatHandler|null        $heartbeatHandler     Optional heartbeat handler whose
+     *                                                            server_heartbeats table is pruned
+     *                                                            on each tick (HB-4.3).
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
@@ -52,6 +60,8 @@ final class IdleReaper
         private readonly int $intervalSeconds = self::DEFAULT_INTERVAL_SECONDS,
         private readonly int $staleThresholdSeconds = self::DEFAULT_STALE_THRESHOLD_SECONDS,
         private readonly ?RelaySessionManager $sessionManager = null,
+        private readonly ?HeartbeatHandler $heartbeatHandler = null,
+        private readonly ?ClientRelayTokenService $clientRelayTokenService = null,
     ) {
     }
 
@@ -133,6 +143,15 @@ final class IdleReaper
         // 60-second tick so the relay-path DB write is bounded to one flush
         // per session per tick instead of one UPDATE per frame.
         $this->sessionManager?->flushAll();
+
+        // HB-4.3: Prune server_heartbeats rows, keeping only the most recent
+        // ~100 rows per server to prevent unbounded table growth.
+        $this->heartbeatHandler?->pruneAllServerHeartbeats(100);
+
+        // HB-4.2: Prune expired, already-revoked client relay tokens older than
+        // 1 day. Tokens are only removed once both expired AND revoked so audit
+        // logs can still reference a revoked token before it naturally expires.
+        $this->clientRelayTokenService?->pruneExpiredTokens();
 
         return $reapedCount;
     }

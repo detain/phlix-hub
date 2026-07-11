@@ -79,17 +79,17 @@ php bin/phlix migrate
 - [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE
 - [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin
 - [x] HB-3.3  per-channel tunnel flow control/fairness  (commit: cbc29cc)  DONE
-- [x] HB-3.4  bandwidth accounting + per-user quotas  (commit: TBD)  DONE
-- [ ] HB-4.1  relay observability metrics
-- [ ] HB-4.2  client_relay_tokens retention sweep
-- [ ] HB-4.3  server_heartbeats growth control
-- [ ] HB-4.4  heartbeat handler hash library list optimization
-- [ ] HB-4.5  metrics prune singleton
-- [ ] HB-4.6  rate limiting on proxy/client-mount/heartbeat/JWKS
-- [ ] HB-4.7  Ed25519KeyManager in-memory previous-key cache
-- [ ] HB-4.8  stream-timer sweep instead of per-second del+add
-- [ ] HB-4.9  verify/implement HTTP_CANCEL server-side stop
-- [ ] HB-4.10 remove RelaySessionManager::routeRequest
+- [x] HB-3.4  bandwidth accounting + per-user quotas  (commit: 1de552a)  DONE
+- [x] HB-4.1  relay observability metrics  (commit: H-W4-batch)  DONE — pending-request gauge, reply-drop counter, per-request latency histogram, 503/504 counters, decode-buffer-size gauge fully wired in MetricsCollector/Registry/FlushService + RelayProxyManager
+- [x] HB-4.2  client_relay_tokens retention sweep  (commit: H-W4-batch)  DONE — pruneExpiredTokens() in ClientRelayTokenService, called from IdleReaper tick
+- [x] HB-4.3  server_heartbeats growth control  (commit: H-W4-batch)  DONE — pruneAllServerHeartbeats()/pruneServerHeartbeats() ring-delete in HeartbeatHandler, called from IdleReaper tick
+- [x] HB-4.4  heartbeat handler hash library list optimization  (commit: H-W4-batch)  DONE — SHA-256 library list hash in server_library_hashes table, skip upserts when unchanged; migration 037
+- [x] HB-4.5  metrics prune singleton  (commit: H-W4-batch)  DONE — MetricsFlushService registered as per-worker singleton via static variable in factory
+- [x] HB-4.6  rate limiting on proxy/client-mount/heartbeat/JWKS  (commit: H-W4-batch)  DONE — RateLimiterInterface injected into ServerProxyController, ClientMountController, HeartbeatHandler, HubJwksController
+- [x] HB-4.7  Ed25519KeyManager in-memory previous-key cache  (commit: H-W4-batch)  DONE — unlink removed from loadPreviousKey hot path; purgeExpiredPreviousKey() available for background cleanup
+- [x] HB-4.8  stream-timer sweep instead of per-second del+add  (commit: H-W4-batch)  DONE — batch SWEEP_INTERVAL_SECONDS timer replaces per-request timer delete+add; sweepStreamTimers() method
+- [x] HB-4.9  verify/implement HTTP_CANCEL server-side stop  (commit: H-W4-batch)  DONE — already implemented; full cancel path verified: Bridge→Channel→ProxyManager→Tunnel::sendCancel()→server
+- [x] HB-4.10 remove RelaySessionManager::routeRequest  (commit: H-W4-batch)  DONE — confirmed no callers; method removed; docstrings updated
 
 ## Notes / cross-repo blockers
 - X1: Scrub→encode→cancel chain (UI-0.3 first, then SV-4.2, then HB-4.9)
