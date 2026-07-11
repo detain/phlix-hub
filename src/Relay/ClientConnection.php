@@ -154,11 +154,13 @@ final class ClientConnection
      *
      * @param string $encodedFrame Already-encoded binary frame.
      *
-     * @return void
+     * @return bool True if the frame was placed in the send buffer, false if
+     *              the send buffer is full (caller should apply backpressure).
      */
-    public function sendRaw(string $encodedFrame): void
+    public function sendRaw(string $encodedFrame): bool
     {
-        $this->clientWs->send($encodedFrame);
+        $result = $this->clientWs->send($encodedFrame);
+        return $result !== false;
     }
 
     /**
@@ -167,12 +169,14 @@ final class ClientConnection
      * @param RelayFrame $frame Frame to send.
      * @param FrameEncoder $encoder Encoder to use.
      *
-     * @return void
+     * @return bool True if the frame was placed in the send buffer, false if
+     *              the send buffer is full (caller should apply backpressure).
      */
-    public function send(RelayFrame $frame, FrameEncoder $encoder): void
+    public function send(RelayFrame $frame, FrameEncoder $encoder): bool
     {
         $encoded = $encoder->encode($frame->type, $frame->seq, $frame->payload);
-        $this->clientWs->send($encoded);
+        $result = $this->clientWs->send($encoded);
+        return $result !== false;
     }
 
     /**

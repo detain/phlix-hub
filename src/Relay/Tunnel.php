@@ -22,9 +22,11 @@ use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use SplObjectStorage;
+use Swoole\Coroutine\Channel;
 use Throwable;
 use Workerman\Connection\ConnectionInterface;
 use Workerman\Connection\TcpConnection;
+use Workerman\Timer;
 
 use function base64_decode;
 use function count;
@@ -191,6 +193,28 @@ final class Tunnel implements TunnelInterface
      * @var int Total bytes received from the server and sent to clients through this tunnel.
      */
     private int $bytesIn = 0;
+
+    /**
+     * Seconds to wait for a backpressure drain before closing the tunnel.
+     * Generous: a live-but-slow connection should never be dropped, only a
+     * genuinely stuck one. Mirrors ConnectionResponseSink::BACKPRESSURE_WAIT_SECONDS.
+     */
+    private const BACKPRESSURE_WAIT_SECONDS = 30.0;
+
+    /**
+     * @var int Number of clients with backpressure (send buffer full). When > 0,
+     *          serverWs->pauseRecv() has been called to stop receiving from the
+     *          server. Each client's onBufferDrain decrements this; when it hits 0,
+     *          serverWs->resumeRecv() is called.
+     */
+    private int $serverBackpressureCount = 0;
+
+    /**
+     * @var bool Whether client receives are currently paused due to server
+     *          send-buffer backpressure. When true, all clientWs->pauseRecv()
+     *          has been called. serverWs->onBufferDrain resumes them.
+     */
+    private bool $clientBackpressureActive = false;
 
     /**
      * Handle an incoming message from the server.
@@ -516,7 +540,14 @@ final class Tunnel implements TunnelInterface
         }
 
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
-        $this->serverWs->send($encoded);
+
+        // Apply backpressure if the server's send buffer is full. The tunnel
+        // assumes reliable delivery — if we can't apply backpressure, close
+        // the tunnel so the client sees a hard failure rather than corruption.
+        if ($this->serverWs->send($encoded) === false) {
+            $this->handleServerSendBackpressure();
+            return;
+        }
 
         // Track local byte counter for diagnostics
         $this->bytesOut += strlen($encoded);
@@ -561,7 +592,13 @@ final class Tunnel implements TunnelInterface
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
         $frameLen = strlen($encoded);
 
-        $client->sendRaw($encoded);
+        // Apply backpressure if the client's send buffer is full. Never silently
+        // drop a DATA frame — the tunnel assumes reliable delivery; a dropped
+        // frame means silent stream corruption.
+        if ($client->sendRaw($encoded) === false) {
+            $this->handleClientSendBackpressure($client);
+            return;
+        }
 
         // Record bytes in to the session manager for this client (DB)
         if ($this->relaySessionId !== null) {
@@ -569,6 +606,133 @@ final class Tunnel implements TunnelInterface
         }
 
         $this->bytesIn += $frameLen;
+    }
+
+    /**
+     * Handle backpressure when a client's send buffer is full.
+     *
+     * When a slow client can't accept more DATA frames, we pause receiving
+     * from the server (upstream backpressure). Each client's onBufferDrain
+     * callback resumes the server when that specific client's buffer drains.
+     * The count prevents premature resume if multiple clients are congested.
+     *
+     * @param ClientConnection $client The client whose send buffer is full.
+     *
+     * @return void
+     */
+    private function handleClientSendBackpressure(ClientConnection $client): void
+    {
+        if ($this->serverBackpressureCount === 0) {
+            // First client with backpressure — pause the server.
+            $this->serverWs->pauseRecv();
+            $this->logger->warning('Relay: client send buffer full, pausing server recv', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'client_id' => $client->clientId,
+            ]);
+        }
+
+        $this->serverBackpressureCount++;
+
+        // One-shot drain handler for this specific client. When this client's
+        // send buffer drains, decrement the count and resume server recv if
+        // no other clients are still congested.
+        $client->clientWs->onBufferDrain = function () use ($client): void {
+            $client->clientWs->onBufferDrain = null;
+            $this->serverBackpressureCount--;
+
+            $this->logger->debug('Relay: client send buffer drained, server backpressure count', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'client_id' => $client->clientId,
+                'remaining_count' => $this->serverBackpressureCount,
+            ]);
+
+            if ($this->serverBackpressureCount === 0) {
+                $this->serverWs->resumeRecv();
+                $this->logger->info('Relay: all client buffers drained, resuming server recv', [
+                    'server_id' => $this->serverId,
+                    'tunnel_id' => $this->tunnelId,
+                ]);
+            }
+        };
+
+        // Safety timeout: if the drain never comes within BACKPRESSURE_WAIT_SECONDS,
+        // close the tunnel so the client sees a hard failure rather than corruption.
+        Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function () use ($client): void {
+            if ($this->status === self::STATUS_CLOSED) {
+                return;
+            }
+            if ($this->serverBackpressureCount > 0) {
+                $this->logger->error('Relay: backpressure timeout, closing tunnel', [
+                    'server_id' => $this->serverId,
+                    'tunnel_id' => $this->tunnelId,
+                    'client_id' => $client->clientId,
+                    'backpressure_count' => $this->serverBackpressureCount,
+                ]);
+                $this->close('backpressure_timeout');
+            }
+        }, [], false);
+    }
+
+    /**
+     * Handle backpressure when the server's send buffer is full.
+     *
+     * When the server can't accept more data (its send buffer is full), we
+     * pause all clients' receiving (upstream backpressure on the client side).
+     * The server's onBufferDrain callback resumes all clients when it drains.
+     *
+     * @return void
+     */
+    private function handleServerSendBackpressure(): void
+    {
+        if (!$this->clientBackpressureActive) {
+            // Pause all clients first.
+            foreach ($this->clientConnections as $client) {
+                /** @var ClientConnection $client */
+                $client->clientWs->pauseRecv();
+            }
+            $this->clientBackpressureActive = true;
+
+            $this->logger->warning('Relay: server send buffer full, pausing all client recv', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'client_count' => count($this->clientConnections),
+            ]);
+        }
+
+        // One-shot drain handler on the server. When the server's send buffer
+        // drains, resume all clients and clear the flag.
+        $serverWs = $this->serverWs;
+        $serverWs->onBufferDrain = function () use ($serverWs): void {
+            $serverWs->onBufferDrain = null;
+            $this->clientBackpressureActive = false;
+
+            foreach ($this->clientConnections as $client) {
+                /** @var ClientConnection $client */
+                $client->clientWs->resumeRecv();
+            }
+
+            $this->logger->info('Relay: server send buffer drained, resuming all client recv', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+            ]);
+        };
+
+        // Safety timeout: if the drain never comes, close the tunnel so
+        // clients see a hard failure rather than an indefinitely stalled stream.
+        Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function (): void {
+            if ($this->status === self::STATUS_CLOSED) {
+                return;
+            }
+            if ($this->clientBackpressureActive) {
+                $this->logger->error('Relay: server backpressure timeout, closing tunnel', [
+                    'server_id' => $this->serverId,
+                    'tunnel_id' => $this->tunnelId,
+                ]);
+                $this->close('backpressure_timeout');
+            }
+        }, [], false);
     }
 
     /**
@@ -731,6 +895,20 @@ final class Tunnel implements TunnelInterface
             'relay_session_id' => $this->relaySessionId,
             'reason' => $reason,
         ]);
+
+        // Clean up any backpressure state: resume any paused receives before
+        // closing so connections aren't left in a stuck/paused state.
+        if ($this->serverBackpressureCount > 0) {
+            $this->serverWs->resumeRecv();
+            $this->serverBackpressureCount = 0;
+        }
+        if ($this->clientBackpressureActive) {
+            foreach ($this->clientConnections as $client) {
+                /** @var ClientConnection $client */
+                $client->clientWs->resumeRecv();
+            }
+            $this->clientBackpressureActive = false;
+        }
 
         // Notify clients
         $this->notifyClientsDisconnected($reason);
