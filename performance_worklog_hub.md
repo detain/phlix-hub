@@ -77,7 +77,7 @@ php bin/phlix migrate
 - [ ] HB-2.5  static-asset caching headers + realpath memo
 - [ ] HB-2.6  dedicated maintenance worker for reapers
 - [ ] HB-3.1  write-over-relay (PUT/DELETE/PATCH)
-- [ ] HB-3.2  SyncPlay relay authentication
+- [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin
 - [ ] HB-3.3  per-channel tunnel flow control/fairness
 - [ ] HB-3.4  bandwidth accounting + per-user quotas
 - [ ] HB-4.1  relay observability metrics
