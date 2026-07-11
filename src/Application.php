@@ -102,6 +102,23 @@ final class Application
     }
 
     /**
+     * Per-worker realpath() memo — avoids repeated syscalls for hot static paths.
+     *
+     * @param string $path Filesystem path to resolve.
+     *
+     * @return string|false Resolved real path, or false if not found.
+     */
+    private static function getRealPathMemo(string $path): string|false
+    {
+        static $memo = [];
+        if (isset($memo[$path])) {
+            return $memo[$path];
+        }
+
+        return $memo[$path] = realpath($path);
+    }
+
+    /**
      * Register every route the hub exposes today.
      */
     private function registerRoutes(): void
@@ -1349,7 +1366,7 @@ final class Application
                 $path = $request->path();
                 if ($path !== '' && $path !== '/' && !str_starts_with($path, '/api/')) {
                     $candidate = $publicRoot . $path;
-                    $real = realpath($candidate);
+                    $real = self::getRealPathMemo($candidate);
                     if (
                         $real !== false
                         && str_starts_with($real, $publicRoot . DIRECTORY_SEPARATOR)
@@ -1391,7 +1408,17 @@ final class Application
                             }
                         }
                         $mime ??= 'application/octet-stream';
-                        $resp = new \Workerman\Protocols\Http\Response(200, ['Content-Type' => $mime]);
+                        // Hashed assets (e.g. app.abc123def456.js) are immutable —
+                        // long max-age + immutable. Non-hashed paths get a short
+                        // max-age so updates propagate quickly.
+                        $isHashedAsset = (bool) preg_match('/\.([a-f0-9]{6,12})\./i', $path);
+                        $cacheControl = $isHashedAsset
+                            ? 'public, max-age=31536000, immutable'
+                            : 'public, max-age=86400';
+                        $resp = new \Workerman\Protocols\Http\Response(200, [
+                            'Content-Type' => $mime,
+                            'Cache-Control' => $cacheControl,
+                        ]);
                         $resp->withFile($real);
                         $connection->send($resp);
                         return;
@@ -1489,6 +1516,57 @@ final class Application
 
         // Wire up runtime timers for relay services before starting workers
         HubServicesProvider::boot();
+
+        // -----------------------------------------------------------------------------
+        // HB-2.6: Config-driven managed maintenance worker for reapers.
+        //
+        // config/process.php is the single source of truth for the maintenance worker
+        // settings (maintenance => enabled/count/poll_seconds). This is identical to
+        // how phlix-server handles library-scan and other managed workers. The
+        // maintenance worker runs on its own count=1 process with its own DB
+        // connection, so reaper DB queries no longer add jitter to tunnel frame
+        // processing on the relay worker.
+        // -----------------------------------------------------------------------------
+        $serverConfig = $this->config;
+        try {
+            /** @var array<string, array{enabled?: bool, count?: int, poll_seconds?: int}> $processConfig */
+            $processConfig = require __DIR__ . '/../config/process.php';
+            if (is_array($processConfig)) {
+                $settings = $processConfig['maintenance'] ?? null;
+                if (is_array($settings) && ($settings['enabled'] ?? false) === true) {
+                    $count = (int) ($settings['count'] ?? 1);
+
+                    $maintenanceWorker = new Worker();
+                    $maintenanceWorker->count = $count > 0 ? $count : 1;
+                    $maintenanceWorker->name = 'phlix-hub-maintenance';
+                    $maintenanceWorker->onWorkerStart = static function (Worker $w) use (
+                        $serverConfig
+                    ): void {
+                        try {
+                            // Built inside the fork so the child owns its own DB/HTTP state.
+                            $container = \Phlix\Hub\Common\Container\ContainerFactory::create($serverConfig);
+                            $maintenance = $container->get(\Phlix\Hub\MaintenanceWorker::class);
+                            if ($maintenance instanceof \Phlix\Hub\MaintenanceWorker) {
+                                $maintenance->start($container);
+                            }
+                        } catch (\Throwable $e) {
+                            // Guard the fork: log and idle rather than exit, so a build
+                            // failure can't put the worker into a tight re-fork loop.
+                            trigger_error(
+                                'Maintenance worker failed to start: ' . $e->getMessage(),
+                                E_USER_WARNING,
+                            );
+                        }
+                    };
+                    \Phlix\Hub\Common\Database\ConnectionPool::armWorkerStopCleanup($maintenanceWorker);
+                }
+            }
+        } catch (\Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'Maintenance: failed to load process config, skipping maintenance worker',
+                ['error' => $e->getMessage()],
+            );
+        }
 
         // Start the cross-process channel broker that carries relay-proxy
         // requests/responses between the HTTP workers and the relay-ws worker.

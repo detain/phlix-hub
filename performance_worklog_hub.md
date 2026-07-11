@@ -70,9 +70,9 @@ php bin/phlix migrate
 - [x] HB-1.2  raw tunnel data-plane backpressure  (commits: 2a2b421, 0aed3e0, b1140b1)  DONE
 - [x] HB-1.3  non-blocking onReply delivery  (commits: e3cb349, 8ea42ae, 8d45c85)  DONE
 - [x] HB-1.4  lean owner/status queries on hot paths  (commits: c0461ed, 2f81f37, e5ce01e)  DONE
-- [ ] HB-2.1  request-body chunking over tunnel (enable bodied relay)
-- [ ] HB-2.2  validate HELLO JWT before displacing incumbent tunnel
-- [ ] HB-2.3  cap FrameDecoder buffer
+- [x] HB-2.1  request-body chunking over tunnel (enable bodied relay)  (commits: phlix-shared:216ea5d, phlix-hub:7b71c190)  DONE
+- [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  (commit: 7c30723)  DONE
+- [x] HB-2.3  cap FrameDecoder buffer  (commit: ec17c9cc)  DONE
 - [ ] HB-2.4  O(1) cancel index
 - [ ] HB-2.5  static-asset caching headers + realpath memo
 - [ ] HB-2.6  dedicated maintenance worker for reapers

@@ -55,6 +55,7 @@ final class MigrationFileTest extends TestCase
             '031_server_libraries.sql',
             '032_client_relay_tokens.sql',
             '033_metrics_schema.sql',
+            '034_add_server_heartbeats_received_at_index.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
