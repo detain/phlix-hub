@@ -324,6 +324,24 @@ class UserRepository
     }
 
     /**
+     * Quick existence probe for user id — used by
+     * {@see \Phlix\Hub\Http\Middleware\AuthMiddleware} to confirm a valid
+     * userId claim without loading the full row on every authenticated request.
+     */
+    public function userExists(string $id): bool
+    {
+        /**
+         * @var mixed $result
+         * @psalm-suppress MixedAssignment
+         */
+        $result = $this->db->query(
+            'SELECT 1 FROM users WHERE id = :id LIMIT 1',
+            ['id' => $id],
+        );
+        return is_array($result) && $result !== [];
+    }
+
+    /**
      * Quick existence probe for username (used by signup pre-validation).
      */
     public function usernameExists(string $username): bool

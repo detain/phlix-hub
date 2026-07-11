@@ -71,6 +71,58 @@ class ServerInfoHandler
     }
 
     /**
+     * Lean owner + status query for hot-path admission gates.
+     *
+     * Returns only the fields needed by:
+     * - {@see \Phlix\Hub\Http\Controllers\ServerProxyController::proxy()}
+     *   for ownership check + relay-availability check
+     * - {@see \Phlix\Hub\Relay\ClientRelayWorker::validateClientAuth()}
+     *   for ownership re-confirmation at WS mount time
+     *
+     * Use this instead of {@see getServerInfo()} on the proxy / WS-mount
+     * hot path. The correlated EXISTS(subquery) is still executed so the
+     * relay-active flag is fresh; the heavier COUNT(server_libraries)
+     * subquery in getServerInfo() is omitted.
+     *
+     * @param string $serverId Server UUID.
+     *
+     * @return array{userId: string, status: string, relayActive: bool}|null
+     *         Owner info, or null when the server does not exist.
+     */
+    public function getOwnerAndStatus(string $serverId): ?array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT s.id, s.user_id, s.status,
+                    EXISTS(
+                        SELECT 1 FROM relay_sessions r
+                        WHERE r.server_id = s.id AND r.closed_at IS NULL
+                    ) AS relay_active
+             FROM servers s WHERE s.id = :id LIMIT 1',
+            ['id' => $serverId],
+        );
+
+        if (!isset($rows[0])) {
+            return null;
+        }
+
+        $row = $rows[0];
+        /** @var string */
+        $userId = $row['user_id'];
+        /** @var string */
+        $status = is_string($row['status'] ?? null) ? $row['status'] : 'offline';
+        /** @var mixed $relayActiveRaw */
+        $relayActiveRaw = $row['relay_active'] ?? false;
+        $relayActive = is_numeric($relayActiveRaw) ? (int) $relayActiveRaw === 1 : (bool) $relayActiveRaw;
+
+        return [
+            'userId' => $userId,
+            'status' => $status,
+            'relayActive' => $relayActive,
+        ];
+    }
+
+    /**
      * Get all servers owned by a user.
      *
      * @param string   $userId User UUID.

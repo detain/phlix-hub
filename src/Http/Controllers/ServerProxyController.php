@@ -363,22 +363,22 @@ final class ServerProxyController
         }
 
         $serverId = $params['id'] ?? '';
-        $server = $this->serverInfo->getServerInfo($serverId);
-        if ($server === null) {
+        $owner = $this->serverInfo->getOwnerAndStatus($serverId);
+        if ($owner === null) {
             return (new Response())->status(404)->json([
                 'error' => 'Not Found',
                 'code' => 'server.not_found',
             ]);
         }
 
-        if ($server->userId !== $userId) {
+        if ($owner['userId'] !== $userId) {
             return (new Response())->status(403)->json([
                 'error' => 'Forbidden',
                 'code' => 'server.not_owned',
             ]);
         }
 
-        if (!$server->relayActive) {
+        if (!$owner['relayActive']) {
             // Distinguish "the server is heartbeating but its secure relay
             // tunnel isn't connected" from "the server is genuinely down".
             // `status` and `relayActive` are set by INDEPENDENT paths: a
@@ -390,7 +390,7 @@ final class ServerProxyController
             // legitimately have no tunnel. Either way we still REFUSE to proxy
             // (the tunnel is the trust boundary and there is nothing to forward
             // to) — only the code/message differ so the UI can explain why.
-            if ($server->status === ServerInfoDto::STATUS_ONLINE) {
+            if ($owner['status'] === ServerInfoDto::STATUS_ONLINE) {
                 return (new Response())->status(503)->json([
                     'error' => 'Relay tunnel unavailable',
                     'code' => 'server.relay_unavailable',

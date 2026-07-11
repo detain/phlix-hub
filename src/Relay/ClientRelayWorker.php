@@ -443,13 +443,15 @@ final class ClientRelayWorker
         }
 
         // Re-confirm current ownership: the bound user must still own the
-        // target server (mirrors ServerProxyController::proxy()).
-        $server = $serverInfo->getServerInfo($serverId);
-        if ($server === null) {
+        // target server (mirrors ServerProxyController::proxy()).  Use the
+        // lean getOwnerAndStatus() query to avoid the COUNT(server_libraries)
+        // correlated subquery that getServerInfo() runs.
+        $owner = $serverInfo->getOwnerAndStatus($serverId);
+        if ($owner === null) {
             return null;
         }
 
-        if ($server->userId !== $bound['user_id']) {
+        if ($owner['userId'] !== $bound['user_id']) {
             return null;
         }
 

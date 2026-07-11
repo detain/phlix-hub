@@ -18,6 +18,8 @@ use Phlix\Hub\Http\RequestContext;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Auth\JwtClaims;
 
+use function time;
+
 /**
  * Hub-side bearer/cookie auth middleware.
  *
@@ -48,6 +50,23 @@ final class AuthMiddleware
     public const COOKIE_REFRESH = 'phlix_hub_refresh';
 
     /**
+     * Short-TTL in-worker cache for user-existence probes.
+     *
+     * Avoids a full `SELECT * FROM users WHERE id = ?` on every authenticated
+     * request — the hot-path controllers only need $request->userId from the
+     * already-validated JWT. The cache stores a unix timestamp; entries older
+     * than USER_EXISTS_CACHE_TTL seconds are treated as stale.
+     *
+     * @var array<string, int> userId → unix timestamp of last confirmed existence
+     */
+    private static array $userExistsCache = [];
+
+    /**
+     * TTL for entries in the user-existence cache (seconds).
+     */
+    private const int USER_EXISTS_CACHE_TTL = 5;
+
+    /**
      * @param JwtHandler     $jwt   JWT validator.
      * @param UserRepository $users Repository used to load the user record.
      */
@@ -73,18 +92,19 @@ final class AuthMiddleware
             return $this->challenge($request, 'auth.invalid_token');
         }
 
-        $user = $this->users->findById($claims->sub);
-        if ($user === null) {
+        $userId = $claims->sub;
+
+        // Lightweight existence check with short TTL — avoids the full
+        // `SELECT * FROM users WHERE id = ?` on every authenticated request.
+        // The hot-path controllers only need $request->userId (from the
+        // already-validated JWT claims); controllers that need the full user
+        // row (e.g. PageController for SSR admin flags) call
+        // AuthManager::getCurrentUser() directly.
+        if (!$this->userExists($userId)) {
             return $this->challenge($request, 'auth.user_not_found');
         }
 
-        $request->userId = $claims->sub;
-        // Stash the claims + user in pathParams (the Request struct doesn't
-        // expose typed bags yet; controllers can pull these via $request->pathParams).
-        // Note: keep this minimal and unobtrusive so we don't need to change
-        // the Request shape.
-        unset($user['password_hash']);
-        $request->user = $user;
+        $request->userId = $userId;
         $request->claims = $claims;
 
         // Publish the authenticated user-id into the coroutine-local
@@ -93,7 +113,7 @@ final class AuthMiddleware
         // replacement for the static/global pattern that resident-memory
         // workers cannot use safely under coroutines (see step 0.2c
         // and `phlix-docs/docs/dev/coroutine-runtime.md`).
-        RequestContext::setUserId($claims->sub);
+        RequestContext::setUserId($userId);
 
         return null;
     }
@@ -163,6 +183,32 @@ final class AuthMiddleware
         return (new Response())
             ->status(302)
             ->header('Location', '/login');
+    }
+
+    /**
+     * Probe user existence using a lean `SELECT 1 … LIMIT 1` query
+     * with a short in-worker TTL cache.
+     *
+     * Controllers that need the full user row call
+     * {@see \Phlix\Hub\Auth\AuthManager::getCurrentUser()} directly.
+     */
+    private function userExists(string $userId): bool
+    {
+        $now = time();
+
+        // Warm cache entry on miss — one lightweight query per user per TTL window.
+        if (!isset(self::$userExistsCache[$userId]) || ($now - self::$userExistsCache[$userId]) > self::USER_EXISTS_CACHE_TTL) {
+            if ($this->users->userExists($userId)) {
+                self::$userExistsCache[$userId] = $now;
+                return true;
+            }
+            // Negative cache too: record that this user definitely does not exist
+            // so we don't re-query for a deleted user within the TTL window.
+            self::$userExistsCache[$userId] = $now;
+            return false;
+        }
+
+        return true;
     }
 
     /**

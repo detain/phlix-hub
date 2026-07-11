@@ -50,22 +50,32 @@ final class PageController
     /**
      * Common variables every layout-aware template needs.
      *
-     * Reads `$request->user` (populated by {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}),
-     * so this is silently `is_authenticated = false, is_admin = false` on
-     * pages that aren't gated by AuthMiddleware (`/`, `/signup`, `/login`).
+     * After HB-1.4, {@see \Phlix\Hub\Http\Middleware\AuthMiddleware} no longer
+     * populates $request->user (to avoid a full user-row load on every request).
+     * This method calls {@see \Phlix\Hub\Auth\AuthManager::getCurrentUser()} directly
+     * when $request->userId is set, so the admin flag is always correct.
+     * On pages that are not behind AuthMiddleware ($request->userId is empty)
+     * this returns the correct defaults without hitting the DB.
      *
      * @return array{is_authenticated: bool, is_admin: bool}
      */
     private function layoutContext(Request $request): array
     {
-        $user = $request->user ?? [];
         $isAuthenticated = ($request->userId ?? '') !== '';
-        /** @var mixed $flag */
-        $flag = $user['is_admin'] ?? null;
-        // The MySQL driver may return TINYINT(1) as either 1 or "1" depending
-        // on the connection mode, so accept both (and a real boolean).
-        $isAdmin = $isAuthenticated
-            && ($flag === 1 || $flag === '1' || $flag === true);
+        $isAdmin = false;
+
+        if ($isAuthenticated) {
+            // AuthMiddleware no longer loads $request->user; fetch it here
+            // when needed for the admin flag. This is a single-row lookup by PK
+            // and is not on the relay/WS hot path.
+            $user = $this->auth->getCurrentUser($request->userId ?? '');
+            /** @var mixed $flag */
+            $flag = $user['is_admin'] ?? null;
+            // The MySQL driver may return TINYINT(1) as either 1 or "1" depending
+            // on the connection mode, so accept both (and a real boolean).
+            $isAdmin = ($flag === 1 || $flag === '1' || $flag === true);
+        }
+
         return [
             'is_authenticated' => $isAuthenticated,
             'is_admin'         => $isAdmin,

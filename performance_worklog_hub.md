@@ -68,7 +68,7 @@ php bin/phlix migrate
 - [x] HB-0.4  add subdomain to ServerInfoDto, drop redundant query  (commits: phlix-shared:008fcc1, phlix-hub:489ec7d)  DONE
 - [ ] HB-1.1  drop base64 on internal channel-broker body path
 - [ ] HB-1.2  raw tunnel data-plane backpressure
-- [ ] HB-1.3  non-blocking onReply delivery
+- [x] HB-1.3  non-blocking onReply delivery  (commits: e3cb349, 8ea42ae, 8d45c85)  DONE
 - [ ] HB-1.4  lean owner/status queries on hot paths
 - [ ] HB-2.1  request-body chunking over tunnel (enable bodied relay)
 - [ ] HB-2.2  validate HELLO JWT before displacing incumbent tunnel
