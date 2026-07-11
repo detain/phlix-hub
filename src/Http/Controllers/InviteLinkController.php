@@ -14,6 +14,7 @@ namespace Phlix\Hub\Http\Controllers;
 use InvalidArgumentException;
 use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
+use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
@@ -198,5 +199,63 @@ final class InviteLinkController
             'token' => $token,
             'is_authenticated' => $request->userId !== null,
         ]);
+    }
+
+    /**
+     * `POST /api/v1/me/invite-links/{token}/redeem` — redeem an invite link.
+     *
+     * @param array<string, string> $params Route parameters including `token`.
+     */
+    public function redeem(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json([
+                'error' => 'Unauthorized',
+                'code' => 'auth.required',
+            ]);
+        }
+
+        $token = $params['token'] ?? '';
+        if ($token === '') {
+            return (new Response())->status(400)->json([
+                'error' => 'Bad Request',
+                'code' => 'missing_token',
+            ]);
+        }
+
+        try {
+            /** @var LibraryShare $share */
+            $share = $this->handler->redeemInviteLink($token, $userId);
+
+            return (new Response())->status(201)->json($share->toPayload());
+        } catch (InvalidArgumentException $e) {
+            $code = $e->getCode();
+            if ($code === 400) {
+                return (new Response())->status(400)->json([
+                    'error' => 'Bad Request',
+                    'code' => 'invalid_invite',
+                    'message' => $e->getMessage(),
+                ]);
+            }
+            if ($code === 404) {
+                return (new Response())->status(404)->json([
+                    'error' => 'Not Found',
+                    'code' => 'invite_link_not_found',
+                ]);
+            }
+            if ($code === 410) {
+                return (new Response())->status(410)->json([
+                    'error' => 'Gone',
+                    'code' => 'invite_expired_or_exhausted',
+                    'message' => $e->getMessage(),
+                ]);
+            }
+
+            return (new Response())->status(500)->json([
+                'error' => 'Internal Server Error',
+                'code' => 'unknown_error',
+            ]);
+        }
     }
 }

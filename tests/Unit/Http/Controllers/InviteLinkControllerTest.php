@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
+use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Request;
 
@@ -251,5 +252,153 @@ final class InviteLinkControllerTest extends TestCase
         $response = $this->controller->showAcceptInvitePage($request, []);
 
         self::assertSame(404, $response->statusCode);
+    }
+
+    public function testRedeemReturns401WhenNotAuthenticated(): void
+    {
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/token123/redeem';
+        $request->method = 'POST';
+
+        $response = $this->controller->redeem($request, ['token' => 'token123']);
+
+        self::assertSame(401, $response->statusCode);
+    }
+
+    public function testRedeemReturns400WhenTokenMissing(): void
+    {
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links//redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $response = $this->controller->redeem($request, []);
+
+        self::assertSame(400, $response->statusCode);
+    }
+
+    public function testRedeemReturns201OnSuccess(): void
+    {
+        $share = new LibraryShare(
+            id: 'share-1',
+            ownerUserId: 'user-owner',
+            collaboratorUserId: 'user-1',
+            serverId: 'server-1',
+            libraryId: 'lib-1',
+            libraryName: 'My Library',
+            permissionLevel: 'read',
+            createdAt: time(),
+        );
+
+        $this->handler->expects(self::once())->method('redeemInviteLink')
+            ->with('jwt-token-123', 'user-1')
+            ->willReturn($share);
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/jwt-token-123/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $response = $this->controller->redeem($request, ['token' => 'jwt-token-123']);
+
+        self::assertSame(201, $response->statusCode);
+        $payload = json_decode($response->body, true);
+        self::assertIsArray($payload);
+        self::assertSame('share-1', $payload['id']);
+        self::assertSame('user-owner', $payload['owner_user_id']);
+        self::assertSame('user-1', $payload['collaborator_user_id']);
+        self::assertSame('server-1', $payload['server_id']);
+        self::assertSame('lib-1', $payload['library_id']);
+        self::assertSame('read', $payload['permission_level']);
+    }
+
+    public function testRedeemReturns400ForInvalidToken(): void
+    {
+        $this->handler->method('redeemInviteLink')
+            ->willThrowException(new InvalidArgumentException('Invalid or expired invite token', 400));
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/bad-token/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $response = $this->controller->redeem($request, ['token' => 'bad-token']);
+
+        self::assertSame(400, $response->statusCode);
+        $payload = json_decode($response->body, true);
+        self::assertIsArray($payload);
+        self::assertSame('invalid_invite', $payload['code']);
+    }
+
+    public function testRedeemReturns400ForSelfRedemption(): void
+    {
+        $this->handler->method('redeemInviteLink')
+            ->willThrowException(new InvalidArgumentException('Cannot redeem your own invite link', 400));
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/own-token/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $response = $this->controller->redeem($request, ['token' => 'own-token']);
+
+        self::assertSame(400, $response->statusCode);
+        $payload = json_decode($response->body, true);
+        self::assertIsArray($payload);
+        self::assertSame('invalid_invite', $payload['code']);
+    }
+
+    public function testRedeemReturns404WhenLinkNotFound(): void
+    {
+        $this->handler->method('redeemInviteLink')
+            ->willThrowException(new InvalidArgumentException('Invite link not found', 404));
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/nonexistent/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $response = $this->controller->redeem($request, ['token' => 'nonexistent']);
+
+        self::assertSame(404, $response->statusCode);
+        $payload = json_decode($response->body, true);
+        self::assertIsArray($payload);
+        self::assertSame('invite_link_not_found', $payload['code']);
+    }
+
+    public function testRedeemReturns410WhenExpired(): void
+    {
+        $this->handler->method('redeemInviteLink')
+            ->willThrowException(new InvalidArgumentException('Invite link has expired', 410));
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/expired-token/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $response = $this->controller->redeem($request, ['token' => 'expired-token']);
+
+        self::assertSame(410, $response->statusCode);
+        $payload = json_decode($response->body, true);
+        self::assertIsArray($payload);
+        self::assertSame('invite_expired_or_exhausted', $payload['code']);
+    }
+
+    public function testRedeemReturns410WhenExhausted(): void
+    {
+        $this->handler->method('redeemInviteLink')
+            ->willThrowException(new InvalidArgumentException('Invite link has been exhausted', 410));
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/exhausted-token/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $response = $this->controller->redeem($request, ['token' => 'exhausted-token']);
+
+        self::assertSame(410, $response->statusCode);
+        $payload = json_decode($response->body, true);
+        self::assertIsArray($payload);
+        self::assertSame('invite_expired_or_exhausted', $payload['code']);
     }
 }

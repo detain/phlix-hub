@@ -826,6 +826,11 @@ final class Application
                 $typedParams = $params;
                 return $inviteController->deleteInviteLink($req, $typedParams);
             });
+            $r->post('/{token}/redeem', static function (Request $req, array $params) use ($inviteController): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $inviteController->redeem($req, $typedParams);
+            });
         }, [$authMiddleware]);
     }
 
