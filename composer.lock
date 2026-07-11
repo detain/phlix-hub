@@ -288,7 +288,7 @@
             "dist": {
                 "type": "path",
                 "url": "/home/sites/phlix/phlix-shared",
-                "reference": "0fa2709c4042794cea14ff52e1fdee2ecef00924"
+                "reference": "216ea5dfa7faf2a422dbf0a1a4116442994e7c74"
             },
             "require": {
                 "php": "^8.3",

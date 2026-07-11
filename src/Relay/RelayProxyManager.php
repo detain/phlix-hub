@@ -16,6 +16,8 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
+use Phlix\Shared\Relay\RelayHttpRequestCodec;
+use Phlix\Shared\Relay\RelayHttpRequestHead;
 use Phlix\Shared\Relay\RelayHttpResponseChunk;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
@@ -221,17 +223,6 @@ final class RelayProxyManager
             return;
         }
 
-        if (strlen($json) > 65535) {
-            $this->reply(
-                $replyEvent,
-                $clientRequestId,
-                413,
-                [],
-                $this->errorBody('relay.request_too_large', 'Relayed request exceeds the 65535-byte frame limit.'),
-            );
-            return;
-        }
-
         $requestId = $this->allocateRequestId();
         // Per-request completion ceiling forwarded by the HTTP worker so this
         // timer matches the browser-facing wait (playback-read segments carry
@@ -267,7 +258,42 @@ final class RelayProxyManager
             'stream_opened_at' => $now,
         ];
 
-        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, $requestId, $json));
+        // Use chunked sending when the body is large enough that the
+        // base64-encoded JSON would exceed the 65535-byte frame limit.
+        // For empty bodies or small encoded sizes, send as a single frame
+        // for backwards compatibility.
+        if ($body === '' || strlen($json) <= 65535) {
+            $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, $requestId, $json));
+        } else {
+            // Chunked path: HEAD + BODY chunks + END
+            $head = new RelayHttpRequestHead(
+                $envelope->method,
+                $envelope->path,
+                $envelope->query,
+                $headers,
+            );
+            $head = $head->withBodySize(strlen($body));
+
+            $tunnel->sendToServer(new RelayFrame(
+                RelayFrameType::HTTP_REQUEST,
+                $requestId,
+                RelayHttpRequestCodec::encodeHead($head),
+            ));
+
+            foreach (RelayHttpRequestCodec::chunkBodyIterator($body) as $bodyChunk) {
+                $tunnel->sendToServer(new RelayFrame(
+                    RelayFrameType::HTTP_REQUEST,
+                    $requestId,
+                    $bodyChunk,
+                ));
+            }
+
+            $tunnel->sendToServer(new RelayFrame(
+                RelayFrameType::HTTP_REQUEST,
+                $requestId,
+                RelayHttpRequestCodec::encodeEnd(),
+            ));
+        }
 
         $this->logger->info('Relay proxy: forwarded request to server', [
             'server_id' => $serverId,
