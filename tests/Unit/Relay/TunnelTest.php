@@ -384,7 +384,7 @@ class TunnelTest extends TestCase
         $this->assertSame($channelId, $decoded->channelId());
     }
 
-    public function test_heartbeat_touches_last_frame_at(): void
+    public function test_send_heartbeat_does_not_touch_last_frame_at(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -403,11 +403,40 @@ class TunnelTest extends TestCase
 
         $initialLastFrameAt = $tunnel->lastFrameAt;
 
-        // Wait a tiny bit then send heartbeat
         usleep(1000);
         $tunnel->sendHeartbeat();
 
-        $this->assertGreaterThanOrEqual($initialLastFrameAt, $tunnel->lastFrameAt);
+        $this->assertSame($initialLastFrameAt, $tunnel->lastFrameAt);
+    }
+
+    public function test_is_stale_reflects_last_inbound_frame_not_outbound_heartbeat(): void
+    {
+        $sessionId = 'session-456';
+        $this->sessionManager
+            ->method('registerServer')
+            ->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $tunnel->lastFrameAt = time() - 100;
+        $this->assertTrue($tunnel->isStale(90));
+
+        usleep(1000);
+        $tunnel->sendHeartbeat();
+
+        $this->assertTrue($tunnel->isStale(90), 'Tunnel should still be stale after outbound heartbeat (lastFrameAt must not be refreshed by sendHeartbeat)');
+
+        $tunnel->onServerMessage($this->codec->encode(RelayFrameType::HEARTBEAT, 0, ''));
+
+        $this->assertFalse($tunnel->isStale(90), 'Tunnel should not be stale after inbound heartbeat (lastFrameAt updated by onServerMessage)');
     }
 
     public function test_send_to_client_records_bytes_in_for_the_target_only(): void

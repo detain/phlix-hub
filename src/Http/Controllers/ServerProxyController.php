@@ -566,7 +566,7 @@ final class ServerProxyController
     private function isStreamingPath(string $method, string $path): bool
     {
         $method = strtoupper($method);
-        if ($method !== 'GET' && $method !== 'HEAD') {
+        if ($method !== 'GET') {
             return false;
         }
 

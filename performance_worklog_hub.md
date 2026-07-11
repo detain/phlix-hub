@@ -62,9 +62,9 @@ php bin/phlix migrate
 (remote script on the hub box; pulls latest master and restarts the hub service on port :8800)
 
 ## Progress
-- [ ] HB-0.1  restore idle reaper (remove lastFrameAt self-refresh)
+- [x] HB-0.1  restore idle reaper (remove lastFrameAt self-refresh)  (commit: H-0.1) — sendHeartbeat no longer touches lastFrameAt; isStale correctly reflects last inbound frame; unit test added
 - [x] HB-0.2  wire invite-link redeem route  (commits: f057aaf, 3a7067d)  DONE
-- [ ] HB-0.3  short-circuit HEAD over relay proxy
+- [x] HB-0.3  short-circuit HEAD over relay proxy  (commit: H-0.3) — HEAD excluded from isStreamingPath, routed through buffered bridge->request() path; returns headers immediately without streaming body
 - [x] HB-0.4  add subdomain to ServerInfoDto, drop redundant query  (commits: phlix-shared:008fcc1, phlix-hub:489ec7d)  DONE
 - [x] HB-1.1  drop base64 on internal channel-broker body path  (commits: e7ef677, 49913e7, d16b567)  DONE
 - [x] HB-1.2  raw tunnel data-plane backpressure  (commits: 2a2b421, 0aed3e0, b1140b1)  DONE

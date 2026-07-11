@@ -1044,8 +1044,6 @@ final class Tunnel implements TunnelInterface
         $heartbeatFrame = new RelayFrame(RelayFrameType::HEARTBEAT, 0, '');
         $this->sendToServer($heartbeatFrame);
 
-        $this->lastFrameAt = time();
-
         $this->logger->debug('Relay: heartbeat sent to server', [
             'server_id' => $this->serverId,
             'tunnel_id' => $this->tunnelId,
