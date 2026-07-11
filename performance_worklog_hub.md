@@ -65,7 +65,7 @@ php bin/phlix migrate
 - [ ] HB-0.1  restore idle reaper (remove lastFrameAt self-refresh)
 - [ ] HB-0.2  wire invite-link redeem route
 - [ ] HB-0.3  short-circuit HEAD over relay proxy
-- [ ] HB-0.4  add subdomain to ServerInfoDto, drop redundant query
+- [x] HB-0.4  add subdomain to ServerInfoDto, drop redundant query  (commits: phlix-shared:008fcc1, phlix-hub:489ec7d)  DONE
 - [ ] HB-1.1  drop base64 on internal channel-broker body path
 - [ ] HB-1.2  raw tunnel data-plane backpressure
 - [ ] HB-1.3  non-blocking onReply delivery
