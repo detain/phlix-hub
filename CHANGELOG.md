@@ -15,6 +15,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `InviteLinkHandler::redeemInviteLink()` handler.
 
 ### Changed
+- **Relay proxy: dropped base64 encoding from the internal channel-broker body path (HB-1.1)**
+  (`src/Relay/RelayProxyManager.php`, `src/Relay/RelayProxyBridge.php`,
+  `src/Http/Controllers/ServerProxyController.php`). The relay's internal hub-to-hub
+  channel broker now passes raw binary body fragments directly instead of base64-encoding
+  them. This removes the 33% byte inflation and two CPU encoding/decoding passes per
+  fragment on every relayed response, reducing loopback bandwidth and CPU overhead on
+  the hub worker.
 - **web-ui: bumped `@phlix/ui` pin from `v0.73.1` to `v0.74.0`** (F2) and rebuilt the
   committed `public/assets/app/**` bundle. Brings the stream-quality/ABR player UI
   (Track E: hls.js level API, `QualityMenu`, Auto/pinned-rung selection, visual + a11y

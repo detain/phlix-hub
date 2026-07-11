@@ -161,7 +161,7 @@ final class RelayProxyBridge
      * @param string                $body     Raw request body.
      * @param float                 $timeout  Seconds to wait for the response.
      *
-     * @return array<string, mixed>|null The relay reply payload (status/headers/body_b64),
+     * @return array<string, mixed>|null The relay reply payload (status/headers/body),
      *                                    or null on timeout / no response.
      *
      * @since 0.10.0
