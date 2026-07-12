@@ -70,7 +70,7 @@ php bin/phlix migrate
 - [~] HB-1.2  raw tunnel data-plane backpressure  FIX LANDED 2026-07-12 → RE-REVIEW spawned (Implementer) — drop hole closed on BOTH paths via re-queue+retry-on-drain (mirrors pendingHighPriorityFrames). sendToClient: per-client `pendingClientFrames[channelId]` re-queues the dropped DATA frame, `flushClientQueue` re-sends on that client's onBufferDrain BEFORE decrementing serverBackpressureCount/resuming server. sendToServer low-priority body: `pendingBodyFrames` re-queues, `flushBodyQueue` re-sends on serverWs onBufferDrain (control-first then body) BEFORE resuming clients. Both caps (256) → close('backpressure_overflow') hard-fail; existing close('backpressure_timeout') safety timer kept (extracted to testable named methods, Timer::add wrapped in try/catch like RelayProxyManager). removeClient releases a congested client's slot so it can't strand the pause. +4 tests (no-drop deliver-on-drain + timeout-close, client & server paths). Commits 728a843,5fedc5f. was PARTIAL (2a2b421, 0aed3e0, b1140b1). REVIEW-2 2026-07-12: 5 findings — the fix INTRODUCED issues on untested seams: #1 CONFIRMED reordering — high-priority server path (:719-733) lacks the enqueue-if-backlog guard the body/client paths have → a new control frame (HEARTBEAT/CANCEL/CLIENT_CONNECT/DISCONNECT) jumps ahead of queued frames (silent reorder). #2 CONFIRMED — high-priority overflow (:721-729) logs+returns (silent drop) instead of close('backpressure_overflow'). #3 lower-conf pre-existing — uncancelled one-shot safety timers test GLOBAL count → stale timer false-closes healthy tunnel (:984-998,:1080-1090). #4 test gap — no multi-frame FIFO / removeClient-release / overflow→close / high-priority-path coverage. #5 hygiene — pendingHighPriorityFrames not cleared in close()/notifyClientsDisconnected. → FIX-2 spawned (#1,#2,#3,#4,#5). FIX-2 LANDED 2026-07-12 → RE-REVIEW (review-3): all 5 fixed — #1 enqueue-if-backlog guard on high-priority path (FIFO preserved: flush control-then-body unchanged); #2 enqueueHighPriorityFrame close('backpressure_overflow'); #3 episode-scoped safety timers (arm on 0→1 / false→true, cancel on drain in armClientDrain+removeClient+server drain+close) so a stale timer can't false-close; #5 close() clears pendingHighPriorityFrames + cancels both timers. +7 tests (FIFO high-priority+backlog, client FIFO, removeClient release, multi-client 2→1→0, 3× overflow→close). Suite 1232 pass/17 skip, phpstan L9 clean, phpcs -n src/ clean. Commits 99fb814 (fix), c10d02b (tests).
 - [x] HB-1.3  non-blocking onReply delivery  RE-AUDIT 2026-07-12: DONE, well-tested — push(...,0.0) non-blocking probe, full/closed → own Coroutine::create fiber (deliverReplyInFiber) so one stuck consumer blocks only its fiber; 3 substantive tests. No action. (e3cb349, 8ea42ae, 8d45c85)
 - [x] HB-1.4  lean owner/status queries on hot paths  FIX 2026-07-12: DONE. Negative-cache defect closed — AuthMiddleware::userExists now stores the BOOLEAN probe result + timestamp (was a bare ts) and a cache hit returns the cached boolean (was unconditional true), so a deleted/revoked user is rejected for the whole TTL instead of bypassing auth.user_not_found; hot-path optimisation + short-TTL revocation preserved; static cache bounded (USER_EXISTS_CACHE_MAX). +9 tests: getOwnerAndStatus leanness (SQL no-COUNT + proxy/client-mount never()->getServerInfo), never()->findById on hot path, cache-TTL query-count + deleted-user regression guard + TTL-expiry re-probe. Suite 1243 pass/17 skip, phpstan L9 0, phpcs -n src/ clean. Prior wiring (c0461ed, 2f81f37, e5ce01e).
-- [~] HB-2.1  request-body chunking over tunnel (enable bodied relay)  RE-AUDIT-2 2026-07-12 (post HB-1.2 fix-3): NOT-DONE — CROSS-REPO BLOCKER, X2 only HALF-landed. Hub side CORRECT (RelayHttpRequestCodec tag-byte HEAD/BODY/END; RelayProxyManager.php:288-319 chunks >64KB; 413 cap lifted; classifier now match($frame->type) → chunked frames flow LOW/pendingBodyFrames without throwing, proven by TunnelTest). BUT **phlix-server never built the request-reassembly half + is NOT repinned to the shared request codec** → a real >64KB bodied relay now fails 400-malformed (RelayConsumer::onHttpRequest @server:745-746 does RelayHttpRequest::fromJson unconditionally, no tag-byte branch/accumulator; server composer.lock detain/phlix-shared v0.19.0 has only RelayHttpResponseCodec). GAPS to close HB-2.1: (a) SERVER repin to shared ≥216ea5d; (b) SERVER onHttpRequest per-requestId chunk reassembly (mirror response side); (c) HUB test: onRequest(>64KB binary body incl NUL/0xFF) emits HEAD+N·BODY+END on one requestId (RelayProxyManager.php:300-318 = 0 coverage today); (d) integration round-trip (writable only after b). Hub unit-codec round-trip + Tunnel classification/ordering ALREADY tested. (commits: phlix-shared:216ea5d, phlix-hub:7b71c190; classifier fb9e7b7). → server task queued (SV-side of X2).
+- [x] HB-2.1  request-body chunking over tunnel (enable bodied relay)  CLOSEOUT 2026-07-12 (TestEngineer): gap (c) hub emission test + gap (d) round-trip coverage assessed — both halves now assert against the shared `RelayHttpRequestCodec` (see TestEngineer note below). Server reassembly half already landed+verified byte-for-byte. RE-AUDIT-2 2026-07-12 (post HB-1.2 fix-3): NOT-DONE — CROSS-REPO BLOCKER, X2 only HALF-landed. Hub side CORRECT (RelayHttpRequestCodec tag-byte HEAD/BODY/END; RelayProxyManager.php:288-319 chunks >64KB; 413 cap lifted; classifier now match($frame->type) → chunked frames flow LOW/pendingBodyFrames without throwing, proven by TunnelTest). BUT **phlix-server never built the request-reassembly half + is NOT repinned to the shared request codec** → a real >64KB bodied relay now fails 400-malformed (RelayConsumer::onHttpRequest @server:745-746 does RelayHttpRequest::fromJson unconditionally, no tag-byte branch/accumulator; server composer.lock detain/phlix-shared v0.19.0 has only RelayHttpResponseCodec). GAPS to close HB-2.1: (a) SERVER repin to shared ≥216ea5d; (b) SERVER onHttpRequest per-requestId chunk reassembly (mirror response side); (c) HUB test: onRequest(>64KB binary body incl NUL/0xFF) emits HEAD+N·BODY+END on one requestId (RelayProxyManager.php:300-318 = 0 coverage today); (d) integration round-trip (writable only after b). Hub unit-codec round-trip + Tunnel classification/ordering ALREADY tested. (commits: phlix-shared:216ea5d, phlix-hub:7b71c190; classifier fb9e7b7). → server task queued (SV-side of X2).
 - [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  RE-FIXED 2026-07-12 (Fixer) — prior fix (7c30723) was INEFFECTIVE (DoS still open). Now CLOSED: displacement gated on validation (not on a never-thrown exception), incumbent stays routable, failServer() guarded, reconnect-drain (H-R6) added, txn test hardened. See Fixer note below.
 - [x] HB-2.3  cap FrameDecoder buffer  RE-FIXED 2026-07-12 (Fixer) — prior fix (ec17c9cc) capped the buffer but the "close tunnel" half was UNWIRED: FrameDecoder threw a base `\RuntimeException` that `Tunnel::onServerMessage` (catches only `InvalidFrameTypeException`) let escape the Workerman callback. Now CLOSED: overflow throws `FrameBufferOverflowException extends InvalidFrameTypeException` → existing tunnel catch closes cleanly with reason `frame_buffer_overflow`; all other FrameDecoder consumers (client relay :8803, both federation paths) now also catch+close instead of leaking. Real Tunnel-driven test added (fails pre-fix). See Fixer note below.
 - [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
@@ -869,3 +869,76 @@ every append, before parsing). Tests exercise both.
 - `/home/sites/phlix/phlix-hub/tests/Unit/Relay/FrameDecoderTest.php`
 - `/home/sites/phlix/phlix-hub/tests/Unit/Relay/TunnelTest.php`
 - `/home/sites/phlix/phlix-hub/tests/Unit/Relay/ClientConnectionTest.php`
+
+## TestEngineer — HB-2.1 closeout — 2026-07-12
+
+Closed HB-2.1 gap (c) (hub chunk-emission test = 0 coverage) and assessed gap (d)
+(integration round-trip). **Test build-out only — no production code changed.**
+
+### Gap (c) — hub emission test (RelayProxyManager.php:288-319 chunked path)
+
+Added to `tests/Unit/Relay/RelayProxyManagerTest.php` (2 new tests + 1 private helper):
+
+- **`test_large_binary_body_emits_head_body_end_chunks`** — drives `onRequest` with a
+  **140 000-byte BINARY body** cycling all 256 byte values (asserts it contains NUL 0x00
+  and 0xFF; not valid UTF-8/JSON). 140000 > 2·MAX_BODY_CHUNK(65534) so it must span
+  **3 BODY chunks**. Decodes every emitted HTTP_REQUEST frame with the **REAL vendored
+  `RelayHttpRequestCodec::decode()`** (not a hand-rolled parser) and asserts the exact
+  sequence on the one requestId: **1 HEAD (tag 0x01) → 3 BODY (tag 0x02) → 1 END (tag 0x03)**.
+  HEAD decodes to a real `RelayHttpRequestHead` with method=`PUT`, path/query/Content-Type
+  correct and **bodySize** `Content-Length === (string)strlen($body)`. The concatenated BODY
+  bytes are asserted **byte-for-byte identical** to the source (`$body === $reassembled`,
+  length + strict `===`) — NUL/0xFF preserved, no base64/UTF-8 corruption. Each BODY chunk
+  is `<= MAX_BODY_CHUNK`.
+- **`test_body_size_boundary_single_envelope_vs_chunked`** — pins the **65535 decision
+  boundary**. Binary-searches (via the shared `RelayHttpRequest::toJson()`) the smallest body
+  whose JSON envelope exceeds 65535, then asserts: just-**under** → exactly **one**
+  HTTP_REQUEST frame that decodes via `RelayHttpRequest::fromJson()` with body round-tripping
+  identically (legacy single-frame envelope, back-compat preserved); just-**over** → the
+  chunked **HEAD + BODY(s) + END** path with reassembled body byte-identical. Guarantees
+  chunking never fires early (regressing the envelope) nor late (413-capping a bodied request).
+- Both drive the real `RelayProxyManager::onRequest` + real `Tunnel::sendToServer`; the
+  hub's raw-JSON HELLO_ACK (begins `{`) is filtered, binary frames decoded with `FrameDecoder`.
+
+Coverage: `RelayProxyManager.php` lines **292–318 (the entire chunked-emission branch)** go
+from **0 → covered (count=2)**, confirmed from `coverage.xml`.
+
+### Gap (d) — round-trip coverage conclusion
+
+A true cross-process **hub-emit → server-reassemble** integration test is **not runnable inside
+one repo's unit suite** — phlix-hub and phlix-server are separate deployables and there is no
+in-repo hub↔server integration harness that could stand up both event loops. The practical,
+authoritative coverage is therefore the **two-halves-against-one-shared-codec** guarantee:
+
+- **Hub emit half** (this step): `RelayProxyManagerTest` asserts the emitted frames decode via
+  the vendored `Phlix\Shared\Relay\RelayHttpRequestCodec` (tags 0x01/0x02/0x03,
+  MAX_BODY_CHUNK=65534) to the exact HEAD/BODY*/END contract, body byte-identical.
+- **Server reassembly half** (already landed + verified): per the phlix-server worklog
+  `## Reviewer — X2/HB-2.1 server side (post-deps verify) — 2026-07-12`, `RelayConsumer::onHttpRequest`
+  reassembles the **same** `RelayHttpRequestCodec` contract byte-for-byte (first-byte branch on
+  TAG_HEAD/BODY/END, unambiguous vs the legacy `{`-prefixed JSON envelope), covered by
+  `RelayConsumerTest` (`phpunit --filter 'RelayConsumer|RelayHttpRequest'` → 45 tests OK) against
+  phlix-shared `^0.20.0` — the same `@since 0.17.0` codec API the hub vendors.
+
+Both ends encode/decode against **one shared codec module**, so the hub's emission and the
+server's reassembly are contract-locked: this is a **codec-contract-level round-trip guarantee**
+and is the recorded closeout for gap (d). No hub↔server integration harness exists in-repo to run
+a live cross-process trip; if one is later added, a single 140KB-body live-trip assertion would
+be the natural addition.
+
+### Verify (actual output)
+
+- `phpunit --filter 'RelayProxyManager|RelayHttpRequest'` → **OK (40 tests, 190 assertions)**
+  (was 38 → +2 new emission tests).
+- FULL `php -d max_execution_time=0 ./vendor/bin/phpunit` →
+  **`Tests: 1254, Assertions: 15555, Skipped: 17`** (0 failures; baseline 1252 + 2 new).
+- `phpstan analyze --no-progress` → **`[OK] No errors`**.
+- `phpcs --standard=PSR12 -n src/` → clean (no output; test-only change, src untouched).
+- psalm SKIPPED (environmental: box PHP 8.3.6 < psalm's required 8.3.16).
+
+**Files touched (absolute):**
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/RelayProxyManagerTest.php` (tests only)
+- `/home/sites/phlix/phlix-hub/performance_worklog_hub.md` (this note + HB-2.1 → [x])
+
+**Status: GREEN.** HB-2.1 closed — hub emission test green, byte-for-byte against the shared
+`RelayHttpRequestCodec`, matching the server reassembly half.

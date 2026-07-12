@@ -13,6 +13,8 @@ use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
+use Phlix\Shared\Relay\RelayHttpRequestChunk;
+use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
 use PHPUnit\Framework\TestCase;
@@ -24,9 +26,14 @@ use Workerman\Timer;
 
 use function array_key_last;
 use function base64_decode;
+use function base64_encode;
+use function chr;
 use function count;
 use function json_decode;
 use function microtime;
+use function str_repeat;
+use function strlen;
+use function substr;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -202,6 +209,228 @@ final class RelayProxyManagerTest extends TestCase
 
         // No reply published yet — awaiting the server's HTTP_RESPONSE.
         $this->assertCount(0, $this->published);
+    }
+
+    /**
+     * Gap (c): the chunked emission path (RelayProxyManager::onRequest for a
+     * body too large for a single 65535-byte JSON envelope) had ZERO coverage.
+     *
+     * Drive onRequest with a ~140 KB BINARY body (contains NUL and 0xFF, spans
+     * >2 body chunks) and assert the emitted HTTP_REQUEST frame sequence on the
+     * one requestId is exactly: 1 HEAD (tag 0x01) → N BODY (tag 0x02) → 1 END
+     * (tag 0x03). Every frame is decoded with the REAL vendored
+     * RelayHttpRequestCodec (not a hand-rolled parser) so this end asserts
+     * against the SAME contract the phlix-server reassembly half verifies.
+     */
+    public function test_large_binary_body_emits_head_body_end_chunks(): void
+    {
+        // Build a ~140 KB binary body cycling all 256 byte values so it
+        // includes NUL (0x00) and 0xFF and is NOT valid UTF-8 / JSON. 140000 >
+        // 2 * MAX_BODY_CHUNK (65534) so it must span exactly 3 BODY chunks.
+        $pattern = '';
+        for ($b = 0; $b < 256; $b++) {
+            $pattern .= chr($b);
+        }
+        $body = substr(str_repeat($pattern, 548), 0, 140000);
+        $this->assertSame(140000, strlen($body));
+        $this->assertStringContainsString(chr(0), $body);
+        $this->assertStringContainsString(chr(255), $body);
+
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-big',
+            'reply_event' => 'reply.big',
+            'server_id' => 'srv-1',
+            'method' => 'PUT',
+            'path' => '/api/v1/library/upload',
+            'query' => 'overwrite=1',
+            'headers' => ['Content-Type' => 'application/octet-stream'],
+            'body_b64' => base64_encode($body),
+        ]);
+
+        // Decode every emitted frame (HELLO_ACK first, then our request frames).
+        // Each send() call carries exactly one complete encoded frame, so a
+        // fresh decoder per entry mirrors the wire boundary.
+        $chunks = [];
+        foreach ($sent as $encoded) {
+            // The HELLO_ACK is sent to the server as a raw JSON string (begins
+            // with '{'), not a binary frame — skip it; binary frames begin with
+            // a 4-byte seq whose high byte is never '{' (0x7B) here.
+            if ($encoded === '' || $encoded[0] === '{') {
+                continue;
+            }
+            $frame = (new FrameDecoder())->decode($encoded);
+            $this->assertNotNull($frame);
+            if ($frame->type !== RelayFrameType::HTTP_REQUEST) {
+                continue;
+            }
+            $chunks[] = RelayHttpRequestCodec::decode($frame->payload);
+        }
+
+        // Sequence shape: exactly one HEAD, then N BODY, then exactly one END.
+        $this->assertGreaterThanOrEqual(5, count($chunks)); // HEAD + 3 BODY + END
+        $head = $chunks[0];
+        $end = $chunks[count($chunks) - 1];
+        $this->assertSame(RelayHttpRequestChunk::KIND_HEAD, $head->kind);
+        $this->assertSame(RelayHttpRequestChunk::KIND_END, $end->kind);
+
+        // HEAD decodes to a real RelayHttpRequestHead with method/path/query/
+        // headers correct and bodySize (Content-Length) === strlen($body).
+        $this->assertNotNull($head->head);
+        $this->assertSame('PUT', $head->head->method);
+        $this->assertSame('/api/v1/library/upload', $head->head->path);
+        $this->assertSame('overwrite=1', $head->head->query);
+        $this->assertSame('application/octet-stream', $head->head->headers['Content-Type'] ?? null);
+        $this->assertSame((string) strlen($body), $head->head->headers['Content-Length'] ?? null);
+
+        // Middle chunks are all BODY; there must be exactly one HEAD and one END
+        // and no stray HEAD/END in between (strict ordering on the requestId).
+        $bodyChunks = 0;
+        $reassembled = '';
+        for ($i = 1; $i < count($chunks) - 1; $i++) {
+            $this->assertSame(RelayHttpRequestChunk::KIND_BODY, $chunks[$i]->kind);
+            $this->assertLessThanOrEqual(RelayHttpRequestCodec::MAX_BODY_CHUNK, strlen($chunks[$i]->body));
+            $reassembled .= $chunks[$i]->body;
+            $bodyChunks++;
+        }
+        // ceil(140000 / 65534) = 3 BODY frames.
+        $this->assertSame(3, $bodyChunks);
+
+        // The concatenated BODY bytes equal the original body BYTE-FOR-BYTE —
+        // NUL/0xFF preserved, no base64/UTF-8 corruption.
+        $this->assertSame(strlen($body), strlen($reassembled));
+        $this->assertTrue($body === $reassembled, 'reassembled body must be byte-identical to the source');
+
+        // No reply yet — awaiting the server's HTTP_RESPONSE.
+        $this->assertCount(0, $this->published);
+    }
+
+    /**
+     * Back-compat boundary: a body whose base64 JSON envelope is <= 65535 bytes
+     * still travels as ONE single-frame HTTP_REQUEST JSON envelope (legacy
+     * shape, decodable via RelayHttpRequest::fromJson) — while a body one step
+     * over the threshold flips to the chunked HEAD/BODY/END path. This pins the
+     * 65535 decision boundary so the chunking never fires early (regressing the
+     * back-compat envelope) nor late (413-capping a bodied request).
+     */
+    public function test_body_size_boundary_single_envelope_vs_chunked(): void
+    {
+        // Envelope shape used for the boundary probe (must match production's
+        // method/path/query/headers so strlen(json) matches onRequest's check).
+        $probe = static fn (string $b): int => strlen(
+            (new RelayHttpRequest('POST', '/api/v1/upload', '', [], $b))->toJson(),
+        );
+
+        // Binary-search the smallest body whose JSON envelope exceeds 65535.
+        $lo = 1;
+        $hi = 60000;
+        $this->assertGreaterThan(65535, $probe(str_repeat('x', $hi)));
+        $this->assertLessThanOrEqual(65535, $probe(str_repeat('x', $lo)));
+        while ($lo + 1 < $hi) {
+            $mid = intdiv($lo + $hi, 2);
+            if ($probe(str_repeat('x', $mid)) <= 65535) {
+                $lo = $mid;
+            } else {
+                $hi = $mid;
+            }
+        }
+        $underBody = str_repeat('x', $lo);   // JSON <= 65535 → single envelope
+        $overBody = str_repeat('x', $hi);    // JSON  > 65535 → chunked
+        $this->assertLessThanOrEqual(65535, $probe($underBody));
+        $this->assertGreaterThan(65535, $probe($overBody));
+
+        // --- just under: exactly one HTTP_REQUEST JSON envelope frame ---
+        $underFrames = $this->httpRequestFramesFor($underBody);
+        $this->assertCount(1, $underFrames);
+        $envelope = RelayHttpRequest::fromJson($underFrames[0]->payload);
+        $this->assertSame('POST', $envelope->method);
+        $this->assertTrue($underBody === $envelope->body, 'under-threshold body must round-trip via JSON envelope');
+
+        // --- just over: chunked HEAD + BODY(s) + END, no JSON envelope ---
+        $overFrames = $this->httpRequestFramesFor($overBody);
+        $this->assertGreaterThanOrEqual(3, count($overFrames)); // HEAD + >=1 BODY + END
+        $overChunks = [];
+        foreach ($overFrames as $f) {
+            $overChunks[] = RelayHttpRequestCodec::decode($f->payload);
+        }
+        $this->assertSame(RelayHttpRequestChunk::KIND_HEAD, $overChunks[0]->kind);
+        $this->assertSame(RelayHttpRequestChunk::KIND_END, $overChunks[count($overChunks) - 1]->kind);
+        $reassembled = '';
+        for ($i = 1; $i < count($overChunks) - 1; $i++) {
+            $this->assertSame(RelayHttpRequestChunk::KIND_BODY, $overChunks[$i]->kind);
+            $reassembled .= $overChunks[$i]->body;
+        }
+        $this->assertTrue($overBody === $reassembled, 'over-threshold body must reassemble byte-identical');
+    }
+
+    /**
+     * Drive onRequest for a POST with the given body and return the ordered
+     * HTTP_REQUEST frames emitted down the tunnel (HELLO_ACK filtered out).
+     *
+     * @return list<RelayFrame>
+     */
+    private function httpRequestFramesFor(string $body): array
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-boundary',
+            'reply_event' => 'reply.boundary',
+            'server_id' => 'srv-1',
+            'method' => 'POST',
+            'path' => '/api/v1/upload',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => base64_encode($body),
+        ]);
+
+        $frames = [];
+        foreach ($sent as $encoded) {
+            // Skip the raw-JSON HELLO_ACK (begins with '{'); decode binary frames.
+            if ($encoded === '' || $encoded[0] === '{') {
+                continue;
+            }
+            $frame = (new FrameDecoder())->decode($encoded);
+            $this->assertNotNull($frame);
+            if ($frame->type === RelayFrameType::HTTP_REQUEST) {
+                $frames[] = $frame;
+            }
+        }
+
+        return $frames;
     }
 
     public function test_response_chunks_assemble_and_publish_reply(): void
