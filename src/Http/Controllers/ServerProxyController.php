@@ -536,7 +536,30 @@ final class ServerProxyController
         // streamed straight to the browser without buffering the whole body on
         // the hub; everything else keeps the simple buffered round-trip.
         if ($this->isStreamingPath($request->method, $path)) {
+            // HB-3.4 G3: per-user concurrent-stream cap. Enforced BEFORE the
+            // stream is admitted so an over-limit request never occupies a slot.
+            // The live count is in-memory per worker (RelaySessionManager owns
+            // it); the operator-configured maximum is read from the quota rollup
+            // (0 = unlimited → skip).
+            $maxStreams = $this->sessionManager->getUserMaxConcurrentStreams($userId);
+            if ($maxStreams > 0 && $this->sessionManager->activeUserStreams($userId) >= $maxStreams) {
+                $this->logger->info('Relay proxy: rejected — per-user concurrent-stream cap reached', [
+                    'server_id' => $serverId,
+                    'user_id' => $userId,
+                    'active_streams' => $this->sessionManager->activeUserStreams($userId),
+                    'max_streams' => $maxStreams,
+                ]);
+
+                return (new Response())->status(503)->json([
+                    'error' => [
+                        'code' => 'stream.limit',
+                        'message' => 'You have reached your maximum number of concurrent streams.',
+                    ],
+                ]);
+            }
+
             return $this->buildStreamingResponse(
+                $userId,
                 $serverId,
                 $request->method,
                 $path,
@@ -625,6 +648,22 @@ final class ServerProxyController
      * server — so a multi-MB segment (or a whole direct-play file) never has to
      * be buffered on the hub before the first byte reaches the client.
      *
+     * ### Bandwidth accounting + concurrency (HB-3.4 G1/G3)
+     * The user has already cleared the concurrent-stream cap in {@see self::proxy()};
+     * here we OCCUPY a stream slot for them ({@see RelaySessionManager::beginUserStream()})
+     * and guarantee it is RELEASED exactly once on every exit path. The producer's
+     * `finally` is the release point because it is the true "stream is over"
+     * boundary: {@see RelayProxyBridge::stream()} always either returns (normal
+     * completion, browser-gone mid-body, timeout) or throws (a pre-head error it
+     * re-raises), and `finally` runs in every one of those cases — so the slot can
+     * never leak on error/disconnect. The one-shot `$release` guard makes the
+     * decrement idempotent. In the same `finally` we meter the AUTHORITATIVE bytes
+     * actually delivered to the browser — read from the sink's own on-the-wire
+     * counter ({@see ConnectionResponseSink::bytesStreamed()}), NOT a header
+     * estimate — as the user's monthly DOWNLOAD, plus the real request body as
+     * UPLOAD.
+     *
+     * @param string                $userId   Authenticated hub user id (for accounting).
      * @param string                $serverId Target server UUID.
      * @param string                $method   HTTP method.
      * @param string                $path     Resolved `/`-prefixed forward path.
@@ -636,6 +675,7 @@ final class ServerProxyController
      * @return Response
      */
     private function buildStreamingResponse(
+        string $userId,
         string $serverId,
         string $method,
         string $path,
@@ -644,7 +684,24 @@ final class ServerProxyController
         string $body,
         float $timeout,
     ): Response {
+        $sessionManager = $this->sessionManager;
+
+        // HB-3.4 G3: occupy a concurrent-stream slot for this admitted stream.
+        $sessionManager->beginUserStream($userId);
+
+        // One-shot slot release. Idempotent so it is safe to call from the
+        // producer's finally regardless of how the stream ended.
+        $released = false;
+        $release = static function () use (&$released, $sessionManager, $userId): void {
+            if ($released) {
+                return;
+            }
+            $released = true;
+            $sessionManager->endUserStream($userId);
+        };
+
         $bridge = $this->bridge;
+        $requestBodyBytes = strlen($body);
         $producer = static function (TcpConnection $connection) use (
             $bridge,
             $serverId,
@@ -654,17 +711,35 @@ final class ServerProxyController
             $headers,
             $body,
             $timeout,
+            $sessionManager,
+            $userId,
+            $requestBodyBytes,
+            $release,
         ): void {
-            $bridge->stream(
-                $serverId,
-                $method,
-                $path,
-                $query,
-                $headers,
-                $body,
-                $timeout,
-                new ConnectionResponseSink($connection, $method),
-            );
+            $sink = new ConnectionResponseSink($connection, $method);
+            try {
+                $bridge->stream(
+                    $serverId,
+                    $method,
+                    $path,
+                    $query,
+                    $headers,
+                    $body,
+                    $timeout,
+                    $sink,
+                );
+            } finally {
+                // HB-3.4 G1: meter the real bytes streamed (authoritative
+                // data-plane total, not a header estimate) as the user's
+                // DOWNLOAD, and the real request body as their UPLOAD.
+                $bytesStreamed = $sink->bytesStreamed();
+                if ($bytesStreamed > 0 || $requestBodyBytes > 0) {
+                    $sessionManager->recordUserBandwidth($userId, $bytesStreamed, $requestBodyBytes);
+                }
+                // HB-3.4 G3: free the concurrent-stream slot on EVERY exit
+                // (completion, browser-gone, error) — no leak.
+                $release();
+            }
         };
 
         return (new Response())->status(200)->stream($producer);

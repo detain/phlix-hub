@@ -125,6 +125,17 @@ final class ConnectionResponseSink implements RelayResponseSink
     /** @var int Raw body bytes actually written so far (fixed-length framing only). */
     private int $bytesWritten = 0;
 
+    /**
+     * @var int Total raw body bytes streamed to the browser so far, across BOTH
+     *          framings (fixed-length and chunked). Unlike {@see self::$bytesWritten}
+     *          (fixed-length only, used for the short-body force-close), this is the
+     *          authoritative on-the-wire download total the bandwidth-accounting
+     *          layer meters (HB-3.4 G1) — the actual bytes delivered, not a header
+     *          estimate. Counts only body fragments that {@see self::body()}
+     *          successfully handed to the connection.
+     */
+    private int $bytesStreamed = 0;
+
     /** @var Channel Capacity-1 wake channel pushed by onBufferDrain. */
     private readonly Channel $resume;
 
@@ -226,6 +237,9 @@ final class ConnectionResponseSink implements RelayResponseSink
         if (!$this->chunked) {
             $this->bytesWritten += strlen($bytes);
         }
+        // Authoritative download total for bandwidth accounting (HB-3.4 G1):
+        // count the raw body bytes regardless of framing.
+        $this->bytesStreamed += strlen($bytes);
 
         // Respect the socket send buffer: if it filled, park until it drains so a
         // slow client cannot make the hub queue the body without bound.
@@ -304,6 +318,20 @@ final class ConnectionResponseSink implements RelayResponseSink
         if ($isShortFixedLengthBody) {
             $this->connection->close();
         }
+    }
+
+    /**
+     * Total raw body bytes successfully streamed to the browser (both framings).
+     *
+     * The authoritative download byte count the bandwidth-accounting layer meters
+     * for the user once the stream ends (HB-3.4 G1) — real on-the-wire bytes, not
+     * a header/`Content-Length` estimate.
+     *
+     * @return int
+     */
+    public function bytesStreamed(): int
+    {
+        return $this->bytesStreamed;
     }
 
     /**

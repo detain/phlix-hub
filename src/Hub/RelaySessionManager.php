@@ -50,6 +50,21 @@ class RelaySessionManager
     private array $pendingLastFrameAt = [];
 
     /**
+     * In-memory count of a user's currently-active relay streams, keyed by user
+     * id. Used by the per-user concurrent-stream cap (HB-3.4 G3).
+     *
+     * This lives in memory ON PURPOSE and is NOT persisted: the live count is a
+     * property of THIS worker process (it owns the browser connections it is
+     * streaming), so a DB round-trip would neither be authoritative nor cheap.
+     * The map is BOUNDED — a user's entry is removed the moment their count
+     * returns to zero ({@see self::endUserStream()}) — so it can never grow
+     * without limit in the resident Workerman worker (§0.4).
+     *
+     * @var array<string, int>
+     */
+    private array $activeStreams = [];
+
+    /**
      * @param Connection       $db     MySQL connection.
      * @param StructuredLogger $logger Application logger.
      */
@@ -536,9 +551,18 @@ class RelaySessionManager
     /**
      * Check whether a user is currently within their bandwidth quota.
      *
-     * For the initial implementation the check is best-effort: if the user
-     * has no quota row or both quotas are 0 (unlimited), they are allowed.
-     * A more refined check accounting for the estimated bytes of an in-flight
+     * Enforces BOTH monthly caps recorded for the period (HB-3.4 G2):
+     *   - the DOWNLOAD cap `quota_bytes_in` against `bytes_in` (bytes the user
+     *     has DOWNLOADED from the server — the dimension a media stream grows),
+     *   - the UPLOAD cap `quota_bytes_out` against `bytes_out` (bytes the user
+     *     has UPLOADED to the server).
+     * (See the column semantics documented on {@see self::recordUserBandwidth()}:
+     * `bytes_in` = downloaded-by-user, `bytes_out` = uploaded-by-user.) A cap of
+     * 0 on either dimension means "unlimited" for that dimension and is skipped.
+     * Denial fires when a set cap has been reached (`used >= quota`).
+     *
+     * Best-effort: if the user has no quota row for the current period, they are
+     * allowed. A refined check accounting for the estimated bytes of an in-flight
      * request may be added later.
      *
      * @param string $userId          Hub user UUID.
@@ -552,7 +576,7 @@ class RelaySessionManager
 
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT bytes_out, quota_bytes_out FROM relay_user_quotas
+            'SELECT bytes_in, bytes_out, quota_bytes_in, quota_bytes_out FROM relay_user_quotas
              WHERE user_id = :user_id AND period_start = :period_start
              LIMIT 1',
             [
@@ -569,22 +593,120 @@ class RelaySessionManager
         /** @var array<string, mixed> $row */
         $row = $rows[0];
 
+        $bytesIn = is_numeric($row['bytes_in'] ?? null) ? (int) $row['bytes_in'] : 0;
         $bytesOut = is_numeric($row['bytes_out'] ?? null) ? (int) $row['bytes_out'] : 0;
+        $quotaBytesIn = is_numeric($row['quota_bytes_in'] ?? null) ? (int) $row['quota_bytes_in'] : 0;
         $quotaBytesOut = is_numeric($row['quota_bytes_out'] ?? null) ? (int) $row['quota_bytes_out'] : 0;
 
-        // Unlimited when both caps are 0.
-        if ($quotaBytesOut === 0) {
-            return ['allowed' => true, 'reason' => null];
-        }
-
-        if ($bytesOut >= $quotaBytesOut) {
+        // DOWNLOAD cap: bytes_in is what the user has downloaded from the server;
+        // this is the dimension a media stream grows, so it is the cap that
+        // actually bites for playback over the relay.
+        if ($quotaBytesIn > 0 && $bytesIn >= $quotaBytesIn) {
             return [
                 'allowed' => false,
-                'reason' => 'User has reached their monthly bandwidth quota.',
+                'reason' => 'User has reached their monthly download bandwidth quota.',
+            ];
+        }
+
+        // UPLOAD cap: bytes_out is what the user has uploaded to the server.
+        if ($quotaBytesOut > 0 && $bytesOut >= $quotaBytesOut) {
+            return [
+                'allowed' => false,
+                'reason' => 'User has reached their monthly upload bandwidth quota.',
             ];
         }
 
         return ['allowed' => true, 'reason' => null];
+    }
+
+    /**
+     * Read a user's operator-configured maximum number of concurrent relay
+     * streams for the current period (HB-3.4 G3).
+     *
+     * Stored on the {@see relay_user_quotas} rollup row (migration 038,
+     * `max_concurrent_streams`). 0 (the default, and the value returned when no
+     * row exists for the period) means UNLIMITED, so the caller skips the
+     * admission check.
+     *
+     * @param string $userId Hub user UUID.
+     *
+     * @return int Max concurrent streams (0 = unlimited).
+     */
+    public function getUserMaxConcurrentStreams(string $userId): int
+    {
+        $periodStart = $this->currentPeriodStart();
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT max_concurrent_streams FROM relay_user_quotas
+             WHERE user_id = :user_id AND period_start = :period_start
+             LIMIT 1',
+            [
+                'user_id' => $userId,
+                'period_start' => $periodStart,
+            ],
+        );
+
+        if ($rows === []) {
+            return 0;
+        }
+
+        /** @var array<string, mixed> $row */
+        $row = $rows[0];
+
+        return is_numeric($row['max_concurrent_streams'] ?? null)
+            ? (int) $row['max_concurrent_streams']
+            : 0;
+    }
+
+    /**
+     * Number of relay streams currently active for a user in THIS worker
+     * (HB-3.4 G3). In-memory, per-worker.
+     *
+     * @param string $userId Hub user UUID.
+     *
+     * @return int
+     */
+    public function activeUserStreams(string $userId): int
+    {
+        return $this->activeStreams[$userId] ?? 0;
+    }
+
+    /**
+     * Mark that a user has begun one relay stream (HB-3.4 G3).
+     *
+     * Called when a streaming response is admitted. Pairs 1:1 with
+     * {@see self::endUserStream()} on stream completion/close/error.
+     *
+     * @param string $userId Hub user UUID.
+     *
+     * @return void
+     */
+    public function beginUserStream(string $userId): void
+    {
+        $this->activeStreams[$userId] = ($this->activeStreams[$userId] ?? 0) + 1;
+    }
+
+    /**
+     * Mark that one of a user's relay streams has ended (HB-3.4 G3).
+     *
+     * Decrements the in-memory active count and REMOVES the key entirely once it
+     * reaches zero, so {@see self::$activeStreams} stays bounded by the number of
+     * users with a live stream right now (never accumulates dead entries).
+     * Clamps at zero so a spurious/double end can never drive the count negative.
+     *
+     * @param string $userId Hub user UUID.
+     *
+     * @return void
+     */
+    public function endUserStream(string $userId): void
+    {
+        $current = $this->activeStreams[$userId] ?? 0;
+        if ($current <= 1) {
+            unset($this->activeStreams[$userId]);
+            return;
+        }
+        $this->activeStreams[$userId] = $current - 1;
     }
 
     /**
