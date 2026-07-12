@@ -101,6 +101,29 @@ final class ClientConnectionTest extends TestCase
         $this->assertTrue(true);
     }
 
+    public function testOnMessageClosesConnectionOnFrameBufferOverflow(): void
+    {
+        $client = new ClientConnection(
+            $this->clientWs,
+            'server-123',
+            'client-456',
+            $this->logger,
+        );
+
+        // The client relay path must NOT leak a decode-buffer overflow (H-R7)
+        // out of the Workerman message callback — it closes the connection.
+        $this->clientWs->expects($this->once())->method('close');
+
+        $decoder = new FrameDecoder();
+
+        // A single binary message larger than MAX_BUFFER_SIZE (131072) trips the
+        // accumulation guard; onMessage must swallow it and close cleanly.
+        $client->onMessage(str_repeat("\x00", 140000), $decoder);
+
+        // No exception escaped — the guard closed the connection instead.
+        $this->assertTrue(true);
+    }
+
     public function testOnMessageWithNonDataFrameSendsErrorToClient(): void
     {
         $client = new ClientConnection(

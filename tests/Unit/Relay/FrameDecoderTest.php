@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Relay;
 
 use InvalidArgumentException;
+use Phlix\Hub\Relay\FrameBufferOverflowException;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
-use RuntimeException;
 
 class FrameDecoderTest extends TestCase
 {
@@ -273,31 +273,49 @@ class FrameDecoderTest extends TestCase
         $this->decoder->decode($invalidFrame);
     }
 
-    public function test_buffer_overflow_closes_tunnel(): void
+    /**
+     * Low-level guard: the decoder itself raises a typed overflow exception (a
+     * subclass of {@see InvalidFrameTypeException}, so every existing tunnel
+     * catch handles it) once the accumulation buffer passes the 128 KB cap
+     * without completing a frame, and it drops the oversized buffer.
+     */
+    public function test_buffer_overflow_throws_typed_exception(): void
     {
         $decoder = new FrameDecoder();
 
-        // Start with partial header indicating max-length payload (7 bytes header, len=65535)
-        // This simulates an attacker sending dribbling data with a large length prefix
-        $partialHeader = pack('N', 1) . chr(RelayFrameType::DATA->value) . pack('n', 65535);
-        $decoder->decode($partialHeader);
+        // Each decode() call extracts at most ONE frame and keeps the remainder
+        // buffered. An attacker that packs many complete frames into every
+        // message therefore grows the backlog faster than it is drained
+        // (H-R7 unbounded accumulation). Each chunk is 700 complete 7-byte
+        // empty DATA frames (4900 bytes); one frame is consumed per call, so the
+        // buffer climbs ~4893 bytes/call and crosses the 128 KB cap.
+        $emptyFrame = pack('N', 1) . chr(RelayFrameType::DATA->value) . pack('n', 0);
+        $chunk = str_repeat($emptyFrame, 700);
 
-        // Feed small chunks that won't complete the frame - use 0x01 bytes which don't
-        // form a valid frame type at any offset, allowing buffer to accumulate
-        $chunk = str_repeat("\x01", 5000);
-
-        // Keep feeding until buffer exceeds 128KB (MAX_BUFFER_SIZE = 131072)
-        // The RuntimeException should be thrown when buffer size exceeds the limit
-        $exceptionThrown = false;
-        while (!$exceptionThrown) {
-            try {
+        $caught = null;
+        try {
+            // MAX_BUFFER_SIZE = 131072; ~27 chunks overflow the accumulation.
+            for ($i = 0; $i < 40; $i++) {
                 $decoder->decode($chunk);
-            } catch (RuntimeException $e) {
-                $this->assertSame('invalid_frame', $e->getMessage());
-                $exceptionThrown = true;
             }
+        } catch (FrameBufferOverflowException $e) {
+            $caught = $e;
         }
 
-        $this->assertTrue($exceptionThrown, 'RuntimeException should be thrown when buffer exceeds 128KB');
+        $this->assertInstanceOf(
+            FrameBufferOverflowException::class,
+            $caught,
+            'Decoder must throw FrameBufferOverflowException once the buffer passes the cap',
+        );
+        $this->assertInstanceOf(
+            InvalidFrameTypeException::class,
+            $caught,
+            'Overflow must be an InvalidFrameTypeException so existing tunnel catches handle it',
+        );
+        $this->assertSame(1011, $caught->getCode());
+        $this->assertGreaterThan(131072, $caught->bufferSize);
+        $this->assertSame(131072, $caught->maxBufferSize);
+        // Oversized buffer is dropped rather than kept resident.
+        $this->assertSame(0, $decoder->getBufferSize());
     }
 }

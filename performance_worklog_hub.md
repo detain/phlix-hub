@@ -72,7 +72,7 @@ php bin/phlix migrate
 - [x] HB-1.4  lean owner/status queries on hot paths  FIX 2026-07-12: DONE. Negative-cache defect closed — AuthMiddleware::userExists now stores the BOOLEAN probe result + timestamp (was a bare ts) and a cache hit returns the cached boolean (was unconditional true), so a deleted/revoked user is rejected for the whole TTL instead of bypassing auth.user_not_found; hot-path optimisation + short-TTL revocation preserved; static cache bounded (USER_EXISTS_CACHE_MAX). +9 tests: getOwnerAndStatus leanness (SQL no-COUNT + proxy/client-mount never()->getServerInfo), never()->findById on hot path, cache-TTL query-count + deleted-user regression guard + TTL-expiry re-probe. Suite 1243 pass/17 skip, phpstan L9 0, phpcs -n src/ clean. Prior wiring (c0461ed, 2f81f37, e5ce01e).
 - [~] HB-2.1  request-body chunking over tunnel (enable bodied relay)  RE-AUDIT-2 2026-07-12 (post HB-1.2 fix-3): NOT-DONE — CROSS-REPO BLOCKER, X2 only HALF-landed. Hub side CORRECT (RelayHttpRequestCodec tag-byte HEAD/BODY/END; RelayProxyManager.php:288-319 chunks >64KB; 413 cap lifted; classifier now match($frame->type) → chunked frames flow LOW/pendingBodyFrames without throwing, proven by TunnelTest). BUT **phlix-server never built the request-reassembly half + is NOT repinned to the shared request codec** → a real >64KB bodied relay now fails 400-malformed (RelayConsumer::onHttpRequest @server:745-746 does RelayHttpRequest::fromJson unconditionally, no tag-byte branch/accumulator; server composer.lock detain/phlix-shared v0.19.0 has only RelayHttpResponseCodec). GAPS to close HB-2.1: (a) SERVER repin to shared ≥216ea5d; (b) SERVER onHttpRequest per-requestId chunk reassembly (mirror response side); (c) HUB test: onRequest(>64KB binary body incl NUL/0xFF) emits HEAD+N·BODY+END on one requestId (RelayProxyManager.php:300-318 = 0 coverage today); (d) integration round-trip (writable only after b). Hub unit-codec round-trip + Tunnel classification/ordering ALREADY tested. (commits: phlix-shared:216ea5d, phlix-hub:7b71c190; classifier fb9e7b7). → server task queued (SV-side of X2).
 - [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  RE-FIXED 2026-07-12 (Fixer) — prior fix (7c30723) was INEFFECTIVE (DoS still open). Now CLOSED: displacement gated on validation (not on a never-thrown exception), incumbent stays routable, failServer() guarded, reconnect-drain (H-R6) added, txn test hardened. See Fixer note below.
-- [x] HB-2.3  cap FrameDecoder buffer  (commit: ec17c9cc)  DONE — ⚠️ REOPENED by 2026-07-12 batch audit (see Fixer note): overflow RuntimeException from FrameDecoder is NOT caught by onServerMessage → escapes the Workerman callback, tunnel never closes. Separate queued task; NOT fixed here.
+- [x] HB-2.3  cap FrameDecoder buffer  RE-FIXED 2026-07-12 (Fixer) — prior fix (ec17c9cc) capped the buffer but the "close tunnel" half was UNWIRED: FrameDecoder threw a base `\RuntimeException` that `Tunnel::onServerMessage` (catches only `InvalidFrameTypeException`) let escape the Workerman callback. Now CLOSED: overflow throws `FrameBufferOverflowException extends InvalidFrameTypeException` → existing tunnel catch closes cleanly with reason `frame_buffer_overflow`; all other FrameDecoder consumers (client relay :8803, both federation paths) now also catch+close instead of leaking. Real Tunnel-driven test added (fails pre-fix). See Fixer note below.
 - [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
 - [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE
 - [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE
@@ -794,3 +794,78 @@ they got an immediate hard disconnect; now a brief freeze then disconnect). The 
 intended value on the dominant SPA HTTP-over-relay playback path. Recorded for the record only.
 
 **Verdict: master GREEN (no new red from deps/migration); HB-2.2 fix CONFIRMED correct — NO FINDINGS.**
+
+## Fixer — HB-2.3 — 2026-07-12
+
+**Reopened defect (from HB-2.2 batch audit):** the 128 KB `FrameDecoder` buffer cap existed, but the
+"close tunnel with invalid_frame" half of the AC was never wired. `FrameDecoder::decode` threw a
+**base `\RuntimeException('invalid_frame')`** on overflow; `Tunnel::onServerMessage` catches only
+`InvalidFrameTypeException`, and a base RuntimeException is NOT one → the overflow escaped
+`onServerMessage`. `RelayWorker::onMessage` delegates with no try/catch → the exception escaped the
+Workerman message callback (which `Worker::stopAll`s the worker), and the tunnel's clean
+`close(...)` (notify clients / close DB session / fail in-flight) never ran. Verified pre-fix: the new
+Tunnel test errored with `RuntimeException: invalid_frame` escaping at `Tunnel.php:349`.
+
+**Approach chosen (option a — typed exception, minimal blast radius):**
+- New `src/Relay/FrameBufferOverflowException.php` **extends `InvalidFrameTypeException`** (which extends
+  `RuntimeException`, code 1011). Because it is a subclass, **every existing `catch
+  (InvalidFrameTypeException)` boundary that already closes the tunnel now also handles overflow** — no
+  new catch was strictly required for correctness, only for a distinct close reason.
+- `src/Relay/InvalidFrameTypeException.php`: dropped `final`; message building moved to an overridable
+  `protected static formatMessage()` (late-static-bound) so the subclass gets a clean
+  `"Relay frame buffer overflow: …"` message instead of `"Invalid frame type 0x0: …"`.
+- `src/Relay/FrameDecoder.php:111-119`: throws `FrameBufferOverflowException($size, MAX_BUFFER_SIZE)` on
+  overflow and **clears the oversized buffer first** (don't keep it resident — §0.4). Kept the 128 KB
+  ceiling (`MAX_BUFFER_SIZE = 131072`). Added `@throws` PHPDoc.
+- `src/Relay/Tunnel.php:onServerMessage`: added a `catch (FrameBufferOverflowException)` **before** the
+  existing `InvalidFrameTypeException` catch — logs buffer_size/max and closes with the distinct reason
+  **`frame_buffer_overflow`** (runs the full clean close: notify+close clients, `closeSession`, fail
+  in-flight via `failServer`, `serverWs->close`).
+
+**No other FrameDecoder consumer leaks the exception** (grepped all `->decode(` callers):
+- `src/Relay/ClientConnection.php:onMessage` (client relay :8803) — wrapped decode; catches
+  `InvalidFrameTypeException` → `close()` the client WS.
+- `src/Http/Controllers/FederationRelayController.php:handleBinaryMessage` — wrapped → `close('invalid_frame')`.
+- `src/Federation/FederationPeerManager.php:handleBinaryFrame` — wrapped → `masterConnection?->close()`
+  (reconnect timer re-establishes). These paths previously would also have leaked an *invalid-frame-type*
+  exception; now both overflow and invalid-type close cleanly. `FrameEncoder::decodeStatic` is a one-shot
+  test/util helper (no accumulation), left as-is.
+- `Tunnel::onServerMessage` (server relay :8802) — the H-R7 attack surface — fixed as above.
+
+**Tests (all fail pre-fix, verified by temporarily reverting the throw):**
+- `tests/Unit/Relay/TunnelTest.php::test_tunnel_closes_on_frame_buffer_overflow` — **AC guard**: drives a
+  REAL `Tunnel` via `onServerMessage` (as `RelayWorker` does) with a >128 KB message; asserts the
+  registered client is notified (`send`) + `close`d, `closeSession(..., 'frame_buffer_overflow')`,
+  `serverWs->close`, status `CLOSED`, and clients detached — and that `onServerMessage` does NOT throw.
+- `tests/Unit/Relay/FrameDecoderTest.php::test_buffer_overflow_throws_typed_exception` — low-level:
+  packs many complete 7-byte frames per chunk (one consumed per `decode()` call) so the backlog grows
+  past the cap; asserts a `FrameBufferOverflowException` that is-a `InvalidFrameTypeException`, code 1011,
+  `bufferSize > 131072`, `maxBufferSize == 131072`, and buffer dropped to 0.
+- `tests/Unit/Relay/ClientConnectionTest.php::testOnMessageClosesConnectionOnFrameBufferOverflow` —
+  covers the :8803 path: oversized message → `clientWs->close()`, no escape.
+
+Note on overflow mechanics: a single advertised frame maxes at 65542 bytes (< 131072), so it always
+completes below the cap; unbounded growth comes from (a) a single WS message larger than the cap, or
+(b) a backlog of complete frames consumed one-per-`decode()` call. Both trip the guard (checked on
+every append, before parsing). Tests exercise both.
+
+**Verify (actual output):**
+- `phpunit --filter 'FrameDecoder|Tunnel|RelayWorker|ClientRelay|ClientConnection'` → `OK (154 tests, 548 assertions)`.
+- FULL `php -d max_execution_time=0 ./vendor/bin/phpunit` → `Tests: 1252, Assertions: 15505, Skipped: 17` (0 failures; baseline 1250 + 2 new).
+- `phpstan analyze --no-progress` → `[OK] No errors`.
+- `phpcs --standard=PSR12 -n src/` → clean (no output).
+- Pre-fix confirmation: with the old `throw new \RuntimeException('invalid_frame')` restored, both new
+  overflow tests ERROR with the exception escaping at `Tunnel.php:349` / `FrameDecoder.php` — proving the
+  tests guard the real defect.
+
+**Files touched (absolute):**
+- `/home/sites/phlix/phlix-hub/src/Relay/FrameBufferOverflowException.php` (new)
+- `/home/sites/phlix/phlix-hub/src/Relay/InvalidFrameTypeException.php`
+- `/home/sites/phlix/phlix-hub/src/Relay/FrameDecoder.php`
+- `/home/sites/phlix/phlix-hub/src/Relay/Tunnel.php`
+- `/home/sites/phlix/phlix-hub/src/Relay/ClientConnection.php`
+- `/home/sites/phlix/phlix-hub/src/Http/Controllers/FederationRelayController.php`
+- `/home/sites/phlix/phlix-hub/src/Federation/FederationPeerManager.php`
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/FrameDecoderTest.php`
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/TunnelTest.php`
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/ClientConnectionTest.php`

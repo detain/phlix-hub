@@ -1516,4 +1516,65 @@ class TunnelTest extends TestCase
         $this->assertSame($body2, $this->decodeFrame($sent[2])->payload, 'BODY-2 third');
         $this->assertSame($endPayload, $this->decodeFrame($sent[3])->payload, 'END last — never overtakes BODY');
     }
+
+    /**
+     * AC guard (H-R7 / HB-2.3): a server that grows the decode buffer past the
+     * 128 KB cap without ever completing a frame must NOT leak an uncaught
+     * exception out of the Workerman message callback. Instead the tunnel closes
+     * cleanly on the SAME path an invalid frame uses — clients are notified and
+     * closed, the DB session is closed, and the server WS is torn down.
+     *
+     * This drives a REAL Tunnel via onServerMessage (as RelayWorker::onMessage
+     * does) and asserts the tunnel state, not merely that decode() throws.
+     */
+    public function test_tunnel_closes_on_frame_buffer_overflow(): void
+    {
+        $sessionId = 'session-overflow';
+        $this->sessionManager
+            ->method('registerServer')
+            ->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $this->serverWs->method('send');
+
+        // A client is attached: on overflow it must be notified (DISCONNECTED)
+        // and closed, proving the clean close path ran (not an escaping fatal).
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->expects($this->once())->method('send');
+        $clientWs->expects($this->once())->method('close');
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        // The DB session must be closed with the overflow reason.
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with($sessionId, 'frame_buffer_overflow');
+
+        // The server WS must be torn down.
+        $this->serverWs->expects($this->once())->method('close');
+
+        // Feed a single binary WS message larger than MAX_BUFFER_SIZE (131072).
+        // The accumulation guard trips on the very first append (before any frame
+        // parsing), which is exactly the oversized-length attack from H-R7.
+        $oversized = str_repeat("\x00", 140000);
+
+        // Must NOT throw out of onServerMessage — the overflow is caught inside.
+        $tunnel->onServerMessage($oversized);
+
+        $this->assertSame(
+            Tunnel::STATUS_CLOSED,
+            $tunnel->status,
+            'tunnel must close on frame-buffer overflow instead of leaking the exception',
+        );
+        $this->assertCount(0, $tunnel->clientConnections, 'all clients detached on overflow close');
+    }
 }
