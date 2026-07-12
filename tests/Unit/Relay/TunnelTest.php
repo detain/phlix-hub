@@ -767,4 +767,215 @@ class TunnelTest extends TestCase
 
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
+
+    // ---------------------------------------------------------------------
+    // HB-1.2 — data-plane backpressure: no silent drop of a DATA/body frame.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Build an already-ACTIVE tunnel wired to the shared mocks.
+     */
+    private function activeTunnel(string $sessionId = 'session-456'): Tunnel
+    {
+        $this->sessionManager->method('registerServer')->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        return $tunnel;
+    }
+
+    /**
+     * CLIENT DATA path: when a client's send buffer is full, the server→client
+     * DATA frame must NOT be dropped (Workerman discards the package on a full
+     * buffer). It must be re-queued, the SERVER paused (upstream backpressure),
+     * and the frame delivered byte-exact when the client's buffer drains.
+     */
+    public function test_send_to_client_requeues_dropped_frame_and_delivers_it_on_drain(): void
+    {
+        $tunnel = $this->activeTunnel();
+
+        // AC (b)/(c): server recv paused when the client fills, resumed on drain.
+        $this->serverWs->expects($this->once())->method('pauseRecv');
+        $this->serverWs->expects($this->once())->method('resumeRecv');
+        $this->serverWs->method('send')->willReturn(true); // CLIENT_CONNECT
+
+        // Client whose buffer is "full" for the first send, then drains.
+        $clientWs = $this->createMock(TcpConnection::class);
+        $full = true;
+        $delivered = [];
+        $clientWs->method('send')->willReturnCallback(
+            function (string $data) use (&$full, &$delivered): bool {
+                if ($full) {
+                    return false; // buffer full — Workerman would DROP this frame
+                }
+                $delivered[] = $data;
+                return true;
+            }
+        );
+
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client); // channel 1
+
+        $frame = new RelayFrame(RelayFrameType::DATA, $client->channelId, 'STREAM-PAYLOAD');
+        $tunnel->sendToClient($client->channelId, $frame);
+
+        // Nothing delivered yet and no bytes counted — the frame is held, not lost.
+        $this->assertSame([], $delivered, 'frame must not be delivered while the buffer is full');
+        $this->assertSame(0, $tunnel->getBytesIn());
+
+        // Buffer drains — invoke the onBufferDrain handler the tunnel armed.
+        $this->assertIsCallable($clientWs->onBufferDrain);
+        $full = false;
+        ($clientWs->onBufferDrain)();
+
+        // AC (a): the previously-failing frame is delivered byte-exact — zero loss.
+        $this->assertCount(1, $delivered);
+        $decoded = $this->codec->decode($delivered[0]);
+        $this->assertInstanceOf(RelayFrame::class, $decoded);
+        $this->assertSame('STREAM-PAYLOAD', $decoded->payload);
+        $this->assertSame($client->channelId, $decoded->channelId());
+        $this->assertGreaterThan(0, $tunnel->getBytesIn());
+    }
+
+    /**
+     * CLIENT DATA path: if the client's buffer never drains, the safety timeout
+     * closes the tunnel with the backpressure-timeout reason (a hard, visible
+     * failure) rather than leaving a silently corrupt stream.
+     */
+    public function test_client_backpressure_timeout_closes_tunnel(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(true);
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+        $this->serverWs->expects($this->once())->method('close');
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(false); // permanently full
+
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with('session-456', 'backpressure_timeout');
+
+        $frame = new RelayFrame(RelayFrameType::DATA, $client->channelId, 'x');
+        $tunnel->sendToClient($client->channelId, $frame); // congested; drain never comes
+
+        // Simulate the safety timer firing (armed via Timer::add, a no-op in tests).
+        $method = new \ReflectionMethod($tunnel, 'handleClientBackpressureTimeout');
+        $method->setAccessible(true);
+        $method->invoke($tunnel, $client);
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    /**
+     * SERVER low-priority BODY path: when the server's send buffer is full, an
+     * HTTP_REQUEST body chunk must NOT be dropped. It must be re-queued, all
+     * clients paused (upstream backpressure), and the frame delivered byte-exact
+     * when the server's buffer drains.
+     */
+    public function test_send_to_server_body_requeues_dropped_frame_and_delivers_it_on_drain(): void
+    {
+        $tunnel = $this->activeTunnel();
+
+        // AC (b)/(c): the OPPOSITE side (all clients) is paused/resumed.
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(true);
+        $clientWs->expects($this->once())->method('pauseRecv');
+        $clientWs->expects($this->once())->method('resumeRecv');
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+
+        $full = false;
+        $sent = [];
+        $this->serverWs->method('send')->willReturnCallback(
+            function (string $data) use (&$full, &$sent): bool {
+                if ($full) {
+                    return false; // buffer full — Workerman would DROP this frame
+                }
+                $sent[] = $data;
+                return true;
+            }
+        );
+
+        $tunnel->registerClient($client); // CLIENT_CONNECT sent while not full
+        $sentBeforeBody = count($sent);
+
+        // Now the server's send buffer is full.
+        $full = true;
+
+        $bodyPayload = (string) json_encode(['kind' => 'body', 'data' => 'BODY-BYTES']);
+        $bodyFrame = new RelayFrame(RelayFrameType::HTTP_REQUEST, 7, $bodyPayload);
+        $tunnel->sendToServer($bodyFrame);
+
+        // Held, not sent — the frame is queued rather than dropped.
+        $this->assertCount($sentBeforeBody, $sent, 'body frame must not be sent while the buffer is full');
+
+        // Buffer drains — invoke the server onBufferDrain handler the tunnel armed.
+        $this->assertIsCallable($this->serverWs->onBufferDrain);
+        $full = false;
+        ($this->serverWs->onBufferDrain)();
+
+        // AC (a): the previously-failing body frame is delivered byte-exact.
+        $this->assertCount($sentBeforeBody + 1, $sent);
+        $decoded = $this->codec->decode($sent[count($sent) - 1]);
+        $this->assertInstanceOf(RelayFrame::class, $decoded);
+        $this->assertSame(RelayFrameType::HTTP_REQUEST, $decoded->type);
+        $this->assertSame($bodyPayload, $decoded->payload);
+    }
+
+    /**
+     * SERVER low-priority BODY path: if the server's buffer never drains, the
+     * safety timeout closes the tunnel with the backpressure-timeout reason.
+     */
+    public function test_server_backpressure_timeout_closes_tunnel(): void
+    {
+        $tunnel = $this->activeTunnel();
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(true);
+        $clientWs->method('pauseRecv');
+        $clientWs->method('resumeRecv');
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+
+        $full = false;
+        $this->serverWs->method('send')->willReturnCallback(
+            function () use (&$full): bool {
+                return $full ? false : true;
+            }
+        );
+        $this->serverWs->expects($this->once())->method('close');
+
+        $tunnel->registerClient($client);
+        $full = true;
+
+        $bodyFrame = new RelayFrame(
+            RelayFrameType::HTTP_REQUEST,
+            7,
+            (string) json_encode(['kind' => 'body']),
+        );
+        $tunnel->sendToServer($bodyFrame); // congested; drain never comes
+
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with('session-456', 'backpressure_timeout');
+
+        $method = new \ReflectionMethod($tunnel, 'handleServerBackpressureTimeout');
+        $method->setAccessible(true);
+        $method->invoke($tunnel);
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
 }
