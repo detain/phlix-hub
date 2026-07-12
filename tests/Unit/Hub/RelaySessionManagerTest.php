@@ -538,6 +538,36 @@ final class RelaySessionManagerTest extends TestCase
         self::assertSame(date('Y-m-01'), $capturedParams['period_start']);
         self::assertSame(10485760, $capturedParams['quota_bytes_in']);
         self::assertSame(5242880, $capturedParams['quota_bytes_out']);
+        // The 3-arg call must NOT touch the concurrent-stream column (backward compat).
+        self::assertArrayNotHasKey('max_concurrent_streams', $capturedParams);
+        self::assertStringNotContainsString('max_concurrent_streams', $capturedSql);
+    }
+
+    public function testSetUserQuotaWithMaxConcurrentStreamsWritesTheColumn(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): void {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        $manager->setUserQuota('user-xyz', 10485760, 5242880, 4);
+
+        self::assertStringContainsString('max_concurrent_streams', $capturedSql);
+        self::assertStringContainsString(
+            'max_concurrent_streams = VALUES(max_concurrent_streams)',
+            $capturedSql,
+        );
+        self::assertSame(10485760, $capturedParams['quota_bytes_in']);
+        self::assertSame(5242880, $capturedParams['quota_bytes_out']);
+        self::assertSame(4, $capturedParams['max_concurrent_streams']);
     }
 
     public function testCheckUserQuotaUnlimitedIsAllowed(): void
