@@ -553,3 +553,68 @@ full user-row load is skipped when only existence is needed (`expects(never())->
 - `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
 - `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
 - psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
+
+## Reviewer — HB-1.4 — 2026-07-12
+
+NO FINDINGS.
+
+Reviewed the security FIX (commits de87263 fix + 4b2879e tests) against the current source.
+
+Security correctness (CONFIRMED closed):
+- `src/Http/Middleware/AuthMiddleware.php:221-251` — the cache stores `array{exists: bool, at: int}`
+  and a cache HIT within TTL returns `$entry['exists']` (line 231), NEVER an unconditional `true`.
+  A user that probes `false` stays rejected for the whole TTL window; there is no code path that
+  positively-caches a now-deleted user as authorized. `challenge('auth.user_not_found')` fires on
+  every request in the window for a deleted user. Revocation latency is bounded by
+  `USER_EXISTS_CACHE_TTL = 5`; on TTL expiry the entry is stale and re-probed (lines 226, 239).
+- The negative result is written the same way as a positive one (line 250), so the gate is symmetric.
+
+Bounded static cache (§0.4 no-unbounded-static-growth):
+- `USER_EXISTS_CACHE_MAX = 10000`, clear-on-overflow (lines 243-248) only when inserting a NEW id at
+  the cap. Clear-on-overflow at worst forces a re-probe of live entries — correctness-safe (a cleared
+  positive re-probes to positive; a cleared negative re-probes to negative). No incorrect admit.
+
+Leanness (H-D3/H-W2/H-W6):
+- `ServerInfoHandler::getOwnerAndStatus` (`src/Hub/ServerInfoHandler.php:92-124`) selects only
+  `s.id, s.user_id, s.status` + the fresh `EXISTS(relay_sessions)` probe; NO `COUNT(*)` /
+  `server_libraries` / `library_count`. The heavy COUNT subquery lives only in `getServerInfo`.
+- `ServerProxyController::proxy` (`:397`) and `ClientRelayWorker::validateClientAuth` (`:449`) both
+  call `getOwnerAndStatus` and NOT `getServerInfo`.
+- `AuthMiddleware` uses the lean `UserRepository::userExists` (`SELECT 1 … LIMIT 1`,
+  `src/Auth/UserRepository.php:331-342`) and sets `$request->userId` from validated claims; no full
+  `findById` on the hot path.
+
+Tests genuinely guard:
+- `AuthMiddlewareTest::testDeletedUserIsRejectedForWholeTtlAndProbedOnce` is a true regression guard —
+  it asserts a `false`-probing user is 401 `auth.user_not_found` on ALL 5 requests in the window
+  (`assertNotNull($response)` per request). Against the old bare-timestamp+unconditional-`true` code,
+  requests #2..5 returned null (admitted) → this test FAILS. It also asserts `once()` probe (negative
+  cached).
+- `testExistenceReprobedAfterTtlAndCatchesDeletedUser` back-dates the cache entry via reflection
+  (`$cache['u-revoke']['at'] -= 3600`) — no blocking sleep — and proves post-TTL re-probe catches the
+  now-deleted user (`willReturnOnConsecutiveCalls(true, false)`, `exactly(2)` probes).
+- `testHotPathNeverLoadsFullUserRow` → `never()->findById`; `testExistenceProbeIsCachedWithinTtl` →
+  `once()` probe across 5 requests.
+- `ServerInfoHandlerTest::testGetOwnerAndStatusIsLeanWithNoLibraryCountSubquery` captures the SQL and
+  asserts `assertStringNotContainsString('COUNT(' | 'server_libraries' | 'library_count')`.
+- `ServerProxyControllerTest::test_proxy_uses_lean_owner_query_and_never_full_getServerInfo` and
+  `ClientRelayWorkerTest::testValidateClientAuthUsesLeanOwnerQueryNotFullServerInfo` both assert
+  `once()->getOwnerAndStatus` + `never()->getServerInfo`. All assertions are real (not vacuous).
+- Static cache reset between tests via `AuthMiddleware::resetCache()` in `setUp()`.
+
+Conventions/async/resident-memory: DB uses `query()` with colon-free bind KEY `['id' => $id]` and a
+`:id` SQL placeholder (matches the established pattern); no PDO/mysqli, no `exit`/`die`, no blocking
+`sleep`, no per-request static/global state. PSR-12 / PHPStan-L9 clean. Scope confined to the named
+files.
+
+Verification (this box, PHP 8.3.6 + PCOV):
+- `phpunit --filter 'AuthMiddleware|ServerInfoHandler|ServerProxyController|ClientRelayWorker'` →
+  **OK (175 tests, 514 assertions)**.
+- Full `php -d max_execution_time=0 ./vendor/bin/phpunit` →
+  **OK, 1243 tests / 15459 assertions / 17 skipped / 0 failures**.
+- `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
+
+Verdict: **HB-1.4 is code/test-complete** (docs cycle pending). Security defect confirmed closed;
+leanness wiring confirmed; tests genuinely guard the regression.
