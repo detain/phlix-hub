@@ -277,6 +277,25 @@ final class Tunnel implements TunnelInterface
     private bool $clientBackpressureActive = false;
 
     /**
+     * @var int|null Timer id of the safety timer for the CURRENT client
+     *          backpressure episode (server paused because ≥1 client is
+     *          congested). Armed when serverBackpressureCount goes 0→1 and
+     *          cancelled (Timer::del) when it returns to 0, so a stale timer
+     *          left over from an already-drained episode cannot fire and
+     *          false-close a tunnel whose current congestion is within budget.
+     */
+    private ?int $clientBackpressureTimerId = null;
+
+    /**
+     * @var int|null Timer id of the safety timer for the CURRENT server
+     *          backpressure episode (all clients paused because the server send
+     *          buffer is full). Armed when clientBackpressureActive goes
+     *          false→true and cancelled when the server drains, so a stale timer
+     *          from a drained episode cannot false-close a healthy tunnel.
+     */
+    private ?int $serverBackpressureTimerId = null;
+
+    /**
      * Handle an incoming message from the server.
      *
      * During PENDING state: expects JSON HELLO frame, transitions to ACTIVE.
@@ -604,6 +623,33 @@ final class Tunnel implements TunnelInterface
     }
 
     /**
+     * Re-queue a HIGH-PRIORITY (control) frame that could not be sent because the
+     * server's send buffer was full, or because a control backlog already exists
+     * (preserving strict FIFO). Bounded by {@see MAX_HIGH_PRIORITY_QUEUE};
+     * exceeding the bound closes the tunnel (a hard, visible failure) — mirroring
+     * {@see enqueueBodyFrame}/{@see enqueueClientFrame} — rather than dropping the
+     * frame: a dropped CANCEL/CLIENT_DISCONNECT would reintroduce exactly the
+     * silent reliable-delivery drop HB-1.2 exists to eliminate.
+     *
+     * @param RelayFrame $frame The control frame to re-queue.
+     *
+     * @return void
+     */
+    private function enqueueHighPriorityFrame(RelayFrame $frame): void
+    {
+        if (count($this->pendingHighPriorityFrames) >= self::MAX_HIGH_PRIORITY_QUEUE) {
+            $this->logger->error('Relay: high-priority queue full under backpressure, closing tunnel', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'queue_size' => count($this->pendingHighPriorityFrames),
+            ]);
+            $this->close('backpressure_overflow');
+            return;
+        }
+        $this->pendingHighPriorityFrames[] = $frame;
+    }
+
+    /**
      * Flush the low-priority BODY frame queue toward the server, in FIFO order.
      * If the server's send buffer fills again, the frame is left at the head of
      * the queue and backpressure is (re-)applied so the next drain retries it —
@@ -717,17 +763,23 @@ final class Tunnel implements TunnelInterface
         // LOW-PRIORITY frames (body chunks): sent directly after high-priority
         // queue is drained.
         if ($isHighPriority) {
+            // If a control backlog already exists this frame must NOT be sent
+            // ahead of it. onBufferDrain fires only when the send buffer reaches
+            // EMPTY, but send() resumes succeeding once the buffer drops below
+            // the high-watermark — so a direct send in the window between a
+            // failed send and the drain callback would let a newly generated
+            // control frame (HEARTBEAT, CLIENT_CONNECT/DISCONNECT, CANCEL, or an
+            // HTTP_REQUEST head/end) overtake still-queued control frames. The
+            // tunnel assumes in-order reliable delivery, so enqueue to preserve
+            // strict FIFO; the queue is flushed (before any body frame) on drain.
+            if (!empty($this->pendingHighPriorityFrames)) {
+                $this->enqueueHighPriorityFrame($frame);
+                $this->handleServerSendBackpressure();
+                return;
+            }
+
             if ($this->serverWs->send($encoded) === false) {
-                if (count($this->pendingHighPriorityFrames) >= self::MAX_HIGH_PRIORITY_QUEUE) {
-                    $this->logger->warning('Relay: high-priority queue full, dropping control frame', [
-                        'server_id' => $this->serverId,
-                        'tunnel_id' => $this->tunnelId,
-                        'queue_size' => count($this->pendingHighPriorityFrames),
-                    ]);
-                    $this->handleServerSendBackpressure();
-                    return;
-                }
-                $this->pendingHighPriorityFrames[] = $frame;
+                $this->enqueueHighPriorityFrame($frame);
                 $this->handleServerSendBackpressure();
                 return;
             }
@@ -902,32 +954,66 @@ final class Tunnel implements TunnelInterface
     private function handleClientSendBackpressure(ClientConnection $client): void
     {
         if ($this->serverBackpressureCount === 0) {
-            // First client with backpressure — pause the server.
+            // First client of this congestion episode — pause the server and arm
+            // ONE episode-scoped safety timer. Arming it here (count 0→1) and
+            // cancelling it when the count returns to 0 keeps the timeout a
+            // genuine last resort for a truly stuck drain: a stale timer from an
+            // already-drained episode cannot fire and false-close a tunnel whose
+            // current congestion is within budget.
             $this->serverWs->pauseRecv();
             $this->logger->warning('Relay: client send buffer full, pausing server recv', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,
                 'client_id' => $client->clientId,
             ]);
+            $this->armClientBackpressureTimer();
         }
 
         $this->serverBackpressureCount++;
 
         $this->armClientDrain($client);
+    }
 
-        // Safety timeout: if the drain never comes within BACKPRESSURE_WAIT_SECONDS,
-        // close the tunnel so the client sees a hard failure rather than corruption.
-        // Timer::add throws outside a Workerman event loop (e.g. under PHPUnit) —
-        // swallow that so unit tests can exercise the backpressure path; production
-        // always has a live loop. The timeout body lives in a named method so it is
-        // directly testable.
+    /**
+     * Arm the one-shot safety timer for the current CLIENT backpressure episode
+     * and store its id so it can be cancelled on drain
+     * ({@see cancelClientBackpressureTimer}). Timer::add throws outside a
+     * Workerman event loop (e.g. under PHPUnit) — swallow that so unit tests can
+     * exercise the backpressure path; production always has a live loop. The
+     * timeout body lives in a named method so it is directly testable.
+     *
+     * @return void
+     */
+    private function armClientBackpressureTimer(): void
+    {
         try {
-            Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function () use ($client): void {
-                $this->handleClientBackpressureTimeout($client);
+            $this->clientBackpressureTimerId = Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function (): void {
+                $this->clientBackpressureTimerId = null;
+                $this->handleClientBackpressureTimeout();
             }, [], false);
         } catch (Throwable) {
             // Timer unavailable (outside the event loop / tests) — no-op.
+            $this->clientBackpressureTimerId = null;
         }
+    }
+
+    /**
+     * Cancel the CLIENT backpressure safety timer if one is armed (the episode
+     * drained within budget). Idempotent; safe when no timer is armed.
+     *
+     * @return void
+     */
+    private function cancelClientBackpressureTimer(): void
+    {
+        if ($this->clientBackpressureTimerId === null) {
+            return;
+        }
+        try {
+            Timer::del($this->clientBackpressureTimerId);
+        } catch (Throwable) {
+            // Timer unavailable (outside the event loop / tests) — no-op.
+        }
+        $this->clientBackpressureTimerId = null;
     }
 
     /**
@@ -963,6 +1049,9 @@ final class Tunnel implements TunnelInterface
             ]);
 
             if ($this->serverBackpressureCount === 0) {
+                // Episode drained within budget — cancel its safety timer so it
+                // can't fire later and false-close a healthy tunnel.
+                $this->cancelClientBackpressureTimer();
                 $this->serverWs->resumeRecv();
                 $this->logger->info('Relay: all client buffers drained, resuming server recv', [
                     'server_id' => $this->serverId,
@@ -973,24 +1062,23 @@ final class Tunnel implements TunnelInterface
     }
 
     /**
-     * Backpressure-timeout handler for a congested client. If the client is
-     * still congested when the safety timer fires the tunnel is closed so the
-     * client sees a hard failure rather than an indefinitely stalled stream.
-     *
-     * @param ClientConnection $client The client whose drain was awaited.
+     * Backpressure-timeout handler for the current client congestion episode.
+     * Episode-scoped (armed on count 0→1, cancelled on drain), so if it fires
+     * at all the episode genuinely never drained: if any client is still
+     * congested the tunnel is closed so clients see a hard failure rather than
+     * an indefinitely stalled stream.
      *
      * @return void
      */
-    private function handleClientBackpressureTimeout(ClientConnection $client): void
+    private function handleClientBackpressureTimeout(): void
     {
         if ($this->status === self::STATUS_CLOSED) {
             return;
         }
         if ($this->serverBackpressureCount > 0) {
-            $this->logger->error('Relay: backpressure timeout, closing tunnel', [
+            $this->logger->error('Relay: client backpressure timeout, closing tunnel', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,
-                'client_id' => $client->clientId,
                 'backpressure_count' => $this->serverBackpressureCount,
             ]);
             $this->close('backpressure_timeout');
@@ -1009,7 +1097,11 @@ final class Tunnel implements TunnelInterface
     private function handleServerSendBackpressure(): void
     {
         if (!$this->clientBackpressureActive) {
-            // Pause all clients first.
+            // First frame of this congestion episode — pause all clients and arm
+            // ONE episode-scoped safety timer (cancelled when the server drains).
+            // Re-arms of the drain handler while still congested do NOT re-arm
+            // the timer, so it stays a genuine last resort for a stuck drain and
+            // never becomes a stale timer that could false-close a healthy tunnel.
             foreach ($this->clientConnections as $client) {
                 /** @var ClientConnection $client */
                 $client->clientWs->pauseRecv();
@@ -1021,6 +1113,8 @@ final class Tunnel implements TunnelInterface
                 'tunnel_id' => $this->tunnelId,
                 'client_count' => count($this->clientConnections),
             ]);
+
+            $this->armServerBackpressureTimer();
         }
 
         // One-shot drain handler on the server. When the server's send buffer
@@ -1045,6 +1139,10 @@ final class Tunnel implements TunnelInterface
 
             $this->clientBackpressureActive = false;
 
+            // Episode drained within budget — cancel its safety timer so it
+            // can't fire later and false-close a healthy tunnel.
+            $this->cancelServerBackpressureTimer();
+
             foreach ($this->clientConnections as $client) {
                 /** @var ClientConnection $client */
                 $client->clientWs->resumeRecv();
@@ -1055,19 +1153,48 @@ final class Tunnel implements TunnelInterface
                 'tunnel_id' => $this->tunnelId,
             ]);
         };
+    }
 
-        // Safety timeout: if the drain never comes, close the tunnel so clients
-        // see a hard failure rather than an indefinitely stalled stream. Timer::add
-        // throws outside a Workerman event loop (e.g. under PHPUnit); swallow that
-        // so unit tests can exercise the path. The body lives in a named method so
-        // it is directly testable.
+    /**
+     * Arm the one-shot safety timer for the current SERVER backpressure episode
+     * and store its id so it can be cancelled on drain
+     * ({@see cancelServerBackpressureTimer}). Timer::add throws outside a
+     * Workerman event loop (e.g. under PHPUnit) — swallow that so unit tests can
+     * exercise the path. The timeout body lives in a named method so it is
+     * directly testable.
+     *
+     * @return void
+     */
+    private function armServerBackpressureTimer(): void
+    {
         try {
-            Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function (): void {
+            $this->serverBackpressureTimerId = Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function (): void {
+                $this->serverBackpressureTimerId = null;
                 $this->handleServerBackpressureTimeout();
             }, [], false);
         } catch (Throwable) {
             // Timer unavailable (outside the event loop / tests) — no-op.
+            $this->serverBackpressureTimerId = null;
         }
+    }
+
+    /**
+     * Cancel the SERVER backpressure safety timer if one is armed (the episode
+     * drained within budget). Idempotent; safe when no timer is armed.
+     *
+     * @return void
+     */
+    private function cancelServerBackpressureTimer(): void
+    {
+        if ($this->serverBackpressureTimerId === null) {
+            return;
+        }
+        try {
+            Timer::del($this->serverBackpressureTimerId);
+        } catch (Throwable) {
+            // Timer unavailable (outside the event loop / tests) — no-op.
+        }
+        $this->serverBackpressureTimerId = null;
     }
 
     /**
@@ -1192,8 +1319,14 @@ final class Tunnel implements TunnelInterface
             $client->clientWs->onBufferDrain = null;
             if ($this->serverBackpressureCount > 0) {
                 $this->serverBackpressureCount--;
-                if ($this->serverBackpressureCount === 0 && $this->status === self::STATUS_ACTIVE) {
-                    $this->serverWs->resumeRecv();
+                if ($this->serverBackpressureCount === 0) {
+                    // Last congested client gone — cancel the episode safety
+                    // timer so it can't false-close the tunnel, and resume the
+                    // server (it was paused for this now-cleared congestion).
+                    $this->cancelClientBackpressureTimer();
+                    if ($this->status === self::STATUS_ACTIVE) {
+                        $this->serverWs->resumeRecv();
+                    }
                 }
             }
         }
@@ -1268,8 +1401,11 @@ final class Tunnel implements TunnelInterface
             'reason' => $reason,
         ]);
 
-        // Clean up any backpressure state: resume any paused receives before
-        // closing so connections aren't left in a stuck/paused state.
+        // Clean up any backpressure state: cancel the episode safety timers and
+        // resume any paused receives before closing so connections aren't left
+        // in a stuck/paused state and no stale timer fires on a discarded tunnel.
+        $this->cancelClientBackpressureTimer();
+        $this->cancelServerBackpressureTimer();
         if ($this->serverBackpressureCount > 0) {
             $this->serverWs->resumeRecv();
             $this->serverBackpressureCount = 0;
@@ -1281,7 +1417,10 @@ final class Tunnel implements TunnelInterface
             }
             $this->clientBackpressureActive = false;
         }
+        // Clear the server-side queues (the client queue is cleared in
+        // notifyClientsDisconnected) so a reused Tunnel never resends stale frames.
         $this->pendingBodyFrames = [];
+        $this->pendingHighPriorityFrames = [];
 
         // Notify clients
         $this->notifyClientsDisconnected($reason);
