@@ -64,12 +64,12 @@ php bin/phlix migrate
 ## Progress
 - [x] HB-0.1  restore idle reaper  RE-AUDIT 2026-07-12: DONE (hub side) — sendHeartbeat no longer stamps lastFrameAt (only inbound paths do: onServerMessage/handleBinaryFrame/onHeartbeat); isStale reflects last INBOUND frame; reaper wired in maintenance worker; real tests pass (TunnelTest+IdleReaperTest). ⚠️ RUNTIME correctness depends on X9: server MUST emit an inbound frame (heartbeat/echo) within the 90s stale window or a healthy-but-quiet tunnel is false-reaped. → server X9 audit spawned.
 - [x] HB-0.2  wire invite-link redeem route  RE-AUDIT 2026-07-12: DONE — POST /api/v1/me/invite-links/{token}/redeem auth-gated → controller → handler; double-redeem guarded by atomic conditional UPDATE (410 exhausted); 8 controller + concurrency/exhausted handler tests pass. (f057aaf, 3a7067d)
-- [~] HB-0.3  short-circuit HEAD over relay proxy  RE-AUDIT 2026-07-12: PARTIAL. Chose Option 2 (HEAD excluded from isStreamingPath → buffered bridge->request()), BUT the buffered path only assembles/returns on KIND_END, so HEAD STILL waits for a server END chunk → still 30-60s stall if server withFile() HEAD emits no END. Blocked on X3 (server HEAD framing). Tests inadequate: no head-only/no-END anti-stall test, no HEAD-then-ranged-GET sub-second integration test. Minor: isStreamingPath docblock still says "GET/HEAD". → server X3 audit spawned; fix decision pending.
+- [x] HB-0.3  short-circuit HEAD over relay proxy  RE-AUDIT+COMPLETE 2026-07-12: DONE. X3 resolved (server emits HEAD→END zero-body → buffered path completes promptly; no server change). Added 3 anti-stall tests (RelayProxyManagerTest: buffered HEAD completes on END w/ zero body + HEAD-then-ranged-GET; ServerProxyControllerTest: end-to-end HEAD returns promptly, never 504). Fixed isStreamingPath docblock (GET-only streams). Full suite 1221 pass, phpstan clean, phpcs clean. Commit 6a4759d. HUB W0 COMPLETE 🎉
 - [x] HB-0.4  add subdomain to ServerInfoDto, drop redundant query  RE-AUDIT 2026-07-12: DONE — subdomain on ServerInfoDto (shared + vendored), populated in rowToDto, redundant getServerSubdomain query removed (single getServerInfo path); DTO round-trip + controller relay_url tests pass. (shared:008fcc1, hub:489ec7d)
-- [x] HB-1.1  drop base64 on internal channel-broker body path  (commits: e7ef677, 49913e7, d16b567)  DONE
-- [x] HB-1.2  raw tunnel data-plane backpressure  (commits: 2a2b421, 0aed3e0, b1140b1)  DONE
-- [x] HB-1.3  non-blocking onReply delivery  (commits: e3cb349, 8ea42ae, 8d45c85)  DONE
-- [x] HB-1.4  lean owner/status queries on hot paths  (commits: c0461ed, 2f81f37, e5ce01e)  DONE
+- [x] HB-1.1  drop base64 on internal channel-broker body path  RE-AUDIT 2026-07-12: DONE (code — raw body publish/decode, minimal payload; residual base64 is the REQUEST envelope = HB-2.1 territory, out of scope). Tests SHALLOW (ASCII-only; missing binary round-trip w/ NUL/0xFF/invalid-UTF-8). → optional test hardening queued. (e7ef677, 49913e7, d16b567)
+- [x] HB-1.2  raw tunnel data-plane backpressure  FIXED 2026-07-12 (Implementer) — drop hole closed on BOTH paths via re-queue+retry-on-drain (mirrors pendingHighPriorityFrames). sendToClient: per-client `pendingClientFrames[channelId]` re-queues the dropped DATA frame, `flushClientQueue` re-sends on that client's onBufferDrain BEFORE decrementing serverBackpressureCount/resuming server. sendToServer low-priority body: `pendingBodyFrames` re-queues, `flushBodyQueue` re-sends on serverWs onBufferDrain (control-first then body) BEFORE resuming clients. Both caps (256) → close('backpressure_overflow') hard-fail; existing close('backpressure_timeout') safety timer kept (extracted to testable named methods, Timer::add wrapped in try/catch like RelayProxyManager). removeClient releases a congested client's slot so it can't strand the pause. +4 tests (no-drop deliver-on-drain + timeout-close, client & server paths). was PARTIAL (2a2b421, 0aed3e0, b1140b1).
+- [x] HB-1.3  non-blocking onReply delivery  RE-AUDIT 2026-07-12: DONE, well-tested — push(...,0.0) non-blocking probe, full/closed → own Coroutine::create fiber (deliverReplyInFiber) so one stuck consumer blocks only its fiber; 3 substantive tests. No action. (e3cb349, 8ea42ae, 8d45c85)
+- [~] HB-1.4  lean owner/status queries on hot paths  RE-AUDIT 2026-07-12: PARTIAL. Wiring DONE (getOwnerAndStatus omits COUNT, used by proxy-admission + client-mount; AuthMiddleware uses lean userExists + $request->userId from token + 5s TTL cache). BUG: AuthMiddleware::userExists (:205-220) negative cache broken — non-existent user cached same as existing (bare ts), cache-hit returns true unconditionally → deleted/revoked user bypasses auth.user_not_found gate for the 5s TTL. Test gaps: no getOwnerAndStatus leanness test, no expects(never())->findById, no cache-TTL query-count test. → FIX agent queued. (c0461ed, 2f81f37, e5ce01e)
 - [x] HB-2.1  request-body chunking over tunnel (enable bodied relay)  (commits: phlix-shared:216ea5d, phlix-hub:7b71c190)  DONE
 - [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  (commit: 7c30723)  DONE
 - [x] HB-2.3  cap FrameDecoder buffer  (commit: ec17c9cc)  DONE
@@ -119,3 +119,49 @@ tests can hide mock-encoded-wrong contracts — cf. the 0.4 auth-contract incide
   timer, RelayConsumer::startHeartbeatTimer @:1517, RelayConfig::pingInterval default 30) + echoes hub
   heartbeats. 30s ≪ 90s reap window. HB-0.1 fully cleared. CAVEAT: document that hub reap window must
   stay > PHLIX_RELAY_PING_INTERVAL (default 30) or tunnels false-reap.
+
+## Implementer — 2026-07-12 (HB-1.2 fix + tests)
+
+**Confirmed bug (verified vs vendor):** `TcpConnection::send()` returns false on a full send buffer
+and DROPS the package before appending (vendor `.../TcpConnection.php` bufferIsFull). Two Tunnel paths
+returned on `send()===false` WITHOUT re-queueing → exactly one DATA/body frame lost per backpressure
+episode = silent stream corruption (H-H3 forbids). The high-priority server-control path already
+re-queued correctly (`pendingHighPriorityFrames` + `flushHighPriorityQueue` retry) — used as the model.
+
+**Approach: re-queue + retry-on-drain (lossless), mirroring the high-priority machinery.** Chose this
+over the `onBufferFull` proactive pause because it reuses the exact idiom already proven on the
+control path and needs no new callback wiring.
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-hub/src/Relay/Tunnel.php`
+  - CLIENT DATA path (`sendToClient`): on `sendRaw()===false`, the encoded frame is re-queued into a
+    new per-client `pendingClientFrames[channelId]` (was: dropped) then backpressure applied. New
+    `enqueueClientFrame` (bounded by `MAX_CLIENT_QUEUE=256` → `close('backpressure_overflow')`) and
+    `flushClientQueue` (re-sends FIFO, byte-exact). `handleClientSendBackpressure` split: `armClientDrain`
+    now flushes the client queue on `onBufferDrain` and only decrements `serverBackpressureCount` /
+    resumes the server AFTER the queue fully drains; if the buffer refills mid-flush it re-arms and
+    stays paused. If a client already has a backlog, new frames enqueue behind it (no reorder).
+  - SERVER low-priority BODY path (`sendToServer`): on `send()===false`, the body frame is re-queued
+    into a new `pendingBodyFrames` (was: dropped). New `enqueueBodyFrame` (bounded by `MAX_BODY_QUEUE=256`
+    → `close('backpressure_overflow')`) and `flushBodyQueue`. If a control/body backlog already exists,
+    the body frame enqueues behind it. `handleServerSendBackpressure`'s server `onBufferDrain` now
+    flushes high-priority THEN body queue and only resumes clients once BOTH are empty (this also fixes
+    a latent gap where queued control frames were only flushed on the next inbound body frame).
+  - Safety timeouts kept intact but extracted into testable `handleClientBackpressureTimeout` /
+    `handleServerBackpressureTimeout`; the `Timer::add(..., [], false)` one-shots are wrapped in
+    try/catch (mirrors `RelayProxyManager`) so they no-op outside a Workerman loop (tests) — one-shot
+    flag preserved.
+  - `removeClient`: releases a congested client's backpressure slot + drops its queue so a disconnect
+    can't strand the server in a permanently-paused state / leak queued frames.
+  - `notifyClientsDisconnected` / `close`: reset the new queues.
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/TunnelTest.php` — +4 tests (both paths):
+  (a) zero-drop: re-queued frame delivered byte-exact after drain; (b) opposite side paused on fill;
+  (c) resumed on drain; (d) tunnel closes with `backpressure_timeout` if drain never comes.
+
+**Invariant now guaranteed:** no DATA/body frame is discarded — a slow reader pauses upstream and every
+frame is delivered on drain; if drain never comes the existing timeout `close('backpressure_timeout')`
+(or the queue-cap `close('backpressure_overflow')`) is the hard, visible last resort.
+
+**Verify:** phpunit full suite 1225 pass / 15351 assertions / 17 skipped (baseline 1221 + 4 new);
+phpunit `--filter Tunnel` 62 pass; phpstan L9 no errors; `phpcs --standard=PSR12 -n src/` clean.
+(psalm skipped — box PHP 8.3.6 < psalm required.)

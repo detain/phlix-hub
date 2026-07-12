@@ -210,6 +210,25 @@ final class Tunnel implements TunnelInterface
     private const MAX_HIGH_PRIORITY_QUEUE = 256;
 
     /**
+     * Maximum number of low-priority BODY frames that may be re-queued while the
+     * server's send buffer is full. When the server is congested we pause all
+     * client reads, so in practice at most the single in-flight frame lands here;
+     * the cap is a safety valve. If it is exceeded we close the tunnel (a hard,
+     * visible failure) rather than either dropping a frame (silent corruption)
+     * or buffering unbounded (memory leak in the resident worker).
+     */
+    private const MAX_BODY_QUEUE = 256;
+
+    /**
+     * Maximum number of server→client DATA frames that may be re-queued per
+     * client while that client's send buffer is full. When a client is congested
+     * we pause the server, so at most the single in-flight frame lands here; the
+     * cap is a safety valve. Exceeding it closes the tunnel (hard failure) rather
+     * than dropping a DATA frame (silent corruption).
+     */
+    private const MAX_CLIENT_QUEUE = 256;
+
+    /**
      * High-priority frame queue. These frames (control + small JSON) are always
      * sent before any low-priority (body-chunk) frames to prevent a large
      * transfer from stalling browse/segment requests.
@@ -217,6 +236,30 @@ final class Tunnel implements TunnelInterface
      * @var list<RelayFrame>
      */
     private array $pendingHighPriorityFrames = [];
+
+    /**
+     * Low-priority BODY frame queue toward the server. A BODY frame whose
+     * {@see TcpConnection::send()} returned false (send buffer full — Workerman
+     * DROPS the package before returning) is re-queued here instead of being
+     * lost, and re-sent (in FIFO order, after the high-priority queue) when the
+     * server's send buffer drains. This closes the silent-drop hole on the
+     * server body path — the tunnel assumes reliable delivery.
+     *
+     * @var list<RelayFrame>
+     */
+    private array $pendingBodyFrames = [];
+
+    /**
+     * Per-client re-queue of server→client DATA frames, keyed by channel id.
+     * A DATA frame whose {@see ClientConnection::sendRaw()} returned false (the
+     * client's send buffer is full — Workerman DROPS the package before
+     * returning) is re-queued here (as an already-encoded wire string) instead
+     * of being lost, and re-sent when that client's send buffer drains. This
+     * closes the silent-drop hole on the client DATA path.
+     *
+     * @var array<int, list<string>>
+     */
+    private array $pendingClientFrames = [];
 
     /**
      * @var int Number of clients with backpressure (send buffer full). When > 0,
@@ -561,6 +604,56 @@ final class Tunnel implements TunnelInterface
     }
 
     /**
+     * Flush the low-priority BODY frame queue toward the server, in FIFO order.
+     * If the server's send buffer fills again, the frame is left at the head of
+     * the queue and backpressure is (re-)applied so the next drain retries it —
+     * no BODY frame is ever discarded.
+     *
+     * @return void
+     */
+    private function flushBodyQueue(): void
+    {
+        while (!empty($this->pendingBodyFrames)) {
+            $frame = $this->pendingBodyFrames[0];
+            $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
+            if ($this->serverWs->send($encoded) === false) {
+                // Still full — leave the frame queued and re-arm backpressure.
+                $this->handleServerSendBackpressure();
+                return;
+            }
+            array_shift($this->pendingBodyFrames);
+            $this->bytesOut += strlen($encoded);
+            if ($this->relaySessionId !== null) {
+                $this->sessionManager->recordBytesOut($this->relaySessionId, strlen($encoded));
+            }
+        }
+    }
+
+    /**
+     * Re-queue a BODY frame that could not be sent because the server's send
+     * buffer was full. Bounded by {@see MAX_BODY_QUEUE}; exceeding the bound
+     * closes the tunnel (hard, visible failure) rather than dropping the frame
+     * (silent corruption) or buffering unbounded.
+     *
+     * @param RelayFrame $frame The BODY frame to re-queue.
+     *
+     * @return void
+     */
+    private function enqueueBodyFrame(RelayFrame $frame): void
+    {
+        if (count($this->pendingBodyFrames) >= self::MAX_BODY_QUEUE) {
+            $this->logger->error('Relay: body queue full under backpressure, closing tunnel', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'queue_size' => count($this->pendingBodyFrames),
+            ]);
+            $this->close('backpressure_overflow');
+            return;
+        }
+        $this->pendingBodyFrames[] = $frame;
+    }
+
+    /**
      * Classify a frame for priority queue placement.
      *
      * CONTROL priority (true) — enqueued and always flushed before low-priority:
@@ -645,10 +738,24 @@ final class Tunnel implements TunnelInterface
             return;
         }
 
-        // Apply backpressure if the server's send buffer is full. The tunnel
-        // assumes reliable delivery — if we can't apply backpressure, close
-        // the tunnel so the client sees a hard failure rather than corruption.
+        // If a backlog already exists (control frames still queued after the
+        // flush above, or body frames from a prior drop), this body frame must
+        // NOT be sent ahead of it — that would both reorder the stream and race
+        // a full buffer. Re-queue it to preserve FIFO order; it is flushed on
+        // drain. A non-empty queue implies backpressure is already armed.
+        if (!empty($this->pendingHighPriorityFrames) || !empty($this->pendingBodyFrames)) {
+            $this->enqueueBodyFrame($frame);
+            return;
+        }
+
+        // Apply backpressure if the server's send buffer is full. Workerman
+        // DROPS the package before send() returns false, so the frame must be
+        // re-queued here — never silently dropped (the tunnel assumes reliable
+        // delivery; a lost BODY frame is silent stream corruption). It is
+        // re-sent when the server's send buffer drains; if the drain never
+        // comes the backpressure timeout closes the tunnel (hard failure).
         if ($this->serverWs->send($encoded) === false) {
+            $this->enqueueBodyFrame($frame);
             $this->handleServerSendBackpressure();
             return;
         }
@@ -694,10 +801,22 @@ final class Tunnel implements TunnelInterface
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
         $frameLen = strlen($encoded);
 
-        // Apply backpressure if the client's send buffer is full. Never silently
-        // drop a DATA frame — the tunnel assumes reliable delivery; a dropped
-        // frame means silent stream corruption.
+        // If this client already has queued frames it is congested — do not send
+        // ahead of the backlog (that would reorder its stream). Re-queue to
+        // preserve FIFO order; the backlog is flushed on this client's drain.
+        if (!empty($this->pendingClientFrames[$channelId])) {
+            $this->enqueueClientFrame($client, $encoded);
+            return;
+        }
+
+        // Apply backpressure if the client's send buffer is full. Workerman
+        // DROPS the package before send() returns false, so the frame must be
+        // re-queued here — never silently dropped (the tunnel assumes reliable
+        // delivery; a lost DATA frame is silent stream corruption). It is
+        // re-sent when this client's send buffer drains; if the drain never
+        // comes the backpressure timeout closes the tunnel (hard failure).
         if ($client->sendRaw($encoded) === false) {
+            $this->enqueueClientFrame($client, $encoded);
             $this->handleClientSendBackpressure($client);
             return;
         }
@@ -708,6 +827,64 @@ final class Tunnel implements TunnelInterface
         }
 
         $this->bytesIn += $frameLen;
+    }
+
+    /**
+     * Re-queue an already-encoded server→client DATA frame that could not be
+     * sent because the client's send buffer was full. Bounded per client by
+     * {@see MAX_CLIENT_QUEUE}; exceeding the bound closes the tunnel (hard,
+     * visible failure) rather than dropping the frame (silent corruption) or
+     * buffering unbounded in the resident worker.
+     *
+     * @param ClientConnection $client  The congested client.
+     * @param string           $encoded The already-encoded wire frame.
+     *
+     * @return void
+     */
+    private function enqueueClientFrame(ClientConnection $client, string $encoded): void
+    {
+        $channelId = $client->channelId;
+        if (count($this->pendingClientFrames[$channelId] ?? []) >= self::MAX_CLIENT_QUEUE) {
+            $this->logger->error('Relay: client queue full under backpressure, closing tunnel', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'client_id' => $client->clientId,
+                'channel_id' => $channelId,
+            ]);
+            $this->close('backpressure_overflow');
+            return;
+        }
+        $this->pendingClientFrames[$channelId][] = $encoded;
+    }
+
+    /**
+     * Re-send any queued DATA frames for a client whose send buffer has drained.
+     * Frames are sent in FIFO order; if the buffer fills again the remaining
+     * frames stay queued and the caller re-arms this client's drain handler —
+     * no DATA frame is ever discarded.
+     *
+     * @param ClientConnection $client The client whose buffer drained.
+     *
+     * @return bool True when the client's queue fully drained; false if the
+     *              send buffer filled again and frames remain queued.
+     */
+    private function flushClientQueue(ClientConnection $client): bool
+    {
+        $channelId = $client->channelId;
+        while (!empty($this->pendingClientFrames[$channelId])) {
+            $encoded = $this->pendingClientFrames[$channelId][0];
+            if ($client->sendRaw($encoded) === false) {
+                return false;
+            }
+            array_shift($this->pendingClientFrames[$channelId]);
+            $frameLen = strlen($encoded);
+            if ($this->relaySessionId !== null) {
+                $this->sessionManager->recordBytesIn($this->relaySessionId, $frameLen);
+            }
+            $this->bytesIn += $frameLen;
+        }
+        unset($this->pendingClientFrames[$channelId]);
+        return true;
     }
 
     /**
@@ -736,11 +913,46 @@ final class Tunnel implements TunnelInterface
 
         $this->serverBackpressureCount++;
 
-        // One-shot drain handler for this specific client. When this client's
-        // send buffer drains, decrement the count and resume server recv if
-        // no other clients are still congested.
+        $this->armClientDrain($client);
+
+        // Safety timeout: if the drain never comes within BACKPRESSURE_WAIT_SECONDS,
+        // close the tunnel so the client sees a hard failure rather than corruption.
+        // Timer::add throws outside a Workerman event loop (e.g. under PHPUnit) —
+        // swallow that so unit tests can exercise the backpressure path; production
+        // always has a live loop. The timeout body lives in a named method so it is
+        // directly testable.
+        try {
+            Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function () use ($client): void {
+                $this->handleClientBackpressureTimeout($client);
+            }, [], false);
+        } catch (Throwable) {
+            // Timer unavailable (outside the event loop / tests) — no-op.
+        }
+    }
+
+    /**
+     * (Re-)arm the one-shot drain handler for a congested client. On drain we
+     * first re-send any DATA frames that were re-queued while the client was
+     * congested; only once its queue fully drains do we decrement the
+     * backpressure count and resume server recv (when no client is still
+     * congested). If the buffer fills again mid-flush we re-arm and stay paused.
+     *
+     * @param ClientConnection $client The congested client.
+     *
+     * @return void
+     */
+    private function armClientDrain(ClientConnection $client): void
+    {
         $client->clientWs->onBufferDrain = function () use ($client): void {
             $client->clientWs->onBufferDrain = null;
+
+            // Re-send queued frames BEFORE resuming upstream. If the buffer fills
+            // again, keep this client congested and re-arm — nothing is dropped.
+            if (!$this->flushClientQueue($client)) {
+                $this->armClientDrain($client);
+                return;
+            }
+
             $this->serverBackpressureCount--;
 
             $this->logger->debug('Relay: client send buffer drained, server backpressure count', [
@@ -758,23 +970,31 @@ final class Tunnel implements TunnelInterface
                 ]);
             }
         };
+    }
 
-        // Safety timeout: if the drain never comes within BACKPRESSURE_WAIT_SECONDS,
-        // close the tunnel so the client sees a hard failure rather than corruption.
-        Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function () use ($client): void {
-            if ($this->status === self::STATUS_CLOSED) {
-                return;
-            }
-            if ($this->serverBackpressureCount > 0) {
-                $this->logger->error('Relay: backpressure timeout, closing tunnel', [
-                    'server_id' => $this->serverId,
-                    'tunnel_id' => $this->tunnelId,
-                    'client_id' => $client->clientId,
-                    'backpressure_count' => $this->serverBackpressureCount,
-                ]);
-                $this->close('backpressure_timeout');
-            }
-        }, [], false);
+    /**
+     * Backpressure-timeout handler for a congested client. If the client is
+     * still congested when the safety timer fires the tunnel is closed so the
+     * client sees a hard failure rather than an indefinitely stalled stream.
+     *
+     * @param ClientConnection $client The client whose drain was awaited.
+     *
+     * @return void
+     */
+    private function handleClientBackpressureTimeout(ClientConnection $client): void
+    {
+        if ($this->status === self::STATUS_CLOSED) {
+            return;
+        }
+        if ($this->serverBackpressureCount > 0) {
+            $this->logger->error('Relay: backpressure timeout, closing tunnel', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'client_id' => $client->clientId,
+                'backpressure_count' => $this->serverBackpressureCount,
+            ]);
+            $this->close('backpressure_timeout');
+        }
     }
 
     /**
@@ -804,10 +1024,25 @@ final class Tunnel implements TunnelInterface
         }
 
         // One-shot drain handler on the server. When the server's send buffer
-        // drains, resume all clients and clear the flag.
+        // drains, first re-send any queued frames (control frames first, then
+        // body frames) that were re-queued while congested — never dropped —
+        // and only resume all clients once BOTH queues are empty. If a flush
+        // re-fills the buffer it re-arms backpressure and we stay paused.
         $serverWs = $this->serverWs;
         $serverWs->onBufferDrain = function () use ($serverWs): void {
             $serverWs->onBufferDrain = null;
+
+            $this->flushHighPriorityQueue();
+            if (empty($this->pendingHighPriorityFrames)) {
+                $this->flushBodyQueue();
+            }
+
+            if (!empty($this->pendingHighPriorityFrames) || !empty($this->pendingBodyFrames)) {
+                // Still congested — the flush re-armed backpressure (and this
+                // drain handler); keep all clients paused until it clears.
+                return;
+            }
+
             $this->clientBackpressureActive = false;
 
             foreach ($this->clientConnections as $client) {
@@ -821,20 +1056,39 @@ final class Tunnel implements TunnelInterface
             ]);
         };
 
-        // Safety timeout: if the drain never comes, close the tunnel so
-        // clients see a hard failure rather than an indefinitely stalled stream.
-        Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function (): void {
-            if ($this->status === self::STATUS_CLOSED) {
-                return;
-            }
-            if ($this->clientBackpressureActive) {
-                $this->logger->error('Relay: server backpressure timeout, closing tunnel', [
-                    'server_id' => $this->serverId,
-                    'tunnel_id' => $this->tunnelId,
-                ]);
-                $this->close('backpressure_timeout');
-            }
-        }, [], false);
+        // Safety timeout: if the drain never comes, close the tunnel so clients
+        // see a hard failure rather than an indefinitely stalled stream. Timer::add
+        // throws outside a Workerman event loop (e.g. under PHPUnit); swallow that
+        // so unit tests can exercise the path. The body lives in a named method so
+        // it is directly testable.
+        try {
+            Timer::add(self::BACKPRESSURE_WAIT_SECONDS, function (): void {
+                $this->handleServerBackpressureTimeout();
+            }, [], false);
+        } catch (Throwable) {
+            // Timer unavailable (outside the event loop / tests) — no-op.
+        }
+    }
+
+    /**
+     * Backpressure-timeout handler for a congested server connection. If the
+     * server is still congested when the safety timer fires the tunnel is
+     * closed so clients see a hard failure rather than an indefinite stall.
+     *
+     * @return void
+     */
+    private function handleServerBackpressureTimeout(): void
+    {
+        if ($this->status === self::STATUS_CLOSED) {
+            return;
+        }
+        if ($this->clientBackpressureActive) {
+            $this->logger->error('Relay: server backpressure timeout, closing tunnel', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+            ]);
+            $this->close('backpressure_timeout');
+        }
     }
 
     /**
@@ -929,6 +1183,21 @@ final class Tunnel implements TunnelInterface
             unset($this->channelClients[$channelId]);
         }
 
+        // If this client was congested (frames re-queued for it), it will never
+        // fire its drain handler now that it is gone. Release its backpressure
+        // slot and drop its queue so the server isn't left paused forever (and
+        // the queued frames aren't leaked in the resident worker).
+        if ($channelId > 0 && isset($this->pendingClientFrames[$channelId])) {
+            unset($this->pendingClientFrames[$channelId]);
+            $client->clientWs->onBufferDrain = null;
+            if ($this->serverBackpressureCount > 0) {
+                $this->serverBackpressureCount--;
+                if ($this->serverBackpressureCount === 0 && $this->status === self::STATUS_ACTIVE) {
+                    $this->serverWs->resumeRecv();
+                }
+            }
+        }
+
         // Send CLIENT_DISCONNECT notification to the server, tagged with the
         // client's channel id so the server closes the matching local conn.
         if ($this->status === self::STATUS_ACTIVE && $channelId > 0) {
@@ -974,6 +1243,7 @@ final class Tunnel implements TunnelInterface
 
         $this->clientConnections->removeAll($this->clientConnections);
         $this->channelClients = [];
+        $this->pendingClientFrames = [];
     }
 
     /**
@@ -1011,6 +1281,7 @@ final class Tunnel implements TunnelInterface
             }
             $this->clientBackpressureActive = false;
         }
+        $this->pendingBodyFrames = [];
 
         // Notify clients
         $this->notifyClientsDisconnected($reason);
