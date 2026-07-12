@@ -74,11 +74,14 @@ class TunnelManagerTest extends TestCase
             ->method('registerServer')
             ->willReturn($sessionId);
 
-        // First connection
+        // First connection — the incumbent, brought ACTIVE (routable).
         $tunnel1 = $manager->acceptServer('server-abc', $serverWs1);
+        $tunnel1->relaySessionId = $sessionId;
+        $tunnel1->status = Tunnel::STATUS_ACTIVE;
 
         // Second connection (reconnect) must NOT close the first tunnel yet.
-        // The incumbent is stored in $closingTunnels and remains active.
+        // The new tunnel is parked pending JWT validation; the incumbent remains
+        // active and — critically (HB-2.2 defect #2) — still the routing entry.
         $serverWs1
             ->expects($this->never())
             ->method('close');
@@ -88,21 +91,26 @@ class TunnelManagerTest extends TestCase
         // Should be a different tunnel
         $this->assertNotSame($tunnel1, $tunnel2);
 
-        // The new tunnel (tunnel2) is now the active one
-        $this->assertSame($tunnel2, $manager->getTunnelForServer('server-abc'));
+        // The incumbent (tunnel1) is STILL the routable tunnel — the unvalidated
+        // reconnect has NOT displaced it in the routing map.
+        $this->assertSame($tunnel1, $manager->getTunnelForServer('server-abc'));
 
         // The incumbent tunnel (tunnel1) is NOT closed yet
         $this->assertNotSame(Tunnel::STATUS_CLOSED, $tunnel1->status);
     }
 
-    public function test_finalize_server_connection_closes_incumbent(): void
+    public function test_finalize_server_connection_drains_then_displaces_incumbent(): void
     {
-        // HB-2.2: After JWT validation succeeds, finalizeServerConnection()
-        // must close the incumbent tunnel that was stored during acceptServer().
+        // HB-2.2 + H-R6: After JWT validation succeeds, finalizeServerConnection()
+        // promotes the validated tunnel into the routing map and DRAINS the
+        // incumbent (moves it to CLOSING for a grace period) before the hard
+        // close, so a legitimate reconnect does not instantly kill playback.
         $manager = new TunnelManager(
             $this->sessionManager,
             $this->codec,
             $this->logger,
+            null,
+            5.0, // reconnect-drain grace
         );
 
         $serverWs1 = $this->createMock(TcpConnection::class);
@@ -113,25 +121,57 @@ class TunnelManagerTest extends TestCase
             ->method('registerServer')
             ->willReturn($sessionId);
 
-        // First connection
+        // First connection — incumbent, ACTIVE.
         $tunnel1 = $manager->acceptServer('server-abc', $serverWs1);
         $tunnel1->relaySessionId = $sessionId;
         $tunnel1->status = Tunnel::STATUS_ACTIVE;
 
-        // Second connection - incumbent stored, not closed
+        // Second connection — parked pending, incumbent still routable & ACTIVE.
         $tunnel2 = $manager->acceptServer('server-abc', $serverWs2);
+        $this->assertSame($tunnel1, $manager->getTunnelForServer('server-abc'));
+        $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel1->status);
 
-        // The incumbent tunnel should still be in PENDING (not closed yet)
-        $this->assertNotSame(Tunnel::STATUS_CLOSED, $tunnel1->status);
-
-        // Now finalize the connection (JWT validated successfully).
-        // The incumbent tunnel's close() is called, which calls serverWs1->close().
+        // Finalize (JWT validated). The new tunnel is promoted and the incumbent
+        // begins draining (CLOSING) — NOT hard-closed yet.
         $manager->finalizeServerConnection('server-abc');
 
-        // The incumbent tunnel should now be closed
-        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel1->status);
+        $this->assertSame(Tunnel::STATUS_CLOSING, $tunnel1->status, 'incumbent drains before displacement');
+        $this->assertSame($tunnel2, $manager->getTunnelForServer('server-abc'), 'new tunnel is promoted');
 
-        // The new tunnel should still be active
+        // Simulate the drain grace timer firing (armed via Timer::add — a no-op
+        // in tests). The incumbent then hard-closes.
+        $method = new \ReflectionMethod($tunnel1, 'handleDrainTimeout');
+        $method->setAccessible(true);
+        $method->invoke($tunnel1);
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel1->status);
+        // The promoted tunnel is unaffected.
+        $this->assertSame($tunnel2, $manager->getTunnelForServer('server-abc'));
+    }
+
+    public function test_finalize_server_connection_immediate_displace_when_grace_zero(): void
+    {
+        // Grace of 0 disables the drain — the incumbent is displaced immediately.
+        $manager = new TunnelManager(
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            0.0,
+        );
+
+        $serverWs1 = $this->createMock(TcpConnection::class);
+        $serverWs2 = $this->createMock(TcpConnection::class);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel1 = $manager->acceptServer('server-abc', $serverWs1);
+        $tunnel1->relaySessionId = 'session-123';
+        $tunnel1->status = Tunnel::STATUS_ACTIVE;
+
+        $tunnel2 = $manager->acceptServer('server-abc', $serverWs2);
+        $manager->finalizeServerConnection('server-abc');
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel1->status);
         $this->assertSame($tunnel2, $manager->getTunnelForServer('server-abc'));
     }
 
@@ -159,6 +199,63 @@ class TunnelManagerTest extends TestCase
 
         // Tunnel should still be there
         $this->assertNotNull($manager->getTunnelForServer('server-abc'));
+    }
+
+    public function test_abort_pending_connection_leaves_incumbent_routable(): void
+    {
+        // HB-2.2: a rejected reconnect (bad HELLO) must be discarded WITHOUT
+        // touching the live incumbent, which stays routable.
+        $manager = new TunnelManager(
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+
+        $serverWs1 = $this->createMock(TcpConnection::class);
+        $serverWs2 = $this->createMock(TcpConnection::class);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        // Live incumbent.
+        $tunnel1 = $manager->acceptServer('server-abc', $serverWs1);
+        $tunnel1->relaySessionId = 'session-123';
+        $tunnel1->status = Tunnel::STATUS_ACTIVE;
+
+        // The incumbent's connection must never be closed by the aborted reconnect.
+        $serverWs1->expects($this->never())->method('close');
+        // The attacker's connection IS closed by close('unauthorized').
+        $serverWs2->expects($this->atLeastOnce())->method('close');
+
+        // Parked reconnect that then fails validation.
+        $tunnel2 = $manager->acceptServer('server-abc', $serverWs2);
+        $manager->abortPendingConnection('server-abc', $tunnel2);
+
+        // Incumbent untouched and still routable; rejected tunnel closed.
+        $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel1->status);
+        $this->assertSame($tunnel1, $manager->getTunnelForServer('server-abc'));
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel2->status);
+    }
+
+    public function test_abort_pending_connection_removes_fresh_rejected_tunnel(): void
+    {
+        // Fresh connection (no incumbent) whose HELLO fails: the rejected tunnel
+        // was placed directly in the map and must be removed so getTunnelForServer
+        // does not return a dead tunnel.
+        $manager = new TunnelManager(
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel = $manager->acceptServer('server-fresh', $serverWs);
+        $this->assertSame($tunnel, $manager->getTunnelForServer('server-fresh'));
+
+        $manager->abortPendingConnection('server-fresh', $tunnel);
+
+        $this->assertNull($manager->getTunnelForServer('server-fresh'));
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
 
     public function test_get_tunnel_for_server_returns_tunnel_when_exists(): void

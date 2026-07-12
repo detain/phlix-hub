@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\FrameDecoder;
@@ -175,6 +176,77 @@ final class RelayWorkerTest extends TestCase
             'type' => 'hello',
             'enrollment_jwt' => 'jwt',
         ], JSON_THROW_ON_ERROR));
+    }
+
+    // ---- HB-2.2: tunnel-displacement DoS regression guard -----------------
+
+    /**
+     * REGRESSION GUARD for the HB-2.2 tunnel-displacement DoS (finding H-H1).
+     *
+     * An unauthenticated/invalid HELLO carrying a KNOWN server_id must NOT evict
+     * the live tunnel for that server. This drives the REAL orchestration
+     * (RelayWorker::onMessage → handleHello → Tunnel::onServerMessage →
+     * abortPendingConnection) through a TunnelManager wired with a jwtService
+     * that REJECTS — mirroring production DI (HubServicesProvider). The
+     * setUp() manager has NO jwtService (validateHelloJwt returns true blindly),
+     * which is precisely the blind spot that hid this live DoS; here we plug it.
+     *
+     * Pre-fix this fails: handleHello called finalizeServerConnection()
+     * unconditionally, closing the incumbent even on a rejected HELLO.
+     */
+    public function testInvalidHelloDoesNotDisplaceLiveIncumbent(): void
+    {
+        $jwtService = $this->createMock(EnrollmentJwtService::class);
+        $jwtService->method('validateEnrollmentJwt')->willReturn(null); // reject all
+        $tunnelManager = new TunnelManager($this->sessionManager, $this->codec, $this->logger, $jwtService);
+
+        $relay = new RelayWorker($this->buildContainerFor($tunnelManager), 0);
+
+        // A legitimate server holds a live, ACTIVE tunnel with a connected client.
+        $incumbentWs = $this->createMock(TcpConnection::class);
+        $incumbentWs->method('send')->willReturn(true);
+        // The incumbent's connection must NEVER be closed by the attack.
+        $incumbentWs->expects($this->never())->method('close');
+
+        $incumbent = $tunnelManager->acceptServer('victim-server', $incumbentWs);
+        $incumbent->relaySessionId = 'sess-incumbent';
+        $incumbent->status = Tunnel::STATUS_ACTIVE;
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(true);
+        // The incumbent's client must NEVER be disconnected by the attack.
+        $clientWs->expects($this->never())->method('close');
+        $client = new ClientConnection($clientWs, 'victim-server', 'client-1', $this->logger, 'cs1');
+        $incumbent->registerClient($client);
+
+        // Attacker connects to :8802 and HELLOs with the KNOWN server_id but an
+        // invalid enrollment JWT.
+        $attackerWs = $this->createMock(TcpConnection::class);
+        $attackerWs->method('send')->willReturn(true);
+        $attackerHello = (string) json_encode([
+            'type' => 'hello',
+            'enrollment_jwt' => 'in.valid.jwt',
+            'server_id' => 'victim-server',
+        ], JSON_THROW_ON_ERROR);
+
+        $relay->onMessage($attackerWs, $attackerHello);
+
+        // The incumbent survives: still ACTIVE, still routable, client attached.
+        self::assertSame(
+            Tunnel::STATUS_ACTIVE,
+            $incumbent->status,
+            'incumbent must survive an invalid HELLO (not displaced)',
+        );
+        self::assertSame(
+            $incumbent,
+            $tunnelManager->getTunnelForServer('victim-server'),
+            'incumbent must remain the routable tunnel',
+        );
+        self::assertCount(
+            1,
+            $incumbent->clientConnections,
+            'incumbent client must not be disconnected by the attack',
+        );
     }
 
     // ---- Binary frames: server's EXACT wire bytes -------------------------
@@ -418,6 +490,42 @@ final class RelayWorkerTest extends TestCase
     private function buildContainer(): ContainerInterface
     {
         return $this->buildContainerWithSessions($this->sessionManager);
+    }
+
+    /**
+     * PSR-11 container exposing a SPECIFIC TunnelManager (e.g. one wired with a
+     * rejecting jwtService for the DoS regression guard) plus the shared session
+     * manager.
+     */
+    private function buildContainerFor(TunnelManager $tunnelManager): ContainerInterface
+    {
+        $sessionManager = $this->sessionManager;
+
+        return new class ($tunnelManager, $sessionManager) implements ContainerInterface {
+            public function __construct(
+                private readonly TunnelManager $tunnelManager,
+                private readonly RelaySessionManager $sessionManager,
+            ) {
+            }
+
+            public function get(string $id): mixed
+            {
+                return match ($id) {
+                    TunnelManager::class, TunnelManagerInterface::class => $this->tunnelManager,
+                    RelaySessionManager::class => $this->sessionManager,
+                    default => throw new \RuntimeException("Unknown service: {$id}"),
+                };
+            }
+
+            public function has(string $id): bool
+            {
+                return in_array($id, [
+                    TunnelManager::class,
+                    TunnelManagerInterface::class,
+                    RelaySessionManager::class,
+                ], true);
+            }
+        };
     }
 
     /**

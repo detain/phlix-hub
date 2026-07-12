@@ -23,18 +23,39 @@ final class RelaySessionManagerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
 
+        // Record the full call ordering across query() AND the transaction
+        // control methods so we can assert the supersede UPDATE + INSERT are
+        // wrapped in a committed transaction (H-D4).
         /** @var list<array{sql: string, params: mixed}> $calls */
         $calls = [];
+        /** @var list<string> $order */
+        $order = [];
         $db->method('query')->willReturnCallback(
-            function (string $sql, $params = null) use (&$calls) {
+            function (string $sql, $params = null) use (&$calls, &$order) {
                 $calls[] = ['sql' => $sql, 'params' => $params];
-                // First call = server existence SELECT; return one row.
                 if (str_contains($sql, 'SELECT id FROM servers')) {
+                    $order[] = 'select';
                     return [['id' => 'server-1']];
+                }
+                if (str_contains($sql, 'UPDATE')) {
+                    $order[] = 'update';
+                } elseif (str_contains($sql, 'INSERT')) {
+                    $order[] = 'insert';
                 }
                 return null;
             },
         );
+        $db->expects($this->once())->method('beginTrans')
+            ->willReturnCallback(function () use (&$order): bool {
+                $order[] = 'begin';
+                return true;
+            });
+        $db->expects($this->once())->method('commitTrans')
+            ->willReturnCallback(function () use (&$order): bool {
+                $order[] = 'commit';
+                return true;
+            });
+        $db->expects($this->never())->method('rollBackTrans');
 
         $manager = new RelaySessionManager($db, $logger);
         $sessionId = $manager->registerServer('server-1', 'worker-a');
@@ -58,6 +79,62 @@ final class RelaySessionManagerTest extends TestCase
         // The supersede UPDATE must run BEFORE the INSERT.
         $insert = $calls[2];
         self::assertStringContainsString('INSERT INTO relay_sessions', $insert['sql']);
+
+        // H-D4: the UPDATE + INSERT must be enclosed in a committed transaction,
+        // strictly: begin → update → insert → commit.
+        self::assertSame(['select', 'begin', 'update', 'insert', 'commit'], $order);
+    }
+
+    public function testRegisterServerRollsBackWhenInsertFails(): void
+    {
+        // H-D4: a failure mid-transaction (after the supersede UPDATE, during the
+        // INSERT) must roll the transaction back — not commit a half-applied
+        // supersede that would leave the server with zero open sessions.
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        /** @var list<string> $order */
+        $order = [];
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$order) {
+                if (str_contains($sql, 'SELECT id FROM servers')) {
+                    return [['id' => 'server-1']];
+                }
+                if (str_contains($sql, 'UPDATE')) {
+                    $order[] = 'update';
+                    return null;
+                }
+                if (str_contains($sql, 'INSERT')) {
+                    $order[] = 'insert';
+                    throw new \RuntimeException('INSERT exploded mid-transaction');
+                }
+                return null;
+            },
+        );
+        $db->expects($this->once())->method('beginTrans')
+            ->willReturnCallback(function () use (&$order): bool {
+                $order[] = 'begin';
+                return true;
+            });
+        // Commit must NEVER be reached; rollBack MUST fire.
+        $db->expects($this->never())->method('commitTrans');
+        $db->expects($this->once())->method('rollBackTrans')
+            ->willReturnCallback(function () use (&$order): bool {
+                $order[] = 'rollback';
+                return true;
+            });
+
+        $manager = new RelaySessionManager($db, $logger);
+
+        try {
+            $manager->registerServer('server-1', 'worker-a');
+            self::fail('registerServer should re-throw the mid-transaction failure');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('INSERT exploded', $e->getMessage());
+        }
+
+        // begin → update → insert(throws) → rollback; NO commit.
+        self::assertSame(['begin', 'update', 'insert', 'rollback'], $order);
     }
 
     public function testReapStaleSessionsIssuesStaleCloseUpdate(): void

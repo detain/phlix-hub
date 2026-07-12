@@ -883,6 +883,163 @@ class TunnelTest extends TestCase
     }
 
     /**
+     * H-R6 reconnect-drain: a VALIDATED reconnect moves the incumbent to CLOSING
+     * and keeps its clients + server connection alive for the grace period, then
+     * hard-closes when the grace timer fires — WITHOUT failing the server's
+     * in-flight proxy requests (those now belong to the promoted tunnel, and
+     * failServer() is keyed by server_id).
+     */
+    public function test_begin_drain_keeps_clients_during_grace_then_closes_without_failserver(): void
+    {
+        // RelayProxyManager is final (cannot be mocked); use a real one and seed
+        // one in-flight request for this server. The drain-end close must LEAVE it
+        // pending — failServer() (keyed by server_id) would kill the newly
+        // promoted tunnel's requests too, defeating the drain.
+        $proxyManager = $this->newProxyManager();
+        $this->seedPendingRequest($proxyManager, 'server-123');
+
+        $this->sessionManager->method('registerServer')->willReturn('session-456');
+        $this->serverWs->method('send')->willReturn(true);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            null,
+            $proxyManager,
+        );
+        $tunnel->relaySessionId = 'session-456';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(true);
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        // Begin draining: CLOSING, but clients stay connected during the grace and
+        // the in-flight request is untouched.
+        $tunnel->beginDrain(5.0, 'server_replaced');
+        $this->assertSame(Tunnel::STATUS_CLOSING, $tunnel->status);
+        $this->assertCount(1, $tunnel->clientConnections, 'client must stay connected during drain');
+        $this->assertCount(1, $this->pendingRequests($proxyManager), 'in-flight request survives during drain');
+
+        // Grace expires → hard close: client disconnected, session closed.
+        $clientWs->expects($this->once())->method('close');
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with('session-456', 'server_replaced');
+
+        $method = new \ReflectionMethod($tunnel, 'handleDrainTimeout');
+        $method->setAccessible(true);
+        $method->invoke($tunnel);
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+        $this->assertCount(0, $tunnel->clientConnections);
+        // The in-flight request is NOT failed at drain end (belongs to the
+        // promoted tunnel now).
+        $this->assertCount(
+            1,
+            $this->pendingRequests($proxyManager),
+            'drain-end close must NOT failServer() the promoted tunnel\'s requests',
+        );
+    }
+
+    /**
+     * A rejected tunnel that never activated (no relay session) must NOT fail the
+     * server's in-flight requests when it closes — otherwise a bad HELLO would
+     * 503 the legitimate incumbent's requests (HB-2.2 residual DoS via
+     * failServer(), which is keyed by server_id).
+     */
+    public function test_close_of_never_activated_tunnel_does_not_failserver(): void
+    {
+        $proxyManager = $this->newProxyManager();
+        $this->seedPendingRequest($proxyManager, 'server-123');
+
+        $this->serverWs->method('send')->willReturn(true);
+
+        // PENDING tunnel: no relaySessionId assigned (never validated/activated).
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            null,
+            $proxyManager,
+        );
+        $this->assertSame(Tunnel::STATUS_PENDING, $tunnel->status);
+        $this->assertNull($tunnel->relaySessionId);
+
+        $tunnel->close('unauthorized');
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+        // The incumbent's in-flight request must survive the rejected tunnel's close.
+        $this->assertCount(
+            1,
+            $this->pendingRequests($proxyManager),
+            'a never-activated tunnel must NOT failServer() the incumbent\'s requests',
+        );
+    }
+
+    /**
+     * Build a real {@see \Phlix\Hub\Relay\RelayProxyManager} (it is final and
+     * cannot be doubled) with a stub tunnel manager and a no-op error emitter.
+     */
+    private function newProxyManager(): \Phlix\Hub\Relay\RelayProxyManager
+    {
+        return new \Phlix\Hub\Relay\RelayProxyManager(
+            $this->createMock(\Phlix\Hub\Relay\TunnelManagerInterface::class),
+            $this->createMock(StructuredLogger::class),
+            30,
+            static function (string $e, array $d): void {
+            },
+        );
+    }
+
+    /**
+     * Seed one in-flight pending request for $serverId into the proxy manager's
+     * private map (the request-registration path needs a live tunnel + channel).
+     */
+    private function seedPendingRequest(\Phlix\Hub\Relay\RelayProxyManager $pm, string $serverId): void
+    {
+        $prop = new \ReflectionProperty(\Phlix\Hub\Relay\RelayProxyManager::class, 'pending');
+        $prop->setAccessible(true);
+        $prop->setValue($pm, [
+            42 => [
+                'reply_event' => 'reply-x',
+                'request_id' => 'client-req-1',
+                'server_id' => $serverId,
+                'head' => null,
+                'body' => '',
+                'stream' => false,
+                'stream_started' => false,
+                'timeout' => 30.0,
+                'stream_opened_at' => microtime(true),
+                'sent_at' => microtime(true),
+            ],
+        ]);
+    }
+
+    /**
+     * Read the proxy manager's private pending-request map for assertions.
+     *
+     * @return array<int, mixed>
+     */
+    private function pendingRequests(\Phlix\Hub\Relay\RelayProxyManager $pm): array
+    {
+        $prop = new \ReflectionProperty(\Phlix\Hub\Relay\RelayProxyManager::class, 'pending');
+        $prop->setAccessible(true);
+        /** @var array<int, mixed> $pending */
+        $pending = $prop->getValue($pm);
+        return $pending;
+    }
+
+    /**
      * SERVER low-priority BODY path: when the server's send buffer is full, an
      * HTTP_REQUEST body chunk must NOT be dropped. It must be re-queued, all
      * clients paused (upstream backpressure), and the frame delivered byte-exact

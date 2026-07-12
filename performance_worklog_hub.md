@@ -71,8 +71,8 @@ php bin/phlix migrate
 - [x] HB-1.3  non-blocking onReply delivery  RE-AUDIT 2026-07-12: DONE, well-tested — push(...,0.0) non-blocking probe, full/closed → own Coroutine::create fiber (deliverReplyInFiber) so one stuck consumer blocks only its fiber; 3 substantive tests. No action. (e3cb349, 8ea42ae, 8d45c85)
 - [x] HB-1.4  lean owner/status queries on hot paths  FIX 2026-07-12: DONE. Negative-cache defect closed — AuthMiddleware::userExists now stores the BOOLEAN probe result + timestamp (was a bare ts) and a cache hit returns the cached boolean (was unconditional true), so a deleted/revoked user is rejected for the whole TTL instead of bypassing auth.user_not_found; hot-path optimisation + short-TTL revocation preserved; static cache bounded (USER_EXISTS_CACHE_MAX). +9 tests: getOwnerAndStatus leanness (SQL no-COUNT + proxy/client-mount never()->getServerInfo), never()->findById on hot path, cache-TTL query-count + deleted-user regression guard + TTL-expiry re-probe. Suite 1243 pass/17 skip, phpstan L9 0, phpcs -n src/ clean. Prior wiring (c0461ed, 2f81f37, e5ce01e).
 - [~] HB-2.1  request-body chunking over tunnel (enable bodied relay)  RE-AUDIT-2 2026-07-12 (post HB-1.2 fix-3): NOT-DONE — CROSS-REPO BLOCKER, X2 only HALF-landed. Hub side CORRECT (RelayHttpRequestCodec tag-byte HEAD/BODY/END; RelayProxyManager.php:288-319 chunks >64KB; 413 cap lifted; classifier now match($frame->type) → chunked frames flow LOW/pendingBodyFrames without throwing, proven by TunnelTest). BUT **phlix-server never built the request-reassembly half + is NOT repinned to the shared request codec** → a real >64KB bodied relay now fails 400-malformed (RelayConsumer::onHttpRequest @server:745-746 does RelayHttpRequest::fromJson unconditionally, no tag-byte branch/accumulator; server composer.lock detain/phlix-shared v0.19.0 has only RelayHttpResponseCodec). GAPS to close HB-2.1: (a) SERVER repin to shared ≥216ea5d; (b) SERVER onHttpRequest per-requestId chunk reassembly (mirror response side); (c) HUB test: onRequest(>64KB binary body incl NUL/0xFF) emits HEAD+N·BODY+END on one requestId (RelayProxyManager.php:300-318 = 0 coverage today); (d) integration round-trip (writable only after b). Hub unit-codec round-trip + Tunnel classification/ordering ALREADY tested. (commits: phlix-shared:216ea5d, phlix-hub:7b71c190; classifier fb9e7b7). → server task queued (SV-side of X2).
-- [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  (commit: 7c30723)  DONE
-- [x] HB-2.3  cap FrameDecoder buffer  (commit: ec17c9cc)  DONE
+- [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  RE-FIXED 2026-07-12 (Fixer) — prior fix (7c30723) was INEFFECTIVE (DoS still open). Now CLOSED: displacement gated on validation (not on a never-thrown exception), incumbent stays routable, failServer() guarded, reconnect-drain (H-R6) added, txn test hardened. See Fixer note below.
+- [x] HB-2.3  cap FrameDecoder buffer  (commit: ec17c9cc)  DONE — ⚠️ REOPENED by 2026-07-12 batch audit (see Fixer note): overflow RuntimeException from FrameDecoder is NOT caught by onServerMessage → escapes the Workerman callback, tunnel never closes. Separate queued task; NOT fixed here.
 - [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
 - [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE
 - [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE
@@ -618,3 +618,97 @@ Verification (this box, PHP 8.3.6 + PCOV):
 
 Verdict: **HB-1.4 is code/test-complete** (docs cycle pending). Security defect confirmed closed;
 leanness wiring confirmed; tests genuinely guard the regression.
+
+## Fixer — HB-2.2 — 2026-07-12
+
+**Why reopened.** Audit found the tunnel-displacement DoS (H-H1) still OPEN — the prior fix
+(7c30723) was ineffective. `RelayWorker::handleHello` called `finalizeServerConnection($serverId)`
+UNCONDITIONALLY after `$tunnel->onServerMessage($data)`, relying on a comment ("If onServerMessage()
+throws (invalid JWT…)") that is FACTUALLY WRONG: `Tunnel::handleHelloFrame` on a bad/absent JWT calls
+`$this->close('unauthorized'); return;` — it does NOT throw. So control still reached
+`finalizeServerConnection`, which closed the incumbent (`server_replaced`). Also `acceptServer`
+overwrote `$this->tunnels[serverId]` with the new PENDING tunnel BEFORE validation, so after a bad
+HELLO `getTunnelForServer()` returned the attacker's now-closed tunnel and the live incumbent was
+unroutable. Net: an unauthenticated HELLO with a known `server_id` evicted the live tunnel.
+
+### How the DoS was closed (validate-before-displace restructure)
+- `TunnelManager` now parks the new, UNVALIDATED tunnel in a `$pendingTunnels` slot and LEAVES the
+  incumbent in the routing map (`$tunnels`) — reachable — until validation succeeds. (`$closingTunnels`
+  removed.) On a fresh connect with no live incumbent the new tunnel takes the routing slot directly.
+- `finalizeServerConnection` is now called by `handleHello` ONLY when `$tunnel->status ===
+  STATUS_ACTIVE` (i.e. the HELLO JWT validated). It promotes the parked tunnel and displaces the
+  incumbent. The wrong comment is gone; orchestration is gated on the tunnel's post-HELLO auth STATE,
+  not on an exception that never comes.
+- New `TunnelManager::abortPendingConnection()` — called on the `!== ACTIVE` path — discards the
+  rejected tunnel and leaves any live incumbent untouched and routable.
+- **failServer residual sub-vector closed.** `Tunnel::close()`/`onServerClose()` call
+  `proxyManager->failServer($serverId)`, which is keyed by server_id. A rejected tunnel shares the
+  victim's server_id, so its `close('unauthorized')` (fired inside `handleHelloFrame`, before
+  orchestration) would 503 the LEGITIMATE incumbent's in-flight requests. Both call sites are now
+  guarded with `$this->relaySessionId !== null` (a never-activated tunnel never owned the server's
+  requests), so a bad HELLO cannot fail the incumbent's requests either.
+
+### Reconnect-drain (H-R6) — DONE (same session)
+- On a VALIDATED reconnect, `finalizeServerConnection` promotes the new tunnel and calls
+  `incumbent->beginDrain($graceSeconds, 'server_replaced')` instead of an immediate hard close. The
+  incumbent moves to CLOSING, keeps its clients + server connection alive for a bounded, config-driven
+  grace period (default 5s, `HUB_RELAY_RECONNECT_DRAIN_GRACE` / `config/server.php`
+  `relay.reconnect_drain_grace_seconds`; wired in `HubServicesProvider`), then hard-closes when a
+  ONE-SHOT `Timer::add(…, [], false)` fires (§0.4). Grace `<= 0` = immediate displacement (legacy).
+- The drain-end close uses `close($reason, failInFlight: false)` so the server-scoped `failServer()`
+  does NOT also kill the newly promoted tunnel's freshly accepted requests. Caveat (honest): any of
+  the OLD tunnel's own stragglers not complete by grace end fall back to their per-request relay
+  timeout rather than a server-wide fail (which would wrongly nuke the new tunnel's requests) —
+  RelayProxyManager pending entries are keyed by server_id, not per-session, so per-request scoping is
+  out of scope here. `Timer::add`/`Timer::del` wrapped in try/catch (same pattern as the backpressure
+  timers) so unit tests without a live loop don't throw.
+
+### Transaction (H-D4) test hardening
+- Kept `RelaySessionManager::registerServer`'s `beginTrans`/commit/rollBack wrapping.
+- `testRegisterServerSupersedesOpenSessionsBeforeInsert` now asserts the STRICT ordering
+  `select → begin → update → insert → commit` (beginTrans once, commitTrans once, rollBackTrans never).
+- New `testRegisterServerRollsBackWhenInsertFails`: INSERT throws mid-txn → asserts
+  `begin → update → insert → rollback`, NO commit, and the exception is re-thrown.
+
+### Tests (the guards that were missing)
+- `RelayWorkerTest::testInvalidHelloDoesNotDisplaceLiveIncumbent` — drives the REAL orchestration
+  (`onMessage → handleHello → Tunnel::onServerMessage → abortPendingConnection`) through a
+  TunnelManager wired with a REAL (mocked) `EnrollmentJwtService` that REJECTS — mirroring production
+  DI, unlike the jwtService-less manager that hid the DoS. Asserts incumbent stays ACTIVE, still
+  routable, client not disconnected. **Verified FAILS pre-fix** (git-stashed the 6 production files;
+  incumbent went to 'closing' — evicted — instead of 'active').
+- `TunnelManagerTest`: incumbent stays routable while a reconnect is pending; finalize drains→CLOSING
+  then (simulated timer) →CLOSED with the new tunnel promoted; grace-0 immediate displace;
+  abortPendingConnection leaves incumbent routable / removes a fresh rejected tunnel.
+- `TunnelTest`: drain keeps clients + in-flight request during grace then closes WITHOUT failServer
+  (real RelayProxyManager, pending seeded via reflection since the class is final); never-activated
+  tunnel close does NOT failServer the incumbent's requests.
+
+### Files changed (absolute)
+- `/home/sites/phlix/phlix-hub/src/Relay/RelayWorker.php` — gate finalize on STATUS_ACTIVE; abort path.
+- `/home/sites/phlix/phlix-hub/src/Relay/TunnelManager.php` — pendingTunnels model; acceptServer /
+  finalizeServerConnection / abortPendingConnection; reconnect-drain grace param.
+- `/home/sites/phlix/phlix-hub/src/Relay/TunnelManagerInterface.php` — abortPendingConnection; doc.
+- `/home/sites/phlix/phlix-hub/src/Relay/Tunnel.php` — failServer guard (close + onServerClose);
+  close($reason, $failInFlight); beginDrain/handleDrainTimeout + drain-timer lifecycle.
+- `/home/sites/phlix/phlix-hub/src/Common/Container/Providers/HubServicesProvider.php` — wire grace.
+- `/home/sites/phlix/phlix-hub/config/server.php` — `relay.reconnect_drain_grace_seconds`.
+- Tests: `tests/Unit/Relay/RelayWorkerTest.php`, `tests/Unit/Relay/TunnelManagerTest.php`,
+  `tests/Unit/Relay/TunnelTest.php`, `tests/Unit/Hub/RelaySessionManagerTest.php`.
+
+### Verification (actual)
+- `phpunit --filter 'RelayWorker|TunnelManager|Tunnel|RelaySessionManager'` → **OK (127 tests, 429
+  assertions)**; also green in isolation (`--filter TunnelManager` 17, `--filter TunnelTest` 36).
+- Full `php -d max_execution_time=0 ./vendor/bin/phpunit` → **Tests: 1250, Assertions: 15494,
+  Skipped: 17, Failures: 0** (baseline ~1243 pass +7 new tests).
+- `phpstan analyze --no-progress` → **[OK] No errors**.
+- `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**. (phpcs on tests/ flags PRE-EXISTING snake_case
+  method names — the whole TunnelTest/TunnelManagerTest use that convention; not a CI gate.)
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
+
+### Batch audit verdicts (recorded per instruction)
+- **HB-2.2** — fixed here (DoS + drain + tests). Marked [x].
+- **HB-2.3** — **REOPENED**: the FrameDecoder buffer-overflow `RuntimeException` is NOT caught by
+  `Tunnel::onServerMessage` (only `InvalidFrameTypeException` is) → it escapes the Workerman message
+  callback and the tunnel is never closed. Separate queued task; NOT fixed here.
+- **HB-2.4** — **DONE** (O(1) cancel index confirmed).
