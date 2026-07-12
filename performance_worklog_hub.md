@@ -1457,3 +1457,62 @@ Adversarial verification of the high-risk items — all CLEAR:
    and the cap from one row read. Low severity — correct and consistent with the existing per-request
    query pattern, but a concrete, easily-removed redundancy on the exact path the perf pass exists to
    improve.
+
+## Fixer — HB-3.4 (Reviewer Finding #1: single-row read on the streaming hot path) — 2026-07-12
+
+Closed the one Low finding. The streaming branch of `ServerProxyController::proxy()` now reads the
+`relay_user_quotas` row ONCE per request (via `checkUserQuota`) instead of twice (`checkUserQuota` +
+`getUserMaxConcurrentStreams`). Behaviour preserved exactly. Did NOT touch `Tunnel.php`
+(HB-3.3/HB-1.2 not regressed). G5 NOT started.
+
+**What changed:**
+- `src/Hub/RelaySessionManager.php` — `checkUserQuota()`: folded `max_concurrent_streams` into the
+  existing SELECT projection (`SELECT bytes_in, bytes_out, quota_bytes_in, quota_bytes_out,
+  max_concurrent_streams FROM relay_user_quotas WHERE user_id=:user_id AND period_start=:period_start
+  LIMIT 1` — one lean row read, colon-free bind keys, no interpolation). The return shape gained a
+  third key: `array{allowed: bool, reason: string|null, maxConcurrentStreams: int}`. `maxConcurrentStreams`
+  is populated on ALL post-row return paths (allow + both deny paths) via the same
+  `is_numeric(...) ? (int) ... : 0` guard used elsewhere; the no-row early-return returns
+  `maxConcurrentStreams => 0` (unlimited), identical to the old default. `getUserMaxConcurrentStreams()`
+  is UNCHANGED (not deleted) — its docblock now notes the hot path no longer calls it and it is retained
+  for the forthcoming G5 admin endpoints.
+- `src/Http/Controllers/ServerProxyController.php` — `proxy()` streaming branch: replaced
+  `$maxStreams = $this->sessionManager->getUserMaxConcurrentStreams($userId);` (the second identical
+  SELECT ~:545) with `$maxStreams = $quotaCheck['maxConcurrentStreams'];`, consuming the cap from the
+  `checkUserQuota()` result already computed at :474. The admission logic
+  (`if ($maxStreams > 0 && activeUserStreams >= $maxStreams) → 503 stream.limit`), the begin/end
+  concurrent-slot accounting, and the `finally`-released slot are all UNCHANGED. Default
+  `max_concurrent_streams = 0` still means "no cap" (skip admission).
+
+**Behaviour unchanged (verified):** default no-cap (0) skips the admission check; over-cap still
+returns 503 `stream.limit` without occupying a slot / forwarding; under-cap admits, occupies once,
+releases once. Over-quota still returns 503 `quota.exceeded` before the streaming branch. The only
+observable difference is one fewer identical SELECT per streaming request.
+
+**`getUserMaxConcurrentStreams()` callers after this change:** zero PRODUCTION callers (only the
+`RelaySessionManagerTest` unit test exercises it directly). Per §0.1 it is LEFT IN PLACE, not deleted;
+it will be used by G5's admin quota-management endpoints. Flagged for the §6 removal queue only if G5
+ends up not needing it.
+
+**Tests:**
+- `tests/Unit/Http/Controllers/ServerProxyControllerTest.php`: updated the 3 HB-3.4 mocks + the default
+  `controller()` mock to return the folded `maxConcurrentStreams` key; the two streaming-branch tests
+  (`test_concurrent_stream_cap_reached_*`, `test_stream_under_concurrent_cap_*`) now assert
+  `expects(self::never())->method('getUserMaxConcurrentStreams')` — proving the streaming branch issues
+  ONE quota-row read, not two (the query-count spy the finding asked for).
+- `tests/Unit/Hub/RelaySessionManagerTest.php`: +2 tests —
+  `testCheckUserQuotaFoldsInMaxConcurrentStreamsFromSingleRowRead` (SELECT projects
+  `max_concurrent_streams`, verdict carries it, exactly ONE query issued) and
+  `testCheckUserQuotaNoRowReturnsUnlimitedConcurrentStreams` (no row → allowed + cap 0).
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `./vendor/bin/phpcs --standard=PSR12 -n src/Hub/RelaySessionManager.php
+  src/Http/Controllers/ServerProxyController.php` → **clean (exit 0)**. (Pre-existing `test_snake_case`
+  method-name notices in `tests/` are outside the repo gate, which lints `src/` only, and I added no
+  new snake_case methods.)
+- `phpunit --filter 'RelaySessionManager|ServerProxyController|ConnectionResponseSink'` →
+  **OK (189 tests, 592 assertions)**.
+- Full suite → **1320 pass / 15763 assertions / 17 skipped / 0 failures** (baseline 1318 + 2 new).
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental). `bin/phlix migrate` not run
+  (no DB on box — environmental; no migration touched by this fix anyway).

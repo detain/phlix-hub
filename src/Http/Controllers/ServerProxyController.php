@@ -539,9 +539,11 @@ final class ServerProxyController
             // HB-3.4 G3: per-user concurrent-stream cap. Enforced BEFORE the
             // stream is admitted so an over-limit request never occupies a slot.
             // The live count is in-memory per worker (RelaySessionManager owns
-            // it); the operator-configured maximum is read from the quota rollup
-            // (0 = unlimited → skip).
-            $maxStreams = $this->sessionManager->getUserMaxConcurrentStreams($userId);
+            // it); the operator-configured maximum (0 = unlimited → skip) was
+            // already read as part of the checkUserQuota() row read above, so we
+            // consume it from that ONE row read instead of issuing a second
+            // identical SELECT on every HLS/DASH segment (HB-3.4 hot-path fix).
+            $maxStreams = $quotaCheck['maxConcurrentStreams'];
             if ($maxStreams > 0 && $this->sessionManager->activeUserStreams($userId) >= $maxStreams) {
                 $this->logger->info('Relay proxy: rejected — per-user concurrent-stream cap reached', [
                     'server_id' => $serverId,

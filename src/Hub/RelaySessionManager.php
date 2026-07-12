@@ -549,7 +549,8 @@ class RelaySessionManager
     }
 
     /**
-     * Check whether a user is currently within their bandwidth quota.
+     * Check whether a user is currently within their bandwidth quota AND read
+     * their configured concurrent-stream cap from the SAME row (HB-3.4).
      *
      * Enforces BOTH monthly caps recorded for the period (HB-3.4 G2):
      *   - the DOWNLOAD cap `quota_bytes_in` against `bytes_in` (bytes the user
@@ -561,14 +562,21 @@ class RelaySessionManager
      * 0 on either dimension means "unlimited" for that dimension and is skipped.
      * Denial fires when a set cap has been reached (`used >= quota`).
      *
+     * The `max_concurrent_streams` column (migration 038, 0 = unlimited) is
+     * folded into this single row read and returned as `maxConcurrentStreams` so
+     * the streaming hot path ({@see \Phlix\Hub\Http\Controllers\ServerProxyController::proxy()})
+     * consumes the allow/deny verdict AND the concurrent cap from ONE round-trip
+     * to `relay_user_quotas` instead of re-reading the identical row via
+     * {@see self::getUserMaxConcurrentStreams()}.
+     *
      * Best-effort: if the user has no quota row for the current period, they are
-     * allowed. A refined check accounting for the estimated bytes of an in-flight
-     * request may be added later.
+     * allowed and the concurrent cap is 0 (unlimited). A refined check accounting
+     * for the estimated bytes of an in-flight request may be added later.
      *
      * @param string $userId          Hub user UUID.
      * @param int    $additionalBytesOut Ignored in the simplified implementation.
      *
-     * @return array{allowed: bool, reason: string|null}
+     * @return array{allowed: bool, reason: string|null, maxConcurrentStreams: int}
      */
     public function checkUserQuota(string $userId, int $additionalBytesOut = 0): array
     {
@@ -576,7 +584,8 @@ class RelaySessionManager
 
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT bytes_in, bytes_out, quota_bytes_in, quota_bytes_out FROM relay_user_quotas
+            'SELECT bytes_in, bytes_out, quota_bytes_in, quota_bytes_out, max_concurrent_streams
+             FROM relay_user_quotas
              WHERE user_id = :user_id AND period_start = :period_start
              LIMIT 1',
             [
@@ -585,9 +594,9 @@ class RelaySessionManager
             ],
         );
 
-        // No record means no quota set — allow.
+        // No record means no quota set — allow, with the concurrent cap unlimited.
         if ($rows === []) {
-            return ['allowed' => true, 'reason' => null];
+            return ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0];
         }
 
         /** @var array<string, mixed> $row */
@@ -597,6 +606,9 @@ class RelaySessionManager
         $bytesOut = is_numeric($row['bytes_out'] ?? null) ? (int) $row['bytes_out'] : 0;
         $quotaBytesIn = is_numeric($row['quota_bytes_in'] ?? null) ? (int) $row['quota_bytes_in'] : 0;
         $quotaBytesOut = is_numeric($row['quota_bytes_out'] ?? null) ? (int) $row['quota_bytes_out'] : 0;
+        $maxConcurrentStreams = is_numeric($row['max_concurrent_streams'] ?? null)
+            ? (int) $row['max_concurrent_streams']
+            : 0;
 
         // DOWNLOAD cap: bytes_in is what the user has downloaded from the server;
         // this is the dimension a media stream grows, so it is the cap that
@@ -605,6 +617,7 @@ class RelaySessionManager
             return [
                 'allowed' => false,
                 'reason' => 'User has reached their monthly download bandwidth quota.',
+                'maxConcurrentStreams' => $maxConcurrentStreams,
             ];
         }
 
@@ -613,10 +626,11 @@ class RelaySessionManager
             return [
                 'allowed' => false,
                 'reason' => 'User has reached their monthly upload bandwidth quota.',
+                'maxConcurrentStreams' => $maxConcurrentStreams,
             ];
         }
 
-        return ['allowed' => true, 'reason' => null];
+        return ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => $maxConcurrentStreams];
     }
 
     /**
@@ -627,6 +641,12 @@ class RelaySessionManager
      * `max_concurrent_streams`). 0 (the default, and the value returned when no
      * row exists for the period) means UNLIMITED, so the caller skips the
      * admission check.
+     *
+     * NOTE: the streaming admission hot path no longer calls this — it reads the
+     * concurrent cap from {@see self::checkUserQuota()}'s single folded row read
+     * (HB-3.4 fix) to avoid a second identical SELECT per HLS/DASH segment. This
+     * standalone accessor is retained for callers that need only the cap (e.g.
+     * the forthcoming admin quota-management endpoints, HB-3.4 G5).
      *
      * @param string $userId Hub user UUID.
      *
