@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Relay;
 
 use Channel\Client as ChannelClient;
+use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
@@ -230,10 +231,21 @@ final class RelayWorker
             ]);
         }
 
-        // HB-2.6: Maintenance timers (idle reaper, server reaper, tunnel heartbeat,
-        // federation-session reaper) have been moved to the dedicated maintenance
-        // worker (count=1, own connection) so reaper DB queries no longer add
-        // jitter to tunnel frame processing on this relay worker.
+        // HB-2.6 (data-locality split): the DB-only reapers (stale-session reap,
+        // server offline reaper, heartbeat/token prune, federation-session
+        // reaper) run on the dedicated maintenance worker so their DB latency no
+        // longer adds jitter to tunnel frame processing here. But the IN-MEMORY
+        // reapers — the idle/half-open tunnel reaper (HB-0.1), the tunnel
+        // keepalive heartbeat pinger, and the flush of the in-memory
+        // byte/last-frame accumulators — scan the live TunnelManager registry +
+        // accumulators that exist ONLY in THIS relay-worker process, so they must
+        // be armed here (the maintenance fork's registry is empty). Armed once
+        // (relay worker is count=1) from within the running loop (cid>=0).
+        try {
+            HubServicesProvider::startInMemoryReapers($this->container);
+        } catch (Throwable $e) {
+            $logger->error('Relay: failed to start in-memory reapers', ['error' => $e->getMessage()]);
+        }
     }
 
     /**

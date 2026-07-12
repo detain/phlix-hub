@@ -54,14 +54,20 @@ final class IdleReaper
      * @param StructuredLogger            $logger               Structured logger for relay events.
      * @param int                         $intervalSeconds      Interval between scans in seconds.
      * @param int                         $staleThresholdSeconds Seconds before a tunnel is considered stale.
-     * @param RelaySessionManager|null     $sessionManager       Optional session manager whose orphaned
-     *                                                            open DB rows are reaped on each tick.
+     * @param RelaySessionManager|null     $sessionManager       Optional session manager: its in-memory
+     *                                                            accumulators are flushed on each
+     *                                                            {@see tick()} (relay worker) and its
+     *                                                            orphaned open DB rows are reaped on each
+     *                                                            {@see reapDbMaintenance()} (maintenance
+     *                                                            worker).
      * @param ClientRelayTokenService|null $clientRelayTokenService Optional token service whose
      *                                                            expired revoked tokens are pruned
-     *                                                            on each tick (HB-4.2).
+     *                                                            on each {@see reapDbMaintenance()}
+     *                                                            (HB-4.2).
      * @param HeartbeatHandler|null        $heartbeatHandler     Optional heartbeat handler whose
      *                                                            server_heartbeats table is pruned
-     *                                                            on each tick (HB-4.3).
+     *                                                            on each {@see reapDbMaintenance()}
+     *                                                            (HB-4.3).
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
@@ -75,10 +81,21 @@ final class IdleReaper
     }
 
     /**
-     * Start the periodic idle reaper timer.
+     * Start the periodic idle reaper timer (IN-MEMORY work).
      *
      * Registers a Workerman Timer that calls {@see tick()} every
      * $intervalSeconds. The timer persists until the worker stops.
+     *
+     * HB-2.6 DATA-LOCALITY: this MUST be armed on the RELAY worker
+     * ({@see \Phlix\Hub\Relay\RelayWorker::onWorkerStart()}), because {@see tick()}
+     * scans the live {@see TunnelManager} registry and flushes the in-memory
+     * per-session byte/last-frame accumulators — both of which live ONLY in the
+     * relay-worker process that owns the {@see Tunnel} objects. Arming it on the
+     * dedicated maintenance worker (a separate fork with its own, EMPTY
+     * TunnelManager) would scan zero tunnels and flush an empty accumulator, so
+     * the idle/half-open reaper (HB-0.1) and the byte/last-frame persistence
+     * would silently do nothing. The DB-only pruners live in
+     * {@see startDbMaintenance()} and run on the maintenance worker instead.
      *
      * @return int Timer ID (can be passed to Timer::del() to cancel).
      */
@@ -98,10 +115,47 @@ final class IdleReaper
     }
 
     /**
-     * Perform a single reaper scan.
+     * Start the periodic DB-maintenance timer (DB-ONLY work).
+     *
+     * Registers a Workerman Timer that calls {@see reapDbMaintenance()} every
+     * $intervalSeconds. Unlike {@see start()}, this touches NO in-memory tunnel
+     * state — it only runs off-worker DB reapers/pruners — so it is armed on the
+     * dedicated maintenance worker ({@see \Phlix\Hub\MaintenanceWorker}) to keep
+     * that DB latency off the relay worker's frame-processing loop (HB-2.6
+     * intent, H-A3/H-A4/H-D5). It is safe to run against the maintenance worker's
+     * own DB connection because none of its work depends on the live tunnel
+     * registry.
+     *
+     * @return int Timer ID (can be passed to Timer::del() to cancel).
+     */
+    public function startDbMaintenance(): int
+    {
+        $timerId = Timer::add(
+            $this->intervalSeconds,
+            [$this, 'reapDbMaintenance'],
+        );
+
+        $this->logger->debug('Relay: idle reaper DB-maintenance started', [
+            'interval_seconds' => $this->intervalSeconds,
+        ]);
+
+        return $timerId;
+    }
+
+    /**
+     * Perform a single IN-MEMORY reaper scan (relay-worker only).
      *
      * Iterates all active tunnels and closes any that have been idle
-     * (no frames received) for longer than the configured stale threshold.
+     * (no frames received) for longer than the configured stale threshold,
+     * then flushes the in-memory per-session byte/last-frame accumulators to
+     * the DB. Both operate on state that lives ONLY in the relay-worker process
+     * (the live {@see Tunnel} registry + the {@see RelaySessionManager}
+     * accumulators populated by `recordBytesIn/Out`), so this must run there and
+     * NOT on the maintenance worker (whose registry/accumulators are empty).
+     *
+     * The DB-only reapers/pruners (stale-session reap, heartbeat + token prune)
+     * were split out to {@see reapDbMaintenance()} which the maintenance worker
+     * runs off the relay loop.
      *
      * This method is public so it can be called directly by tests or
      * manually triggered. Normally it is called automatically by the timer.
@@ -141,17 +195,52 @@ final class IdleReaper
             ]);
         }
 
-        // Also reap orphaned open relay_sessions DB rows left behind when a
-        // session's close path was never reached (worker restart, dropped
-        // connection). This keeps the dashboard "active relays" count accurate
-        // even for rows that no longer have a live in-memory tunnel.
-        $this->sessionManager?->reapStaleSessions();
-
         // Flush all pending byte counters and last-frame timestamps from the
         // in-memory accumulators to the database.  This runs on the same
         // 60-second tick so the relay-path DB write is bounded to one flush
         // per session per tick instead of one UPDATE per frame.
+        //
+        // HB-2.6: this MUST stay on the relay worker — the accumulators
+        // (populated by RelaySessionManager::recordBytesIn/Out on the tunnel
+        // data plane) live only in this process. Running it on the maintenance
+        // worker's separate RelaySessionManager instance would flush an empty
+        // accumulator and the relay_sessions bytes_in/out + last_frame_at writes
+        // would be lost.
         $this->sessionManager?->flushAll();
+
+        return $reapedCount;
+    }
+
+    /**
+     * Perform a single DB-ONLY maintenance sweep (maintenance-worker only).
+     *
+     * Runs the reapers/pruners whose work is entirely in the database and does
+     * NOT depend on the live tunnel registry or the in-memory accumulators, so
+     * they can safely execute on the dedicated maintenance worker's own DB
+     * connection, off the relay worker's frame-processing loop (HB-2.6):
+     *
+     *  - {@see RelaySessionManager::reapStaleSessions()}: close orphaned open
+     *    `relay_sessions` rows left behind when a session's close path was never
+     *    reached (worker restart, dropped connection). It reads `last_frame_at`,
+     *    which the relay worker keeps fresh via {@see tick()}'s `flushAll()`, so
+     *    a healthy session is not falsely reaped across the worker boundary.
+     *  - HB-4.3 {@see HeartbeatHandler::pruneAllServerHeartbeats()}: keep only
+     *    the most recent ~100 `server_heartbeats` rows per server.
+     *  - HB-4.2 {@see ClientRelayTokenService::pruneExpiredTokens()}: prune
+     *    expired, already-revoked client relay tokens older than 1 day.
+     *
+     * This method is public so it can be called directly by tests or manually
+     * triggered. Normally it is called automatically by the timer armed in
+     * {@see startDbMaintenance()}.
+     *
+     * @return void
+     */
+    public function reapDbMaintenance(): void
+    {
+        // Reap orphaned open relay_sessions DB rows. This keeps the dashboard
+        // "active relays" count accurate even for rows that no longer have a
+        // live in-memory tunnel.
+        $this->sessionManager?->reapStaleSessions();
 
         // HB-4.3: Prune server_heartbeats rows, keeping only the most recent
         // ~100 rows per server to prevent unbounded table growth.
@@ -161,8 +250,6 @@ final class IdleReaper
         // 1 day. Tokens are only removed once both expired AND revoked so audit
         // logs can still reference a revoked token before it naturally expires.
         $this->clientRelayTokenService?->pruneExpiredTokens();
-
-        return $reapedCount;
     }
 
     /**

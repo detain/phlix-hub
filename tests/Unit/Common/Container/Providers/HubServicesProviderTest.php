@@ -15,19 +15,28 @@ use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 
 /**
- * Covers {@see HubServicesProvider::startMaintenanceTimers()} — the method that
- * arms the periodic reapers from within a worker's event loop (cid>=0) instead
- * of {@see HubServicesProvider::boot()} (the master's pcntl signal scheduler,
+ * Covers the HB-2.6 DATA-LOCALITY split of the periodic reaper wiring:
+ * {@see HubServicesProvider::startInMemoryReapers()} (armed on the RELAY worker,
+ * for tasks that scan the live in-memory tunnel registry + accumulators) and
+ * {@see HubServicesProvider::startDbMaintenanceTimers()} (armed on the dedicated
+ * MAINTENANCE worker, for DB-only reapers/pruners).
+ *
+ * Both are armed from within a worker's event loop (cid>=0) instead of
+ * {@see HubServicesProvider::boot()} (the master's pcntl signal scheduler,
  * cid<0, which bypassed {@see \Phlix\Hub\Common\Database\PhlixMySQLConnection}'s
  * per-connection mutex and 500ed heartbeat/claim with "already active
  * transaction").
  *
- * The wiring's contract is that each of the four timers is resolved and armed
- * INDEPENDENTLY under its own try/catch, so one unavailable — or mis-typed —
- * service can never block the others. These tests assert exactly that: every
- * service is still requested when each resolution fails, and nothing escapes.
- * They stay hermetic (no event loop) by never letting a real reaper resolve, so
- * no {@see \Workerman\Timer::add()} is ever reached.
+ * The wiring's contract is that each timer is resolved and armed INDEPENDENTLY
+ * under its own try/catch, so one unavailable — or mis-typed — service can never
+ * block the others, AND that each set resolves ONLY the services whose data
+ * lives in that worker: the relay set must NOT resolve the DB-only reapers and,
+ * critically for the regression this class guards, the maintenance set must NOT
+ * resolve the {@see TunnelManager} the idle reaper / keepalive heartbeat scan
+ * (the maintenance fork's registry is empty, so arming them there is a no-op
+ * that silently breaks HB-0.1 + the keepalive heartbeat). Tests stay hermetic
+ * (no event loop) by never letting a real reaper resolve, so no
+ * {@see \Workerman\Timer::add()} is ever reached.
  */
 #[CoversClass(HubServicesProvider::class)]
 final class HubServicesProviderTest extends TestCase
@@ -39,9 +48,9 @@ final class HubServicesProviderTest extends TestCase
     {
         parent::setUp();
 
-        // startMaintenanceTimers() resolves its logger through the static
-        // LoggerFactory; point it at a memory stream so the guarded failures it
-        // logs go nowhere (no real log files, no PHPUnit output).
+        // The wiring resolves its logger through the static LoggerFactory; point
+        // it at a memory stream so the guarded failures it logs go nowhere (no
+        // real log files, no PHPUnit output).
         $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-hubservices-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
         file_put_contents(
@@ -62,27 +71,44 @@ final class HubServicesProviderTest extends TestCase
     }
 
     /**
-     * The four services the maintenance wiring resolves, in the exact order it
-     * arms their timers.
+     * The RELAY-worker (in-memory) set, in the exact order it arms its timers:
+     * the idle-tunnel reaper and the tunnel keepalive heartbeat (which scans the
+     * {@see TunnelManager}).
      *
      * @return list<class-string>
      */
-    private function expectedServices(): array
+    private function expectedInMemoryServices(): array
+    {
+        return [
+            IdleReaper::class,
+            TunnelManager::class,
+        ];
+    }
+
+    /**
+     * The MAINTENANCE-worker (DB-only) set, in the exact order it arms its
+     * timers. Crucially does NOT include {@see TunnelManager}: the maintenance
+     * fork's tunnel registry is empty, so the in-memory reaper/heartbeat that
+     * scan it belong on the relay worker only.
+     *
+     * @return list<class-string>
+     */
+    private function expectedDbServices(): array
     {
         return [
             IdleReaper::class,
             ServerReaper::class,
-            TunnelManager::class,
             FederationSessionManager::class,
         ];
     }
 
-    public function testResolvesEveryServiceEvenWhenEachResolutionThrows(): void
+    /**
+     * A container recording every get() id, then throwing — so if a set's arms
+     * were not each independently guarded, the first throw would abort the rest.
+     */
+    private function recordingThrowingContainer(): ContainerInterface
     {
-        // A container that throws for every get(): were the four arms not each
-        // independently guarded, the first throw would abort the rest and the
-        // later services would never be requested.
-        $container = new class implements ContainerInterface {
+        return new class implements ContainerInterface {
             /** @var list<string> */
             public array $seen = [];
 
@@ -97,18 +123,16 @@ final class HubServicesProviderTest extends TestCase
                 return true;
             }
         };
-
-        HubServicesProvider::startMaintenanceTimers($container);
-
-        self::assertSame($this->expectedServices(), $container->seen);
     }
 
-    public function testSkipsWiringWhenServicesResolveToUnexpectedTypes(): void
+    /**
+     * A container recording every get() id, then returning the WRONG type — so
+     * the instanceof guards are all false, no reaper starts, no Timer is armed,
+     * and every service is still attempted.
+     */
+    private function recordingWrongTypeContainer(): ContainerInterface
     {
-        // A container returning the wrong type for every get(): the instanceof
-        // guards must all be false, so no reaper is started and no Timer armed —
-        // and every service is still attempted (proving independent handling).
-        $container = new class implements ContainerInterface {
+        return new class implements ContainerInterface {
             /** @var list<string> */
             public array $seen = [];
 
@@ -123,9 +147,79 @@ final class HubServicesProviderTest extends TestCase
                 return true;
             }
         };
+    }
 
-        HubServicesProvider::startMaintenanceTimers($container);
+    public function testInMemoryReapersResolveEveryServiceEvenWhenEachResolutionThrows(): void
+    {
+        $container = $this->recordingThrowingContainer();
 
-        self::assertSame($this->expectedServices(), $container->seen);
+        HubServicesProvider::startInMemoryReapers($container);
+
+        self::assertSame($this->expectedInMemoryServices(), $container->seen);
+    }
+
+    public function testInMemoryReapersSkipWiringWhenServicesResolveToUnexpectedTypes(): void
+    {
+        $container = $this->recordingWrongTypeContainer();
+
+        HubServicesProvider::startInMemoryReapers($container);
+
+        self::assertSame($this->expectedInMemoryServices(), $container->seen);
+    }
+
+    public function testDbMaintenanceTimersResolveEveryServiceEvenWhenEachResolutionThrows(): void
+    {
+        $container = $this->recordingThrowingContainer();
+
+        HubServicesProvider::startDbMaintenanceTimers($container);
+
+        self::assertSame($this->expectedDbServices(), $container->seen);
+    }
+
+    public function testDbMaintenanceTimersSkipWiringWhenServicesResolveToUnexpectedTypes(): void
+    {
+        $container = $this->recordingWrongTypeContainer();
+
+        HubServicesProvider::startDbMaintenanceTimers($container);
+
+        self::assertSame($this->expectedDbServices(), $container->seen);
+    }
+
+    /**
+     * HB-2.6 regression guard: the maintenance worker must NEVER arm the
+     * in-memory tunnel reaper / keepalive heartbeat, i.e. it must never resolve
+     * the {@see TunnelManager} (its registry is empty). Before the fix ALL
+     * reapers — including the heartbeat pinger that iterates allTunnels() — were
+     * armed on the maintenance worker, so TunnelManager WAS resolved there; this
+     * test FAILS against that wiring.
+     */
+    public function testDbMaintenanceTimersNeverResolveTunnelManager(): void
+    {
+        $container = $this->recordingThrowingContainer();
+
+        HubServicesProvider::startDbMaintenanceTimers($container);
+
+        self::assertNotContains(
+            TunnelManager::class,
+            $container->seen,
+            'The maintenance worker must not resolve TunnelManager: the in-memory '
+            . 'tunnel reaper + keepalive heartbeat scan the live registry that '
+            . 'lives only in the relay worker, so they belong on the relay worker.',
+        );
+    }
+
+    /**
+     * Complementary guard: the relay worker's in-memory set must NOT resolve the
+     * DB-only reapers (ServerReaper, FederationSessionManager) — those run off
+     * the relay loop on the maintenance worker (the HB-2.6 intent).
+     */
+    public function testInMemoryReapersNeverResolveDbOnlyReapers(): void
+    {
+        $container = $this->recordingThrowingContainer();
+
+        HubServicesProvider::startInMemoryReapers($container);
+
+        self::assertNotContains(ServerReaper::class, $container->seen);
+        self::assertNotContains(FederationSessionManager::class, $container->seen);
     }
 }

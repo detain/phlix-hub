@@ -75,7 +75,7 @@ php bin/phlix migrate
 - [x] HB-2.3  cap FrameDecoder buffer  RE-FIXED 2026-07-12 (Fixer) — prior fix (ec17c9cc) capped the buffer but the "close tunnel" half was UNWIRED: FrameDecoder threw a base `\RuntimeException` that `Tunnel::onServerMessage` (catches only `InvalidFrameTypeException`) let escape the Workerman callback. Now CLOSED: overflow throws `FrameBufferOverflowException extends InvalidFrameTypeException` → existing tunnel catch closes cleanly with reason `frame_buffer_overflow`; all other FrameDecoder consumers (client relay :8803, both federation paths) now also catch+close instead of leaking. Real Tunnel-driven test added (fails pre-fix). See Fixer note below.
 - [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
 - [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE
-- [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE
+- [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE — ⚠️ FIXER 2026-07-12: the "move ALL reapers to the maintenance worker" change BROKE the in-memory tunnel reaper (HB-0.1) + keepalive heartbeat (maintenance fork's TunnelManager/accumulators are EMPTY). Re-split by data locality: in-memory tasks back on the relay worker, DB-only reapers stay on maintenance. See `## Fixer — HB-2.6 — 2026-07-12`.
 - [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE
 - [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin
 - [x] HB-3.3  per-channel tunnel flow control/fairness  (commit: cbc29cc)  DONE
@@ -942,3 +942,97 @@ be the natural addition.
 
 **Status: GREEN.** HB-2.1 closed — hub emission test green, byte-for-byte against the shared
 `RelayHttpRequestCodec`, matching the server reassembly half.
+
+## Fixer — HB-2.6 — 2026-07-12
+
+**CRITICAL production regression closed.** The HB-2.6 change (dedicated `MaintenanceWorker`,
+count=1, own fork + own container) moved *every* reaper off the relay worker. That was correct for
+the DB-based reapers but SILENTLY BROKE the in-memory tunnel reaper (HB-0.1) + keepalive heartbeat:
+the maintenance worker is a separate fork with its OWN container (`Application.php:1543`), so its
+`TunnelManager` and its `RelaySessionManager` byte/last-frame accumulators are EMPTY. All three
+in-memory tasks therefore ran against empty state on the maintenance worker:
+1. `IdleReaper::tick()` scanned the maintenance fork's empty `allTunnels()` → reaped 0 stale/half-open
+   tunnels (HB-0.1 dead).
+2. The 30s tunnel-heartbeat pinger iterated the empty registry → pinged nothing (server could
+   false-reap a quiet-but-healthy tunnel; X9 keepalive gone).
+3. `flushAll()` drained the maintenance fork's empty accumulators → `relay_sessions.bytes_in/out` +
+   `last_frame_at` writes lost (accumulators are populated by `recordBytesIn/Out` on the relay
+   worker's data plane only).
+
+### The data-locality split implemented
+
+**Stayed on the MAINTENANCE worker (DB-only — genuinely benefits from being off the relay loop,
+H-A3/H-A4/H-D5):** `ServerReaper` (UPDATE servers / DELETE server_heartbeats), the federation-session
+reaper, and — moved out of `IdleReaper::tick()` into a new `IdleReaper::reapDbMaintenance()` — the
+DB-only pruners `RelaySessionManager::reapStaleSessions()`, `HeartbeatHandler::pruneAllServerHeartbeats(100)`
+(HB-4.3), and `ClientRelayTokenService::pruneExpiredTokens()` (HB-4.2). None depend on the live tunnel
+registry. `reapStaleSessions` reads `last_frame_at`, which the relay worker keeps fresh via `flushAll()`,
+so cross-worker coordination happens correctly through the DB (threshold 180s ≫ 60s flush cadence).
+
+**Moved BACK to the RELAY worker (in-memory — only that process holds the live `Tunnel` objects +
+accumulators):** `IdleReaper::start()` → `tick()` (now scans `allTunnels()` for stale/half-open +
+`closeTunnel` + `flushAll()` of accumulators) and the 30s tunnel keepalive heartbeat pinger.
+
+### Restructuring (no txn/mutex machinery touched)
+- `IdleReaper`: `tick()` trimmed to the in-memory work (tunnel scan + `flushAll`); new
+  `reapDbMaintenance()` holds the 3 DB pruners; new `startDbMaintenance()` arms a repeating timer for
+  it. `start()` (arms `tick`) unchanged in behavior. Both timers repeat (correct — not one-shot).
+- `HubServicesProvider::startMaintenanceTimers()` split into `startInMemoryReapers()` (IdleReaper
+  `start()` + heartbeat pinger — armed on the relay worker) and `startDbMaintenanceTimers()`
+  (IdleReaper `startDbMaintenance()` + ServerReaper + federation reaper — armed on the maintenance
+  worker). Both still arm each timer independently under its own guard and from within the worker's
+  loop (cid≥0), preserving the per-connection-mutex rationale from the 2026-06/07 txn incident.
+- `MaintenanceWorker::start()` now calls `startDbMaintenanceTimers()` (was `startMaintenanceTimers`);
+  class docblock documents WHY the in-memory reapers are deliberately not run here.
+- `RelayWorker::onWorkerStart()` now calls `HubServicesProvider::startInMemoryReapers($this->container)`
+  (guarded) exactly once (relay worker is count=1) — the HB-2.6 "moved to maintenance" comment block
+  it replaced armed nothing. No double-arming: relay arms only the in-memory set, maintenance only the
+  DB set.
+- Verified no other consumer assumed these ran on the maintenance worker (grepped `startMaintenanceTimers`
+  — only `MaintenanceWorker` + tests referenced it). HB-2.2 reconnect-drain / HB-1.2 backpressure
+  timers are Tunnel-resident and untouched.
+
+### Restores HB-0.1
+This restores HB-0.1's runtime behavior: the idle/half-open tunnel reaper again scans the POPULATED
+relay-worker registry and reaps stale tunnels within the window, healthy tunnels receiving inbound
+frames stay alive, and the keepalive heartbeat again reaches the server within its stale window (X9).
+
+### The regression guard that was missing
+- `IdleReaperTest::test_tick_flushes_accumulators_and_scans_tunnels_but_runs_no_db_pruners` — drives
+  `tick()` with a POPULATED registry (one stale tunnel): asserts `closeTunnel('server-stale','timeout')`
+  + `flushAll()` once, and `reapStaleSessions`/`pruneAllServerHeartbeats` NEVER. **Verified FAILS
+  pre-fix** (re-added the DB pruners into `tick()` → the `never()` expectations tripped:
+  `Tests: 1, Failures: 1`).
+- `IdleReaperTest::test_reap_db_maintenance_runs_db_pruners_but_never_touches_tunnel_registry_or_flush`
+  — `reapDbMaintenance()` runs the pruners but `allTunnels`/`closeTunnel`/`flushAll` NEVER (proves the
+  maintenance path never touches the empty registry). The pre-existing DB-reaper tests were adjusted
+  to call `reapDbMaintenance()` (kept the maintenance-side coverage).
+- `HubServicesProviderTest::testDbMaintenanceTimersNeverResolveTunnelManager` — the wiring guard: the
+  maintenance set must NOT resolve `TunnelManager` (the heartbeat pinger's dependency). Pre-fix ALL
+  reapers incl. the pinger were armed on the maintenance worker, so `TunnelManager` WAS resolved there
+  — this assertion fails against that wiring. Plus `testInMemoryReapersNeverResolveDbOnlyReapers` and
+  exact resolved-service-order tests for both new methods.
+
+### Files changed (absolute)
+- `/home/sites/phlix/phlix-hub/src/Relay/IdleReaper.php` — split tick() / reapDbMaintenance() /
+  startDbMaintenance().
+- `/home/sites/phlix/phlix-hub/src/Common/Container/Providers/HubServicesProvider.php` —
+  startInMemoryReapers() + startDbMaintenanceTimers() (replaces startMaintenanceTimers()).
+- `/home/sites/phlix/phlix-hub/src/MaintenanceWorker.php` — call startDbMaintenanceTimers(); docblock.
+- `/home/sites/phlix/phlix-hub/src/Relay/RelayWorker.php` — arm startInMemoryReapers() in onWorkerStart().
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/IdleReaperTest.php` — DB tests → reapDbMaintenance()
+  + 2 data-locality guards.
+- `/home/sites/phlix/phlix-hub/tests/Unit/Common/Container/Providers/HubServicesProviderTest.php` —
+  split into in-memory vs DB wiring coverage + regression guards.
+
+### Verify (actual output)
+- `phpunit --filter 'IdleReaper|MaintenanceWorker|RelayWorker|HubServicesProvider|RelaySessionManager|ServerReaper'`
+  → **OK (87 tests, 251 assertions)**.
+- FULL `php -d max_execution_time=0 ./vendor/bin/phpunit` →
+  **Tests: 1260, Assertions: 15567, Skipped: 17** (0 failures; baseline 1254 + 6 net new).
+- `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
+- Pre-fix confirmation: re-adding the DB pruners into `tick()` makes
+  `test_tick_flushes_accumulators_and_scans_tunnels_but_runs_no_db_pruners` FAIL (1 failure) — proves
+  the guard bites.
+- psalm SKIPPED (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).

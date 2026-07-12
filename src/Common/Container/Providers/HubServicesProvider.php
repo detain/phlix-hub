@@ -757,9 +757,11 @@ final class HubServicesProvider implements ServiceProviderInterface
      * {@see FederationWorker} (a Worker must be constructed before runAll) and
      * bootstrapping the leaf→master federation WS connection.
      *
-     * The periodic DB-touching maintenance timers (idle reaper, server reaper,
-     * tunnel heartbeat, federation-session reaper) are deliberately NOT armed
-     * here — see the inline note below and {@see startMaintenanceTimers()}.
+     * The periodic maintenance timers are deliberately NOT armed here — see the
+     * inline note below. They are split by data locality (HB-2.6): the in-memory
+     * tunnel reapers ({@see startInMemoryReapers()}) run on the relay worker and
+     * the DB-only reapers ({@see startDbMaintenanceTimers()}) on the maintenance
+     * worker.
      *
      * @return void
      */
@@ -779,9 +781,12 @@ final class HubServicesProvider implements ServiceProviderInterface
         // BYPASSES its per-connection mutex, so a reaper query lands mid-flight on
         // the shared socket a request coroutine holds a transaction on → 2014 /
         // "There is already an active transaction" → heartbeat/claim/auth 500s.
-        // They are armed instead — ONCE, at cid>=0 — from within the running
-        // relay worker's event loop by {@see startMaintenanceTimers()} (called in
-        // {@see \Phlix\Hub\Relay\RelayWorker::onWorkerStart()}).
+        // They are armed instead — ONCE, at cid>=0 — from within a running
+        // worker's event loop, split by data locality (HB-2.6): the in-memory
+        // tunnel reaper + keepalive heartbeat by {@see startInMemoryReapers()} in
+        // {@see \Phlix\Hub\Relay\RelayWorker::onWorkerStart()} (which owns the
+        // live tunnel registry), and the DB-only reapers by
+        // {@see startDbMaintenanceTimers()} on the dedicated maintenance worker.
 
         // Start the federation WebSocket worker for hub-to-hub connections. This
         // creates a Worker, which MUST happen in the master before runAll().
@@ -812,40 +817,48 @@ final class HubServicesProvider implements ServiceProviderInterface
     }
 
     /**
-     * Arm the hub's periodic maintenance timers from WITHIN a running worker's
-     * event loop, so {@see \Workerman\Timer::add()} takes the Swoole event-loop
-     * path (Timer\Swoole → Coroutine::create) and every callback fires inside a
-     * coroutine (cid>=0). That keeps each reaper's DB queries serialised behind
+     * Arm the hub's IN-MEMORY periodic reapers from WITHIN the RELAY worker's
+     * event loop.
+     *
+     * These tasks operate on state that lives ONLY in the relay-worker process
+     * (:8802): the live {@see TunnelManager} registry of {@see Tunnel} objects
+     * and the per-session byte/last-frame accumulators inside
+     * {@see \Phlix\Hub\Hub\RelaySessionManager}. They therefore MUST be armed
+     * here — {@see \Phlix\Hub\Relay\RelayWorker::onWorkerStart()} — and NOT on
+     * the dedicated maintenance worker, whose separate fork owns an EMPTY
+     * TunnelManager + empty accumulators. (HB-2.6 originally moved ALL reapers to
+     * the maintenance worker, which silently broke HB-0.1's idle/half-open
+     * tunnel reaping and the tunnel keepalive heartbeat + byte/last-frame
+     * persistence, because those scan the live registry that the maintenance
+     * fork does not have — this method restores them to the owning process.)
+     *
+     * Armed from within the running worker's loop so {@see \Workerman\Timer::add()}
+     * takes the Swoole event-loop path and callbacks fire inside a coroutine
+     * (cid>=0), keeping DB writes serialised behind
      * {@see \Phlix\Hub\Common\Database\PhlixMySQLConnection}'s per-connection
-     * mutex, alongside the request coroutines.
+     * mutex (the 2026-06/07 "already active transaction" incident — never arm in
+     * the master {@see boot()} at cid<0).
      *
-     * Arming them in {@see boot()} instead — the master process, before the
-     * event loop exists — used Workerman's pcntl signal-timer fallback, whose
-     * callbacks run with NO coroutine context (cid<0). At cid<0 the connection
-     * mutex is bypassed, so a reaper query barged into a request coroutine's
-     * in-flight transaction on the shared socket → "SQLSTATE[HY000] 2014
-     * unbuffered queries active" → corrupted transaction → the next
-     * beginTrans() throwing "There is already an active transaction" →
-     * heartbeat/claim/auth 500s (the 2026-06/07 production incident).
+     * Call this ONCE: the relay worker is count=1 (so each timer runs once
+     * hub-wide) and it owns the {@see TunnelManager} both timers scan.
      *
-     * Call this ONCE, from {@see \Phlix\Hub\Relay\RelayWorker::onWorkerStart()}:
-     * the relay worker is count=1 (so each timer runs once hub-wide, not once
-     * per HTTP worker) and it already owns the {@see TunnelManager} the idle
-     * reaper and tunnel-heartbeat loop scan.
+     * The DB-only reapers/pruners are armed separately on the maintenance worker
+     * by {@see startDbMaintenanceTimers()}.
      *
      * Each timer is armed independently and guarded, so one unavailable service
      * never blocks the others.
      *
-     * @param ContainerInterface $container Worker-local PSR-11 container.
+     * @param ContainerInterface $container Relay-worker-local PSR-11 container.
      *
      * @return void
      */
-    public static function startMaintenanceTimers(ContainerInterface $container): void
+    public static function startInMemoryReapers(ContainerInterface $container): void
     {
         $logger = LoggerFactory::get(LogChannels::RELAY);
 
-        // Idle-tunnel reaper: closes tunnels idle past the window and reaps
-        // stale relay sessions (via its RelaySessionManager).
+        // Idle-tunnel reaper (HB-0.1): closes tunnels idle past the stale window
+        // and flushes the in-memory byte/last-frame accumulators. Scans the live
+        // TunnelManager registry — relay-worker-resident.
         try {
             /** @var mixed $idleReaper */
             $idleReaper = $container->get(IdleReaper::class);
@@ -856,18 +869,9 @@ final class HubServicesProvider implements ServiceProviderInterface
             $logger->error('Maintenance: failed to start IdleReaper timer', ['error' => $e->getMessage()]);
         }
 
-        // Server offline-reaper + heartbeat-retention sweep (B2 + P2 on one timer).
-        try {
-            /** @var mixed $serverReaper */
-            $serverReaper = $container->get(ServerReaper::class);
-            if ($serverReaper instanceof ServerReaper) {
-                $serverReaper->start();
-            }
-        } catch (\Throwable $e) {
-            $logger->error('Maintenance: failed to start ServerReaper timer', ['error' => $e->getMessage()]);
-        }
-
-        // Tunnel heartbeat: ping every active tunnel every 30s.
+        // Tunnel keepalive heartbeat: ping every active tunnel every 30s so the
+        // server receives an inbound hub frame well within its stale window (X9).
+        // Iterates the live registry — relay-worker-resident.
         try {
             /** @var mixed $tunnelManager */
             $tunnelManager = $container->get(TunnelManager::class);
@@ -883,6 +887,58 @@ final class HubServicesProvider implements ServiceProviderInterface
             }
         } catch (\Throwable $e) {
             $logger->error('Maintenance: failed to start tunnel-heartbeat timer', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Arm the hub's DB-ONLY periodic reapers/pruners from WITHIN the dedicated
+     * maintenance worker's event loop.
+     *
+     * These tasks are entirely database-backed and do NOT depend on the live
+     * tunnel registry or the in-memory accumulators, so they run correctly on
+     * the maintenance worker's own DB connection — the whole point of HB-2.6 is
+     * to keep this DB latency off the relay worker's frame-processing loop
+     * (H-A3/H-A4/H-D5). The in-memory reapers that DO need the live registry are
+     * armed on the relay worker by {@see startInMemoryReapers()}.
+     *
+     * Armed from within the maintenance worker's loop (cid>=0), same coroutine /
+     * per-connection-mutex rationale as {@see startInMemoryReapers()}.
+     *
+     * Each timer is armed independently and guarded, so one unavailable service
+     * never blocks the others.
+     *
+     * @param ContainerInterface $container Maintenance-worker-local PSR-11 container.
+     *
+     * @return void
+     */
+    public static function startDbMaintenanceTimers(ContainerInterface $container): void
+    {
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+
+        // Idle-reaper DB-maintenance sweep: stale-session reap + heartbeat/token
+        // prune (HB-4.2/HB-4.3). DB-only — no tunnel-registry access.
+        try {
+            /** @var mixed $idleReaper */
+            $idleReaper = $container->get(IdleReaper::class);
+            if ($idleReaper instanceof IdleReaper) {
+                $idleReaper->startDbMaintenance();
+            }
+        } catch (\Throwable $e) {
+            $logger->error(
+                'Maintenance: failed to start IdleReaper DB-maintenance timer',
+                ['error' => $e->getMessage()],
+            );
+        }
+
+        // Server offline-reaper + heartbeat-retention sweep (B2 + P2 on one timer).
+        try {
+            /** @var mixed $serverReaper */
+            $serverReaper = $container->get(ServerReaper::class);
+            if ($serverReaper instanceof ServerReaper) {
+                $serverReaper->start();
+            }
+        } catch (\Throwable $e) {
+            $logger->error('Maintenance: failed to start ServerReaper timer', ['error' => $e->getMessage()]);
         }
 
         // Federation session reaper: drop federation sessions with no heartbeat
