@@ -55,7 +55,12 @@ final class SyncPlayRelayWorker
     private static array $clients = [];
 
     /**
-     * Map of room name => [client_id => SyncPlayClient].
+     * Map of SCOPED room key => [client_id => SyncPlayClient].
+     *
+     * The key is NOT the raw client-supplied room name: it is scoped to the
+     * authenticated (server_id, owner) identity via {@see scopedRoomKey()} so
+     * two different servers/owners that pick the same friendly room name resolve
+     * to DIFFERENT internal rooms and can never control each other's playback.
      *
      * @var array<string, array<string, SyncPlayClient>>
      */
@@ -335,12 +340,12 @@ final class SyncPlayRelayWorker
             return;
         }
 
-        $room = $message['room'] ?? null;
-        if ($room === null) {
+        $clientRoom = $message['room'] ?? null;
+        if ($clientRoom === null) {
             return;
         }
         // @var guard: json message room field is string when not null
-        if (!is_string($room)) {
+        if (!is_string($clientRoom)) {
             return;
         }
 
@@ -351,38 +356,44 @@ final class SyncPlayRelayWorker
             $this->handleGroupLeave($client);
         }
 
-        // Join new room
-        $client->room = $room;
+        // Scope the room to the authenticated (server_id, owner) identity. The
+        // client supplies a friendly name; two different servers/owners that
+        // pick the same friendly name must land in DIFFERENT internal rooms so
+        // a control/broadcast never crosses the (server_id, owner) boundary.
+        $scopedRoom = self::scopedRoomKey($client, $clientRoom);
+
+        // Join new room (keyed by the scoped key, never the raw client string)
+        $client->room = $scopedRoom;
         /** @var mixed $messageDisplayName */
-        $messageDisplayName = $message['display_name'];
+        $messageDisplayName = $message['display_name'] ?? null;
         $displayName = is_string($messageDisplayName) ? $messageDisplayName : 'Anonymous';
         $client->displayName = $displayName;
 
-        if (!isset(self::$rooms[$room])) {
-            self::$rooms[$room] = [];
+        if (!isset(self::$rooms[$scopedRoom])) {
+            self::$rooms[$scopedRoom] = [];
         }
-        self::$rooms[$room][$client->clientId] = $client;
+        self::$rooms[$scopedRoom][$client->clientId] = $client;
 
-        // Send current room state to joining client
-        $roomState = $this->getRoomState($room);
+        // Send current room state to joining client (echo the FRIENDLY name back)
+        $roomState = $this->getRoomState($scopedRoom);
         $stateMessage = [
             'type' => 'room_state',
-            'room' => $room,
+            'room' => $clientRoom,
             'clients' => $roomState,
         ];
         $client->connection->send(json_encode($stateMessage, JSON_THROW_ON_ERROR));
 
-        // Notify other clients in room about new joiner
+        // Notify other clients in the (scoped) room about the new joiner
         $joinNotification = [
             'type' => 'client_joined',
             'client_id' => $client->clientId,
             'display_name' => $client->displayName,
         ];
-        $this->broadcastToRoom($room, json_encode($joinNotification, JSON_THROW_ON_ERROR), $client->clientId, true);
+        $this->broadcastToRoom($scopedRoom, json_encode($joinNotification, JSON_THROW_ON_ERROR), $client->clientId, true);
 
         $logger->info('SyncPlay: client joined room', [
             'client_id' => $client->clientId,
-            'room' => $room,
+            'room' => $clientRoom,
             'server_id' => $client->serverId,
         ]);
     }
@@ -461,7 +472,7 @@ final class SyncPlayRelayWorker
     /**
      * Broadcast a message to all clients in a room.
      *
-     * @param string $room         Room name.
+     * @param string $room         Scoped room key (see {@see scopedRoomKey()}).
      * @param string $message     JSON message to send.
      * @param string $excludeId   Client ID to exclude (optional).
      * @param bool   $includeSelf Include sender in broadcast (default false).
@@ -482,7 +493,7 @@ final class SyncPlayRelayWorker
     /**
      * Get current state of a room.
      *
-     * @param string $room Room name.
+     * @param string $room Scoped room key (see {@see scopedRoomKey()}).
      *
      * @return array<string, array{client_id: string, display_name: string}> Client list.
      */
@@ -513,6 +524,26 @@ final class SyncPlayRelayWorker
         }
         $serverId = trim(rawurldecode($matches[1]));
         return $serverId !== '' ? $serverId : null;
+    }
+
+    /**
+     * Compose the internal, scoped room key for a client's friendly room name.
+     *
+     * The effective room namespace is scoped to the authenticated
+     * (server_id, owner) identity established in {@see validateClientAuth()}.
+     * `server_id` and `owner` are UUIDs (hex + hyphens, never a colon), so the
+     * first two `:` delimiters unambiguously separate the scope prefix from the
+     * arbitrary client-supplied friendly name — two different servers/owners can
+     * never resolve to the same internal room even with identical friendly names.
+     *
+     * @param SyncPlayClient $client     The authenticated client (server_id + owner).
+     * @param string         $clientRoom The friendly room name from the client.
+     *
+     * @return string The scoped room key.
+     */
+    private static function scopedRoomKey(SyncPlayClient $client, string $clientRoom): string
+    {
+        return $client->serverId . ':' . (string) $client->userId . ':' . $clientRoom;
     }
 
     /**

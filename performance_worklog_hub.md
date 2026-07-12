@@ -77,7 +77,7 @@ php bin/phlix migrate
 - [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE — FIXER 2026-07-12: closed AC gaps — added ETag + conditional-GET 304 on NON-hashed assets, a per-worker stat memo (realpath+mtime+size, kills per-hit is_file/stat), and the first tests. See `## Fixer — HB-2.5 — 2026-07-12`.
 - [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE — ⚠️ FIXER 2026-07-12: the "move ALL reapers to the maintenance worker" change BROKE the in-memory tunnel reaper (HB-0.1) + keepalive heartbeat (maintenance fork's TunnelManager/accumulators are EMPTY). Re-split by data locality: in-memory tasks back on the relay worker, DB-only reapers stay on maintenance. See `## Fixer — HB-2.6 — 2026-07-12`.
 - [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE — FIXER 2026-07-12: replaced the broad `PUT /api/v1/media` + `PUT|DELETE /api/v1/playlists` prefixes with ANCHORED per-action PCREs; PATCH documented as registered-but-deny (no server PATCH write route); added the anchoring guard + real bodied round-trip tests. See `## Fixer — HB-3.1 — 2026-07-12`.
-- [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin
+- [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin — FIXER 2026-07-12: closed a SECURITY gap — room namespace was scoped cosmetically (keyed by the RAW client-supplied string) so two authed users owning DIFFERENT servers who picked the same friendly room name shared ONE room + controlled each other's playback. Now rooms are keyed by the scoped `{server_id}:{owner}:{clientRoom}` key + first SyncPlayRelayWorker tests. See `## Fixer — HB-3.2 — 2026-07-12`.
 - [x] HB-3.3  per-channel tunnel flow control/fairness  (commit: cbc29cc)  DONE
 - [x] HB-3.4  bandwidth accounting + per-user quotas  (commit: 1de552a)  DONE
 - [x] HB-4.1  relay observability metrics  (commit: H-W4-batch)  DONE — pending-request gauge, reply-drop counter, per-request latency histogram, 503/504 counters, decode-buffer-size gauge fully wired in MetricsCollector/Registry/FlushService + RelayProxyManager
@@ -1153,3 +1153,62 @@ the broad prefixes made 7/12 guard cases relay (504) instead of deny (403).
 - `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
 - `./vendor/bin/phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
 - psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red).
+
+## Fixer — HB-3.2 — 2026-07-12
+
+Closed the SECURITY gap the audit flagged: SyncPlay relay auth-reject was real, but the room
+**namespace was scoped only cosmetically** — rooms were keyed by the RAW client-supplied string
+(`self::$rooms[$room]`, `$client->room = $room`). The connect-side ownership check only restricts
+WHICH `server_id` path a client may attach to; it did NOT scope the room namespace. So two
+authenticated users owning DIFFERENT servers (different owners) who both picked room `"movie-night"`
+landed in the SAME `self::$rooms['movie-night']` and broadcast play/pause/seek to each other. AC
+"cross-user/cross-server room join is IMPOSSIBLE" was UNMET.
+
+**Fix — scope the room key by the authenticated (server_id, owner) identity.** New helper
+`SyncPlayRelayWorker::scopedRoomKey(SyncPlayClient $client, string $clientRoom)` composing
+`"{$client->serverId}:{$client->userId}:{$clientRoom}"`. `server_id` and `owner` are UUIDs (hex +
+hyphens, never a colon), so the first two `:` delimiters unambiguously separate the scope prefix from
+the arbitrary client friendly name → two different servers/owners can never collide even with the same
+friendly name. (The `:` in the in-memory array key is NOT a DB `:param`; §0.4 colon-free rule does not
+apply — no DB is touched.)
+
+**Where applied (`src/SyncPlay/SyncPlayRelayWorker.php`):** the scoped key is computed once in
+`handleGroupJoin` and stored on `$client->room`. Because every other consumer already reads
+`$client->room`, the single stored scoped key propagates EVERYWHERE the raw room was used with no other
+call-site edits needed:
+- `handleGroupJoin` — `self::$rooms[$scopedRoom]` create + member insert (was `self::$rooms[$room]`);
+  `getRoomState($scopedRoom)`; `broadcastToRoom($scopedRoom, …)` for `client_joined`. The `room_state`
+  reply now echoes the FRIENDLY name (`$clientRoom`) back to the client, not the internal scoped key.
+- `handleGroupLeave` — `unset(self::$rooms[$client->room][$clientId])` + `broadcastToRoom($client->room…)`
+  now operate on the scoped key (member can only ever be in a room within its own scope).
+- `onMessage` default relay + `handlePlayback` — `broadcastToRoom($client->room, …)` scoped.
+- `onClose` — routes through `handleGroupLeave` (scoped) then drops the client; empty-room cleanup timer
+  keys by the scoped key. No unbounded `self::$rooms` growth (empty rooms swept + removed on leave).
+Auth-reject (`onWebSocketConnect` → `rejectUnauthorized`) and the `handleGroupJoin` unauth gate are
+unchanged / not regressed.
+
+**Tests — new `tests/Unit/SyncPlay/SyncPlayRelayWorkerTest.php` (5 tests; none existed before):**
+- **auth-required:** `testConnectWithNoTokenIsRejected` + `testConnectWithInvalidTokenIsRejected` — an
+  absent/unknown relay token → `connection->close('', true)`, zero clients registered.
+- **ownership-scoping (the guard):** `testDifferentServerOwnerSameRoomNameDoNotShareRoom` — two authed
+  clients on DIFFERENT (server_id, owner) picking the SAME friendly name resolve to TWO scoped rooms
+  (`getActiveRoomCount() === 2`) and A's `playback_play` is NEVER delivered to B. **This test FAILS
+  against the pre-fix raw-key code** (verified: `git show HEAD:…SyncPlayRelayWorker.php` restored →
+  the two clients share ONE room, `Failed asserting that 1 is identical to 2` — cross-user join was
+  real), then passes with the fix.
+- **legitimate-flow:** `testSameServerOwnerSameRoomShareAndReceivePlayback` — two authed clients on the
+  SAME server/owner joining the same room share ONE scoped room and B receives A's `playback_play`.
+- **cleanup:** `testGroupLeaveEmptiesTheScopedRoomAndCleansUp` — disconnect drops the client from its
+  scoped room + live set (no static leak).
+Conventions mirrored from `ClientRelayWorkerTest`: real `ClientRelayTokenService` over a mock
+`Workerman\MySQL\Connection` (the service is `final`, cannot be mocked) keyed by the sha256 `token_hash`
+param; mock `ServerInfoHandler::getOwnerAndStatus`; recording mock `TcpConnection`; in-memory
+`LoggerFactory`; `SyncPlayRelayWorker::reset()` + `$_GET` restore for static isolation.
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `phpunit --filter 'SyncPlay'` → **OK (5 tests, 11 assertions)**.
+- Full suite `php -d max_execution_time=0 ./vendor/bin/phpunit` → **OK, 1301 tests / 15689 assertions /
+  17 skipped / 0 failures** (baseline 1296 + 5 new).
+- `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `phpcs --standard=PSR12 -n src/` → **clean (exit 0)** (new test file also clean).
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
