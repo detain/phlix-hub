@@ -62,10 +62,10 @@ php bin/phlix migrate
 (remote script on the hub box; pulls latest master and restarts the hub service on port :8800)
 
 ## Progress
-- [x] HB-0.1  restore idle reaper (remove lastFrameAt self-refresh)  (commit: H-0.1) — sendHeartbeat no longer touches lastFrameAt; isStale correctly reflects last inbound frame; unit test added
-- [x] HB-0.2  wire invite-link redeem route  (commits: f057aaf, 3a7067d)  DONE
-- [x] HB-0.3  short-circuit HEAD over relay proxy  (commit: H-0.3) — HEAD excluded from isStreamingPath, routed through buffered bridge->request() path; returns headers immediately without streaming body
-- [x] HB-0.4  add subdomain to ServerInfoDto, drop redundant query  (commits: phlix-shared:008fcc1, phlix-hub:489ec7d)  DONE
+- [x] HB-0.1  restore idle reaper  RE-AUDIT 2026-07-12: DONE (hub side) — sendHeartbeat no longer stamps lastFrameAt (only inbound paths do: onServerMessage/handleBinaryFrame/onHeartbeat); isStale reflects last INBOUND frame; reaper wired in maintenance worker; real tests pass (TunnelTest+IdleReaperTest). ⚠️ RUNTIME correctness depends on X9: server MUST emit an inbound frame (heartbeat/echo) within the 90s stale window or a healthy-but-quiet tunnel is false-reaped. → server X9 audit spawned.
+- [x] HB-0.2  wire invite-link redeem route  RE-AUDIT 2026-07-12: DONE — POST /api/v1/me/invite-links/{token}/redeem auth-gated → controller → handler; double-redeem guarded by atomic conditional UPDATE (410 exhausted); 8 controller + concurrency/exhausted handler tests pass. (f057aaf, 3a7067d)
+- [~] HB-0.3  short-circuit HEAD over relay proxy  RE-AUDIT 2026-07-12: PARTIAL. Chose Option 2 (HEAD excluded from isStreamingPath → buffered bridge->request()), BUT the buffered path only assembles/returns on KIND_END, so HEAD STILL waits for a server END chunk → still 30-60s stall if server withFile() HEAD emits no END. Blocked on X3 (server HEAD framing). Tests inadequate: no head-only/no-END anti-stall test, no HEAD-then-ranged-GET sub-second integration test. Minor: isStreamingPath docblock still says "GET/HEAD". → server X3 audit spawned; fix decision pending.
+- [x] HB-0.4  add subdomain to ServerInfoDto, drop redundant query  RE-AUDIT 2026-07-12: DONE — subdomain on ServerInfoDto (shared + vendored), populated in rowToDto, redundant getServerSubdomain query removed (single getServerInfo path); DTO round-trip + controller relay_url tests pass. (shared:008fcc1, hub:489ec7d)
 - [x] HB-1.1  drop base64 on internal channel-broker body path  (commits: e7ef677, 49913e7, d16b567)  DONE
 - [x] HB-1.2  raw tunnel data-plane backpressure  (commits: 2a2b421, 0aed3e0, b1140b1)  DONE
 - [x] HB-1.3  non-blocking onReply delivery  (commits: e3cb349, 8ea42ae, 8d45c85)  DONE
@@ -91,7 +91,31 @@ php bin/phlix migrate
 - [x] HB-4.9  verify/implement HTTP_CANCEL server-side stop  (commit: H-W4-batch)  DONE — already implemented; full cancel path verified: Bridge→Channel→ProxyManager→Tunnel::sendCancel()→server
 - [x] HB-4.10 remove RelaySessionManager::routeRequest  (commit: H-W4-batch)  DONE — confirmed no callers; method removed; docstrings updated
 
+## Re-baseline — Claude Code orchestrator pass (2026-07-12)
+
+**Subagent capability:** git / phpunit / phpstan / phpcs all run OK, no prompts. **psalm CANNOT run**
+on this box (PHP 8.3.6 < psalm's required 8.3.16) — workers must SKIP psalm; it's environmental, not
+red. ext-swoole NOT loaded (did not affect any gate). => full-delegation model, workers self-verify
+(phpunit+phpstan+phpcs) and commit+push themselves.
+
+**Entrypoint correction:** hub has NO `public/index.php` — it is `start.php`-only (Workerman resident).
+Ignore any dual-entrypoint mirroring for hub; there is a single entrypoint.
+
+**MASTER HEALTH AT PASS START = GREEN:**
+- PHPUnit full suite: 1218 tests / 15304 assertions, 0 errors, 0 failures, 17 self-skips. Lines 56%.
+- PHPStan L9 (phpstan.neon.dist): No errors.
+- PHPCS PSR-12 -n src/: clean.
+- MigrationFileTest: 140 tests pass.
+Prior (opencode) run committed all HB-0.x/1.x/2.x/3.x + SV-4.7. Green master means it compiles/passes
+— but per plan §I each step still needs an acceptance/completeness/test-depth AUDIT this pass (green
+tests can hide mock-encoded-wrong contracts — cf. the 0.4 auth-contract incident in memory).
+
 ## Notes / cross-repo blockers
 - X1: Scrub→encode→cancel chain (UI-0.3 first, then SV-4.2, then HB-4.9)
-- X3: HB-0.3 needs server HEAD behavior confirmation
-- X9: HB-0.1 waiting on server heartbeat-echo confirmation
+- X3: RESOLVED 2026-07-12 — server-side confirmed: HEAD to a withFile() route emits HEAD→END(zero-body)
+  →HTTP_CANCEL (RelayConsumer::sendHttpResponse END emitted unconditionally @:1010). So HB-0.3's buffered
+  path DOES complete promptly; NO server change. Fix stays hub-side = add anti-stall tests + docblock.
+- X9: RESOLVED 2026-07-12 — server-side confirmed SAFE: server sends HEARTBEAT every 30s (repeating
+  timer, RelayConsumer::startHeartbeatTimer @:1517, RelayConfig::pingInterval default 30) + echoes hub
+  heartbeats. 30s ≪ 90s reap window. HB-0.1 fully cleared. CAVEAT: document that hub reap window must
+  stay > PHLIX_RELAY_PING_INTERVAL (default 30) or tunnels false-reap.

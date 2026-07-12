@@ -37,6 +37,15 @@ final class IdleReaper
 
     /**
      * Default stale threshold in seconds (tunnels idle longer are reaped).
+     *
+     * HB-0.1 COUPLING: this window MUST stay strictly greater than the server's
+     * relay ping interval (`PHLIX_RELAY_PING_INTERVAL`, server default 30s) or a
+     * healthy-but-quiet tunnel is false-reaped. The server sends a HEARTBEAT
+     * every ping interval and also echoes hub pings, and only INBOUND frames
+     * refresh `lastFrameAt` (`sendHeartbeat` no longer self-refreshes), so as
+     * long as reap window > ping interval every live tunnel receives at least
+     * one inbound frame per window and stays alive. The default 90s ≫ 30s gives
+     * ~3 heartbeats of headroom; keep that margin if either value is tuned.
      */
     public const DEFAULT_STALE_THRESHOLD_SECONDS = 90;
 
