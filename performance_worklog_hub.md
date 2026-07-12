@@ -712,3 +712,85 @@ unroutable. Net: an unauthenticated HELLO with a known `server_id` evicted the l
   `Tunnel::onServerMessage` (only `InvalidFrameTypeException` is) → it escapes the Workerman message
   callback and the tunnel is never closed. Separate queued task; NOT fixed here.
 - **HB-2.4** — **DONE** (O(1) cancel index confirmed).
+
+## Reviewer — HB-2.2 (post-deps verify) — 2026-07-12
+
+Combined VERIFY + confirming-REVIEW after the external release/deps/migration commits
+(`b9032fe` @phlix/ui v0.79.0, `847668b` phlix-shared → Packagist ^0.20.0, `548fb8f`
+migrations 034-036 MySQL-8 compat) landed on master over the HB-2.2 fix.
+
+### Job A — master GREEN (actual gate output)
+- `composer install` → **Nothing to install, update or remove** (lock resolves clean).
+- `detain/phlix-shared` vendored at **0.20.0** from Packagist; `vendor/detain/phlix-shared/src/Relay/`
+  present with all codecs (RelayFrame, RelayFrameType, RelayHttpRequest{,Chunk,Codec,Head},
+  RelayHttpResponse{,Chunk,Codec,Head}, RelayWireCodecInterface). Relay wire contract intact.
+- `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors**.
+- `php -d max_execution_time=0 ./vendor/bin/phpunit` → **Tests: 1250, Assertions: 15494,
+  Skipped: 17, Failures: 0** — matches the pre-deps baseline exactly (1250 pass / 17 skip / 0 fail).
+  **No new red from the deps or migration change.**
+- `./vendor/bin/phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
+- `./vendor/bin/phpunit --filter Migration` → **160 tests, 323 assertions, 5 skipped, 0 fail**
+  (MigrationFileTest + migration suite green). Reviewed the 034-036 diff: drops MariaDB-only
+  `CREATE INDEX IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` (rejected by MySQL 8), folds the dangling
+  `KEY` into the 035 CREATE TABLE; idempotency provided by the runner's tracking table. DDL is
+  portable to both engines; header/engine/PK contract preserved.
+- psalm SKIPPED (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, per instruction).
+
+**IS MASTER GREEN: YES.** No new failure attributable to the deps/migration commits.
+
+### Job B — confirming review of the HB-2.2 tunnel-displacement-DoS fix
+
+**DoS closure (security-critical) — CONFIRMED CLOSED.**
+- `TunnelManager::acceptServer` (`:150-171`) parks a new tunnel that arrives for a live `server_id` in
+  `$pendingTunnels` and LEAVES the incumbent in the `$tunnels` routing map, reachable. It never
+  overwrites `$tunnels[serverId]` while an incumbent is live.
+- `RelayWorker::handleHello` (`:372-385`) calls `finalizeServerConnection` ONLY when
+  `$tunnel->status === Tunnel::STATUS_ACTIVE` after `onServerMessage` — i.e. the enrollment JWT
+  validated. The prior false "if onServerMessage throws" comment is gone; gating is on post-HELLO auth
+  STATE, not a never-thrown exception. The `!== ACTIVE` branch calls `abortPendingConnection`.
+- `abortPendingConnection` (`TunnelManager:336-359`) removes the rejected tunnel from
+  pending/routing and leaves any live incumbent untouched and routable.
+- `failServer` residual sub-vector closed: both `Tunnel::close` (`:1518`) and
+  `Tunnel::onServerClose` (`:627`) guard `proxyManager->failServer($serverId)` with
+  `$this->relaySessionId !== null`. `relaySessionId` is only set AFTER JWT validation
+  (`handleHelloFrame:442`), so a rejected same-`server_id` tunnel's `close('unauthorized')` cannot
+  503 the legitimate incumbent's in-flight requests.
+- Regression test `RelayWorkerTest::testInvalidHelloDoesNotDisplaceLiveIncumbent` (`:197-250`) drives
+  the REAL orchestration through a `TunnelManager` wired with a REAL (mocked) `EnrollmentJwtService`
+  that rejects all tokens (prod-DI parity), asserts the incumbent stays ACTIVE + routable + client
+  attached, and pins `expects($this->never())->method('close')` on both the incumbent WS and its
+  client WS. Worklog records it verified-FAILS against pre-fix code. Genuine guard.
+
+**Reconnect-drain (H-R6) — CONFIRMED.** `finalizeServerConnection` (`:295-320`) promotes the pending
+tunnel then `incumbent->beginDrain($grace,'server_replaced')`. `beginDrain` (`:1557-1592`) moves the
+incumbent to CLOSING, keeps clients + server conn alive, and arms a ONE-SHOT timer
+(`Timer::add(..., [], false)` — §0.4). `handleDrainTimeout` (`:1604-1611`) → `close($reason, false)`
+so `failServer` does NOT nuke the promoted tunnel's requests. Grace `<= 0` displaces immediately.
+Timer id nulled inside the closure and on `close`/`onServerClose` (`:1477-1484`, `:609-616`) with
+`Timer::del` in try/catch — no timer leak, no double-fire. Grace is config-driven
+(`config/server.php` `relay.reconnect_drain_grace_seconds`, env `HUB_RELAY_RECONNECT_DRAIN_GRACE`,
+default 5.0) and wired in `HubServicesProvider` (`:318-340`) with a REAL `EnrollmentJwtService`.
+Documented straggler caveat (per-request relay timeout fallback) is acceptable.
+
+**Transaction (H-D4) — CONFIRMED.** `RelaySessionManager::registerServer` (`:89-122`) wraps
+UPDATE+INSERT in `beginTrans`/`commitTrans` with `catch → rollBackTrans → rethrow`. Named colon-free
+`:param` bind keys. Tests `testRegisterServerSupersedesOpenSessionsBeforeInsert` (begin once / commit
+once / rollBack never) and `testRegisterServerRollsBackWhenInsertFails` (begin→rollback, no commit,
+rethrow) present and assert strict ordering.
+
+**Async/timer discipline (§0.4):** one-shot drain + backpressure timers, `Timer::del` guarded, no
+`exit`/`die`/blocking `sleep`, no request state in static/global. DB uses named `:param` placeholders.
+Clean.
+
+### Findings
+NO FINDINGS.
+
+Informational (non-blocking, no fix required): during the drain window the incumbent is in CLOSING,
+and `Tunnel::sendToClient` (`:886`) early-returns on `status !== STATUS_ACTIVE`, so raw DATA-channel
+frames to directly-attached clients are dropped during the grace period (only the HTTP_RESPONSE proxy
+path — via `onHttpResponse`/`proxyManager->onResponseFrame`, which is NOT status-gated — actually
+drains). This is outcome-neutral: those raw-data-plane clients were being displaced anyway (pre-fix
+they got an immediate hard disconnect; now a brief freeze then disconnect). The drain delivers its
+intended value on the dominant SPA HTTP-over-relay playback path. Recorded for the record only.
+
+**Verdict: master GREEN (no new red from deps/migration); HB-2.2 fix CONFIRMED correct — NO FINDINGS.**
