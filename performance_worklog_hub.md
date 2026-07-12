@@ -74,7 +74,7 @@ php bin/phlix migrate
 - [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  RE-FIXED 2026-07-12 (Fixer) — prior fix (7c30723) was INEFFECTIVE (DoS still open). Now CLOSED: displacement gated on validation (not on a never-thrown exception), incumbent stays routable, failServer() guarded, reconnect-drain (H-R6) added, txn test hardened. See Fixer note below.
 - [x] HB-2.3  cap FrameDecoder buffer  RE-FIXED 2026-07-12 (Fixer) — prior fix (ec17c9cc) capped the buffer but the "close tunnel" half was UNWIRED: FrameDecoder threw a base `\RuntimeException` that `Tunnel::onServerMessage` (catches only `InvalidFrameTypeException`) let escape the Workerman callback. Now CLOSED: overflow throws `FrameBufferOverflowException extends InvalidFrameTypeException` → existing tunnel catch closes cleanly with reason `frame_buffer_overflow`; all other FrameDecoder consumers (client relay :8803, both federation paths) now also catch+close instead of leaking. Real Tunnel-driven test added (fails pre-fix). See Fixer note below.
 - [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
-- [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE
+- [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE — FIXER 2026-07-12: closed AC gaps — added ETag + conditional-GET 304 on NON-hashed assets, a per-worker stat memo (realpath+mtime+size, kills per-hit is_file/stat), and the first tests. See `## Fixer — HB-2.5 — 2026-07-12`.
 - [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE — ⚠️ FIXER 2026-07-12: the "move ALL reapers to the maintenance worker" change BROKE the in-memory tunnel reaper (HB-0.1) + keepalive heartbeat (maintenance fork's TunnelManager/accumulators are EMPTY). Re-split by data locality: in-memory tasks back on the relay worker, DB-only reapers stay on maintenance. See `## Fixer — HB-2.6 — 2026-07-12`.
 - [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE
 - [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin
@@ -1036,3 +1036,60 @@ frames stay alive, and the keepalive heartbeat again reaches the server within i
   `test_tick_flushes_accumulators_and_scans_tunnels_but_runs_no_db_pruners` FAIL (1 failure) — proves
   the guard bites.
 - psalm SKIPPED (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
+
+## Fixer — HB-2.5 — 2026-07-12
+
+Audit found the hashed-immutable Cache-Control + realpath memo present & correct, but three AC
+gaps: (1) NO ETag / conditional-GET on non-hashed assets; (2) the memo was realpath-only so
+`is_file()` (and now the ETag stat) re-syscalled every hit; (3) ZERO tests. All closed. The
+immutable-hashed path is unchanged.
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-hub/src/Application.php`
+  - **Gap 1 — ETag + 304.** Extracted the header/ETag/304 decision into a pure, side-effect-free
+    `public static computeStaticCacheDecision(mime, isHashedAsset, mtime, size, ifNoneMatch,
+    ifModifiedSince): array{status,headers}`. Hashed assets keep `public, max-age=31536000,
+    immutable` with NO validators (browser never revalidates). Non-hashed assets get
+    `public, max-age=86400` + a strong `ETag` (`"<mtime-hex>-<size-hex>"`) + `Last-Modified`. A
+    matching `If-None-Match` (weak comparison per RFC 7232: `*`, comma-lists, and `W/`-weak tags
+    handled via `etagMatches`/`stripWeakEtag`) — or, in its absence, an `If-Modified-Since` not
+    older than mtime (`isStaticAssetNotModified`, If-None-Match takes precedence) — returns
+    **304** carrying the validators and NO `Content-Type`. The static-serve closure
+    (`onMessage`) now reads `If-None-Match`/`If-Modified-Since` off the Workerman request, calls
+    the decision fn, and for `status===304` sends a bodiless `Response(304, validators)` (never
+    `withFile`); otherwise `Response(200, headers)->withFile($real)` as before. `$status` is set
+    to 304 so per-route metrics record correctly.
+  - **Gap 2 — stat memo.** New `getStaticFileMemo(candidate): array{real,mtime,size}|false` — a
+    per-worker `static` memo that reuses the existing `getRealPathMemo()` for the realpath leg
+    (behavior preserved) and additionally caches `is_file` + `stat()` (mtime/size). The closure
+    now resolves the file once via this memo, so `realpath()`/`is_file()`/`stat()` no longer fire
+    on every asset hit and the ETag is derived without an extra syscall. Bounded by
+    `STATIC_FILE_MEMO_MAX = 4096` (clear-on-overflow) so a flood of distinct 404 candidates can't
+    grow the memo unbounded in a resident worker (§0.4). Docblock notes the deploy-staleness
+    caveat: a negative result and the mtime/size are cached for the worker's lifetime, so
+    in-place asset replacement without a worker recycle serves stale validators until restart —
+    acceptable for the finite public/ asset set + hashed-immutable assets.
+- `/home/sites/phlix/phlix-hub/tests/Unit/ApplicationStaticAssetCacheTest.php` (NEW, +14 tests):
+  - Header-presence: non-hashed carries `ETag` + `public, max-age=86400` (+ not `immutable`) +
+    `Last-Modified` + `Content-Type`; hashed carries `immutable` long max-age and NO `ETag`/
+    `Last-Modified`; hashed ignores conditional headers → still 200.
+  - Conditional GET: matching `If-None-Match` → 304 with validators + NO `Content-Type` (no body);
+    non-matching → 200 with body + ETag; weak `W/` tag matches; `*` matches; comma-list containing
+    the tag matches; `If-Modified-Since` ≥ mtime → 304, older → 200; `If-None-Match` precedence
+    over `If-Modified-Since`.
+  - Memo: `getStaticFileMemo` (reflection) resolves real/mtime/size; a second lookup returns the
+    memoized stat byte-identically even after the file is deleted (proves no re-stat/re-realpath);
+    missing path → false.
+
+**AC mapping:** "hashed bundles cached by the browser" → immutable path unchanged + test.
+"short max-age + ETag for others" → Gap 1. "fewer FS syscalls per asset request" → Gap 2 stat
+memo. "header-presence test; memo hit test" → the 14 new tests.
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `phpunit --filter ApplicationStaticAssetCache` → **OK (14 tests, 37 assertions)**.
+- Full suite `php -d max_execution_time=0 ./vendor/bin/phpunit` → **OK, 1274 tests / 15604
+  assertions / 17 skipped / 0 failures** (baseline 1260 + 14 new).
+- `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `./vendor/bin/phpcs --standard=PSR12 -n src/` → **clean (exit 0)**. (Test method names use the
+  project's snake_case convention like `ApplicationRouteTemplateTest`; CI runs phpcs on `src/` only.)
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red).

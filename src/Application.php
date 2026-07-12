@@ -87,6 +87,14 @@ use Workerman\Worker;
  */
 final class Application
 {
+    /**
+     * Upper bound for the per-worker static-file stat/realpath memos. The
+     * public/ asset set is finite, so this is a defensive cap against a flood
+     * of distinct (typically 404) candidate paths growing the memo without
+     * limit in a resident Workerman worker (no unbounded static state).
+     */
+    private const int STATIC_FILE_MEMO_MAX = 4096;
+
     private Router $router;
 
     /**
@@ -116,6 +124,163 @@ final class Application
         }
 
         return $memo[$path] = realpath($path);
+    }
+
+    /**
+     * Per-worker stat memo for hot static paths.
+     *
+     * Resolves and caches realpath + mtime + size (and the is_file decision) so
+     * that serving a static asset does not re-issue blocking realpath()/stat()/
+     * is_file() syscalls on the event loop for every hit, and so the ETag can be
+     * derived without an extra syscall. Reuses {@see self::getRealPathMemo()} for
+     * the realpath leg. Returns false for anything that is not a regular file.
+     *
+     * Deploy-staleness caveat: like the realpath memo, both a negative result and
+     * the mtime/size are cached for the worker's lifetime. Replacing an asset
+     * in-place without recycling the worker (e.g. `systemctl reload phlix-hub`)
+     * will keep serving the stale mtime/size (and thus a stale ETag) until the
+     * worker restarts — acceptable for hashed-immutable assets and the finite
+     * public/ asset set.
+     *
+     * @param string $candidate Filesystem path under the public root.
+     *
+     * @return array{real: string, mtime: int, size: int}|false
+     */
+    private static function getStaticFileMemo(string $candidate): array|false
+    {
+        /** @var array<string, array{real: string, mtime: int, size: int}|false> $memo */
+        static $memo = [];
+        if (array_key_exists($candidate, $memo)) {
+            return $memo[$candidate];
+        }
+        if (count($memo) >= self::STATIC_FILE_MEMO_MAX) {
+            // Bound the memo to the finite asset set (clear-on-overflow); at
+            // worst this forces a re-resolve of live entries — never incorrect.
+            $memo = [];
+        }
+
+        $real = self::getRealPathMemo($candidate);
+        if ($real === false || !is_file($real)) {
+            return $memo[$candidate] = false;
+        }
+        $stat = @stat($real);
+        if ($stat === false) {
+            return $memo[$candidate] = false;
+        }
+
+        return $memo[$candidate] = [
+            'real' => $real,
+            'mtime' => (int) $stat['mtime'],
+            'size' => (int) $stat['size'],
+        ];
+    }
+
+    /**
+     * Compute the cache headers + conditional-GET (304) decision for a static
+     * asset. Pure and side-effect-free (no I/O) so it is unit-testable.
+     *
+     * Hashed-immutable assets get a year-long immutable Cache-Control and no
+     * validators — the browser never revalidates them. Non-hashed assets get a
+     * short max-age plus a strong ETag (mtime+size) and Last-Modified so the
+     * browser can revalidate; when a request carries a matching If-None-Match
+     * (weak comparison per RFC 7232 §2.3.2) — or, in its absence, an
+     * If-Modified-Since not older than the file mtime (§3.3) — the result is
+     * 304 Not Modified carrying the validators and NO body (the caller must not
+     * attach a file to a 304).
+     *
+     * @param string      $mime            Resolved Content-Type.
+     * @param bool        $isHashedAsset   Path carries a content hash.
+     * @param int         $mtime           File modification time (unix seconds).
+     * @param int         $size            File size in bytes.
+     * @param string|null $ifNoneMatch     Raw If-None-Match request header.
+     * @param string|null $ifModifiedSince Raw If-Modified-Since request header.
+     *
+     * @return array{status: int, headers: array<string, string>}
+     */
+    public static function computeStaticCacheDecision(
+        string $mime,
+        bool $isHashedAsset,
+        int $mtime,
+        int $size,
+        ?string $ifNoneMatch,
+        ?string $ifModifiedSince,
+    ): array {
+        if ($isHashedAsset) {
+            return [
+                'status' => 200,
+                'headers' => [
+                    'Content-Type' => $mime,
+                    'Cache-Control' => 'public, max-age=31536000, immutable',
+                ],
+            ];
+        }
+
+        // Strong validator derived from mtime+size — cheap, stable, and unique
+        // enough for a static asset without hashing the file contents.
+        $etag = sprintf('"%x-%x"', $mtime, $size);
+        $validators = [
+            'Cache-Control' => 'public, max-age=86400',
+            'ETag' => $etag,
+            'Last-Modified' => gmdate('D, d M Y H:i:s', $mtime) . ' GMT',
+        ];
+
+        if (self::isStaticAssetNotModified($etag, $mtime, $ifNoneMatch, $ifModifiedSince)) {
+            // 304: validators only, no Content-Type, no body.
+            return ['status' => 304, 'headers' => $validators];
+        }
+
+        return ['status' => 200, 'headers' => ['Content-Type' => $mime] + $validators];
+    }
+
+    /**
+     * Evaluate a conditional GET against a non-hashed asset's validators.
+     * If-None-Match takes precedence over If-Modified-Since (RFC 7232 §3.3).
+     */
+    private static function isStaticAssetNotModified(
+        string $etag,
+        int $mtime,
+        ?string $ifNoneMatch,
+        ?string $ifModifiedSince,
+    ): bool {
+        if ($ifNoneMatch !== null && $ifNoneMatch !== '') {
+            return self::etagMatches($ifNoneMatch, $etag);
+        }
+        if ($ifModifiedSince !== null && $ifModifiedSince !== '') {
+            $since = strtotime($ifModifiedSince);
+
+            return $since !== false && $mtime <= $since;
+        }
+
+        return false;
+    }
+
+    /**
+     * Weak comparison of an If-None-Match header (which may be `*`, a single
+     * entity-tag, or a comma-separated list, any of them weak) against $etag.
+     */
+    private static function etagMatches(string $ifNoneMatch, string $etag): bool
+    {
+        $ifNoneMatch = trim($ifNoneMatch);
+        if ($ifNoneMatch === '*') {
+            return true;
+        }
+        $target = self::stripWeakEtag($etag);
+        foreach (explode(',', $ifNoneMatch) as $candidate) {
+            if (self::stripWeakEtag(trim($candidate)) === $target) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Strip a leading weak indicator (`W/`) from an entity-tag so weak and
+     * strong forms of the same tag compare equal.
+     */
+    private static function stripWeakEtag(string $etag): string
+    {
+        return str_starts_with($etag, 'W/') ? substr($etag, 2) : $etag;
     }
 
     /**
@@ -1362,13 +1527,15 @@ final class Application
                 $path = $request->path();
                 if ($path !== '' && $path !== '/' && !str_starts_with($path, '/api/')) {
                     $candidate = $publicRoot . $path;
-                    $real = self::getRealPathMemo($candidate);
+                    // Memoized realpath + stat (mtime/size) — no per-hit
+                    // realpath()/is_file()/stat() syscalls on the loop.
+                    $file = self::getStaticFileMemo($candidate);
                     if (
-                        $real !== false
-                        && str_starts_with($real, $publicRoot . DIRECTORY_SEPARATOR)
-                        && is_file($real)
-                        && strtolower(pathinfo($real, PATHINFO_EXTENSION)) !== 'php'
+                        $file !== false
+                        && str_starts_with($file['real'], $publicRoot . DIRECTORY_SEPARATOR)
+                        && strtolower(pathinfo($file['real'], PATHINFO_EXTENSION)) !== 'php'
                     ) {
+                        $real = $file['real'];
                         // Extension-first MIME map — mime_content_type()
                         // sniffs content via libmagic and returns text/plain
                         // for CSS/JS/JSON/SVG, which makes the browser
@@ -1405,16 +1572,28 @@ final class Application
                         }
                         $mime ??= 'application/octet-stream';
                         // Hashed assets (e.g. app.abc123def456.js) are immutable —
-                        // long max-age + immutable. Non-hashed paths get a short
-                        // max-age so updates propagate quickly.
+                        // long max-age + immutable, no revalidation. Non-hashed
+                        // paths get a short max-age + ETag/Last-Modified so a
+                        // conditional GET can be answered 304 (no body).
                         $isHashedAsset = (bool) preg_match('/\.([a-f0-9]{6,12})\./i', $path);
-                        $cacheControl = $isHashedAsset
-                            ? 'public, max-age=31536000, immutable'
-                            : 'public, max-age=86400';
-                        $resp = new \Workerman\Protocols\Http\Response(200, [
-                            'Content-Type' => $mime,
-                            'Cache-Control' => $cacheControl,
-                        ]);
+                        $ifNoneMatch = $request->header('if-none-match');
+                        $ifModifiedSince = $request->header('if-modified-since');
+                        $decision = self::computeStaticCacheDecision(
+                            $mime,
+                            $isHashedAsset,
+                            $file['mtime'],
+                            $file['size'],
+                            is_string($ifNoneMatch) ? $ifNoneMatch : null,
+                            is_string($ifModifiedSince) ? $ifModifiedSince : null,
+                        );
+                        if ($decision['status'] === 304) {
+                            $status = 304;
+                            $connection->send(
+                                new \Workerman\Protocols\Http\Response(304, $decision['headers']),
+                            );
+                            return;
+                        }
+                        $resp = new \Workerman\Protocols\Http\Response(200, $decision['headers']);
                         $resp->withFile($real);
                         $connection->send($resp);
                         return;
