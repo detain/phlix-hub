@@ -1516,3 +1516,58 @@ ends up not needing it.
 - Full suite → **1320 pass / 15763 assertions / 17 skipped / 0 failures** (baseline 1318 + 2 new).
 - psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental). `bin/phlix migrate` not run
   (no DB on box — environmental; no migration touched by this fix anyway).
+
+## Reviewer (re-review) — HB-3.4 fix — 2026-07-12
+
+Re-reviewed the fix for the one Low finding (double `relay_user_quotas` row read on the
+streaming hot path). Range `9386359..47bc368` (f52b97a fix + 47bc368 tests). Read the current
+`src/Hub/RelaySessionManager.php`, `src/Http/Controllers/ServerProxyController.php`, and the two
+touched test files.
+
+**NO FINDINGS**
+
+1. **Finding CLOSED — one row read per streaming request.** `ServerProxyController::proxy()`
+   streaming branch (`:546`) now consumes `$maxStreams = $quotaCheck['maxConcurrentStreams']`
+   from the single `checkUserQuota()` result read at `:474`; the second
+   `getUserMaxConcurrentStreams()` SELECT is gone from the hot path.
+   `grep -rn getUserMaxConcurrentStreams src/` → only its own definition + a docblock @see; ZERO
+   production callers remain.
+
+2. **Behaviour preserved exactly.** `checkUserQuota()` return shape
+   `array{allowed, reason, maxConcurrentStreams}` populates the cap on ALL row paths — no-row
+   early-return → `maxConcurrentStreams => 0` (unlimited, `:599`), download over-cap (`:620`),
+   upload over-cap (`:629`), and allow (`:633`). In `proxy()`: over-quota → 503 `quota.exceeded`
+   before the streaming branch (`:475-482`); over-cap (`$maxStreams > 0 && active >= maxStreams`)
+   → 503 `stream.limit` returning before `buildStreamingResponse` so NO slot is occupied
+   (`:547-561`); under-cap → `buildStreamingResponse` occupies once (`beginUserStream :692`) and
+   releases once via the idempotent `$release` in the producer `finally` (`:697-743`). Default
+   `max_concurrent_streams = 0` still skips admission.
+
+3. **SQL correct (§0.4).** Combined SELECT projects only the needed columns
+   (`bytes_in, bytes_out, quota_bytes_in, quota_bytes_out, max_concurrent_streams`); colon-free
+   bind keys (`user_id`, `period_start`); named `:param` placeholders, no interpolation; predicate
+   `WHERE user_id = :user_id AND period_start = :period_start`; `LIMIT 1`; `$this->db->query` (no
+   raw PDO/mysqli).
+
+4. **No collateral regression.** `Tunnel.php` untouched (not in the changed-files set —
+   HB-3.3/HB-1.2 intact); the begin/end slot accounting + `finally` release in
+   `buildStreamingResponse` are byte-for-byte unchanged; `getUserMaxConcurrentStreams()` is LEFT
+   IN PLACE (§0.1), docblock updated to note the hot path no longer calls it and it is retained for
+   G5; its only remaining caller is the standalone unit test (correct).
+
+5. **Tests genuinely guard the change.** `ServerProxyControllerTest` — the two streaming-branch
+   tests now assert `expects(self::never())->method('getUserMaxConcurrentStreams')` (fails against
+   the pre-fix code, which called it) plus begin-once/end-once and never-begin on over-cap.
+   `RelaySessionManagerTest::testCheckUserQuotaFoldsInMaxConcurrentStreamsFromSingleRowRead` asserts
+   the projection contains `max_concurrent_streams`, the verdict carries it (=4), and exactly ONE
+   query is issued (fails against the pre-fix 2-key shape without the column);
+   `testCheckUserQuotaNoRowReturnsUnlimitedConcurrentStreams` covers the no-row → cap 0 path. The
+   default `controller()` mock and the over-quota/over-cap/under-cap admission tests still cover
+   default-no-cap / over-cap / under-cap.
+
+**Gates (this box, PHP 8.3.6 + PCOV):** `phpstan analyse --no-progress` → **[OK] No errors** (L9);
+`phpunit --filter 'RelaySessionManager|ServerProxyController'` → **OK (168 tests, 539 assertions)**;
+`phpcs --standard=PSR12 -n` on both touched src files → **clean (exit 0)**. psalm skipped (env);
+`bin/phlix migrate` not run (no DB) — neither is a finding.
+
+Verdict: **HB-3.4 hot-path fix DONE** (the one Low finding is closed; no new defect introduced).
