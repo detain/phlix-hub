@@ -1645,3 +1645,56 @@ baseline); `phpcs --standard=PSR12 -n` on all 4 touched src files → **clean (e
 `phpunit` → **OK — 1341 tests / 15836 assertions / 17 skipped / 0 failures** (baseline 1320 + 21 new).
 psalm skipped (env: PHP 8.3.6 < psalm-required 8.3.16); `bin/phlix migrate` not run (no DB) — no new
 migration needed (mig 038 `max_concurrent_streams` already exists). Neither is a finding.
+
+## Reviewer (per-step) — HB-3.4 G5 — 2026-07-12
+
+Reviewed commits `125fabc` + `ab1ab49` (range `06f9b1a..ab1ab49`): new `UserQuotaController`,
+route wiring in `Application.php` (`registerUserQuotaRoutes`), DI in `HubServicesProvider`,
+`RelaySessionManager::setUserQuota` 4th-arg extension, and tests.
+
+**NO FINDINGS**
+
+All 7 review checkpoints pass:
+
+1. **Route collision — clear.** `Router::addRoute` compiles `{id}` to `(?P<id>[^/]+)` (single
+   segment, no slash) and anchors every pattern `#^...$#`. The admin group registers GET
+   `/{id}/bandwidth` → `#^/api/v1/admin/users/(?P<id>[^/]+)/bandwidth$#` and PUT `/{id}/quota` →
+   `#^.../(?P<id>[^/]+)/quota$#`. `AdminUserController` registers `/{id}` (GET/PUT/DELETE),
+   `/{id}/set-admin`, `/{id}/reset-password`, `/{id}/profiles` — all mutually exclusive with the
+   new sub-paths (the `/{id}` update/get patterns require `$` immediately after the id, so a
+   single `[^/]+` id can never swallow `abc/bandwidth` or `abc/quota`). No `{path:.*}`/catch-all in
+   the admin-users group, no duplicate pattern key (no shadowing), correct verb separation
+   (PUT `/{id}` update vs PUT `/{id}/quota` are distinct keys in `routes['PUT']`; the new read is GET).
+2. **Authorization — correct.** `viewOwnBandwidth` derives the subject solely from `$request->userId`
+   (no path id), so a normal user can only read their own row. Both admin methods call the inline
+   `requireAdmin()` first; it is a genuine gate — `UserRepository::findAdminById($userId) === null` →
+   403 `admin_required` + `AuditLogger::logPermissionDenied` — a verbatim copy of
+   `RequestController::requireAdmin()` (only the audit label `admin.user_quota` differs). Behind it
+   sits `AdminMiddleware` on the route group (defence-in-depth). Auth-less → 401 `auth.required`;
+   non-admin (incl. requesting another user's bandwidth) → 403.
+3. **`setUserQuota` extension — backward compatible.** The `$maxConcurrentStreams === null` branch is
+   byte-for-byte identical to the prior 3-arg upsert (no `max_concurrent_streams` column touched);
+   the non-null branch folds the column into the SAME upsert with colon-free named binds, no
+   interpolation. Grep confirms the only production caller of `setUserQuota` is the new controller;
+   `testSetUserQuota` now also guards the column stays untouched on the 3-arg path.
+4. **Validation — correct.** `parseBoundedInt` accepts a native int or digit-only string, rejects
+   float / negative / non-numeric / missing / out-of-range (byte cap ≤ 1 PiB, streams ≤ 1000),
+   0 = unlimited; bad input → 400 `{error, code:'invalid_quota', message}`, missing id → 400
+   `missing_user_id` — matches the repo `{error, code}` convention.
+5. **DI + conventions — correct.** Registered in `HubServicesProvider` via `factory()` injecting the
+   real `RelaySessionManager` + `UserRepository` + `AuditLogger`, mirroring `RequestController`; no
+   raw PDO/mysqli. `Tunnel.php`, reaper, and txn machinery untouched (not in the diff). Endpoints are
+   hub-local — registered only in `registerUserQuotaRoutes`, not added to any relay-proxy allowlist.
+6. **Build-out policy — met.** No stubs/TODO; `getUserMaxConcurrentStreams` retained and G5 restores
+   its first production caller (`bandwidthPayload`). No deletions.
+7. **Tests genuine.** Non-admin paths assert `expects(self::never())->method('setUserQuota')` /
+   `->method('getUserBandwidth')` and the self path asserts `never()->findAdminById` — each fails if
+   the corresponding gate is removed. Auth-less → 401 and invalid-body (8-case provider) → 400 with
+   `setUserQuota` never() are covered.
+
+Read-only gates on this box: `phpstan analyse --no-progress` → **[OK] No errors** (L9, no baseline);
+`phpunit --filter 'UserQuota|RelaySessionManager|AdminUser'` → **OK (86 tests, 332 assertions)**.
+psalm skipped (env: PHP 8.3.6 < psalm-required 8.3.16); `bin/phlix migrate` not run (no DB) — neither
+is a finding.
+
+Verdict: **HB-3.4 G5 DONE** — NO FINDINGS.
