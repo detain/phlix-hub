@@ -18,6 +18,7 @@ use Phlix\Hub\Http\RequestContext;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Auth\JwtClaims;
 
+use function count;
 use function time;
 
 /**
@@ -54,10 +55,16 @@ final class AuthMiddleware
      *
      * Avoids a full `SELECT * FROM users WHERE id = ?` on every authenticated
      * request — the hot-path controllers only need $request->userId from the
-     * already-validated JWT. The cache stores a unix timestamp; entries older
-     * than USER_EXISTS_CACHE_TTL seconds are treated as stale.
+     * already-validated JWT. Each entry stores the BOOLEAN probe RESULT
+     * (`exists`) alongside the unix timestamp it was taken (`at`); entries
+     * older than USER_EXISTS_CACHE_TTL seconds are treated as stale and
+     * re-probed. Crucially the cache distinguishes existence: a user that
+     * probes as NON-existent is cached as `false` and keeps being rejected
+     * within the window — a deleted/revoked user can never be served a stale
+     * `true` (the auth.user_not_found gate is honoured for negatives too).
      *
-     * @var array<string, int> userId → unix timestamp of last confirmed existence
+     * @var array<string, array{exists: bool, at: int}>
+     *      userId → last existence-probe result + the unix timestamp it was taken
      */
     private static array $userExistsCache = [];
 
@@ -75,6 +82,15 @@ final class AuthMiddleware
      * TTL for entries in the user-existence cache (seconds).
      */
     private const int USER_EXISTS_CACHE_TTL = 5;
+
+    /**
+     * Hard cap on distinct cached user-ids per worker. A resident Workerman
+     * worker sees an unbounded stream of ids over its lifetime, so the cache
+     * is cleared wholesale once it would exceed this bound rather than growing
+     * without limit (no unbounded static state). The short TTL means a clear
+     * costs at most one extra lean probe per active user.
+     */
+    private const int USER_EXISTS_CACHE_MAX = 10000;
 
     /**
      * @param JwtHandler     $jwt   JWT validator.
@@ -206,19 +222,33 @@ final class AuthMiddleware
     {
         $now = time();
 
-        // Warm cache entry on miss — one lightweight query per user per TTL window.
-        if (!isset(self::$userExistsCache[$userId]) || ($now - self::$userExistsCache[$userId]) > self::USER_EXISTS_CACHE_TTL) {
-            if ($this->users->userExists($userId)) {
-                self::$userExistsCache[$userId] = $now;
-                return true;
-            }
-            // Negative cache too: record that this user definitely does not exist
-            // so we don't re-query for a deleted user within the TTL window.
-            self::$userExistsCache[$userId] = $now;
-            return false;
+        $entry = self::$userExistsCache[$userId] ?? null;
+        if ($entry !== null && ($now - $entry['at']) <= self::USER_EXISTS_CACHE_TTL) {
+            // Cache hit within TTL: honour the CACHED BOOLEAN RESULT, never an
+            // unconditional `true`. A user probed as non-existent stays
+            // rejected for the rest of the window, so a deleted/revoked user
+            // cannot bypass the auth.user_not_found gate.
+            return $entry['exists'];
         }
 
-        return true;
+        // Miss or stale: run the lean existence probe once and cache the
+        // boolean result with its timestamp. The common (existing-user) case
+        // still skips this probe on the hot path via the branch above, while a
+        // negative result is honoured for the TTL window just like a positive
+        // one. Revocation latency is bounded by USER_EXISTS_CACHE_TTL.
+        $exists = $this->users->userExists($userId);
+
+        // Bound the per-worker cache so an unbounded churn of distinct ids in
+        // a resident worker can't grow it without limit.
+        if (
+            !isset(self::$userExistsCache[$userId])
+            && count(self::$userExistsCache) >= self::USER_EXISTS_CACHE_MAX
+        ) {
+            self::$userExistsCache = [];
+        }
+
+        self::$userExistsCache[$userId] = ['exists' => $exists, 'at' => $now];
+        return $exists;
     }
 
     /**
