@@ -78,7 +78,7 @@ php bin/phlix migrate
 - [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE — ⚠️ FIXER 2026-07-12: the "move ALL reapers to the maintenance worker" change BROKE the in-memory tunnel reaper (HB-0.1) + keepalive heartbeat (maintenance fork's TunnelManager/accumulators are EMPTY). Re-split by data locality: in-memory tasks back on the relay worker, DB-only reapers stay on maintenance. See `## Fixer — HB-2.6 — 2026-07-12`.
 - [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE — FIXER 2026-07-12: replaced the broad `PUT /api/v1/media` + `PUT|DELETE /api/v1/playlists` prefixes with ANCHORED per-action PCREs; PATCH documented as registered-but-deny (no server PATCH write route); added the anchoring guard + real bodied round-trip tests. See `## Fixer — HB-3.1 — 2026-07-12`.
 - [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin — FIXER 2026-07-12: closed a SECURITY gap — room namespace was scoped cosmetically (keyed by the RAW client-supplied string) so two authed users owning DIFFERENT servers who picked the same friendly room name shared ONE room + controlled each other's playback. Now rooms are keyed by the scoped `{server_id}:{owner}:{clientRoom}` key + first SyncPlayRelayWorker tests. See `## Fixer — HB-3.2 — 2026-07-12`.
-- [x] HB-3.3  per-channel tunnel flow control/fairness  (commit: cbc29cc)  DONE
+- [~] HB-3.3  per-channel tunnel flow control/fairness  RE-AUDIT+COMPLETE 2026-07-12: was PARTIAL (real commit b5a9dba's HTTP_REQUEST-HEAD/END=HIGH priority approach was correctly REVERTED by HB-1.2 fix-3 8d6c1c3 because it reordered chunked bodies; no replacement fairness existed). NOW DONE: replaced the flat `pendingBodyFrames` FIFO with per-channel body queues keyed by `RelayFrame::channelId()`; `flushBodyQueue` drains ROUND-ROBIN (one frame/channel/pass) so a bulk transfer can't starve a browse request; strict intra-channel FIFO preserved (per-channel array_shift → HEAD/BODY/END never reorder). removeClient + close clear per-channel buckets. +1 two-stream fairness test. See `## Implementer — HB-3.3 — 2026-07-12`.
 - [x] HB-3.4  bandwidth accounting + per-user quotas  (commit: 1de552a)  DONE
 - [x] HB-4.1  relay observability metrics  (commit: H-W4-batch)  DONE — pending-request gauge, reply-drop counter, per-request latency histogram, 503/504 counters, decode-buffer-size gauge fully wired in MetricsCollector/Registry/FlushService + RelayProxyManager
 - [x] HB-4.2  client_relay_tokens retention sweep  (commit: H-W4-batch)  DONE — pruneExpiredTokens() in ClientRelayTokenService, called from IdleReaper tick
@@ -1211,4 +1211,63 @@ param; mock `ServerInfoHandler::getOwnerAndStatus`; recording mock `TcpConnectio
   17 skipped / 0 failures** (baseline 1296 + 5 new).
 - `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
 - `phpcs --standard=PSR12 -n src/` → **clean (exit 0)** (new test file also clean).
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
+
+## Implementer — HB-3.3 — 2026-07-12 (per-channel fair scheduling / anti head-of-line-blocking)
+
+**Problem (H-R4 / audit PARTIAL).** After HB-1.2 fix-3 all stream frames (HTTP_REQUEST browse/segment,
+chunked HEAD/BODY/END, DATA) correctly share ONE priority class (LOW) so intra-request ordering is
+preserved — but they shared a SINGLE FLAT `pendingBodyFrames` FIFO. Under server backpressure a large
+transfer on channel A monopolised that FIFO and a browse HTTP_REQUEST on channel B landed dead-last
+behind A's entire backlog → head-of-line blocking, one client starving another on the same tunnel. The
+naive fix (re-prioritising HEAD/END as HIGH) was already tried in the real HB-3.3 commit b5a9dba and
+REVERTED by HB-1.2 fix-3 (8d6c1c3) because it reordered chunked request bodies (END overtaking BODY).
+
+**Fix = per-channel fair scheduling, NOT priority reclassification.** `isHighPriorityFrame` is UNCHANGED
+(HIGH = HEARTBEAT/HTTP_CANCEL/CLIENT_CONNECT/CLIENT_DISCONNECT only). Intra-request ordering stays
+strictly FIFO; interleaving happens ACROSS channels.
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-hub/src/Relay/Tunnel.php`
+  - **HB-3.3a (data structure):** `pendingBodyFrames` changed from `list<RelayFrame>` to
+    `array<int, list<RelayFrame>>` keyed by `RelayFrame::channelId()` (the `seq` field — client channel
+    id for DATA, relay request id for HTTP_REQUEST sub-frames). Mirrors the shape of `pendingClientFrames`.
+    Emptied channel keys are unset so `empty($this->pendingBodyFrames)` reliably means "no backlog"
+    (the existing enqueue-if-backlog guard at `sendToServer` + the drain-handler check both rely on it,
+    unchanged).
+  - **HB-3.3b (scheduler):** `flushBodyQueue()` rewritten to ROUND-ROBIN — an outer `while (!empty)` with
+    an inner `foreach (array_keys(...))` sending AT MOST ONE frame per channel per pass. Strict
+    intra-channel FIFO via `[0]` + `array_shift` on each channel's list (HEAD→BODY→END of one request
+    never reorder). On `send()===false` mid-flush it leaves everything queued and re-arms backpressure
+    (no frame dropped — HB-1.2 invariant preserved). Control-before-body ordering in the server
+    `onBufferDrain` (flushHighPriorityQueue then flushBodyQueue) is UNCHANGED.
+  - **HB-3.3c (wiring/lifecycle):** `enqueueBodyFrame()` now appends to `pendingBodyFrames[$frame->channelId()]`;
+    the MAX_BODY_QUEUE=256 cap is enforced as the AGGREGATE across all channels via a new `bodyQueueTotal()`
+    helper (memory bound independent of channel count → still `close('backpressure_overflow')`). `removeClient`
+    now also `unset($this->pendingBodyFrames[$channelId])` for a departing client's channel (no leak/stranded
+    slot); `close()` already reset the whole array (works for array-of-arrays). The low-priority enqueue
+    guard in `sendToServer` and the `onBufferDrain` flush logic were left intact.
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/TunnelTest.php`
+  - **HB-3.3d:** added `test_body_queue_round_robin_prevents_one_channel_starving_another` — channel A
+    enqueues an 8-frame BODY burst, then channel B enqueues one browse HTTP_REQUEST while congested;
+    on drain asserts B is delivered at index 1 (first round-robin pass — bounded delay, not index 8),
+    AND channel A's 8 chunks stay in strict FIFO order. Relabeled
+    `test_is_high_priority_frame_classifies_by_type_without_decoding_payload`'s docblock to disclaim any
+    fairness guarantee (it documents ONLY type-classification; points at the new fairness test).
+
+**AC mapping:** "concurrent clients on one server's tunnel get fair progress; a large transfer doesn't
+stall browse/segment requests" → the round-robin drain delivers channel B's request on the first pass
+regardless of channel A's backlog size (proved by the new test). Intra-request framing integrity
+("HEAD/BODY/END never reorder") preserved by per-channel FIFO (existing chunked-order test + the new
+test's channel-A FIFO assertion still green).
+
+**Out of scope (noted only, NOT built):** a separate tunnel connection for bulk media vs control
+(the longer-term H-R4 option) — future work.
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `phpunit --filter Tunnel` → **OK (80 tests, 294 assertions)**.
+- Full suite `php -d max_execution_time=0 ./vendor/bin/phpunit` → **OK, 1302 tests / 15705 assertions /
+  17 skipped / 0 failures** (baseline 1301 + 1 new).
+- `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
 - psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).

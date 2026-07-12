@@ -1426,6 +1426,13 @@ class TunnelTest extends TestCase
      * out-of-band control frames (HEARTBEAT/CANCEL/CLIENT_CONNECT/DISCONNECT)
      * are HIGH. This is the regression guard for the fault where json_decode
      * threw JsonException on the tag byte and faulted every chunked bodied relay.
+     *
+     * NOTE (HB-3.3): this test documents ONLY frame-type classification — it does
+     * NOT prove any cross-channel fairness guarantee. Control-priority is safe
+     * only as INTER-request fairness, never for within-request ordering. The
+     * actual per-channel fairness / anti-starvation guarantee (one bulk channel
+     * must not starve another channel's browse request) is proved by
+     * {@see test_body_queue_round_robin_prevents_one_channel_starving_another}.
      */
     public function test_is_high_priority_frame_classifies_by_type_without_decoding_payload(): void
     {
@@ -1515,6 +1522,84 @@ class TunnelTest extends TestCase
         $this->assertSame($body1, $this->decodeFrame($sent[1])->payload, 'BODY-1 second');
         $this->assertSame($body2, $this->decodeFrame($sent[2])->payload, 'BODY-2 third');
         $this->assertSame($endPayload, $this->decodeFrame($sent[3])->payload, 'END last — never overtakes BODY');
+    }
+
+    // ---------------------------------------------------------------------
+    // HB-3.3 — per-channel fair scheduling (anti head-of-line-blocking).
+    // ---------------------------------------------------------------------
+
+    /**
+     * HB-3.3 two-stream fairness / anti-starvation (the acceptance-criteria
+     * proof). Under server backpressure, a channel streaming a large BODY burst
+     * (channel A) must NOT starve another channel's single browse request
+     * (channel B). The scheduler drains the per-channel body queues ROUND-ROBIN
+     * (one frame per channel per pass), so B's request is delivered with BOUNDED
+     * delay — interleaved on the FIRST pass, right after A's first chunk — rather
+     * than dead-last behind A's entire backlog (which is what a single flat FIFO
+     * body queue did, the H-R4 head-of-line-blocking bug). Simultaneously,
+     * channel A's own HEAD/BODY/END chunks stay in strict intra-channel FIFO
+     * order, so per-request framing is never corrupted.
+     */
+    public function test_body_queue_round_robin_prevents_one_channel_starving_another(): void
+    {
+        $tunnel = $this->activeTunnel();
+
+        $full = true; // buffer full from the start: every frame queues per-channel
+        $sent = [];
+        $this->serverWs->method('send')->willReturnCallback(
+            function (string $data) use (&$full, &$sent): bool {
+                if ($full) {
+                    return false;
+                }
+                $sent[] = $data;
+                return true;
+            }
+        );
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+
+        $channelA = 100; // bulk media transfer (many BODY chunks)
+        $channelB = 200; // a single browse request
+
+        // Channel A enqueues a large BODY burst while the buffer is full.
+        $burst = 8;
+        $aPayloads = [];
+        for ($i = 0; $i < $burst; $i++) {
+            $payload = RelayHttpRequestCodec::encodeBody('A-CHUNK-' . $i);
+            $aPayloads[] = $payload;
+            $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, $channelA, $payload));
+        }
+
+        // Channel B enqueues ONE browse request (single-frame HTTP_REQUEST
+        // envelope) AFTER A's whole backlog. With a flat FIFO body queue this
+        // would land dead-last (index 8), stalled behind the bulk transfer.
+        $bPayload = json_encode(['method' => 'GET', 'path' => '/api/v1/media']);
+        $this->assertIsString($bPayload);
+        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, $channelB, $bPayload));
+
+        // Nothing on the wire yet — all queued behind the full buffer, none dropped.
+        $this->assertSame([], $sent, 'all frames queued while congested, none dropped');
+
+        // Buffer drains — the tunnel flushes the per-channel body queues round-robin.
+        $this->assertIsCallable($this->serverWs->onBufferDrain);
+        $full = false;
+        ($this->serverWs->onBufferDrain)();
+
+        // Everything is delivered; nothing lost.
+        $this->assertCount($burst + 1, $sent);
+
+        $order = array_map(fn (string $w): string => $this->decodeFrame($w)->payload, $sent);
+        $bIndex = array_search($bPayload, $order, true);
+
+        // FAIRNESS: B's request interleaves on the FIRST round-robin pass (index
+        // 1, right after A's first chunk) — bounded delay, NOT after A's entire
+        // 8-frame backlog. A flat-FIFO regression would put it at index 8.
+        $this->assertSame(1, $bIndex, 'browse request must interleave on the first pass, not wait for the whole bulk backlog');
+        $this->assertLessThan($burst, $bIndex, 'browse request delay must be bounded by the channel count, not the backlog size');
+
+        // INTRA-CHANNEL FIFO: channel A's chunks stay in strict producer order.
+        $aOrder = array_values(array_filter($order, fn (string $p): bool => $p !== $bPayload));
+        $this->assertSame($aPayloads, $aOrder, 'channel A body chunks must stay in FIFO order');
     }
 
     /**

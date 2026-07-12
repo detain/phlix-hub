@@ -212,11 +212,13 @@ final class Tunnel implements TunnelInterface
 
     /**
      * Maximum number of low-priority BODY frames that may be re-queued while the
-     * server's send buffer is full. When the server is congested we pause all
-     * client reads, so in practice at most the single in-flight frame lands here;
-     * the cap is a safety valve. If it is exceeded we close the tunnel (a hard,
-     * visible failure) rather than either dropping a frame (silent corruption)
-     * or buffering unbounded (memory leak in the resident worker).
+     * server's send buffer is full — counted as the AGGREGATE across all
+     * per-channel body queues ({@see bodyQueueTotal()}), so the memory footprint
+     * stays bounded regardless of how many channels are congested. When the
+     * server is congested we pause all client reads, so in practice little lands
+     * here; the cap is a safety valve. If it is exceeded we close the tunnel (a
+     * hard, visible failure) rather than either dropping a frame (silent
+     * corruption) or buffering unbounded (memory leak in the resident worker).
      */
     private const MAX_BODY_QUEUE = 256;
 
@@ -239,14 +241,22 @@ final class Tunnel implements TunnelInterface
     private array $pendingHighPriorityFrames = [];
 
     /**
-     * Low-priority BODY frame queue toward the server. A BODY frame whose
-     * {@see TcpConnection::send()} returned false (send buffer full — Workerman
-     * DROPS the package before returning) is re-queued here instead of being
-     * lost, and re-sent (in FIFO order, after the high-priority queue) when the
-     * server's send buffer drains. This closes the silent-drop hole on the
-     * server body path — the tunnel assumes reliable delivery.
+     * Per-CHANNEL low-priority BODY frame queues toward the server, keyed by the
+     * frame's channel id ({@see RelayFrame::channelId()} — the `seq` field: a
+     * client channel id for DATA, a relay request id for HTTP_REQUEST sub-frames).
      *
-     * @var list<RelayFrame>
+     * A body/stream frame whose {@see TcpConnection::send()} returned false (send
+     * buffer full — Workerman DROPS the package before returning), or that arrives
+     * while a backlog already exists, is re-queued into its channel's list instead
+     * of being lost. {@see flushBodyQueue()} drains the channels ROUND-ROBIN (one
+     * frame per channel per pass) so a large bulk transfer on channel A cannot
+     * starve channel B's browse/segment request (the HB-3.3 fairness requirement).
+     * Strict intra-channel FIFO is preserved by the per-channel list + array_shift,
+     * so the sub-frames of one request (HEAD→BODY→END) never reorder; only
+     * DISTINCT channels interleave. Emptied channel keys are unset on drain so a
+     * plain `empty($this->pendingBodyFrames)` reliably means "no body backlog".
+     *
+     * @var array<int, list<RelayFrame>>
      */
     private array $pendingBodyFrames = [];
 
@@ -701,53 +711,100 @@ final class Tunnel implements TunnelInterface
     }
 
     /**
-     * Flush the low-priority BODY frame queue toward the server, in FIFO order.
-     * If the server's send buffer fills again, the frame is left at the head of
-     * the queue and backpressure is (re-)applied so the next drain retries it —
-     * no BODY frame is ever discarded.
+     * Flush the per-channel low-priority BODY frame queues toward the server,
+     * ROUND-ROBIN — at most one frame per channel per pass — so no single channel
+     * (e.g. a large media transfer) monopolises the tunnel and starves another
+     * channel's browse/segment request (the HB-3.3 fairness requirement). Within
+     * a channel the frames stay in strict FIFO order (array_shift of that
+     * channel's list), so a request's HEAD/BODY/END sub-frames never reorder;
+     * only distinct channels interleave. If the server's send buffer fills again
+     * mid-flush the offending frame is left at the head of its channel queue and
+     * backpressure is (re-)applied so the next drain retries it — no BODY frame
+     * is ever discarded.
      *
      * @return void
      */
     private function flushBodyQueue(): void
     {
         while (!empty($this->pendingBodyFrames)) {
-            $frame = $this->pendingBodyFrames[0];
-            $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
-            if ($this->serverWs->send($encoded) === false) {
-                // Still full — leave the frame queued and re-arm backpressure.
-                $this->handleServerSendBackpressure();
-                return;
+            $progressed = false;
+
+            // One frame per channel per pass = fair interleave across channels.
+            foreach (array_keys($this->pendingBodyFrames) as $channel) {
+                if (empty($this->pendingBodyFrames[$channel])) {
+                    unset($this->pendingBodyFrames[$channel]);
+                    continue;
+                }
+
+                $frame = $this->pendingBodyFrames[$channel][0];
+                $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
+                if ($this->serverWs->send($encoded) === false) {
+                    // Still full — leave every frame queued and re-arm backpressure.
+                    $this->handleServerSendBackpressure();
+                    return;
+                }
+
+                array_shift($this->pendingBodyFrames[$channel]);
+                if (empty($this->pendingBodyFrames[$channel])) {
+                    unset($this->pendingBodyFrames[$channel]);
+                }
+
+                $this->bytesOut += strlen($encoded);
+                if ($this->relaySessionId !== null) {
+                    $this->sessionManager->recordBytesOut($this->relaySessionId, strlen($encoded));
+                }
+                $progressed = true;
             }
-            array_shift($this->pendingBodyFrames);
-            $this->bytesOut += strlen($encoded);
-            if ($this->relaySessionId !== null) {
-                $this->sessionManager->recordBytesOut($this->relaySessionId, strlen($encoded));
+
+            // Defensive: if a pass sent nothing (all channels were empty and
+            // unset) stop rather than spin. Normal completion is the while guard.
+            if (!$progressed) {
+                break;
             }
         }
     }
 
     /**
-     * Re-queue a BODY frame that could not be sent because the server's send
-     * buffer was full. Bounded by {@see MAX_BODY_QUEUE}; exceeding the bound
-     * closes the tunnel (hard, visible failure) rather than dropping the frame
-     * (silent corruption) or buffering unbounded.
+     * Re-queue a BODY/stream frame that could not be sent (server send buffer
+     * full) or that arrived while a backlog already exists, into ITS CHANNEL's
+     * queue ({@see $pendingBodyFrames}, keyed by {@see RelayFrame::channelId()})
+     * so intra-channel FIFO is preserved and channels are drained fairly. Bounded
+     * by {@see MAX_BODY_QUEUE} across ALL channels combined ({@see bodyQueueTotal});
+     * exceeding the bound closes the tunnel (hard, visible failure) rather than
+     * dropping the frame (silent corruption) or buffering unbounded.
      *
-     * @param RelayFrame $frame The BODY frame to re-queue.
+     * @param RelayFrame $frame The BODY/stream frame to re-queue.
      *
      * @return void
      */
     private function enqueueBodyFrame(RelayFrame $frame): void
     {
-        if (count($this->pendingBodyFrames) >= self::MAX_BODY_QUEUE) {
+        if ($this->bodyQueueTotal() >= self::MAX_BODY_QUEUE) {
             $this->logger->error('Relay: body queue full under backpressure, closing tunnel', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,
-                'queue_size' => count($this->pendingBodyFrames),
+                'queue_size' => $this->bodyQueueTotal(),
             ]);
             $this->close('backpressure_overflow');
             return;
         }
-        $this->pendingBodyFrames[] = $frame;
+        $this->pendingBodyFrames[$frame->channelId()][] = $frame;
+    }
+
+    /**
+     * Total number of BODY/stream frames queued across ALL per-channel body
+     * queues — the aggregate bound checked against {@see MAX_BODY_QUEUE} so the
+     * memory footprint stays bounded regardless of channel count.
+     *
+     * @return int
+     */
+    private function bodyQueueTotal(): int
+    {
+        $total = 0;
+        foreach ($this->pendingBodyFrames as $frames) {
+            $total += count($frames);
+        }
+        return $total;
     }
 
     /**
@@ -854,10 +911,12 @@ final class Tunnel implements TunnelInterface
         }
 
         // If a backlog already exists (control frames still queued after the
-        // flush above, or body frames from a prior drop), this body frame must
-        // NOT be sent ahead of it — that would both reorder the stream and race
-        // a full buffer. Re-queue it to preserve FIFO order; it is flushed on
-        // drain. A non-empty queue implies backpressure is already armed.
+        // flush above, or body frames on ANY channel from a prior drop), this
+        // body frame must NOT be sent ahead of it — that would race a full buffer
+        // and bypass the fair round-robin drain. Re-queue it into its channel's
+        // queue; the round-robin flush on drain delivers it with bounded delay
+        // (one frame per channel per pass) while preserving intra-channel FIFO.
+        // A non-empty queue implies backpressure is already armed.
         if (!empty($this->pendingHighPriorityFrames) || !empty($this->pendingBodyFrames)) {
             $this->enqueueBodyFrame($frame);
             return;
@@ -1408,6 +1467,17 @@ final class Tunnel implements TunnelInterface
                     }
                 }
             }
+        }
+
+        // Drop any low-priority body frames still queued toward the server on
+        // THIS client's channel (its client→server DATA chunks). The client is
+        // gone, so they can never complete; leaving them would leak in the
+        // resident worker and hold a fair-scheduling slot. HTTP_REQUEST buckets
+        // keyed by relay request id are unaffected — a proxied request is not
+        // tied to a persistent client channel — so this only reclaims the
+        // departing channel's own bulk stream.
+        if ($channelId > 0 && isset($this->pendingBodyFrames[$channelId])) {
+            unset($this->pendingBodyFrames[$channelId]);
         }
 
         // Send CLIENT_DISCONNECT notification to the server, tagged with the
