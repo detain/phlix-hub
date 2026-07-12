@@ -41,7 +41,7 @@ ls .github/workflows/              # CI pipelines: phpunit + phpstan + psalm + p
 - **DB**: only `Workerman\MySQL\Connection` with named `:param` placeholders (positional `?` breaks `bindMore()`); no PDO/mysqli; no string interpolation. Example: `src/Common/Database/MigrationRunner.php`.
 - **Logging**: `LoggerFactory::get(LogChannels::*)` (`src/Common/Logger/LogChannels.php`).
 - **Controllers**: `final`, return `Response->json([...'error','code'])`, gate on `$request->userId` (401 `auth.required`), map handler exception codes to HTTP.
-- **Migrations**: `-- migration: NNN_name` header, `CREATE TABLE IF NOT EXISTS`, `ENGINE=InnoDB` utf8mb4, `CHAR(36)` PK — enforced by `tests/Unit/Migrations/MigrationFileTest.php`.
+- **Migrations**: `-- migration: NNN_name` header, `CREATE TABLE IF NOT EXISTS`, `ENGINE=InnoDB` utf8mb4, `CHAR(36)` PK — enforced by `tests/Unit/Migrations/MigrationFileTest.php`. Column/index DDL must be **plain** (`ADD COLUMN …`, `CREATE INDEX …`); **never** write `IF [NOT] EXISTS` on a column/index/key — that is MariaDB-only and the MySQL 8 deploy target rejects it (1064). Idempotency comes from the `MigrationRunner` tracking table (each file applied once), not from `IF NOT EXISTS` guards.
 - **Shared types**: cross-repo DTOs live in the `Phlix\Shared\*` namespace (the shared composer package); do not duplicate.
 - PHPStan 9 + Psalm 1 green, **no baselines**; PHPDoc on public API.
 
