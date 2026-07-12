@@ -78,6 +78,65 @@ final class ServerInfoHandlerTest extends TestCase
         self::assertStringContainsString('AS library_count', $captured);
     }
 
+    /**
+     * HB-1.4 [H-D3]: the proxy-admission / WS-mount gate query
+     * `getOwnerAndStatus()` must be LEAN — it selects only the admission
+     * fields (`id`, `user_id`, `status`) plus the fresh relay-active EXISTS
+     * probe, and must NEVER run the heavy dashboard `COUNT(server_libraries)`
+     * correlated subquery that `getServerInfo()` carries.
+     */
+    public function testGetOwnerAndStatusIsLeanWithNoLibraryCountSubquery(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $captured = '';
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$captured): array {
+                $captured = $sql;
+                return [];
+            },
+        );
+
+        $handler = new ServerInfoHandler($db);
+        $handler->getOwnerAndStatus('server-1');
+
+        // Selects only the admission fields.
+        self::assertStringContainsString('SELECT s.id, s.user_id, s.status', $captured);
+        // Keeps the fresh relay-active liveness probe.
+        self::assertStringContainsString('EXISTS(', $captured);
+        // But NEVER the heavy dashboard COUNT(server_libraries) subquery.
+        self::assertStringNotContainsString('COUNT(', $captured);
+        self::assertStringNotContainsString('server_libraries', $captured);
+        self::assertStringNotContainsString('library_count', $captured);
+    }
+
+    public function testGetOwnerAndStatusReturnsShapeWhenFound(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([[
+            'id' => 'server-1',
+            'user_id' => 'owner-9',
+            'status' => 'online',
+            'relay_active' => 1,
+        ]]);
+
+        $handler = new ServerInfoHandler($db);
+        $owner = $handler->getOwnerAndStatus('server-1');
+
+        self::assertSame(
+            ['userId' => 'owner-9', 'status' => 'online', 'relayActive' => true],
+            $owner,
+        );
+    }
+
+    public function testGetOwnerAndStatusReturnsNullWhenNotFound(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $handler = new ServerInfoHandler($db);
+        self::assertNull($handler->getOwnerAndStatus('nonexistent'));
+    }
+
     public function testGetServersForUserSelectsUnixTimestampAndLibraryCount(): void
     {
         $db = $this->createMock(Connection::class);

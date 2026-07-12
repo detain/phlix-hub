@@ -69,7 +69,7 @@ php bin/phlix migrate
 - [x] HB-1.1  drop base64 on internal channel-broker body path  RE-AUDIT 2026-07-12: DONE (code — raw body publish/decode, minimal payload; residual base64 is the REQUEST envelope = HB-2.1 territory, out of scope). Tests SHALLOW (ASCII-only; missing binary round-trip w/ NUL/0xFF/invalid-UTF-8). → optional test hardening queued. (e7ef677, 49913e7, d16b567)
 - [~] HB-1.2  raw tunnel data-plane backpressure  FIX LANDED 2026-07-12 → RE-REVIEW spawned (Implementer) — drop hole closed on BOTH paths via re-queue+retry-on-drain (mirrors pendingHighPriorityFrames). sendToClient: per-client `pendingClientFrames[channelId]` re-queues the dropped DATA frame, `flushClientQueue` re-sends on that client's onBufferDrain BEFORE decrementing serverBackpressureCount/resuming server. sendToServer low-priority body: `pendingBodyFrames` re-queues, `flushBodyQueue` re-sends on serverWs onBufferDrain (control-first then body) BEFORE resuming clients. Both caps (256) → close('backpressure_overflow') hard-fail; existing close('backpressure_timeout') safety timer kept (extracted to testable named methods, Timer::add wrapped in try/catch like RelayProxyManager). removeClient releases a congested client's slot so it can't strand the pause. +4 tests (no-drop deliver-on-drain + timeout-close, client & server paths). Commits 728a843,5fedc5f. was PARTIAL (2a2b421, 0aed3e0, b1140b1). REVIEW-2 2026-07-12: 5 findings — the fix INTRODUCED issues on untested seams: #1 CONFIRMED reordering — high-priority server path (:719-733) lacks the enqueue-if-backlog guard the body/client paths have → a new control frame (HEARTBEAT/CANCEL/CLIENT_CONNECT/DISCONNECT) jumps ahead of queued frames (silent reorder). #2 CONFIRMED — high-priority overflow (:721-729) logs+returns (silent drop) instead of close('backpressure_overflow'). #3 lower-conf pre-existing — uncancelled one-shot safety timers test GLOBAL count → stale timer false-closes healthy tunnel (:984-998,:1080-1090). #4 test gap — no multi-frame FIFO / removeClient-release / overflow→close / high-priority-path coverage. #5 hygiene — pendingHighPriorityFrames not cleared in close()/notifyClientsDisconnected. → FIX-2 spawned (#1,#2,#3,#4,#5). FIX-2 LANDED 2026-07-12 → RE-REVIEW (review-3): all 5 fixed — #1 enqueue-if-backlog guard on high-priority path (FIFO preserved: flush control-then-body unchanged); #2 enqueueHighPriorityFrame close('backpressure_overflow'); #3 episode-scoped safety timers (arm on 0→1 / false→true, cancel on drain in armClientDrain+removeClient+server drain+close) so a stale timer can't false-close; #5 close() clears pendingHighPriorityFrames + cancels both timers. +7 tests (FIFO high-priority+backlog, client FIFO, removeClient release, multi-client 2→1→0, 3× overflow→close). Suite 1232 pass/17 skip, phpstan L9 clean, phpcs -n src/ clean. Commits 99fb814 (fix), c10d02b (tests).
 - [x] HB-1.3  non-blocking onReply delivery  RE-AUDIT 2026-07-12: DONE, well-tested — push(...,0.0) non-blocking probe, full/closed → own Coroutine::create fiber (deliverReplyInFiber) so one stuck consumer blocks only its fiber; 3 substantive tests. No action. (e3cb349, 8ea42ae, 8d45c85)
-- [~] HB-1.4  lean owner/status queries on hot paths  RE-AUDIT 2026-07-12: PARTIAL. Wiring DONE (getOwnerAndStatus omits COUNT, used by proxy-admission + client-mount; AuthMiddleware uses lean userExists + $request->userId from token + 5s TTL cache). BUG: AuthMiddleware::userExists (:205-220) negative cache broken — non-existent user cached same as existing (bare ts), cache-hit returns true unconditionally → deleted/revoked user bypasses auth.user_not_found gate for the 5s TTL. Test gaps: no getOwnerAndStatus leanness test, no expects(never())->findById, no cache-TTL query-count test. → FIX agent queued. (c0461ed, 2f81f37, e5ce01e)
+- [x] HB-1.4  lean owner/status queries on hot paths  FIX 2026-07-12: DONE. Negative-cache defect closed — AuthMiddleware::userExists now stores the BOOLEAN probe result + timestamp (was a bare ts) and a cache hit returns the cached boolean (was unconditional true), so a deleted/revoked user is rejected for the whole TTL instead of bypassing auth.user_not_found; hot-path optimisation + short-TTL revocation preserved; static cache bounded (USER_EXISTS_CACHE_MAX). +9 tests: getOwnerAndStatus leanness (SQL no-COUNT + proxy/client-mount never()->getServerInfo), never()->findById on hot path, cache-TTL query-count + deleted-user regression guard + TTL-expiry re-probe. Suite 1243 pass/17 skip, phpstan L9 0, phpcs -n src/ clean. Prior wiring (c0461ed, 2f81f37, e5ce01e).
 - [~] HB-2.1  request-body chunking over tunnel (enable bodied relay)  RE-AUDIT-2 2026-07-12 (post HB-1.2 fix-3): NOT-DONE — CROSS-REPO BLOCKER, X2 only HALF-landed. Hub side CORRECT (RelayHttpRequestCodec tag-byte HEAD/BODY/END; RelayProxyManager.php:288-319 chunks >64KB; 413 cap lifted; classifier now match($frame->type) → chunked frames flow LOW/pendingBodyFrames without throwing, proven by TunnelTest). BUT **phlix-server never built the request-reassembly half + is NOT repinned to the shared request codec** → a real >64KB bodied relay now fails 400-malformed (RelayConsumer::onHttpRequest @server:745-746 does RelayHttpRequest::fromJson unconditionally, no tag-byte branch/accumulator; server composer.lock detain/phlix-shared v0.19.0 has only RelayHttpResponseCodec). GAPS to close HB-2.1: (a) SERVER repin to shared ≥216ea5d; (b) SERVER onHttpRequest per-requestId chunk reassembly (mirror response side); (c) HUB test: onRequest(>64KB binary body incl NUL/0xFF) emits HEAD+N·BODY+END on one requestId (RelayProxyManager.php:300-318 = 0 coverage today); (d) integration round-trip (writable only after b). Hub unit-codec round-trip + Tunnel classification/ordering ALREADY tested. (commits: phlix-shared:216ea5d, phlix-hub:7b71c190; classifier fb9e7b7). → server task queued (SV-side of X2).
 - [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  (commit: 7c30723)  DONE
 - [x] HB-2.3  cap FrameDecoder buffer  (commit: ec17c9cc)  DONE
@@ -497,3 +497,59 @@ Verification (this box, PHP 8.3.6 + PCOV):
 Verdict: **HB-1.2 DONE** (pending the standard Docs cycle). HB-2.1 still needs its
 flagged end-to-end re-audit (a real >64 KB bodied relay round-trip) now that the
 classifier fault is fixed.
+
+## Fixer — HB-1.4 — 2026-07-12
+
+Closed the security defect + the three test gaps the RE-AUDIT flagged. The wiring
+(`getOwnerAndStatus` omitting the COUNT subquery; used by proxy-admission + WS client-mount;
+`AuthMiddleware` using the lean `userExists` probe + `$request->userId` from the validated token)
+was already correct — only the negative-cache bug and missing tests remained.
+
+**DEFECT FIXED — `AuthMiddleware::userExists` negative cache (deleted user bypassed the gate).**
+`src/Http/Middleware/AuthMiddleware.php`. The old cache stored a bare unix timestamp for BOTH an
+existing and a non-existing user, and a cache HIT returned `true` unconditionally. So a
+deleted/revoked user was rejected on the first request (cache miss → probe → false) but silently
+re-admitted on requests #2..N for the whole 5 s TTL (cache hit → `true`). FIX: the cache now stores
+the BOOLEAN probe result with its timestamp (`array{exists: bool, at: int}`), and a cache hit
+returns the cached boolean — never an unconditional `true`. A negative result is honoured for the
+TTL window exactly like a positive one, so a user that probes as non-existent stays rejected. The
+hot-path optimisation (skip the probe for the common existing-user case) is preserved; revocation
+latency is bounded by the short `USER_EXISTS_CACHE_TTL` (5 s). Also bounded the per-worker static
+cache with `USER_EXISTS_CACHE_MAX` (10000) — clear-on-overflow — so a churn of distinct ids in a
+resident Workerman worker can't grow it without limit (no unbounded static state per §0.4).
+
+**TEST GAP 1 — getOwnerAndStatus leanness (proxy + client-mount do NOT run getServerInfo).**
+- `tests/Unit/Hub/ServerInfoHandlerTest.php`: `testGetOwnerAndStatusIsLeanWithNoLibraryCountSubquery`
+  captures the SQL and asserts it selects only `s.id, s.user_id, s.status` + keeps the fresh
+  `EXISTS(` relay-active probe, but contains NO `COUNT(` / `server_libraries` / `library_count`;
+  plus shape + null-when-not-found tests.
+- `tests/Unit/Http/Controllers/ServerProxyControllerTest.php`:
+  `test_proxy_uses_lean_owner_query_and_never_full_getServerInfo` — `expects(once())->getOwnerAndStatus`
+  and `expects(never())->getServerInfo` on the per-request proxy admission path.
+- `tests/Unit/Relay/ClientRelayWorkerTest.php`:
+  `testValidateClientAuthUsesLeanOwnerQueryNotFullServerInfo` — same `once()/never()` assertions on
+  the WS client-mount gate (added an optional `$serverInfo` arg to the test's `buildContainer`).
+
+**TEST GAP 2 — never()->findById on the auth hot path.**
+`tests/Unit/Http/Middleware/AuthMiddlewareTest.php`: `testHotPathNeverLoadsFullUserRow` proves the
+full user-row load is skipped when only existence is needed (`expects(never())->method('findById')`).
+
+**TEST GAP 3 — cache-TTL query-count + the negative-cache regression guard.**
+`tests/Unit/Http/Middleware/AuthMiddlewareTest.php`:
+- `testExistenceProbeIsCachedWithinTtl` — 5 requests within the window ⇒ `userExists` probed exactly
+  ONCE.
+- `testDeletedUserIsRejectedForWholeTtlAndProbedOnce` — THE regression guard for the defect: a
+  deleted user (probe → false) is rejected 401 `auth.user_not_found` on all 5 requests in the window
+  (before the fix, #2..N were admitted) and probed exactly once (negative cached).
+- `testExistenceReprobedAfterTtlAndCatchesDeletedUser` — back-dates the cache entry via reflection
+  (no blocking sleep) to prove the gate re-evaluates after TTL expiry and catches a now-deleted user
+  (`willReturnOnConsecutiveCalls(true, false)` ⇒ authorized then rejected; exactly two probes).
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `phpunit --filter 'AuthMiddleware|ServerInfoHandler|ServerProxyController|ClientRelayWorker'` →
+  **OK (175 tests, 514 assertions)**.
+- Full suite `php -d max_execution_time=0 ./vendor/bin/phpunit` → **OK, 1243 tests / 15459 assertions
+  / 17 skipped / 0 failures** (baseline 1234 + 9 new).
+- `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).

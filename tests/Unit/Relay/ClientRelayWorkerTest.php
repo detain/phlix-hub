@@ -212,6 +212,33 @@ final class ClientRelayWorkerTest extends TestCase
         self::assertSame(self::OWNER_USER_ID, $worker->validateClientAuth($token, $serverId));
     }
 
+    /**
+     * HB-1.4 leanness: the WS client-mount ownership re-confirmation MUST use
+     * the lean {@see ServerInfoHandler::getOwnerAndStatus()} query
+     * (SELECT id,user_id,status — no COUNT subquery) and MUST NOT touch the
+     * heavy dashboard-shaped {@see ServerInfoHandler::getServerInfo()} on this
+     * hot, reconnect-frequent path.
+     */
+    public function testValidateClientAuthUsesLeanOwnerQueryNotFullServerInfo(): void
+    {
+        $serverId = 'server-uuid-lean';
+        $token = 'valid-relay-token-lean';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+
+        $leanInfo = $this->createMock(ServerInfoHandler::class);
+        $leanInfo->expects(self::once())
+            ->method('getOwnerAndStatus')
+            ->with($serverId)
+            ->willReturn(['userId' => self::OWNER_USER_ID, 'status' => 'online', 'relayActive' => true]);
+        // The dashboard-shaped, two-correlated-subquery getServerInfo() must
+        // never run on the mount gate.
+        $leanInfo->expects(self::never())->method('getServerInfo');
+
+        $worker = new ClientRelayWorker($this->buildContainer(null, null, $leanInfo));
+
+        self::assertSame(self::OWNER_USER_ID, $worker->validateClientAuth($token, $serverId));
+    }
+
     public function testValidateClientAuthRejectsServerIdMismatch(): void
     {
         // Token is minted for server A but presented at server B's mount path.
@@ -705,9 +732,10 @@ final class ClientRelayWorkerTest extends TestCase
     private function buildContainer(
         ?MetricsCollector $metrics = null,
         ?MetricsFlushService $flush = null,
+        ?ServerInfoHandler $serverInfo = null,
     ): ContainerInterface {
         $tokenService = $this->buildTokenService();
-        $serverInfo = $this->buildServerInfoHandler();
+        $serverInfo ??= $this->buildServerInfoHandler();
         $tunnelManager = $this->tunnelManager;
         $controllerFactory = fn (): ClientMountController => $this->controller;
         // Default: rate limiter always returns non-limited state.

@@ -181,6 +181,43 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame(401, $response->statusCode);
     }
 
+    /**
+     * HB-1.4 leanness [H-D3]: the per-request proxy-admission gate MUST use the
+     * lean {@see ServerInfoHandler::getOwnerAndStatus()} query and MUST NOT run
+     * the heavy dashboard-shaped {@see ServerInfoHandler::getServerInfo()}
+     * (EXISTS + COUNT(server_libraries)) — that COUNT is paid on every one of
+     * the dozens of segment requests per playback and admission never uses it.
+     */
+    public function test_proxy_uses_lean_owner_query_and_never_full_getServerInfo(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->expects(self::once())
+            ->method('getOwnerAndStatus')
+            ->with('srv-1')
+            ->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->expects(self::never())->method('getServerInfo');
+
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge): void {
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/libraries'],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
     public function test_unknown_server_returns_404(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
