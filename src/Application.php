@@ -49,6 +49,7 @@ use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
+use Phlix\Hub\Http\Controllers\UserQuotaController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\CsrfMiddleware;
@@ -527,6 +528,10 @@ final class Application
         // Media request routes.
         $this->registerRequestRoutes();
 
+        // Per-user relay bandwidth quota routes (HB-3.4 G5): self usage +
+        // admin set/view of caps.
+        $this->registerUserQuotaRoutes();
+
         // Metrics routes (admin-only API, S4).
         $this->registerMetricsRoutes();
     }
@@ -599,6 +604,51 @@ final class Application
                 return $requestController->denyRequest($req, $typedParams);
             });
         }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
+     * Register the per-user relay bandwidth quota routes (HB-3.4 G5).
+     *
+     * Self surface under `/api/v1/me/bandwidth` (auth only — a user reads their
+     * OWN usage). Admin surface under `/api/v1/admin/users/{id}/...` gated by
+     * {@see AdminMiddleware} in addition to the controller's own requireAdmin()
+     * so a non-admin can neither set another user's caps nor read another
+     * user's usage (403). These are hub-local admin/self endpoints and are NOT
+     * exposed over the relay proxy allowlist.
+     */
+    private function registerUserQuotaRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveUserQuotaController();
+
+        // Self usage — auth only.
+        $this->router->group('/api/v1/me/bandwidth', static function (Router $r) use ($controller): void {
+            $r->get('', static fn (Request $req): Response => $controller->viewOwnBandwidth($req));
+        }, [$authMiddleware]);
+
+        // Admin set/view — auth + admin (plus the controller's inline requireAdmin).
+        $this->router->group('/api/v1/admin/users', static function (Router $r) use ($controller): void {
+            $r->get('/{id}/bandwidth', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->viewUserBandwidth($req, $typedParams);
+            });
+            $r->put('/{id}/quota', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->setUserQuota($req, $typedParams);
+            });
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    private function resolveUserQuotaController(): UserQuotaController
+    {
+        $controller = $this->container->get(UserQuotaController::class);
+        if (!$controller instanceof UserQuotaController) {
+            throw new \RuntimeException('Container returned an unexpected UserQuotaController instance');
+        }
+        return $controller;
     }
 
     private function resolveAdminMiddleware(): AdminMiddleware

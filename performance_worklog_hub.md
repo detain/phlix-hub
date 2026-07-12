@@ -1571,3 +1571,77 @@ touched test files.
 `bin/phlix migrate` not run (no DB) — neither is a finding.
 
 Verdict: **HB-3.4 hot-path fix DONE** (the one Low finding is closed; no new defect introduced).
+
+## Implementer — HB-3.4 G5 (HTTP exposure of per-user quota controls) — 2026-07-12
+
+Built out the previously-unwired HTTP surface for the per-user relay bandwidth quotas + concurrent-stream
+cap (the `RelaySessionManager` accounting methods existed but were unreachable over HTTP). Build-out per
+§0.1 — real controller + routes + DI + tests, no stubs. `Tunnel.php` / reaper / txn machinery untouched.
+
+**Routes added (in `src/Application.php`, new `registerUserQuotaRoutes()` + `resolveUserQuotaController()`):**
+- `GET /api/v1/me/bandwidth` — behind `[$authMiddleware]` (auth only). The caller reads their OWN
+  current-period usage + caps (`$request->userId`); no admin needed.
+- `GET /api/v1/admin/users/{id}/bandwidth` — behind `[$authMiddleware, $adminMiddleware]`. Admin reads
+  ANY user's usage + caps.
+- `PUT /api/v1/admin/users/{id}/quota` — behind `[$authMiddleware, $adminMiddleware]`. Admin sets a user's
+  monthly download/upload caps + concurrent-stream cap for the current period.
+These are hub-local admin/self endpoints — deliberately NOT added to the relay-proxy allowlist. The
+admin routes share the `/api/v1/admin/users/{id}/...` prefix with `AdminUserController` but are distinct
+sub-paths (`/bandwidth`, `/quota`) — no route collision.
+
+**Admin-vs-self enforcement (matched the existing convention, did NOT invent one):**
+- Self endpoint = a separate `me/*` route (auth-only), so a normal user only ever reaches their own data.
+- Admin endpoints = the same double gate the rest of the hub admin API uses: `AdminMiddleware` on the route
+  group **plus** an inline `requireAdmin()` in the controller (defence-in-depth), copied verbatim from
+  `RequestController::requireAdmin()` — `UserRepository::findAdminById()` → 403 `admin_required` +
+  `AuditLogger::logPermissionDenied(...)`. A non-admin hitting either admin route → 403 (a non-admin
+  requesting another user's bandwidth is thus forbidden, per AC).
+
+**Controller:** `src/Http/Controllers/UserQuotaController.php` — `final class`, `declare(strict_types=1)`,
+namespace `Phlix\Hub\Http\Controllers`. Injects `RelaySessionManager`, `UserRepository`, `AuditLogger`
+(promoted `private readonly`). Methods: `viewOwnBandwidth`, `viewUserBandwidth`, `setUserQuota`. Every
+method gates `$request->userId` 401 `auth.required` first. Body validation → `{error, code}` 400
+`invalid_quota` (non-negative ints; `max_concurrent_streams` ≤ 1000, byte caps ≤ 1 PiB; 0 = unlimited);
+missing path id → 400 `missing_user_id`. Successful set is audited via
+`AuditLogger::logAdminAction(admin, 'user.quota.set', targetId, {...caps})`. Response payload is a real
+rollup `{user_id, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out, max_concurrent_streams}` (zeroed
+usage + unlimited caps when no row exists — a meaningful 200, not a 404).
+
+**DI:** registered in `src/Common/Container/Providers/HubServicesProvider.php` (domain controller) via a
+`factory()` injecting `RelaySessionManager` + `UserRepository` + `AuditLogger`, mirroring the
+`RequestController` registration exactly.
+
+**Domain signatures wired (confirmed unchanged EXCEPT one backward-compatible extension):**
+- `getUserBandwidth(string $userId): ?array` — UNCHANGED.
+- `getUserMaxConcurrentStreams(string $userId): int` — UNCHANGED (retained per plan; this endpoint restores
+  its first production caller, exactly as its docblock anticipated for G5).
+- `setUserQuota(string $userId, int $quotaBytesIn, int $quotaBytesOut, ?int $maxConcurrentStreams = null)` —
+  EXTENDED with an optional 4th nullable param. Reason: the G5 admin endpoint must set all THREE caps
+  (incl. `max_concurrent_streams`) but the prior 3-arg method had no way to write that column and there was
+  no other setter. The extension is backward-compatible — when the param is null the original SQL/behaviour
+  is preserved byte-for-byte (existing 3-arg callers + the `testSetUserQuota` domain test are unaffected);
+  when provided, `max_concurrent_streams` is folded into the SAME upsert. Colon-free bind keys, named
+  `:param` placeholders, no interpolation, no new SQL method.
+
+**Tests:**
+- `tests/Unit/Http/Controllers/UserQuotaControllerTest.php` (+20) — `@covers UserQuotaController`. Covers:
+  admin sets quota (200 + all three caps forwarded to the 4-arg signature + `logAdminAction` audited),
+  non-admin set-quota → 403 (`setUserQuota` never called), invalid body → 400 (8-case data provider:
+  missing field, negative, float, non-numeric string, streams>1000, bytes>1 PiB), auth-less → 401,
+  self reads own bandwidth (200; admin repo never consulted), non-admin reading another → 403
+  (`getUserBandwidth` never called), admin reading any → 200, missing id → 400, zero-as-unlimited.
+- `tests/Unit/Hub/RelaySessionManagerTest.php` (+1) — `testSetUserQuotaWithMaxConcurrentStreamsWritesTheColumn`
+  asserts the 4-arg path folds `max_concurrent_streams` into the upsert; the existing 3-arg
+  `testSetUserQuota` now also asserts the column is NOT touched (backward compat guard).
+
+**Acceptance criteria mapping:** (1) admin set-quota exposed + admin-gated + body-validated → `setUserQuota`
+route/method; (2) bandwidth view self-or-admin with 403 on cross-user by a non-admin → `viewOwnBandwidth`
+(self) + `viewUserBandwidth` (admin, 403 otherwise); (3) both wired in `Application.php` behind
+`AuthMiddleware` matching `me/*`+admin shapes, not on the relay allowlist; (4) DI registered in
+`HubServicesProvider`; (5) build-out, no stubs, `getUserMaxConcurrentStreams` retained.
+
+**Gates (this box, PHP 8.3.6 + PCOV):** `phpstan analyze --no-progress` → **[OK] No errors** (L9, no
+baseline); `phpcs --standard=PSR12 -n` on all 4 touched src files → **clean (exit 0)**; full suite
+`phpunit` → **OK — 1341 tests / 15836 assertions / 17 skipped / 0 failures** (baseline 1320 + 21 new).
+psalm skipped (env: PHP 8.3.6 < psalm-required 8.3.16); `bin/phlix migrate` not run (no DB) — no new
+migration needed (mig 038 `max_concurrent_streams` already exists). Neither is a finding.

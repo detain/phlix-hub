@@ -523,27 +523,61 @@ class RelaySessionManager
     /**
      * Set or update the bandwidth quota for a user for the current month.
      *
-     * @param string $userId        Hub user UUID.
-     * @param int    $quotaBytesIn  Monthly download cap (0 = unlimited).
-     * @param int    $quotaBytesOut Monthly upload cap (0 = unlimited).
+     * When {@see $maxConcurrentStreams} is supplied it is written to the
+     * migration-038 `max_concurrent_streams` column in the SAME upsert (0 =
+     * unlimited). When it is left null the column is untouched, so existing
+     * three-argument callers keep their original behaviour unchanged — the
+     * concurrent cap is only ever mutated when a caller explicitly provides one
+     * (the HB-3.4 G5 admin quota endpoint sets all three caps together).
+     *
+     * @param string   $userId               Hub user UUID.
+     * @param int      $quotaBytesIn         Monthly download cap (0 = unlimited).
+     * @param int      $quotaBytesOut        Monthly upload cap (0 = unlimited).
+     * @param int|null $maxConcurrentStreams Concurrent-stream cap (0 = unlimited);
+     *                                        null leaves the stored value unchanged.
      *
      * @return void
      */
-    public function setUserQuota(string $userId, int $quotaBytesIn, int $quotaBytesOut): void
-    {
+    public function setUserQuota(
+        string $userId,
+        int $quotaBytesIn,
+        int $quotaBytesOut,
+        ?int $maxConcurrentStreams = null,
+    ): void {
         $periodStart = $this->currentPeriodStart();
 
+        if ($maxConcurrentStreams === null) {
+            $this->db->query(
+                'INSERT INTO relay_user_quotas (user_id, period_start, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out)
+                 VALUES (:user_id, :period_start, 0, 0, :quota_bytes_in, :quota_bytes_out)
+                 ON DUPLICATE KEY UPDATE
+                     quota_bytes_in = VALUES(quota_bytes_in),
+                     quota_bytes_out = VALUES(quota_bytes_out)',
+                [
+                    'user_id' => $userId,
+                    'period_start' => $periodStart,
+                    'quota_bytes_in' => $quotaBytesIn,
+                    'quota_bytes_out' => $quotaBytesOut,
+                ],
+            );
+
+            return;
+        }
+
         $this->db->query(
-            'INSERT INTO relay_user_quotas (user_id, period_start, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out)
-             VALUES (:user_id, :period_start, 0, 0, :quota_bytes_in, :quota_bytes_out)
+            'INSERT INTO relay_user_quotas
+                 (user_id, period_start, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out, max_concurrent_streams)
+             VALUES (:user_id, :period_start, 0, 0, :quota_bytes_in, :quota_bytes_out, :max_concurrent_streams)
              ON DUPLICATE KEY UPDATE
                  quota_bytes_in = VALUES(quota_bytes_in),
-                 quota_bytes_out = VALUES(quota_bytes_out)',
+                 quota_bytes_out = VALUES(quota_bytes_out),
+                 max_concurrent_streams = VALUES(max_concurrent_streams)',
             [
                 'user_id' => $userId,
                 'period_start' => $periodStart,
                 'quota_bytes_in' => $quotaBytesIn,
                 'quota_bytes_out' => $quotaBytesOut,
+                'max_concurrent_streams' => $maxConcurrentStreams,
             ],
         );
     }

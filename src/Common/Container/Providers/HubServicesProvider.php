@@ -71,6 +71,7 @@ use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Http\Controllers\RequestController;
+use Phlix\Hub\Http\Controllers\UserQuotaController;
 use Phlix\Hub\Stats\Metrics\MetricsRepositoryInterface;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
@@ -572,6 +573,22 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): HubSettingsController {
                 return new HubSettingsController($settings);
             })->parameter('settings', get(HubSettingsRepository::class)),
+
+            // Per-user relay bandwidth quota + concurrent-stream cap HTTP surface
+            // (HB-3.4 G5). Self usage under /api/v1/me/bandwidth; admin set/view
+            // under /api/v1/admin/users/{id}/{quota,bandwidth}. Gated
+            // [auth]/[auth, admin] at the route group in
+            // Application::registerUserQuotaRoutes(), plus the controller's own
+            // requireAdmin() defence-in-depth.
+            UserQuotaController::class => factory(static function (
+                RelaySessionManager $sessionManager,
+                UserRepository $users,
+                AuditLogger $audit,
+            ): UserQuotaController {
+                return new UserQuotaController($sessionManager, $users, $audit);
+            })->parameter('sessionManager', get(RelaySessionManager::class))
+                ->parameter('users', get(UserRepository::class))
+                ->parameter('audit', get(AuditLogger::class)),
 
             // Shared admin console user-management API (hubby.md H1.3). Reuses
             // the existing UserRepository and AuditLogger; gated [auth, admin]
