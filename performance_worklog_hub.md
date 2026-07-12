@@ -1709,3 +1709,60 @@ Audit agent verdicts vs the "H-W4-batch" claim (all 5 claimed DONE in one commit
 - **HB-4.5 [H-W3] prune singleton → NOT-DONE.** `MetricsFlushService::flush()` unconditionally calls `prune()` every ~min; `flush()` armed from every HTTP worker (HUB_WORKERS=2) + relay + client-relay ≈4 procs → N× DELETE churn. "per-process singleton" is orthogonal to the AC; no worker-id-0/leader gate. → Complete (gate prune to one worker; flushes stay per-worker; add single-pruner test).
 
 Queue: HB-4.1 (Complete→review→test) → HB-4.2 → HB-4.5. Then RE-AUDIT batch 2 (HB-4.6–4.10).
+
+## Implementer — HB-4.1 — 2026-07-12 (all 4 audit gaps closed)
+
+Commits: **b2feb66** (impl) + **a25a478** (tests), pushed to master (was 7bd1324). Tree clean,
+local==origin==a25a478. Suite **1356 pass / 0 fail / 17 skip** (baseline 1341 + 15 new), phpstan L9
+**0 errors**, phpcs PSR-12 `-n src/` **clean** (psalm skipped — box PHP 8.3.6 < required; migrate can't
+run — no DB; neither is a finding).
+
+**Gap 1 — collector wiring (the regression).** Injected the per-worker SHARED `MetricsCollector` into
+the `RelayProxyManager` DI factory (`HubServicesProvider.php` — added `use …MetricsCollector;` + a
+`MetricsCollector $metrics` factory param bound `->parameter('metrics', get(MetricsCollector::class))`,
+constructed via named arg `metrics: $metrics` so the defaulted timeout/publisher are unchanged). Chose
+the DI-factory wire (the audit's second option) over a `RelayWorker::setMetrics()` because it makes the
+production proxy manager ALWAYS carry the collector and is directly unit-testable. PROOF of "same
+instance the worker drains": all four metrics services are SHARED singletons per worker
+(`MetricsServicesProvider`), and `MetricsFlushService` is built from `get(MetricsCollector::class)` —
+so proxy-manager collector === worker collector (`RelayWorker.php:183`) === flush collector === one
+`MetricsRegistry`. `RelayProxyManagerWiringTest` asserts `proxyManager.metrics ===
+container.get(MetricsCollector) === registry the flush drains`. The collector no-ops every record when
+metrics are disabled, so injecting unconditionally is safe.
+
+**Gap 2 — drain + persist (migration-036 columns).** `MetricsFlushService::flush()` now calls
+`registry->drainRelayMetrics($nowTs)` and the new `flushRelay()` UPSERTs into `metrics_rollup`:
+`relay_pending_requests` (gauge → `GREATEST`), `relay_reply_drops`/`relay_error_503`/`relay_error_504`
+(counters → `col + VALUES`), `relay_decode_buffer_bytes` (gauge → `GREATEST`), and the
+`relay_latency_h_le_10..h_gt_5000` histogram (counters). The latency histogram is already time-bucketed
+so each bucket's row gets its histogram; the window-total scalars go into the current flush bucket
+(new `MetricsRegistry::bucketStart()` exposes the private bucket alignment). All-zero windows are
+skipped. Bind names are non-prefixing (`:rl0..:rl8`, `:re503`, `:re504`, `:rpending`, `:rdrops`,
+`:rbuffer`) — same emulated-prepares/HY093 guard as `flushOverall`. **No new migration** — 036 already
+added every column.
+
+**Gap 3 — no_tunnel-503 counter.** The `server.no_tunnel` fail-fast branch (`RelayProxyManager::onRequest`)
+now calls `$this->metrics?->recordRelayError(503)` before replying — previously only `failServer`
+(server.offline) counted a 503.
+
+**Gap 4 — first-byte + total latency, incl. the streaming path.** Added a per-request
+`first_byte_recorded` flag; `onResponseFrame` records first-byte (TTFB = send→first response frame) once
+on the first decoded frame for BOTH streaming and buffered, and records TOTAL (send→END) on KIND_END for
+BOTH paths (moved out of the buffered-only block so a STREAMING response — which returns early — now
+contributes a latency observation at completion). The single migration-036 relay-latency histogram thus
+receives both the first-byte and the total observation per completed request (the AC's "first-byte +
+total").
+
+**Tests (+15).** `RelayProxyManagerTest` (+7): a REAL `MetricsCollector`+`MetricsRegistry` injected,
+asserting recorded state end-to-end — pending gauge inc-on-request/dec-on-completion; `recordRelayError(503)`
+on BOTH no_tunnel + failServer; `recordRelayError(504)` on timeout; reply-drop on an unknown-request
+frame; latency = 2 observations (first-byte + total) on BOTH buffered and streaming. `MetricsFlushServiceTest`
+(+6): flush drains + persists all relay columns with the drained values; idle all-zero window skipped;
+drain resets so a 2nd flush writes nothing; relay-insert bind names non-prefixing; relay UPSERT passes
+the `BindingContractConnection` colon-free contract; latency's own-bucket vs scalar-bucket placement.
+`RelayProxyManagerWiringTest` (+2, new file): the DI-constructed proxy manager has a non-null collector
+that is the same shared instance/registry the flush drains (guards the exact audit regression).
+
+Scope kept to HB-4.1: did NOT touch `Tunnel.php`, reapers, or txn-locking; decode-buffer gauge feed
+(`RelayWorker.php:224`) was already correct and is now covered end-to-end by the drain-persist test.
+Docs cycle (CHANGELOG/README/docblocks-beyond-touched) still owed per the batched sweep.
