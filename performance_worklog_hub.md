@@ -429,3 +429,71 @@ of a real >64 KB bodied relay round-trip now that the classifier no longer fault
 
 Commits: fb9e7b7 (#1 classify by type, no json_decode), ed008c8 (#3 no re-arm after overflow close),
 + the tests commit (real RelayHttpRequestCodec tag-byte frames + within-request ordering).
+
+## Reviewer (REVIEW-4) — HB-1.2 — 2026-07-12
+
+Reviewed FIX-3 commits fb9e7b7 (#1 classify by type), ed008c8 (#3 no re-arm after
+overflow close), 287b635 (tests) against current `src/Relay/Tunnel.php` +
+`tests/Unit/Relay/TunnelTest.php`.
+
+**NO FINDINGS**
+
+All 3 REVIEW-3 findings are genuinely resolved and no new defect was introduced:
+
+- **#1 (High) — CLOSED.** `isHighPriorityFrame` (`Tunnel.php:732-742`) is now a pure
+  `match ($frame->type)` on the `RelayFrameType` enum with a `default => false` arm.
+  The payload is never touched, so it cannot throw on any shape (tag-byte
+  HEAD/BODY/END, binary, empty). Verified against the real enum (`phlix-shared`
+  `RelayFrameType`): HIGH = HEARTBEAT/HTTP_CANCEL/CLIENT_CONNECT/CLIENT_DISCONNECT;
+  everything else (HTTP_REQUEST single-frame JSON envelope + chunked HEAD/BODY/END
+  tag-byte sub-frames + DATA) = LOW. Traced every producer into `sendToServer`
+  (RelayProxyManager:289/300-318 HTTP_REQUEST; Tunnel internal
+  sendClientData=DATA, CLIENT_CONNECT:1312, CLIENT_DISCONNECT:1376,
+  HEARTBEAT:1484, HTTP_CANCEL:1509) — no genuine control frame is misclassified
+  LOW and no stream frame is misclassified HIGH. The chunked bodied-relay fault is
+  gone. `sendToClient` is DATA-only and never calls the classifier, so the change
+  scope is correct.
+
+- **#2 (Medium) — CLOSED.** Because every HTTP_REQUEST sub-frame is now the same
+  (LOW) class, HEAD/BODY/END of one request share the single `pendingBodyFrames`
+  FIFO; the low-priority enqueue-if-backlog guard (`:811`) + `flushBodyQueue`
+  `array_shift` FIFO order guarantee END can never overtake a queued BODY. The new
+  `test_chunked_request_head_body_end_deliver_in_order_under_backpressure` proves
+  HEAD→BODY→BODY→END delivery order under a full buffer. Genuine control frames may
+  still interleave between sub-frames — harmless (server demuxes by type+request-id;
+  only same-request relative order matters).
+
+- **#3 (Low) — CLOSED.** `if ($this->status !== self::STATUS_ACTIVE) { return; }`
+  added at the very top of both `handleClientSendBackpressure` (`:973`) and
+  `handleServerSendBackpressure` (`:1123`). This is a single correct choke point:
+  the only way to reach these handlers with a non-ACTIVE status is an
+  `enqueue*Frame()` overflow that `close()`d the tunnel in the same call
+  (`sendToServer`/`sendToClient` already early-return on non-ACTIVE at entry), so no
+  stale `pauseRecv`/one-shot timer is left armed on a discarded tunnel, and no
+  legitimate backpressure episode is skipped.
+
+**Tests exercise the real production path.** The 4 fix-2 body/overflow tests were
+rewritten from `json_encode(['kind'=>'body'])` to `RelayHttpRequestCodec::encodeBody()`
+tag-byte payloads, and `test_is_high_priority_frame_classifies_by_type_without_decoding_payload`
+asserts the classifier does not throw and returns false for real HEAD/BODY/END (incl.
+NUL/0xFF binary) + DATA, true only for the 4 control types. No mock-encoded-wrong-contract
+remains.
+
+**Acceptance criteria met:** no silent DATA-frame drop (re-queue + bounded-256 queue →
+`close('backpressure_overflow')` hard-fail; timeout close retained); slow reader pauses
+upstream and resumes on drain; no silent truncation or within-request reorder.
+
+**Async/resident-memory (§0.4):** classifier no longer throws; no sleep/exit/die; queues
+bounded at 256; one-shot safety timers `Timer::add(...,[],false)` cancel-on-drain and on
+close; no request data in static/global. Scope clean (only `src/Relay/Tunnel.php` +
+`tests/Unit/Relay/TunnelTest.php` touched).
+
+Verification (this box, PHP 8.3.6 + PCOV):
+- `php -d max_execution_time=0 ./vendor/bin/phpunit --filter Tunnel` → **OK (71 tests, 241 assertions)**.
+- `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `./vendor/bin/phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red).
+
+Verdict: **HB-1.2 DONE** (pending the standard Docs cycle). HB-2.1 still needs its
+flagged end-to-end re-audit (a real >64 KB bodied relay round-trip) now that the
+classifier fault is fixed.
