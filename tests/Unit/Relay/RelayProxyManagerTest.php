@@ -10,6 +10,8 @@ use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManagerInterface;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
+use Phlix\Hub\Stats\Metrics\MetricsRegistry;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
@@ -25,6 +27,7 @@ use Workerman\Events\EventInterface;
 use Workerman\Timer;
 
 use function array_key_last;
+use function array_sum;
 use function base64_decode;
 use function base64_encode;
 use function chr;
@@ -1831,5 +1834,310 @@ final class RelayProxyManagerTest extends TestCase
         // failServer published 503; sweep must not have published anything else.
         $this->assertCount(1, $this->published);
         $this->assertSame(503, $this->published[0]['data']['status']);
+    }
+
+    // ---------------------------------------------------------------------
+    // HB-4.1: relay observability metric EMISSION on the real paths.
+    // A real MetricsCollector wrapping a real MetricsRegistry is injected so
+    // these assert the recorded state end-to-end (not a mock's call count) —
+    // guarding the exact regression the audit found (metrics recorded under
+    // `$this->metrics?->…` but the collector was always null, so every record
+    // was a no-op).
+    // ---------------------------------------------------------------------
+
+    /**
+     * Build a manager whose metrics land in the given real registry.
+     */
+    private function meteredManager(TunnelManagerInterface $tunnelManager, MetricsRegistry $registry): RelayProxyManager
+    {
+        return new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+            new MetricsCollector($registry, true),
+        );
+    }
+
+    /**
+     * Read a private int counter/gauge off the registry without draining it.
+     */
+    private function registryInt(MetricsRegistry $registry, string $property): int
+    {
+        $p = new ReflectionProperty(MetricsRegistry::class, $property);
+        $p->setAccessible(true);
+        /** @var int $v */
+        $v = $p->getValue($registry);
+        return $v;
+    }
+
+    /**
+     * Total number of relay-latency observations recorded (sum of every
+     * per-bucket histogram cell), read non-destructively.
+     */
+    private function relayLatencyObservationCount(MetricsRegistry $registry): int
+    {
+        $p = new ReflectionProperty(MetricsRegistry::class, 'relayLatencyHistogram');
+        $p->setAccessible(true);
+        /** @var array<int, array<int, int>> $hist */
+        $hist = $p->getValue($registry);
+        $total = 0;
+        foreach ($hist as $bucket) {
+            $total += array_sum($bucket);
+        }
+        return $total;
+    }
+
+    /**
+     * A mocked TcpConnection whose send() always succeeds, capturing bytes.
+     *
+     * @param array<int, string> $sent
+     */
+    private function capturingServerWs(array &$sent): TcpConnection
+    {
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        return $serverWs;
+    }
+
+    public function test_pending_gauge_increments_on_request_and_decrements_on_completion(): void
+    {
+        $sent = [];
+        $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $registry = new MetricsRegistry(10);
+        $manager  = $this->meteredManager($tunnelManager, $registry);
+
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        // The pending gauge tracks the one in-flight request.
+        $this->assertSame(1, $this->registryInt($registry, 'relayPendingRequests'));
+
+        $requestId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, [], 0)),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        // Back to zero on completion.
+        $this->assertSame(0, $this->registryInt($registry, 'relayPendingRequests'));
+    }
+
+    public function test_no_tunnel_branch_records_relay_error_503(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn(null);
+
+        $registry = new MetricsRegistry(10);
+        $manager  = $this->meteredManager($tunnelManager, $registry);
+
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-offline',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        // The 503 body still carries server.no_tunnel AND the error is counted
+        // (previously this fail-fast branch recorded no metric at all).
+        $this->assertSame(503, $this->published[0]['data']['status']);
+        $this->assertSame(1, $this->registryInt($registry, 'relayError503'));
+        $this->assertSame(0, $this->registryInt($registry, 'relayError504'));
+    }
+
+    public function test_fail_server_records_relay_error_503(): void
+    {
+        $sent = [];
+        $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $registry = new MetricsRegistry(10);
+        $manager  = $this->meteredManager($tunnelManager, $registry);
+
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        $manager->failServer('srv-1');
+
+        // The tunnel-dropped 503 path is counted too, and the gauge drains to 0.
+        $this->assertSame(1, $this->registryInt($registry, 'relayError503'));
+        $this->assertSame(0, $this->registryInt($registry, 'relayPendingRequests'));
+    }
+
+    public function test_timeout_records_relay_error_504(): void
+    {
+        $sent = [];
+        $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $registry = new MetricsRegistry(10);
+        $manager  = $this->meteredManager($tunnelManager, $registry);
+
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        $requestId = (int) (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+
+        $onTimeout = new ReflectionMethod(RelayProxyManager::class, 'onTimeout');
+        $onTimeout->setAccessible(true);
+        $onTimeout->invoke($manager, $requestId);
+
+        $this->assertSame(504, $this->published[0]['data']['status']);
+        $this->assertSame(1, $this->registryInt($registry, 'relayError504'));
+        $this->assertSame(0, $this->registryInt($registry, 'relayError503'));
+    }
+
+    public function test_unknown_response_frame_records_reply_drop(): void
+    {
+        $registry = new MetricsRegistry(10);
+        $manager  = $this->meteredManager(
+            $this->createMock(TunnelManagerInterface::class),
+            $registry,
+        );
+
+        // No pending entry for id 999 → the HTTP_RESPONSE is dropped + counted.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            999,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        $this->assertSame(1, $this->registryInt($registry, 'relayReplyDrops'));
+        $this->assertCount(0, $this->published);
+    }
+
+    public function test_buffered_request_records_first_byte_and_total_latency(): void
+    {
+        $sent = [];
+        $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $registry = new MetricsRegistry(10);
+        $manager  = $this->meteredManager($tunnelManager, $registry);
+
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/api/v1/libraries',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+        $requestId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+
+        // No latency yet — nothing has come back.
+        $this->assertSame(0, $this->relayLatencyObservationCount($registry));
+
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, [], 3)),
+        ));
+        // First-byte recorded on the HEAD frame.
+        $this->assertSame(1, $this->relayLatencyObservationCount($registry));
+
+        foreach (RelayHttpResponseCodec::chunkBody('abc') as $bodyChunk) {
+            $manager->onResponseFrame(new RelayFrame(RelayFrameType::HTTP_RESPONSE, $requestId, $bodyChunk));
+        }
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        // Total recorded on END → exactly two observations (first-byte + total).
+        $this->assertSame(2, $this->relayLatencyObservationCount($registry));
+    }
+
+    public function test_streaming_request_records_first_byte_and_total_latency(): void
+    {
+        $sent = [];
+        $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $registry = new MetricsRegistry(10);
+        $manager  = $this->meteredManager($tunnelManager, $registry);
+
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/hls/job/seg-1.ts',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+        $requestId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '6'], 6)),
+        ));
+        // First-byte recorded on the streamed HEAD (previously the streaming
+        // path recorded NO latency at all).
+        $this->assertSame(1, $this->relayLatencyObservationCount($registry));
+
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('foobar'),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        // Total recorded at stream completion (END) → two observations.
+        $this->assertSame(2, $this->relayLatencyObservationCount($registry));
     }
 }

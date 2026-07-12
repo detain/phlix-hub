@@ -390,6 +390,171 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertArrayHasKey('live-1', $registry->snapshotConnections());
     }
 
+    public function test_flush_drains_and_persists_relay_metrics_into_rollup_columns(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+
+        // Populate every relay counter/gauge the migration-036 columns hold.
+        $registry->setRelayPendingRequests(4);
+        $registry->recordRelayReplyDrop();
+        $registry->recordRelayReplyDrop();
+        $registry->recordRelayError(503);
+        $registry->recordRelayError(504);
+        $registry->recordRelayError(504);
+        $registry->setRelayDecodeBufferSize(9000);
+        $registry->recordRelayLatency(5.0, 1000);    // -> <=10ms bucket (rl0)
+        $registry->recordRelayLatency(300.0, 1000);  // -> <=500ms bucket (rl4)
+
+        $this->service($collector)->flush(1, 1000);
+
+        // The relay row is the only metrics_rollup INSERT (no request/route/conn
+        // activity here). Distinguish it by its relay column list.
+        $relay = $this->queriesMatching('relay_pending_requests');
+        $this->assertCount(1, $relay);
+
+        $q = $relay[0];
+        $this->assertStringContainsString('INSERT INTO metrics_rollup', $q['sql']);
+        $this->assertStringContainsString(
+            'relay_reply_drops         = relay_reply_drops + VALUES(relay_reply_drops)',
+            $q['sql'],
+        );
+        $this->assertStringContainsString(
+            'relay_pending_requests    = GREATEST(relay_pending_requests, VALUES(relay_pending_requests))',
+            $q['sql'],
+        );
+
+        $p = $q['params'];
+        $this->assertSame(date('Y-m-d H:i:s', 1000), $p['bucket']);
+        $this->assertSame('hub-relay', $p['worker_id']);
+        $this->assertSame(4, $p['rpending']);
+        $this->assertSame(2, $p['rdrops']);
+        $this->assertSame(1, $p['re503']);
+        $this->assertSame(2, $p['re504']);
+        $this->assertSame(9000, $p['rbuffer']);
+        // The two latency observations land in the <=10ms (rl0) and <=500ms (rl4)
+        // histogram buckets.
+        $this->assertSame(1, $p['rl0']);
+        $this->assertSame(1, $p['rl4']);
+        $this->assertSame(0, $p['rl8']);
+    }
+
+    public function test_relay_flush_skips_an_idle_all_zero_window(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+
+        // No relay activity at all → no relay row is written.
+        $this->service($collector)->flush(1, 1000);
+
+        $this->assertCount(0, $this->queriesMatching('relay_pending_requests'));
+    }
+
+    public function test_relay_metrics_are_drained_so_a_second_flush_writes_nothing(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+        $service = $this->service($collector);
+
+        $registry->recordRelayError(503);
+        $registry->recordRelayLatency(20.0, 1000);
+        $service->flush(1, 1000);
+        $this->assertCount(1, $this->queriesMatching('relay_pending_requests'));
+
+        // drainRelayMetrics() reset the accumulators — a second flush with no new
+        // activity writes no relay row.
+        $this->queries = [];
+        $service->flush(1, 1005);
+        $this->assertCount(0, $this->queriesMatching('relay_pending_requests'));
+    }
+
+    public function test_relay_insert_has_no_prefix_colliding_bind_params(): void
+    {
+        // Same emulated-prepares guard as test_no_metrics_insert_has_prefix_...
+        // but for the relay UPSERT: :rl0..:rl8 / :re503 / :re504 / :rpending etc.
+        // must have no name that is a strict prefix of another.
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+
+        $registry->setRelayPendingRequests(3);
+        $registry->recordRelayReplyDrop();
+        $registry->recordRelayError(503);
+        $registry->recordRelayError(504);
+        $registry->setRelayDecodeBufferSize(1000);
+        $registry->recordRelayLatency(42.0, 1000);
+        $this->service($collector)->flush(1, 1000);
+
+        $relay = $this->queriesMatching('relay_pending_requests');
+        $this->assertCount(1, $relay);
+
+        $keys = array_keys($relay[0]['params']);
+        foreach ($keys as $a) {
+            foreach ($keys as $b) {
+                if ($a !== $b) {
+                    $this->assertStringStartsNotWith(
+                        $a,
+                        $b,
+                        "bind param '$a' is a prefix of '$b' — breaks emulated prepares"
+                    );
+                }
+            }
+        }
+    }
+
+    public function test_relay_flush_honours_the_workerman_binding_contract(): void
+    {
+        // Drive the relay UPSERT through BindingContractConnection: any colon-in-
+        // key or double-colon mis-keying would throw HY093 here.
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $conn      = new BindingContractConnection();
+        $this->mockConnectionPool($conn);
+
+        $registry->setRelayPendingRequests(2);
+        $registry->recordRelayError(504);
+        $registry->recordRelayLatency(75.0, 1000);
+        $this->service($collector)->flush(1, 1000);
+
+        $sqls = array_map(static fn (array $c): string => $c['sql'], $conn->calls);
+        $has  = static fn (string $needle): bool
+            => $sqls !== [] && array_filter($sqls, static fn (string $s): bool => str_contains($s, $needle)) !== [];
+        $this->assertTrue($has('relay_pending_requests'), 'the relay UPSERT must have run without an HY093');
+    }
+
+    public function test_relay_latency_histogram_bucketing_writes_its_own_bucket(): void
+    {
+        // A latency observed in an EARLIER bucket than the flush's scalar bucket
+        // is written into that earlier bucket's row (the histogram is
+        // time-bucketed), while the scalar counters go into the flush bucket.
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+
+        $registry->recordRelayLatency(5.0, 1000);   // bucket 1000
+        $registry->setRelayPendingRequests(1);      // scalar -> flush bucket 1020
+        $this->service($collector)->flush(1, 1025);
+
+        $relay = $this->queriesMatching('relay_pending_requests');
+        // Two rows: bucket 1000 (histogram only) + bucket 1020 (scalars).
+        $this->assertCount(2, $relay);
+
+        $byBucket = [];
+        foreach ($relay as $q) {
+            $byBucket[$q['params']['bucket']] = $q['params'];
+        }
+        $this->assertArrayHasKey(date('Y-m-d H:i:s', 1000), $byBucket);
+        $this->assertArrayHasKey(date('Y-m-d H:i:s', 1020), $byBucket);
+        // Histogram bucket carries the observation but no pending gauge.
+        $this->assertSame(1, $byBucket[date('Y-m-d H:i:s', 1000)]['rl0']);
+        $this->assertSame(0, $byBucket[date('Y-m-d H:i:s', 1000)]['rpending']);
+        // Scalar bucket carries the pending gauge.
+        $this->assertSame(1, $byBucket[date('Y-m-d H:i:s', 1020)]['rpending']);
+    }
+
     /**
      * Mock ConnectionPool::getConnection() to return our mock connection.
      */
