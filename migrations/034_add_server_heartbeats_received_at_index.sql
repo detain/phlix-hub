@@ -7,6 +7,8 @@
 -- The sweepHeartbeats() DELETE in ServerReaper only filters on received_at,
 -- so a dedicated index on received_at alone fixes this.
 --
--- Idempotency: CREATE INDEX IF NOT EXISTS is safe to re-apply.
+-- Idempotency: the runner records applied files in the `migrations` tracking
+-- table and never re-runs them, so a plain CREATE INDEX suffices. (MySQL 8 does
+-- not support `CREATE INDEX IF NOT EXISTS` — that is MariaDB-only.)
 
-CREATE INDEX IF NOT EXISTS idx_server_heartbeats_received_at ON server_heartbeats (received_at);
+CREATE INDEX idx_server_heartbeats_received_at ON server_heartbeats (received_at);
