@@ -20,6 +20,9 @@ use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Shared\Hub\ServerInfoDto;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Relay\RelayHttpRequest;
+use Phlix\Shared\Relay\RelayHttpRequestChunk;
+use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
 use PHPUnit\Framework\TestCase;
@@ -31,6 +34,10 @@ use function count;
 use function is_string;
 use function json_decode;
 use function json_encode;
+use function ltrim;
+use function ord;
+use function str_repeat;
+use function strlen;
 
 /**
  * @covers \Phlix\Hub\Http\Controllers\ServerProxyController
@@ -985,16 +992,20 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * HB-3.1: favorite, rating, like_level, and poster are allowed via PUT.
-     * They forward over the relay bridge and the server returns the result.
+     * HB-3.1: rating, like (like_level), and poster are the PUT write actions,
+     * each anchored to a REAL server route
+     * ({@see \Phlix\Server\Http\Controllers\MediaUserDataController::setRating}
+     * / `setLikeLevel` / `MediaPosterController::setPoster`). They forward over
+     * the relay bridge and the server returns the result. NOTE favorite is NOT a
+     * PUT action (server exposes POST/DELETE favorite) — see the anchoring-guard
+     * test below, which asserts `PUT …/favorite` is DENIED.
      *
      * @return iterable<string, array{0: string}>
      */
     public static function allowedSiblingMediaPutProvider(): iterable
     {
-        yield 'favorite' => ['/api/v1/media/item-123/favorite'];
         yield 'rating' => ['/api/v1/media/item-123/rating'];
-        yield 'like_level' => ['/api/v1/media/item-123/like_level'];
+        yield 'like' => ['/api/v1/media/item-123/like'];
         yield 'poster' => ['/api/v1/media/item-123/poster'];
     }
 
@@ -1057,6 +1068,363 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertIsArray($forwarded, "POST /{$path} must reach the relay bridge");
         $this->assertSame($path, $forwarded['path']);
         $this->assertSame('POST', $forwarded['method']);
+    }
+
+    /**
+     * HB-3.1: the POST write actions that are NOT `/api/v1/media/{id}/…` toggles
+     * — add-favorite and playlist-create — are allowed via anchored patterns.
+     * Server: POST /api/v1/media/{id}/favorite, POST /api/v1/playlists.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function allowedMediaPostWriteProvider(): iterable
+    {
+        yield 'add favorite' => ['/api/v1/media/item-123/favorite'];
+        yield 'create playlist' => ['/api/v1/playlists'];
+    }
+
+    /**
+     * @dataProvider allowedMediaPostWriteProvider
+     */
+    public function test_post_write_actions_favorite_and_playlist_are_allowed(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = $d;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('POST', 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(504, $response->statusCode, "POST /{$path} must be forwarded");
+        $this->assertIsArray($forwarded, "POST /{$path} must reach the relay bridge");
+        $this->assertSame($path, $forwarded['path']);
+        $this->assertSame('POST', $forwarded['method']);
+    }
+
+    /**
+     * HB-3.1: DELETE write actions — remove-favorite and clear-rating — are
+     * allowed via anchored patterns. Server (MediaUserDataController):
+     * DELETE /api/v1/media/{id}/favorite, DELETE /api/v1/media/{id}/rating.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function allowedMediaDeleteProvider(): iterable
+    {
+        yield 'remove favorite' => ['/api/v1/media/item-123/favorite'];
+        yield 'clear rating' => ['/api/v1/media/item-123/rating'];
+    }
+
+    /**
+     * @dataProvider allowedMediaDeleteProvider
+     */
+    public function test_delete_write_actions_are_allowed(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = $d;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('DELETE', 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(504, $response->statusCode, "DELETE /{$path} must be forwarded");
+        $this->assertIsArray($forwarded, "DELETE /{$path} must reach the relay bridge");
+        $this->assertSame($path, $forwarded['path']);
+        $this->assertSame('DELETE', $forwarded['method']);
+    }
+
+    /**
+     * THE anchoring guard (this test FAILS against the pre-fix broad-prefix
+     * allowlist). With the old `PUT /api/v1/media` / `DELETE|PUT /api/v1/playlists`
+     * broad prefixes, ANY `PUT /api/v1/media/{id}/<anything>` (and any
+     * `/api/v1/playlists/<sub>`) was relayed. The anchored per-action patterns
+     * now DENY every write path that is not an intended action — including a
+     * would-be media-update `PUT …/{id}` bare, a `PUT …/{id}/delete`, a
+     * `PUT …/{id}/scan`, `POST/PUT …/{id}/like_level` (the real route is `/like`),
+     * a favorite via the wrong verb (PUT), and an admin write.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function deniedNonListedWriteProvider(): iterable
+    {
+        // method, path (leading slash trimmed by the caller).
+        yield 'PUT bare media id (would-be update)' => ['PUT', '/api/v1/media/item-123'];
+        yield 'PUT media delete sub-path' => ['PUT', '/api/v1/media/item-123/delete'];
+        yield 'PUT media scan sub-path' => ['PUT', '/api/v1/media/item-123/scan'];
+        yield 'PUT wrong like_level route' => ['PUT', '/api/v1/media/item-123/like_level'];
+        yield 'PUT favorite (wrong verb)' => ['PUT', '/api/v1/media/item-123/favorite'];
+        yield 'POST wrong like_level route' => ['POST', '/api/v1/media/item-123/like_level'];
+        yield 'POST rating (wrong verb)' => ['POST', '/api/v1/media/item-123/rating'];
+        yield 'PUT admin users' => ['PUT', '/api/v1/admin/users/u-1'];
+        yield 'DELETE admin user' => ['DELETE', '/api/v1/admin/users/u-1'];
+        yield 'POST admin scan' => ['POST', '/api/v1/admin/libraries/lib-1/scan'];
+        yield 'DELETE playlists sub-path' => ['DELETE', '/api/v1/playlists/pl-1'];
+        yield 'PUT playlists sub-path' => ['PUT', '/api/v1/playlists/pl-1'];
+    }
+
+    /**
+     * @dataProvider deniedNonListedWriteProvider
+     */
+    public function test_non_listed_write_actions_are_denied(string $method, string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request($method, 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(403, $response->statusCode, "{$method} /{$path} must be denied (fail closed)");
+        $this->assertFalse($forwarded, "{$method} /{$path} must never reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * PATCH decision: the media server exposes NO PATCH write route, so the
+     * registered-but-deny PATCH proxy route fails closed for EVERY path (an
+     * intended action path, an admin path, and a bare media id alike). This
+     * documents that PATCH carries no capability.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function patchAlwaysDeniedProvider(): iterable
+    {
+        yield 'rating' => ['/api/v1/media/item-123/rating'];
+        yield 'favorite' => ['/api/v1/media/item-123/favorite'];
+        yield 'bare media id' => ['/api/v1/media/item-123'];
+        yield 'admin user' => ['/api/v1/admin/users/u-1'];
+        yield 'browse read' => ['/api/v1/libraries'];
+    }
+
+    /**
+     * @dataProvider patchAlwaysDeniedProvider
+     */
+    public function test_patch_is_always_denied(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('PATCH', 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(403, $response->statusCode, "PATCH /{$path} must fail closed");
+        $this->assertFalse($forwarded, "PATCH /{$path} must never reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * Bodied round-trip (small body → single-frame HTTP_REQUEST). Drives a
+     * `PUT /api/v1/media/{id}/rating` with a JSON body ALL THE WAY through a real
+     * {@see RelayProxyManager} + live tunnel, decodes the emitted
+     * {@see RelayHttpRequest} off the wire, and asserts method/path/body bytes
+     * are forwarded intact (not merely that the request reached the bridge). A
+     * 200 is fed back over the tunnel so the controller completes → proves the
+     * full write round-trip, not a 504.
+     */
+    public function test_bodied_put_rating_round_trip_forwards_body_intact(): void
+    {
+        [$captured, $response, $frames] = $this->roundTripWrite(
+            'PUT',
+            '/api/v1/media/item-123/rating',
+            ['rating' => 7],
+        );
+
+        $this->assertSame(200, $response->statusCode, 'The bodied write must complete over the relay, not 504');
+        $this->assertSame('PUT', $captured['method']);
+        $this->assertSame('/api/v1/media/item-123/rating', $captured['path']);
+        $this->assertSame('{"rating":7}', $captured['body'], 'Body bytes must reach the server verbatim');
+        $this->assertSame(1, $frames, 'A small body is a single HTTP_REQUEST frame');
+    }
+
+    /**
+     * Bodied round-trip over the HB-2.1 chunking path (>64 KB body → the emitted
+     * request is split into HEAD + N·BODY + END tag-byte sub-frames). Asserts
+     * the reassembled body is byte-for-byte identical to what the hub forwarded,
+     * proving large bodied writes traverse the proxy→relay bridge intact and are
+     * NOT rejected (the old 413 cap / single-frame limit).
+     */
+    public function test_large_bodied_put_round_trip_chunks_and_preserves_body_bytes(): void
+    {
+        // A body whose JSON encoding comfortably exceeds the 65535-byte single
+        // frame limit, forcing RelayProxyManager onto the chunked HEAD/BODY/END
+        // path (HB-2.1). Includes a NUL and 0xFF-adjacent bytes are avoided in
+        // JSON, but the large payload alone exercises multi-frame reassembly.
+        $note = str_repeat('AB', 40000); // 80 000 chars
+        [$captured, $response, $frames] = $this->roundTripWrite(
+            'PUT',
+            '/api/v1/media/item-123/rating',
+            ['rating' => 7, 'note' => $note],
+        );
+
+        $expectedBody = json_encode(['rating' => 7, 'note' => $note], JSON_THROW_ON_ERROR);
+        $this->assertGreaterThan(65535, strlen($expectedBody), 'Test body must exceed the single-frame limit');
+        $this->assertSame(200, $response->statusCode, 'The large bodied write must complete over the relay');
+        $this->assertSame('PUT', $captured['method']);
+        $this->assertSame('/api/v1/media/item-123/rating', $captured['path']);
+        $this->assertSame($expectedBody, $captured['body'], 'Chunked body must reassemble byte-for-byte');
+        // HEAD + at least one BODY + END ⇒ strictly more than one HTTP_REQUEST frame.
+        $this->assertGreaterThan(1, $frames, 'A >64 KB body must be chunked into multiple frames');
+    }
+
+    /**
+     * Drive a bodied write all the way through a real {@see RelayProxyManager} +
+     * live tunnel (mirrors {@see self::test_head_over_relay_returns_promptly_on_end_without_body_frames}),
+     * capturing and reassembling the {@see RelayHttpRequest} the hub emits on the
+     * wire — whether a single-frame JSON envelope or the HB-2.1 chunked
+     * HEAD/BODY…/END tag-byte sequence — then feeding back a 200 so the
+     * controller completes.
+     *
+     * @param array<string, mixed> $body Parsed body the hub re-encodes + forwards.
+     *
+     * @return array{0: array{method: string, path: string, query: string, body: string}, 1: Response, 2: int}
+     *         [captured request, controller response, HTTP_REQUEST frame count]
+     */
+    private function roundTripWrite(string $method, string $path, array $body): array
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $proxyManager = null;
+        $decoder = new FrameDecoder();
+
+        $captured = ['method' => '', 'path' => '', 'query' => '', 'body' => ''];
+        $bodyAccumulator = '';
+        $frameCount = 0;
+        $responded = [];
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(
+            function (mixed $data) use (
+                &$proxyManager,
+                $decoder,
+                &$captured,
+                &$bodyAccumulator,
+                &$frameCount,
+                &$responded
+            ): bool {
+                $frame = null;
+                if (is_string($data)) {
+                    try {
+                        $frame = $decoder->decode($data);
+                    } catch (\Throwable) {
+                        $frame = null;
+                    }
+                }
+                if ($frame === null || $frame->type !== RelayFrameType::HTTP_REQUEST) {
+                    return true;
+                }
+                $frameCount++;
+
+                $payload = $frame->payload;
+                $tag = $payload !== '' ? ord($payload[0]) : 0;
+                $complete = false;
+
+                if (
+                    $tag === RelayHttpRequestCodec::TAG_HEAD
+                    || $tag === RelayHttpRequestCodec::TAG_BODY
+                    || $tag === RelayHttpRequestCodec::TAG_END
+                ) {
+                    // HB-2.1 chunked path.
+                    $chunk = RelayHttpRequestCodec::decode($payload);
+                    if ($chunk->kind === RelayHttpRequestChunk::KIND_HEAD && $chunk->head !== null) {
+                        $captured['method'] = $chunk->head->method;
+                        $captured['path'] = $chunk->head->path;
+                        $captured['query'] = $chunk->head->query;
+                    } elseif ($chunk->kind === RelayHttpRequestChunk::KIND_BODY) {
+                        $bodyAccumulator .= $chunk->body;
+                    } elseif ($chunk->kind === RelayHttpRequestChunk::KIND_END) {
+                        $captured['body'] = $bodyAccumulator;
+                        $complete = true;
+                    }
+                } else {
+                    // Single-frame JSON envelope.
+                    $decoded = RelayHttpRequest::fromJson($payload);
+                    $captured['method'] = $decoded->method;
+                    $captured['path'] = $decoded->path;
+                    $captured['query'] = $decoded->query;
+                    $captured['body'] = $decoded->body;
+                    $complete = true;
+                }
+
+                if ($complete && !isset($responded[$frame->seq])) {
+                    $responded[$frame->seq] = true;
+                    /** @var RelayProxyManager $proxyManager */
+                    $proxyManager->onResponseFrame(new RelayFrame(
+                        RelayFrameType::HTTP_RESPONSE,
+                        $frame->seq,
+                        RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                            200,
+                            ['Content-Type' => 'application/json'],
+                            0,
+                        )),
+                    ));
+                    $proxyManager->onResponseFrame(new RelayFrame(
+                        RelayFrameType::HTTP_RESPONSE,
+                        $frame->seq,
+                        RelayHttpResponseCodec::encodeEnd(),
+                    ));
+                }
+
+                return true;
+            },
+        );
+
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$proxyManager): void {
+            /** @var RelayProxyManager $proxyManager */
+            $proxyManager->onRequest($data);
+        };
+        $bridge = $this->bridge($publisher);
+        $proxyManager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            static function (string $event, array $data) use (&$bridge): void {
+                /** @var RelayProxyBridge $bridge */
+                $bridge->onReply($data);
+            },
+        );
+
+        $req = $this->request($method, 'user-1');
+        $req->body = $body;
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy($req, ['id' => 'srv-1', 'path' => ltrim($path, '/')]);
+
+        return [$captured, $response, $frameCount];
     }
 
     /**

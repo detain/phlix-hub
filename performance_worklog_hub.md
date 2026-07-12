@@ -76,7 +76,7 @@ php bin/phlix migrate
 - [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
 - [x] HB-2.5  static-asset caching headers + realpath memo  (commit: 4644e72)  DONE — FIXER 2026-07-12: closed AC gaps — added ETag + conditional-GET 304 on NON-hashed assets, a per-worker stat memo (realpath+mtime+size, kills per-hit is_file/stat), and the first tests. See `## Fixer — HB-2.5 — 2026-07-12`.
 - [x] HB-2.6  dedicated maintenance worker for reapers  (commit: 4644e72)  DONE — ⚠️ FIXER 2026-07-12: the "move ALL reapers to the maintenance worker" change BROKE the in-memory tunnel reaper (HB-0.1) + keepalive heartbeat (maintenance fork's TunnelManager/accumulators are EMPTY). Re-split by data locality: in-memory tasks back on the relay worker, DB-only reapers stay on maintenance. See `## Fixer — HB-2.6 — 2026-07-12`.
-- [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE
+- [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE — FIXER 2026-07-12: replaced the broad `PUT /api/v1/media` + `PUT|DELETE /api/v1/playlists` prefixes with ANCHORED per-action PCREs; PATCH documented as registered-but-deny (no server PATCH write route); added the anchoring guard + real bodied round-trip tests. See `## Fixer — HB-3.1 — 2026-07-12`.
 - [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin
 - [x] HB-3.3  per-channel tunnel flow control/fairness  (commit: cbc29cc)  DONE
 - [x] HB-3.4  bandwidth accounting + per-user quotas  (commit: 1de552a)  DONE
@@ -1092,4 +1092,64 @@ memo. "header-presence test; memo hit test" → the 14 new tests.
 - `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
 - `./vendor/bin/phpcs --standard=PSR12 -n src/` → **clean (exit 0)**. (Test method names use the
   project's snake_case convention like `ApplicationRouteTemplateTest`; CI runs phpcs on `src/` only.)
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red).
+
+## Fixer — HB-3.1 — 2026-07-12
+
+Audit found the step functional + failing-closed, but the write allowlist used BROAD prefixes for 4
+of 6 named actions, PATCH was a dead route with no documented decision, and there was no true bodied
+round-trip test. Closed all three gaps. Scope: `src/Http/Controllers/ServerProxyController.php`,
+`src/Application.php`, `tests/Unit/Http/Controllers/ServerProxyControllerTest.php`. No traversal-guard
+or watched/unwatched/transcode anchor regressed; fail-closed posture preserved (never widened to
+admin/scan).
+
+**Gap 1 — anchored per-action write allowlist (aligned to REAL phlix-server routes, verified).**
+Removed the broad `PUT => ['/api/v1/media', '/api/v1/playlists']` and `DELETE => ['/api/v1/playlists']`
+entries from `BROWSE_SCOPE_ALLOWLIST` (they let ANY `PUT /api/v1/media/{id}/<anything>` and any
+`/api/v1/playlists/<sub>` be relayed). Every write action is now a fully-anchored (`^…$`)
+single-segment-`[^/]+`-id PCRE in `BROWSE_SCOPE_PATTERNS`, keyed by method. Confirmed each against
+phlix-server source (`MediaUserDataController` @ `WebPortalRouter.php:305-309` + `Core/Application.php:530-531`,
+`MediaPosterController` @ `WebPortalRouter.php:356`/`Core/Application.php:451`, playlist create @
+`Core/Application.php:1402`):
+  - `POST`  `#^/api/v1/media/[^/]+/transcode$#` (unchanged), `#…/watched$#`, `#…/unwatched$#`
+    (unchanged), **`#^/api/v1/media/[^/]+/favorite$#`** (add-favorite), **`#^/api/v1/playlists$#`**
+    (create playlist → collection; server route is a POST, not PUT/DELETE).
+  - `PUT`   **`#^/api/v1/media/[^/]+/rating$#`**, **`#^/api/v1/media/[^/]+/like$#`** (like_level; the
+    server route is `/like`, NOT `/like_level`), **`#^/api/v1/media/[^/]+/poster$#`**.
+  - `DELETE` **`#^/api/v1/media/[^/]+/favorite$#`** (remove favorite), **`#^/api/v1/media/[^/]+/rating$#`**
+    (clear rating).
+Consequence: a future/non-intended `PUT /api/v1/media/{id}/<anything-else>` (a would-be media-update
+route, `/delete`, `/scan`), the wrong-verb/wrong-name variants (`PUT …/favorite`, `POST …/rating`,
+`…/like_level`), and every admin/scan/`/api/v1/playlists/<sub>` path now stay 403 `proxy.scope_denied`.
+The old broad `PUT|DELETE /api/v1/playlists` prefixes were also DEAD against the real server (it has no
+such routes) — dropped, not re-anchored.
+
+**Gap 2 — PATCH decision: registered-but-deny, documented.** The media server exposes NO PATCH write
+route for any action (favorite/rating/like/watched/poster/playlist are POST/PUT/DELETE; grep of
+phlix-server confirmed zero `->patch(`/`@api_endpoint PATCH`). Kept the PATCH proxy route registered in
+`Application.php` (so a PATCH gets a deliberate 403 `proxy.scope_denied` rather than a bare 404) with NO
+allowlist/pattern entry → every PATCH fails closed carrying no capability. Documented at the route
+registration, the `BROWSE_SCOPE_ALLOWLIST`/`BROWSE_SCOPE_PATTERNS` docblocks, and `isWithinBrowseScope`.
+
+**Gap 3 — real bodied round-trip tests (codec-contract level).** Added `roundTripWrite()` harness that
+drives a bodied write ALL THE WAY through a real `RelayProxyManager` + live `Tunnel` (mirrors the HEAD
+harness), decodes the emitted request off the wire, and feeds back a 200 so the controller completes:
+  - `test_bodied_put_rating_round_trip_forwards_body_intact` — small `PUT …/rating` with `{"rating":7}`:
+    single-frame `RelayHttpRequest`, asserts method/path/**body bytes** forwarded verbatim + 200 (not 504).
+  - `test_large_bodied_put_round_trip_chunks_and_preserves_body_bytes` — >64 KB body forces the HB-2.1
+    chunked HEAD+N·BODY+END tag-byte path (`RelayHttpRequestCodec`); reassembles and asserts the body is
+    byte-for-byte identical + strictly >1 HTTP_REQUEST frame + 200.
+
+**Other tests.** Fixed `allowedSiblingMediaPutProvider` (dropped `favorite` — not a PUT action; renamed
+`like_level`→`like` to the real route). Added `test_post_write_actions_favorite_and_playlist_are_allowed`,
+`test_delete_write_actions_are_allowed`, `test_patch_is_always_denied` (5 paths), and — the key guard —
+`test_non_listed_write_actions_are_denied` (12 paths). Proven to FAIL pre-fix: temporarily re-injecting
+the broad prefixes made 7/12 guard cases relay (504) instead of deny (403).
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `phpunit --filter 'ServerProxyController|RelayProxy'` → **OK (194 tests, 655 assertions)**.
+- Full suite `php -d max_execution_time=0 ./vendor/bin/phpunit` → **OK, 1296 tests / 15678 assertions /
+  17 skipped / 0 failures** (baseline 1274 + 22 net new).
+- `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `./vendor/bin/phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
 - psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red).

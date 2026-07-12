@@ -462,12 +462,19 @@ final class Application
             $r->get('/servers/{id}/proxy/{path:.*}', $proxyHandler);
             $r->put('/servers/{id}/proxy/{path:.*}', $proxyHandler);
             $r->delete('/servers/{id}/proxy/{path:.*}', $proxyHandler);
+            // PATCH is registered but has NO allowlist/pattern entry in
+            // ServerProxyController: the media server exposes no PATCH write
+            // route, so every PATCH deliberately fails closed with 403
+            // `proxy.scope_denied` (registered-but-deny → a clean 403 rather than
+            // a bare 404). Add anchored PATCH patterns here + in
+            // BROWSE_SCOPE_PATTERNS only if the server ever gains a PATCH write.
             $r->patch('/servers/{id}/proxy/{path:.*}', $proxyHandler);
             // POST is registered so non-allowlisted POSTs still reach the
             // controller and get a deliberate 403 `proxy.scope_denied` (fails
-            // closed) rather than a bare 404. BROWSE_SCOPE_ALLOWLIST contains
-            // the permitted write method + path entries (favorite, rating,
-            // like_level, watched, playlist, poster).
+            // closed) rather than a bare 404. The permitted write actions
+            // (favorite, rating, like, watched/unwatched, poster, playlist,
+            // transcode) are ANCHORED per-action PCREs in
+            // ServerProxyController::BROWSE_SCOPE_PATTERNS.
             $r->post('/servers/{id}/proxy/{path:.*}', $proxyHandler);
         }, [$authMiddleware]);
 

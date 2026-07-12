@@ -135,13 +135,16 @@ final class ServerProxyController
      * ride a widened prefix: {@see self::hasTraversalSegment()} rejects any
      * dot-segment or encoded separator BEFORE this allowlist is consulted.
      *
-     * NOTE: only GET/HEAD are listed HERE. The only permitted non-GET/HEAD
-     * request is the single anchored POST in {@see self::BROWSE_SCOPE_PATTERNS};
-     * every other PUT/DELETE/PATCH (and any unlisted method/path) is
-     * intentionally denied by the browse-scope gate. Denied mutating routes are
-     * still registered in {@see \Phlix\Hub\Application} so they route to this
-     * controller (and get a deliberate 403 via {@see self::isWithinBrowseScope()})
-     * rather than a bare 404.
+     * NOTE: only GET/HEAD read families are listed HERE. Every WRITE action
+     * (HB-3.1 write-over-relay) is an ANCHORED per-action PCRE in
+     * {@see self::BROWSE_SCOPE_PATTERNS} (POST/PUT/DELETE keys) — never a broad
+     * prefix — so a future non-intended `/api/v1/media/{id}/…` write route
+     * cannot ride a prefix into the relay. PATCH has NO entry in EITHER map: the
+     * media server exposes no PATCH write route, so every PATCH fails closed with
+     * 403 `proxy.scope_denied`. Denied mutating routes (incl. PATCH) are still
+     * registered in {@see \Phlix\Hub\Application} so they route to this controller
+     * and get a deliberate 403 via {@see self::isWithinBrowseScope()} rather than
+     * a bare 404.
      *
      * @var array<string, list<string>>
      */
@@ -190,18 +193,12 @@ final class ServerProxyController
             '/media',
             '/api/v1/transcode',
         ],
-        // Write methods: HB-3.1 write-over-relay (PUT/DELETE/PATCH).
-        // PUT covers: favorite, rating, like_level, poster (server PUT routes).
-        // DELETE covers: playlist item removal.
-        // POST covers: watched/unwatched toggles.
-        'PUT' => [
-            '/api/v1/media',
-            '/api/v1/playlists',
-        ],
-        'DELETE' => [
-            '/api/v1/playlists',
-        ],
-
+        // Write methods (HB-3.1 write-over-relay) are deliberately NOT listed
+        // here as broad prefixes. Each write action is an ANCHORED per-action
+        // PCRE in {@see self::BROWSE_SCOPE_PATTERNS} (POST/PUT/DELETE keys), so a
+        // broad `/api/v1/media` prefix can never expose an unintended future
+        // `/api/v1/media/{id}/…` write route. PATCH is absent from both maps and
+        // fails closed (no server PATCH write route exists).
     ];
 
     /**
@@ -218,11 +215,20 @@ final class ServerProxyController
      * captured as a single `[^/]+` segment, so the match is exact: it accepts
      * ONLY `/api/v1/media/{id}/transcode` with nothing before or after it.
      *
-     * Note: favorite, rating, like_level, watched/unwatched, and poster are
-     * ALLOWED via prefix allowlist entries (HB-3.1 write-over-relay). The
-     * admin `POST /api/v1/admin/media/merge` and `POST …/match/apply` routes
-     * remain 403 `proxy.scope_denied` — the anchored `/transcode$` pattern
-     * cannot match them by design. Path traversal is impossible here for the
+     * HB-3.1 write-over-relay: every write action is an anchored entry HERE (not
+     * a broad prefix), each aligned to a REAL phlix-server route:
+     *   - POST  /api/v1/media/{id}/transcode   (transcode-START)
+     *   - POST  /api/v1/media/{id}/watched|unwatched  (MediaUserDataController)
+     *   - POST  /api/v1/media/{id}/favorite    (add favorite)
+     *   - POST  /api/v1/playlists              (create playlist → collection)
+     *   - PUT   /api/v1/media/{id}/rating|like|poster
+     *   - DELETE /api/v1/media/{id}/favorite|rating
+     * Because each id is a single `[^/]+` segment and each pattern is fully
+     * anchored, NO other `/api/v1/media/{id}/…` verb+sub-path can match — the
+     * admin `POST /api/v1/admin/media/merge`, `POST …/match/apply`, a future
+     * `PUT /api/v1/media/{id}` update, and all scan endpoints stay 403
+     * `proxy.scope_denied`. PATCH has no key here (no server PATCH write route),
+     * so every PATCH fails closed. Path traversal is impossible here for the
      * same reason as the prefix allowlist: {@see self::hasTraversalSegment()}
      * rejects any dot-segment or encoded separator BEFORE this map is consulted.
      *
@@ -258,13 +264,38 @@ final class ServerProxyController
         ],
         'POST' => [
             // Transcode-START ONLY. Anchored (`^…$`) + single-segment `[^/]+` id
-            // so no other `/api/v1/media/{id}/*` POST (favorite/rating/like_level/
-            // match/poster) and no `/api/v1/admin/media/merge` can match.
+            // so no other `/api/v1/media/{id}/*` POST (match/apply) and no
+            // `/api/v1/admin/media/merge` can match.
             '#^/api/v1/media/[^/]+/transcode$#',
             // HB-3.1: watched/unwatched toggles — anchored to prevent any other
             // sub-path (e.g. match/apply) from matching via a broad prefix.
+            // Server: POST /api/v1/media/{id}/watched|unwatched.
             '#^/api/v1/media/[^/]+/watched$#',
             '#^/api/v1/media/[^/]+/unwatched$#',
+            // HB-3.1: add-favorite. Server: POST /api/v1/media/{id}/favorite.
+            '#^/api/v1/media/[^/]+/favorite$#',
+            // HB-3.1: create playlist. Server: POST /api/v1/playlists (alias that
+            // creates a collection). Anchored EXACT — no sub-path — so admin/scan
+            // and any future `/api/v1/playlists/…` route stays denied.
+            '#^/api/v1/playlists$#',
+        ],
+        // HB-3.1: PUT write actions, each anchored to a REAL server route with a
+        // single-segment `[^/]+` id. Server (MediaUserDataController /
+        // MediaPosterController): PUT /api/v1/media/{id}/rating|like|poster. Any
+        // other `PUT /api/v1/media/{id}/…` (e.g. a future media-update route) and
+        // every admin/scan path stay 403 `proxy.scope_denied`.
+        'PUT' => [
+            '#^/api/v1/media/[^/]+/rating$#',
+            '#^/api/v1/media/[^/]+/like$#',
+            '#^/api/v1/media/[^/]+/poster$#',
+        ],
+        // HB-3.1: DELETE write actions. Server (MediaUserDataController):
+        // DELETE /api/v1/media/{id}/favorite (remove favorite) and
+        // DELETE /api/v1/media/{id}/rating (clear rating). Anchored per-action so
+        // no other DELETE sub-path is exposed.
+        'DELETE' => [
+            '#^/api/v1/media/[^/]+/favorite$#',
+            '#^/api/v1/media/[^/]+/rating$#',
         ],
     ];
 
@@ -691,9 +722,11 @@ final class ServerProxyController
      *
      * Two layers, checked in order: the prefix
      * {@see self::BROWSE_SCOPE_ALLOWLIST} (GET/HEAD read families) and the
-     * exact-match {@see self::BROWSE_SCOPE_PATTERNS} (the sole permitted write,
-     * transcode-START). A request is in scope when it matches EITHER layer for
-     * its method; every other method/path returns false and fails closed.
+     * anchored-PCRE {@see self::BROWSE_SCOPE_PATTERNS} (every HB-3.1 write action
+     * — favorite/rating/like/watched/unwatched/poster/playlist/transcode — plus a
+     * few non-prefix reads). A request is in scope when it matches EITHER layer
+     * for its method; every other method/path (incl. all PATCH) returns false
+     * and fails closed.
      *
      * @param string $method The inbound HTTP method.
      * @param string $path   The resolved `/`-prefixed forward path.
@@ -714,9 +747,9 @@ final class ServerProxyController
             }
         }
 
-        // Exact, fully-anchored patterns for the narrow non-prefix routes
-        // (currently only the transcode-START POST). Anchoring + a single-segment
-        // id guarantees no other `/api/v1/media/{id}/*` mutation can match.
+        // Exact, fully-anchored patterns for every write action + the narrow
+        // non-prefix reads. Anchoring + a single-segment id guarantees no other
+        // `/api/v1/media/{id}/*` mutation (or admin/scan path) can match.
         $allowedPatterns = self::BROWSE_SCOPE_PATTERNS[$method] ?? [];
         foreach ($allowedPatterns as $pattern) {
             if (preg_match($pattern, $path) === 1) {
