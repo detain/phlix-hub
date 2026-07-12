@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Tests
+- **HB-0.3 HEAD-over-relay anti-stall hardening** (`tests/Unit/Relay/RelayProxyManagerTest.php`,
+  `tests/Unit/Http/Controllers/ServerProxyControllerTest.php`). Added coverage proving a HEAD probe
+  over the relay completes PROMPTLY. A server `withFile()` HEAD emits a head frame (carrying
+  Content-Length) followed by a zero-body END with no body frames; the buffered path now has explicit
+  tests that it assembles and returns on END — carrying status + Content-Length + range support with
+  an empty body — rather than stalling on a body frame that never arrives (which would surface as a
+  504). Also added a HEAD-then-ranged-GET ordering test (HEAD returns headers/Content-Length, the
+  ranged GET returns the requested bytes). The earlier HEAD test supplied a pre-assembled buffered
+  reply and so did not exercise the head+END-only assembly; these do. No production logic changed.
+
+### Docs
+- **HB-0.3**: fixed docblock rot on `ServerProxyController::isStreamingPath()` — it now states that
+  only **GET** streams and HEAD is deliberately routed through the buffered path (it previously said
+  "GET/HEAD").
+- **HB-0.1**: documented the reap-window/ping-interval coupling on
+  `IdleReaper::DEFAULT_STALE_THRESHOLD_SECONDS` — the stale window (default 90s) MUST stay strictly
+  greater than the server's relay ping interval (`PHLIX_RELAY_PING_INTERVAL`, default 30s) or a
+  healthy-but-quiet tunnel is false-reaped. The server sends a HEARTBEAT every ping interval and
+  echoes hub pings, and only inbound frames refresh `lastFrameAt`, so the margin keeps live tunnels
+  alive.
+
 ### Added
 - **Tunnel data-plane backpressure (HB-1.2)** (`src/Relay/Tunnel.php`, `src/Relay/ClientConnection.php`).
   When `send()` returns `false` because the socket send buffer is full, the tunnel now applies

@@ -12,16 +12,25 @@ use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
+use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyManager;
+use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Shared\Hub\ServerInfoDto;
+use Phlix\Shared\Relay\RelayFrame;
+use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Relay\RelayHttpResponseCodec;
+use Phlix\Shared\Relay\RelayHttpResponseHead;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Workerman\Connection\TcpConnection;
 
 use function base64_encode;
+use function count;
+use function is_string;
 use function json_decode;
+use function json_encode;
 
 /**
  * @covers \Phlix\Hub\Http\Controllers\ServerProxyController
@@ -89,6 +98,36 @@ final class ServerProxyControllerTest extends TestCase
     private function bridge(?callable $publisher): RelayProxyBridge
     {
         return new RelayProxyBridge($this->createMock(StructuredLogger::class), $publisher);
+    }
+
+    /**
+     * Build a live, ACTIVE relay tunnel whose server-side WebSocket records
+     * every frame it sends. Mirrors the harness in RelayProxyManagerTest so the
+     * controller test can drive a request all the way through a real
+     * {@see RelayProxyManager} + tunnel (not a stub publisher).
+     *
+     * @param string       $serverId Tunnel's server id.
+     * @param TcpConnection $serverWs Server-side WebSocket double.
+     */
+    private function activeTunnel(string $serverId, TcpConnection $serverWs): Tunnel
+    {
+        $sessionManager = $this->createMock(RelaySessionManager::class);
+        $sessionManager->method('registerServer')->willReturn('sess-1');
+
+        $tunnel = new Tunnel(
+            $serverId,
+            $serverWs,
+            $sessionManager,
+            new FrameDecoder(),
+            $this->createMock(StructuredLogger::class),
+        );
+        $tunnel->onServerMessage((string) json_encode([
+            'type' => 'hello',
+            'enrollment_jwt' => 'a.b.c',
+            'server_id' => $serverId,
+        ]));
+
+        return $tunnel;
     }
 
     /**
@@ -462,6 +501,106 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertIsArray($forwarded, "{$method} /{$path} must be forwarded over the relay bridge");
         $this->assertSame('/' . $path, $forwarded['path']);
         $this->assertSame($method, $forwarded['method']);
+    }
+
+    /**
+     * HB-0.3 anti-stall (end-to-end): a HEAD probe over the relay is routed
+     * through the BUFFERED bridge path — HEAD is excluded from
+     * `isStreamingPath()`, so only GET streams. The paired server's
+     * `withFile()` HEAD emits a head frame carrying Content-Length then a
+     * zero-body END, with NO body frame. The controller must return PROMPTLY on
+     * END — a buffered 200 carrying range support and an empty body — never
+     * blocking until the reply timeout (which would surface as a 504).
+     *
+     * This wires a real {@see RelayProxyManager} + live tunnel and feeds the
+     * exact HEAD+END frame sequence the moment the HTTP_REQUEST is sent down
+     * the tunnel, proving completion happens on END (not on a body frame or a
+     * wall-clock timeout).
+     *
+     * (Content-Length itself is intentionally re-derived by the hub's response
+     * framing — it is in the stripped-response-header set — so the assertion
+     * here is on prompt buffered completion + preserved range support, not on
+     * the Content-Length value. RelayProxyManagerTest asserts the manager
+     * carries Content-Length through to its reply verbatim.)
+     */
+    public function test_head_over_relay_returns_promptly_on_end_without_body_frames(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $proxyManager = null;
+        $decoder = new FrameDecoder();
+        $serverWs = $this->createMock(TcpConnection::class);
+        // The moment the manager sends the HTTP_REQUEST down the tunnel, feed
+        // back exactly what a server withFile() HEAD emits: a head frame with
+        // Content-Length + a zero-body END. No body frame is ever sent.
+        $serverWs->method('send')->willReturnCallback(
+            static function (mixed $data) use (&$proxyManager, $decoder): bool {
+                // The handshake HELLO_ACK is not a data frame — decode defensively
+                // and only react to the HTTP_REQUEST the manager forwards.
+                $frame = null;
+                if (is_string($data)) {
+                    try {
+                        $frame = $decoder->decode($data);
+                    } catch (\Throwable) {
+                        $frame = null;
+                    }
+                }
+                if ($frame !== null && $frame->type === RelayFrameType::HTTP_REQUEST) {
+                    /** @var RelayProxyManager $proxyManager */
+                    $proxyManager->onResponseFrame(new RelayFrame(
+                        RelayFrameType::HTTP_RESPONSE,
+                        $frame->seq,
+                        RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                            200,
+                            ['Content-Type' => 'video/mp4', 'Content-Length' => '12345', 'Accept-Ranges' => 'bytes'],
+                            12345,
+                        )),
+                    ));
+                    $proxyManager->onResponseFrame(new RelayFrame(
+                        RelayFrameType::HTTP_RESPONSE,
+                        $frame->seq,
+                        RelayHttpResponseCodec::encodeEnd(),
+                    ));
+                }
+                return true;
+            },
+        );
+
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$proxyManager): void {
+            /** @var RelayProxyManager $proxyManager */
+            $proxyManager->onRequest($data);
+        };
+        $bridge = $this->bridge($publisher);
+        $proxyManager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            static function (string $event, array $data) use (&$bridge): void {
+                /** @var RelayProxyBridge $bridge */
+                $bridge->onReply($data);
+            },
+        );
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('HEAD', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+
+        // HEAD is buffered, never streamed — no producer closure.
+        $this->assertNull($response->streamProducer, 'HEAD must take the buffered path, not the streaming producer');
+        // Prompt completion on END — a 200, never a 504 gateway timeout.
+        $this->assertSame(200, $response->statusCode);
+        // Range support survives the hub's response framing.
+        $this->assertSame('bytes', $response->headers['Accept-Ranges'] ?? null);
+        // Completed on END with no body frame → empty body.
+        $this->assertSame('', $response->body);
     }
 
     public function test_streaming_read_returns_a_producer_and_streams_body_to_the_connection(): void

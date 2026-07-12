@@ -553,10 +553,15 @@ final class ServerProxyController
      * Whether a method + resolved path should be streamed to the browser
      * fragment-by-fragment rather than buffered whole.
      *
-     * Only GET/HEAD under a {@see self::STREAMING_BODY_PREFIXES} family qualify;
-     * these paths already passed the browse-scope gate (so a mutating method
-     * never reaches here). The match uses the same exact-or-`/`-subpath rule as
-     * the allowlist — never a bare sibling like `/hlsX`.
+     * Only **GET** under a {@see self::STREAMING_BODY_PREFIXES} family qualifies.
+     * HEAD is deliberately EXCLUDED so it flows through the buffered
+     * {@see RelayProxyBridge::request()} path (HB-0.3): a server `withFile()`
+     * HEAD emits a head frame + zero-body END with no body frames, and the
+     * buffered path completes promptly on that END — streaming a body-less
+     * response would add no value. These paths already passed the browse-scope
+     * gate (so a mutating method never reaches here). The match uses the same
+     * exact-or-`/`-subpath rule as the allowlist — never a bare sibling like
+     * `/hlsX`.
      *
      * @param string $method The inbound HTTP method.
      * @param string $path   The resolved `/`-prefixed forward path.

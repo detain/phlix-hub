@@ -263,6 +263,196 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame('{"ok":true}!!', $reply['data']['body']);
     }
 
+    /**
+     * HB-0.3 anti-stall (buffered HEAD): the paired server's `withFile()` HEAD
+     * route emits, over the tunnel, exactly a head frame (carrying
+     * Content-Length) followed by a zero-body END — a body frame is NEVER sent.
+     * The buffered path must assemble and publish its single reply the moment
+     * END arrives, carrying the head's status + Content-Length with an empty
+     * body, rather than waiting for a body frame that never comes (which would
+     * stall the request until the reply timeout and surface downstream as a 504).
+     */
+    public function test_head_buffered_path_completes_on_end_with_zero_body(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        // Buffered request (no `stream` flag) — HEAD is always buffered.
+        $manager->onRequest([
+            'request_id' => 'req-head',
+            'reply_event' => 'reply.head',
+            'server_id' => 'srv-1',
+            'method' => 'HEAD',
+            'path' => '/media/item-123/stream',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        // The exact shape the server emits for a HEAD to a withFile() route:
+        // a head frame carrying Content-Length, then a zero-body END. No body
+        // frame is ever sent.
+        $head = new RelayHttpResponseHead(
+            200,
+            ['Content-Type' => 'video/mp4', 'Content-Length' => '12345', 'Accept-Ranges' => 'bytes'],
+            12345,
+        );
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead($head),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        // Completed on END — exactly ONE buffered reply, never a phased stream
+        // and never a stall waiting on a body frame that never arrives.
+        $this->assertCount(1, $this->published);
+        $reply = $this->published[0];
+        $this->assertSame('reply.head', $reply['event']);
+        $this->assertArrayNotHasKey('phase', $reply['data'], 'buffered HEAD must publish one reply, not phases');
+        $this->assertSame(200, $reply['data']['status']);
+        // The head's Content-Length + range support are carried through verbatim.
+        $this->assertSame('12345', $reply['data']['headers']['Content-Length'] ?? null);
+        $this->assertSame('bytes', $reply['data']['headers']['Accept-Ranges'] ?? null);
+        // No body frame was sent → the assembled body is empty.
+        $this->assertSame('', $reply['data']['body']);
+
+        // The pending entry is torn down: a further frame for the same id is
+        // dropped as unknown rather than re-completing the request.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+        $this->assertCount(1, $this->published);
+    }
+
+    /**
+     * HB-0.3 ordering: a client probes with HEAD (headers + Content-Length,
+     * empty body) then follows with a ranged GET that must return the requested
+     * bytes. Both flow through the same manager on distinct request ids: the
+     * buffered HEAD reply carries the size/range headers and no body, and the
+     * ranged GET streams back a 206 with the exact range bytes.
+     */
+    public function test_head_then_ranged_get_returns_headers_then_bytes(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        // 1) HEAD probe (buffered): headers + Content-Length, empty body.
+        $manager->onRequest([
+            'request_id' => 'req-head',
+            'reply_event' => 'reply.head',
+            'server_id' => 'srv-1',
+            'method' => 'HEAD',
+            'path' => '/media/item-123/stream',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+        $headReqId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $headReqId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                200,
+                ['Content-Length' => '10', 'Accept-Ranges' => 'bytes'],
+                10,
+            )),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $headReqId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        $this->assertCount(1, $this->published);
+        $this->assertSame(200, $this->published[0]['data']['status']);
+        $this->assertSame('10', $this->published[0]['data']['headers']['Content-Length'] ?? null);
+        $this->assertSame('bytes', $this->published[0]['data']['headers']['Accept-Ranges'] ?? null);
+        $this->assertSame('', $this->published[0]['data']['body'], 'a HEAD carries no body');
+
+        // 2) Ranged GET (streamed): 206 + Content-Range + the requested bytes.
+        $manager->onRequest([
+            'request_id' => 'req-get',
+            'reply_event' => 'reply.get',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/media/item-123/stream',
+            'query' => '',
+            'headers' => ['Range' => 'bytes=0-4'],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+        $getReqId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $getReqId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                206,
+                ['Content-Range' => 'bytes 0-4/10', 'Content-Length' => '5'],
+                5,
+            )),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $getReqId,
+            RelayHttpResponseCodec::encodeBody('Hello'),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $getReqId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+
+        // HEAD reply (1) + GET head/body/end phases (3) = 4 published entries.
+        $this->assertCount(4, $this->published);
+        $this->assertSame('head', $this->published[1]['data']['phase']);
+        $this->assertSame(206, $this->published[1]['data']['status']);
+        $this->assertSame('bytes 0-4/10', $this->published[1]['data']['headers']['Content-Range'] ?? null);
+        $this->assertSame('body', $this->published[2]['data']['phase']);
+        $this->assertSame('Hello', $this->published[2]['data']['body'], 'the ranged GET returns the requested bytes');
+        $this->assertSame('end', $this->published[3]['data']['phase']);
+    }
+
     public function test_streaming_response_publishes_phased_frames_without_buffering(): void
     {
         $sent = [];
