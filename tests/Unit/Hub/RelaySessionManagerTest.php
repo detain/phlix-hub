@@ -589,4 +589,114 @@ final class RelaySessionManagerTest extends TestCase
         self::assertTrue($result['allowed']);
         self::assertNull($result['reason']);
     }
+
+    public function testCheckUserQuotaEnforcesDownloadCap(): void
+    {
+        // HB-3.4 G2: bytes_in (downloaded by user) at/over quota_bytes_in must be
+        // denied — the download dimension the OLD implementation never checked.
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql): array {
+                $capturedSql = $sql;
+                return [[
+                    'bytes_in' => '5242880',
+                    'bytes_out' => '0',
+                    'quota_bytes_in' => '5242880',
+                    'quota_bytes_out' => '0',
+                ]];
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->checkUserQuota('user-dl-over');
+
+        // The query must now read BOTH dimensions.
+        self::assertStringContainsString('bytes_in', $capturedSql);
+        self::assertStringContainsString('quota_bytes_in', $capturedSql);
+
+        self::assertFalse($result['allowed']);
+        self::assertNotNull($result['reason']);
+        self::assertStringContainsString('download', $result['reason']);
+    }
+
+    public function testCheckUserQuotaUnderBothCapsIsAllowed(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $db->method('query')->willReturn([[
+            'bytes_in' => '1048576',
+            'bytes_out' => '1024',
+            'quota_bytes_in' => '5242880',
+            'quota_bytes_out' => '2097152',
+        ]]);
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->checkUserQuota('user-both-under');
+
+        self::assertTrue($result['allowed']);
+        self::assertNull($result['reason']);
+    }
+
+    public function testConcurrentStreamCounterIncrementsDecrementsAndBounds(): void
+    {
+        // HB-3.4 G3: the in-memory active-stream counter — increment on begin,
+        // decrement on end, clamp at zero, and drop the key entirely at zero so
+        // the map stays bounded (no dead entries in the resident worker).
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        // No DB access for the pure in-memory counter methods.
+        $db->expects($this->never())->method('query');
+
+        $manager = new RelaySessionManager($db, $logger);
+
+        self::assertSame(0, $manager->activeUserStreams('user-c'));
+
+        $manager->beginUserStream('user-c');
+        $manager->beginUserStream('user-c');
+        self::assertSame(2, $manager->activeUserStreams('user-c'));
+
+        $manager->endUserStream('user-c');
+        self::assertSame(1, $manager->activeUserStreams('user-c'));
+
+        $manager->endUserStream('user-c');
+        self::assertSame(0, $manager->activeUserStreams('user-c'));
+
+        // Bound: a spurious extra end can never drive the count negative.
+        $manager->endUserStream('user-c');
+        self::assertSame(0, $manager->activeUserStreams('user-c'));
+
+        // Independent per user.
+        $manager->beginUserStream('user-d');
+        self::assertSame(1, $manager->activeUserStreams('user-d'));
+        self::assertSame(0, $manager->activeUserStreams('user-c'));
+    }
+
+    public function testGetUserMaxConcurrentStreamsReadsColumnOrDefaultsToUnlimited(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql): array {
+                $capturedSql = $sql;
+                return [['max_concurrent_streams' => '3']];
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        self::assertSame(3, $manager->getUserMaxConcurrentStreams('user-m'));
+        self::assertStringContainsString('max_concurrent_streams', $capturedSql);
+        self::assertStringContainsString('FROM relay_user_quotas', $capturedSql);
+
+        // No row for the period → 0 (unlimited).
+        $db2 = $this->createMock(Connection::class);
+        $db2->method('query')->willReturn([]);
+        $manager2 = new RelaySessionManager($db2, $logger);
+        self::assertSame(0, $manager2->getUserMaxConcurrentStreams('user-none'));
+    }
 }

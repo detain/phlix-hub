@@ -79,7 +79,7 @@ php bin/phlix migrate
 - [x] HB-3.1  write-over-relay (PUT/DELETE/PATCH)  (commits: 6c7a4df, +test-fix c86d6e2)  DONE — FIXER 2026-07-12: replaced the broad `PUT /api/v1/media` + `PUT|DELETE /api/v1/playlists` prefixes with ANCHORED per-action PCREs; PATCH documented as registered-but-deny (no server PATCH write route); added the anchoring guard + real bodied round-trip tests. See `## Fixer — HB-3.1 — 2026-07-12`.
 - [x] HB-3.2  SyncPlay relay authentication ✅ (commit e5f4603) — authenticate in onWebSocketConnect, gate handleGroupJoin — FIXER 2026-07-12: closed a SECURITY gap — room namespace was scoped cosmetically (keyed by the RAW client-supplied string) so two authed users owning DIFFERENT servers who picked the same friendly room name shared ONE room + controlled each other's playback. Now rooms are keyed by the scoped `{server_id}:{owner}:{clientRoom}` key + first SyncPlayRelayWorker tests. See `## Fixer — HB-3.2 — 2026-07-12`.
 - [~] HB-3.3  per-channel tunnel flow control/fairness  RE-AUDIT+COMPLETE 2026-07-12: was PARTIAL (real commit b5a9dba's HTTP_REQUEST-HEAD/END=HIGH priority approach was correctly REVERTED by HB-1.2 fix-3 8d6c1c3 because it reordered chunked bodies; no replacement fairness existed). NOW DONE: replaced the flat `pendingBodyFrames` FIFO with per-channel body queues keyed by `RelayFrame::channelId()`; `flushBodyQueue` drains ROUND-ROBIN (one frame/channel/pass) so a bulk transfer can't starve a browse request; strict intra-channel FIFO preserved (per-channel array_shift → HEAD/BODY/END never reorder). removeClient + close clear per-channel buckets. +1 two-stream fairness test. See `## Implementer — HB-3.3 — 2026-07-12`.
-- [x] HB-3.4  bandwidth accounting + per-user quotas  (commit: 1de552a)  DONE
+- [~] HB-3.4  bandwidth accounting + per-user quotas  RE-AUDIT+COMPLETE 2026-07-12 (G1–G4; G5 HTTP exposure = separate sub-step, NOT done here). was PARTIAL (1de552a): streaming path recorded NOTHING (returned before recordUserBandwidth); only the UPLOAD cap enforced; no concurrent-stream cap; no controller cap tests. NOW: G1 real streamed bytes metered from the sink's on-the-wire counter (not header estimates); G2 checkUserQuota enforces BOTH download (bytes_in) + upload (bytes_out) caps; G3 in-memory per-user concurrent-stream cap (migration 038 max_concurrent_streams) enforced at proxy admission → 503 stream.limit, leak-free release in the producer finally; G4 controller cap tests (quota.exceeded + stream.limit + under-cap admit/release). See `## Implementer — HB-3.4 — 2026-07-12`.
 - [x] HB-4.1  relay observability metrics  (commit: H-W4-batch)  DONE — pending-request gauge, reply-drop counter, per-request latency histogram, 503/504 counters, decode-buffer-size gauge fully wired in MetricsCollector/Registry/FlushService + RelayProxyManager
 - [x] HB-4.2  client_relay_tokens retention sweep  (commit: H-W4-batch)  DONE — pruneExpiredTokens() in ClientRelayTokenService, called from IdleReaper tick
 - [x] HB-4.3  server_heartbeats growth control  (commit: H-W4-batch)  DONE — pruneAllServerHeartbeats()/pruneServerHeartbeats() ring-delete in HeartbeatHandler, called from IdleReaper tick
@@ -1271,3 +1271,130 @@ test's channel-A FIFO assertion still green).
 - `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
 - `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
 - psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
+
+## Reviewer (per-step, read-only) — HB-3.3 — 2026-07-12
+
+Reviewed commit `5c57ce4` (parent `b965a79`) — diff `b965a79..5c57ce4` scoped to
+`src/Relay/Tunnel.php` + `tests/Unit/Relay/TunnelTest.php` (+ worklog). Gates re-run on this
+box: phpstan L9 `[OK] No errors`; `phpcs -n src/Relay/Tunnel.php` exit 0; `phpunit --filter Tunnel`
+OK (80 tests / 294 assertions); full suite 1302 pass / 0 fail / 17 skip (baseline held).
+
+Verified:
+- **AC met.** `flushBodyQueue()` is round-robin (one frame per channel per outer-while pass via
+  `array_keys` snapshot + per-channel `[0]`/`array_shift`); the new
+  `test_body_queue_round_robin_prevents_one_channel_starving_another` proves channel B's browse
+  request lands at wire index 1 (bounded, first pass) instead of index 8 behind channel A's 8-frame
+  bulk backlog. The `assertSame(1, $bIndex)` genuinely fails against the old flat-FIFO behavior, so
+  the test really guards the H-R4 seam.
+- **Intra-channel FIFO integrity intact.** Channel key = `RelayFrame::channelId()` = `seq`. Confirmed
+  in `RelayProxyManager::forwardRequest` (:289/:300-318) that HEAD, every BODY chunk, and END of one
+  chunked request all carry the SAME `$requestId` as `seq` → one bucket, drained in order via
+  `array_shift`. Distinct requests get distinct request ids (`FIRST_REQUEST_ID=0x80000001` monotonic)
+  and DATA carries the client channel id (small positive from `nextChannelId++`), so the two id spaces
+  never collide in the shared map — no bucket cross-contamination. The `sendToServer` LOW-priority
+  enqueue-if-backlog guard (:920, `!empty(pendingBodyFrames)` = ANY channel) ensures a later same-channel
+  frame is never direct-sent ahead of a queued earlier one.
+- **HB-1.2 invariants not regressed.** No-drop preserved (false send → `enqueueBodyFrame` re-queue +
+  `handleServerSendBackpressure`; mid-flush false send in `flushBodyQueue` leaves everything queued and
+  returns). Overflow → `close('backpressure_overflow')` retained, now via aggregate `bodyQueueTotal()`
+  (semantically equivalent to the old flat `count()` — total frames, not channels). Control-before-body
+  drain order in the server `onBufferDrain` (flushHighPriorityQueue then, only if empty, flushBodyQueue)
+  unchanged; episode-scoped safety timer semantics untouched.
+- **No leaks / stranded pause.** Emptied channel keys are `unset` on drain so `empty()` == "no backlog";
+  `removeClient` drops the departing DATA channel's bucket (:1479-1481) leaving HTTP_REQUEST buckets
+  (request-id-keyed, not client-tied) correctly untouched; the client-congestion decrement +
+  server-resume path (:1455-1470) is separate and intact; `close()` resets `pendingBodyFrames = []`
+  (:1589), valid for the array-of-arrays shape.
+- `flushBodyQueue` cannot spin (progressed-guard + unset-on-empty + return on false send).
+- Scope clean (only the two in-scope files + worklog); repo conventions and §0.4 respected.
+
+NO FINDINGS
+
+## Implementer — HB-3.4 — 2026-07-12
+
+Audit-and-complete of the CORE enforcement path (gaps G1–G4). **G5 (HTTP endpoints to
+set caps / view usage via setUserQuota/getUserBandwidth) is deliberately left for the
+separate follow-up sub-step — NOT touched here.** Did NOT touch Tunnel.php (HB-3.3
+round-robin / HB-1.2 backpressure untouched — accounting taps the sink's byte count,
+it does not reorder frames).
+
+**G1 — meter REAL streamed bytes (authoritative, not header estimates).**
+- `src/Http/ConnectionResponseSink.php`: added `$bytesStreamed` incremented on every
+  body fragment the sink SUCCESSFULLY hands to the connection, across BOTH framings
+  (fixed-length and chunked); it counts only raw body bytes (chunk framing overhead
+  excluded) and a failed send is not counted. New `bytesStreamed(): int` getter.
+  **Byte-metering locus = the sink's on-the-wire counter** — this is authoritative (the
+  actual bytes delivered to the browser socket) rather than the old `strlen($body)+1024`
+  header estimate the buffered path used.
+- `src/Http/Controllers/ServerProxyController.php`: `buildStreamingResponse()` now takes
+  `$userId`; its producer wraps `$bridge->stream(...)` in try/finally and, in the finally,
+  calls `recordUserBandwidth($userId, $sink->bytesStreamed(), strlen($body))` — download =
+  real streamed bytes, upload = real request body. Runs on every exit (completion,
+  browser-gone, mid-stream error). The streaming path used to `return` before the only
+  `recordUserBandwidth()` calls, recording nothing — that gap is closed.
+
+**G2 — enforce BOTH caps.** `RelaySessionManager::checkUserQuota()` now SELECTs
+`bytes_in, bytes_out, quota_bytes_in, quota_bytes_out` and denies when EITHER cap is set
+(`quota > 0`) and reached (`used >= quota`). Per the column docstrings (`bytes_in` =
+downloaded-by-user, `bytes_out` = uploaded-by-user), the DOWNLOAD cap (`quota_bytes_in`
+vs `bytes_in`) is the one that bites for playback and was previously never checked; the
+UPLOAD cap behaviour is preserved.
+
+**G3 — per-user concurrent-stream cap (in-memory, migration-configurable).**
+- Migration `038_relay_user_quotas_concurrency.sql`: plain
+  `ALTER TABLE relay_user_quotas ADD COLUMN max_concurrent_streams INT UNSIGNED NOT NULL
+  DEFAULT 0` (0 = unlimited). No `IF NOT EXISTS` (MySQL-8 1064); header
+  `-- migration: 038_relay_user_quotas_concurrency`; added to `MigrationFileTest`
+  expected-files list (146 tests pass).
+- `RelaySessionManager`: in-memory `$activeStreams` map keyed by userId +
+  `beginUserStream`/`endUserStream`/`activeUserStreams` and
+  `getUserMaxConcurrentStreams()` (reads the new column for the current period; 0 when no
+  row → unlimited). The map is BOUNDED — a user's key is `unset` the moment their count
+  hits 0, and `endUserStream` clamps at 0 — so no unbounded static growth in the resident
+  worker; the live count is NOT persisted (it is a property of this worker's open
+  connections).
+- `ServerProxyController::proxy()`: BEFORE `buildStreamingResponse`, if
+  `maxStreams > 0 && activeUserStreams >= maxStreams` → 503 `stream.limit` (never occupies
+  a slot, never forwards). The slot is occupied in `buildStreamingResponse` (begin) and
+  **released in the producer's finally** via a one-shot idempotent `$release` closure —
+  the finally is the true "stream over" boundary (`stream()` always returns OR throws, and
+  the producer runs synchronously in the same HTTP worker per `Application::onMessage`), so
+  the slot cannot leak on normal completion, browser-disconnect, or a pre-head exception.
+
+**G4 — controller cap tests** (`tests/Unit/Http/Controllers/ServerProxyControllerTest.php`):
+- `test_over_quota_user_returns_503_quota_exceeded_and_is_not_forwarded`
+- `test_concurrent_stream_cap_reached_returns_503_stream_limit_and_is_not_forwarded`
+  (asserts `beginUserStream` is NEVER called + not forwarded)
+- `test_stream_under_concurrent_cap_is_admitted_occupies_then_releases_slot`
+  (begin once / end once / `recordUserBandwidth('user-1', 6, 0)` once — no leak)
+The existing allow-path case (`checkUserQuota` → allow) still passes.
+Also added: `RelaySessionManagerTest` download-cap + both-under + concurrent-counter-bounds
++ getUserMaxConcurrentStreams tests; `ConnectionResponseSinkTest` bytesStreamed (fixed /
+chunked / failed-send) tests.
+
+**⚠️ Concurrency-cap scope note:** the HTTP worker (`:8800`) defaults to `HUB_WORKERS=2`
+(config/server.php), NOT count=1 (only the relay worker `:8802` is count=1). Streaming +
+this admission both run in the HTTP worker, so the in-memory concurrent counter is
+per-HTTP-worker → the cap is effectively enforced per worker (≈ N×max globally). This
+matches the task's explicit "in-memory counter, do NOT store the live count in the DB"
+directive and is correct within a worker; a strict GLOBAL cap would need a shared store
+(Redis/DB) — flagged as future work alongside G5.
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
+- `phpunit --filter 'RelaySessionManager|ServerProxyController|ConnectionResponseSink|Migration'`
+  → **OK (353 tests, 916 assertions, 5 skipped)**.
+- Full suite → **1318 pass / 15752 assertions / 17 skipped / 0 failures** (baseline 1302,
+  +16 new).
+- `MigrationFileTest` → **OK (146 tests)** — validates 038 header/plain-ALTER + expected list.
+- `php bin/phlix migrate` → could NOT run live (DB unreachable on this box:
+  `SQLSTATE[HY000] [2002] Connection refused`, environmental — same class as the psalm
+  skip). 038 is a single plain `ALTER … ADD COLUMN`; the MigrationRunner tracking table is
+  what makes each file apply once (re-runnable). Needs a box with the DB up to confirm the
+  live apply.
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
+
+**G5 explicitly left open:** HTTP exposure of `setUserQuota`/`getUserBandwidth`/
+`max_concurrent_streams` (admin/user endpoints to set caps + view usage) is a SEPARATE
+follow-up sub-step and was not implemented here.

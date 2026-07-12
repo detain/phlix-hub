@@ -1895,4 +1895,125 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame(60.0, $reflected->invoke($controller, 'GET', '/dash/job/manifest.mpd'));
         $this->assertSame(10.0, $reflected->invoke($controller, 'GET', '/api/v1/media'));
     }
+
+    // ---------------------------------------------------------------------
+    // HB-3.4 G4: cap enforcement at proxy admission.
+    // ---------------------------------------------------------------------
+
+    /**
+     * HB-3.4 G2/G4: a user over their monthly bandwidth quota is refused with
+     * 503 `quota.exceeded` BEFORE the request is forwarded — the quota gate runs
+     * for every admitted request (browse and stream alike).
+     */
+    public function test_over_quota_user_returns_503_quota_exceeded_and_is_not_forwarded(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $sessionManager = $this->createMock(RelaySessionManager::class);
+        $sessionManager->method('checkUserQuota')->willReturn([
+            'allowed' => false,
+            'reason' => 'User has reached their monthly download bandwidth quota.',
+        ]);
+
+        $forwarded = false;
+        $bridge = $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        });
+
+        $controller = $this->controller($info, $bridge, $sessionManager);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/libraries'],
+        );
+
+        $this->assertSame(503, $response->statusCode);
+        $this->assertFalse($forwarded, 'An over-quota request must never reach the relay bridge.');
+        /** @var array{error?: array{code?: string, message?: string}} $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('quota.exceeded', $body['error']['code'] ?? null);
+    }
+
+    /**
+     * HB-3.4 G3/G4: when a user is already streaming at their configured
+     * concurrent-stream maximum, a further stream is refused with 503
+     * `stream.limit` BEFORE any slot is occupied or anything forwarded.
+     */
+    public function test_concurrent_stream_cap_reached_returns_503_stream_limit_and_is_not_forwarded(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $sessionManager = $this->createMock(RelaySessionManager::class);
+        $sessionManager->method('checkUserQuota')->willReturn(['allowed' => true, 'reason' => null]);
+        // Max of 2, already at 2 active → the 3rd stream is refused.
+        $sessionManager->method('getUserMaxConcurrentStreams')->willReturn(2);
+        $sessionManager->method('activeUserStreams')->willReturn(2);
+        // The refused stream must NOT occupy a slot.
+        $sessionManager->expects(self::never())->method('beginUserStream');
+
+        $forwarded = false;
+        $bridge = $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        });
+
+        $controller = $this->controller($info, $bridge, $sessionManager);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'hls/job-abc/seg-00007.ts'],
+        );
+        // A refused stream returns a buffered 503 JSON error, not a producer.
+        $this->assertNull($response->streamProducer, 'A capped stream must not return a streaming producer.');
+        $this->assertSame(503, $response->statusCode);
+        $this->assertFalse($forwarded, 'A capped stream must never reach the relay bridge.');
+        /** @var array{error?: array{code?: string, message?: string}} $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('stream.limit', $body['error']['code'] ?? null);
+    }
+
+    /**
+     * HB-3.4 G3/G4: a stream UNDER the concurrent cap is admitted — it occupies a
+     * slot on start, is forwarded, and releases the slot once the producer
+     * completes (no leak).
+     */
+    public function test_stream_under_concurrent_cap_is_admitted_occupies_then_releases_slot(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $sessionManager = $this->createMock(RelaySessionManager::class);
+        $sessionManager->method('checkUserQuota')->willReturn(['allowed' => true, 'reason' => null]);
+        $sessionManager->method('getUserMaxConcurrentStreams')->willReturn(3);
+        $sessionManager->method('activeUserStreams')->willReturn(0);
+        // Slot is occupied exactly once and released exactly once (no leak).
+        $sessionManager->expects(self::once())->method('beginUserStream')->with('user-1');
+        $sessionManager->expects(self::once())->method('endUserStream')->with('user-1');
+        // The real bytes streamed (foo+bar = 6) are metered as the user's download.
+        $sessionManager->expects(self::once())->method('recordUserBandwidth')
+            ->with('user-1', 6, 0);
+
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge): void {
+            /** @var RelayProxyBridge $bridge */
+            $id = $data['request_id'];
+            $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 200, 'headers' => [
+                'Content-Type' => 'video/mp2t',
+                'Content-Length' => '6',
+            ]]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'foo']);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'bar']);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge, $sessionManager);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'hls/job-abc/seg-00007.ts'],
+        );
+
+        $this->assertNotNull($response->streamProducer);
+        $connection = $this->drive($response);
+        $this->assertStringContainsString('HTTP/1.1 200 OK', $connection->written[0]);
+    }
 }

@@ -74,6 +74,52 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertCount(2, $written);
     }
 
+    public function test_bytes_streamed_counts_raw_body_bytes_for_fixed_length(): void
+    {
+        // HB-3.4 G1: bytesStreamed() is the authoritative on-the-wire download
+        // total the bandwidth accounting meters — real body bytes, not headers.
+        $connection = $this->connection();
+        $sink = new ConnectionResponseSink($connection);
+
+        $sink->head(200, ['Content-Type' => 'video/mp2t', 'Content-Length' => '6']);
+        self::assertSame(0, $sink->bytesStreamed());
+        $sink->body('foo');
+        $sink->body('bar');
+        $sink->end();
+
+        // 6 raw body bytes ('foo' + 'bar'), independent of the head bytes.
+        self::assertSame(6, $sink->bytesStreamed());
+    }
+
+    public function test_bytes_streamed_counts_raw_body_bytes_for_chunked(): void
+    {
+        // Chunked framing wraps each fragment in a chunk header on the wire, but
+        // bytesStreamed() must count only the RAW body bytes (the download the
+        // user actually received), not the chunk framing overhead.
+        $connection = $this->connection();
+        $sink = new ConnectionResponseSink($connection);
+
+        $sink->head(200, ['Content-Type' => 'application/vnd.apple.mpegurl']);
+        $sink->body('hello');
+        $sink->body('worldwide');
+        $sink->end();
+
+        self::assertSame(14, $sink->bytesStreamed()); // 5 + 9
+    }
+
+    public function test_bytes_streamed_does_not_count_a_failed_send(): void
+    {
+        // When the connection reports the body send failed (client gone), those
+        // bytes never reached the wire and must not be metered.
+        $connection = $this->connection(sendResult: false);
+        $sink = new ConnectionResponseSink($connection);
+
+        $sink->head(200, ['Content-Type' => 'video/mp2t', 'Content-Length' => '3']);
+        self::assertFalse($sink->body('foo'));
+
+        self::assertSame(0, $sink->bytesStreamed());
+    }
+
     public function test_unknown_length_uses_chunked_transfer_encoding(): void
     {
         $connection = $this->connection();
