@@ -364,15 +364,24 @@ final class RelayWorker
             $tunnel = $tunnelManager->acceptServer($serverId, $connection);
             self::$connTunnels[$connId] = $tunnel;
 
-            // Let the tunnel process the HELLO (validates + transitions state).
-            // If onServerMessage() throws (invalid JWT, malformed HELLO, etc.)
-            // the catch block closes the connection and the incumbent tunnel
-            // (stored in closingTunnels) remains untouched.
+            // Let the tunnel process the HELLO. This validates the enrollment JWT
+            // and, on success, transitions the tunnel to ACTIVE. On failure
+            // Tunnel::handleHelloFrame calls close('unauthorized') and RETURNS —
+            // it does NOT throw — so we MUST inspect the resulting state rather
+            // than rely on an exception that never comes (the HB-2.2 defect).
             $tunnel->onServerMessage($data);
 
-            // JWT validated successfully — the new tunnel is now ACTIVE.
-            // Safe to displace the incumbent tunnel that was stored when
-            // acceptServer() was called (HB-2.2).
+            if ($tunnel->status !== Tunnel::STATUS_ACTIVE) {
+                // HELLO rejected (invalid/absent JWT, malformed payload). Any live
+                // incumbent for this server_id stays routable and is NEVER evicted
+                // by an unvalidated HELLO — this is the core of the HB-2.2 DoS fix.
+                // Displacement is gated on validation, not on HELLO arrival.
+                $tunnelManager->abortPendingConnection($serverId, $tunnel);
+                return;
+            }
+
+            // JWT validated successfully — the new tunnel is now ACTIVE. Promote
+            // it into the routing map and drain/displace any incumbent (HB-2.2).
             $tunnelManager->finalizeServerConnection($serverId);
 
             // S4 metrics: register the tunnel as a live connection. Its byte

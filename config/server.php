@@ -31,6 +31,17 @@ return [
     // for heartbeats and JWKS fetches. See $hubBaseUrl derivation above.
     'hub_base_url'  => $hubBaseUrl,
 
+    // Reverse-tunnel relay tuning.
+    'relay' => [
+        // Grace window (seconds) an incumbent tunnel keeps draining in-flight
+        // requests after a VALIDATED server reconnect displaces it (H-R6), so a
+        // deploy/network blip does not instantly kill active playback. `0`
+        // disables the drain (immediate hard displacement).
+        'reconnect_drain_grace_seconds' => is_numeric(getenv('HUB_RELAY_RECONNECT_DRAIN_GRACE') ?: '')
+            ? (float) getenv('HUB_RELAY_RECONNECT_DRAIN_GRACE')
+            : 5.0,
+    ],
+
     // Sonarr/Radarr endpoints used by the request UI.
     // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.
     'arr' => [

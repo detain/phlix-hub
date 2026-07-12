@@ -41,33 +41,52 @@ final class TunnelManager implements TunnelManagerInterface
      * @param EnrollmentJwtService|null $jwtService    Enrollment-JWT validator passed to each tunnel
      *                                                 so HELLO frames are cryptographically verified.
      *                                                 Null (test-only) skips validation.
+     * @param float                     $reconnectDrainGraceSeconds Grace window (seconds) an incumbent
+     *                                                 tunnel keeps draining in-flight requests after a
+     *                                                 VALIDATED reconnect displaces it (H-R6). `<= 0`
+     *                                                 disables the drain (immediate hard displacement).
      */
     public function __construct(
         private readonly RelaySessionManager $sessionManager,
         private readonly RelayWireCodecInterface $codec,
         private readonly StructuredLogger $logger,
         private readonly ?EnrollmentJwtService $jwtService = null,
+        private readonly float $reconnectDrainGraceSeconds = self::DEFAULT_RECONNECT_DRAIN_GRACE_SECONDS,
     ) {
         $this->tunnels = [];
     }
 
     /**
-     * @var array<string, Tunnel> Active tunnels keyed by server ID.
+     * Default reconnect-drain grace period (seconds). A validated server
+     * reconnect lets the incumbent tunnel finish delivering in-flight responses
+     * for this long before the hard close, so a deploy/network blip does not
+     * instantly kill active playback (H-R6).
+     */
+    public const float DEFAULT_RECONNECT_DRAIN_GRACE_SECONDS = 5.0;
+
+    /**
+     * @var array<string, Tunnel> Active tunnels keyed by server ID. This is the
+     *      routing map: {@see getTunnelForServer()} reads it, and a live
+     *      incumbent stays here (reachable) until a reconnecting tunnel's HELLO
+     *      JWT validates.
      */
     private array $tunnels;
 
     /**
-     * Incumbent tunnels awaiting displacement after JWT validation.
+     * New, UNVALIDATED tunnels awaiting HELLO-JWT validation, keyed by server ID.
      *
-     * When a new server HELLO arrives for a server_id that already has a tunnel,
-     * the incumbent is stored here (not yet closed). It is only closed once the
-     * new tunnel's JWT validation succeeds in {@see finalizeServerConnection()}.
-     * This prevents an attacker from displacing an incumbent tunnel before
-     * their JWT is validated (HB-2.2).
+     * When a HELLO arrives for a server_id that already has a live tunnel, the
+     * new tunnel is parked here — NOT placed in {@see $tunnels} and NOT allowed
+     * to displace the incumbent — until its enrollment JWT is validated in
+     * {@see finalizeServerConnection()}. If validation fails,
+     * {@see abortPendingConnection()} discards it and the incumbent is never
+     * touched. This closes the unauthenticated tunnel-displacement DoS
+     * (HB-2.2 / H-H1): displacement is gated on validation, not on the mere
+     * arrival of a HELLO.
      *
      * @var array<string, Tunnel>
      */
-    private array $closingTunnels = [];
+    private array $pendingTunnels = [];
 
     /**
      * @var RelayProxyManager|null Proxy manager passed to each tunnel for HTTP-over-relay.
@@ -92,10 +111,19 @@ final class TunnelManager implements TunnelManagerInterface
     }
 
     /**
-     * Accept a new server connection and create a tunnel.
+     * Accept a new server connection and create a tunnel (still in PENDING).
      *
-     * If a tunnel already exists for this server_id, it is closed first
-     * (server reconnect scenario) before a new one is created.
+     * The returned tunnel has NOT yet displaced any incumbent. If a live tunnel
+     * already serves this server_id, the new tunnel is parked in
+     * {@see $pendingTunnels} and the incumbent is LEFT in the routing map, fully
+     * reachable, until the new tunnel's HELLO enrollment JWT validates (see
+     * {@see finalizeServerConnection()} / {@see abortPendingConnection()}). This
+     * closes the unauthenticated tunnel-displacement DoS (HB-2.2 / H-H1): an
+     * invalid HELLO with a known server_id can no longer evict a healthy tunnel.
+     *
+     * When there is no live incumbent, the new tunnel becomes the routing entry
+     * directly (there is nothing to protect); a failed HELLO then removes it via
+     * {@see abortPendingConnection()}.
      *
      * @param string      $serverId Server UUID from the HELLO handshake.
      * @param TcpConnection $serverWs Workerman connection to the server.
@@ -104,17 +132,6 @@ final class TunnelManager implements TunnelManagerInterface
      */
     public function acceptServer(string $serverId, TcpConnection $serverWs): Tunnel
     {
-        // If a tunnel already exists for this server, store it as an incumbent
-        // pending displacement — DO NOT close it yet. The JWT must be validated
-        // first (HB-2.2). The incumbent is only closed after the new tunnel
-        // successfully validates its HELLO JWT in finalizeServerConnection().
-        if (isset($this->tunnels[$serverId])) {
-            $this->logger->info('Relay: incumbent tunnel stored for displacement after JWT validation', [
-                'server_id' => $serverId,
-            ]);
-            $this->closingTunnels[$serverId] = $this->tunnels[$serverId];
-        }
-
         $hostname = @gethostname();
         /** @var non-falsy-string $workerNode */
         $workerNode = is_string($hostname) && $hostname !== '' ? $hostname : 'unknown';
@@ -130,6 +147,30 @@ final class TunnelManager implements TunnelManagerInterface
             $this->proxyManager,
         );
 
+        $incumbent = $this->tunnels[$serverId] ?? null;
+        if ($incumbent !== null && $incumbent->status !== Tunnel::STATUS_CLOSED) {
+            // A live tunnel already serves this server. Park the new (still
+            // UNVALIDATED) tunnel and leave the incumbent routable. It is only
+            // displaced once this tunnel's HELLO JWT validates.
+            $priorPending = $this->pendingTunnels[$serverId] ?? null;
+            if ($priorPending !== null && $priorPending->status !== Tunnel::STATUS_CLOSED) {
+                // Rapid re-HELLO before the previous one resolved: discard the
+                // older pending tunnel (never promoted, nothing routes to it).
+                $priorPending->close('superseded_pending');
+            }
+            $this->pendingTunnels[$serverId] = $tunnel;
+
+            $this->logger->info('Relay: HELLO for server with live tunnel; parked pending JWT validation', [
+                'server_id' => $serverId,
+                'tunnel_id' => $tunnel->tunnelId,
+                'incumbent_tunnel_id' => $incumbent->tunnelId,
+                'worker_node' => $workerNode,
+            ]);
+
+            return $tunnel;
+        }
+
+        // No live incumbent — the new tunnel owns the routing slot directly.
         $this->tunnels[$serverId] = $tunnel;
 
         $this->logger->info('Relay: server accepted, tunnel created', [
@@ -233,17 +274,19 @@ final class TunnelManager implements TunnelManagerInterface
     }
 
     /**
-     * Finalize a server connection after successful JWT validation.
+     * Promote a validated tunnel and displace any incumbent.
      *
-     * Called by {@see RelayWorker::handleHello()} after the tunnel's
-     * `onServerMessage()` completes without throwing — meaning the HELLO
-     * JWT was valid and the tunnel transitioned to ACTIVE. At that point
-     * the incumbent tunnel (stored during `acceptServer()`) can be safely
-     * closed since the new connection has proven itself.
+     * Called by {@see RelayWorker::handleHello()} ONLY after the tunnel's
+     * `onServerMessage()` transitioned it to ACTIVE — i.e. its HELLO enrollment
+     * JWT validated. The parked (pending) tunnel is swapped into the routing map
+     * and the incumbent (if any) is displaced. Displacement uses a bounded
+     * reconnect-drain (H-R6): the incumbent keeps delivering in-flight responses
+     * for {@see $reconnectDrainGraceSeconds} before its hard close, so a
+     * legitimate reconnect (deploy/network blip) does not instantly kill
+     * playback.
      *
-     * If the new tunnel fails JWT validation and its connection is closed
-     * before this method is called, the incumbent remains active in
-     * `$closingTunnels` and is never touched.
+     * Safe to call when there is no pending tunnel (fresh connection): the new
+     * tunnel is already the map entry and there is nothing to displace.
      *
      * @param string $serverId Server UUID.
      *
@@ -251,17 +294,68 @@ final class TunnelManager implements TunnelManagerInterface
      */
     public function finalizeServerConnection(string $serverId): void
     {
-        if (!isset($this->closingTunnels[$serverId])) {
+        $pending = $this->pendingTunnels[$serverId] ?? null;
+        if ($pending === null) {
+            // Fresh connection: the validated tunnel is already the routing
+            // entry (placed by acceptServer) and there is nothing to displace.
             return;
         }
+        unset($this->pendingTunnels[$serverId]);
 
-        $this->logger->info('Relay: JWT validated, closing incumbent tunnel', [
+        $incumbent = $this->tunnels[$serverId] ?? null;
+
+        // Promote the now-VALIDATED tunnel into the routing map. From here new
+        // clients and proxy requests route to it.
+        $this->tunnels[$serverId] = $pending;
+
+        if ($incumbent !== null && $incumbent !== $pending && $incumbent->status !== Tunnel::STATUS_CLOSED) {
+            $this->logger->info('Relay: JWT validated, draining + displacing incumbent tunnel', [
+                'server_id' => $serverId,
+                'incumbent_tunnel_id' => $incumbent->tunnelId,
+                'new_tunnel_id' => $pending->tunnelId,
+                'grace_seconds' => $this->reconnectDrainGraceSeconds,
+            ]);
+            $incumbent->beginDrain($this->reconnectDrainGraceSeconds, 'server_replaced');
+        }
+    }
+
+    /**
+     * Discard a tunnel whose HELLO failed validation, leaving the incumbent live.
+     *
+     * Called by {@see RelayWorker::handleHello()} when `onServerMessage()` did
+     * NOT bring the tunnel to ACTIVE (invalid/absent enrollment JWT, malformed
+     * HELLO). The rejected tunnel is removed from wherever it was parked; a live
+     * incumbent stays in the routing map, untouched and reachable — it is NEVER
+     * displaced by an unvalidated HELLO. This is the core of the HB-2.2 fix.
+     *
+     * @param string $serverId Server UUID.
+     * @param Tunnel $rejected The tunnel that failed HELLO validation.
+     *
+     * @return void
+     */
+    public function abortPendingConnection(string $serverId, Tunnel $rejected): void
+    {
+        if (($this->pendingTunnels[$serverId] ?? null) === $rejected) {
+            unset($this->pendingTunnels[$serverId]);
+        }
+
+        // Fresh-connection case: the rejected tunnel was placed directly in the
+        // routing map (no incumbent). Drop it so getTunnelForServer() does not
+        // return a dead tunnel. A live incumbent in the map is left in place.
+        if (($this->tunnels[$serverId] ?? null) === $rejected) {
+            unset($this->tunnels[$serverId]);
+        }
+
+        // Tunnel::handleHelloFrame already closed it (close('unauthorized')).
+        // close() is idempotent on CLOSED; this is a defensive no-op if so.
+        if ($rejected->status !== Tunnel::STATUS_CLOSED) {
+            $rejected->close('unauthorized');
+        }
+
+        $this->logger->info('Relay: HELLO rejected; incumbent (if any) left intact', [
             'server_id' => $serverId,
+            'tunnel_id' => $rejected->tunnelId,
         ]);
-
-        $incumbent = $this->closingTunnels[$serverId];
-        $incumbent->close('server_replaced');
-        unset($this->closingTunnels[$serverId]);
     }
 
     /**

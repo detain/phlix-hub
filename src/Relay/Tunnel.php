@@ -297,6 +297,23 @@ final class Tunnel implements TunnelInterface
     private ?int $serverBackpressureTimerId = null;
 
     /**
+     * @var int|null Timer id of the reconnect-drain grace timer (H-R6). Armed by
+     *          {@see beginDrain()} when a VALIDATED reconnect displaces this
+     *          (incumbent) tunnel: the tunnel is moved to CLOSING and kept alive
+     *          for a bounded grace period so its in-flight requests can drain
+     *          before the hard close, instead of instantly killing playback.
+     *          One-shot ({@see Timer::add()} with `[], false`); cleared when it
+     *          fires or when the tunnel closes for any other reason.
+     */
+    private ?int $drainTimerId = null;
+
+    /**
+     * @var string Close reason to use when the reconnect-drain grace period
+     *          expires (see {@see beginDrain()}).
+     */
+    private string $drainReason = 'server_replaced';
+
+    /**
      * Handle an incoming message from the server.
      *
      * During PENDING state: expects JSON HELLO frame, transitions to ACTIVE.
@@ -587,11 +604,29 @@ final class Tunnel implements TunnelInterface
             'relay_session_id' => $this->relaySessionId,
         ]);
 
+        // Cancel any pending reconnect-drain grace timer so it cannot fire on an
+        // already-torn-down tunnel.
+        if ($this->drainTimerId !== null) {
+            try {
+                Timer::del($this->drainTimerId);
+            } catch (Throwable) {
+                // Timer unavailable (outside the event loop / tests) — no-op.
+            }
+            $this->drainTimerId = null;
+        }
+
         // Close all client connections with TYPE_DISCONNECTED
         $this->notifyClientsDisconnected('server_closed');
 
-        // Fail any in-flight proxy requests for this server.
-        $this->proxyManager?->failServer($this->serverId);
+        // Fail any in-flight proxy requests for this server — but ONLY if this
+        // tunnel was actually the ACTIVE owner (it holds a relay session). A
+        // never-activated tunnel (e.g. one rejected during the HELLO handshake)
+        // never owned this server's requests; failServer() is keyed by
+        // server_id, so calling it from a rejected tunnel would wrongly 503 the
+        // LEGITIMATE incumbent's in-flight requests (HB-2.2 / H-H1 residual DoS).
+        if ($this->relaySessionId !== null) {
+            $this->proxyManager?->failServer($this->serverId);
+        }
 
         // Close the session in the database
         if ($this->relaySessionId !== null) {
@@ -1411,11 +1446,17 @@ final class Tunnel implements TunnelInterface
     /**
      * Close the tunnel with the given reason.
      *
-     * @param string $reason Human-readable close reason.
+     * @param string $reason      Human-readable close reason.
+     * @param bool   $failInFlight When true (default) any in-flight proxy
+     *                            requests for this server are 503'd. Set false
+     *                            when displacing an incumbent after a validated
+     *                            reconnect drain (H-R6): {@see failServer()} is
+     *                            keyed by server_id, so failing here would also
+     *                            kill the NEW tunnel's freshly accepted requests.
      *
      * @return void
      */
-    public function close(string $reason = 'normal'): void
+    public function close(string $reason = 'normal', bool $failInFlight = true): void
     {
         if ($this->status === self::STATUS_CLOSED) {
             return;
@@ -1429,6 +1470,18 @@ final class Tunnel implements TunnelInterface
             'relay_session_id' => $this->relaySessionId,
             'reason' => $reason,
         ]);
+
+        // Cancel any pending reconnect-drain grace timer (it may be the very
+        // caller, in which case drainTimerId is already null — Timer::del is a
+        // no-op on null-guarded ids).
+        if ($this->drainTimerId !== null) {
+            try {
+                Timer::del($this->drainTimerId);
+            } catch (Throwable) {
+                // Timer unavailable (outside the event loop / tests) — no-op.
+            }
+            $this->drainTimerId = null;
+        }
 
         // Clean up any backpressure state: cancel the episode safety timers and
         // resume any paused receives before closing so connections aren't left
@@ -1454,8 +1507,17 @@ final class Tunnel implements TunnelInterface
         // Notify clients
         $this->notifyClientsDisconnected($reason);
 
-        // Fail any in-flight proxy requests for this server.
-        $this->proxyManager?->failServer($this->serverId);
+        // Fail any in-flight proxy requests for this server — but ONLY if this
+        // tunnel was the ACTIVE owner (holds a relay session) AND the caller
+        // wants in-flight requests failed. A never-activated tunnel rejected
+        // during the HELLO handshake never owned this server's requests; because
+        // failServer() is keyed by server_id, failing here would 503 the
+        // LEGITIMATE incumbent's in-flight requests (the HB-2.2 residual DoS).
+        // $failInFlight is set false when draining an incumbent after a validated
+        // reconnect so the NEW tunnel's requests survive the displacement.
+        if ($failInFlight && $this->relaySessionId !== null) {
+            $this->proxyManager?->failServer($this->serverId);
+        }
 
         // Close server connection
         $this->serverWs->close();
@@ -1466,6 +1528,86 @@ final class Tunnel implements TunnelInterface
         }
 
         $this->status = self::STATUS_CLOSED;
+    }
+
+    /**
+     * Begin a reconnect-drain (H-R6) before displacing this incumbent tunnel.
+     *
+     * Called by {@see TunnelManager::finalizeServerConnection()} when a server
+     * reconnects and its NEW tunnel has passed HELLO-JWT validation. Rather than
+     * hard-closing this (incumbent) tunnel immediately — which tears down every
+     * client and 503s every in-flight request, killing active playback on every
+     * legitimate deploy/network blip — the tunnel is moved to CLOSING and kept
+     * alive for a bounded grace period. New clients and proxy requests already
+     * route to the promoted tunnel; this one simply finishes delivering the
+     * responses already in flight on its (still-open) server connection, then
+     * closes when the grace timer fires.
+     *
+     * The grace close uses `failInFlight = false` so the server-scoped
+     * {@see failServer()} does not also kill the newly promoted tunnel's
+     * requests. Any of this tunnel's own stragglers that have not completed by
+     * grace end fall back to their per-request relay timeout.
+     *
+     * @param float  $graceSeconds Grace window in seconds. `<= 0` displaces
+     *                            immediately (drain disabled).
+     * @param string $reason      Close reason recorded when the grace expires.
+     *
+     * @return void
+     */
+    public function beginDrain(float $graceSeconds, string $reason = 'server_replaced'): void
+    {
+        if ($this->status === self::STATUS_CLOSED || $this->status === self::STATUS_CLOSING) {
+            return;
+        }
+
+        if ($graceSeconds <= 0.0) {
+            // Drain disabled — displace immediately (legacy hard-kill behaviour).
+            $this->close($reason);
+            return;
+        }
+
+        $this->status = self::STATUS_CLOSING;
+        $this->drainReason = $reason;
+
+        $this->logger->info('Relay: incumbent tunnel draining before displacement', [
+            'server_id' => $this->serverId,
+            'tunnel_id' => $this->tunnelId,
+            'relay_session_id' => $this->relaySessionId,
+            'grace_seconds' => $graceSeconds,
+            'reason' => $reason,
+        ]);
+
+        // One-shot grace timer (§0.4: `[], false` — must NOT repeat). Timer::add
+        // throws outside a Workerman event loop (e.g. under PHPUnit); swallow that
+        // so unit tests can exercise the drain path (they invoke
+        // handleDrainTimeout() directly). Production always has a live loop.
+        try {
+            $this->drainTimerId = Timer::add($graceSeconds, function (): void {
+                $this->drainTimerId = null;
+                $this->handleDrainTimeout();
+            }, [], false);
+        } catch (Throwable) {
+            $this->drainTimerId = null;
+        }
+    }
+
+    /**
+     * Fire when the reconnect-drain grace period expires: hard-close the
+     * incumbent tunnel WITHOUT failing the server's in-flight requests (those
+     * now belong to the promoted tunnel — see {@see beginDrain()}).
+     *
+     * Exposed as a distinct method (not an inline closure) so tests can simulate
+     * the timer firing deterministically without a running event loop.
+     *
+     * @return void
+     */
+    private function handleDrainTimeout(): void
+    {
+        if ($this->status === self::STATUS_CLOSED) {
+            return;
+        }
+
+        $this->close($this->drainReason, false);
     }
 
     /**

@@ -102,16 +102,31 @@ interface TunnelManagerInterface
     public function removeTunnel(string $serverId): void;
 
     /**
-     * Finalize a server connection after successful JWT validation.
+     * Promote a validated tunnel and displace any incumbent.
      *
      * Called after a tunnel's HELLO JWT is validated (transitioning to ACTIVE)
-     * to close the incumbent tunnel that was stored during acceptServer().
-     * This implements the HB-2.2 security fix: incumbent displacement is
-     * deferred until the new connection has proven itself via JWT validation.
+     * to swap the parked tunnel into the routing map and drain/displace the
+     * incumbent that was serving this server. This implements the HB-2.2
+     * security fix: incumbent displacement is deferred until the new connection
+     * has proven itself via JWT validation.
      *
      * @param string $serverId Server UUID.
      *
      * @return void
      */
     public function finalizeServerConnection(string $serverId): void;
+
+    /**
+     * Discard a tunnel whose HELLO failed validation, leaving the incumbent live.
+     *
+     * Called when a tunnel's HELLO did NOT validate (invalid/absent enrollment
+     * JWT, malformed HELLO). The rejected tunnel is removed; a live incumbent
+     * stays routable and is never displaced by an unvalidated HELLO (HB-2.2).
+     *
+     * @param string $serverId Server UUID.
+     * @param Tunnel $rejected The tunnel that failed HELLO validation.
+     *
+     * @return void
+     */
+    public function abortPendingConnection(string $serverId, Tunnel $rejected): void;
 }

@@ -320,11 +320,20 @@ final class HubServicesProvider implements ServiceProviderInterface
                 RelayWireCodecInterface $codec,
                 EnrollmentJwtService $jwtService,
             ): TunnelManager {
+                /** @var array<string, mixed> $serverConfig */
+                $serverConfig = require dirname(__DIR__, 4) . '/config/server.php';
+                /** @var array<string, mixed> $relayConfig */
+                $relayConfig = is_array($serverConfig['relay'] ?? null) ? $serverConfig['relay'] : [];
+                $graceSeconds = is_numeric($relayConfig['reconnect_drain_grace_seconds'] ?? null)
+                    ? (float) $relayConfig['reconnect_drain_grace_seconds']
+                    : TunnelManager::DEFAULT_RECONNECT_DRAIN_GRACE_SECONDS;
+
                 return new TunnelManager(
                     $sessionManager,
                     $codec,
                     LoggerFactory::get(LogChannels::RELAY),
                     $jwtService,
+                    $graceSeconds,
                 );
             })->parameter('sessionManager', get(RelaySessionManager::class))
                 ->parameter('codec', get(RelayWireCodecInterface::class))
