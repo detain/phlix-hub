@@ -1398,3 +1398,62 @@ directive and is correct within a worker; a strict GLOBAL cap would need a share
 **G5 explicitly left open:** HTTP exposure of `setUserQuota`/`getUserBandwidth`/
 `max_concurrent_streams` (admin/user endpoints to set caps + view usage) is a SEPARATE
 follow-up sub-step and was not implemented here.
+
+## Reviewer (per-step) — HB-3.4 (G1–G4 core enforcement) — 2026-07-12
+
+Range `5c57ce4..dbafd72`. Gates re-run on this box: phpstan L9 **0 errors**; targeted
+`--filter 'RelaySessionManager|ServerProxyController|ConnectionResponseSink|Migration'`
+**353 pass / 916 assert / 5 skip**; full suite **1318 pass / 15752 assert / 0 fail / 17 skip**
+(matches stated baseline); `phpcs PSR-12 -n` on the 3 touched src files **clean**; `Tunnel.php`
+**untouched** (HB-3.3/HB-1.2 not regressed). `bin/phlix migrate` not run (no DB on box —
+environmental, not a finding). psalm skipped (env).
+
+Adversarial verification of the high-risk items — all CLEAR:
+- **G1 arg-order end-to-end — NO SWAP (verified).** `recordUserBandwidth($userId,
+  $sink->bytesStreamed(), strlen($body))` → sig `(userId, bytesIn, bytesOut)`; docstring
+  `bytesIn = downloaded-by-user`, `bytesOut = uploaded-by-user`; DB `bytes_in`/`bytes_out`;
+  `checkUserQuota` download cap = `quota_bytes_in` vs `bytes_in`. Streamed-to-browser bytes land
+  in `bytes_in` and the download cap reads `bytes_in` — aligned metering→column→check. The under-cap
+  test asserts `recordUserBandwidth('user-1', 6, 0)` (foo+bar=6 download, 0 upload), locking the order.
+- **G1 metering correctness.** `bytesStreamed` increments by `strlen($bytes)` (raw body, NOT the
+  chunk-framed `$payload`) only after `send() !== false`; head fragments/empty bodies skip; failed
+  send returns before the increment. Chunk overhead + failed sends excluded, both framings counted.
+  Tests cover fixed/chunked/failed-send.
+- **No double-count / no spurious zero row.** Streaming branch `return`s via `buildStreamingResponse`
+  (records once in the producer `finally`); the buffered branch records separately — no request hits
+  both. The `finally` guards `if ($bytesStreamed > 0 || $requestBodyBytes > 0)`, so a pre-head
+  exception with no bytes writes nothing.
+- **G3 slot-leak — none.** `beginUserStream` runs synchronously inside `buildStreamingResponse`;
+  `Application.php:1654` invokes the producer synchronously and unconditionally whenever
+  `streamProducer !== null` (same onMessage), and the producer wraps `$bridge->stream()` in
+  try/finally whose `$release` (one-shot, idempotent) runs on completion, browser-gone, and thrown
+  exception (the throw then hits Application's backstop `catch`→`close`). No path sets a producer
+  without the paired begin, and none skips producer invocation. `endUserStream` clamps ≥0 and unsets
+  the key at 0 (map bounded). Admission→begin critical section has no suspension point between the
+  `activeUserStreams()` read and `beginUserStream()`, so it is not racy even under coroutine hooks;
+  per-worker soft cap accepted as first cut (implementer documented strict-global deferral) — the AC
+  says "optional per-user concurrent-stream cap", which this satisfies. NOT a finding.
+- **G2** enforces both caps (`quota > 0 && used >= quota`), download cap genuinely bites; base
+  migration 035 has all four columns. **Migration 038** plain ADD COLUMN, correct header, no
+  `IF NOT EXISTS`, added to `MigrationFileTest` (146 pass); re-runnability via the tracking table.
+- **G4 tests** are genuine and would fail pre-fix (concurrent/under-cap tests call
+  `getUserMaxConcurrentStreams`/`begin`/`end`/`recordUserBandwidth` that did not exist / were never
+  called before). Bind-key convention OK (params keys colon-free), no SQL injection, projections lean.
+
+### Findings
+
+1. **`src/Http/Controllers/ServerProxyController.php:545` + `src/Hub/RelaySessionManager.php`
+   (`getUserMaxConcurrentStreams` vs `checkUserQuota`) — Low (perf redundancy on the hot path).**
+   On the STREAMING branch, `proxy()` issues `checkUserQuota()` (SELECT `bytes_in, bytes_out,
+   quota_bytes_in, quota_bytes_out FROM relay_user_quotas WHERE user_id=:u AND period_start=:p`) at
+   :474 and then `getUserMaxConcurrentStreams()` (SELECT `max_concurrent_streams FROM
+   relay_user_quotas WHERE user_id=:u AND period_start=:p`) at :545 — two round-trips reading the
+   IDENTICAL row, milliseconds apart, on every HLS/DASH segment and direct-play request (the highest-
+   frequency path this remediation program targets), and the second fires even in the common
+   default case (`max_concurrent_streams = 0`, no cap). Failure scenario: N concurrent players ×
+   frequent segment fetches double the quota-related DB QPS on the relay hot path for no functional
+   gain. Fix direction: fold `max_concurrent_streams` into `checkUserQuota()`'s existing SELECT (or a
+   single combined `getUserQuotaState()` read) and have `proxy()` consume both the allow/deny verdict
+   and the cap from one row read. Low severity — correct and consistent with the existing per-request
+   query pattern, but a concrete, easily-removed redundancy on the exact path the perf pass exists to
+   improve.
