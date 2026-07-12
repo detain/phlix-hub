@@ -966,6 +966,14 @@ final class Tunnel implements TunnelInterface
      */
     private function handleClientSendBackpressure(ClientConnection $client): void
     {
+        // An enqueue* call above may have overflowed and close()d the tunnel
+        // (cancelling its timers + tearing down connections). Do not re-arm
+        // backpressure — a stale pauseRecv/timer on a discarded tunnel is
+        // exactly what fix-2's episode-scoped timers exist to prevent.
+        if ($this->status !== self::STATUS_ACTIVE) {
+            return;
+        }
+
         if ($this->serverBackpressureCount === 0) {
             // First client of this congestion episode — pause the server and arm
             // ONE episode-scoped safety timer. Arming it here (count 0→1) and
@@ -1109,6 +1117,14 @@ final class Tunnel implements TunnelInterface
      */
     private function handleServerSendBackpressure(): void
     {
+        // An enqueue* call above may have overflowed and close()d the tunnel
+        // (cancelling its timers + tearing down connections). Do not re-arm
+        // backpressure — a stale pauseRecv/timer on a discarded tunnel is
+        // exactly what fix-2's episode-scoped timers exist to prevent.
+        if ($this->status !== self::STATUS_ACTIVE) {
+            return;
+        }
+
         if (!$this->clientBackpressureActive) {
             // First frame of this congestion episode — pause all clients and arm
             // ONE episode-scoped safety timer (cancelled when the server drains).
