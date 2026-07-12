@@ -1698,3 +1698,14 @@ psalm skipped (env: PHP 8.3.6 < psalm-required 8.3.16); `bin/phlix migrate` not 
 is a finding.
 
 Verdict: **HB-3.4 G5 DONE** — NO FINDINGS.
+
+## Orchestrator — HB-4.1–4.5 RE-AUDIT roll-up (2026-07-12, perf-4 session)
+
+Audit agent verdicts vs the "H-W4-batch" claim (all 5 claimed DONE in one commit `70e32e2`):
+- **HB-4.1 [H-R8] metrics → NOT-DONE.** MetricsCollector/Registry defined but INERT end-to-end. Producer: `RelayProxyManager` records under `$this->metrics?->…` but DI (`HubServicesProvider.php:343-350`) constructs it with NO metrics arg (ctor default null, no `setMetrics()` anywhere) → pending-gauge/reply-drop/latency/503/504 are all no-ops; only decode-buffer gauge is fed (`RelayWorker.php:224`). Drain: `MetricsRegistry::drainRelayMetrics()` has ZERO callers; `MetricsFlushService::flush()` never drains relay metrics → migration-036 columns never written. Also: no_tunnel-503 branch (`RelayProxyManager.php:220-228`) records no metric; latency AC "first-byte+total" only records one point (buffered KIND_END) and streaming path records none. Tests assert nothing about emission. → Complete.
+- **HB-4.2 [H-D2] token sweep → PARTIAL.** Wired + runs on the maintenance worker (real), but `ClientRelayTokenService::pruneExpiredTokens()` (`:225-229`) uses `expires_at < NOW()-INTERVAL 1 DAY AND revoked_at IS NOT NULL` — AC/finding require `OR`. Expired-never-revoked tokens (common, 1h TTL) never pruned → table still grows. Test (`ClientRelayTokenServiceTest:185-204`) is a string-contains that locks in the bug. → Complete (AND→OR + rewrite test behaviorally).
+- **HB-4.3 [H-D1] heartbeat growth → DONE (confirmed).** `HeartbeatHandler::pruneServerHeartbeats/pruneAllServerHeartbeats(100)` keep-last-N ring-delete on the maintenance-worker Timer; index-backed; genuine behavioral tests. No action.
+- **HB-4.4 [H-A2] library-hash dedupe → DONE (confirmed).** `updateServerLibraries()` SHA-256 short-circuit vs `server_library_hashes` (mig 037), real skip-when-unchanged; behavioral tests. (Non-AC note: library sync still inside the heartbeat txn.) No action.
+- **HB-4.5 [H-W3] prune singleton → NOT-DONE.** `MetricsFlushService::flush()` unconditionally calls `prune()` every ~min; `flush()` armed from every HTTP worker (HUB_WORKERS=2) + relay + client-relay ≈4 procs → N× DELETE churn. "per-process singleton" is orthogonal to the AC; no worker-id-0/leader gate. → Complete (gate prune to one worker; flushes stay per-worker; add single-pruner test).
+
+Queue: HB-4.1 (Complete→review→test) → HB-4.2 → HB-4.5. Then RE-AUDIT batch 2 (HB-4.6–4.10).
