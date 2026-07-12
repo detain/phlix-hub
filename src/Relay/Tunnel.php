@@ -20,6 +20,7 @@ use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use SplObjectStorage;
 use Throwable;
@@ -700,31 +701,43 @@ final class Tunnel implements TunnelInterface
     }
 
     /**
-     * Classify a frame for priority queue placement.
+     * Classify a frame for priority queue placement — by frame TYPE only.
      *
-     * CONTROL priority (true) — enqueued and always flushed before low-priority:
-     *   - All non-HTTP_REQUEST frames (CLIENT_CONNECT/DISCONNECT, HEARTBEAT,
-     *     CANCEL, etc.)
-     *   - HTTP_REQUEST frames carrying KIND_HEAD ('head') or KIND_END ('end')
+     * CONTROL priority (true) — genuine out-of-band control frames, enqueued and
+     * always flushed before low-priority stream frames (the HB-3.3 fairness
+     * requirement so a bulk transfer can't starve control traffic):
+     *   - {@see RelayFrameType::HEARTBEAT} keep-alive probes
+     *   - {@see RelayFrameType::HTTP_CANCEL} request cancellations
+     *   - {@see RelayFrameType::CLIENT_CONNECT} / {@see RelayFrameType::CLIENT_DISCONNECT}
+     *     channel lifecycle notifications
+     * These are generated independently of any request stream, so prioritizing
+     * them is safe — they carry no per-request ordering constraint.
      *
-     * BODY priority (false) — sent after flushing the high-priority queue:
-     *   - HTTP_REQUEST KIND_BODY ('body') chunks; these are the large bulk-data
-     *     frames that could starve control traffic if not paced.
+     * STREAM priority (false) — request/response stream frames whose sub-frames
+     * MUST stay in producer order within a request; they share one FIFO body
+     * queue so ordering is preserved (END can never overtake a queued BODY):
+     *   - {@see RelayFrameType::HTTP_REQUEST} single-frame envelopes AND the
+     *     chunked HEAD / BODY / END sub-frames (tag-byte {@see RelayHttpRequestCodec}
+     *     payloads — NEVER JSON-decoded here)
+     *   - {@see RelayFrameType::DATA} raw client-channel bulk stream bytes
+     *
+     * Classification is a pure type switch: the frame payload is opaque and is
+     * never parsed (a tag-byte HEAD/BODY/END payload is not valid JSON, so the
+     * old json_decode faulted on every chunked bodied relay request).
      *
      * @param RelayFrame $frame
      *
-     * @return bool true = high-priority (control/JSON), false = low-priority (body)
+     * @return bool true = high-priority (control), false = low-priority (stream/body)
      */
     private function isHighPriorityFrame(RelayFrame $frame): bool
     {
-        if ($frame->type !== RelayFrameType::HTTP_REQUEST) {
-            return true;
-        }
-        $decoded = json_decode($frame->payload, true, 3, JSON_THROW_ON_ERROR);
-        if (!is_array($decoded) || !isset($decoded['kind'])) {
-            return true;
-        }
-        return ($decoded['kind'] ?? '') !== 'body';
+        return match ($frame->type) {
+            RelayFrameType::HEARTBEAT,
+            RelayFrameType::HTTP_CANCEL,
+            RelayFrameType::CLIENT_CONNECT,
+            RelayFrameType::CLIENT_DISCONNECT => true,
+            default => false,
+        };
     }
 
     /**
