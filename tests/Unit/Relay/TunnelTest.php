@@ -11,6 +11,8 @@ use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Relay\RelayHttpRequestCodec;
+use Phlix\Shared\Relay\RelayHttpRequestHead;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
@@ -915,7 +917,11 @@ class TunnelTest extends TestCase
         // Now the server's send buffer is full.
         $full = true;
 
-        $bodyPayload = (string) json_encode(['kind' => 'body', 'data' => 'BODY-BYTES']);
+        // REAL wire codec: a chunked HTTP_REQUEST BODY sub-frame is a tag-byte
+        // payload (chr(0x02) . bytes), NOT {"kind":"body"} JSON. This is the
+        // production classification path — the old json-shaped payload masked
+        // the fault where json_decode threw on the tag byte.
+        $bodyPayload = RelayHttpRequestCodec::encodeBody('BODY-BYTES');
         $bodyFrame = new RelayFrame(RelayFrameType::HTTP_REQUEST, 7, $bodyPayload);
         $tunnel->sendToServer($bodyFrame);
 
@@ -963,7 +969,7 @@ class TunnelTest extends TestCase
         $bodyFrame = new RelayFrame(
             RelayFrameType::HTTP_REQUEST,
             7,
-            (string) json_encode(['kind' => 'body']),
+            RelayHttpRequestCodec::encodeBody('x'),
         );
         $tunnel->sendToServer($bodyFrame); // congested; drain never comes
 
@@ -1034,7 +1040,7 @@ class TunnelTest extends TestCase
         // A body frame while a control backlog exists must queue behind the
         // control frames (control-first-then-body preserved).
         $full = true;
-        $bodyPayload = (string) json_encode(['kind' => 'body', 'data' => 'BODY-1']);
+        $bodyPayload = RelayHttpRequestCodec::encodeBody('BODY-1');
         $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $bodyPayload));
         $this->assertSame([], $sent);
 
@@ -1216,7 +1222,7 @@ class TunnelTest extends TestCase
             ->with('session-456', 'backpressure_overflow');
 
         $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_BODY_QUEUE'))->getValue();
-        $bodyPayload = (string) json_encode(['kind' => 'body']);
+        $bodyPayload = RelayHttpRequestCodec::encodeBody('x');
         for ($i = 0; $i <= $max; $i++) {
             $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $bodyPayload));
         }
@@ -1248,5 +1254,109 @@ class TunnelTest extends TestCase
         }
 
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    // ---------------------------------------------------------------------
+    // FIX-3 — type-based classification (no json_decode) + within-request order.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Frame classification is a pure type switch: the REAL tag-byte
+     * HEAD/BODY/END payloads produced by {@see RelayHttpRequestCodec} must never
+     * be json_decoded (they are not valid JSON — a leading 0x01/0x02/0x03 tag
+     * byte). isHighPriorityFrame must NOT throw on any of them and must classify
+     * every HTTP_REQUEST / DATA stream frame as LOW priority, while the genuine
+     * out-of-band control frames (HEARTBEAT/CANCEL/CLIENT_CONNECT/DISCONNECT)
+     * are HIGH. This is the regression guard for the fault where json_decode
+     * threw JsonException on the tag byte and faulted every chunked bodied relay.
+     */
+    public function test_is_high_priority_frame_classifies_by_type_without_decoding_payload(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $method = new \ReflectionMethod($tunnel, 'isHighPriorityFrame');
+        $method->setAccessible(true);
+
+        $head = new RelayHttpRequestHead('POST', '/api/v1/x', '', ['content-type' => 'application/json']);
+
+        // Real wire-codec stream sub-frames: must classify LOW and NOT throw.
+        $streamLow = [
+            'HEAD' => new RelayFrame(RelayFrameType::HTTP_REQUEST, 1, RelayHttpRequestCodec::encodeHead($head)),
+            'BODY' => new RelayFrame(RelayFrameType::HTTP_REQUEST, 1, RelayHttpRequestCodec::encodeBody("\x00\xFF binary\x01")),
+            'END'  => new RelayFrame(RelayFrameType::HTTP_REQUEST, 1, RelayHttpRequestCodec::encodeEnd()),
+            'DATA' => new RelayFrame(RelayFrameType::DATA, 1, "\x00\x01\x02 raw bytes"),
+        ];
+        foreach ($streamLow as $label => $frame) {
+            $this->assertFalse(
+                $method->invoke($tunnel, $frame),
+                "$label stream frame must classify LOW (not high priority)",
+            );
+        }
+
+        // Genuine out-of-band control frames: HIGH priority.
+        $controlHigh = [
+            RelayFrameType::HEARTBEAT,
+            RelayFrameType::HTTP_CANCEL,
+            RelayFrameType::CLIENT_CONNECT,
+            RelayFrameType::CLIENT_DISCONNECT,
+        ];
+        foreach ($controlHigh as $type) {
+            $this->assertTrue(
+                $method->invoke($tunnel, new RelayFrame($type, 0, '')),
+                $type->label() . ' control frame must classify HIGH priority',
+            );
+        }
+    }
+
+    /**
+     * Within-request ordering (finding #2): for a single chunked request the
+     * sub-frame sequence HEAD → BODY → BODY → END must be delivered to the
+     * server in exactly that order under backpressure — END must NEVER overtake
+     * a still-queued BODY chunk. Because #1 makes every HTTP_REQUEST sub-frame
+     * the SAME (LOW) priority class, they share one FIFO body queue and order is
+     * preserved; a residual END-jumps-BODY reorder would fail this.
+     */
+    public function test_chunked_request_head_body_end_deliver_in_order_under_backpressure(): void
+    {
+        $tunnel = $this->activeTunnel();
+
+        $full = true; // buffer full from the start: every sub-frame queues
+        $sent = [];
+        $this->serverWs->method('send')->willReturnCallback(
+            function (string $data) use (&$full, &$sent): bool {
+                if ($full) {
+                    return false;
+                }
+                $sent[] = $data;
+                return true;
+            }
+        );
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+
+        $head = new RelayHttpRequestHead('POST', '/api/v1/watched', '', ['content-type' => 'application/json']);
+        $headPayload = RelayHttpRequestCodec::encodeHead($head->withBodySize(20));
+        $body1 = RelayHttpRequestCodec::encodeBody('AAAAAAAAAA');
+        $body2 = RelayHttpRequestCodec::encodeBody('BBBBBBBBBB');
+        $endPayload = RelayHttpRequestCodec::encodeEnd();
+
+        // Producer order (mirrors RelayProxyManager chunked path): HEAD, BODY×2, END.
+        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 42, $headPayload));
+        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 42, $body1));
+        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 42, $body2));
+        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 42, $endPayload));
+
+        // Nothing on the wire yet — all four queued behind the full buffer.
+        $this->assertSame([], $sent, 'all sub-frames must queue, none dropped, while congested');
+
+        // Buffer drains — the tunnel flushes the body FIFO.
+        $this->assertIsCallable($this->serverWs->onBufferDrain);
+        $full = false;
+        ($this->serverWs->onBufferDrain)();
+
+        $this->assertCount(4, $sent);
+        $this->assertSame($headPayload, $this->decodeFrame($sent[0])->payload, 'HEAD first');
+        $this->assertSame($body1, $this->decodeFrame($sent[1])->payload, 'BODY-1 second');
+        $this->assertSame($body2, $this->decodeFrame($sent[2])->payload, 'BODY-2 third');
+        $this->assertSame($endPayload, $this->decodeFrame($sent[3])->payload, 'END last — never overtakes BODY');
     }
 }

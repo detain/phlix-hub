@@ -70,7 +70,7 @@ php bin/phlix migrate
 - [~] HB-1.2  raw tunnel data-plane backpressure  FIX LANDED 2026-07-12 → RE-REVIEW spawned (Implementer) — drop hole closed on BOTH paths via re-queue+retry-on-drain (mirrors pendingHighPriorityFrames). sendToClient: per-client `pendingClientFrames[channelId]` re-queues the dropped DATA frame, `flushClientQueue` re-sends on that client's onBufferDrain BEFORE decrementing serverBackpressureCount/resuming server. sendToServer low-priority body: `pendingBodyFrames` re-queues, `flushBodyQueue` re-sends on serverWs onBufferDrain (control-first then body) BEFORE resuming clients. Both caps (256) → close('backpressure_overflow') hard-fail; existing close('backpressure_timeout') safety timer kept (extracted to testable named methods, Timer::add wrapped in try/catch like RelayProxyManager). removeClient releases a congested client's slot so it can't strand the pause. +4 tests (no-drop deliver-on-drain + timeout-close, client & server paths). Commits 728a843,5fedc5f. was PARTIAL (2a2b421, 0aed3e0, b1140b1). REVIEW-2 2026-07-12: 5 findings — the fix INTRODUCED issues on untested seams: #1 CONFIRMED reordering — high-priority server path (:719-733) lacks the enqueue-if-backlog guard the body/client paths have → a new control frame (HEARTBEAT/CANCEL/CLIENT_CONNECT/DISCONNECT) jumps ahead of queued frames (silent reorder). #2 CONFIRMED — high-priority overflow (:721-729) logs+returns (silent drop) instead of close('backpressure_overflow'). #3 lower-conf pre-existing — uncancelled one-shot safety timers test GLOBAL count → stale timer false-closes healthy tunnel (:984-998,:1080-1090). #4 test gap — no multi-frame FIFO / removeClient-release / overflow→close / high-priority-path coverage. #5 hygiene — pendingHighPriorityFrames not cleared in close()/notifyClientsDisconnected. → FIX-2 spawned (#1,#2,#3,#4,#5). FIX-2 LANDED 2026-07-12 → RE-REVIEW (review-3): all 5 fixed — #1 enqueue-if-backlog guard on high-priority path (FIFO preserved: flush control-then-body unchanged); #2 enqueueHighPriorityFrame close('backpressure_overflow'); #3 episode-scoped safety timers (arm on 0→1 / false→true, cancel on drain in armClientDrain+removeClient+server drain+close) so a stale timer can't false-close; #5 close() clears pendingHighPriorityFrames + cancels both timers. +7 tests (FIFO high-priority+backlog, client FIFO, removeClient release, multi-client 2→1→0, 3× overflow→close). Suite 1232 pass/17 skip, phpstan L9 clean, phpcs -n src/ clean. Commits 99fb814 (fix), c10d02b (tests).
 - [x] HB-1.3  non-blocking onReply delivery  RE-AUDIT 2026-07-12: DONE, well-tested — push(...,0.0) non-blocking probe, full/closed → own Coroutine::create fiber (deliverReplyInFiber) so one stuck consumer blocks only its fiber; 3 substantive tests. No action. (e3cb349, 8ea42ae, 8d45c85)
 - [~] HB-1.4  lean owner/status queries on hot paths  RE-AUDIT 2026-07-12: PARTIAL. Wiring DONE (getOwnerAndStatus omits COUNT, used by proxy-admission + client-mount; AuthMiddleware uses lean userExists + $request->userId from token + 5s TTL cache). BUG: AuthMiddleware::userExists (:205-220) negative cache broken — non-existent user cached same as existing (bare ts), cache-hit returns true unconditionally → deleted/revoked user bypasses auth.user_not_found gate for the 5s TTL. Test gaps: no getOwnerAndStatus leanness test, no expects(never())->findById, no cache-TTL query-count test. → FIX agent queued. (c0461ed, 2f81f37, e5ce01e)
-- [x] HB-2.1  request-body chunking over tunnel (enable bodied relay)  (commits: phlix-shared:216ea5d, phlix-hub:7b71c190)  DONE
+- [~] HB-2.1  request-body chunking over tunnel (enable bodied relay)  ⚠️ RE-AUDIT NEEDED 2026-07-12 — HB-1.2 review-3 found Tunnel::isHighPriorityFrame json_decodes tag-byte RelayHttpRequestCodec frames → uncaught throw → CHUNKED BODIED RELAY FAULTS in prod (HB-2.1's data plane broken). HB-1.2 FIX-3 addresses the classification; after it lands, RE-AUDIT HB-2.1 end-to-end (a >64KB bodied relay request actually succeeds over the tunnel, not just unit-codec round-trip). (commits: phlix-shared:216ea5d, phlix-hub:7b71c190)
 - [x] HB-2.2  validate HELLO JWT before displacing incumbent tunnel  (commit: 7c30723)  DONE
 - [x] HB-2.3  cap FrameDecoder buffer  (commit: ec17c9cc)  DONE
 - [x] HB-2.4  O(1) cancel index  (commit: 371c17a)  DONE
@@ -293,3 +293,139 @@ returns false while "full", onBufferDrain invoked manually; no sleeps):**
   (the #2 guard for the high-priority path).
 - Updated the existing `test_client_backpressure_timeout_closes_tunnel` to invoke the now-param-less
   `handleClientBackpressureTimeout()`.
+
+## Reviewer (per-step, RE-REVIEW / REVIEW-3, read-only) — HB-1.2 fix-2 — 2026-07-12
+
+Range 99fb814 (fix) + c10d02b (tests). Verified: `phpunit --filter Tunnel` green (69 tests /
+222 assertions); `phpstan analyze` 0 errors.
+
+**Fix-2's 5 review-2 findings are all correctly resolved** (no functional regression in any exercised
+path):
+- #1 high-over-high reorder — CLOSED. `sendToServer` high-priority branch (:775) enqueues when
+  `pendingHighPriorityFrames` is non-empty before any direct `send()`; `flushHighPriorityQueue` uses
+  array_shift/array_unshift-on-fail (no loss, no infinite loop, refill-safe). Test
+  `test_high_priority_frames_preserve_fifo_and_never_overtake_backlog` truly guards it: with buffer
+  un-full, CTRL-2 must stay queued — reverting the guard flips that assertion to a direct send. ✔
+- #2 high-priority overflow — CLOSED. `enqueueHighPriorityFrame` (:638-650) `close('backpressure_overflow')`
+  on MAX; test covers. ✔
+- #3 episode-scoped timers — CORRECT. client timer armed only on count 0→1, cancelled on →0 in the
+  drain handler (:1054), removeClient (:1322 path) and close(); server timer armed only on
+  active false→true, cancelled on full drain (:1144) and close(); re-arm-while-congested does NOT
+  duplicate (guarded by the 0/false predicate); Timer::del null-guarded + try/catch; one-shot flag
+  intact. No leak / no armed-after-episode path found. ✔
+- #4 tests / #5 hygiene — present and adequate as Tunnel-unit tests; close() clears both server queues
+  + cancels both timers. ✔
+
+Verdict: **fix-2 introduced no new functional defect in the paths its 5 findings cover.** However, per
+review checklist items (b)/(4)/(5) I scrutinized the shared HB-2.1/HB-3.3 seam the body-priority path
+lives on and found real bugs. 3 findings, most severe first.
+
+1. **CONFIRMED (High) — the body-priority path fix-2 hardened is DEAD in production; the new tests mask
+   it with a wrong-contract payload. PRE-EXISTING (HB-3.3+HB-2.1 seam), not introduced by fix-2.**
+   `src/Relay/Tunnel.php:718-728` (`isHighPriorityFrame`) classifies via
+   `json_decode($frame->payload, true, 3, JSON_THROW_ON_ERROR)` and reads `$decoded['kind']`. But real
+   chunked HTTP_REQUEST frames are emitted by `src/Relay/RelayProxyManager.php:300-318` using
+   `RelayHttpRequestCodec::encode{Head,Body,End}()`, whose wire format is a **leading tag byte**
+   (`chr(0x01)|chr(0x02)|chr(0x03)` + data), NOT `{"kind":...}` JSON. `json_decode` throws
+   `JsonException` on all three (verified empirically: "Control character error"). `sendToServer:748`
+   calls `isHighPriorityFrame` first thing and `onRequest` (RelayProxyManager:197-337) has no try/catch
+   around the sends → **every chunked (large-body, encoded >65535B) relay request throws uncaught**, i.e.
+   the HB-2.1 request-chunking / HB-3.1 bodied write-over-relay path is broken. Consequence for fix-2:
+   no production frame is ever classified LOW, so `pendingBodyFrames` (the queue fix-2 made lossless +
+   overflow-safe) is unreachable, and the reorder guard's body branch never fires. The new tests
+   construct body frames as `json_encode(['kind'=>'body'])` (:1032/1234-area, `test_*body*`) — a payload
+   that classifies LOW without throwing — so they validate the machinery against a contract that does
+   not match the wire codec (the "mock-encoded-wrong-contract" trap the re-baseline notes call out).
+   Why it matters: the central HB-1.2 goal (lossless body backpressure) is not actually exercised on the
+   real data plane, and large bodied relays fault. Fix direction (HB-3.3/HB-2.1 owner): classify by the
+   codec tag, `ord($frame->payload[0]) === RelayHttpRequestCodec::TAG_BODY` (with a try/catch defaulting
+   to high-priority), and rewrite the body tests to use `RelayHttpRequestCodec::encodeBody()`.
+
+2. **CONFIRMED (Medium) — intra-request END-overtakes-BODY reorder on the same channel. PRE-EXISTING,
+   currently masked by #1.** The #1 reorder guard added by fix-2 (`Tunnel.php:775`) checks only
+   `pendingHighPriorityFrames`, not `pendingBodyFrames`; and the drain flush is unconditionally
+   control-before-body (`flushHighPriorityQueue` then `flushBodyQueue`, :1129-1132). For a single chunked
+   request HEAD(high)/BODY…(low)/END(high) on one channel, a directly-sent or flushed END lands ahead of
+   still-queued BODY chunks → the server sees END before the body → truncated/corrupt request body. The
+   per-queue FIFO guards protect each queue in isolation but the cross-class ordering within one request
+   is not preserved — control-priority is only safe as *cross-request* fairness, not within a request.
+   Only unreachable today because #1 crashes the chunked path first; fixing #1 makes this live. Fix
+   direction: keep head/body/end of one channel/request in a single per-channel FIFO rather than splitting
+   across priority classes (scope control-priority to inter-request fairness).
+
+3. **CONFIRMED (Low) — safety timer re-armed on a just-closed tunnel (partially new via fix-2's #2).**
+   When `enqueueHighPriorityFrame`/`enqueueBodyFrame`/`enqueueClientFrame` trigger
+   `close('backpressure_overflow')`, control returns to `sendToServer:777/783` / `sendToClient:872`,
+   which then call `handle{Server,Client}SendBackpressure()` on the now-closed tunnel — status is not
+   re-checked. Because `close()` emptied `clientConnections` and set `clientBackpressureActive=false`,
+   `handleServerSendBackpressure` re-enters its first-frame block, sets `clientBackpressureActive=true`
+   again and `armServerBackpressureTimer()` **re-arms a 30s one-shot timer that close() just cancelled** —
+   directly against fix-2's own #3 goal ("no stale timer fires on a discarded tunnel"), leaving a stray
+   `onBufferDrain` + a `true` flag on a discarded object and keeping it alive ~30s. Not corruption (the
+   timeout handler self-guards on `STATUS_CLOSED`; connections are already torn down), and body/client
+   overflow paths shared the wart pre-fix-2, but the high-priority overflow-close path is new in fix-2.
+   Fix direction: `if ($this->status !== self::STATUS_ACTIVE) { return; }` immediately after each
+   `enqueue*Frame()` call (or early-return on non-ACTIVE status at the top of `handle*SendBackpressure`).
+
+NO other issues: timer lifecycle (leak / arm-after-episode / double-arm / null-guard) verified clean;
+`removeClient` release + multi-client count semantics correct and tested; `close()` idempotent; async
+discipline OK (one-shot `Timer::add(...,[],false)` in try/catch, no sleep/exit/die, no request data in
+static/global, queues bounded at 256).
+
+## Implementer — FIX-3 (HB-1.2 review-3 findings + HB-2.1 seam) — 2026-07-12
+
+All 3 review-3 findings fixed in `src/Relay/Tunnel.php`; the masking body tests rewritten to the REAL
+`RelayHttpRequestCodec` wire format + 2 new tests. Full suite green (1234 pass / 15405 assertions /
+17 skips, +2 net new), phpstan L9 0 errors, phpcs PSR-12 `-n src/` clean. (psalm skipped — box PHP
+8.3.6 < psalm required.)
+
+**#1 (High) — classify by frame TYPE, never json_decode a payload. `Tunnel.php:718-755` (`isHighPriorityFrame`).**
+The old body did `json_decode($frame->payload, …, JSON_THROW_ON_ERROR)` expecting `{"kind":…}`. Real
+chunked `HTTP_REQUEST` sub-frames carry tag-byte `RelayHttpRequestCodec` payloads
+(`chr(0x01|0x02|0x03).data`) → `json_decode` THREW `JsonException` → uncaught at `sendToServer` →
+every chunked (>65535-byte encoded) bodied relay faulted (HB-2.1/HB-3.1 bodied writes broken; HB-1.2's
+body queue unreachable in prod). NEW body is a pure `match ($frame->type)` type switch — the payload is
+now NEVER parsed. HIGH = genuine out-of-band control types only: HEARTBEAT, HTTP_CANCEL, CLIENT_CONNECT,
+CLIENT_DISCONNECT. Everything else (all HTTP_REQUEST single/HEAD/BODY/END + DATA bulk) = LOW (body FIFO).
+Cannot throw on any payload shape.
+
+**#2 (Medium) — within-request ordering (END never overtakes BODY). Resolved by #1 + verified.**
+Because #1 puts every HTTP_REQUEST sub-frame in the SAME (LOW) class, HEAD/BODY/END of one request all
+land in the single `pendingBodyFrames` FIFO. The low-priority send path already guards
+`if (!empty(pendingHighPriorityFrames) || !empty(pendingBodyFrames)) enqueueBodyFrame()` (`:798`), so once
+any sub-frame is queued the rest enqueue behind it; `flushBodyQueue` re-sends in `array_shift` FIFO order
+→ END can never be flushed ahead of a queued BODY. True out-of-band control (HEARTBEAT/CANCEL) may still
+interleave between request sub-frames — harmless, the server routes stream frames by type+request-id, and
+only same-request relative order matters. New test
+`test_chunked_request_head_body_end_deliver_in_order_under_backpressure` proves HEAD→BODY→BODY→END
+delivery order under a full buffer.
+
+**#3 (Low) — no backpressure re-arm after an overflow close. `Tunnel.php` guard at top of
+`handleClientSendBackpressure` and `handleServerSendBackpressure`.** After an `enqueue*Frame()` overflow
+triggers `close('backpressure_overflow')` (which cancels both safety timers + tears down connections),
+control returned to `sendToServer:781/787/810` / `sendToClient` and called `handle*SendBackpressure()`,
+re-entering the first-frame block → `pauseRecv` + `armServerBackpressureTimer()` re-armed a 30 s one-shot
+timer on a discarded tunnel (directly against fix-2's #3). FIX: `if ($this->status !== STATUS_ACTIVE)
+{ return; }` at the very top of both handlers — a single choke point covering every enqueue call site;
+no stale timer/pauseRecv is left on a closed tunnel.
+
+**Tests — masking removed + real-codec coverage. `tests/Unit/Relay/TunnelTest.php`.**
+- Rewrote the 4 fix-2 body/overflow tests from `json_encode(['kind'=>'body'])` (a contract that did NOT
+  match the wire codec — exactly why #1 was masked) to `RelayHttpRequestCodec::encodeBody()` tag-byte
+  payloads, so they now exercise the PRODUCTION classification path (which classifies HTTP_REQUEST LOW).
+- Added `test_is_high_priority_frame_classifies_by_type_without_decoding_payload`: proves the classifier
+  does NOT throw and returns false for real tag-byte HEAD/BODY/END (incl. binary/NUL/0xFF body) + DATA,
+  and true only for the 4 genuine control types.
+- Added the within-request ordering test above.
+- Existing FIFO/overflow/timer/removeClient tests remain green (HTTP_CANCEL is still HIGH under the new
+  type switch, so those cases are unchanged).
+
+**HB-2.1 re-audit flag:** #1 means HB-2.1 (request-body chunking / bodied relay) was BROKEN in production
+end-to-end — any chunked bodied request faulted before this fix, so HB-2.1's acceptance (">64 KB body
+succeeds, not 413") was never actually met on the live data plane despite green unit tests. HB-2.1 should
+be RE-AUDITED / re-verified (the fault was in the hub tunnel classifier that HB-2.1's chunked path feeds,
+not in HB-2.1's own codec/RelayProxyManager code, which is correct). Recommend an integration-level check
+of a real >64 KB bodied relay round-trip now that the classifier no longer faults.
+
+Commits: fb9e7b7 (#1 classify by type, no json_decode), ed008c8 (#3 no re-arm after overflow close),
++ the tests commit (real RelayHttpRequestCodec tag-byte frames + within-request ordering).
