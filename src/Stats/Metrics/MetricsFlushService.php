@@ -113,6 +113,7 @@ final class MetricsFlushService
         $this->flushOverall($drained['overall']);
         $this->flushRoutes($drained['routes']);
         $this->flushConnections($registry->snapshotConnections(), $nowTs);
+        $this->flushRelay($registry->drainRelayMetrics($nowTs), $registry->bucketStart($nowTs));
 
         // Prune roughly once per minute rather than every flush.
         $this->flushTick++;
@@ -361,6 +362,129 @@ final class MetricsFlushService
             if (!isset($connections[$trackedId])) {
                 unset($this->previousBytes[$trackedId]);
             }
+        }
+    }
+
+    /**
+     * Upsert the drained relay-observability metrics into the migration-036
+     * relay columns of `metrics_rollup`.
+     *
+     * The latency histogram is already time-bucketed by the registry, so each
+     * bucket's histogram is written into that bucket's row. The scalar
+     * counters/gauges (pending gauge, reply-drops, 503/504 counters, decode
+     * buffer gauge) are window totals with no per-observation bucket, so they
+     * go into the current flush bucket. Counters accumulate
+     * (`col = col + VALUES(col)`); gauges take the window high-water mark
+     * (`GREATEST(col, VALUES(col))`), matching the migration-036 semantics
+     * ("pending requests gauge — high-water mark across the flush window").
+     * An all-zero window is skipped so idle flushes never churn empty rows.
+     *
+     * Bind names are deliberately non-prefixing (`:rl0..:rl8`, `:re503`,
+     * `:re504`, …) — under emulated prepares a placeholder that is a strict
+     * prefix of another in the same statement mis-rewrites and throws HY093
+     * (see {@see flushOverall()} / {@see flushConnections()}).
+     *
+     * @param array{
+     *     pending_requests: int,
+     *     reply_drops: int,
+     *     latency_histogram: array<int, array<int, int>>,
+     *     error_503: int,
+     *     error_504: int,
+     *     decode_buffer_bytes: int
+     * } $relay          The drained relay metrics.
+     * @param int $scalarBucketTs Bucket start for the scalar counters/gauges.
+     *
+     * @return void
+     */
+    private function flushRelay(array $relay, int $scalarBucketTs): void
+    {
+        // Per-bucket relay column values. Latency buckets carry only the
+        // histogram; the scalar bucket also carries the counters/gauges.
+        /**
+         * @var array<int, array{
+         *     pending: int, drops: int, e503: int, e504: int, buffer: int,
+         *     hist: array<int, int>
+         * }> $rows
+         */
+        $rows = [];
+
+        foreach ($relay['latency_histogram'] as $bucketTs => $hist) {
+            $rows[$bucketTs] = [
+                'pending' => 0, 'drops' => 0, 'e503' => 0, 'e504' => 0, 'buffer' => 0,
+                'hist' => $hist,
+            ];
+        }
+
+        if (!isset($rows[$scalarBucketTs])) {
+            $rows[$scalarBucketTs] = [
+                'pending' => 0, 'drops' => 0, 'e503' => 0, 'e504' => 0, 'buffer' => 0,
+                'hist' => [],
+            ];
+        }
+        $rows[$scalarBucketTs]['pending'] = $relay['pending_requests'];
+        $rows[$scalarBucketTs]['drops']   = $relay['reply_drops'];
+        $rows[$scalarBucketTs]['e503']    = $relay['error_503'];
+        $rows[$scalarBucketTs]['e504']    = $relay['error_504'];
+        $rows[$scalarBucketTs]['buffer']  = $relay['decode_buffer_bytes'];
+
+        $db = ConnectionPool::getConnection(self::CONNECTION);
+
+        foreach ($rows as $bucketTs => $row) {
+            $h = $row['hist'];
+            // Skip an all-zero window so idle flushes don't churn empty rows.
+            if (
+                $row['pending'] === 0 && $row['drops'] === 0 && $row['e503'] === 0
+                && $row['e504'] === 0 && $row['buffer'] === 0 && array_sum($h) === 0
+            ) {
+                continue;
+            }
+
+            $db->query(
+                "INSERT INTO metrics_rollup
+                 (bucket_started_at, worker_id,
+                  relay_pending_requests, relay_reply_drops,
+                  relay_latency_h_le_10, relay_latency_h_le_50, relay_latency_h_le_100,
+                  relay_latency_h_le_250, relay_latency_h_le_500, relay_latency_h_le_1000,
+                  relay_latency_h_le_2500, relay_latency_h_le_5000, relay_latency_h_gt_5000,
+                  relay_error_503, relay_error_504, relay_decode_buffer_bytes)
+                 VALUES (:bucket, :worker_id,
+                         :rpending, :rdrops,
+                         :rl0, :rl1, :rl2, :rl3, :rl4, :rl5, :rl6, :rl7, :rl8,
+                         :re503, :re504, :rbuffer)
+                 ON DUPLICATE KEY UPDATE
+                     relay_pending_requests    = GREATEST(relay_pending_requests, VALUES(relay_pending_requests)),
+                     relay_reply_drops         = relay_reply_drops + VALUES(relay_reply_drops),
+                     relay_latency_h_le_10     = relay_latency_h_le_10 + VALUES(relay_latency_h_le_10),
+                     relay_latency_h_le_50     = relay_latency_h_le_50 + VALUES(relay_latency_h_le_50),
+                     relay_latency_h_le_100    = relay_latency_h_le_100 + VALUES(relay_latency_h_le_100),
+                     relay_latency_h_le_250    = relay_latency_h_le_250 + VALUES(relay_latency_h_le_250),
+                     relay_latency_h_le_500    = relay_latency_h_le_500 + VALUES(relay_latency_h_le_500),
+                     relay_latency_h_le_1000   = relay_latency_h_le_1000 + VALUES(relay_latency_h_le_1000),
+                     relay_latency_h_le_2500   = relay_latency_h_le_2500 + VALUES(relay_latency_h_le_2500),
+                     relay_latency_h_le_5000   = relay_latency_h_le_5000 + VALUES(relay_latency_h_le_5000),
+                     relay_latency_h_gt_5000   = relay_latency_h_gt_5000 + VALUES(relay_latency_h_gt_5000),
+                     relay_error_503           = relay_error_503 + VALUES(relay_error_503),
+                     relay_error_504           = relay_error_504 + VALUES(relay_error_504),
+                     relay_decode_buffer_bytes = GREATEST(relay_decode_buffer_bytes, VALUES(relay_decode_buffer_bytes))",
+                [
+                    'bucket'    => $this->datetime($bucketTs),
+                    'worker_id' => 'hub-relay',
+                    'rpending'  => $row['pending'],
+                    'rdrops'    => $row['drops'],
+                    'rl0'       => $h[10] ?? 0,
+                    'rl1'       => $h[50] ?? 0,
+                    'rl2'       => $h[100] ?? 0,
+                    'rl3'       => $h[250] ?? 0,
+                    'rl4'       => $h[500] ?? 0,
+                    'rl5'       => $h[1000] ?? 0,
+                    'rl6'       => $h[2500] ?? 0,
+                    'rl7'       => $h[5000] ?? 0,
+                    'rl8'       => $h[-1] ?? 0,
+                    're503'     => $row['e503'],
+                    're504'     => $row['e504'],
+                    'rbuffer'   => $row['buffer'],
+                ]
+            );
         }
     }
 

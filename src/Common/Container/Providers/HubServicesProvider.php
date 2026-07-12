@@ -72,6 +72,7 @@ use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\UserQuotaController;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsRepositoryInterface;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
@@ -342,12 +343,21 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             RelayProxyManager::class => factory(static function (
                 TunnelManagerInterface $tunnelManager,
+                MetricsCollector $metrics,
             ): RelayProxyManager {
+                // The metrics collector is the per-worker SHARED singleton
+                // (MetricsServicesProvider) — the SAME instance the relay worker's
+                // flush timer drains — so the pending-gauge / reply-drop / latency /
+                // 503 / 504 the proxy manager records land in the drained registry.
+                // The collector no-ops every record call when metrics are disabled,
+                // so injecting it unconditionally is safe.
                 return new RelayProxyManager(
                     $tunnelManager,
                     LoggerFactory::get(LogChannels::RELAY),
+                    metrics: $metrics,
                 );
-            })->parameter('tunnelManager', get(TunnelManagerInterface::class)),
+            })->parameter('tunnelManager', get(TunnelManagerInterface::class))
+                ->parameter('metrics', get(MetricsCollector::class)),
 
             RelayProxyBridge::class => factory(static function (): RelayProxyBridge {
                 return new RelayProxyBridge(LoggerFactory::get(LogChannels::RELAY));

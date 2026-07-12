@@ -133,6 +133,7 @@ final class RelayProxyManager
      *     body: string,
      *     stream: bool,
      *     stream_started: bool,
+     *     first_byte_recorded: bool,
      *     timeout: float,
      *     stream_opened_at: float,
      *     sent_at: float
@@ -218,6 +219,10 @@ final class RelayProxyManager
         // distinct `server.no_tunnel` code marks this as the registry verdict.
         $tunnel = $this->tunnelManager->getTunnelForServer($serverId);
         if ($tunnel === null || $tunnel->getStatus() !== Tunnel::STATUS_ACTIVE) {
+            // Registry verdict: no live tunnel. Count this 503 the same way the
+            // tunnel-dropped path (failServer) does, so the `server.no_tunnel`
+            // fail-fast is not invisible to the relay-error metrics.
+            $this->metrics?->recordRelayError(503);
             $this->reply(
                 $replyEvent,
                 $clientRequestId,
@@ -274,6 +279,7 @@ final class RelayProxyManager
             'body' => '',
             'stream' => $stream,
             'stream_started' => false,
+            'first_byte_recorded' => false,
             'timeout' => $timeout,
             'stream_opened_at' => $now,
             'sent_at' => $now,
@@ -358,6 +364,18 @@ final class RelayProxyManager
 
         $streaming = $this->pending[$requestId]['stream'];
 
+        // First-byte (TTFB) latency: the time from sending the HTTP_REQUEST frame
+        // to the first response frame decoded for this request. Recorded once, on
+        // the first frame, for BOTH the streaming and buffered paths (the
+        // migration-036 relay-latency histogram is defined as "time from
+        // HTTP_REQUEST sent to first response byte"). The matching TOTAL latency
+        // is recorded on KIND_END below.
+        if (!$this->pending[$requestId]['first_byte_recorded']) {
+            $this->pending[$requestId]['first_byte_recorded'] = true;
+            $firstByteMs = (microtime(true) - $this->pending[$requestId]['sent_at']) * 1000.0;
+            $this->metrics?->recordRelayLatency($firstByteMs);
+        }
+
         if ($chunk->kind === RelayHttpResponseChunk::KIND_HEAD) {
             if ($streaming) {
                 $head = $chunk->head;
@@ -392,6 +410,12 @@ final class RelayProxyManager
         unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
         $this->metrics?->setRelayPendingRequests(count($this->pending));
 
+        // Total round-trip latency (HTTP_REQUEST sent → END received), recorded on
+        // completion for BOTH paths — so a STREAMING response (which returns early
+        // below) still contributes a latency observation, not just the buffered path.
+        $totalMs = (microtime(true) - $entry['sent_at']) * 1000.0;
+        $this->metrics?->recordRelayLatency($totalMs);
+
         if ($streaming) {
             $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);
             $this->logger->info('Relay proxy: completed streamed response from server', [
@@ -404,12 +428,6 @@ final class RelayProxyManager
         $head = $entry['head'];
         $status = $head !== null ? $head->status : 502;
         $headers = $head !== null ? $head->headers : [];
-
-        // Record relay latency for buffered requests (time from send to first response byte).
-        if (isset($entry['sent_at'])) {
-            $latencyMs = (microtime(true) - $entry['sent_at']) * 1000.0;
-            $this->metrics?->recordRelayLatency($latencyMs);
-        }
 
         $this->reply($entry['reply_event'], $entry['request_id'], $status, $headers, $entry['body']);
 

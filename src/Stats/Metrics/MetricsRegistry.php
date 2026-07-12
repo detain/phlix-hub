@@ -434,6 +434,23 @@ final class MetricsRegistry
     }
 
     /**
+     * Public bucket alignment for the flush service.
+     *
+     * The relay scalar counters/gauges drained by {@see drainRelayMetrics()} are
+     * window totals (not per-observation time-bucketed like the latency
+     * histogram), so {@see MetricsFlushService} needs to place them onto the same
+     * bucket grid every other rollup row uses. Exposes {@see bucketFor()}.
+     *
+     * @param int $ts Unix timestamp.
+     *
+     * @return int Bucket start timestamp.
+     */
+    public function bucketStart(int $ts): int
+    {
+        return $this->bucketFor($ts);
+    }
+
+    /**
      * Resolve the route to record, folding to OTHER_ROUTE past the cardinality cap.
      *
      * @param int    $bucketTs Bucket start timestamp.
