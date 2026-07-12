@@ -85,9 +85,11 @@ final class ServerProxyControllerTest extends TestCase
     {
         if ($sessionManager === null) {
             $sessionManager = $this->createMock(RelaySessionManager::class);
-            // Default: quota check always allows (quota not exceeded).
+            // Default: quota check always allows (quota not exceeded), concurrent
+            // cap unlimited (0). The concurrent cap is folded into checkUserQuota's
+            // single row read (HB-3.4 hot-path fix), so it is returned here too.
             $sessionManager->method('checkUserQuota')->willReturn(
-                ['allowed' => true, 'reason' => null],
+                ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0],
             );
         }
         // Default: rate limiter always returns non-limited state.
@@ -1914,6 +1916,7 @@ final class ServerProxyControllerTest extends TestCase
         $sessionManager->method('checkUserQuota')->willReturn([
             'allowed' => false,
             'reason' => 'User has reached their monthly download bandwidth quota.',
+            'maxConcurrentStreams' => 0,
         ]);
 
         $forwarded = false;
@@ -1945,10 +1948,17 @@ final class ServerProxyControllerTest extends TestCase
         $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
 
         $sessionManager = $this->createMock(RelaySessionManager::class);
-        $sessionManager->method('checkUserQuota')->willReturn(['allowed' => true, 'reason' => null]);
-        // Max of 2, already at 2 active → the 3rd stream is refused.
-        $sessionManager->method('getUserMaxConcurrentStreams')->willReturn(2);
+        // Max of 2, already at 2 active → the 3rd stream is refused. The cap is
+        // folded into the single checkUserQuota row read (HB-3.4 hot-path fix).
+        $sessionManager->method('checkUserQuota')->willReturn([
+            'allowed' => true,
+            'reason' => null,
+            'maxConcurrentStreams' => 2,
+        ]);
         $sessionManager->method('activeUserStreams')->willReturn(2);
+        // The streaming branch must NOT issue a second row read: the separate
+        // getUserMaxConcurrentStreams() round-trip is eliminated on the hot path.
+        $sessionManager->expects(self::never())->method('getUserMaxConcurrentStreams');
         // The refused stream must NOT occupy a slot.
         $sessionManager->expects(self::never())->method('beginUserStream');
 
@@ -1982,9 +1992,16 @@ final class ServerProxyControllerTest extends TestCase
         $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
 
         $sessionManager = $this->createMock(RelaySessionManager::class);
-        $sessionManager->method('checkUserQuota')->willReturn(['allowed' => true, 'reason' => null]);
-        $sessionManager->method('getUserMaxConcurrentStreams')->willReturn(3);
+        // The concurrent cap (3) is folded into the single checkUserQuota row
+        // read (HB-3.4 hot-path fix) — no second getUserMaxConcurrentStreams read.
+        $sessionManager->method('checkUserQuota')->willReturn([
+            'allowed' => true,
+            'reason' => null,
+            'maxConcurrentStreams' => 3,
+        ]);
         $sessionManager->method('activeUserStreams')->willReturn(0);
+        // The streaming branch must NOT issue a second identical row read.
+        $sessionManager->expects(self::never())->method('getUserMaxConcurrentStreams');
         // Slot is occupied exactly once and released exactly once (no leak).
         $sessionManager->expects(self::once())->method('beginUserStream')->with('user-1');
         $sessionManager->expects(self::once())->method('endUserStream')->with('user-1');

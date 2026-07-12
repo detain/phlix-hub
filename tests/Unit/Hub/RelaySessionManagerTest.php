@@ -641,6 +641,65 @@ final class RelaySessionManagerTest extends TestCase
         self::assertNull($result['reason']);
     }
 
+    public function testCheckUserQuotaFoldsInMaxConcurrentStreamsFromSingleRowRead(): void
+    {
+        // HB-3.4 hot-path fix: the concurrent-stream cap is read from the SAME
+        // row as the bandwidth verdict, so the streaming admission path does not
+        // issue a second identical SELECT. The projection must include
+        // max_concurrent_streams and the returned verdict must carry it.
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $queryCount = 0;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$queryCount): array {
+                $capturedSql = $sql;
+                $queryCount++;
+                return [[
+                    'bytes_in' => '1048576',
+                    'bytes_out' => '1024',
+                    'quota_bytes_in' => '5242880',
+                    'quota_bytes_out' => '2097152',
+                    'max_concurrent_streams' => '4',
+                ]];
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->checkUserQuota('user-fold');
+
+        // Verdict + folded cap come from ONE row read.
+        self::assertTrue($result['allowed']);
+        self::assertNull($result['reason']);
+        self::assertSame(4, $result['maxConcurrentStreams']);
+        self::assertSame(1, $queryCount, 'checkUserQuota must read the quota row exactly once.');
+
+        // The single SELECT must project the folded column alongside the byte
+        // counters/caps.
+        self::assertStringContainsString('max_concurrent_streams', $capturedSql);
+        self::assertStringContainsString('bytes_in', $capturedSql);
+        self::assertStringContainsString('quota_bytes_in', $capturedSql);
+        self::assertStringContainsString('FROM relay_user_quotas', $capturedSql);
+    }
+
+    public function testCheckUserQuotaNoRowReturnsUnlimitedConcurrentStreams(): void
+    {
+        // No quota row for the period → allowed, and the folded concurrent cap
+        // defaults to 0 (unlimited) so the streaming admission check is skipped.
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $db->method('query')->willReturn([]);
+
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->checkUserQuota('user-none');
+
+        self::assertTrue($result['allowed']);
+        self::assertNull($result['reason']);
+        self::assertSame(0, $result['maxConcurrentStreams']);
+    }
+
     public function testConcurrentStreamCounterIncrementsDecrementsAndBounds(): void
     {
         // HB-3.4 G3: the in-memory active-stream counter — increment on begin,
