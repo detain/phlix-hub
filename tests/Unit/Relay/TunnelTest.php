@@ -875,7 +875,7 @@ class TunnelTest extends TestCase
         // Simulate the safety timer firing (armed via Timer::add, a no-op in tests).
         $method = new \ReflectionMethod($tunnel, 'handleClientBackpressureTimeout');
         $method->setAccessible(true);
-        $method->invoke($tunnel, $client);
+        $method->invoke($tunnel);
 
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
@@ -975,6 +975,277 @@ class TunnelTest extends TestCase
         $method = new \ReflectionMethod($tunnel, 'handleServerBackpressureTimeout');
         $method->setAccessible(true);
         $method->invoke($tunnel);
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    // ---------------------------------------------------------------------
+    // HB-1.2 fix-2 — FIFO ordering, overflow-close, multi-client, release.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Decode a single complete wire frame with a fresh decoder (so decoder
+     * buffer state never leaks between assertions).
+     */
+    private function decodeFrame(string $wire): RelayFrame
+    {
+        $frame = (new FrameDecoder())->decode($wire);
+        $this->assertInstanceOf(RelayFrame::class, $frame);
+        return $frame;
+    }
+
+    /**
+     * HIGH-PRIORITY server path (finding #1 regression guard): a control frame
+     * generated while a control backlog exists must NOT be sent directly ahead
+     * of the still-queued frames — even in the window where send() succeeds
+     * again (buffer below the high-watermark) but onBufferDrain has not yet
+     * fired. Frames must be delivered in strict enqueue order, and any body
+     * frame queued behind them must stay after the control frames.
+     */
+    public function test_high_priority_frames_preserve_fifo_and_never_overtake_backlog(): void
+    {
+        $tunnel = $this->activeTunnel();
+
+        $full = true;
+        $sent = [];
+        $this->serverWs->method('send')->willReturnCallback(
+            function (string $data) use (&$full, &$sent): bool {
+                if ($full) {
+                    return false; // buffer full — Workerman would DROP this frame
+                }
+                $sent[] = $data;
+                return true;
+            }
+        );
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+
+        // Buffer full: first control frame fails send and is queued.
+        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_CANCEL, 0, 'CTRL-1'));
+        $this->assertSame([], $sent, 'first control frame must be queued, not sent');
+
+        // Buffer drops below the high-watermark so send() would succeed again —
+        // but onBufferDrain has NOT fired. A newly generated control frame must
+        // queue BEHIND the backlog, never overtake it (the #1 reordering bug).
+        $full = false;
+        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_CANCEL, 0, 'CTRL-2'));
+        $this->assertSame([], $sent, 'second control frame must queue behind the backlog, not overtake it');
+
+        // A body frame while a control backlog exists must queue behind the
+        // control frames (control-first-then-body preserved).
+        $full = true;
+        $bodyPayload = (string) json_encode(['kind' => 'body', 'data' => 'BODY-1']);
+        $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $bodyPayload));
+        $this->assertSame([], $sent);
+
+        // Drain: control queue FIFO first, then the body frame.
+        $this->assertIsCallable($this->serverWs->onBufferDrain);
+        $full = false;
+        ($this->serverWs->onBufferDrain)();
+
+        $this->assertCount(3, $sent);
+        $this->assertSame('CTRL-1', $this->decodeFrame($sent[0])->payload);
+        $this->assertSame('CTRL-2', $this->decodeFrame($sent[1])->payload);
+        $this->assertSame($bodyPayload, $this->decodeFrame($sent[2])->payload);
+        $this->assertSame(RelayFrameType::HTTP_REQUEST, $this->decodeFrame($sent[2])->type);
+    }
+
+    /**
+     * CLIENT DATA path FIFO: two frames re-queued for one congested client must
+     * be delivered in enqueue order once its buffer drains (a reordering
+     * regression on the client path would flip them).
+     */
+    public function test_client_queue_delivers_multiple_frames_in_fifo_order(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(true);
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $full = true;
+        $delivered = [];
+        $clientWs->method('send')->willReturnCallback(
+            function (string $data) use (&$full, &$delivered): bool {
+                if ($full) {
+                    return false;
+                }
+                $delivered[] = $data;
+                return true;
+            }
+        );
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        // Two frames while congested — first fails send, second sees the backlog.
+        $tunnel->sendToClient($client->channelId, new RelayFrame(RelayFrameType::DATA, $client->channelId, 'FIRST'));
+        $tunnel->sendToClient($client->channelId, new RelayFrame(RelayFrameType::DATA, $client->channelId, 'SECOND'));
+        $this->assertSame([], $delivered);
+
+        $full = false;
+        $this->assertIsCallable($clientWs->onBufferDrain);
+        ($clientWs->onBufferDrain)();
+
+        $this->assertCount(2, $delivered);
+        $this->assertSame('FIRST', $this->decodeFrame($delivered[0])->payload);
+        $this->assertSame('SECOND', $this->decodeFrame($delivered[1])->payload);
+    }
+
+    /**
+     * removeClient must release a congested client's backpressure slot and
+     * resume the server (the anti-stranding path): a congested client that
+     * disconnects will never fire its drain handler, so if its slot is not
+     * released the server stays paused forever.
+     */
+    public function test_remove_client_releases_backpressure_slot_and_resumes_server(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(true); // CLIENT_CONNECT / DISCONNECT
+        $this->serverWs->expects($this->once())->method('pauseRecv');
+        $this->serverWs->expects($this->once())->method('resumeRecv');
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(false); // permanently full
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        $tunnel->sendToClient($client->channelId, new RelayFrame(RelayFrameType::DATA, $client->channelId, 'x'));
+
+        $count = new \ReflectionProperty($tunnel, 'serverBackpressureCount');
+        $count->setAccessible(true);
+        $this->assertSame(1, $count->getValue($tunnel), 'server paused while the client is congested');
+
+        $tunnel->removeClient($client);
+
+        $this->assertSame(0, $count->getValue($tunnel), 'removing the client released its slot');
+    }
+
+    /**
+     * Two congested clients: the server must resume only after BOTH drain (the
+     * count semantics). Draining one leaves the server paused (count 2→1);
+     * draining the second resumes it (count 1→0).
+     */
+    public function test_two_congested_clients_resume_server_only_after_both_drain(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(true);
+        $this->serverWs->expects($this->once())->method('pauseRecv');
+        $this->serverWs->expects($this->once())->method('resumeRecv');
+
+        $full1 = true;
+        $ws1 = $this->createMock(TcpConnection::class);
+        $ws1->method('send')->willReturnCallback(function () use (&$full1): bool {
+            return !$full1;
+        });
+        $c1 = new ClientConnection($ws1, 'server-123', 'client-1', $this->clientLogger, '');
+
+        $full2 = true;
+        $ws2 = $this->createMock(TcpConnection::class);
+        $ws2->method('send')->willReturnCallback(function () use (&$full2): bool {
+            return !$full2;
+        });
+        $c2 = new ClientConnection($ws2, 'server-123', 'client-2', $this->clientLogger, '');
+
+        $tunnel->registerClient($c1);
+        $tunnel->registerClient($c2);
+
+        $tunnel->sendToClient($c1->channelId, new RelayFrame(RelayFrameType::DATA, $c1->channelId, 'a'));
+        $tunnel->sendToClient($c2->channelId, new RelayFrame(RelayFrameType::DATA, $c2->channelId, 'b'));
+
+        $count = new \ReflectionProperty($tunnel, 'serverBackpressureCount');
+        $count->setAccessible(true);
+        $this->assertSame(2, $count->getValue($tunnel));
+
+        // First client drains — server must STAY paused.
+        $full1 = false;
+        $this->assertIsCallable($ws1->onBufferDrain);
+        ($ws1->onBufferDrain)();
+        $this->assertSame(1, $count->getValue($tunnel), 'server stays paused while a second client is congested');
+
+        // Second client drains — server resumes.
+        $full2 = false;
+        $this->assertIsCallable($ws2->onBufferDrain);
+        ($ws2->onBufferDrain)();
+        $this->assertSame(0, $count->getValue($tunnel));
+    }
+
+    /**
+     * CLIENT queue overflow: exceeding MAX_CLIENT_QUEUE closes the tunnel with
+     * backpressure_overflow (a hard, visible failure) rather than dropping a
+     * DATA frame (silent corruption).
+     */
+    public function test_client_queue_overflow_closes_tunnel(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(true);
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(false); // always full — every frame re-queues
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with('session-456', 'backpressure_overflow');
+
+        $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_CLIENT_QUEUE'))->getValue();
+        for ($i = 0; $i <= $max; $i++) {
+            $tunnel->sendToClient($client->channelId, new RelayFrame(RelayFrameType::DATA, $client->channelId, 'x'));
+        }
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    /**
+     * BODY queue overflow: exceeding MAX_BODY_QUEUE closes the tunnel with
+     * backpressure_overflow rather than dropping a body frame.
+     */
+    public function test_body_queue_overflow_closes_tunnel(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(false); // server always full
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with('session-456', 'backpressure_overflow');
+
+        $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_BODY_QUEUE'))->getValue();
+        $bodyPayload = (string) json_encode(['kind' => 'body']);
+        for ($i = 0; $i <= $max; $i++) {
+            $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $bodyPayload));
+        }
+
+        $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
+    }
+
+    /**
+     * HIGH-PRIORITY queue overflow (finding #2): exceeding MAX_HIGH_PRIORITY_QUEUE
+     * closes the tunnel with backpressure_overflow rather than silently dropping
+     * a control frame (a dropped CANCEL/CLIENT_DISCONNECT would strand server
+     * state / leak an in-flight request).
+     */
+    public function test_high_priority_queue_overflow_closes_tunnel(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(false); // always full
+        $this->serverWs->method('pauseRecv');
+        $this->serverWs->method('resumeRecv');
+
+        $this->sessionManager
+            ->expects($this->once())
+            ->method('closeSession')
+            ->with('session-456', 'backpressure_overflow');
+
+        $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_HIGH_PRIORITY_QUEUE'))->getValue();
+        for ($i = 0; $i <= $max; $i++) {
+            $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_CANCEL, 0, 'c'));
+        }
 
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
