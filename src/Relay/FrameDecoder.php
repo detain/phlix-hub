@@ -102,6 +102,10 @@ final class FrameDecoder implements RelayWireCodecInterface
      * @inheritDoc
      *
      * Returns null if the data is incomplete (less than 7 bytes for the header).
+     *
+     * @throws FrameBufferOverflowException If the accumulation buffer exceeds
+     *         {@see MAX_BUFFER_SIZE} without a complete frame (H-R7).
+     * @throws InvalidFrameTypeException If the frame type byte is unrecognized.
      */
     public function decode(string $bytes): ?RelayFrame
     {
@@ -109,7 +113,14 @@ final class FrameDecoder implements RelayWireCodecInterface
         $this->buffer .= $bytes;
 
         if (strlen($this->buffer) > self::MAX_BUFFER_SIZE) {
-            throw new \RuntimeException('invalid_frame');
+            // A dribbling / oversized-length peer grew the buffer past the hard
+            // ceiling without ever completing a frame (H-R7). Drop the oversized
+            // buffer immediately so we don't keep it resident, and raise a fatal
+            // protocol violation — the consumer's existing InvalidFrameType catch
+            // closes the tunnel/connection cleanly.
+            $overflowSize = strlen($this->buffer);
+            $this->buffer = '';
+            throw new FrameBufferOverflowException($overflowSize, self::MAX_BUFFER_SIZE);
         }
 
         // Minimum frame is 7 bytes: 4 (seq) + 1 (type) + 2 (len) = 7

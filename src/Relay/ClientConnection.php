@@ -88,7 +88,22 @@ final class ClientConnection
     {
         $this->lastFrameAt = time();
 
-        $frame = $decoder->decode($data);
+        try {
+            $frame = $decoder->decode($data);
+        } catch (InvalidFrameTypeException $e) {
+            // Undecodable frame or a buffer-overflow attack from the client
+            // (H-R7: a dribbling / oversized-length client can otherwise grow the
+            // decode buffer without bound). Left unhandled this escapes the
+            // Workerman message callback and stops the client relay worker. Close
+            // this client's connection cleanly instead.
+            $this->logger->warning('Relay: undecodable frame from client, closing connection', [
+                'server_id' => $this->serverId,
+                'client_id' => $this->clientId,
+                'error' => $e->getMessage(),
+            ]);
+            $this->close();
+            return;
+        }
 
         if ($frame === null) {
             // Incomplete frame — continue buffering

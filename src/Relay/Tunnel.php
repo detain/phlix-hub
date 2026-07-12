@@ -347,6 +347,21 @@ final class Tunnel implements TunnelInterface
 
         try {
             $frame = $this->serverDecoder->decode($data);
+        } catch (FrameBufferOverflowException $e) {
+            // A dribbling / oversized-length server grew the decode buffer past
+            // the 128 KB hard cap without completing a frame (H-R7). Left
+            // unhandled this fatals out of the Workerman message callback and
+            // takes down the relay worker. Close the tunnel cleanly instead so
+            // clients are notified, the DB session is closed, and in-flight proxy
+            // requests are failed.
+            $this->logger->warning('Relay: frame buffer overflow from server, closing tunnel', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'buffer_size' => $e->bufferSize,
+                'max_buffer_size' => $e->maxBufferSize,
+            ]);
+            $this->close('frame_buffer_overflow');
+            return;
         } catch (InvalidFrameTypeException $e) {
             // A server that re-handshakes on its existing connection (or a framing
             // desync during a reconnect race) sends a JSON HELLO/HELLO_ACK on an

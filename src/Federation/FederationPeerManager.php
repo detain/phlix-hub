@@ -17,6 +17,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
+use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Throwable;
@@ -460,7 +461,24 @@ class FederationPeerManager
      */
     private function handleBinaryFrame(string $data): void
     {
-        $frame = $this->decoder->decode($data);
+        try {
+            $frame = $this->decoder->decode($data);
+        } catch (InvalidFrameTypeException $e) {
+            // Undecodable frame or a decode-buffer overflow (H-R7) from the
+            // master hub. Escaping here would fatal out of the Workerman message
+            // callback; close the connection cleanly and let the reconnect timer
+            // re-establish a known-good session.
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: undecodable frame from master, closing connection',
+                ['error' => $e->getMessage()],
+            );
+            try {
+                $this->masterConnection?->close();
+            } catch (Throwable) {
+                // Connection already gone — no-op.
+            }
+            return;
+        }
         if ($frame === null) {
             return;
         }

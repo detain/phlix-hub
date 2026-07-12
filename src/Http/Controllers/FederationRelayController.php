@@ -16,6 +16,7 @@ use Phlix\Hub\Federation\FederationFrameHandler;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
+use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\ConnectionInterface;
@@ -139,7 +140,15 @@ final class FederationRelayController
             return;
         }
 
-        $frame = $decoder->decode($data);
+        try {
+            $frame = $decoder->decode($data);
+        } catch (InvalidFrameTypeException) {
+            // Undecodable frame or a decode-buffer overflow (H-R7) from a leaf
+            // hub. Escaping here would fatal out of the Workerman callback; close
+            // the federation connection cleanly instead.
+            $connection->close('invalid_frame');
+            return;
+        }
         if ($frame === null) {
             // Incomplete frame — wait for more data
             return;
