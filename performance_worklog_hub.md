@@ -2879,3 +2879,101 @@ Verify (this box, PHP 8.3.6 + PCOV):
 - `phpstan analyze --no-progress` (L9, no baseline) on the 4 changed files → [OK] No errors.
 - `phpcs --standard=PSR12` on the 4 changed files → clean (exit 0).
 - psalm skipped (env: box PHP < psalm-required).
+
+## Reviewer (per-step, HB-4.6 login-limiter sub-1-4, commits e0568fd+352e0e9) — 2026-07-13 (perf-7)
+**NO FINDINGS.** Reviewed as security-sensitive auth brute-force code. Verified (not just trusted the
+worklog): every DbRateLimiter query uses named `:param` colon-free placeholders with DISTINCT keys for
+repeated values (nowCheck/nowReset, freshReset/renewReset); the LIMIT-as-string 1064 class of bug
+(server's real incident) is genuinely avoided — traced the actual bind path (PhlixMySQLConnection
+pdoParamType() int→PARAM_INT unquoted) and confirmed the regression test captures REAL production params
+(would go red on a `(string)` cast, not a mock that passes regardless); the atomic
+INSERT...ON DUPLICATE KEY UPDATE hit/check logic is genuinely race-free under InnoDB row-lock (traced the
+column-assignment ORDER: attempts assigned first reading OLD reset_at, THEN reset_at reassigned — correct
+restart-vs-increment semantics, a swap would break it); peek() is read-only (can't be abused to reset);
+reset() only fires after successful login; injected connection is the pooled 'mysql' conn, not 'txn';
+repoint scope confirmed LOGIN-only (grepped for the dropped concrete RateLimiter::class alias — zero
+consumers); AuthManager tests inject a real limiter directly, unaffected. Suite 1424/0 reconfirmed,
+phpstan/phpcs clean. **Sub-1-4 CODE-COMPLETE + review-clean.**
+Non-blocking note for sub-5: the column-assignment ordering correctness above was verified by READING the
+SQL, not by a real-MySQL test — the current behavioral fake models correct semantics regardless of actual
+column order, so it would NOT catch an accidental column swap. Sub-5 (real-MySQL/cross-worker concurrency
+test) should close this gap. Remaining: sub-5 (dedicated test hardening) → sub-6 (docs).
+
+## TestEngineer — HB-4.6 login-limiter sub-5 — 2026-07-13 (perf-7) — GREEN
+Scope: sub-step 5 of 6 — dedicated real-MySQL test hardening for `DbRateLimiter`, closing the Reviewer's
+one non-blocking sub-5 note above (the ODKU column-assignment ordering was verified only by READING the
+SQL; the behavioural fake models correct semantics regardless of the ACTUAL SQL, so it cannot catch a
+column swap). Sub-6 (docs: CHANGELOG/README/phlix-docs) is the last remaining piece.
+
+**Added (both NEW, absolute paths):**
+- `/home/sites/phlix/phlix-hub/tests/Integration/Common/RateLimit/DbRateLimiterIntegrationTest.php` —
+  8 tests, `@group integration`, exercising the ACTUAL `hit()/peek()/reset()` SQL against a REAL MySQL
+  row. Uses the established `HUB_TEST_DB_*` env-var convention + graceful `markTestSkipped` when unset
+  (mirrors `MigrationRunnerIntegrationTest`), so it self-skips in CI / any DB-less env. The real
+  `login_rate_limit` table is (re)created fresh at setUp() from the ACTUAL migration-040 DDL (reads
+  `migrations/040_login_rate_limit.sql`, strips `--` comments) so it also surfaces schema drift; dropped
+  in tearDown(). Tests:
+  - `testFreshKeyStartsAttemptsAtOne` — first hit on a fresh key persists attempts=1 (not 0/phantom).
+  - `testRepeatedHitsIncrementWithinWindow` — hits increment the same row; reset_at anchored to the FIRST
+    window (no slide); `limited` trips at max.
+  - `testHitAfterWindowExpiryRestartsAtOne` — **THE column-ORDER guard.** Builds a stale window
+    (attempts=2), forces `reset_at` into the past, hits again → asserts attempts RESTARTS at 1 (not
+    incremented) and reset_at renewed. This is exactly the semantics that breaks on a SET-clause swap.
+  - `testPeekDoesNotMutateLiveRow` / `testPeekReportsEmptyForExpiredWindowWithoutWriting` — peek() is
+    read-only on the hot path; a live counter is unchanged by repeated peeks; an expired-window peek
+    reports empty AND leaves the stale row physically present (no DELETE/upsert).
+  - `testResetDeletesRow` — reset() removes the bucket row.
+  - `testHitSweepsExpiredRowsButKeepsLiveRow` — the bounded in-`hit()` sweep reclaims OTHER keys' expired
+    rows while never touching the freshly-written live row.
+  - `testConcurrentHitsDoNotLoseIncrements` (`@group slow`) — genuine concurrent-writer proof (see below).
+- `/home/sites/phlix/phlix-hub/tests/Integration/Common/RateLimit/Fixtures/concurrent_hit_worker.php` —
+  isolated child-process writer (one MySQL session per process; same child-process idiom as
+  `Fixtures/pool_harness.php`, which avoids the nested-Swoole-coroutine-in-PHPUnit segfault). Opens its
+  OWN `Connection` + `DbRateLimiter`, busy-wait barrier on a shared start epoch (pure microtime spin, NO
+  blocking sleep), fires N hits at one shared key.
+
+**Real concurrent-writer coverage: ACHIEVED (not just sequential).** `testConcurrentHitsDoNotLoseIncrements`
+launches 6 concurrent OS processes (via `proc_open`, each a distinct MySQL session) that each fire 25
+`hit()`s at the SAME fresh key under a large window, then asserts the final persisted `attempts` == 150
+(writers × iterations). Zero lost increments → proves the atomic `INSERT … ON DUPLICATE KEY UPDATE
+attempts = … attempts + 1` is genuinely serialized by the InnoDB row-lock under real contention — the
+shared-store race the in-memory `RateLimiter` cannot even have (its per-worker counters never contend).
+This goes beyond the mandatory sequential minimum. (Note on rigor: correctness — no lost updates — holds
+regardless of overlap degree because the upsert is a single atomic statement; the barrier maximizes
+actual temporal overlap so the row-lock is genuinely exercised, not just theoretically.)
+
+**Deliberate-swap-goes-RED verification (empirical, per the brief): CONFIRMED.**
+1. Baseline against real MySQL 8.0.46: all 8 integration tests GREEN (`OK, 8 tests, 56 assertions`).
+2. Temporarily SWAPPED the two SET clauses in the REAL source
+   (`src/Common/RateLimit/DbRateLimiter.php`: `reset_at = …` moved BEFORE `attempts = …`) and re-ran:
+   `testHitAfterWindowExpiryRestartsAtOne` went **RED** — `Failed asserting that 3 is identical to 1`
+   (the expired window INCREMENTED the stale 2→3 instead of restarting at 1, because MySQL evaluates ODKU
+   assignments left-to-right and the swapped `attempts` clause then reads the already-renewed future
+   `reset_at`). Independently reproduced the same 1-vs-3 divergence with raw SQL against the cluster.
+3. Re-ran the behavioural UNIT test (`DbRateLimiterTest`) WITH the swapped source: STILL GREEN (11/11) —
+   empirically confirming the Reviewer's point that the fake cannot catch the swap; only this real-MySQL
+   test does.
+4. RESTORED the source (`git diff src/Common/RateLimit/DbRateLimiter.php` → EMPTY) and re-ran the
+   integration suite → GREEN again (8/8). Source is unchanged from HEAD 352e0e9; ONLY tests were added.
+
+**No general-hardening gaps left open** beyond the above (sweep-behavior, peek read-only, reset delete all
+now covered against real MySQL).
+
+VERIFY (actual output, this box, PHP 8.3.6):
+- Integration suite vs real MySQL 8.0.46 (env `HUB_TEST_DB_HOST=127.0.0.1 PORT=6446` via the local
+  mysqlrouter RW endpoint → InnoDB cluster, dedicated ad-hoc DB created+dropped, replication_user full
+  grants): `OK (8 tests, 56 assertions)`, ~2.4s.
+- Full hub suite, NO DB env (CI-equivalent — integration self-skips): `Tests: 1432, Assertions: 17287,
+  Skipped: 25`, 0 failures (was 1424 Unit at HEAD; +8 new integration tests, all skipped without DB env).
+  No regression.
+- `phpstan analyze --no-progress` (L9, no baseline, default `src` gate) → `[OK] No errors`; explicit L9 on
+  both new test files → `[OK] No errors` (fixed 2 `mixed`→int casts via an `is_numeric` coercion helper).
+- `phpcs --standard=PSR12 -n` on both new files → clean (exit 0).
+- psalm skipped (env: box PHP < psalm-required).
+
+CI note: CI has no MySQL service, so `DbRateLimiterIntegrationTest` (like `MigrationRunnerIntegrationTest`)
+self-skips there — the real-DB run above is the authoritative verification. To re-run: create a MySQL DB,
+then `HUB_TEST_DB_HOST/PORT/USER/PASSWORD/NAME=… php -d max_execution_time=0 ./vendor/bin/phpunit
+--testsuite Integration --filter DbRateLimiterIntegrationTest`.
+
+Remaining for HB-4.6: sub-6 (docs) is the last piece.
