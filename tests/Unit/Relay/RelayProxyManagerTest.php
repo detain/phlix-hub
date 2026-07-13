@@ -1618,13 +1618,17 @@ final class RelayProxyManagerTest extends TestCase
         $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
         $requestId = $reqFrame->seq;
 
-        // Rewind the sent_at clock to simulate a request that's been waiting
-        // longer than its timeout.
+        // Rewind the inactivity clock to simulate a request that's been idle
+        // (no response frame at all) longer than its timeout. `lastActivityAt`
+        // is seeded to `sent_at` at creation and only refreshed by a response
+        // frame — since none arrived here it equals `sent_at`, so back-date both
+        // to faithfully reproduce a genuinely-stalled request.
         $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
         $pendingProp->setAccessible(true);
         /** @var array<int, array<string, mixed>> $pending */
         $pending = $pendingProp->getValue($manager);
         $pending[$requestId]['sent_at'] = microtime(true) - 60.0; // 60s ago > 30s timeout
+        $pending[$requestId]['lastActivityAt'] = microtime(true) - 60.0; // idle 60s > 30s
         $pendingProp->setValue($manager, $pending);
 
         // Run the sweep.

@@ -33,6 +33,7 @@ use function is_string;
 use function json_encode;
 use function microtime;
 use function strlen;
+use function time;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -136,7 +137,8 @@ final class RelayProxyManager
      *     first_byte_recorded: bool,
      *     timeout: float,
      *     stream_opened_at: float,
-     *     sent_at: float
+     *     sent_at: float,
+     *     lastActivityAt: float
      * }>
      */
     private array $pending = [];
@@ -283,6 +285,12 @@ final class RelayProxyManager
             'timeout' => $timeout,
             'stream_opened_at' => $now,
             'sent_at' => $now,
+            // Inactivity clock: seeded to the send time and refreshed on every
+            // response frame in onResponseFrame(). The sweep measures idleness
+            // from THIS field (not the fixed `sent_at`), so an actively-streaming
+            // entry is only terminated once it has been genuinely IDLE for
+            // `timeout` seconds — never `timeout` seconds after it STARTED.
+            'lastActivityAt' => $now,
         ];
         $this->clientToRelayRequestId[$clientRequestId] = $requestId;
         $this->metrics?->setRelayPendingRequests(count($this->pending));
@@ -361,6 +369,14 @@ final class RelayProxyManager
             ]);
             return;
         }
+
+        // Any decoded response frame (HEAD/BODY/END) proves the stream is still
+        // alive, so refresh the inactivity clock the sweep reads. This is on the
+        // per-frame hot path — use the coarse second-granularity time() rather
+        // than a high-resolution microtime() syscall: the inactivity timeouts
+        // are 30-60s and the sweep runs every 2s, so sub-second precision buys
+        // nothing. Cost is one integer assignment per frame (never per byte).
+        $this->pending[$requestId]['lastActivityAt'] = (float) time();
 
         $streaming = $this->pending[$requestId]['stream'];
 
@@ -580,8 +596,10 @@ final class RelayProxyManager
         if ($entry['stream'] && $entry['stream_started']) {
             // Head already streamed to the browser — terminate the stream rather
             // than emit a fresh 504 body. This fires as an *inactivity* cutoff:
-            // the timer is re-armed on each response frame, so it only trips when
-            // the server genuinely stalls mid-transfer.
+            // the sweep only reaches here once `lastActivityAt` (refreshed on
+            // every response frame) is older than `timeout`, so it trips only
+            // when the server genuinely stalls mid-transfer — or when the
+            // absolute MAX_STREAM_DURATION_SECONDS ceiling is reached.
             $this->logger->warning('Relay proxy: streamed response stalled, terminating', [
                 'request_id' => $requestId,
                 'server_id' => $entry['server_id'],
@@ -641,9 +659,14 @@ final class RelayProxyManager
                 continue;
             }
 
-            // Inactivity timeout: if the server hasn't sent any data for longer
-            // than the per-request timeout, the entry is timed out.
-            if ($now - $entry['sent_at'] >= $entry['timeout']) {
+            // Inactivity timeout: terminate ONLY when the stream has been
+            // genuinely IDLE — no response frame for longer than the per-request
+            // timeout. `lastActivityAt` is refreshed on every response frame
+            // (onResponseFrame), so an actively-streaming entry is NOT killed
+            // `timeout` seconds after it STARTED (the fixed-`sent_at` regression
+            // this replaces). A stuck-but-trickling stream is still bounded by
+            // the absolute MAX_STREAM_DURATION_SECONDS ceiling checked above.
+            if ($now - $entry['lastActivityAt'] >= $entry['timeout']) {
                 $this->onTimeout($requestId);
             }
         }
