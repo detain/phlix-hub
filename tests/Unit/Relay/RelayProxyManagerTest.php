@@ -1830,6 +1830,58 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertArrayNotHasKey('req-cancel', $mapAfter, 'map must be cleared after onCancel');
     }
 
+    /**
+     * HB-4.9: the cancel-to-stop metric increments when a real in-flight request
+     * is cancelled (client abandoned it → hub emits HTTP_CANCEL). A cancel for an
+     * unknown/already-completed request must NOT increment the counter.
+     */
+    public function test_cancel_records_the_cancel_metric(): void
+    {
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+        $tunnel = $this->activeTunnel('srv-metric', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+            $collector,
+        );
+
+        // A cancel for a request that was never seen must be a no-op for the metric.
+        $manager->onCancel([
+            'request_id' => 'never-existed',
+            'server_id' => 'srv-metric',
+        ]);
+        $this->assertSame(0, $registry->drainRelayMetrics(1000)['cancels']);
+
+        // Register a real in-flight request, then cancel it.
+        $manager->onRequest([
+            'request_id' => 'req-metric',
+            'reply_event' => 'reply.metric',
+            'server_id' => 'srv-metric',
+            'method' => 'GET',
+            'path' => '/x',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        $manager->onCancel([
+            'request_id' => 'req-metric',
+            'server_id' => 'srv-metric',
+        ]);
+
+        // The cancel counter is incremented exactly once at the real cancel site.
+        $this->assertSame(1, $registry->drainRelayMetrics(1000)['cancels']);
+    }
+
     // ---------------------------------------------------------------------
     // HB-4.8: Batch sweep timer (replaces per-request timer churn)
     // ---------------------------------------------------------------------

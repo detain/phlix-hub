@@ -509,6 +509,10 @@ final class RelayProxyManager
 
         unset($this->pending[$requestId]);
         $this->metrics?->setRelayPendingRequests(count($this->pending));
+        // Count the cancel-to-stop signal: the client abandoned this request, so
+        // the hub is about to ask the server (via HTTP_CANCEL) to stop work on a
+        // response that can no longer be delivered. Pairs with server SV-4.2.
+        $this->metrics?->recordRelayCancel();
 
         $tunnel = $this->tunnelManager->getTunnelForServer($entry['server_id']);
         if ($tunnel !== null && $tunnel->getStatus() === Tunnel::STATUS_ACTIVE) {

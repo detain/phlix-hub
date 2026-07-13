@@ -410,6 +410,7 @@ final class MetricsFlushService
      * @param array{
      *     pending_requests: int,
      *     reply_drops: int,
+     *     cancels: int,
      *     latency_histogram: array<int, array<int, int>>,
      *     error_503: int,
      *     error_504: int,
@@ -425,7 +426,7 @@ final class MetricsFlushService
         // histogram; the scalar bucket also carries the counters/gauges.
         /**
          * @var array<int, array{
-         *     pending: int, drops: int, e503: int, e504: int, buffer: int,
+         *     pending: int, drops: int, cancels: int, e503: int, e504: int, buffer: int,
          *     hist: array<int, int>
          * }> $rows
          */
@@ -433,19 +434,20 @@ final class MetricsFlushService
 
         foreach ($relay['latency_histogram'] as $bucketTs => $hist) {
             $rows[$bucketTs] = [
-                'pending' => 0, 'drops' => 0, 'e503' => 0, 'e504' => 0, 'buffer' => 0,
+                'pending' => 0, 'drops' => 0, 'cancels' => 0, 'e503' => 0, 'e504' => 0, 'buffer' => 0,
                 'hist' => $hist,
             ];
         }
 
         if (!isset($rows[$scalarBucketTs])) {
             $rows[$scalarBucketTs] = [
-                'pending' => 0, 'drops' => 0, 'e503' => 0, 'e504' => 0, 'buffer' => 0,
+                'pending' => 0, 'drops' => 0, 'cancels' => 0, 'e503' => 0, 'e504' => 0, 'buffer' => 0,
                 'hist' => [],
             ];
         }
         $rows[$scalarBucketTs]['pending'] = $relay['pending_requests'];
         $rows[$scalarBucketTs]['drops']   = $relay['reply_drops'];
+        $rows[$scalarBucketTs]['cancels'] = $relay['cancels'];
         $rows[$scalarBucketTs]['e503']    = $relay['error_503'];
         $rows[$scalarBucketTs]['e504']    = $relay['error_504'];
         $rows[$scalarBucketTs]['buffer']  = $relay['decode_buffer_bytes'];
@@ -456,8 +458,9 @@ final class MetricsFlushService
             $h = $row['hist'];
             // Skip an all-zero window so idle flushes don't churn empty rows.
             if (
-                $row['pending'] === 0 && $row['drops'] === 0 && $row['e503'] === 0
-                && $row['e504'] === 0 && $row['buffer'] === 0 && array_sum($h) === 0
+                $row['pending'] === 0 && $row['drops'] === 0 && $row['cancels'] === 0
+                && $row['e503'] === 0 && $row['e504'] === 0 && $row['buffer'] === 0
+                && array_sum($h) === 0
             ) {
                 continue;
             }
@@ -469,11 +472,11 @@ final class MetricsFlushService
                   relay_latency_h_le_10, relay_latency_h_le_50, relay_latency_h_le_100,
                   relay_latency_h_le_250, relay_latency_h_le_500, relay_latency_h_le_1000,
                   relay_latency_h_le_2500, relay_latency_h_le_5000, relay_latency_h_gt_5000,
-                  relay_error_503, relay_error_504, relay_decode_buffer_bytes)
+                  relay_error_503, relay_error_504, relay_decode_buffer_bytes, relay_cancels)
                  VALUES (:bucket, :worker_id,
                          :rpending, :rdrops,
                          :rl0, :rl1, :rl2, :rl3, :rl4, :rl5, :rl6, :rl7, :rl8,
-                         :re503, :re504, :rbuffer)
+                         :re503, :re504, :rbuffer, :rcancels)
                  ON DUPLICATE KEY UPDATE
                      relay_pending_requests    = GREATEST(relay_pending_requests, VALUES(relay_pending_requests)),
                      relay_reply_drops         = relay_reply_drops + VALUES(relay_reply_drops),
@@ -488,7 +491,8 @@ final class MetricsFlushService
                      relay_latency_h_gt_5000   = relay_latency_h_gt_5000 + VALUES(relay_latency_h_gt_5000),
                      relay_error_503           = relay_error_503 + VALUES(relay_error_503),
                      relay_error_504           = relay_error_504 + VALUES(relay_error_504),
-                     relay_decode_buffer_bytes = GREATEST(relay_decode_buffer_bytes, VALUES(relay_decode_buffer_bytes))",
+                     relay_decode_buffer_bytes = GREATEST(relay_decode_buffer_bytes, VALUES(relay_decode_buffer_bytes)),
+                     relay_cancels             = relay_cancels + VALUES(relay_cancels)",
                 [
                     'bucket'    => $this->datetime($bucketTs),
                     'worker_id' => 'hub-relay',
@@ -506,6 +510,7 @@ final class MetricsFlushService
                     're503'     => $row['e503'],
                     're504'     => $row['e504'],
                     'rbuffer'   => $row['buffer'],
+                    'rcancels'  => $row['cancels'],
                 ]
             );
         }

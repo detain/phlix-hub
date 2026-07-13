@@ -485,6 +485,9 @@ final class MetricsFlushServiceTest extends TestCase
         $registry->recordRelayError(504);
         $registry->recordRelayError(504);
         $registry->setRelayDecodeBufferSize(9000);
+        $registry->recordRelayCancel();
+        $registry->recordRelayCancel();
+        $registry->recordRelayCancel();
         $registry->recordRelayLatency(5.0, 1000);    // -> <=10ms bucket (rl0)
         $registry->recordRelayLatency(300.0, 1000);  // -> <=500ms bucket (rl4)
 
@@ -514,6 +517,11 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(1, $p['re503']);
         $this->assertSame(2, $p['re504']);
         $this->assertSame(9000, $p['rbuffer']);
+        $this->assertSame(3, $p['rcancels']);
+        $this->assertStringContainsString(
+            'relay_cancels             = relay_cancels + VALUES(relay_cancels)',
+            $q['sql'],
+        );
         // The two latency observations land in the <=10ms (rl0) and <=500ms (rl4)
         // histogram buckets.
         $this->assertSame(1, $p['rl0']);

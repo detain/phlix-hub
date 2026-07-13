@@ -51,6 +51,9 @@ final class MetricsRegistry
     /** @var int Cumulative count of HTTP_RESPONSE frames dropped for unknown/closed requests. */
     private int $relayReplyDrops = 0;
 
+    /** @var int Cumulative count of HTTP_CANCEL frames the hub emitted (client abandoned an in-flight request). */
+    private int $relayCancels = 0;
+
     /**
      * Per-bucket relay-latency histogram (time from HTTP_REQUEST sent to first HTTP_RESPONSE byte).
      *
@@ -554,6 +557,18 @@ final class MetricsRegistry
     }
 
     /**
+     * Record that the hub cancelled an in-flight relay request and signalled the
+     * server to stop work (an HTTP_CANCEL frame was emitted because the client
+     * abandoned the request).
+     *
+     * @return void
+     */
+    public function recordRelayCancel(): void
+    {
+        $this->relayCancels++;
+    }
+
+    /**
      * Record the round-trip latency of a completed relay proxy request.
      *
      * @param float $ms Latency in milliseconds (time from sending HTTP_REQUEST
@@ -626,6 +641,7 @@ final class MetricsRegistry
      * @return array{
      *     pending_requests: int,
      *     reply_drops: int,
+     *     cancels: int,
      *     latency_histogram: array<int, array<int, int>>,
      *     error_503: int,
      *     error_504: int,
@@ -638,6 +654,7 @@ final class MetricsRegistry
         $snapshot = [
             'pending_requests' => $this->relayPendingRequests,
             'reply_drops' => $this->relayReplyDrops,
+            'cancels' => $this->relayCancels,
             'latency_histogram' => $latencyHistogram,
             'error_503' => $this->relayError503,
             'error_504' => $this->relayError504,
@@ -646,6 +663,7 @@ final class MetricsRegistry
 
         $this->relayPendingRequests = 0;
         $this->relayReplyDrops = 0;
+        $this->relayCancels = 0;
         $this->relayLatencyHistogram = [];
         $this->relayError503 = 0;
         $this->relayError504 = 0;

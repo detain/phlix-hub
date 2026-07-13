@@ -173,6 +173,20 @@ final class MetricsCollector
     }
 
     /**
+     * Record that the hub cancelled an in-flight relay request and emitted an
+     * HTTP_CANCEL frame to the server (client abandoned the request).
+     *
+     * @return void
+     */
+    public function recordRelayCancel(): void
+    {
+        if (!$this->enabled) {
+            return;
+        }
+        $this->registry->recordRelayCancel();
+    }
+
+    /**
      * Record the round-trip latency of a completed relay proxy request.
      *
      * @param float $ms Latency in milliseconds.
