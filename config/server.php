@@ -89,18 +89,24 @@ return [
     // Per-surface rate limiting (HB-4.6). Each surface gets its OWN worker-local
     // RateLimiter instance (see Phlix\Hub\Common\RateLimit\RateLimitProfiles);
     // a single login-grade 5/900 limiter is wrong for everything but login.
-    // Thresholds are PER-WORKER: login/relay_connect/client_mount run on the
-    // count=1 surfaces (per-worker == global); proxy/heartbeat/jwks run across
-    // HUB_WORKERS HTTP workers, so the soft-global limit is ~max × HUB_WORKERS
-    // (mirrors HB-3.4). Any surface's `max`/`window` — and the shared `cap`
-    // (key-count ceiling) — is env-overridable; absent keys fall back to the
-    // RateLimitProfiles defaults.
+    // Thresholds are PER-WORKER: only relay_connect (:8802) and client_mount
+    // (:8803) run on count=1 surfaces (per-worker == global). login/proxy/
+    // heartbeat/jwks all run across the HUB_WORKERS HTTP workers, so each keeps
+    // an independent per-worker counter and the soft-global limit is ~max ×
+    // HUB_WORKERS (mirrors HB-3.4). ⚠️ login is thus NOT a global 5/900: with
+    // HUB_WORKERS=4 the effective budget is ~5×HUB_WORKERS/900 (first 429 near
+    // attempt ~9). Migration 040_login_rate_limit adds a shared DB-backed store
+    // to unify the login bucket; until the DbRateLimiter lands and the LOGIN
+    // binding is repointed, login stays per-worker in-memory (HB-4.6 follow-up).
+    // Any surface's `max`/`window` — and the shared `cap` (key-count ceiling) —
+    // is env-overridable; absent keys fall back to the RateLimitProfiles defaults.
     'rate_limit' => (static function (): array {
         $envInt = static fn (string $k, int $d): int => is_numeric(getenv($k) ?? '') ? (int) getenv($k) : $d;
 
         return [
             'cap'           => $envInt('PHLIX_HUB_RATELIMIT_CAP', 10000),
-            // Login: unchanged historical limiter (5 attempts / 15 min).
+            // Login: 5 attempts / 15 min — PER-WORKER in-memory today (see the
+            // caveat above; migration 040 lays the groundwork for a shared store).
             'login'         => [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_LOGIN_MAX', 5),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_LOGIN_WINDOW', 900),

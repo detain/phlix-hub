@@ -90,6 +90,7 @@ php bin/phlix migrate
 - [x] HB-4.8  stream-timer sweep instead of per-second del+add  RE-AUDIT+FIX 2026-07-12: was PARTIAL (⚠️ BEHAVIORAL REGRESSION — the 2s sweep measured inactivity from the FIXED `sent_at`, killing ACTIVE streams `timeout`s after they STARTED: direct-play ~30s, /hls,/dash ~60s; the 900s ceiling was unreachable). FIXED: added `lastActivityAt` to the pending entry (seeded to `sent_at`), refreshed per HEAD/BODY/END in `onResponseFrame` via `(float) time()`, sweep now tests `now - lastActivityAt >= timeout`; KEPT the `stream_opened_at + MAX_STREAM_DURATION_SECONDS` (900s) absolute ceiling (terminate on EITHER). No per-frame Timer::del/add churn reintroduced; SWEEP_INTERVAL_SECONDS untouched. +3 behavioral tests (active-long-stream SURVIVES — proven to fail vs fixed-`sent_at`; idle>timeout terminates; ceiling fires for active-but-runaway). Suite 1366 pass/17 skip/0 fail, phpstan L9 0, phpcs src clean. See `## Implementer — HB-4.8`. Prior wiring (H-W4-batch: batch SWEEP_INTERVAL_SECONDS timer + sweepStreamTimers()).
 - [x] HB-4.9  verify/implement HTTP_CANCEL server-side stop  (commit: H-W4-batch)  DONE — already implemented; full cancel path verified: Bridge→Channel→ProxyManager→Tunnel::sendCancel()→server
 - [x] HB-4.10 remove RelaySessionManager::routeRequest  (commit: H-W4-batch)  DONE — confirmed no callers; method removed; docstrings updated
+- [ ] HB-4.11 port checksum-divergence detection into the migration ledger — QUEUED 2026-07-13 (perf-7, cross-repo consistency gap, not from the original audit pass). Cross-repo comparison: hub's `migrations` table (filename PK + applied_at) already provides name-only idempotency, but has NO checksum — unlike server's SV-4.9 `schema_migrations` ledger (DONE+reviewed, commits 1788ad35+e9a461fe), which detects when an already-applied `.sql` is edited later (rewrite-class migration) via a normalized-md5 checksum and safely re-applies+warns. Hub currently has no equivalent: an edited already-applied migration is silently never re-run. Full spec added to `/home/sites/phlix/performance_plan.md` §3 as **HB-4.11** (H-W4) — port server's design, adapted to hub's named-`:param`-only DB binding + a backfill-safe `ALTER TABLE migrations ADD COLUMN checksum CHAR(32) NULL` (existing rows have none). NOT yet implemented — queue after HB-4.6 login-limiter.
 
 ## Re-baseline — Claude Code orchestrator pass (2026-07-12)
 
@@ -2731,3 +2732,64 @@ edge branches. The new FD-fix line IS covered.
 SERVER-TWIN FOLLOW-UP: phlix-server/src/Common/Database/PooledMySQLConnection.php has the identical
 FD-churn line in acquire()'s dead-idle branch and needs the same one-line `$conn->closeConnection()`
 fix (server follow-up; not done here per scope).
+
+## Implementer — HB-4.6 login-limiter follow-up, sub-steps 1+2 of 6 — 2026-07-13
+Scope: ONLY the FIRST TWO sub-steps of the "Option B: shared DB-backed login limiter" decomposition
+(the on-box verify found the login 5/900 bucket is enforced PER-WORKER in-memory, so with HUB_WORKERS=4
+the effective budget is ~20/900 — a real brute-force weakening on the one surface where it matters).
+Sub-steps 3–6 are intentionally NOT done here (left for a follow-up agent — see below).
+
+Root cause recap: the login limiter is enforced in `AuthManager::checkRateLimit/recordFailedAttempt/
+clearRateLimit` (keyed `auth:login:<ip>`) on the HTTP workers (count = HUB_WORKERS), NOT on a count=1
+surface. Only `relay_connect` (:8802 RelayWorker) and `client_mount` (:8803 ClientRelayWorker) are truly
+count=1 == global. The prior docblocks wrongly grouped `login` with those count=1 surfaces.
+
+**Sub-step 1 — corrected the misleading docblocks (factually accurate; does NOT overclaim a fix):**
+- `src/Common/RateLimit/RateLimitProfiles.php` (class docblock) — split the per-worker paragraph so
+  only `relay_connect`/`client_mount` are described as count=1==global; `login`/`proxy`/`heartbeat`/
+  `jwks` are documented as INDEPENDENT per-worker counters across HUB_WORKERS. Added an explicit ⚠️
+  note that `login` is NOT a global 5/900 bucket (real budget ~5×HUB_WORKERS/900, first 429 near
+  attempt ~9), that migration 040 lays the DB-backed-store groundwork, and that until the `DbRateLimiter`
+  is built + the `LOGIN` binding repointed, login stays per-worker in-memory.
+- `config/server.php` (`rate_limit` section header comment + the inline `login` sub-key comment) — same
+  correction: only relay_connect/client_mount are count=1; login/proxy/heartbeat/jwks are per-worker
+  across HUB_WORKERS; added the login-weakening ⚠️ note + the migration-040 groundwork pointer.
+
+**Sub-step 2 — added migration `040_login_rate_limit.sql` (+ registered in MigrationFileTest):**
+- `migrations/040_login_rate_limit.sql` — NEW. `CREATE TABLE IF NOT EXISTS login_rate_limit`,
+  ENGINE=InnoDB utf8mb4 utf8mb4_unicode_ci, hub `-- migration: 040_login_rate_limit` header, plain DDL
+  (no MariaDB-only `IF [NOT] EXISTS` on columns/indexes — MySQL-8 target). Shape models phlix-server's
+  `login_rate_limit` (migration 074: attempts / reset_at Unix-ts / created_at / index on reset_at for
+  the TTL sweep) but is keyed by the hub `RateLimiterInterface` OPAQUE bucket key (`rate_key VARCHAR(191)`
+  natural PK, values like `auth:login:<ip>`) instead of the server's bare `ip` column — because the hub's
+  forthcoming `DbRateLimiter` implements the generic `peek/hit/reset` interface, not an IP-specific store.
+  Natural-key table (no `id` column) → exempt from the CHAR(36) rule exactly like `relay_user_quotas`/the
+  telemetry rollups (per MigrationFileTest's own comments). Header comment states plainly that nothing
+  reads the table yet.
+- `tests/Unit/Migrations/MigrationFileTest.php` — added `'040_login_rate_limit.sql'` to the
+  `testExpectedMigrationsExist` allow-list (hub convention).
+
+NOT done here (explicitly out of scope — OPEN for the follow-up agent):
+  (3) build `DbRateLimiter implements RateLimiterInterface` (peek/hit/reset; NAMED `:param` binds only —
+      hub rule; bind LIMIT as int; inject the pooled `Connection` via `'mysql'`, NOT the txn conn);
+  (4) repoint ONLY the `RateLimitProfiles::LOGIN` binding to the DB limiter (leave the other 5 in-memory);
+  (5) tests (`DbRateLimiterTest` + `CommonServicesProviderTest` update; existing AuthManager tests keep
+      injecting a real in-memory limiter and stay green);
+  (6) docs (CHANGELOG/README/phlix-docs).
+
+Files changed (absolute):
+- /home/sites/phlix/phlix-hub/src/Common/RateLimit/RateLimitProfiles.php
+- /home/sites/phlix/phlix-hub/config/server.php
+- /home/sites/phlix/phlix-hub/migrations/040_login_rate_limit.sql (NEW)
+- /home/sites/phlix/phlix-hub/tests/Unit/Migrations/MigrationFileTest.php
+
+Verify (this box, PHP 8.3.6 + PCOV):
+- `phpunit --filter MigrationFileTest` → OK (158 tests, 332 assertions) — new migration registered + all
+  static-shape checks (header, InnoDB/utf8mb4, CREATE TABLE IF NOT EXISTS, balanced parens, natural-key
+  exemption) pass for 040.
+- Full Unit suite → OK 1412/0 (17 skipped, 17201 assertions) — was 1406 at HEAD a203070; +6 = the new
+  migration's per-file dataProvider tests.
+- `phpstan analyze --no-progress` (L9, no baseline) → [OK] No errors.
+- `phpcs --standard=PSR12 -n src/Common/RateLimit/RateLimitProfiles.php config/server.php
+  tests/Unit/Migrations/MigrationFileTest.php` → clean (exit 0).
+- psalm skipped (env: box PHP < psalm-required).

@@ -22,10 +22,21 @@ namespace Phlix\Hub\Common\RateLimit;
  * container id to the `config/server.php` `rate_limit.<key>` override key plus
  * the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER. `login`, `relay_connect` and `client_mount` run on
- * the count=1 relay/HTTP surfaces where per-worker == global; `proxy`,
- * `heartbeat` and `jwks` run across `HUB_WORKERS` HTTP workers, so the effective
- * soft-global limit is roughly `max × HUB_WORKERS` (documented, mirrors HB-3.4).
+ * Thresholds are PER-WORKER. Only `relay_connect` (the :8802 `RelayWorker`) and
+ * `client_mount` (the :8803 `ClientRelayWorker`) run on count=1 surfaces where
+ * per-worker == global. `login`, `proxy`, `heartbeat` and `jwks` are all enforced
+ * on the `HUB_WORKERS` HTTP workers, so each keeps an INDEPENDENT per-worker
+ * counter and the effective soft-global limit is roughly `max × HUB_WORKERS`
+ * (mirrors HB-3.4).
+ *
+ * ⚠️ `login` is therefore NOT a global 5/900 bucket: it is enforced in
+ * {@see \Phlix\Hub\Auth\AuthManager} (keyed `auth:login:<ip>`) on the HTTP
+ * workers, so with `HUB_WORKERS=4` the real budget is ~`5 × HUB_WORKERS` / 900 and
+ * the first 429 lands around attempt ~9 rather than 5 — a genuine brute-force
+ * weakening (HB-4.6 follow-up). Migration `040_login_rate_limit` adds a shared
+ * DB-backed store to unify the login bucket across workers; until the
+ * forthcoming `DbRateLimiter` is built and the {@see LOGIN} binding is repointed
+ * to it, the login limiter remains per-worker in-memory.
  *
  * @package Phlix\Hub\Common\RateLimit
  */
