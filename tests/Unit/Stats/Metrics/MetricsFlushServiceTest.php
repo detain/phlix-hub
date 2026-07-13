@@ -219,13 +219,92 @@ final class MetricsFlushServiceTest extends TestCase
         $this->mockConnectionPool($this->mockConnection());
         $service = $this->service($collector, ['flush_interval_seconds' => 5]);
 
+        // Pruning worker ($shouldPrune=true): the retention DELETEs are still
+        // throttled to ~once/minute (the 12th flush), not run on every tick.
         for ($i = 1; $i <= 11; $i++) {
-            $service->flush(1, 1000 + $i);
+            $service->flush(1, 1000 + $i, true);
         }
         $this->assertCount(0, $this->queriesMatching('DELETE FROM metrics_rollup'));
 
-        $service->flush(1, 1012);
+        $service->flush(1, 1012, true);
         $this->assertCount(1, $this->queriesMatching('DELETE FROM metrics_rollup'));
+    }
+
+    public function test_flush_does_not_prune_when_should_prune_is_false(): void
+    {
+        // [H-W3] single-pruner gate — the NON-pruning worker (an HTTP or the
+        // client-relay worker). It still flushes its own registry every tick,
+        // but must NEVER issue the shared-table retention DELETEs. Cross the
+        // once-a-minute prune tick (12 flushes at the 5s cadence) with real
+        // request activity and assert: rollups are persisted, but NO DELETE ever
+        // fires on this worker (that is what was multiplying churn ~4×).
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+        $service = $this->service($collector, ['flush_interval_seconds' => 5]);
+
+        for ($i = 1; $i <= 12; $i++) {
+            $registry->recordRequest('GET', '/a', 200, 5.0, 1, 1, 1000 + $i);
+            // Default $shouldPrune=false is the non-pruning-worker contract.
+            $service->flush(0, 1000 + $i);
+        }
+
+        // The registry WAS flushed (per-worker metrics persisted) ...
+        $this->assertNotEmpty(
+            $this->queriesMatching('INSERT INTO metrics_rollup'),
+            'a non-pruning worker must still flush its own registry',
+        );
+        // ... but the single-pruner gate held: no retention DELETE on this worker.
+        $this->assertCount(0, $this->queriesMatching('DELETE FROM metrics_connections'));
+        $this->assertCount(0, $this->queriesMatching('DELETE FROM metrics_rollup'));
+        $this->assertCount(0, $this->queriesMatching('DELETE FROM metrics_route_rollup'));
+    }
+
+    public function test_flush_prunes_only_on_the_designated_pruning_worker(): void
+    {
+        // The single designated pruner (the count=1 relay worker) passes
+        // $shouldPrune=true, so on the throttled prune tick it — and only it —
+        // runs the three retention DELETEs, exactly once each.
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+        $service = $this->service($collector, ['flush_interval_seconds' => 5]);
+
+        for ($i = 1; $i <= 12; $i++) {
+            $service->flush(0, 1000 + $i, true);
+        }
+
+        $this->assertCount(1, $this->queriesMatching('DELETE FROM metrics_connections'));
+        $this->assertCount(1, $this->queriesMatching('DELETE FROM metrics_rollup'));
+        $this->assertCount(1, $this->queriesMatching('DELETE FROM metrics_route_rollup'));
+    }
+
+    public function test_in_ram_connection_eviction_runs_even_when_prune_is_gated_off(): void
+    {
+        // Decoupling proof: the per-worker in-RAM registry eviction is NOT gated
+        // by $shouldPrune — it must keep every worker's connection map bounded
+        // (else the client-relay worker leaks). With $shouldPrune=false and thus
+        // NO DB prune, an idle connection is still evicted from the in-RAM map on
+        // the prune tick.
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $this->mockConnectionPool($this->mockConnection());
+        $service = $this->service($collector, [
+            'flush_interval_seconds' => 5,
+            'connection_ttl_seconds' => 15,
+        ]);
+
+        // Idle connection, last seen at t=900, never touched again.
+        $registry->openConnection('stale-1', 'websocket', null, null, null, null, 900);
+
+        for ($i = 1; $i <= 12; $i++) {
+            $service->flush(0, 1000 + $i, false);
+        }
+
+        // Evicted from RAM (bounded) ...
+        $this->assertArrayNotHasKey('stale-1', $registry->snapshotConnections());
+        // ... without any shared-table DELETE (prune gated off on this worker).
+        $this->assertCount(0, $this->queriesMatching('DELETE FROM metrics_connections'));
     }
 
     public function test_flush_forgets_rate_state_for_departed_connections(): void
@@ -311,10 +390,12 @@ final class MetricsFlushServiceTest extends TestCase
         $registry->openConnection('c-1', 'websocket', null, '1.2.3.4', null, null, 1000);
         $registry->touchConnection('c-1', 100, 200, 1004);
 
-        // 12 flushes at the 5s cadence trip the once-a-minute prune tick.
+        // 12 flushes at the 5s cadence trip the once-a-minute prune tick. Pass
+        // $shouldPrune=true so the three DELETEs are driven through the binding
+        // contract too (only the single pruning worker runs them in production).
         $service = $this->service($collector, ['flush_interval_seconds' => 5]);
         for ($i = 1; $i <= 12; $i++) {
-            $service->flush(1, 1000 + $i);
+            $service->flush(1, 1000 + $i, true);
         }
 
         // Reaching here means no HY093 was thrown; assert the writes + prune ran.
