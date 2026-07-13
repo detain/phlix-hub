@@ -6,7 +6,9 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Hub\ClientRelayTokenService;
@@ -107,23 +109,9 @@ final class ClientRelayWorkerTest extends TestCase
 
         $this->codec = new FrameDecoder();
         $this->tunnelManager = new TunnelManager($this->sessionManager, $this->codec, $this->logger);
-        // Rate limiter that never limits for tests.
-        $rateLimiter = new class implements RateLimiterInterface {
-            public function hit(string $key): RateLimitState
-            {
-                return new RateLimitState(1, 4, time() + 900, false, 5);
-            }
-
-            public function reset(string $key): void
-            {
-            }
-
-            public function peek(string $key): RateLimitState
-            {
-                return new RateLimitState(0, 5, 0, false, 5);
-            }
-        };
-        $this->controller = new ClientMountController($this->buildContainer(), $rateLimiter);
+        // HB-4.6f: the controller no longer takes a rate limiter — the real
+        // client-mount limit lives on the ClientRelayWorker WS surface.
+        $this->controller = new ClientMountController($this->buildContainer());
     }
 
     protected function tearDown(): void
@@ -391,6 +379,100 @@ final class ClientRelayWorkerTest extends TestCase
         $connection->expects($this->once())
             ->method('close')
             ->with('server_offline');
+
+        $worker->onWebSocketConnect($connection, $request);
+    }
+
+    // ---- HB-4.6f: client-mount rate limit (WS close 1013) ---------------
+
+    /**
+     * The :8803 client-mount surface must throttle inbound mounts by remote IP
+     * and REJECT the over-limit handshake with WS code 1013 (WS≠HTTP: no 429
+     * body here). A legit reconnect after the window resets must pass.
+     */
+    public function testClientMountRateLimitedAfterBurstThenReconnectPasses(): void
+    {
+        $serverId = 'server-uuid-mount-rl';
+        $token = 'valid-token-mount-rl';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        // Bring up an ACTIVE tunnel so under-limit mounts bind successfully.
+        $serverWs = $this->createMock(TcpConnection::class);
+        $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
+        $tunnel->relaySessionId = 'session-123';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $now = 1_000_000;
+        $clock = function () use (&$now): int {
+            return $now;
+        };
+        // 3 mounts/window/IP; advanceable clock so the reconnect is post-window.
+        $limiter = new RateLimiter(60, 3, 10000, $clock);
+
+        $worker = new ClientRelayWorker($this->buildContainer(null, null, null, $limiter));
+        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
+            'Authorization' => 'Bearer ' . $token,
+        ]);
+
+        // The 2 under-limit mounts from one IP are NOT closed → they bind.
+        for ($i = 0; $i < 2; $i++) {
+            $conn = $this->createMock(TcpConnection::class);
+            $conn->method('getRemoteIp')->willReturn('198.51.100.5');
+            $conn->expects($this->never())->method('close');
+            $worker->onWebSocketConnect($conn, $request);
+        }
+        self::assertCount(2, $tunnel->clientConnections, 'the two under-limit mounts must bind');
+
+        // The 3rd mount from the same IP trips the limiter → WS close 1013, and
+        // NO tunnel bind occurs (the mount is rejected before binding).
+        $limited = $this->createMock(TcpConnection::class);
+        $limited->method('getRemoteIp')->willReturn('198.51.100.5');
+        $limited->expects($this->once())
+            ->method('close')
+            ->with((string) ClientRelayWorker::CLOSE_TRY_AGAIN_LATER, true);
+        $worker->onWebSocketConnect($limited, $request);
+        self::assertCount(2, $tunnel->clientConnections, 'a rate-limited mount must not bind');
+
+        // After the window resets, a legit reconnect from the same IP passes.
+        $now += 61;
+        $reconnect = $this->createMock(TcpConnection::class);
+        $reconnect->method('getRemoteIp')->willReturn('198.51.100.5');
+        $reconnect->expects($this->never())->method('close');
+        $worker->onWebSocketConnect($reconnect, $request);
+        self::assertCount(3, $tunnel->clientConnections, 'a post-window reconnect must bind again');
+    }
+
+    /**
+     * The mount limiter must run BEFORE authentication. Proof: the request
+     * carries NO relay token, so without the mount limiter onWebSocketConnect
+     * would reject with 4401 (missing token). A tripped limiter instead closes
+     * with 1013 AND the ownership re-confirmation ({@see ServerInfoHandler})
+     * never runs — proving the limiter short-circuits ahead of the auth path.
+     */
+    public function testClientMountLimiterRunsBeforeAuth(): void
+    {
+        $serverId = 'server-uuid-before-auth';
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        // max=1 → the very first hit is limited.
+        $limiter = new RateLimiter(60, 1);
+
+        // The ownership re-confirmation (part of auth) must NEVER run.
+        $ownerInfo = $this->createMock(ServerInfoHandler::class);
+        $ownerInfo->expects($this->never())->method('getOwnerAndStatus');
+        $ownerInfo->expects($this->never())->method('getServerInfo');
+
+        $worker = new ClientRelayWorker($this->buildContainer(null, null, $ownerInfo, $limiter));
+        // No Authorization header / no token — the pre-limiter path would 4401.
+        $request = $this->makeUpgradeRequest('/client/' . $serverId);
+
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->method('getRemoteIp')->willReturn('198.51.100.9');
+        // 1013 (rate-limited), NOT 4401 (missing token) — proves ordering.
+        $connection->expects($this->once())
+            ->method('close')
+            ->with((string) ClientRelayWorker::CLOSE_TRY_AGAIN_LATER, true);
 
         $worker->onWebSocketConnect($connection, $request);
     }
@@ -733,13 +815,16 @@ final class ClientRelayWorkerTest extends TestCase
         ?MetricsCollector $metrics = null,
         ?MetricsFlushService $flush = null,
         ?ServerInfoHandler $serverInfo = null,
+        ?RateLimiterInterface $mountLimiter = null,
     ): ContainerInterface {
         $tokenService = $this->buildTokenService();
         $serverInfo ??= $this->buildServerInfoHandler();
         $tunnelManager = $this->tunnelManager;
         $controllerFactory = fn (): ClientMountController => $this->controller;
-        // Default: rate limiter always returns non-limited state.
-        $rateLimiter = new class implements RateLimiterInterface {
+        // Default client-mount limiter: never limits (matches the prior test
+        // harness so the existing mount cases are unaffected). The rate-limit
+        // cases below inject a real, clocked RateLimiter instead.
+        $mountLimiter ??= new class implements RateLimiterInterface {
             public function hit(string $key): RateLimitState
             {
                 return new RateLimitState(1, 4, time() + 900, false, 5);
@@ -762,7 +847,7 @@ final class ClientRelayWorkerTest extends TestCase
             $controllerFactory,
             $metrics,
             $flush,
-            $rateLimiter,
+            $mountLimiter,
         ) implements ContainerInterface {
             /** @param callable():ClientMountController $controllerFactory */
             public function __construct(
@@ -772,7 +857,7 @@ final class ClientRelayWorkerTest extends TestCase
                 private $controllerFactory,
                 private readonly ?MetricsCollector $metrics,
                 private readonly ?MetricsFlushService $flush,
-                private readonly RateLimiterInterface $rateLimiter,
+                private readonly RateLimiterInterface $mountLimiter,
             ) {
             }
 
@@ -787,7 +872,9 @@ final class ClientRelayWorkerTest extends TestCase
                         ?? throw new \RuntimeException("Unknown service: {$id}"),
                     MetricsFlushService::class => $this->flush
                         ?? throw new \RuntimeException("Unknown service: {$id}"),
-                    RateLimiterInterface::class => $this->rateLimiter,
+                    // HB-4.6f: the WS mount limiter is resolved by its per-surface
+                    // container id (rate_limiter.client_mount).
+                    RateLimitProfiles::CLIENT_MOUNT => $this->mountLimiter,
                     default => throw new \RuntimeException("Unknown service: {$id}"),
                 };
             }
@@ -800,7 +887,7 @@ final class ClientRelayWorkerTest extends TestCase
                     TunnelManager::class,
                     TunnelManagerInterface::class,
                     ClientMountController::class,
-                    RateLimiterInterface::class,
+                    RateLimitProfiles::CLIENT_MOUNT,
                 ];
                 if ($this->metrics !== null) {
                     $known[] = MetricsCollector::class;

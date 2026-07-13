@@ -296,11 +296,12 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             ClientMountController::class => factory(static function (
                 ContainerInterface $container,
-                RateLimiterInterface $rateLimiter,
             ): ClientMountController {
-                return new ClientMountController($container, $rateLimiter);
-            })->parameter('container', get(ContainerInterface::class))
-                ->parameter('rateLimiter', get(RateLimiterInterface::class)),
+                // No limiter: the HTTP handle() is a dead stub (426/501 → steer to
+                // the WS endpoint). The REAL client-mount rate limit lives on the
+                // :8803 ClientRelayWorker WS surface (HB-4.6f).
+                return new ClientMountController($container);
+            })->parameter('container', get(ContainerInterface::class)),
 
             FrameDecoder::class => factory(static function (): FrameDecoder {
                 return new FrameDecoder();

@@ -2446,10 +2446,9 @@ Shared-store decision: KEEP per-worker in-memory RateLimiter (NO DB limiter on p
 Per-surface policy (per-worker): login 5/900 (unchanged, own instance); proxy ~600/60s key proxy:{userId} (hit AFTER userId gate); heartbeat ~30/60s key heartbeat:{JWT-serverId}; jwks ~120/60s key jwks:{ip}; relay_connect ~10/60s key {ip} (WS close on limit); client_mount ~30/60s key {ip}(+serverId) (WS close).
 Sub-steps (one active per repo, sequential on hub):
 - [x] HB-4.6a FOUNDATION (15d6404e; RateLimitProfiles + 6 distinct limiters; suite 1377 green) — per-surface named limiter DI in CommonServicesProvider + `rate_limit` section in config/server.php (mirror `metrics` block); keep RateLimiterInterface→login as back-compat alias. BLOCKS all others.
-- [ ] HB-4.6b proxy re-key+threshold (ServerProxyController + factory HubServicesProvider:587); hit below userId gate.
-- [ ] HB-4.6c heartbeat threshold+keying (HeartbeatHandler + factory :168); +[ ] 4.6d JWKS (HubJwksController + factory :242) — may fold into c.
-- [ ] HB-4.6e :8802 relay-connect limiter NEW (RelayWorker::onWebSocketConnect; resolve from container in onWorkerStart; WS close on limit).
-- [ ] HB-4.6f :8803 client-mount limiter NEW (ClientRelayWorker::onWebSocketConnect) + retire dead ClientMountController::handle limiter.
+- [x] HB-4.6b/c/d wired (f9ee4bd8; proxy:{userId} below 401 gate + 100-GET burst test; heartbeat below JWT-validate; jwks; suite 1381 green)
+- [x] HB-4.6e :8802 relay-connect limiter NEW (RelayWorker::onWebSocketConnect; resolve from container in onWorkerStart; WS close 1013 on limit). DONE — see `## Implementer — HB-4.6e/f`.
+- [x] HB-4.6f :8803 client-mount limiter NEW (ClientRelayWorker::onWebSocketConnect, EARLY/before auth; WS close 1013) + retired dead ClientMountController::handle limiter (clean removal: ctor param + factory injection dropped). DONE — see `## Implementer — HB-4.6e/f`.
 - [ ] HB-4.6g 429 mapping: central catch(RateLimitException) before Application.php:1724 + explicit catch in AuthController loginForm/loginJson + ServerController::heartbeat; add RateLimitException::retryAfterSeconds(); WS paths reject (1013) NOT 429.
 - [ ] HB-4.6h test hardening: replace ALL limited:false stubs with real RateLimiter+injected clock; prove streaming burst survives, heartbeat cadence survives, over-limit trips, 429+Retry-After.
 LANDMINES: proxy limiter MUST be generous+userId-keyed or HLS breaks (test real multi-seg burst); local catches in AuthController/ServerController swallow 429→500 (need explicit catch before generic); WS≠HTTP (no 429 body, close 1013); keep RateLimiterInterface alias valid until all sites migrated or container fails to boot.
@@ -2478,6 +2477,62 @@ Wired the per-surface named limiters (from 4.6a) into the three HTTP surfaces. A
 - `HubServicesProvider.php` — HubJwksController factory injects `get(RateLimitProfiles::JWKS)` (120/60s). `HubJwksController` source already keyed `jwks:{ip}` at the correct spot — no source change needed there.
 
 NOT touched: `ClientMountController` factory (still `RateLimiterInterface` → login) — that's 4.6f; the `RateLimiterInterface`/`RateLimiter` back-compat alias — kept per constraints; no 429 mapping (4.6g); no WS surfaces (4.6e/f).
+
+## Implementer — HB-4.6e/f — 2026-07-12
+Wired the per-surface named limiters (from 4.6a) onto the two WebSocket surfaces — the H-H1 DoS
+surfaces. WS handshakes reject via `$connection->close((string)1013, true)` (WS≠HTTP: no 429 body;
+the 429 mapping is 4.6g/HTTP-only). No `RateLimitException` is thrown out of any WS hook. All
+committed+pushed to master.
+
+**4.6e — :8802 relay-connect (`src/Relay/RelayWorker.php`):**
+- Added `RateLimiterInterface $relayConnectLimiter` field + `CLOSE_TRY_AGAIN_LATER = 1013` const.
+- `onWorkerStart()` primes the field via a new guarded `resolveRelayConnectLimiter()` (resolves
+  `RateLimitProfiles::RELAY_CONNECT` = 10/60s from the container — coroutine context, NOT the ctor).
+- `onWebSocketConnect()` (was an empty no-op) now `hit('relay_connect:' . $connection->getRemoteIp())`
+  BEFORE any HELLO processing; on `limited` → warning log + `close('1013', true)` + return. Lazy
+  `??=` fallback resolve keeps it robust/testable (RateLimiter is pure in-memory, no I/O). Relay
+  worker is `count=1` (Application.php:1825) → per-worker == true global limit.
+
+**4.6f — :8803 client-mount (`src/Relay/ClientRelayWorker.php`):**
+- Added `RateLimiterInterface $clientMountLimiter` field + `CLOSE_TRY_AGAIN_LATER = 1013` const.
+- `onWorkerStart()` primes the field via a new guarded `resolveClientMountLimiter()` (resolves
+  `RateLimitProfiles::CLIENT_MOUNT` = 30/60s), kept OUTSIDE the metrics try/catch so a
+  metrics-disabled worker still gets the limiter.
+- `onWebSocketConnect()` now hits `client_mount:{ip}` EARLY — right after `parseServerId`, BEFORE
+  token extraction / `validateClientAuth` / bind; on `limited` → warning log + `close('1013', true)`
+  + return (no auth, no mount). `count=1` default (ctor:137) → per-worker == global.
+
+**Retired the dead stub limiter (CLEAN REMOVAL — grep proved it was used ONLY by the dead `hit()`):**
+- `src/Http/Controllers/ClientMountController.php` — dropped the `RateLimiterInterface $rateLimiter`
+  ctor param + the dead `hit('client_mount:'.$ip)`/`throw RateLimitException` block in `handle()`
+  (a 426/501 stub that never mounts), and the now-unused `RateLimitException` +
+  `RateLimiterInterface` imports. Controller class + routes LEFT IN PLACE (§0.1) — only the dead
+  limiter usage was de-wired.
+- `src/Common/Container/Providers/HubServicesProvider.php` (~:297) — `ClientMountController` factory
+  no longer injects a limiter (single-arg ctor now). The `RateLimiterInterface` import stays (still
+  used by the heartbeat/jwks/proxy factories); the `RateLimiterInterface`/`RateLimiter`→login
+  back-compat alias in `CommonServicesProvider` stays valid (other factories still resolve it).
+
+**Tests (real `RateLimiter` with an injected clock — no `limited:false` stub on these paths):**
+- `tests/Unit/Relay/RelayWorkerTest.php` — `testRelayConnectRateLimitedAfterBurstThenReconnectPasses`
+  (3/window: 2 connects from one IP bind/never-close, 3rd trips → `close('1013',true)`, then
+  clock+61s → reconnect passes) + `testRelayConnectLimiterIsKeyedPerIp` (IP A trips at max=2 while
+  quiet IP B's first connect still passes — proves per-IP buckets, not a global counter). Added a
+  memory-stream `LoggerFactory` init to setUp (the limited path logs a warning) + `makeUpgradeRequest`
+  + `buildContainerWithLimiter` helpers.
+- `tests/Unit/Relay/ClientRelayWorkerTest.php` — `testClientMountRateLimitedAfterBurstThenReconnectPasses`
+  (2 mounts bind, 3rd `close('1013',true)` + assert `clientConnections` did NOT grow, then post-window
+  reconnect binds) + `testClientMountLimiterRunsBeforeAuth` (NO token in request → without the limiter
+  it'd 4401; a tripped limiter closes 1013 AND `ServerInfoHandler::getOwnerAndStatus` is `never()`
+  called — proves the limiter precedes auth). `buildContainer` gained a `?RateLimiterInterface
+  $mountLimiter` param exposed under `RateLimitProfiles::CLIENT_MOUNT`; the controller build dropped
+  its limiter arg.
+- `tests/Unit/Http/Controllers/ClientMountControllerTest.php` — dropped the limiter stub + arg
+  (single-arg ctor); the 400/426/501 contract tests unchanged and green.
+
+Verification: `phpunit --filter 'RelayWorker|ClientRelayWorker|ClientMountController'` 51/51 green;
+FULL suite **1385 pass / 17 skip / 0 fail** (baseline 1381 + 4 new); `phpstan analyze` (L9) **0 errors**;
+`phpcs` PSR-12 `-n` clean on all changed src + test files. psalm = env-skip (PHP 8.3.6 < 8.3.16).
 
 **Tests (no `limited:false` stubs left on these three surfaces):**
 - `tests/Unit/Http/Controllers/ServerProxyControllerTest.php` — `controller()` helper now uses a REAL `RateLimiter(60,600)` (optional 4th param to inject a clocked one); the two reply-timeout inline mocks swapped to real limiters. ADDED `test_normal_hls_segment_burst_of_100_never_trips_proxy_limiter` (100 authed segment GETs, frozen clock/one window → all pass) and `test_proxy_limiter_trips_after_exceeding_600_in_window` (599 pass, 600th throws `RateLimitException` — note `limited` is `count>=max`).

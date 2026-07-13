@@ -16,6 +16,8 @@ use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
@@ -44,11 +46,32 @@ use function spl_object_id;
 final class RelayWorker
 {
     /**
+     * WS close code used when an inbound server relay-connect is rate-limited.
+     *
+     * 1013 ("Try Again Later") is the RFC 6455 code for a transient server-side
+     * refusal — the media server should back off and reconnect. This is NOT an
+     * auth failure (that stays HELLO-time, code 'unauthorized'); it throttles the
+     * connect rate itself to close the H-H1 tunnel-displacement DoS surface.
+     */
+    public const CLOSE_TRY_AGAIN_LATER = 1013;
+
+    /**
      * Internal map of connection ID => Tunnel for active server connections.
      *
      * @var array<int, Tunnel>
      */
     private static array $connTunnels = [];
+
+    /**
+     * Per-worker relay-connect rate limiter (`rate_limiter.relay_connect`,
+     * 10/60s), resolved in {@see onWorkerStart()} and memoized. Keyed by the
+     * connecting server's remote IP in {@see onWebSocketConnect()}. Null keeps
+     * the connect hook unlimited (limiter unavailable / not registered). The
+     * relay worker is `count=1`, so this per-worker limit is a true global limit.
+     *
+     * @var RateLimiterInterface|null
+     */
+    private ?RateLimiterInterface $relayConnectLimiter = null;
 
     /**
      * This worker's metrics collector, resolved in {@see onWorkerStart()} when
@@ -238,6 +261,14 @@ final class RelayWorker
             ]);
         }
 
+        // HB-4.6e: resolve this worker's relay-connect limiter into a field so
+        // the WS-upgrade hook (onWebSocketConnect) can throttle inbound server
+        // connects by remote IP. Resolved HERE (onWorkerStart, coroutine context)
+        // rather than in the constructor. The limiter is a pure in-memory object
+        // (no I/O), so onWebSocketConnect also lazily resolves it if this priming
+        // was skipped. Guarded so a resolution failure never breaks the worker.
+        $this->relayConnectLimiter = $this->resolveRelayConnectLimiter();
+
         // HB-2.6 (data-locality split): the DB-only reapers (stale-session reap,
         // server offline reaper, heartbeat/token prune, federation-session
         // reaper) run on the dedicated maintenance worker so their DB latency no
@@ -309,8 +340,52 @@ final class RelayWorker
      */
     public function onWebSocketConnect(TcpConnection $connection, WorkermanRequest $request): void
     {
-        // Nothing to do on upgrade — the first deframed message carries the
-        // JSON HELLO (and the server_id) which onMessage handles.
+        // HB-4.6e: throttle inbound server relay-connects by remote IP BEFORE any
+        // HELLO processing, closing the H-H1 tunnel-displacement DoS surface (a
+        // flood of connects on :8802). The server_id is not yet known here (it
+        // arrives in the first deframed HELLO), so we key on the remote IP.
+        $limiter = $this->relayConnectLimiter ??= $this->resolveRelayConnectLimiter();
+        if ($limiter !== null) {
+            $ip = $connection->getRemoteIp();
+            $state = $limiter->hit('relay_connect:' . $ip);
+            if ($state->limited) {
+                LoggerFactory::get(LogChannels::RELAY)->warning(
+                    'Relay: server relay-connect rate-limited',
+                    ['remote_ip' => $ip, 'reset_at' => $state->resetAt],
+                );
+                // WS≠HTTP: there is no HTTP 429 envelope after the upgrade hook —
+                // reject by closing the connection with WS code 1013 (try again
+                // later). The 429 mapping (HB-4.6g) is HTTP-only. Mirror the
+                // ClientRelayWorker::rejectUnauthorized close pattern.
+                $connection->close((string) self::CLOSE_TRY_AGAIN_LATER, true);
+                return;
+            }
+        }
+
+        // Otherwise nothing to do on upgrade — the first deframed message carries
+        // the JSON HELLO (and the server_id) which onMessage handles.
+    }
+
+    /**
+     * Resolve the relay-connect rate limiter (`rate_limiter.relay_connect`) from
+     * the container.
+     *
+     * Best-effort: returns null (unlimited connect hook) if the limiter is not
+     * registered or cannot be resolved, so a container hiccup never breaks the
+     * relay worker's connect path.
+     *
+     * @return RateLimiterInterface|null The relay-connect limiter, or null.
+     */
+    private function resolveRelayConnectLimiter(): ?RateLimiterInterface
+    {
+        try {
+            /** @var mixed $limiter */
+            $limiter = $this->container->get(RateLimitProfiles::RELAY_CONNECT);
+        } catch (Throwable) {
+            return null;
+        }
+
+        return $limiter instanceof RateLimiterInterface ? $limiter : null;
     }
 
     /**

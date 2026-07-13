@@ -13,6 +13,8 @@ namespace Phlix\Hub\Relay;
 
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Hub\ClientRelayTokenService;
@@ -84,6 +86,16 @@ final class ClientRelayWorker
     public const CLOSE_UNAUTHORIZED = 4401;
 
     /**
+     * WS close code used when an inbound client mount is rate-limited.
+     *
+     * 1013 ("Try Again Later") is the RFC 6455 code for a transient server-side
+     * refusal — the client should back off and retry. This is distinct from the
+     * auth-failure {@see CLOSE_UNAUTHORIZED} (4401): it throttles the mount rate
+     * itself (HB-4.6f), closing the client-mount DoS surface on :8803.
+     */
+    public const CLOSE_TRY_AGAIN_LATER = 1013;
+
+    /**
      * Map of connection ID => requested server_id, set at WS-connect time so
      * later message/close callbacks know which server the connection targets.
      *
@@ -125,6 +137,18 @@ final class ClientRelayWorker
      * @var MetricsCollector|null
      */
     private ?MetricsCollector $metrics = null;
+
+    /**
+     * Per-worker client-mount rate limiter (`rate_limiter.client_mount`,
+     * 30/60s), resolved in {@see onWorkerStart()} and memoized. Keyed by the
+     * connecting client's remote IP in {@see onWebSocketConnect()}. Null keeps
+     * the mount hook unlimited (limiter unavailable / not registered). The
+     * client-relay worker is `count=1` by default, so this per-worker limit is a
+     * true global limit.
+     *
+     * @var RateLimiterInterface|null
+     */
+    private ?RateLimiterInterface $clientMountLimiter = null;
 
     /**
      * @param ContainerInterface $container PSR-11 container for resolving services.
@@ -182,6 +206,15 @@ final class ClientRelayWorker
      */
     public function onWorkerStart(): void
     {
+        // HB-4.6f: resolve this worker's client-mount limiter into a field so the
+        // WS-upgrade hook (onWebSocketConnect) can throttle inbound mounts by
+        // remote IP. Resolved HERE (onWorkerStart, coroutine context) rather than
+        // in the constructor; the limiter is a pure in-memory object (no I/O), so
+        // onWebSocketConnect also lazily resolves it if this priming was skipped.
+        // Kept OUTSIDE the metrics try/catch below so a metrics-disabled worker
+        // still gets the mount limiter primed.
+        $this->clientMountLimiter = $this->resolveClientMountLimiter();
+
         try {
             /** @var mixed $collector */
             $collector = $this->container->get(MetricsCollector::class);
@@ -262,6 +295,28 @@ final class ClientRelayWorker
             ]);
             $connection->close('', true);
             return;
+        }
+
+        // HB-4.6f: throttle inbound client mounts by remote IP EARLY — before any
+        // token extraction / auth / tunnel bind — so a mount flood on :8803 is
+        // rejected cheaply and cannot exhaust the auth path. Runs BEFORE
+        // validateClientAuth by construction.
+        $limiter = $this->clientMountLimiter ??= $this->resolveClientMountLimiter();
+        if ($limiter !== null) {
+            $ip = $connection->getRemoteIp();
+            $state = $limiter->hit('client_mount:' . $ip);
+            if ($state->limited) {
+                $logger->warning('Relay: client mount rate-limited', [
+                    'remote_ip' => $ip,
+                    'server_id' => $serverId,
+                    'reset_at' => $state->resetAt,
+                ]);
+                // WS≠HTTP: no HTTP 429 envelope after the upgrade hook — reject by
+                // closing with WS code 1013 (try again later). The 429 mapping
+                // (HB-4.6g) is HTTP-only. Mirror the rejectUnauthorized pattern.
+                $connection->close((string) self::CLOSE_TRY_AGAIN_LATER, true);
+                return;
+            }
         }
 
         $token = self::extractClientToken($request);
@@ -554,6 +609,28 @@ final class ClientRelayWorker
         self::$connServerIds = [];
         self::$liveConnections = [];
         self::$connMetricsIds = [];
+    }
+
+    /**
+     * Resolve the client-mount rate limiter (`rate_limiter.client_mount`) from
+     * the container.
+     *
+     * Best-effort: returns null (unlimited mount hook) if the limiter is not
+     * registered or cannot be resolved, so a container hiccup never breaks the
+     * client-relay worker's mount path.
+     *
+     * @return RateLimiterInterface|null The client-mount limiter, or null.
+     */
+    private function resolveClientMountLimiter(): ?RateLimiterInterface
+    {
+        try {
+            /** @var mixed $limiter */
+            $limiter = $this->container->get(RateLimitProfiles::CLIENT_MOUNT);
+        } catch (Throwable) {
+            return null;
+        }
+
+        return $limiter instanceof RateLimiterInterface ? $limiter : null;
     }
 
     /**

@@ -11,8 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
-use Phlix\Hub\Auth\RateLimitException;
-use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
@@ -56,12 +54,10 @@ final class ClientMountController
     private static array $connDecoders = [];
 
     /**
-     * @param ContainerInterface    $container   PSR-11 container for resolving TunnelManager.
-     * @param RateLimiterInterface $rateLimiter Bounded, TTL-windowed rate limiter keyed by client IP.
+     * @param ContainerInterface $container PSR-11 container for resolving TunnelManager.
      */
     public function __construct(
         private readonly ContainerInterface $container,
-        private readonly RateLimiterInterface $rateLimiter,
     ) {
     }
 
@@ -79,16 +75,11 @@ final class ClientMountController
      */
     public function handle(Request $request, array $params): Response
     {
-        // HB-4.6: rate limit by client IP before any other processing.
-        $ip = $request->remoteIp !== '' ? $request->remoteIp : 'unknown';
-        $state = $this->rateLimiter->hit('client_mount:' . $ip);
-        if ($state->limited) {
-            throw new RateLimitException(
-                resetAt: $state->resetAt,
-                remaining: 0,
-            );
-        }
-
+        // NOTE: the REAL client-mount rate limit lives on the :8803 WebSocket
+        // worker ({@see \Phlix\Hub\Relay\ClientRelayWorker::onWebSocketConnect},
+        // HB-4.6f). This HTTP method is a dead stub — it only steers callers to
+        // the WS endpoint (426/501 below) and never mounts a tunnel, so it needs
+        // no limiter of its own (the former one was retired in HB-4.6f).
         $serverId = $params['server_id'] ?? '';
 
         if ($serverId === '') {

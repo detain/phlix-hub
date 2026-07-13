@@ -6,6 +6,9 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\ClientConnection;
@@ -19,6 +22,7 @@ use Phlix\Shared\Relay\RelayWireCodecInterface;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
+use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Worker;
 
 use function chr;
@@ -55,10 +59,26 @@ final class RelayWorkerTest extends TestCase
     private RelayWireCodecInterface $codec;
     private StructuredLogger $logger;
     private TunnelManager $tunnelManager;
+    private string $tmpDir;
 
     protected function setUp(): void
     {
         parent::setUp();
+
+        // The relay-connect rate-limit path (HB-4.6e) logs a warning through the
+        // static LoggerFactory when it closes an over-limit handshake. Point it at
+        // a memory-stream config so tests neither write real log files nor fail on
+        // an uninitialised factory. Reset in tearDown().
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-relay-worker-test-' . uniqid();
+        mkdir($this->tmpDir, 0700, true);
+        $loggerConfig = $this->tmpDir . '/logger.php';
+        file_put_contents(
+            $loggerConfig,
+            "<?php return ['default' => 'mem', 'handlers' => ['mem' => "
+            . "['type' => 'stream', 'path' => 'php://memory', 'level' => 'debug']]];",
+        );
+        LoggerFactory::reset();
+        LoggerFactory::init($loggerConfig);
 
         // RelayWorker resolves nothing through LoggerFactory directly, but the
         // Tunnel it creates does not either (it takes an injected logger).
@@ -77,6 +97,18 @@ final class RelayWorkerTest extends TestCase
         parent::tearDown();
         RelayWorker::reset();
         LoggerFactory::reset();
+
+        $files = glob($this->tmpDir . '/*');
+        if ($files !== false) {
+            foreach ($files as $file) {
+                if (is_file($file)) {
+                    unlink($file);
+                }
+            }
+        }
+        if (is_dir($this->tmpDir)) {
+            rmdir($this->tmpDir);
+        }
     }
 
     // ---- TASK 1: protocol must stay bound ---------------------------------
@@ -457,7 +489,134 @@ final class RelayWorkerTest extends TestCase
         );
     }
 
+    // ---- HB-4.6e: relay-connect rate limit (WS close 1013) ---------------
+
+    /**
+     * The :8802 relay-connect surface must throttle inbound server connects by
+     * remote IP and REJECT the over-limit handshake with WS code 1013 (WS≠HTTP:
+     * no 429 body here). A legit reconnect after the window resets must pass.
+     * This closes the H-H1 tunnel-displacement DoS (a flood of connects).
+     */
+    public function testRelayConnectRateLimitedAfterBurstThenReconnectPasses(): void
+    {
+        $now = 2_000_000;
+        $clock = function () use (&$now): int {
+            return $now;
+        };
+        // 3 connects/window/IP; advanceable clock so the reconnect is post-window.
+        $limiter = new RateLimiter(60, 3, 10000, $clock);
+        $relay = new RelayWorker($this->buildContainerWithLimiter($limiter), 0);
+
+        // The 2 under-limit connects from one IP are NOT closed.
+        for ($i = 0; $i < 2; $i++) {
+            $conn = $this->createMock(TcpConnection::class);
+            $conn->method('getRemoteIp')->willReturn('192.0.2.10');
+            $conn->expects($this->never())->method('close');
+            $relay->onWebSocketConnect($conn, $this->makeUpgradeRequest());
+        }
+
+        // The 3rd connect from the same IP trips the limiter (count >= max) → the
+        // handshake is closed with WS code 1013 before any HELLO processing.
+        $limited = $this->createMock(TcpConnection::class);
+        $limited->method('getRemoteIp')->willReturn('192.0.2.10');
+        $limited->expects($this->once())
+            ->method('close')
+            ->with((string) RelayWorker::CLOSE_TRY_AGAIN_LATER, true);
+        $relay->onWebSocketConnect($limited, $this->makeUpgradeRequest());
+
+        // After the window resets, a legit reconnect from the same IP passes.
+        $now += 61;
+        $reconnect = $this->createMock(TcpConnection::class);
+        $reconnect->method('getRemoteIp')->willReturn('192.0.2.10');
+        $reconnect->expects($this->never())->method('close');
+        $relay->onWebSocketConnect($reconnect, $this->makeUpgradeRequest());
+    }
+
+    /**
+     * Buckets are keyed per remote IP, not a shared global counter — one noisy
+     * IP tripping its limit must not starve a different, quiet IP.
+     */
+    public function testRelayConnectLimiterIsKeyedPerIp(): void
+    {
+        $limiter = new RateLimiter(60, 2);
+        $relay = new RelayWorker($this->buildContainerWithLimiter($limiter), 0);
+
+        // IP A: first connect passes, second trips (count >= 2).
+        $a1 = $this->createMock(TcpConnection::class);
+        $a1->method('getRemoteIp')->willReturn('192.0.2.1');
+        $a1->expects($this->never())->method('close');
+        $relay->onWebSocketConnect($a1, $this->makeUpgradeRequest());
+
+        $a2 = $this->createMock(TcpConnection::class);
+        $a2->method('getRemoteIp')->willReturn('192.0.2.1');
+        $a2->expects($this->once())
+            ->method('close')
+            ->with((string) RelayWorker::CLOSE_TRY_AGAIN_LATER, true);
+        $relay->onWebSocketConnect($a2, $this->makeUpgradeRequest());
+
+        // IP B has its OWN bucket: its first connect passes even though IP A is
+        // already tripped (a shared global counter would have closed this too).
+        $b1 = $this->createMock(TcpConnection::class);
+        $b1->method('getRemoteIp')->willReturn('192.0.2.2');
+        $b1->expects($this->never())->method('close');
+        $relay->onWebSocketConnect($b1, $this->makeUpgradeRequest());
+    }
+
     // ---- Helpers ----------------------------------------------------------
+
+    /**
+     * Build a minimal Workerman WS-upgrade Request. RelayWorker does not read the
+     * request in onWebSocketConnect (the server_id arrives in the first HELLO
+     * message), so a bare upgrade buffer is sufficient.
+     */
+    private function makeUpgradeRequest(): WorkermanRequest
+    {
+        $raw = "GET / HTTP/1.1\r\nHost: hub.example.com\r\nUpgrade: websocket\r\n"
+            . "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+            . "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+
+        return new WorkermanRequest($raw);
+    }
+
+    /**
+     * PSR-11 container exposing the TunnelManager, the shared session manager,
+     * and a specific relay-connect rate limiter under its per-surface container
+     * id ({@see RateLimitProfiles::RELAY_CONNECT}).
+     */
+    private function buildContainerWithLimiter(RateLimiterInterface $limiter): ContainerInterface
+    {
+        $tunnelManager = $this->tunnelManager;
+        $sessionManager = $this->sessionManager;
+
+        return new class ($tunnelManager, $sessionManager, $limiter) implements ContainerInterface {
+            public function __construct(
+                private readonly TunnelManager $tunnelManager,
+                private readonly RelaySessionManager $sessionManager,
+                private readonly RateLimiterInterface $limiter,
+            ) {
+            }
+
+            public function get(string $id): mixed
+            {
+                return match ($id) {
+                    TunnelManager::class, TunnelManagerInterface::class => $this->tunnelManager,
+                    RelaySessionManager::class => $this->sessionManager,
+                    RateLimitProfiles::RELAY_CONNECT => $this->limiter,
+                    default => throw new \RuntimeException("Unknown service: {$id}"),
+                };
+            }
+
+            public function has(string $id): bool
+            {
+                return in_array($id, [
+                    TunnelManager::class,
+                    TunnelManagerInterface::class,
+                    RelaySessionManager::class,
+                    RateLimitProfiles::RELAY_CONNECT,
+                ], true);
+            }
+        };
+    }
 
     /**
      * Build the JSON HELLO text exactly as the media server emits it.
