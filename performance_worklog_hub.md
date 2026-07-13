@@ -1772,3 +1772,71 @@ Docs cycle (CHANGELOG/README/docblocks-beyond-touched) still owed per the batche
 - **HB-4.1 (relay observability metrics)** — **IMPLEMENTED + committed** `b2feb66` (impl) / `a25a478` (tests) / `868fcd4` (worklog): wired shared MetricsCollector into RelayProxyManager via DI + wiring test (closed the inert-metrics regression); drain+persist to migration-036 columns; no_tunnel-503 counter; first-byte+total latency incl. streaming. Suite 1356/0. **BUT its REVIEW agent DIED on a session API limit mid-review (no verdict).** **RE-SPAWN the HB-4.1 REVIEW first on resume** — key checks: DI singleton identity (proxy collector === drained collector), drain-RESET so counters don't double-count each flush, migration-036 column-name match, and the DESIGN QUESTION of blending first-byte + total into the single latency histogram (acceptable vs. a finding).
 - **Hub queue after HB-4.1 review:** HB-4.2 (`AND`→`OR` in `ClientRelayTokenService::pruneExpiredTokens` + rewrite the string-contains test behaviorally — expired-never-revoked tokens currently never pruned) → HB-4.5 (gate `MetricsFlushService::prune()` to ONE worker; flushes stay per-worker; single-pruner test) → RE-AUDIT HB-4.6–4.10.
 - **Audit roll-up already recorded above:** HB-4.3/4.4 confirmed genuinely DONE; HB-4.1 NOT-DONE (now impl'd), HB-4.2 PARTIAL, HB-4.5 NOT-DONE.
+
+## Reviewer (per-step) — HB-4.1 — 2026-07-12
+
+Reviewed `git diff 7bd1324..868fcd4` (impl b2feb66 + tests a25a478) against the H-R8 finding, the
+migration-036 schema, and the four audit gaps. Read-only gates on this box: **phpstan L9 [OK] No
+errors**; `phpunit --filter 'RelayProxyManager|MetricsFlush|MetricsRegistry'` **OK (87 tests, 1088
+assertions)**. (psalm/migrate skipped — env, not findings.)
+
+**The core regression IS genuinely closed** (task item #1): the `HubServicesProvider` factory now
+injects `MetricsCollector` via a bound `metrics` param + named-arg construction; all three metrics
+services are PHP-DI singletons (one instance per worker), so proxy-manager collector ===
+`get(MetricsCollector::class)` === the registry `MetricsFlushService::flush()` drains via
+`$this->collector->registry()`. `RelayProxyManagerWiringTest` asserts identity with `assertSame`, not
+just non-null. Drain-reset is correct: `drainRelayMetrics()` zeroes every accumulator and
+`test_relay_metrics_are_drained_so_a_second_flush_writes_nothing` proves a 2nd flush writes no row (no
+double-count). Column names/semantics match migration 036 EXACTLY — counters additive
+(`col + VALUES`), gauges `GREATEST`, latency buckets [10,50,100,250,500,1000,2500,5000]+(-1→h_gt_5000)
+map correctly; bind keys colon-free/non-prefixing and guarded by the prefix + BindingContractConnection
+tests. no_tunnel-503 records once before replying then returns (no double vs failServer/504); the
+first-byte flag is per-`pending`-entry (per requestId), initialised false at admission — no cross-request
+carryover. Scope clean: `Tunnel.php`/reapers/txn untouched; the decode-buffer gauge feed
+(`RelayWorker.php:224`) is intact and now covered end-to-end. Emission tests inject a REAL
+collector+registry and assert registry state (fail against the pre-fix null collector) — not tautological.
+
+**2 findings**, most severe first.
+
+1. **`src/Relay/RelayProxyBridge.php:576-582` (`dropReply`) — MEDIUM — the reply-drop counter is wired
+   at the wrong site; the drop the H-R8 finding NAMED is still uncounted.** H-R8's location text is
+   explicit: "channel-push drops (`RelayProxyBridge.php:527-530` logs but no counter)". That drop —
+   a reply discarded because the client consumer channel is full/closed (the H-H6 stall / H-H3 back-
+   pressure failure mode, the exact thing an operator needs to alert on) — still only
+   `logger->warning(...)` and increments NO counter (`RelayProxyBridge` has no `MetricsCollector`; its
+   factory `HubServicesProvider.php:363` constructs it with the logger only). The impl instead put
+   `recordRelayReplyDrop()` in `RelayProxyManager::onResponseFrame` (`:351`) — a DIFFERENT event: an
+   inbound HTTP_RESPONSE frame for an already-torn-down/unknown request. **Failure scenario:** a slow or
+   gone browser causes the hub to throw away its replies via `dropReply`; the operator sees zero
+   `relay_reply_drops` and stays blind to precisely the stall H-R8 exists to surface, while the counter
+   that IS populated measures orphan server frames. **Fix direction:** inject the shared
+   `MetricsCollector` into `RelayProxyBridge` (same DI pattern just added for `RelayProxyManager`) and
+   call `recordRelayReplyDrop()` inside `dropReply()`; keep the `RelayProxyManager` orphan-frame counter
+   as a separate signal if desired, but the named channel-push drop must be counted.
+
+2. **`src/Relay/RelayProxyManager.php:413-417 (+367-377)` — MEDIUM — blending first-byte AND total into
+   the single migration-036 latency histogram muddies it, and for STREAMING responses records a
+   stream-DURATION as "latency".** Each completed request now records TWO observations into the one
+   `relay_latency_h_*` histogram: first-byte (`:376`) and total (`:417`, moved out of the buffered-only
+   block onto both paths). Migration 036 documents that histogram as "time from HTTP_REQUEST sent to
+   first response byte" — first-byte only — so recording total contradicts the column's documented
+   meaning, and blending doubles the sample count with mixed semantics so any percentile is a
+   meaningless TTFB/total mix. **Worse for streaming:** for a streamed response `total = sent_at → END`
+   = the entire stream/session duration, which the sweep allows up to the 900s absolute ceiling (and a
+   direct media stream runs for the whole playback). Every media stream therefore dumps a multi-minute
+   observation into `relay_latency_h_gt_5000`, so that bucket is dominated by stream lengths, not
+   latencies — a "latency > 5s" alert would fire on every normal playback. `test_streaming_request_
+   records_first_byte_and_total_latency` locks this blend in. **This is not acceptable as-is** (it
+   defeats H-R8's operational intent). **Fix direction:** record ONLY first-byte into the histogram
+   (a true latency for both buffered and streaming, matching the migration doc); drop the
+   `recordRelayLatency($totalMs)` call. If a round-trip/total metric is genuinely wanted it belongs in a
+   SEPARATE scalar column (needs a new migration — out of this step's schema) and must NOT record a
+   streaming send→END as "latency" (it is a session duration). Simplest in-scope resolution: restrict
+   the histogram to first-byte and adjust the streaming/buffered latency tests to assert one observation.
+
+Accepted-as-designed (not findings): resetting the `relay_pending_requests` / `relay_decode_buffer_bytes`
+GAUGES to 0 on drain is correct for the migration's documented "high-water mark across the flush window"
+semantics (they are re-set on the next lifecycle/decode event; `GREATEST` merges same-bucket flushes) —
+only a fully activity-free window under standing streams under-reports, which carries no new signal.
+
+**2 FINDINGS.**
