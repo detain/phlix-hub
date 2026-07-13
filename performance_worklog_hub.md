@@ -2793,3 +2793,89 @@ Verify (this box, PHP 8.3.6 + PCOV):
 - `phpcs --standard=PSR12 -n src/Common/RateLimit/RateLimitProfiles.php config/server.php
   tests/Unit/Migrations/MigrationFileTest.php` → clean (exit 0).
 - psalm skipped (env: box PHP < psalm-required).
+
+## Implementer — HB-4.6 login-limiter follow-up, sub-steps 3+4 of 6 — 2026-07-13
+Scope: ONLY sub-steps 3 (new `DbRateLimiter`) and 4 (repoint the `RateLimitProfiles::LOGIN` binding).
+Built on top of sub-1+2 (commit `e0568fd`: docblock fix + migration `040_login_rate_limit.sql`). Sub-steps
+5 (dedicated test-hardening pass) and 6 (docs: CHANGELOG/README/phlix-docs) remain OPEN for a follow-up
+agent — see NOT-done note below.
+
+Root-cause recap (from the on-box verify): the login 5/900 bucket was enforced PER-WORKER in-memory
+(`RateLimiter` instance bound at `rate_limiter.login`), so HUB_WORKERS=4 ⇒ effective ~20/900. Option B =
+back the login bucket with a shared DB row per key so every HTTP worker shares one counter.
+
+**Sub-step 3 — new `src/Common/RateLimit/DbRateLimiter.php` (`implements RateLimiterInterface`):**
+- Backs the generic `hit()/peek()/reset()` contract against the `login_rate_limit` table (migration 040:
+  `rate_key VARCHAR(191)` natural PK, `attempts INT UNSIGNED`, `reset_at INT UNSIGNED`, `created_at`).
+- Semantics are IDENTICAL to the in-memory `RateLimiter` (verified by a behavioral fake-DB test that
+  models the table): `hit()` = atomic `INSERT … ON DUPLICATE KEY UPDATE attempts=IF(reset_at<=now,1,
+  attempts+1), reset_at=IF(reset_at<=now, now+window, reset_at)` (fresh/expired window restarts at 1 and
+  renews reset_at; active window increments and KEEPS its reset_at) followed by a `SELECT` to return the
+  authoritative post-write `RateLimitState` (`limited` once `attempts>=max`); `peek()` = read-only SELECT
+  (NO writes on the login hot path — it runs on every attempt), absent/expired ⇒ empty unlimited state;
+  `reset()` = `DELETE … WHERE rate_key`.
+- Hub DB rules honored: NAMED `:param` placeholders only, keys COLON-FREE; every REPEATED placeholder in
+  the upsert (`now`, `reset`) is bound under a DISTINCT key (`nowCheck`/`nowReset`, `freshReset`/
+  `renewReset`) so emulated prepares stay unambiguous — no reused named params.
+- Bounded sweep: `hit()` runs `DELETE … WHERE reset_at <= :threshold LIMIT :batch` (batch=100) to bound
+  the table (one row per distinct key; expired keys that never return would otherwise accumulate),
+  mirroring phlix-server's store. `:batch` and `:threshold` bound as NATIVE INTS — defense against the
+  server's `SV-DI LIMIT-bind` 1064 incident (emulated prepares quote a string LIMIT → `LIMIT '100'`).
+  `PhlixMySQLConnection::execute()` already binds ints as PARAM_INT (unquoted), so passing ints is the
+  verified-correct type; a `testSweepBindsNumericParamsAsInt` regression guard asserts `is_int`.
+- Injected the pooled `'mysql'` `Connection` (autowired `Connection::class` → `ConnectionPool::
+  getConnection('mysql')` in `CoreServicesProvider`), NOT the dedicated `'txn'` connection — these are
+  single-statement reads/writes, not a multi-statement transaction. Clock injectable (like `RateLimiter`)
+  for deterministic tests. `windowSeconds`/`maxAttempts` clamp to ≥1.
+
+**Sub-step 4 — repointed ONLY the LOGIN binding (`src/Common/Container/Providers/CommonServicesProvider.php`):**
+- In the per-surface registration loop, `RateLimitProfiles::LOGIN` now resolves to
+  `factory(fn(Connection $db) => new DbRateLimiter($db, $window, $max))`; the other five surfaces
+  (proxy/heartbeat/jwks/relay_connect/client_mount) are UNCHANGED — still worker-local in-memory
+  `RateLimiter`s. Login `{max,window}` still config-driven (`rate_limit.login`, default 5/900).
+- The legacy `RateLimiterInterface::class => get(LOGIN)` alias is KEPT (so `AuthManager`'s autowired
+  `RateLimiterInterface` now gets the DB-backed limiter). The concrete `RateLimiter::class => get(LOGIN)`
+  alias was DROPPED: the login profile is a `DbRateLimiter`, so aliasing the concrete class to it would be
+  a type lie; no call site injects the concrete class (all use the named profiles or the interface), and
+  PHP-DI still autowires a default `RateLimiter` if the concrete is ever requested. Updated the class
+  docblock to describe the login exception + the dropped alias.
+- AuthManager, the 5 other surfaces, and their tests are untouched. AuthManager tests that inject a real
+  in-memory limiter directly (bypassing DI) keep passing unchanged.
+
+**Tests:**
+- NEW `tests/Unit/Common/RateLimit/DbRateLimiterTest.php` (11 tests) — a behavioral fake `Connection`
+  models the `login_rate_limit` table (upsert/select/sweep/delete parsed from SQL keywords) so the tests
+  prove FULL hit/peek/reset/window-expiry/independent-key/limit-boundary behavior, NOT just query-string
+  shape: fresh-window-at-1, increment-and-trip-within-window (reset_at doesn't slide), window-restart-
+  after-expiry, peek-empty-when-no-record, peek-empty-for-expired-WITHOUT-writing (read-only hot path),
+  reset-clears, upsert+bounded-sweep issued, sweep-binds-int (1064 regression guard), every-query-named-
+  colon-free-params (hub rule), non-positive-thresholds-clamp. (Coroutine-socket safety lives in and is
+  tested on `PhlixMySQLConnection`; repository-style classes here use mock-`Connection` unit tests, the
+  established hub idiom.)
+- UPDATED `tests/Unit/Common/Container/Providers/CommonServicesProviderTest.php` — the 5 in-memory
+  surfaces still assert `RateLimiter` + thresholds; NEW `testLoginProfileResolvesToSharedDbRateLimiter`
+  asserts LOGIN is a `DbRateLimiter` at 5/900; config-override + login-override + distinct-instance +
+  legacy-interface-alias (interface → login DbRateLimiter; concrete `RateLimiter::class` autowires a
+  fresh, unrelated in-memory instance) tests updated. `buildContainer` now registers a mock `Connection`
+  so the DB-backed login profile resolves.
+
+NOT done here (explicitly out of scope — OPEN for the follow-up agent):
+  (5) dedicated test-hardening pass (e.g. an on-box / real-MySQL integration test that a second worker
+      shares the same counter — the cross-worker guarantee is the whole point; unit tests can only prove
+      per-instance semantics);
+  (6) docs (CHANGELOG `Unreleased`, README/phlix-docs rate-limit section noting login is now shared
+      DB-backed while the other five stay per-worker).
+
+Files changed (absolute):
+- /home/sites/phlix/phlix-hub/src/Common/RateLimit/DbRateLimiter.php (NEW)
+- /home/sites/phlix/phlix-hub/src/Common/Container/Providers/CommonServicesProvider.php
+- /home/sites/phlix/phlix-hub/tests/Unit/Common/RateLimit/DbRateLimiterTest.php (NEW)
+- /home/sites/phlix/phlix-hub/tests/Unit/Common/Container/Providers/CommonServicesProviderTest.php
+
+Verify (this box, PHP 8.3.6 + PCOV):
+- `phpunit --filter 'DbRateLimiter|CommonServicesProvider'` → OK (17 tests, 147 assertions).
+- Full Unit suite → OK 1424/0 (17 skipped, 17287 assertions) — was 1412 at HEAD e0568fd; +12 = 11 new
+  DbRateLimiterTest + 1 net-new CommonServicesProviderTest.
+- `phpstan analyze --no-progress` (L9, no baseline) on the 4 changed files → [OK] No errors.
+- `phpcs --standard=PSR12` on the 4 changed files → clean (exit 0).
+- psalm skipped (env: box PHP < psalm-required).
