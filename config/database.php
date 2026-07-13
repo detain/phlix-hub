@@ -8,6 +8,23 @@ $mysql = [
     'user'     => getenv('HUB_DB_USER') ?: 'phlix_hub',
     'password' => getenv('HUB_DB_PASSWORD') ?: 'phlix_hub',
     'database' => getenv('HUB_DB_NAME') ?: 'phlix_hub',
+
+    // Coroutine connection POOL (default ON). Each coroutine leases its own
+    // connection, so no two coroutines ever multiplex queries onto ONE PDO
+    // socket. Without it, the single shared socket desyncs under the Swoole
+    // runtime hook — every fetch returns the PREVIOUS query's result set
+    // ("lag-by-one"), which is what intermittently 500'd/401'd the authed API
+    // (`/api/v1/me`, `me/servers`, `auth/me`) under concurrency even though the
+    // per-connection query mutex was intact. Set DB_POOL_ENABLED=0 to fall back
+    // to the single mutex-serialised socket ({@see PhlixMySQLConnection}).
+    // `pool_size` is per-connection-name PER WORKER — keep
+    // (worker count × distinct connection names × pool_size) under MySQL
+    // `max_connections`. Tune via DB_POOL_SIZE.
+    'pool_enabled' => filter_var(
+        getenv('DB_POOL_ENABLED') === false ? '1' : getenv('DB_POOL_ENABLED'),
+        FILTER_VALIDATE_BOOLEAN,
+    ),
+    'pool_size' => (int) (getenv('DB_POOL_SIZE') ?: 8),
 ];
 
 return [

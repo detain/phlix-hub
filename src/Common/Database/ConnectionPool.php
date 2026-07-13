@@ -71,18 +71,48 @@ class ConnectionPool
             /** @var array<string, scalar> $connConfig */
             $connConfig = $config[$name];
 
-            // Use the local PhlixMySQLConnection subclass so positional
-            // arrays passed to query() are re-keyed to 1-indexed before
-            // PDO::bindParam() — workaround for workerman/mysql v1.0.9's
-            // bindMore() bug on PHP 8.x ("Argument #1 must be >= 1" when
-            // saving settings). Type-compatible with the parent Connection.
-            self::$connections[$name] = new PhlixMySQLConnection(
-                (string) $connConfig['host'],
-                (int) $connConfig['port'],
-                (string) $connConfig['user'],
-                (string) $connConfig['password'],
-                (string) $connConfig['database'],
-            );
+            $poolEnabled = (bool) ($connConfig['pool_enabled'] ?? false);
+            $poolSize = is_numeric($connConfig['pool_size'] ?? null)
+                ? (int) $connConfig['pool_size']
+                : 8;
+
+            if ($poolEnabled) {
+                // Coroutine connection POOL: each coroutine leases its OWN
+                // connection for the duration it holds it, so no two coroutines
+                // ever multiplex queries onto ONE PDO socket. This eliminates the
+                // MySQL-protocol response DESYNC that the shared single-socket
+                // {@see PhlixMySQLConnection} suffers under the Swoole runtime
+                // hook: there, even though the per-connection mutex serialises
+                // query() calls, interleaving many coroutines' queries onto one
+                // socket makes each fetch return the PREVIOUS query's result set
+                // ("lag-by-one") — e.g. `GET /api/v1/me`'s servers query returns
+                // the users-row it just fetched, tripping
+                // `ServerInfoHandler: row missing or null user_id` (500) and the
+                // sibling `auth.user_not_found` (401) / `user.not_found` (404).
+                // Mirrors phlix-server's PooledMySQLConnection. Env-gated (default
+                // ON) via `pool_enabled`; set DB_POOL_ENABLED=0 to fall back to
+                // the single mutex-serialised socket.
+                self::$connections[$name] = new PooledMySQLConnection(
+                    (string) $connConfig['host'],
+                    (int) $connConfig['port'],
+                    (string) $connConfig['user'],
+                    (string) $connConfig['password'],
+                    (string) $connConfig['database'],
+                    $poolSize > 0 ? $poolSize : 8,
+                );
+            } else {
+                // Fallback: the single PhlixMySQLConnection subclass — re-keys
+                // positional bind arrays (workerman/mysql v1.0.9 bindMore() bug
+                // on PHP 8.x) and serialises cross-coroutine access via its
+                // per-connection mutex. Type-compatible with the parent.
+                self::$connections[$name] = new PhlixMySQLConnection(
+                    (string) $connConfig['host'],
+                    (int) $connConfig['port'],
+                    (string) $connConfig['user'],
+                    (string) $connConfig['password'],
+                    (string) $connConfig['database'],
+                );
+            }
         }
         return self::$connections[$name];
     }
