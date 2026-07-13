@@ -2445,7 +2445,7 @@ Gates: hub phpunit (247 relevant tests OK), hub phpstan L9 clean on changed file
 Shared-store decision: KEEP per-worker in-memory RateLimiter (NO DB limiter on proxy hot path). :8802 RelayWorker + :8803 ClientRelayWorker are count=1 ⇒ per-worker==global (the DoS surfaces). proxy/jwks/heartbeat run on HUB_WORKERS(2) ⇒ soft-global ≈2×, set per-worker threshold = target÷HUB_WORKERS + document (mirror HB-3.4). DB limiter sketched (mig 040 rate_limits table, LAST_INSERT_ID atomic) = documented FUTURE work only.
 Per-surface policy (per-worker): login 5/900 (unchanged, own instance); proxy ~600/60s key proxy:{userId} (hit AFTER userId gate); heartbeat ~30/60s key heartbeat:{JWT-serverId}; jwks ~120/60s key jwks:{ip}; relay_connect ~10/60s key {ip} (WS close on limit); client_mount ~30/60s key {ip}(+serverId) (WS close).
 Sub-steps (one active per repo, sequential on hub):
-- [ ] HB-4.6a FOUNDATION — per-surface named limiter DI in CommonServicesProvider + `rate_limit` section in config/server.php (mirror `metrics` block); keep RateLimiterInterface→login as back-compat alias. BLOCKS all others.
+- [x] HB-4.6a FOUNDATION (15d6404e; RateLimitProfiles + 6 distinct limiters; suite 1377 green) — per-surface named limiter DI in CommonServicesProvider + `rate_limit` section in config/server.php (mirror `metrics` block); keep RateLimiterInterface→login as back-compat alias. BLOCKS all others.
 - [ ] HB-4.6b proxy re-key+threshold (ServerProxyController + factory HubServicesProvider:587); hit below userId gate.
 - [ ] HB-4.6c heartbeat threshold+keying (HeartbeatHandler + factory :168); +[ ] 4.6d JWKS (HubJwksController + factory :242) — may fold into c.
 - [ ] HB-4.6e :8802 relay-connect limiter NEW (RelayWorker::onWebSocketConnect; resolve from container in onWorkerStart; WS close on limit).
@@ -2462,3 +2462,26 @@ FOUNDATION landed (blocks HB-4.6b–h). All work committed+pushed to master.
 - **EDIT** `tests/Unit/Common/Container/Providers/CommonServicesProviderTest.php` — rewritten for per-surface DI: (1) each `rate_limiter.<surface>` resolves to a RateLimiter with the expected `(max,window)` (max via `peek()->limit`, window via `hit()->resetAt` range-check); (2) login is 5/900; (3) surfaces are DISTINCT instances (spl_object_id uniqueness); (4) a `rate_limit.proxy` override takes effect while others keep defaults; (5) legacy `RateLimiterInterface`/`RateLimiter` still resolve to the login profile.
 Acceptance mapping: config section ✓ (server.php mirrors metrics), named per-surface instances ✓ (RateLimitProfiles + provider loop), back-compat alias ✓ (interface+concrete → login). Call sites intentionally UNTOUCHED (deferred to 4.6b–f).
 Verification: `phpunit --filter CommonServicesProvider` 5/61 green; full suite **1377 pass / 17 skip / 0 fail**; `phpstan analyze` (L9) **0 errors** (full src); `phpcs` PSR12 clean on changed files. psalm = env-skip (PHP 8.3.6 < 8.3.16).
+
+## Implementer — HB-4.6b/c/d — 2026-07-12
+Wired the per-surface named limiters (from 4.6a) into the three HTTP surfaces. All committed+pushed to master.
+
+**4.6b — Proxy (LANDMINE):**
+- `src/Common/Container/Providers/HubServicesProvider.php` — proxy factory now injects `get(RateLimitProfiles::PROXY)` (600/60s) instead of the shared `RateLimiterInterface` login-grade singleton.
+- `src/Http/Controllers/ServerProxyController.php` — MOVED the `hit()` from before the auth gate to AFTER the `$userId==''` 401 gate, and re-keyed it `proxy:{userId}`. Unauth floods now take the cheap 401 with NO limiter write (they never reach the hit). Key = literally `'proxy:' . $userId` (PHPStan proved the IP fallback is dead code because the 401 gate guarantees non-empty `$userId` — dropped the ternary, documented why in the comment). The hit stays synchronous/pre-stream, so a trip throws `RateLimitException` into the OUTER `Application.php` catch, not the streaming-producer catch. No 429 mapping added (that's 4.6g).
+
+**4.6c — Heartbeat:**
+- `HubServicesProvider.php` — HeartbeatHandler factory injects `get(RateLimitProfiles::HEARTBEAT)` (30/60s).
+- `src/Hub/HeartbeatHandler.php` — MOVED the `hit()` to AFTER `validateEnrollmentJwt` + the `payload.server_id === serverId` check, so an unproven id can't mint a bucket. Key unchanged: `heartbeat:{serverId}` (now JWT-proven). Fixes the old 5/900 mis-injection that tripped the legit ~60s cadence.
+
+**4.6d — JWKS:**
+- `HubServicesProvider.php` — HubJwksController factory injects `get(RateLimitProfiles::JWKS)` (120/60s). `HubJwksController` source already keyed `jwks:{ip}` at the correct spot — no source change needed there.
+
+NOT touched: `ClientMountController` factory (still `RateLimiterInterface` → login) — that's 4.6f; the `RateLimiterInterface`/`RateLimiter` back-compat alias — kept per constraints; no 429 mapping (4.6g); no WS surfaces (4.6e/f).
+
+**Tests (no `limited:false` stubs left on these three surfaces):**
+- `tests/Unit/Http/Controllers/ServerProxyControllerTest.php` — `controller()` helper now uses a REAL `RateLimiter(60,600)` (optional 4th param to inject a clocked one); the two reply-timeout inline mocks swapped to real limiters. ADDED `test_normal_hls_segment_burst_of_100_never_trips_proxy_limiter` (100 authed segment GETs, frozen clock/one window → all pass) and `test_proxy_limiter_trips_after_exceeding_600_in_window` (599 pass, 600th throws `RateLimitException` — note `limited` is `count>=max`).
+- `tests/Unit/Hub/HeartbeatHandlerTest.php` — `createRateLimiter()` returns a real `RateLimiter(60,30)`; ADDED `testLegitimateHeartbeatCadenceNeverTrips` (20 heartbeats at a simulated +60s cadence through ONE handler → never trips).
+- `tests/Unit/Hub/JwksControllerTest.php` — real `RateLimiter(60,120)`; ADDED `testJwksLimiterTripsAfterExceeding120PerIpInWindow` (119 pass, 120th trips, keyed by ip).
+
+Verification: affected filters green; FULL suite **1381 pass / 17 skip / 0 fail**; `phpstan analyze` (L9) **0 errors**; `phpcs` PSR12 on changed src clean (one pre-existing 142-char WARNING on the untouched ServerProxyController factory return line). psalm = env-skip (PHP 8.3.6 < 8.3.16).

@@ -59,15 +59,6 @@ class HeartbeatHandler
      */
     public function handle(string $serverId, string $enrollmentJwt, HeartbeatDto $heartbeat): void
     {
-        // HB-4.6: rate limit by server id before any other processing.
-        $state = $this->rateLimiter->hit('heartbeat:' . $serverId);
-        if ($state->limited) {
-            throw new RateLimitException(
-                resetAt: $state->resetAt,
-                remaining: 0,
-            );
-        }
-
         $tokenKid = JwtHeader::kid($enrollmentJwt);
         if ($tokenKid === null) {
             throw new InvalidArgumentException('ENROLLMENT_TOKEN_EXPIRED');
@@ -79,6 +70,19 @@ class HeartbeatHandler
 
         if (($payload['server_id'] ?? '') !== $serverId) {
             throw new InvalidArgumentException('SERVER_NOT_FOUND');
+        }
+
+        // HB-4.6c: rate limit keyed by the JWT-proven server id, AFTER the
+        // enrollment-JWT validation above so an unproven id can never mint a
+        // bucket. The `rate_limiter.heartbeat` profile is 30/60s — generous
+        // for the legitimate ~60s heartbeat cadence (the old 5/900 login-grade
+        // limiter tripped normal heartbeats).
+        $state = $this->rateLimiter->hit('heartbeat:' . $serverId);
+        if ($state->limited) {
+            throw new RateLimitException(
+                resetAt: $state->resetAt,
+                remaining: 0,
+            );
         }
 
         $now = time();

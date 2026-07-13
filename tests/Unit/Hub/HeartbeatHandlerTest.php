@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Hub;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
-use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\HeartbeatHandler;
@@ -35,14 +36,18 @@ final class HeartbeatHandlerTest extends TestCase
 
     private function createRateLimiter(): RateLimiterInterface
     {
-        $limiter = $this->createMock(RateLimiterInterface::class);
-        $limiter->method('hit')->willReturn(new RateLimitState(1, 4, time() + 900, false, 5));
-        return $limiter;
+        // HB-4.6c: exercise the REAL per-surface heartbeat RateLimiter (30/60s)
+        // rather than a limited:false stub — a single hit never trips.
+        return new RateLimiter(60, 30);
     }
 
-    private function createHandler(Connection $db, EnrollmentJwtService $jwtService, StructuredLogger $logger): HeartbeatHandler
-    {
-        return new HeartbeatHandler($db, $jwtService, $logger, $this->createRateLimiter());
+    private function createHandler(
+        Connection $db,
+        EnrollmentJwtService $jwtService,
+        StructuredLogger $logger,
+        ?RateLimiterInterface $rateLimiter = null,
+    ): HeartbeatHandler {
+        return new HeartbeatHandler($db, $jwtService, $logger, $rateLimiter ?? $this->createRateLimiter());
     }
 
     protected function tearDown(): void
@@ -92,6 +97,57 @@ final class HeartbeatHandlerTest extends TestCase
         );
 
         $handler->handle($serverId, $token, $heartbeat);
+        self::assertTrue(true);
+    }
+
+    /**
+     * HB-4.6c headline bug: the old 5/900 login-grade limiter tripped the
+     * legitimate ~60s heartbeat cadence. Drive 20 heartbeats at a 60s cadence
+     * (simulated advancing clock) through ONE handler backed by the REAL
+     * `rate_limiter.heartbeat` profile (30/60s) and assert none is ever refused
+     * with {@see RateLimitException}. Keyed by the JWT-proven server id.
+     */
+    public function testLegitimateHeartbeatCadenceNeverTrips(): void
+    {
+        $serverId = 'server-cadence-test';
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) use ($serverId) {
+            if (str_contains($sql, 'FOR UPDATE')) {
+                return [['id' => $serverId]];
+            }
+            return [];
+        });
+
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
+        $logger = $this->createMock(StructuredLogger::class);
+
+        // Advancing clock: +60s per heartbeat (the legitimate cadence).
+        $now = 1_000_000;
+        $clock = static function () use (&$now): int {
+            return $now;
+        };
+        $rateLimiter = new RateLimiter(60, 30, 10000, $clock);
+        $handler = $this->createHandler($db, $jwtService, $logger, $rateLimiter);
+
+        $token = $jwtService->createEnrollmentJwt($serverId);
+
+        for ($i = 0; $i < 20; $i++) {
+            $heartbeat = new HeartbeatDto(
+                serverId: $serverId,
+                version: '0.11.0',
+                timestamp: $now,
+                uptimeSeconds: 86400,
+                activeSessions: 0,
+                activeTranscodes: 0,
+                hostnameCandidates: ['https://192.168.1.100:32400'],
+            );
+            // Must not throw — a legitimate 60s-cadence heartbeat is never limited.
+            $handler->handle($serverId, $token, $heartbeat);
+            $now += 60;
+        }
+
         self::assertTrue(true);
     }
 

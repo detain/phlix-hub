@@ -406,22 +406,32 @@ final class ServerProxyController
      */
     public function proxy(Request $request, array $params): Response
     {
-        // HB-4.6: rate limit by client IP before any other processing.
-        $ip = $request->remoteIp !== '' ? $request->remoteIp : 'unknown';
-        $state = $this->rateLimiter->hit('proxy:' . $ip);
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            // HB-4.6b LANDMINE: unauthenticated floods take this cheap 401 —
+            // NOT a limiter write. The proxy limiter is deliberately placed
+            // AFTER this auth gate so an unauthed request never mints a bucket.
+            return (new Response())->status(401)->json([
+                'error' => 'Unauthorized',
+                'code' => 'auth.required',
+            ]);
+        }
+
+        // HB-4.6b: rate limit AFTER the auth gate, keyed by the proven user id
+        // (the `rate_limiter.proxy` profile is generous — 600/60s — so a normal
+        // multi-segment HLS playback burst across variants never trips it).
+        // We key by userId (never IP) because the 401 gate above guarantees an
+        // unauthenticated request never reaches here — it takes the cheap 401
+        // instead of minting a per-IP bucket. The hit runs synchronously here,
+        // before any streaming producer starts, so a trip throws
+        // RateLimitException into the OUTER Application catch, not the
+        // streaming-producer catch.
+        $state = $this->rateLimiter->hit('proxy:' . $userId);
         if ($state->limited) {
             throw new RateLimitException(
                 resetAt: $state->resetAt,
                 remaining: 0,
             );
-        }
-
-        $userId = $request->userId ?? '';
-        if ($userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'auth.required',
-            ]);
         }
 
         $serverId = $params['id'] ?? '';

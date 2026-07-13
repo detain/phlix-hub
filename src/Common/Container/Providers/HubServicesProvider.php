@@ -55,6 +55,7 @@ use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
@@ -175,7 +176,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $rateLimiter,
                 );
             })->parameter('jwtService', get(EnrollmentJwtService::class))
-                ->parameter('rateLimiter', get(RateLimiterInterface::class)),
+                ->parameter('rateLimiter', get(RateLimitProfiles::HEARTBEAT)),
 
             HubSettingsRepository::class => factory(static function (
                 Connection $db,
@@ -243,7 +244,7 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): HubJwksController {
                 return new HubJwksController($keyManager, $rateLimiter);
             })->parameter('keyManager', get(Ed25519KeyManager::class))
-                ->parameter('rateLimiter', get(RateLimiterInterface::class)),
+                ->parameter('rateLimiter', get(RateLimitProfiles::JWKS)),
 
             ServerClaimController::class => factory(static function (
                 ClaimRequestHandler $handler,
@@ -590,7 +591,7 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('serverInfo', get(ServerInfoHandler::class))
                 ->parameter('bridge', get(RelayProxyBridge::class))
                 ->parameter('sessionManager', get(RelaySessionManager::class))
-                ->parameter('rateLimiter', get(RateLimiterInterface::class)),
+                ->parameter('rateLimiter', get(RateLimitProfiles::PROXY)),
 
             HubSettingsController::class => factory(static function (
                 HubSettingsRepository $settings,

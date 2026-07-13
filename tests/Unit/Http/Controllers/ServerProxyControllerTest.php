@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
-use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
@@ -81,8 +82,12 @@ final class ServerProxyControllerTest extends TestCase
         return $req;
     }
 
-    private function controller(ServerInfoHandler $info, RelayProxyBridge $bridge, ?RelaySessionManager $sessionManager = null): ServerProxyController
-    {
+    private function controller(
+        ServerInfoHandler $info,
+        RelayProxyBridge $bridge,
+        ?RelaySessionManager $sessionManager = null,
+        ?RateLimiterInterface $rateLimiter = null,
+    ): ServerProxyController {
         if ($sessionManager === null) {
             $sessionManager = $this->createMock(RelaySessionManager::class);
             // Default: quota check always allows (quota not exceeded), concurrent
@@ -92,15 +97,10 @@ final class ServerProxyControllerTest extends TestCase
                 ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0],
             );
         }
-        // Default: rate limiter always returns non-limited state.
-        $rateLimiter = $this->createMock(RateLimiterInterface::class);
-        $rateLimiter->method('hit')->willReturn(new RateLimitState(
-            count: 1,
-            remaining: 4,
-            resetAt: time() + 900,
-            limited: false,
-            limit: 5,
-        ));
+        // HB-4.6b: use the REAL per-surface proxy RateLimiter (600/60s) rather
+        // than a limited:false stub, so tests exercise the actual limiter. A
+        // single hit per test never trips 600/60s.
+        $rateLimiter ??= new RateLimiter(60, 600);
         return new ServerProxyController($info, $bridge, $this->createMock(StructuredLogger::class), $sessionManager, $rateLimiter);
     }
 
@@ -188,6 +188,64 @@ final class ServerProxyControllerTest extends TestCase
 
         $response = $controller->proxy($this->request('GET', null), ['id' => 'srv-1', 'path' => 'api/v1/libraries']);
         $this->assertSame(401, $response->statusCode);
+    }
+
+    /**
+     * HB-4.6b LANDMINE: a normal multi-segment HLS playback burst (tens of
+     * segment/playlist GETs per minute across variants) must NEVER trip the
+     * proxy limiter. Drive 100 authenticated proxy GETs through a REAL
+     * `rate_limiter.proxy` (600/60s) with a frozen clock (single window) and
+     * assert none throw {@see RateLimitException} — the limiter is keyed by the
+     * authenticated user (`proxy:{userId}`) placed AFTER the auth gate.
+     */
+    public function test_normal_hls_segment_burst_of_100_never_trips_proxy_limiter(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(null); // owner null → 404 after the hit
+
+        // Frozen clock → all 100 hits fall in ONE window (worst case for a burst).
+        $rateLimiter = new RateLimiter(60, 600, 10000, static fn (): int => 1_000_000);
+        $controller = $this->controller($info, $this->bridge(static fn () => null), null, $rateLimiter);
+
+        for ($i = 0; $i < 100; $i++) {
+            $response = $controller->proxy(
+                $this->request('GET', 'user-1'),
+                ['id' => 'srv-1', 'path' => 'hls/job/seg-' . $i . '.ts'],
+            );
+            // 404 (owner null) proves we passed the limiter without a trip.
+            $this->assertSame(404, $response->statusCode, 'segment #' . $i . ' should pass the limiter');
+        }
+    }
+
+    /**
+     * HB-4.6b: exceeding the 600/60s proxy budget within a single window DOES
+     * trip — the 601st hit throws {@see RateLimitException} (mapped to 429 later
+     * in HB-4.6g). Confirms the limiter is real, not a `limited:false` stub.
+     */
+    public function test_proxy_limiter_trips_after_exceeding_600_in_window(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(null);
+
+        $rateLimiter = new RateLimiter(60, 600, 10000, static fn (): int => 1_000_000);
+        $controller = $this->controller($info, $this->bridge(static fn () => null), null, $rateLimiter);
+
+        // First 599 hits are within budget (owner null → 404); the limiter trips
+        // when the count reaches the 600/60s ceiling (limited when count >= max).
+        for ($i = 0; $i < 599; $i++) {
+            $response = $controller->proxy(
+                $this->request('GET', 'user-1'),
+                ['id' => 'srv-1', 'path' => 'hls/job/seg-' . $i . '.ts'],
+            );
+            $this->assertSame(404, $response->statusCode, 'hit #' . $i . ' should be within budget');
+        }
+
+        // The 600th hit reaches the ceiling and trips the limiter.
+        $this->expectException(RateLimitException::class);
+        $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'hls/job/seg-600.ts'],
+        );
     }
 
     /**
@@ -1855,8 +1913,7 @@ final class ServerProxyControllerTest extends TestCase
      */
     public function test_reply_timeout_never_shortens_a_higher_injected_default(): void
     {
-        $rateLimiter = $this->createMock(RateLimiterInterface::class);
-        $rateLimiter->method('hit')->willReturn(new RateLimitState(1, 4, time() + 900, false, 5));
+        $rateLimiter = new RateLimiter(60, 600);
         $controller = new ServerProxyController(
             $this->createMock(ServerInfoHandler::class),
             $this->bridge(static fn () => null),
@@ -1880,8 +1937,7 @@ final class ServerProxyControllerTest extends TestCase
      */
     public function test_reply_timeout_widens_a_lower_injected_default_only_for_streaming(): void
     {
-        $rateLimiter = $this->createMock(RateLimiterInterface::class);
-        $rateLimiter->method('hit')->willReturn(new RateLimitState(1, 4, time() + 900, false, 5));
+        $rateLimiter = new RateLimiter(60, 600);
         $controller = new ServerProxyController(
             $this->createMock(ServerInfoHandler::class),
             $this->bridge(static fn () => null),
