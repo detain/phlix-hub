@@ -1840,3 +1840,61 @@ semantics (they are re-set on the next lifecycle/decode event; `GREATEST` merges
 only a fully activity-free window under standing streams under-reports, which carries no new signal.
 
 **2 FINDINGS.**
+
+## Fixer — HB-4.1 (2 review findings) — 2026-07-12
+
+Both Medium findings fixed; scope kept to them (did NOT touch `Tunnel.php`, reapers, or txn-locking;
+reused the existing `MetricsCollector` API — no new recorders). Commits: **fix** `9c4cdd9` (src) +
+**tests** `4d68b1e`. Full suite **1359 pass / 0 fail / 17 skip** (baseline 1356 + 3 net new),
+phpstan L9 **0 errors**, phpcs PSR-12 `-n src/` **clean** (psalm skipped — box PHP 8.3.6 < required;
+migrate/DB N/A — not findings).
+
+**Finding 1 (reply-drop at the wrong site) — CLOSED.** Injected the SAME per-worker shared
+`MetricsCollector` singleton into `RelayProxyBridge` and count the operationally-critical channel-push
+drop where it actually happens:
+- `src/Relay/RelayProxyBridge.php` — added `use …MetricsCollector;` + a promoted
+  `private readonly ?MetricsCollector $metrics = null` (last ctor param, BC-safe for the existing
+  positional test constructions); `dropReply()` now calls `$this->metrics?->recordRelayReplyDrop()`
+  before its existing `warning()`. `dropReply` is the H-R8-named drop (a reply discarded because the
+  client's consumer channel is full/gone — the H-H6 stall / H-H3 back-pressure failure mode).
+- `src/Common/Container/Providers/HubServicesProvider.php:~362` — the `RelayProxyBridge` DI factory now
+  takes `MetricsCollector $metrics` bound `->parameter('metrics', get(MetricsCollector::class))` and
+  constructs via named arg `metrics: $metrics`, mirroring the `RelayProxyManager` factory. Both metrics
+  services are PHP-DI singletons per worker, so bridge collector === `get(MetricsCollector::class)` ===
+  the registry `MetricsFlushService::flush()` drains — proven by the new wiring test (`assertSame`).
+- **Orphan-frame count decision: KEPT.** The impl's existing count at `RelayProxyManager::onResponseFrame`
+  (`:351`, an inbound HTTP_RESPONSE for an unknown/torn-down request) is a DISTINCT event from the
+  bridge's channel-push drop; both legitimately feed `relay_reply_drops` and are counted at different
+  sites (manager = orphan inbound server frame; bridge = reply the client couldn't take). No single
+  event is double-counted — a given reply is either dropped at the manager (unknown request) OR handed
+  to the bridge and possibly dropped there, never both.
+
+**Finding 2 (latency histogram streaming-duration pollution) — CLOSED.** Record ONLY first-byte into
+the migration-036 histogram (its documented meaning); removed the total observation.
+- `src/Relay/RelayProxyManager.php:~413` — deleted the `$totalMs = … ; recordRelayLatency($totalMs)`
+  call in the KIND_END block (the one that, for a streaming response, recorded send→END = the whole
+  stream/session duration, up to the ~900s ceiling, into `relay_latency_h_gt_5000` → a "latency > 5s"
+  alert on every normal playback). First-byte recording is unchanged and still fires once per request
+  for BOTH buffered and streaming (legit + useful for both). `sent_at` is retained (still used by
+  first-byte + the sweep timer). No other path feeds `total` into the histogram (grep-verified: the
+  only `recordRelayLatency` caller is now the first-byte site).
+
+**Tests (+3 net new; 2 adjusted).**
+- `tests/Unit/Relay/RelayProxyBridgeTest.php` — `test_drop_reply_records_a_reply_drop_on_the_injected_collector`:
+  a REAL `MetricsCollector`+`MetricsRegistry`; a full/gone fake channel + no coroutine context (cid=-1
+  under plain PHPUnit) drives `onReply` → drop path → `dropReply`; asserts `relayReplyDrops === 1`.
+- `tests/Unit/Relay/RelayProxyBridgeWiringTest.php` (new) — DI-constructed bridge has a non-null
+  collector that is the SAME shared instance/registry the flush drains (mirrors
+  `RelayProxyManagerWiringTest`; guards the exact injection regression).
+- `tests/Unit/Relay/RelayProxyManagerTest.php` — the two latency tests now assert exactly ONE
+  observation per request: `test_buffered_request_records_only_first_byte_latency` (was "…first_byte_and_total",
+  final assert 2→1) and `test_streaming_request_records_only_first_byte_latency_not_stream_duration`
+  (was "…first_byte_and_total"). The streaming test BACKDATES `sent_at` by 1000s (after first-byte was
+  recorded) so a would-be total would land in the `>5000ms` bucket, then asserts total observations == 1
+  AND the `>5s` overflow bucket == 0 — proving a long stream never pollutes the histogram.
+
+Verify (this box, PHP 8.3.6 + PCOV):
+- `phpunit --filter 'RelayProxyBridge|RelayProxyManager|MetricsFlush|MetricsRegistry'` → OK (106 tests).
+- full suite → **OK 1359 / 16132 assertions / 17 skipped / 0 failures**.
+- `phpstan analyse --no-progress` → **[OK] No errors** (L9).
+- `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
