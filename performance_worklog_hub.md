@@ -2000,3 +2000,45 @@ the predicate was wrong.
 
 **AC mapping:** (1) predicate AND→OR with correct precedence ✅; (2) misleading docblocks corrected ✅;
 (3) test rewritten behaviorally incl. expired-never-revoked deletion proof ✅.
+
+## Reviewer (per-step) — HB-4.2 — 2026-07-12
+
+Reviewed `git diff 847b0a1..0322fa8` (0abc3d2 fix+docs, 0322fa8 tests) against
+`src/Hub/ClientRelayTokenService.php`, `src/Relay/IdleReaper.php`, and
+`tests/Unit/Hub/ClientRelayTokenServiceTest.php`.
+
+**NO FINDINGS**
+
+1. **Predicate correctness — confirmed.** `pruneExpiredTokens()` (`ClientRelayTokenService.php:237-241`)
+   now emits `DELETE FROM client_relay_tokens WHERE expires_at < NOW() - INTERVAL 1 DAY OR revoked_at
+   IS NOT NULL`. This is a single `A OR B` with no `AND`, so there is no misgrouping risk: `-`/`INTERVAL`
+   bind tighter than `<`, and `<` / `IS NOT NULL` bind tighter than `OR`, yielding exactly
+   `(expires_at < (NOW() - INTERVAL 1 DAY)) OR (revoked_at IS NOT NULL)`. No parens needed. Case check:
+   expired-never-revoked → A true → deleted (the bug's core case); revoked-but-fresh → B true → deleted;
+   fresh-active → A false, B false → survives (so NOT a delete-all). Matches the plan AC (line 758) and
+   H-D2 recommended fix verbatim. Static SQL, no user input, no binds → no injection / colon-free binds
+   N/A.
+
+2. **Docs accurate — confirmed.** The `pruneExpiredTokens` docblock (`:211-229`) states OR semantics,
+   an explicit "operator is OR, not AND" note, and a precedence note; `IdleReaper` `@param` (`:64`),
+   class-level bullet (`:229-230`), and call-site comment (`:249-251`) all describe "expired more than
+   1 day ago OR were revoked". Grep of `src/` finds no lingering "both … AND …" prune wording (remaining
+   `AND revoked_at` hits are unrelated revoke-UPDATE / sharing / federation queries).
+
+3. **Tests genuinely behavioral, not tautological — confirmed.**
+   `test_prune_deletes_expired_never_revoked_row_behaviorally` extracts the WHERE operator from the
+   emitted SQL and evaluates it (`usesOr ? (A||B) : (A&&B)`) over four fixtures; it asserts the
+   expired-never-revoked row IS pruned and 3-of-4 deleted with fresh-active surviving — a regression to
+   AND evaluates the fixture as AND, keeps expired-never-revoked, and fails both assertions.
+   `test_prune_expired_tokens_or_joins_expiry_and_revoked_predicates` regex-extracts the join operator
+   and asserts `OR` not `AND`. Both genuinely guard the fix.
+
+4. **Scope / no regression — confirmed.** Diff touches only the two source files, the test, and the
+   worklog. No new index (relies on the existing `expires_at` index per AC — full-OR not using it
+   tightly is acceptable). Sweep wiring intact: `IdleReaper::reapDbMaintenance` still calls
+   `pruneExpiredTokens()` on the maintenance worker (`IdleReaper.php:252`), only docblocks/comments
+   changed there. `Tunnel.php` / reaper machinery / txn-locking untouched.
+
+Gates (this box, PHP 8.3.6): `phpstan analyse` L9 → [OK] No errors;
+`phpunit --filter 'ClientRelayTokenService|IdleReaper'` → OK (26 tests, 89 assertions). Verdict:
+**NO FINDINGS**.
