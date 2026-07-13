@@ -13,6 +13,7 @@ namespace Phlix\Hub\Relay;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\ClientRelayTokenService;
+use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Workerman\Timer;
@@ -68,6 +69,12 @@ final class IdleReaper
      *                                                            server_heartbeats table is pruned
      *                                                            on each {@see reapDbMaintenance()}
      *                                                            (HB-4.3).
+     * @param Ed25519KeyManager|null       $keyManager           Optional Ed25519 key manager whose
+     *                                                            expired previous-key sidecar is
+     *                                                            purged on each
+     *                                                            {@see reapDbMaintenance()} (HB-4.7 /
+     *                                                            H-A1) — the low-frequency filesystem
+     *                                                            unlink kept off the JWT-verify path.
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
@@ -77,6 +84,7 @@ final class IdleReaper
         private readonly ?RelaySessionManager $sessionManager = null,
         private readonly ?HeartbeatHandler $heartbeatHandler = null,
         private readonly ?ClientRelayTokenService $clientRelayTokenService = null,
+        private readonly ?Ed25519KeyManager $keyManager = null,
     ) {
     }
 
@@ -228,6 +236,12 @@ final class IdleReaper
      *    the most recent ~100 `server_heartbeats` rows per server.
      *  - HB-4.2 {@see ClientRelayTokenService::pruneExpiredTokens()}: prune
      *    client relay tokens that expired more than 1 day ago OR were revoked.
+     *  - HB-4.7 (H-A1) {@see Ed25519KeyManager::purgeExpiredPreviousKey()}: unlink
+     *    the rotated-out previous-key sidecar once its overlap window has lapsed.
+     *    The verify path (`loadPreviousKey`) intentionally does NOT unlink on
+     *    expiry (no filesystem I/O on the hot JWT-verify path); this periodic
+     *    maintenance pass is where the stale sidecar is actually reclaimed
+     *    instead of lingering until the next {@see Ed25519KeyManager::rotate()}.
      *
      * This method is public so it can be called directly by tests or manually
      * triggered. Normally it is called automatically by the timer armed in
@@ -250,6 +264,12 @@ final class IdleReaper
         // were revoked (H-D2). Expired-never-revoked tokens are the common case
         // (~1 h TTL, rarely revoked), so the OR is what actually bounds growth.
         $this->clientRelayTokenService?->pruneExpiredTokens();
+
+        // HB-4.7 (H-A1): Purge the rotated-out Ed25519 previous-key sidecar once
+        // its overlap window has lapsed. Kept OFF the JWT-verify path
+        // (loadPreviousKey does not unlink on expiry); this low-frequency
+        // maintenance-worker filesystem unlink is where it is reclaimed.
+        $this->keyManager?->purgeExpiredPreviousKey();
     }
 
     /**

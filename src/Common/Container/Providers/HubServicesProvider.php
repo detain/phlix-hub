@@ -390,6 +390,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 RelaySessionManager $sessionManager,
                 HeartbeatHandler $heartbeatHandler,
                 ClientRelayTokenService $clientRelayTokenService,
+                Ed25519KeyManager $keyManager,
             ) use ($appConfig): IdleReaper {
                 /** @var int $interval */
                 $interval = is_int($appConfig['relay_idle_reaper_interval'] ?? null)
@@ -408,11 +409,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $sessionManager,
                     $heartbeatHandler,
                     $clientRelayTokenService,
+                    $keyManager,
                 );
             })->parameter('tunnelManager', get(TunnelManager::class))
                 ->parameter('sessionManager', get(RelaySessionManager::class))
                 ->parameter('heartbeatHandler', get(HeartbeatHandler::class))
-                ->parameter('clientRelayTokenService', get(ClientRelayTokenService::class)),
+                ->parameter('clientRelayTokenService', get(ClientRelayTokenService::class))
+                ->parameter('keyManager', get(Ed25519KeyManager::class)),
 
             ServerReaper::class => factory(static function (
                 Connection $db,
