@@ -2616,3 +2616,118 @@ Verified (no edit needed): migrations `038_relay_user_quotas_concurrency.sql` an
 (honest gaps): server-side SV-4.2 stop-work half (different repo); a strict global rate/quota cap
 (needs a shared store — documented as future work); live on-box verification of 429/WS-close/quota
 behavior is owed.
+
+## Orchestrator — HUB FULLY COMPLETE for this pass (2026-07-12, perf-5)
+- Code: HB W0–W4 all done/confirmed. Docs: scribe 7767589 (hub CHANGELOG+README) + phlix-docs a9e08dd (relay-tuning page). Version NOT bumped (Unreleased convention; VERSION=0.2.0 tracks last release).
+- ONLY remaining hub work = on-box verifies (live 429 / WS close-1013 / quota + concurrent-stream cap behavior on the box) — cannot run here.
+
+## ON-BOX VERIFY (perf-5, 2026-07-13) — deploy hub 868fcd4→7767589, server 679a4ea5→3c73fe0a; both healthy, migrations clean
+PASS: HB-4.9 relay_cancels metric live; >64KB bodied-relay round-trip OK.
+CANNOT-VERIFY: WS close-1013 (no ws tooling on box; source wired CLOSE_TRY_AGAIN_LATER=1013).
+🔴 CRITICAL (NEW live bug): authenticated hub API (/api/v1/me, /auth/me, /me/servers, ownership) returns INCONSISTENT per-request for the SAME valid token — cycles 401 auth.user_not_found / 404 user.not_found / 500 "ServerInfoHandler: row missing or null user_id" (ServerInfoHandler.php:194); only ~30-50% succeed. Correlates with which of 4 HUB_WORKERS serves it. Reproduced w/ minted + real-register tokens, new + admin(detain) accounts; user confirmed present in phlix_hub.users via SQL. Smells like [[project_workerman_mysql_coroutine_sharing]] resurfacing in ServerInfoHandler multi-param query. Breaks SPA /auth/me init ~half of loads. → URGENT FIX (in progress).
+⚠️ HB-4.6 login 429 PARTIAL FAIL: 5/900 NOT reliably enforced — HUB_WORKERS=4, per-worker in-memory limiter ⇒ effective ~20/900 (first 429 at attempt ~9). RateLimitProfiles docblock wrongly implies login is count=1/global. Login is the one surface where per-worker weakening = real brute-force concern. → FOLLOW-UP: tighten login threshold ÷HUB_WORKERS OR shared-store for the login bucket.
+
+## 🔴 HUB AUTH INCIDENT — investigation (2026-07-13, perf-5) — NO speculative fix pushed (agent correctly refused)
+Symptom: /api/v1/me,/auth/me,/me/servers,ownership intermittently 401 auth.user_not_found / 404 / 500 "ServerInfoHandler: row missing or null user_id" (:194); ~30-50% ok; correlates w/ which of 4 HTTP workers.
+Diagnosis: 500 signature = a users-table row bled into a servers-table query = cross-coroutine result contamination on one shared 'mysql' socket. BUT PhlixMySQLConnection defenses (per-conn coroutine mutex $queryLock, txn-scoped mutex, emulated+buffered prepares) are ALL PRESENT + unmodified (last touched only by header commit). Under this code HTTP-worker crossing shouldn't be reachable → something environmental defeats the guard.
+PRIME SUSPECT: Swoole 6.2.1 on box (tree has 6.2.1; mutex/getCid validated on older Swoole; 6.x changed coroutine/hook semantics). If getCid()==-1 in HTTP worker OR Channel-mutex changed → guard universally bypassed → crossing. Runtime-bump regression, not app code (explains no-code-change onset). update_hub.sh runs composer install → could have bumped Swoole.
+Confirmed landmine (but WRONG process for this symptom): RelaySessionManager::registerServer (:104-137) runs an explicit txn on shared 'mysql' (HubServicesProvider:276 get(Connection::class)) — the only explicit txn left on 'mysql' (others moved to 'txn' conn in #150/#151). Runs on RelayWorker(:8802,count=1), NOT HTTP workers. → FIX #1 (hardening, correct regardless): wire RelaySessionManager to ConnectionPool::getConnection('txn') + test.
+Amplifier: AuthMiddleware negative-existence cache (HB-1.4 de33313) caches userExists=false 5s/worker → sticky 401 per worker.
+DECISIVE NEXT (box diag, read-only): (1) git -C /opt/phlix-hub rev-parse HEAD + status (is it 7767589 unmodified?); (2) php --ri swoole version + composer.lock swoole pin; (3) reproduce 200/401/404/500 distribution; (4) cid+concurrency probe: does getCid() return ≥0 in hub's coroutine ctx, and does result-crossing reproduce through PhlixMySQLConnection under Swoole 6.2.1? → determines the real fix (don't-gate-mutex-on-getCid / per-coroutine conn lease / pin Swoole).
+
+## 🔴 HUB AUTH INCIDENT — box diagnosis (2026-07-13) — Swoole-defeats-getCid hypothesis REFUTED
+- Deployed 7767589 clean; Swoole 6.2.1 (installed ~3wk ago, NOT by today's deploy); PHP 8.5.4.
+- getCid() CORRECT (−1 outside, unique cids in concurrent coroutines). PhlixMySQLConnection mutex HELD 0/20 crossings in a controlled 20-coroutine real-connection+ServerInfoHandler test.
+- Live symptom REPRODUCES under real HTTP load, scales w/ concurrency: 40 concurrent → 17×200/12×500/11×401. 9× the 500 sig in .logs today post-restart.
+- Verdict (ii): mutex present+functioning in minimal test but live crossing reproduces under real load; couldn't shrink to minimal DB repro.
+- NEW LEADS (diagnostic): (a) instrument queryLockHolder/cid under real traffic; (b) audit whether /api/v1/me path (AuthMiddleware UserRepository probe, AuthManager::getCurrentUser, ServerInfoHandler::getServersForUser) touches the SEPARATE 'txn' connection instance concurrently with 'mysql' (AuthServicesProvider:127, HubServicesProvider:158/173).
+- ★ ORCHESTRATOR PRIME SUSPECT: Http/RequestContext.php coroutine-local userId via support\Context — if NOT correctly coroutine-isolated under Workerman Events\Swoole + Swoole 6, request A's userId bleeds to request B → wrong/empty user → 401 user_not_found / ServerInfoHandler servers-query with crossed/empty user_id → the 500. DB-FREE testable (N concurrent coroutines set+yield+read own userId). → investigation+fix in progress.
+
+## 🔴→✅ HUB AUTH INCIDENT FIXED + DEPLOYED (2026-07-13, perf-5) — commit ed8a5ad
+ROOT CAUSE (confirmed live): all request coroutines share ONE workerman/mysql socket (1 PhlixMySQLConnection/worker DI singleton). Per-query mutex correctly SERIALISES but that's insufficient — MySQL-protocol response DESYNC "lag-by-one" on the shared socket: each fetchAll() returns the result set of whichever query ran immediately before it. /api/v1/me: getServersForUser gets the users row → ServerInfoHandler:194 500; userExists/getCurrentUser get wrong/empty → 401/404. RequestContext hypothesis REFUTED (getUserId never read = dead code).
+FIX: ported phlix-server PooledMySQLConnection — each coroutine leases its OWN connection (transaction-affine, released via Coroutine::defer). config/database.php pool_enabled default ON (DB_POOL_ENABLED/DB_POOL_SIZE); disable→single mutex socket. Files: src/Common/Database/PooledMySQLConnection.php (new), ConnectionPool.php (pool selection), config/database.php, tests/Unit/Common/Database/PooledMySQLConnectionTest.php (new).
+VERIFIED LIVE: 40-concurrent ~29/7/4 → 100% 200 (tested 4×40, 2×80); MySQL threads peaked 43 < 151. Gates: phpunit 1399 pass, phpstan L9 clean, phpcs clean (psalm env-skip). DEPLOYED via update_hub.sh → box at ed8a5ad, /health 200, diagnostics cleaned, box git-clean.
+phlix-server: NO change (already ships PooledMySQLConnection pool-ON — already protected). sugarcraft: N/A.
+REVIEW owed (resume). Follow-up: remove dead RequestContext (§6); reconsider HB-4.6 login limiter now a shared DB-backed limiter is feasible with the pool.
+
+## Reviewer (per-step, hub PooledMySQLConnection ed8a5ad) — 2026-07-13
+Scope: commit ed8a5ad (per-coroutine DB connection pool; already deployed). READ-ONLY.
+
+Verdict: the fix is sound. The `PooledMySQLConnection` class body (from `final class` onward)
+is a BYTE-IDENTICAL port of phlix-server's production-proven implementation (verified by diff),
+and the only hub-specific new code is the `ConnectionPool` selection branch + the `config/database.php`
+pool knobs, both correct. Confirmed:
+- Per-coroutine lease + reliable release: lease keyed by `getCid()`; released via `Coroutine::defer`
+  which fires on EVERY coroutine exit (incl. exception unwind). Dirty (open-txn) connections are
+  rolled back before return to idle, so an interrupted coroutine can't poison the next lessee.
+- Transaction affinity: first DB call leases; all later calls (incl. begin/commit/rollback) reuse
+  `$this->leases[$cid]` → a txn is affine to ONE physical socket. Cannot span two leases.
+- Cross-coroutine crossing genuinely closed: every hub DB access funnels through the delegated
+  `query()` (159 sites) + `beginTrans/commitTrans/rollBackTrans` (+row/single/column/lastInsertId);
+  NO code calls the fluent builder or any un-delegated Connection method on the pooled instance
+  (the `->select/->update/->delete/->execute` hits are repository/router/PDO-internal, not the
+  pooled socket — e.g. MetricsRepository::select is a private helper over `$db->query`), so the
+  test's feared "un-constructed parent crash" path is not reachable.
+- 'metrics'/'txn' isolation preserved and improved: those named connections become their OWN
+  PooledMySQLConnection instances; the cid<0 timer/reaper paths use the dedicated single `cliConn`,
+  request coroutines lease their own — strictly more isolated than before. RelaySessionManager's
+  explicit txn on 'mysql' (RelayWorker count=1) is now lease-affine per coroutine → safe as-is; the
+  worklog's proposed "wire to 'txn'" hardening is superseded and unnecessary.
+- Pool bounds/config: `max(1, maxSize)` clamp; exhaustion BLOCKS on `idle->pop(10.0)` then THROWS
+  (no deadlock); CLI path bounded-polls 10s then throws; `DB_POOL_ENABLED=0` cleanly restores the
+  single mutex socket; default-ON parsing correct; headroom documented (live peaked 43 < 151).
+- Conventions: no new colon/`:` binds introduced; `SELECT 1` liveness probe is SELECT-first and
+  param-free; per-connection mutex machinery untouched; start.php-only bootstrap unaffected.
+
+FINDINGS:
+
+1. tests/Unit/Common/Database/PooledMySQLConnectionTest.php (whole file) — LOW/MEDIUM.
+   Problem: the new unit test exercises only the non-coroutine (CLI) delegation path via mocks —
+   query/row/single/column/txn delegation, single-CLI-connection reuse, type-compat, CLI close.
+   The concurrency behavior that IS the fix — distinct lease per `cid`, `Coroutine::defer` release
+   back to idle, pool-exhaustion timeout/throw, txn-rollback-on-dirty-release, dead-connection
+   eviction — has ZERO unit coverage (the file self-documents this deferral to "a live restart").
+   Impact: the exact regression this critical incident targets (cross-coroutine result crossing)
+   could silently regress with the suite still green; the only proof so far is one manual on-box
+   load run. The plan's twin S-W2 acceptance explicitly mandates "txn rolled back on release",
+   "pool-exhaustion timeout", and "dead-connection accounting" tests. The box has Swoole 6.2.1, so
+   `Swoole\Coroutine\run()` harness tests (guarded by `extension_loaded('swoole')`) are feasible.
+   Suggested fix: add coroutine-harness tests asserting (a) two concurrent coroutines get distinct
+   leased connections, (b) a lease is returned to idle and reused after the coroutine ends,
+   (c) an exhausted pool throws within the timeout instead of hanging, (d) a coroutine that leaves
+   a txn open is rolled back on release (next lessee is clean).
+
+2. src/Common/Database/PooledMySQLConnection.php:~297 (acquire(), dead-idle branch) — LOW
+   (pre-existing in the byte-identical server twin; noted for completeness, not a regression).
+   Problem: when `isConnectionAlive($conn)` is false, the dead connection is dropped with only
+   `$this->created--; return $this->acquire();` — `$conn->closeConnection()` is never called, so a
+   not-fully-dead socket FD can linger until GC. Impact: minor/bounded FD churn on DB-side connection
+   drops (idle timeout/failover). Suggested fix: `$conn->closeConnection();` before recursing. Since
+   this matches the production-proven server implementation, fixing it upstream (server) too would
+   keep the twins in sync.
+
+## TestEngineer — hub PooledMySQLConnection ed8a5ad (2026-07-13, perf-5) — GREEN
+BOTH review findings closed. Finding 1 (test gap): added 7 coroutine-harness tests in
+tests/Unit/Common/Database/PooledMySQLConnectionTest.php driving the REAL Swoole 6.2.1 scheduler via
+a child-process fixture (tests/Unit/Common/Database/Fixtures/pool_harness.php + socket-free double
+tests/Support/RecordingConnection.php; same process-isolation rationale as the existing
+transaction_lock_smoke): distinct per-cid lease (2 concurrent coroutines get DIFFERENT connections),
+defer-release + reuse, defer-release even when the leasing body throws, pool-exhaustion block→handoff
+(bound holds, no deadlock), pool-exhaustion bounded THROW (~10s idle->pop(10.0), @group slow, no hang),
+dirty-txn rollback on release, dead-connection SELECT-1-probe eviction. Finding 2 (FD-churn, HUB COPY
+ONLY): acquire() dead-idle branch now calls `$conn->closeConnection()` before discarding the evicted
+dead connection — verified by the dead_evict test (asserts conn0_closes=1). phlix-server was NOT
+touched (its identical twin edited by another agent).
+VERIFY (actual): `phpunit --filter PooledMySQLConnection` → OK (13 tests, 38 assertions), 00:11.
+Full Unit suite → OK 1406/0, 17188 assertions, 17 skipped (was 1399; +7). phpstan L9 (configured
+src/ gate) → [OK] No errors; PooledMySQLConnection.php clean in isolation. phpcs PSR12 → 0 errors on
+all changed files (src file clean; tests/fixtures also clean). psalm skipped (env: PHP < psalm req).
+COVERAGE (PooledMySQLConnection.php): in-process pcov 41.6% (CLI/delegation only — concurrency runs
+in child procs, invisible to parent instrumentation); union of in-process + child-harness pcov = 78.6%.
+Remaining uncovered = the default real-MySQL factory closure (needs a live server), the defensive
+CLI-only acquire() poll loop (unreachable when lease() short-circuits the CLI path), the pop-timeout
+throw lines (covered by the exhaust_throw test's own child, not the union collector), and 2 trivial
+edge branches. The new FD-fix line IS covered.
+SERVER-TWIN FOLLOW-UP: phlix-server/src/Common/Database/PooledMySQLConnection.php has the identical
+FD-churn line in acquire()'s dead-idle branch and needs the same one-line `$conn->closeConnection()`
+fix (server follow-up; not done here per scope).
