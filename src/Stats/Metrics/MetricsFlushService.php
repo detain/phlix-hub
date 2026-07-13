@@ -95,13 +95,25 @@ final class MetricsFlushService
      * the delta since the previous flush). Pruning is invoked but internally
      * throttled so old rows are cleaned up without a DELETE on every 5s tick.
      *
-     * @param int $workerId Unused; retained for API symmetry with the server
-     *                       flush service. The hub always uses 'hub-relay'.
-     * @param int $nowTs     Unix timestamp of the flush.
+     * @param int  $workerId    Unused; retained for API symmetry with the server
+     *                          flush service. The hub always uses 'hub-relay'.
+     * @param int  $nowTs       Unix timestamp of the flush.
+     * @param bool $shouldPrune When true, this worker ALSO runs the retention
+     *                          DELETEs on the throttled prune tick. Only ONE
+     *                          worker may pass true: every hub process arms its
+     *                          own flush timer (2 HTTP workers + relay +
+     *                          client-relay ≈ 4 procs), and the retention DELETEs
+     *                          target shared/global tables, so leaving prune
+     *                          ungated made every process issue the same three
+     *                          DELETEs each minute — N× retention churn ([H-W3]).
+     *                          Defaults to false so a worker never prunes unless
+     *                          it is the designated single pruner (the count=1
+     *                          relay worker). Registry flushing + the per-worker
+     *                          in-RAM connection eviction happen regardless.
      *
      * @return void
      */
-    public function flush(int $workerId, int $nowTs): void
+    public function flush(int $workerId, int $nowTs, bool $shouldPrune = false): void
     {
         if (!$this->collector->isEnabled()) {
             return;
@@ -115,15 +127,26 @@ final class MetricsFlushService
         $this->flushConnections($registry->snapshotConnections(), $nowTs);
         $this->flushRelay($registry->drainRelayMetrics($nowTs), $registry->bucketStart($nowTs));
 
-        // Prune roughly once per minute rather than every flush.
+        // Run maintenance roughly once per minute rather than every flush.
         $this->flushTick++;
         $ticksPerMinute = max(1, (int) round(60 / $this->flushIntervalSeconds));
         if ($this->flushTick % $ticksPerMinute === 0) {
-            $this->prune($nowTs);
+            // Retention DELETEs on the shared metrics tables. These are NOT
+            // per-worker: every hub process running them multiplies the DELETE
+            // churn by worker count ([H-W3]), so they are gated to exactly ONE
+            // worker via $shouldPrune (the count=1 relay worker passes true; the
+            // HTTP and client-relay workers pass false).
+            if ($shouldPrune) {
+                $this->prune($nowTs);
+            }
+
             // Evict connections from the in-RAM map once they age past the same
             // TTL the persisted rows use, so the registry stays bounded after a
             // relay tunnel closes (the close hook leaves a FINAL touch rather
-            // than an immediate delete, mirroring the server).
+            // than an immediate delete, mirroring the server). This is per-worker
+            // registry hygiene — every worker owns a DISTINCT registry — so it
+            // runs on EVERY worker regardless of $shouldPrune (gating it off
+            // would leak the client-relay worker's connection map).
             $registry->pruneStaleConnections($nowTs - $this->connectionTtlSeconds);
         }
     }

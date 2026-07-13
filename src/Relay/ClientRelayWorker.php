@@ -202,7 +202,11 @@ final class ClientRelayWorker
                 // Best-effort: a transient DB error on a flush tick must never
                 // escape the timer and crash the client-relay worker.
                 try {
-                    $flushService->flush(0, time());
+                    // $shouldPrune=false: the client-relay worker flushes + evicts
+                    // its own registry but must NOT run the shared-table retention
+                    // DELETEs — only the count=1 relay worker prunes, so the
+                    // DELETEs aren't multiplied by worker count ([H-W3]).
+                    $flushService->flush(0, time(), false);
                 } catch (Throwable $e) {
                     LoggerFactory::get(LogChannels::RELAY)->warning(
                         'Metrics: client-relay flush tick failed',

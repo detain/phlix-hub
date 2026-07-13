@@ -197,7 +197,14 @@ final class RelayWorker
                         // Best-effort: a transient DB error on a flush tick must
                         // never escape the timer and crash the relay worker.
                         try {
-                            $flushService->flush(0, time());
+                            // The relay worker is count=1 (single-instance,
+                            // always started) so it is the designated single
+                            // pruner: pass $shouldPrune=true so the shared-table
+                            // retention DELETEs run from HERE ONLY. The HTTP and
+                            // client-relay workers flush their own registries but
+                            // pass false, so the DELETEs aren't multiplied by
+                            // worker count ([H-W3]).
+                            $flushService->flush(0, time(), true);
                         } catch (Throwable $e) {
                             $logger->warning('Metrics: relay flush tick failed', ['error' => $e->getMessage()]);
                         }

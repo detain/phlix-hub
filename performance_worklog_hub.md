@@ -84,7 +84,7 @@ php bin/phlix migrate
 - [x] HB-4.2  client_relay_tokens retention sweep  RE-AUDIT+FIX 2026-07-12 (perf-4): was PARTIAL — DELETE predicate used `expires_at<NOW()-1d AND revoked_at IS NOT NULL` (H-D2 requires OR), so expired-never-revoked rows (~1h TTL, rarely revoked) were NEVER pruned → table still grew. FIXED: AND→OR (precedence parses as `(expiry) OR (revoked)`), corrected misleading "both expired AND revoked" docblocks (ClientRelayTokenService + IdleReaper ×3), rewrote the string-contains test into a behavioral fake-DB test proving expired-never-revoked IS deleted (regression-to-AND caught). phpstan L9 0, suite 1360/17skip/0fail, phpcs src clean. See `## Implementer — HB-4.2 — 2026-07-12`. Prior wiring (H-W4-batch: pruneExpiredTokens called from IdleReaper::reapDbMaintenance on the maintenance worker — correct).
 - [x] HB-4.3  server_heartbeats growth control  (commit: H-W4-batch)  DONE — pruneAllServerHeartbeats()/pruneServerHeartbeats() ring-delete in HeartbeatHandler, called from IdleReaper tick
 - [x] HB-4.4  heartbeat handler hash library list optimization  (commit: H-W4-batch)  DONE — SHA-256 library list hash in server_library_hashes table, skip upserts when unchanged; migration 037
-- [x] HB-4.5  metrics prune singleton  (commit: H-W4-batch)  DONE — MetricsFlushService registered as per-worker singleton via static variable in factory
+- [x] HB-4.5  metrics prune singleton  RE-AUDIT+COMPLETE 2026-07-12: was NOT-DONE (the "per-worker singleton" claim was orthogonal to the AC — `flush()` unconditionally `prune()`d from every worker: 2 HTTP + relay + client-relay ≈4 procs × 3 retention DELETEs/min = N× churn). NOW DONE: added `bool $shouldPrune=false` to `MetricsFlushService::flush()` gating ONLY the DB retention DELETEs; the count=1 relay worker (guaranteed single-instance, always started in boot()) passes `true`, HTTP + client-relay pass `false`. Per-worker in-RAM `pruneStaleConnections()` eviction kept UNCONDITIONAL on the throttle tick (every worker owns a distinct registry — gating it off would leak the client-relay map). Flush cadence + prune SQL untouched. +3 single-pruner tests; existing throttle/binding-contract tests updated to the pruning path. See `## Implementer — HB-4.5 — 2026-07-12`.
 - [x] HB-4.6  rate limiting on proxy/client-mount/heartbeat/JWKS  (commit: H-W4-batch)  DONE — RateLimiterInterface injected into ServerProxyController, ClientMountController, HeartbeatHandler, HubJwksController
 - [x] HB-4.7  Ed25519KeyManager in-memory previous-key cache  (commit: H-W4-batch)  DONE — unlink removed from loadPreviousKey hot path; purgeExpiredPreviousKey() available for background cleanup
 - [x] HB-4.8  stream-timer sweep instead of per-second del+add  (commit: H-W4-batch)  DONE — batch SWEEP_INTERVAL_SECONDS timer replaces per-request timer delete+add; sweepStreamTimers() method
@@ -2042,3 +2042,74 @@ Reviewed `git diff 847b0a1..0322fa8` (0abc3d2 fix+docs, 0322fa8 tests) against
 Gates (this box, PHP 8.3.6): `phpstan analyse` L9 → [OK] No errors;
 `phpunit --filter 'ClientRelayTokenService|IdleReaper'` → OK (26 tests, 89 assertions). Verdict:
 **NO FINDINGS**.
+
+## Implementer — HB-4.5 — 2026-07-12 (gate metrics prune to a single worker)
+
+**Bug (RE-AUDIT verdict NOT-DONE):** `MetricsFlushService::flush()` unconditionally called
+`prune()` on its throttled (~1/min) tick — the three retention `DELETE`s
+(`metrics_connections` / `metrics_rollup` / `metrics_route_rollup`). `flush()` is armed from
+EVERY worker: each HTTP worker (`HUB_WORKERS`, default 2), the relay worker, and the client-relay
+worker ≈4 procs, so ~4 processes each issued the same three DELETEs every minute — the N× retention
+churn [H-W3] describes. The prior "per-process singleton in the factory" change was orthogonal to
+the AC (it de-duped the *object per worker*, not the *prune across workers*); no worker gate existed.
+
+**Gating mechanism (flag, not split):** added a `bool $shouldPrune = false` parameter to
+`MetricsFlushService::flush(int $workerId, int $nowTs, bool $shouldPrune = false)`. Inside the
+existing once-a-minute throttle block:
+- the DB retention `prune($nowTs)` now runs ONLY when `$shouldPrune === true`;
+- the in-RAM `$registry->pruneStaleConnections(...)` eviction stays UNCONDITIONAL (runs on every
+  worker's tick) — it is per-worker registry hygiene; each worker owns a DISTINCT registry, so gating
+  it off would let the client-relay worker's connection map grow unbounded (CARDINAL bounded-memory
+  rule). Only the shared-table DELETEs were ever the multiplicity problem.
+Default `false` is defensive: a worker never prunes unless it is the explicitly-designated single
+pruner, so a future arming site can't silently re-introduce N× churn. Flush cadence and the prune SQL
+are unchanged (only the prune's multiplicity was wrong).
+
+**Which worker prunes + why it's guaranteed single-instance:** the **count=1 relay worker**
+(`RelayWorker`). It is constructed unconditionally in `Application::boot()`
+(`Application.php:1819` — `new RelayWorker($this->container, $relayPort, 1, …)`) and always started;
+its Workerman worker is `count = 1` (`RelayWorker::start()` `$worker->count = $this->count` = 1). It
+is the semantic owner of the tunnels and already arms `flush()`, so it is the natural, always-present
+single pruner — no config can disable it (unlike gating on an HTTP `$worker->id === 0`, which would
+still be correct but the relay worker is the cleaner guaranteed-single choice per the finding's hint).
+
+**Arming call sites changed (so exactly one prunes):**
+- `src/Relay/RelayWorker.php` (~:200) — the single pruner → `flush(0, time(), true)`.
+- `src/Application.php` (~:1534) — HTTP workers → `flush(0, time(), false)`.
+- `src/Relay/ClientRelayWorker.php` (~:205) — client-relay worker → `flush(0, time(), false)`.
+All three still FLUSH their own per-worker registry every tick (unchanged); only the relay worker
+also runs the retention DELETEs.
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-hub/src/Stats/Metrics/MetricsFlushService.php` — `flush()` signature +
+  `$shouldPrune` gate on `prune()`; docblock.
+- `/home/sites/phlix/phlix-hub/src/Relay/RelayWorker.php` — pass `true` (single pruner) + comment.
+- `/home/sites/phlix/phlix-hub/src/Application.php` — HTTP workers pass `false` + comment.
+- `/home/sites/phlix/phlix-hub/src/Relay/ClientRelayWorker.php` — pass `false` + comment.
+- `/home/sites/phlix/phlix-hub/tests/Unit/Stats/Metrics/MetricsFlushServiceTest.php` — +3 tests;
+  updated the two existing DELETE-asserting tests to the pruning path.
+
+**Single-pruner tests added:**
+- `test_flush_does_not_prune_when_should_prune_is_false` — a non-pruning worker crosses the prune
+  tick (12 flushes) with real request activity: rollup INSERTs ARE written (registry still flushed),
+  but ZERO `DELETE FROM metrics_{connections,rollup,route_rollup}` fire — the gate that removes the
+  ~4× churn.
+- `test_flush_prunes_only_on_the_designated_pruning_worker` — with `$shouldPrune=true`, exactly one
+  DELETE per table fires at the throttled prune tick.
+- `test_in_ram_connection_eviction_runs_even_when_prune_is_gated_off` — decoupling proof: an idle
+  connection is still evicted from the in-RAM registry map with `$shouldPrune=false` and NO DB DELETE.
+- `test_prune_is_throttled_across_flushes` (existing, kept green) + the binding-contract test updated
+  to pass `true` so they still exercise the throttled DELETEs on the pruning path.
+
+**AC mapping:** (1) every worker still flushes its own registry — the flush* calls are untouched and
+`test_flush_does_not_prune_when_should_prune_is_false` proves rollups persist on a non-pruning worker;
+(2) prune runs from exactly one worker — only the count=1 relay worker passes `true`; (3) HTTP +
+client-relay flush but don't prune — both pass `false`; (4) flush cadence + prune SQL unchanged.
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- Full suite `php -d max_execution_time=0 ./vendor/bin/phpunit` → **OK, 1363 tests / 16149
+  assertions / 17 skipped / 0 failures** (baseline 1360 + 3 new).
+- `./vendor/bin/phpcs --standard=PSR12 -n src/…` (4 touched src files) → **clean (exit 0)**.
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red); migrate not run
+  (no DB; no migration touched).

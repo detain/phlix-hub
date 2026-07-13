@@ -1531,7 +1531,13 @@ final class Application
                                 // must never escape the timer and crash/flood the
                                 // worker — log it and let the next tick retry.
                                 try {
-                                    $flushService->flush(0, time());
+                                    // $shouldPrune=false: HTTP workers (HUB_WORKERS,
+                                    // default 2) flush + evict their own registry
+                                    // but must NOT run the shared-table retention
+                                    // DELETEs — only the count=1 relay worker
+                                    // prunes, so the DELETEs aren't multiplied by
+                                    // worker count ([H-W3]).
+                                    $flushService->flush(0, time(), false);
                                 } catch (Throwable $e) {
                                     LoggerFactory::get(LogChannels::RELAY)->warning(
                                         'Metrics: HTTP worker flush tick failed',
