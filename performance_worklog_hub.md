@@ -3103,3 +3103,77 @@ checksum that no longer matches DOES trigger the WARNING + re-apply + refresh.
 - `php -l` on the runner → no syntax errors.
 - psalm NOT run: pre-existing environment gate (`Psalm requires PHP >= 8.3.16`, env has
   8.3.6) — unrelated to this change (fails before analysing any code).
+
+## Reviewer (per-step HB-4.11) — 2026-07-13
+
+Reviewed commit `868313d` (migration ledger checksum-divergence port). Read the full HB-4.11
+spec + §0.4 hub rules, the Implementer entry, the SV-4.9 donor, and the CURRENT full source of
+`MigrationRunner.php`, `041_migrations_checksum.sql`, both test files, and the DB layer
+(`PhlixMySQLConnection`/workerman `Connection`).
+
+**NO FINDINGS**
+
+Evidence for the high-stakes checks:
+- **Mass-reapply is structurally impossible for a NULL/absent-checksum recorded row.** `run()`
+  gates on `array_key_exists()` (not `isset()`), then `$recorded === null` → `backfillChecksum()`
+  + `continue` BEFORE `applyFile()`. `applyFile()` is reachable only when a file is un-recorded OR
+  recorded-with-a-non-null-diverged checksum. A day-one NULL row can never fall through to
+  apply-from-scratch. Verified by unit `testRunBackfillsNullChecksumWithoutReapplying` (asserts the
+  CREATE is never executed) + `testRunDoesNotMassReapplyWhenChecksumColumnMissing`.
+- **NULL semantics are real, not just mock-asserted.** The hub retrofits onto an EXISTING table
+  (unlike the server twin's NOT-NULL fresh ledger), so it depends on NULL → PHP `null`. Confirmed the
+  live DB layer is PDO with `FETCH_ASSOC` + `ATTR_STRINGIFY_FETCHES=false` + `ERRMODE_EXCEPTION`
+  (workerman `Connection.php`), so a NULL column returns PHP `null` (→ `is_string()` false → mapped to
+  null, backfill branch), never `''` (which would have mis-routed to the divergence/reapply branch).
+- **Column-absent degrade fires for exactly the right window.** `SELECT filename, checksum` validates
+  the column list against the schema regardless of row count, so on an existing/fresh pre-041 DB it
+  throws "Unknown column 'checksum'". `execute()` rethrows a `PDOException` that CONCATENATES the
+  original message (`"SQL:… " . $e->getMessage()`), so the "unknown column"+"checksum" substrings
+  survive wrapping and `isMissingChecksumColumnError()` still matches → degrades to name-only read/write.
+  Traced the fresh-DB sequencing: ledger loaded once (empty via degrade) → 001..040 apply+record
+  name-only → 041 ALTER adds the column → 041 records WITH checksum → run 2 backfills 001..040 without
+  re-executing. Migrations are CLI-only (`bin/phlix migrate`/`run-migrations.php`/`MigrateCommand`), not
+  invoked at Application boot.
+- **Migration 041 safe + idempotent:** plain `ALTER TABLE migrations ADD COLUMN checksum CHAR(32) NULL`
+  — no `IF NOT EXISTS` on the column (hub AGENTS.md / migrations rule). Re-run safety comes from the
+  tracking table (041 is recorded WITH its checksum once the ALTER runs, so it is skipped thereafter);
+  `ensureTrackingTable()` deliberately does NOT add the column, so 041 is the sole column-adder and
+  never dup-collides. `MigrationFileTest` treats it as an ALTER-only file (exempt from CREATE
+  TABLE/CHAR(36) checks) and it is in the expected-files list.
+- **Named `:param` / colon-free keys + ON DUPLICATE KEY UPDATE:** `recordApplied()` uses
+  `['filename' => …, 'checksum' => …]` (colon-free keys, `:filename`/`:checksum` in SQL) per the hub
+  `bindMore()` rule; `ON DUPLICATE KEY UPDATE checksum = VALUES(checksum)` refreshes in place on
+  divergence (no dup row, no no-op). Name-only fallback path likewise correct.
+- **`checksum()` is a byte-faithful port** of the server's SV-4.9 algorithm (diff of the method bodies
+  is identical modulo `private`→`public` visibility, widened only so tests can compute expected
+  hashes). Concrete spot-check: doc-only/header edits do NOT diverge; a real SQL token change (incl. an
+  inline `-- …` appended to a statement line) DOES diverge.
+- **Divergence visibility:** `warnDivergence()` uses `error_log()` (no logger dep — the class has none
+  and migrations run one-shot from the CLI, where stderr/error_log is captured by the deploy). Not
+  silently swallowed: the re-applied file also appears in `run()`'s return and is printed as
+  "Applied: <file>" by `run-migrations.php`. Acceptable, non-blocking.
+
+Gates at HEAD `868313d`: filtered `MigrationRunner|MigrationFileTest` = 192 OK / 8 skipped; full Unit
+= 1420/0; full default = 1448/0/28 skipped; phpstan L9 (no baseline) = 0 errors; phpcs PSR-12 on all
+4 changed files = clean.
+
+## Scribe — HB-4.11 — 2026-07-13
+
+Documented the migration-ledger checksum-divergence port for operators/developers. Pure docs change
+(no source touches); sanity-ran `phpunit --filter 'MigrationRunner|MigrationFileTest'` → 192 OK / 8
+skipped (DB-gated).
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-hub/CHANGELOG.md` — new `### Changed` entry under `## [Unreleased]`: the
+  migration ledger now detects an edited already-applied `.sql` (comment-normalized-md5 divergence),
+  logs a WARNING via `error_log()`, safely re-applies + refreshes the checksum; documents the new
+  `checksum CHAR(32) NULL` column (migration `041_migrations_checksum`) and the day-one NULL backfill
+  (no mass re-apply of the ~40 pre-existing rows).
+- `/home/sites/phlix/phlix-hub/README.md` — extended the "5. Run migrations" section with an operator
+  callout on hand-editing a rewrite-class migration: detect → WARNING (deploy/CLI stderr) → safe
+  re-apply, comment-only edits ignored, pre-checksum migrations backfilled without re-run, keep
+  migrations re-run-safe.
+- `/home/sites/phlix/phlix-docs/docs/hub-admin/overview.md` — extended the "Database migrations —
+  `scripts/run-migrations.php`" operator section with the same checksum-divergence behaviour note.
+
+**This closes HB-4.11 entirely** (implement → review NO FINDINGS → docs).

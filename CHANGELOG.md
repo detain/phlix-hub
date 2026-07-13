@@ -130,6 +130,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   no response); the server-side stop-work half is tracked as SV-4.2 in `phlix-server`.
 
 ### Changed
+- **Migration ledger: detect & safely re-apply an edited already-applied migration (checksum divergence, HB-4.11)**
+  (`src/Common/Database/MigrationRunner.php`, migration `041_migrations_checksum.sql`). The
+  `MigrationRunner` ledger was **name-only**: once a `migrations/*.sql` file was recorded as applied,
+  the runner skipped it forever on filename alone — so hand-editing an already-applied migration file
+  (a "rewrite-class" migration) was silently invisible and never re-ran. The runner now also tracks a
+  **comment-normalized md5 checksum** of each file's SQL. A new `checksum CHAR(32) NULL` column is added
+  to the existing `migrations` tracking table (migration `041_migrations_checksum.sql`, a plain
+  MySQL-8-safe `ALTER TABLE … ADD COLUMN` — no MariaDB-only `IF NOT EXISTS`). Per-file behaviour on
+  `php bin/phlix migrate` / `scripts/run-migrations.php`:
+  - **recorded + checksum matches** → skipped without executing (unchanged behaviour);
+  - **recorded + checksum diverged** (the file's SQL was edited since it was applied) → logs a
+    **WARNING** via `error_log()` (visible in the deploy output / CLI stderr), **re-applies** the file,
+    and **refreshes** the stored checksum;
+  - **un-recorded** → applied and recorded with its checksum.
+  The checksum strips full-line `--`/`#` comments and per-line trailing whitespace before hashing, so
+  header/doc-only edits do **not** spuriously trigger a replay — only a real SQL-token change diverges.
+  **Backfill safety:** the ~40 pre-existing migration rows land with `checksum IS NULL` the moment the
+  column is added. A NULL recorded checksum means "recorded, no baseline yet" — it is **backfilled** from
+  the current on-disk file's checksum **without re-executing** the migration, and is **never** treated as
+  diverged, so day-one there is **no mass re-apply** of the existing ledger. Only a subsequent edit against
+  that now-populated baseline triggers a real divergence re-apply. Ported from phlix-server's SV-4.9 twin,
+  adapted to hub conventions: named `:param` (colon-free) bind keys per the `bindMore()` rule, and
+  column-absent (pre-041) reads/writes degrade gracefully to name-only.
 - **Relay proxy: dropped base64 encoding from the internal channel-broker body path (HB-1.1)**
   (`src/Relay/RelayProxyManager.php`, `src/Relay/RelayProxyBridge.php`,
   `src/Http/Controllers/ServerProxyController.php`). The relay's internal hub-to-hub

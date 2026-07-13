@@ -455,6 +455,18 @@ sudo -u www-data --preserve-env \
 The runner records applied migrations in a `migrations` table and is **idempotent** — re-running
 it after a successful apply is a no-op.
 
+> **Editing an already-applied migration.** The `migrations` ledger also stores a
+> comment-normalized checksum of each applied file (a `checksum` column added by migration
+> `041_migrations_checksum`). If you hand-edit the SQL of a migration that has **already run** (a
+> "rewrite-class" migration), the next `run-migrations.php` / `bin/phlix migrate` detects the
+> changed content, logs a **WARNING** (via `error_log()`, visible in the deploy output / CLI
+> stderr), **safely re-applies** the file, and refreshes its stored checksum — instead of silently
+> skipping it forever on filename alone. Header/comment-only edits do **not** trigger a re-apply
+> (comments are stripped before hashing). Migrations that already existed before the checksum column
+> was introduced are backfilled without re-running, so upgrading never mass-re-applies your existing
+> schema. Because a re-applied file executes again, keep migrations re-run-safe (`CREATE TABLE IF NOT
+> EXISTS`, additive/idempotent DDL) — the same contract that already governs writing migrations.
+
 ### 6. Run as a systemd service
 
 ```bash
