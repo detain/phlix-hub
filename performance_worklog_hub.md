@@ -2227,3 +2227,69 @@ in `onResponseFrame` cheaply ✔; (3) sweep tests `now - lastActivityAt >= timeo
 - Mutation check: reverting the sweep to `sent_at` makes the new regression test FAIL (proof it guards
   the bug); restored after.
 - (psalm skipped — box PHP 8.3.6 < psalm-required 8.3.16, environmental.)
+
+## Reviewer (per-step) — HB-4.8 — 2026-07-12
+
+**NO FINDINGS.**
+
+Reviewed `git diff ed6f945..1823d6f` (dd007bb fix + 1823d6f tests) against
+`src/Relay/RelayProxyManager.php` + `tests/Unit/Relay/RelayProxyManagerTest.php`.
+Read-only; no code touched.
+
+Regression genuinely fixed (H-R5 / the fixed-`sent_at` behavioral regression):
+- `lastActivityAt: float` added to the pending-entry shape (docblock :140), seeded at
+  entry creation to `$now = microtime(true)` (== `sent_at`/`stream_opened_at`) at
+  RelayProxyManager.php:293.
+- Refreshed on EVERY decoded response frame (HEAD/BODY/END) in `onResponseFrame` at
+  :379 via `(float) time()`, placed after the unknown-request and malformed-chunk
+  guards (correct — only a valid decoded frame proves liveness).
+- Sweep now measures idleness as `now - lastActivityAt >= timeout` (:669), not
+  `now - sent_at`. Traced: an actively-streaming entry (frames arriving) keeps
+  `lastActivityAt` recent → NOT terminated even when `now - sent_at` far exceeds
+  `timeout`. Confirmed by the regression guard test.
+
+Absolute ceiling preserved:
+- `sweepStreamTimers` still terminates on `now - stream_opened_at >=
+  MAX_STREAM_DURATION_SECONDS` (900.0, unchanged) at :657 as a separate check with
+  `continue`, evaluated BEFORE the idle check — so EITHER condition terminates. A
+  runaway/active-forever stream is still capped.
+
+"No response ever" still times out:
+- `lastActivityAt` is seeded to `sent_at` and never refreshed when no frame arrives, so
+  an idle-from-start request times out from send time. The adjusted existing
+  `test_sweep_times_out_inactive_request` back-dates BOTH `sent_at` and `lastActivityAt`
+  to now-60s (faithful — they are equal in production when no frame ever arrives) and
+  still asserts the 504 reply. Adjustment is correct, not masking a break.
+
+Cheap refresh / no hot-path cost:
+- Coarse `(float) time()` assignment, per-frame (frame handler), never per-byte. No new
+  syscall-per-byte. Documented sub-second-precision tradeoff is sound against 30-60s
+  timeouts + a 2s sweep. L9-clean (float cast; array-shape docblock declares
+  `lastActivityAt: float`).
+
+No churn reintroduced / scope:
+- No `touchStreamTimer` / `STREAM_TIMER_REARM` / per-frame `Timer::del`/`Timer::add`
+  residue (grep clean). Single sweep `Timer::add(SWEEP_INTERVAL_SECONDS=2.0, …, true)`
+  at :182 unchanged. Only `src/Relay/RelayProxyManager.php` + the test + this worklog
+  touched (`git diff --name-only`). `Tunnel.php` / reaper machinery / txn-locking
+  untouched.
+
+Tests genuine:
+- `test_active_long_running_stream_survives_sweep_despite_old_start_time` is a true
+  regression guard: it back-dates `sent_at`/`stream_opened_at`/`lastActivityAt` to
+  now-300s, then delivers HEAD+BODY (refreshing `lastActivityAt` to ~now) and sweeps,
+  asserting NO new publish. Against the pre-fix fixed-`sent_at` sweep (`300 >= 30` →
+  true) `onTimeout` would publish a terminating `end` phase → `assertCount` fails.
+  Mutation-real (verified by trace of the pre-fix predicate + `onTimeout` publishing an
+  `end` for a `stream_started` entry). `test_idle_stream_beyond_timeout_is_terminated_by_sweep`
+  isolates the inactivity path (backdated `lastActivityAt`, recent `stream_opened_at`);
+  `test_absolute_ceiling_terminates_active_stream_with_recent_activity` isolates the
+  ceiling (backdated `stream_opened_at`, recent `lastActivityAt`).
+
+Gates (this box, PHP 8.3.6 + PCOV):
+- `./vendor/bin/phpstan analyse --no-progress` → **[OK] No errors** (L9, no baseline).
+- `phpunit --filter 'RelayProxyManager'` → **OK (52 tests, 230 assertions)**.
+- `phpcs --standard=PSR12 -n src/Relay/RelayProxyManager.php` → clean (exit 0).
+- psalm skipped (box PHP 8.3.6 < psalm-required — environmental, not red).
+
+Verdict: **HB-4.8 DONE** (pending the standard Docs cycle).
