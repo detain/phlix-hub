@@ -2401,3 +2401,29 @@ All five verification points confirmed:
    0 fail (baseline 1366 → 1368, the 2 new tests). psalm skipped (environmental).
 
 Verdict: **HB-4.7 — NO FINDINGS** (ready for the Docs cycle).
+
+## Implementer — 2026-07-12 — HB-4.9 (hub-half: cancel metric + shared doc)
+
+Closed both audited hub-side gaps from the perf-4 RE-AUDIT roll-up (worklog ~line 2172).
+
+**Gap 1 — cancel-to-stop metric (hub `6c0aa5f`, pushed to master):**
+- `src/Stats/Metrics/MetricsRegistry.php` — added `relayCancels` counter field + `recordRelayCancel()`; wired into `drainRelayMetrics()` snapshot (new `cancels` key) + zero-reset. Follows the `relayReplyDrops` idiom exactly.
+- `src/Stats/Metrics/MetricsCollector.php` — added `recordRelayCancel()` façade (no-op when disabled), mirroring `recordRelayReplyDrop()`.
+- `src/Relay/RelayProxyManager.php` — `cancelRequest()` now calls `$this->metrics?->recordRelayCancel()` at the REAL cancel site (right after the pending-gauge decrement, before `sendCancel()`). This is the same place the pending gauge is decremented, as specified.
+- `src/Stats/Metrics/MetricsFlushService.php` — `flushRelay()` persists the counter to the new `relay_cancels` column (accumulating `col = col + VALUES(col)`; non-prefixing `:rcancels` bind); idle-skip check + docblock/type updated.
+- `migrations/039_relay_cancel_metric.sql` — `ALTER TABLE metrics_rollup ADD COLUMN relay_cancels INT NOT NULL DEFAULT 0` (plain DDL, MySQL-8 safe; idempotency via runner tracking table). Added to `MigrationFileTest` expected list.
+- Tests: `RelayProxyManagerTest::test_cancel_records_the_cancel_metric` (increments once on a real cancel; stays 0 for an unknown-request cancel); extended `MetricsFlushServiceTest` persistence test to assert `rcancels`/`relay_cancels` SQL.
+
+**Gap 2 — shared HTTP_CANCEL doc (phlix-shared `45edc01`, pushed to master):**
+- `phlix-shared/src/Relay/RelayFrameType.php` — documented `HTTP_CANCEL = 0x12` in the class contract: Types-list line + a "## Request cancellation (0x12)" section (hub→server only; client abandoned the request → hub asks server to STOP in-flight work; server stop-work half = SV-4.2, out of scope; frame is advisory, no response). Also corrected `fromValue` param doc range to `0x01–0x12`. Documentation only — NO behavioral change (the enum case already existed).
+
+**Out of scope (not touched):** server ffmpeg stop = SV-4.2 (X1, different repo); cancel PROPAGATION path (already wired/verified).
+
+**Verification (all green):**
+- Hub `phpunit`: OK 1375 tests, 16216 assertions (17 pre-existing skips — DB-integration).
+- Hub `phpstan` (level 9, no baseline): No errors.
+- Hub `phpcs` on changed src: 0 errors (1 pre-existing >120-char WARNING on an untouched docblock line).
+- phlix-shared `phpunit`/`phpstan`/`phpcs` on RelayFrameType: green.
+- psalm not run — box PHP 8.3.6 < required (environmental, not red).
+
+**phlix-shared repin:** NOT required. Change is comment-only; hub already consumes `detain/phlix-shared ^0.20.0` from Packagist and has no behavioral dependency on the doc. The doc lands at phlix-shared HEAD and reaches consumers at the next natural release/tag; no version bump forced.
