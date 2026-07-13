@@ -110,21 +110,23 @@ final class MigrationRunnerTest extends TestCase
 
     public function testRunSkipsAlreadyAppliedFiles(): void
     {
-        file_put_contents($this->migrationsDir . '/001_a.sql', 'CREATE TABLE foo (id INT);');
+        $content001 = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content001);
         file_put_contents($this->migrationsDir . '/002_b.sql', 'CREATE TABLE bar (id INT);');
 
         $db = $this->createMock(Connection::class);
         // ensureTrackingTable -> 1 query
-        // listApplied         -> 1 query returning that 001 is done
+        // loadLedger          -> 1 query; 001 recorded WITH a matching checksum
+        //                        so it is skipped without executing (no backfill)
         // applyFile(002_b)    -> 1 query
         // recordApplied(002_b)-> 1 query
         $callIndex = 0;
         $db->expects(self::exactly(4))
             ->method('query')
-            ->willReturnCallback(function ($sql, $params = null) use (&$callIndex) {
+            ->willReturnCallback(function ($sql, $params = null) use (&$callIndex, $content001) {
                 $callIndex++;
                 if ($callIndex === 2) {
-                    return [['filename' => '001_a.sql']];
+                    return [['filename' => '001_a.sql', 'checksum' => MigrationRunner::checksum($content001)]];
                 }
                 return null;
             });
@@ -137,16 +139,17 @@ final class MigrationRunnerTest extends TestCase
 
     public function testRunReturnsEmptyArrayWhenEverythingAlreadyApplied(): void
     {
-        file_put_contents($this->migrationsDir . '/001_a.sql', 'CREATE TABLE foo (id INT);');
+        $content001 = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content001);
 
         $db = $this->createMock(Connection::class);
         $callIndex = 0;
         $db->expects(self::exactly(2))
             ->method('query')
-            ->willReturnCallback(function ($sql, $params = null) use (&$callIndex) {
+            ->willReturnCallback(function ($sql, $params = null) use (&$callIndex, $content001) {
                 $callIndex++;
                 if ($callIndex === 2) {
-                    return [['filename' => '001_a.sql']];
+                    return [['filename' => '001_a.sql', 'checksum' => MigrationRunner::checksum($content001)]];
                 }
                 return null;
             });
@@ -232,27 +235,258 @@ final class MigrationRunnerTest extends TestCase
 
     public function testRunRecordsAppliedFilename(): void
     {
-        file_put_contents($this->migrationsDir . '/001_users.sql', 'CREATE TABLE foo (id INT);');
+        $content = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_users.sql', $content);
 
         $db = $this->createMock(Connection::class);
         $recordedFilename = null;
+        $recordedChecksum = null;
         $callIndex = 0;
         $db->method('query')
-            ->willReturnCallback(function ($sql, $params = null) use (&$recordedFilename, &$callIndex) {
-                $callIndex++;
-                if ($callIndex === 2) {
-                    return [];
-                }
-                if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
-                    $recordedFilename = is_array($params) ? ($params['filename'] ?? null) : null;
-                }
-                return null;
-            });
+            ->willReturnCallback(
+                function ($sql, $params = null) use (&$recordedFilename, &$recordedChecksum, &$callIndex) {
+                    $callIndex++;
+                    if ($callIndex === 2) {
+                        return [];
+                    }
+                    if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
+                        $recordedFilename = is_array($params) ? ($params['filename'] ?? null) : null;
+                        $recordedChecksum = is_array($params) ? ($params['checksum'] ?? null) : null;
+                    }
+                    return null;
+                },
+            );
 
         $runner = new MigrationRunner($db, $this->migrationsDir);
         $runner->run();
 
         self::assertSame('001_users.sql', $recordedFilename);
+        // HB-4.11: the ledger row is recorded with the comment-normalised md5.
+        self::assertSame(MigrationRunner::checksum($content), $recordedChecksum);
+    }
+
+    public function testChecksumIsCommentNormalisedMd5(): void
+    {
+        // Full-line `--`/`#` comments and per-line trailing whitespace are
+        // stripped before hashing, so a doc-only edit does not flip the hash…
+        $withComment = "-- migration: 001_x\nCREATE TABLE foo (id INT);   \n";
+        $docOnlyEdit = "-- migration: 001_x (renamed header)\nCREATE TABLE foo (id INT);\n";
+        self::assertSame(
+            MigrationRunner::checksum($withComment),
+            MigrationRunner::checksum($docOnlyEdit),
+            'A documentation-only edit must not change the checksum',
+        );
+
+        // …but a real SQL change DOES flip it.
+        $realEdit = "-- migration: 001_x\nCREATE TABLE foo (id BIGINT);\n";
+        self::assertNotSame(
+            MigrationRunner::checksum($withComment),
+            MigrationRunner::checksum($realEdit),
+            'A real SQL change must change the checksum',
+        );
+
+        // Deterministic 32-char md5.
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', MigrationRunner::checksum($withComment));
+    }
+
+    public function testRunRecordsChecksumOnCleanApply(): void
+    {
+        $content = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content);
+
+        $db = $this->createMock(Connection::class);
+        $recordedChecksum = null;
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$recordedChecksum) {
+                if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                    return []; // empty ledger — un-recorded
+                }
+                if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
+                    $recordedChecksum = is_array($params) ? ($params['checksum'] ?? null) : null;
+                }
+                return null;
+            });
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        self::assertSame(['001_a.sql'], $runner->run());
+        self::assertSame(MigrationRunner::checksum($content), $recordedChecksum);
+    }
+
+    public function testRunSkipsRecordedFileWithMatchingChecksumWithoutExecuting(): void
+    {
+        $content = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content);
+
+        $db = $this->createMock(Connection::class);
+        $executed = [];
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$executed, $content) {
+                if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                    return [['filename' => '001_a.sql', 'checksum' => MigrationRunner::checksum($content)]];
+                }
+                $executed[] = is_string($sql) ? $sql : '';
+                return null;
+            });
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        self::assertSame([], $runner->run(), 'A matching-checksum file must not be re-applied');
+
+        $ranCreate = array_filter($executed, static fn (string $s): bool => str_contains($s, 'CREATE TABLE foo'));
+        self::assertCount(0, $ranCreate, 'The migration statement must not be executed on a checksum match');
+    }
+
+    public function testRunWarnsAndReappliesAndRefreshesOnDivergedChecksum(): void
+    {
+        $content = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content);
+
+        $db = $this->createMock(Connection::class);
+        $executed = [];
+        $recordedChecksum = null;
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$executed, &$recordedChecksum) {
+                if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                    // Recorded with a stale (non-matching) checksum → diverged.
+                    return [['filename' => '001_a.sql', 'checksum' => str_repeat('0', 32)]];
+                }
+                if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
+                    $recordedChecksum = is_array($params) ? ($params['checksum'] ?? null) : null;
+                }
+                $executed[] = is_string($sql) ? $sql : '';
+                return null;
+            });
+
+        // Capture the divergence WARNING (emitted via error_log()).
+        $logFile = (string) tempnam(sys_get_temp_dir(), 'phlix-hub-mig-log-');
+        $previous = ini_set('error_log', $logFile);
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        $applied = $runner->run();
+
+        ini_set('error_log', $previous === false ? '' : $previous);
+        $log = (string) @file_get_contents($logFile);
+        @unlink($logFile);
+
+        self::assertSame(['001_a.sql'], $applied, 'A diverged file must be re-applied');
+
+        $ranCreate = array_filter($executed, static fn (string $s): bool => str_contains($s, 'CREATE TABLE foo'));
+        self::assertCount(1, $ranCreate, 'The migration statement must be executed on divergence');
+
+        // Checksum refreshed to the current on-disk value.
+        self::assertSame(MigrationRunner::checksum($content), $recordedChecksum);
+
+        // A warning was emitted naming the file.
+        self::assertStringContainsString('diverged', $log);
+        self::assertStringContainsString('001_a.sql', $log);
+    }
+
+    public function testRunBackfillsNullChecksumWithoutReapplying(): void
+    {
+        // THE backfill-safety scenario: a row recorded before HB-4.11 added the
+        // checksum column (checksum IS NULL). It must NOT be re-executed — its
+        // mere existence proves it was applied — but its checksum IS backfilled
+        // from the current on-disk file for future divergence detection.
+        $content = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content);
+
+        $db = $this->createMock(Connection::class);
+        $executed = [];
+        $backfillHappened = false;
+        $backfilledChecksum = null;
+        $db->method('query')
+            ->willReturnCallback(
+                function ($sql, $params = null) use (&$executed, &$backfillHappened, &$backfilledChecksum) {
+                    if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                        return [['filename' => '001_a.sql', 'checksum' => null]];
+                    }
+                    if (is_string($sql) && str_contains($sql, 'UPDATE `migrations` SET checksum')) {
+                        $backfillHappened = true;
+                        $backfilledChecksum = is_array($params) ? ($params['checksum'] ?? null) : null;
+                    }
+                    $executed[] = is_string($sql) ? $sql : '';
+                    return null;
+                },
+            );
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        $applied = $runner->run();
+
+        self::assertSame([], $applied, 'A NULL-checksum row must NOT be re-applied (backfill safety)');
+
+        $ranCreate = array_filter($executed, static fn (string $s): bool => str_contains($s, 'CREATE TABLE foo'));
+        self::assertCount(0, $ranCreate, 'Backfill must not re-execute the migration statements');
+
+        self::assertTrue($backfillHappened, 'The NULL checksum must be backfilled');
+        self::assertSame(
+            MigrationRunner::checksum($content),
+            $backfilledChecksum,
+            'Backfill must stamp the current on-disk checksum',
+        );
+    }
+
+    public function testRunDoesNotMassReapplyWhenChecksumColumnMissing(): void
+    {
+        // Pre-041 existing production: the checksum column does not exist yet.
+        // The ledger read must degrade to name-only so already-recorded files
+        // are recognised and NOT re-applied wholesale.
+        $content = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content);
+
+        $db = $this->createMock(Connection::class);
+        $executed = [];
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$executed) {
+                if (is_string($sql) && str_contains($sql, 'SELECT filename, checksum')) {
+                    throw new \RuntimeException("Unknown column 'checksum' in 'field list'");
+                }
+                if (is_string($sql) && str_contains($sql, 'SELECT filename FROM')) {
+                    return [['filename' => '001_a.sql']]; // name-only fallback read
+                }
+                $executed[] = is_string($sql) ? $sql : '';
+                return null;
+            });
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        self::assertSame([], $runner->run(), 'Pre-041 recorded files must not be re-applied');
+
+        $ranCreate = array_filter($executed, static fn (string $s): bool => str_contains($s, 'CREATE TABLE foo'));
+        self::assertCount(0, $ranCreate);
+    }
+
+    public function testRecordAppliedFallsBackToNameOnlyWhenChecksumColumnMissing(): void
+    {
+        // Fresh database: earlier files are recorded before migration 041 adds
+        // the checksum column. recordApplied() must degrade to a name-only
+        // insert instead of aborting the run.
+        $content = 'CREATE TABLE foo (id INT);';
+        file_put_contents($this->migrationsDir . '/001_a.sql', $content);
+
+        $db = $this->createMock(Connection::class);
+        $nameOnlyInsertParams = null;
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$nameOnlyInsertParams) {
+                if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                    return []; // empty ledger — un-recorded
+                }
+                if (
+                    is_string($sql)
+                    && str_contains($sql, 'INSERT INTO `migrations`')
+                    && str_contains($sql, 'checksum')
+                ) {
+                    throw new \RuntimeException("Unknown column 'checksum' in 'field list'");
+                }
+                if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
+                    $nameOnlyInsertParams = is_array($params) ? $params : null;
+                }
+                return null;
+            });
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        self::assertSame(['001_a.sql'], $runner->run());
+
+        self::assertIsArray($nameOnlyInsertParams);
+        self::assertSame('001_a.sql', $nameOnlyInsertParams['filename'] ?? null);
+        self::assertArrayNotHasKey('checksum', $nameOnlyInsertParams);
     }
 
     public function testRunWrapsStatementFailureWithFilename(): void

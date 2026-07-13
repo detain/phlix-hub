@@ -198,6 +198,83 @@ final class MigrationRunnerIntegrationTest extends TestCase
         }
     }
 
+    public function testCleanApplyPopulatesChecksumColumn(): void
+    {
+        $this->runner->run();
+
+        // Migration 041 adds the checksum column; a second run backfills the
+        // earlier files that were recorded before the column existed.
+        $this->runner->run();
+
+        $rows = $this->db->query(
+            'SELECT filename, checksum FROM `migrations` WHERE filename = :f',
+            ['f' => '001_users.sql'],
+        );
+        self::assertIsArray($rows);
+        self::assertCount(1, $rows);
+        $row = $rows[0];
+        self::assertIsArray($row);
+        self::assertIsString($row['checksum'] ?? null, 'checksum must be backfilled to a non-null value');
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', (string) $row['checksum']);
+    }
+
+    public function testDivergedChecksumTriggersReapplyAndRefresh(): void
+    {
+        // Fully apply + backfill checksums.
+        $this->runner->run();
+        $this->runner->run();
+
+        // Simulate a rewrite-class edit: corrupt the recorded checksum so it no
+        // longer matches the on-disk file. 001_users.sql is CREATE TABLE IF NOT
+        // EXISTS, so re-applying it is a safe no-op.
+        $stale = str_repeat('0', 32);
+        $this->db->query(
+            'UPDATE `migrations` SET checksum = :c WHERE filename = :f',
+            ['c' => $stale, 'f' => '001_users.sql'],
+        );
+
+        $applied = $this->runner->run();
+        self::assertContains('001_users.sql', $applied, 'A diverged file must be re-applied');
+
+        $rows = $this->db->query(
+            'SELECT checksum FROM `migrations` WHERE filename = :f',
+            ['f' => '001_users.sql'],
+        );
+        self::assertIsArray($rows);
+        $row = $rows[0] ?? null;
+        self::assertIsArray($row);
+        self::assertNotSame($stale, $row['checksum'] ?? null, 'The stale checksum must be refreshed');
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', (string) ($row['checksum'] ?? ''));
+    }
+
+    public function testNullChecksumBackfillsWithoutReapplying(): void
+    {
+        $this->runner->run();
+        $this->runner->run();
+
+        // Simulate the day-one state: a recorded row with no checksum baseline.
+        $this->db->query(
+            'UPDATE `migrations` SET checksum = NULL WHERE filename = :f',
+            ['f' => '001_users.sql'],
+        );
+
+        $applied = $this->runner->run();
+        self::assertNotContains(
+            '001_users.sql',
+            $applied,
+            'A NULL-checksum row must be backfilled, not re-applied',
+        );
+
+        $rows = $this->db->query(
+            'SELECT checksum FROM `migrations` WHERE filename = :f',
+            ['f' => '001_users.sql'],
+        );
+        self::assertIsArray($rows);
+        $row = $rows[0] ?? null;
+        self::assertIsArray($row);
+        self::assertIsString($row['checksum'] ?? null, 'NULL checksum must be backfilled to a value');
+    }
+
     private function insertUser(string $id, string $username, string $email): void
     {
         $this->db->query(

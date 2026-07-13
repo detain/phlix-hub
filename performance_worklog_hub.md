@@ -90,7 +90,7 @@ php bin/phlix migrate
 - [x] HB-4.8  stream-timer sweep instead of per-second del+add  RE-AUDIT+FIX 2026-07-12: was PARTIAL (⚠️ BEHAVIORAL REGRESSION — the 2s sweep measured inactivity from the FIXED `sent_at`, killing ACTIVE streams `timeout`s after they STARTED: direct-play ~30s, /hls,/dash ~60s; the 900s ceiling was unreachable). FIXED: added `lastActivityAt` to the pending entry (seeded to `sent_at`), refreshed per HEAD/BODY/END in `onResponseFrame` via `(float) time()`, sweep now tests `now - lastActivityAt >= timeout`; KEPT the `stream_opened_at + MAX_STREAM_DURATION_SECONDS` (900s) absolute ceiling (terminate on EITHER). No per-frame Timer::del/add churn reintroduced; SWEEP_INTERVAL_SECONDS untouched. +3 behavioral tests (active-long-stream SURVIVES — proven to fail vs fixed-`sent_at`; idle>timeout terminates; ceiling fires for active-but-runaway). Suite 1366 pass/17 skip/0 fail, phpstan L9 0, phpcs src clean. See `## Implementer — HB-4.8`. Prior wiring (H-W4-batch: batch SWEEP_INTERVAL_SECONDS timer + sweepStreamTimers()).
 - [x] HB-4.9  verify/implement HTTP_CANCEL server-side stop  (commit: H-W4-batch)  DONE — already implemented; full cancel path verified: Bridge→Channel→ProxyManager→Tunnel::sendCancel()→server
 - [x] HB-4.10 remove RelaySessionManager::routeRequest  (commit: H-W4-batch)  DONE — confirmed no callers; method removed; docstrings updated
-- [ ] HB-4.11 port checksum-divergence detection into the migration ledger — QUEUED 2026-07-13 (perf-7, cross-repo consistency gap, not from the original audit pass). Cross-repo comparison: hub's `migrations` table (filename PK + applied_at) already provides name-only idempotency, but has NO checksum — unlike server's SV-4.9 `schema_migrations` ledger (DONE+reviewed, commits 1788ad35+e9a461fe), which detects when an already-applied `.sql` is edited later (rewrite-class migration) via a normalized-md5 checksum and safely re-applies+warns. Hub currently has no equivalent: an edited already-applied migration is silently never re-run. Full spec added to `/home/sites/phlix/performance_plan.md` §3 as **HB-4.11** (H-W4) — port server's design, adapted to hub's named-`:param`-only DB binding + a backfill-safe `ALTER TABLE migrations ADD COLUMN checksum CHAR(32) NULL` (existing rows have none). NOT yet implemented — queue after HB-4.6 login-limiter.
+- [x] HB-4.11 port checksum-divergence detection into the migration ledger — DONE 2026-07-13 (migration `041_migrations_checksum.sql` + `MigrationRunner` checksum-aware `run()`/`loadLedger()`/`recordApplied()`/`backfillChecksum()`/`checksum()`). Editing an already-applied `.sql` now diverges its comment-normalized md5 → WARNING + re-apply + refreshed checksum; unchanged files still skip without executing; day-one NULL-checksum rows are backfilled WITHOUT re-executing (no mass re-apply). Named `:param` (colon-free keys) binding preserved; column-absent (pre-041) reads/writes degrade to name-only. Unit suite 1420/0, phpstan L9 0, phpcs clean. See `## Implementer — HB-4.11`.
 
 ## Re-baseline — Claude Code orchestrator pass (2026-07-12)
 
@@ -3011,3 +3011,95 @@ Verify: full hub suite `phpunit` → OK 1432 tests / 0 failures / 25 skipped (un
 docblock-only). phpstan L9 + phpcs PSR-12 clean on the touched `src` file. psalm env-skipped.
 
 **This closes HB-4.6 login-limiter ENTIRELY (sub-1 through sub-6 all done).**
+
+## Implementer — HB-4.11 — 2026-07-13
+
+Ported phlix-server's SV-4.9 checksum-divergence detection into hub's `MigrationRunner`,
+adapted to hub conventions (named `:param` / colon-free bind keys, MySQL-8-safe plain
+DDL, and a backfill-safe retrofit onto the pre-existing `migrations` table).
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-hub/migrations/041_migrations_checksum.sql` (NEW) — plain
+  `ALTER TABLE migrations ADD COLUMN checksum CHAR(32) NULL` (no `IF NOT EXISTS` on the
+  column — MySQL-8 rejects it per AGENTS.md). Nullable because hub's `migrations` table
+  already holds ~40 real applied rows with no checksum. Header `-- migration:
+  041_migrations_checksum`; ALTER-only (exempt from the CREATE-TABLE/CHAR(36) file checks).
+- `/home/sites/phlix/phlix-hub/src/Common/Database/MigrationRunner.php` —
+  - `run()` rewritten to a checksum-aware loop: reads a `filename => checksum|null`
+    ledger via new `loadLedger()`; **recorded + match → skip without executing**;
+    **recorded + diverged → `warnDivergence()` + re-apply + refresh checksum**;
+    **recorded + NULL checksum → `backfillChecksum()` WITHOUT re-executing**;
+    **un-recorded → apply + record with checksum**. Uses `array_key_exists()` (NOT
+    `isset()`) so a NULL-checksum row is not mis-read as un-recorded.
+  - `checksum()` (NEW, `public static`) — comment-normalized md5 ported verbatim from
+    server (drops full-line `--`/`#` comments + per-line trailing whitespace before
+    hashing, so doc-only edits don't spuriously re-trigger; any real SQL token change
+    still diverges). Made public purely so tests can compute expected checksums.
+  - `recordApplied($filename, ?$checksum)` — now `INSERT ... (filename, checksum)
+    ... ON DUPLICATE KEY UPDATE checksum = VALUES(checksum)` with **named `:filename` /
+    `:checksum` (colon-free array keys)** per the hub `bindMore()` rule; falls back to a
+    name-only insert when the checksum column is absent (pre-041).
+  - `loadLedger()` (NEW, private) — `SELECT filename, checksum`; on `Unknown column
+    'checksum'` degrades to a name-only `SELECT filename` so pre-041 recorded files are
+    still recognised (mapped to null → backfilled), never mass-re-applied; any other read
+    failure degrades to an empty map.
+  - `backfillChecksum()` (NEW, private) — `UPDATE ... SET checksum WHERE filename`,
+    failure-tolerant (retries next run if the column is not present yet).
+  - `warnDivergence()` (NEW, private) — emits the WARNING via `error_log()` (no logger
+    dependency added: migrations run one-shot from the CLI, which does not initialise
+    `LoggerFactory`; `error_log()` surfaces on stderr / the configured log). Matches the
+    class's existing minimal-dependency style.
+  - `isMissingChecksumColumnError()` (NEW, private static) — matches "unknown column" +
+    "checksum" to drive the pre-041 name-only degrade paths.
+  - `listApplied()` (name-only, public) and `ensureTrackingTable()` LEFT UNCHANGED —
+    `ensureTrackingTable()` deliberately does NOT add the checksum column, so migration
+    041 is the sole column-adder and its plain ADD COLUMN never collides (no dup-column
+    abort on fresh or existing DBs).
+- Tests:
+  - `/home/sites/phlix/phlix-hub/tests/Common/Database/MigrationRunnerTest.php` — 8 new
+    tests + 2 existing "already applied" tests updated to seed matching checksums (query
+    counts preserved) + `testRunRecordsAppliedFilename` now also asserts the recorded
+    checksum. New: comment-normalized-md5 semantics; clean-apply records checksum;
+    match-skips-without-executing; **divergence warns + re-applies + refreshes** (captures
+    the `error_log` WARNING via `ini_set('error_log', ...)`); **NULL-checksum backfill does
+    NOT re-execute the migration** (asserts the CREATE statement is never issued while the
+    checksum IS backfilled); pre-041 name-only read (no mass re-apply); recordApplied
+    name-only fallback when the column is missing.
+  - `/home/sites/phlix/phlix-hub/tests/Integration/Migrations/MigrationRunnerIntegrationTest.php`
+    — 3 new real-DB methods (clean-apply populates checksum; diverged checksum re-applies +
+    refreshes; NULL checksum backfills without re-apply). Self-skip without `HUB_TEST_DB_*`.
+  - `/home/sites/phlix/phlix-hub/tests/Unit/Migrations/MigrationFileTest.php` — added
+    `041_migrations_checksum.sql` to the expected-files list.
+
+**Backfill-safety verification (the critical requirement):**
+`testRunBackfillsNullChecksumWithoutReapplying` seeds a ledger row `{filename: 001_a.sql,
+checksum: null}` (the exact day-one post-migration state) and asserts `run()` returns `[]`
+(NOT re-applied), that **no `CREATE TABLE foo` statement is ever executed** (captured all
+executed SQL and filtered — count 0), AND that a `UPDATE migrations SET checksum` fires with
+the current on-disk checksum. This proves the row is backfilled without re-running its
+statements. `testRunDoesNotMassReapplyWhenChecksumColumnMissing` further proves the pre-041
+column-absent read degrades to name-only and does not re-apply already-recorded files.
+Conversely `testRunWarnsAndReappliesAndRefreshesOnDivergedChecksum` proves an ALREADY-non-NULL
+checksum that no longer matches DOES trigger the WARNING + re-apply + refresh.
+
+**Acceptance-criteria mapping:**
+- "editing an already-applied migration → WARNING + re-apply + refreshed checksum" →
+  `run()` divergence branch + `testRunWarnsAndReappliesAndRefreshesOnDivergedChecksum` +
+  integration `testDivergedChecksumTriggersReapplyAndRefresh`.
+- "an untouched already-applied file is still skipped without executing" →
+  `testRunSkipsRecordedFileWithMatchingChecksumWithoutExecuting` +
+  `testRunReturnsEmptyArrayWhenEverythingAlreadyApplied`.
+- "day-one NULL-checksum backfill does not force a mass re-apply" →
+  `testRunBackfillsNullChecksumWithoutReapplying` +
+  `testRunDoesNotMassReapplyWhenChecksumColumnMissing` + integration
+  `testNullChecksumBackfillsWithoutReapplying`.
+
+**Verification output:**
+- `phpunit --filter 'MigrationRunner|MigrationFileTest'` → 192 tests OK, 8 skipped (DB-gated).
+- Full Unit suite → **1420 tests / 0 failures**. Full default suite → **1448 / 0 failures /
+  28 skipped** (integration self-skips; +8 new unit + 3 new integration vs baseline).
+- `phpstan analyze --no-progress` (L9, no baseline) → **0 errors**.
+- `phpcs --standard=PSR12` on all changed files → **clean**.
+- `php -l` on the runner → no syntax errors.
+- psalm NOT run: pre-existing environment gate (`Psalm requires PHP >= 8.3.16`, env has
+  8.3.6) — unrelated to this change (fails before analysing any code).
