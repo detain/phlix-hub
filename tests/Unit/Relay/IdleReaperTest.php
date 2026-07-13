@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Generator;
 use Phlix\Hub\Hub\ClientRelayTokenService;
+use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\IdleReaper;
@@ -327,6 +328,70 @@ class IdleReaperTest extends TestCase
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
         // No token service passed; reapDbMaintenance() must complete cleanly.
+        $reaper = new IdleReaper(
+            $tunnelManager,
+            $this->logger,
+            60,
+            90,
+        );
+
+        $reaper->reapDbMaintenance();
+        $this->addToAssertionCount(1);
+    }
+
+    /**
+     * HB-4.7 (H-A1) wiring guard: the maintenance-worker DB-maintenance sweep
+     * MUST invoke Ed25519KeyManager::purgeExpiredPreviousKey() on the injected
+     * key manager, so the rotated-out previous-key sidecar is reclaimed on the
+     * periodic timer instead of lingering until the next rotate(). Ed25519KeyManager
+     * is final (unmockable), so this uses a real instance over a temp key path with
+     * an injectable clock and asserts the expired sidecar file is unlinked by the
+     * reap — removing the wiring leaves the file and fails the assertion.
+     */
+    public function test_reap_db_maintenance_purges_expired_previous_key_when_key_manager_wired(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+
+        $keyPath = sys_get_temp_dir() . '/phlix_hub_idlereaper_key_' . bin2hex(random_bytes(6)) . '.pem';
+        $now = 1_000_000;
+        $keyManager = new Ed25519KeyManager($keyPath, static function () use (&$now): int {
+            return $now;
+        });
+        // Rotate to persist a previous-key sidecar, then advance past the 24h
+        // overlap window so it is expired and eligible for purge.
+        $keyManager->getOrCreateKeyPair();
+        $keyManager->rotate();
+        $sidecar = $keyPath . '.previous.json';
+        self::assertFileExists($sidecar, 'rotate() must create the previous-key sidecar');
+        $now += Ed25519KeyManager::OVERLAP_TTL_SECONDS + 1;
+
+        $reaper = new IdleReaper(
+            $tunnelManager,
+            $this->logger,
+            60,
+            90,
+            null, // sessionManager
+            null, // heartbeatHandler
+            null, // clientRelayTokenService
+            $keyManager,
+        );
+
+        $reaper->reapDbMaintenance();
+
+        self::assertFileDoesNotExist(
+            $sidecar,
+            'reapDbMaintenance() must invoke purgeExpiredPreviousKey() on the injected key manager',
+        );
+
+        @unlink($keyPath);
+        @unlink($sidecar);
+    }
+
+    public function test_reap_db_maintenance_is_noop_for_key_manager_when_null(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+
+        // No key manager passed; reapDbMaintenance() must complete cleanly.
         $reaper = new IdleReaper(
             $tunnelManager,
             $this->logger,

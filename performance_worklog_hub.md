@@ -2293,3 +2293,60 @@ Gates (this box, PHP 8.3.6 + PCOV):
 - psalm skipped (box PHP 8.3.6 < psalm-required — environmental, not red).
 
 Verdict: **HB-4.8 DONE** (pending the standard Docs cycle).
+
+## Implementer — HB-4.7 (wire the zero-caller key purge into the maintenance reap) — 2026-07-12
+
+**Gap closed (the ONLY gap; H-A1):** `Ed25519KeyManager::purgeExpiredPreviousKey()` was correct but had
+ZERO production callers — the in-memory previous-key cache (`$previousKey` false-sentinel, load-once) and
+the OFF-verify-path `@unlink` (loadPreviousKey sets `previousKey=null` on expiry, does NOT unlink) were
+already done, but nothing periodically purged the stale sidecar so it lingered until the next `rotate()`
+overwrite. Wired the purge to the maintenance worker's periodic DB-maintenance reap.
+
+**Wiring choice — inject into IdleReaper (mirrors HB-4.2/HB-4.3), NOT a new dedicated timer.** The
+maintenance worker already runs the DB pruners via `IdleReaper::reapDbMaintenance()` on a REPEATING timer
+armed by `IdleReaper::startDbMaintenance()` (called only from
+`HubServicesProvider::startDbMaintenanceTimers()` → `MaintenanceWorker::onWorkerStart`). Adding the purge
+there reuses the exact existing maintenance-reaper idiom and guarantees it runs on the MAINTENANCE worker
+(not every worker, not the relay hot loop) and RECURS (repeating timer). The purge is a low-frequency
+filesystem `@unlink` — acceptable on the maintenance worker, which is exactly where the AC wants it
+("off the verify path, on a maintenance timer").
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-hub/src/Relay/IdleReaper.php`
+  - New optional ctor param `?Ed25519KeyManager $keyManager = null` (last position, mirroring the
+    `?HeartbeatHandler`/`?ClientRelayTokenService` optional deps) + import + PHPDoc.
+  - `reapDbMaintenance()` now calls `$this->keyManager?->purgeExpiredPreviousKey();` after the
+    heartbeat/token pruners; added an HB-4.7 bullet to the method docblock explaining why it lives on the
+    DB-maintenance (maintenance-worker) path and not the verify path. `tick()` (the RELAY-worker in-memory
+    path) is UNCHANGED — the purge only runs on the maintenance sweep.
+- `/home/sites/phlix/phlix-hub/src/Common/Container/Providers/HubServicesProvider.php`
+  - `IdleReaper::class` factory: added the `Ed25519KeyManager $keyManager` factory arg, passes it to the
+    `new IdleReaper(...)` ctor, and `->parameter('keyManager', get(Ed25519KeyManager::class))`. DI stays
+    coherent — `Ed25519KeyManager` is the same container singleton the JWKS/enrollment services resolve
+    (hub is start.php-only; no `public/index.php` to mirror).
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/IdleReaperTest.php` — +2 tests:
+  - `test_reap_db_maintenance_purges_expired_previous_key_when_key_manager_wired` — THE wiring guard:
+    `Ed25519KeyManager` is `final` (unmockable), so it uses a REAL instance over a temp key path with an
+    injectable clock — rotate() to persist the previous-key sidecar, advance past the 24h overlap, call
+    `reapDbMaintenance()`, assert the expired sidecar FILE is unlinked. Removing the wiring leaves the file
+    → assertion fails (guards the exact inert-wiring gap this step fixes).
+  - `test_reap_db_maintenance_is_noop_for_key_manager_when_null` — null-safe path (mirrors the sibling
+    null-noop tests). The existing `Ed25519KeyManagerTest` purge-BEHAVIOR test stays green.
+
+**Did NOT touch** the verify path, the in-memory cache, or the unlink location (all already correct) — only
+added the periodic caller.
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `./vendor/bin/phpstan analyse --no-progress` → **[OK] No errors** (L9, no baseline).
+- `phpunit --filter 'IdleReaper|Ed25519KeyManager'` → **OK (26 tests, 78 assertions)**.
+- Full suite `php -d max_execution_time=0 ./vendor/bin/phpunit` → **OK, 1368 tests / 16168 assertions /
+  17 skipped / 0 failures** (baseline 1366 + 2 new).
+- `phpcs --standard=PSR12 -n src/` → clean (exit 0); the two touched src files clean. (The IdleReaperTest
+  snake_case method names are pre-existing repo convention for the whole file; tests/ is outside the phpcs
+  `src/` gate.)
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red).
+
+**Acceptance mapping:** purge now has a production caller on a maintenance timer (AC "move to a maintenance
+timer" met); runs on the MAINTENANCE worker and RECURS; verify path/cache/unlink-location unchanged.
+
+Verdict: **HB-4.7 DONE** (pending the standard Docs cycle).
