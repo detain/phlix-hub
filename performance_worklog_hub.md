@@ -2449,7 +2449,7 @@ Sub-steps (one active per repo, sequential on hub):
 - [x] HB-4.6b/c/d wired (f9ee4bd8; proxy:{userId} below 401 gate + 100-GET burst test; heartbeat below JWT-validate; jwks; suite 1381 green)
 - [x] HB-4.6e :8802 relay-connect limiter NEW (RelayWorker::onWebSocketConnect; resolve from container in onWorkerStart; WS close 1013 on limit). DONE — see `## Implementer — HB-4.6e/f`.
 - [x] HB-4.6f :8803 client-mount limiter NEW (ClientRelayWorker::onWebSocketConnect, EARLY/before auth; WS close 1013) + retired dead ClientMountController::handle limiter (clean removal: ctor param + factory injection dropped). DONE — see `## Implementer — HB-4.6e/f`.
-- [ ] HB-4.6g 429 mapping: central catch(RateLimitException) before Application.php:1724 + explicit catch in AuthController loginForm/loginJson + ServerController::heartbeat; add RateLimitException::retryAfterSeconds(); WS paths reject (1013) NOT 429.
+- [x] HB-4.6g 429 mapping: central catch(RateLimitException) before Application.php:1724 + explicit catch in AuthController loginForm/loginJson + ServerController::heartbeat; add RateLimitException::retryAfterSeconds(); WS paths reject (1013) NOT 429. DONE — see `## Implementer — HB-4.6g`.
 - [ ] HB-4.6h test hardening: replace ALL limited:false stubs with real RateLimiter+injected clock; prove streaming burst survives, heartbeat cadence survives, over-limit trips, 429+Retry-After.
 LANDMINES: proxy limiter MUST be generous+userId-keyed or HLS breaks (test real multi-seg burst); local catches in AuthController/ServerController swallow 429→500 (need explicit catch before generic); WS≠HTTP (no 429 body, close 1013); keep RateLimiterInterface alias valid until all sites migrated or container fails to boot.
 
@@ -2540,3 +2540,29 @@ FULL suite **1385 pass / 17 skip / 0 fail** (baseline 1381 + 4 new); `phpstan an
 - `tests/Unit/Hub/JwksControllerTest.php` — real `RateLimiter(60,120)`; ADDED `testJwksLimiterTripsAfterExceeding120PerIpInWindow` (119 pass, 120th trips, keyed by ip).
 
 Verification: affected filters green; FULL suite **1381 pass / 17 skip / 0 fail**; `phpstan analyze` (L9) **0 errors**; `phpcs` PSR12 on changed src clean (one pre-existing 142-char WARNING on the untouched ServerProxyController factory return line). psalm = env-skip (PHP 8.3.6 < 8.3.16).
+
+## Implementer — HB-4.6g — 2026-07-12
+429 + `Retry-After` mapping for `RateLimitException` landed. Committed+pushed to master.
+
+**Helper:**
+- `src/Auth/RateLimitException.php` — added `retryAfterSeconds(?int $now = null): int`. Defaults `$now` to `time()`; delegates the `max(0, resetAt - now)` math to `RateLimitState::retryAfter()` (single-sourced formula) by constructing a throwaway state from the exception's own `resetAt`/`remaining`. Returns `int<0,max>`.
+
+**Central HTTP catch (proxy/jwks + everything else):**
+- `src/Application.php` — added `catch (RateLimitException $e)` IMMEDIATELY before the generic `catch (Throwable)` at the outer request catch (was ~1724). It sets `$status = 429` (so the metrics `finally` records 429) and sends `self::rateLimitResponse($e)->toWorkermanResponse()`.
+- Added a testable `public static function rateLimitResponse(RateLimitException $e): Response` (next to `computeStaticCacheDecision`) building `status(429)` + `header('Retry-After', (string)$e->retryAfterSeconds())` + `json(['error'=>'Too Many Requests','code'=>'rate_limited'])`. Extracted so the proxy/jwks central-mapping path (controllers throw, don't map locally) gets direct unit coverage without booting Workerman.
+- **Proxy reaches the OUTER catch, confirmed by reading both blocks:** `ServerProxyController::proxy()` calls `hit()` synchronously at the top (before any `stream()` producer is set); dispatch happens at `Application.php` `$response = $router->dispatch($hubRequest)` — the throw propagates from `dispatch()` BEFORE the `$response->streamProducer !== null` check, so it can never reach the streaming-producer `catch` (that one only wraps the `($response->streamProducer)($connection)` invocation and merely `close()`s the socket). It lands in the outer catch → 429. ✓
+
+**Explicit local catches (the LANDMINE — these controllers swallow into generic paths first):**
+- `src/Http/Controllers/AuthController.php` — added `catch (RateLimitException $e)` BEFORE the `InvalidArgumentException`/`Throwable` catches in both `loginForm` (was `Throwable`→500) and `loginJson` (was `InvalidArgumentException`→401), both returning a shared private `rateLimited()` 429 envelope (same shape as the central one).
+- `src/Http/Controllers/ServerController.php` — added `catch (RateLimitException $e)` before the `\InvalidArgumentException` mapping in `heartbeat`, returning the same 429 envelope inline.
+- `src/Hub/HeartbeatHandler.php` — added `@throws RateLimitException` to `handle()`'s docblock. PHPStan treats an explicit `@throws` list as authoritative, so without this the new `ServerController` catch tripped `catch.neverThrown` (L9). `AuthManager::login` already declared its `@throws RateLimitException`, so `AuthController` needed no such doc fix.
+- WS paths (:8802/:8803) LEFT ALONE — they reject with close 1013 (no 429 body post-upgrade), per 4.6e/f.
+
+**Tests:**
+- `tests/Unit/Auth/RateLimitExceptionTest.php` (NEW) — `retryAfterSeconds()` with injected `now` (60, 1), floor-at-0 for a past/equal window, and default-to-`time()` positive.
+- `tests/Unit/ApplicationRateLimitResponseTest.php` (NEW) — `Application::rateLimitResponse()` → 429 + positive `Retry-After` + `code:'rate_limited'` (the proxy/jwks central-mapping coverage) + never-negative floor.
+- `tests/Unit/Http/Controllers/AuthControllerTest.php` — added `testLoginFormRateLimitedReturns429WithRetryAfter` + `testLoginJsonRateLimitedReturns429WithRetryAfter`: build a REAL `AuthManager` (mock `UserRepository` always-null → each attempt records a failure) + REAL `RateLimiter(900,2,1000)`; two bad-cred attempts (401), the 3rd trips → controller returns 429 + `Retry-After` + `code:'rate_limited'` (real limiter to a trip, not a mocked exception).
+- `tests/Unit/Http/Controllers/ServerControllerTest.php` — added `testHeartbeatRateLimitedReturns429WithRetryAfter`: heartbeat handler mock throws a real `RateLimitException(resetAt: now+45)`; controller maps to 429 + bounded `Retry-After` + envelope.
+
+Acceptance mapping: retryAfterSeconds helper ✓; central 429 catch before generic Throwable ✓ (proxy/jwks land here — confirmed by reading both catch blocks); explicit local catches in loginForm/loginJson/heartbeat ✓; WS untouched ✓; back-compat alias + limiter thresholds/keys untouched ✓.
+Verification: `phpunit --filter 'RateLimitException|ApplicationRateLimitResponse|AuthControllerTest|ServerControllerTest'` 35/35 green; FULL suite **1393 pass / 17 skip / 0 fail** (baseline 1385 + 8 new); `phpstan analyze` (L9) **0 errors**; `phpcs -n` PSR-12 clean on all changed src + new test files. psalm = env-skip (PHP 8.3.6 < 8.3.16).

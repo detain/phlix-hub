@@ -56,6 +56,7 @@ class HeartbeatHandler
      * @param HeartbeatDto $heartbeat      Heartbeat payload.
      *
      * @throws InvalidArgumentException When JWT is invalid (401) or server not found (404).
+     * @throws RateLimitException When the heartbeat rate limit for this server is exceeded (429).
      */
     public function handle(string $serverId, string $enrollmentJwt, HeartbeatDto $heartbeat): void
     {

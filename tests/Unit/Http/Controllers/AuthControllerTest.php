@@ -7,6 +7,10 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 use InvalidArgumentException;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
@@ -162,6 +166,91 @@ final class AuthControllerTest extends TestCase
 
         $response = $controller($request);
         self::assertSame(401, $response->statusCode);
+    }
+
+    /**
+     * Build a REAL {@see AuthManager} whose {@see UserRepository} always fails
+     * the lookup (so every login records a failed attempt) backed by the given
+     * REAL {@see RateLimiter}. Driving the login limiter to an actual trip —
+     * rather than mocking the exception — is the HB-4.6g/h coverage the plan
+     * asked for.
+     */
+    private function trippableAuthManager(RateLimiter $rl): AuthManager
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findByUsername')->willReturn(null);
+        $repo->method('findByEmail')->willReturn(null);
+
+        return new AuthManager(
+            $repo,
+            new JwtHandler(self::SECRET),
+            $this->createMock(AuditLogger::class),
+            $this->createMock(StructuredLogger::class),
+            $rl,
+        );
+    }
+
+    public function testLoginFormRateLimitedReturns429WithRetryAfter(): void
+    {
+        // Real limiter: 2 failed attempts fill the window, the 3rd peeks
+        // `limited` and throws RateLimitException BEFORE checking creds.
+        $rl = new RateLimiter(windowSeconds: 900, maxAttempts: 2, cap: 1000);
+        $controller = $this->controller($this->trippableAuthManager($rl));
+
+        $makeRequest = static function (): Request {
+            $request = new Request();
+            $request->method = 'POST';
+            $request->path = '/login';
+            $request->remoteIp = '203.0.113.5';
+            $request->body = ['username' => 'nobody', 'password' => 'wrong'];
+            return $request;
+        };
+
+        // Two bad-credential attempts (each mapped to 401 HTML, no throw out).
+        self::assertSame(401, $controller($makeRequest())->statusCode);
+        self::assertSame(401, $controller($makeRequest())->statusCode);
+
+        // Third attempt trips the limiter -> the local catch maps it to 429.
+        $response = $controller($makeRequest());
+
+        self::assertSame(429, $response->statusCode);
+        self::assertArrayHasKey('Retry-After', $response->headers);
+        $retryAfter = (int) $response->headers['Retry-After'];
+        self::assertGreaterThan(0, $retryAfter);
+        self::assertLessThanOrEqual(900, $retryAfter);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($response->body, true);
+        self::assertSame('rate_limited', $decoded['code']);
+        self::assertSame('Too Many Requests', $decoded['error']);
+    }
+
+    public function testLoginJsonRateLimitedReturns429WithRetryAfter(): void
+    {
+        $rl = new RateLimiter(windowSeconds: 900, maxAttempts: 2, cap: 1000);
+        $controller = $this->controller($this->trippableAuthManager($rl));
+
+        $makeRequest = static function (): Request {
+            $request = new Request();
+            $request->method = 'POST';
+            $request->path = '/api/v1/auth/login';
+            $request->remoteIp = '203.0.113.9';
+            $request->body = ['username' => 'nobody', 'password' => 'wrong'];
+            return $request;
+        };
+
+        // Two bad-credential attempts (each mapped to a 401 JSON, no throw out).
+        self::assertSame(401, $controller($makeRequest())->statusCode);
+        self::assertSame(401, $controller($makeRequest())->statusCode);
+
+        $response = $controller($makeRequest());
+
+        self::assertSame(429, $response->statusCode);
+        self::assertArrayHasKey('Retry-After', $response->headers);
+        self::assertGreaterThan(0, (int) $response->headers['Retry-After']);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($response->body, true);
+        self::assertSame('rate_limited', $decoded['code']);
+        self::assertSame('Too Many Requests', $decoded['error']);
     }
 
     public function testLogoutClearsCookies(): void

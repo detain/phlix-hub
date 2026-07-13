@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Hub\DeregisterHandler;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RenewHandler;
@@ -88,6 +89,14 @@ final class ServerController
         try {
             $this->heartbeatHandler->handle($serverIdFromPath, $token, $heartbeat);
             return (new Response())->json(['status' => 'ok']);
+        } catch (RateLimitException $e) {
+            // Precede the InvalidArgumentException mapping so a limiter trip
+            // maps to 429 + Retry-After rather than being folded into a
+            // generic error by mapError(). WS surfaces do NOT reach here.
+            return (new Response())
+                ->status(429)
+                ->header('Retry-After', (string) $e->retryAfterSeconds())
+                ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
         } catch (\InvalidArgumentException $e) {
             return $this->mapError($e->getMessage());
         }

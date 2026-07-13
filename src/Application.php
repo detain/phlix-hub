@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub;
 
+use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Channel\Client as ChannelClient;
 use Channel\Server as ChannelServer;
@@ -174,6 +175,23 @@ final class Application
             'mtime' => (int) $stat['mtime'],
             'size' => (int) $stat['size'],
         ];
+    }
+
+    /**
+     * Build the canonical HTTP 429 envelope for a {@see RateLimitException}
+     * that bubbles out of dispatch: `status(429)` + a `Retry-After` header
+     * (seconds until the window resets, never negative) + a JSON body of
+     * `{error, code: 'rate_limited'}`. Shared by the central HTTP catch and
+     * exercised directly by tests so the proxy/jwks central-mapping path (whose
+     * controllers throw rather than map locally) has coverage. HTTP-only — the
+     * WS surfaces reject with a close 1013 and never call this.
+     */
+    public static function rateLimitResponse(RateLimitException $e): Response
+    {
+        return (new Response())
+            ->status(429)
+            ->header('Retry-After', (string) $e->retryAfterSeconds())
+            ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
     }
 
     /**
@@ -1721,6 +1739,16 @@ final class Application
                 } else {
                     $connection->send($response->toWorkermanResponse());
                 }
+            } catch (RateLimitException $e) {
+                // Central 429 mapping for any limiter trip that bubbles out of
+                // dispatch BEFORE a streaming producer is set (e.g. the proxy
+                // `hit()` throws at the top of `proxy()`, so it lands here — the
+                // outer catch — not the streaming-producer backstop above).
+                // Controllers that swallow into their own generic paths catch it
+                // locally first (AuthController login*, ServerController::heartbeat);
+                // this is the backstop for everything else (proxy/jwks/...).
+                $status = 429;
+                $connection->send(self::rateLimitResponse($e)->toWorkermanResponse());
             } catch (Throwable $e) {
                 $status = 500;
                 $logger?->error('Unhandled exception in hub request', [

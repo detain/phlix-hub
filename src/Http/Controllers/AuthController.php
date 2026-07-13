@@ -13,6 +13,7 @@ namespace Phlix\Hub\Http\Controllers;
 
 use InvalidArgumentException;
 use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\CsrfMiddleware;
@@ -131,6 +132,11 @@ final class AuthController
                 self::asString($result['access_token']),
                 self::asString($result['refresh_token']),
             );
+        } catch (RateLimitException $e) {
+            // Must precede the generic catches below, which would otherwise
+            // swallow a limiter trip into a 401/500 before the central
+            // Application 429 mapping ever runs. WS surfaces do NOT reach here.
+            return self::rateLimited($e);
         } catch (InvalidArgumentException $e) {
             return $this->csrf->issue($request, (new Response())->html(
                 $this->renderer->render('auth/login.tpl', [
@@ -213,12 +219,30 @@ final class AuthController
                 'user'          => $result['user'],
                 'claims'        => $result['claims'],
             ], 200);
+        } catch (RateLimitException $e) {
+            // Precede the InvalidArgumentException 401 so a limiter trip maps
+            // to 429 + Retry-After rather than a misleading 401.
+            return self::rateLimited($e);
         } catch (InvalidArgumentException $e) {
             return (new Response())->status(401)->json([
                 'error' => 'Unauthorized',
                 'message' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Build the shared 429 rate-limit envelope (status + `Retry-After` header
+     * + `code: 'rate_limited'`), matching the central mapping in
+     * {@see \Phlix\Hub\Application}. Kept local so login trips never fall
+     * through to the generic 401/500 paths above.
+     */
+    private static function rateLimited(RateLimitException $e): Response
+    {
+        return (new Response())
+            ->status(429)
+            ->header('Retry-After', (string) $e->retryAfterSeconds())
+            ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
     }
 
     /**
