@@ -2048,7 +2048,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount(0, $this->published);
     }
 
-    public function test_buffered_request_records_first_byte_and_total_latency(): void
+    public function test_buffered_request_records_only_first_byte_latency(): void
     {
         $sent = [];
         $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
@@ -2090,11 +2090,13 @@ final class RelayProxyManagerTest extends TestCase
             RelayHttpResponseCodec::encodeEnd(),
         ));
 
-        // Total recorded on END → exactly two observations (first-byte + total).
-        $this->assertSame(2, $this->relayLatencyObservationCount($registry));
+        // The migration-036 histogram is documented as first-byte only, so END
+        // records NOTHING more — exactly ONE observation per request (H-R8 fix:
+        // total round-trip is no longer blended into the latency histogram).
+        $this->assertSame(1, $this->relayLatencyObservationCount($registry));
     }
 
-    public function test_streaming_request_records_first_byte_and_total_latency(): void
+    public function test_streaming_request_records_only_first_byte_latency_not_stream_duration(): void
     {
         $sent = [];
         $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
@@ -2122,9 +2124,14 @@ final class RelayProxyManagerTest extends TestCase
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '6'], 6)),
         ));
-        // First-byte recorded on the streamed HEAD (previously the streaming
-        // path recorded NO latency at all).
+        // First-byte recorded on the streamed HEAD.
         $this->assertSame(1, $this->relayLatencyObservationCount($registry));
+
+        // Simulate a LONG-running media stream: after first-byte was already
+        // recorded, backdate this request's send time far into the past, so that
+        // IF the send→END session duration were (wrongly) recorded into the
+        // latency histogram, it would land in the ">5000ms" overflow bucket.
+        $this->backdateSentAt($manager, 1000.0);
 
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
@@ -2137,7 +2144,51 @@ final class RelayProxyManagerTest extends TestCase
             RelayHttpResponseCodec::encodeEnd(),
         ));
 
-        // Total recorded at stream completion (END) → two observations.
-        $this->assertSame(2, $this->relayLatencyObservationCount($registry));
+        // Only the first-byte observation exists at completion — the stream's
+        // multi-minute session duration is NOT recorded, so the ">5s" bucket
+        // stays empty and a "latency > 5s" alert does not fire on normal playback.
+        $this->assertSame(1, $this->relayLatencyObservationCount($registry));
+        $this->assertSame(
+            0,
+            $this->relayLatencyOverflowCount($registry),
+            'a long stream duration must never pollute the >5s latency bucket',
+        );
+    }
+
+    /**
+     * Backdate every in-flight request's `sent_at` so a subsequent END would, if
+     * the (removed) total-latency recording were still present, produce a
+     * multi-second observation. Used to prove the streaming path records no
+     * session duration into the histogram.
+     */
+    private function backdateSentAt(RelayProxyManager $manager, float $secondsAgo): void
+    {
+        $p = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $p->setAccessible(true);
+        /** @var array<int|string, array<string, mixed>> $pending */
+        $pending = $p->getValue($manager);
+        $backdated = microtime(true) - $secondsAgo;
+        foreach ($pending as $key => $entry) {
+            $entry['sent_at'] = $backdated;
+            $pending[$key] = $entry;
+        }
+        $p->setValue($manager, $pending);
+    }
+
+    /**
+     * Number of relay-latency observations that landed in the ">5000ms" overflow
+     * bucket (index -1), summed across all time buckets, read non-destructively.
+     */
+    private function relayLatencyOverflowCount(MetricsRegistry $registry): int
+    {
+        $p = new ReflectionProperty(MetricsRegistry::class, 'relayLatencyHistogram');
+        $p->setAccessible(true);
+        /** @var array<int, array<int, int>> $hist */
+        $hist = $p->getValue($registry);
+        $total = 0;
+        foreach ($hist as $bucket) {
+            $total += $bucket[-1] ?? 0;
+        }
+        return $total;
     }
 }

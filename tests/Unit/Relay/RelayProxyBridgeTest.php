@@ -8,6 +8,8 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayResponseSink;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
+use Phlix\Hub\Stats\Metrics\MetricsRegistry;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 use RuntimeException;
@@ -486,6 +488,59 @@ final class RelayProxyBridgeTest extends TestCase
         // dropped BEFORE it ever reaches the channel — no further push call.
         $bridge->onReply(['request_id' => 'req-1', 'phase' => 'end']);
         $this->assertCount(1, $fakeChannel->pushTimeouts, 'a dropped request must stop being tracked');
+    }
+
+    /**
+     * H-R8 fix (Finding 1): the operationally-critical channel-push reply drop —
+     * a reply discarded because the client's consumer channel is full/gone (the
+     * H-H6 stall / H-H3 back-pressure failure mode) — must increment
+     * `relay_reply_drops` on the injected {@see MetricsCollector}, not merely log.
+     * Before the fix `RelayProxyBridge` carried no collector and `dropReply()`
+     * only warned, so an operator was blind to exactly the stall H-R8 surfaces.
+     */
+    public function test_drop_reply_records_a_reply_drop_on_the_injected_collector(): void
+    {
+        $fakeChannel = new class (1) extends Channel {
+            public bool $pushResult = false;
+
+            public function push(mixed $data, float $timeout = -1): bool
+            {
+                return $this->pushResult;
+            }
+        };
+
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $bridge    = new RelayProxyBridge(
+            $this->createMock(StructuredLogger::class),
+            null,
+            null,
+            $collector,
+        );
+
+        $pendingProp = new ReflectionProperty(RelayProxyBridge::class, 'pending');
+        $pendingProp->setAccessible(true);
+        $pendingProp->setValue($bridge, ['req-1' => $fakeChannel]);
+
+        // Channel rejects the non-blocking probe (full/gone); with no coroutine
+        // context (cid = -1 under plain PHPUnit) onReply() takes the drop path →
+        // dropReply() must COUNT this drop, not just log it.
+        $fakeChannel->pushResult = false;
+        $bridge->onReply(['request_id' => 'req-1', 'phase' => 'body', 'body' => 'x']);
+
+        $this->assertSame(1, $this->registryReplyDrops($registry));
+    }
+
+    /**
+     * Read the private `relayReplyDrops` counter off the registry non-destructively.
+     */
+    private function registryReplyDrops(MetricsRegistry $registry): int
+    {
+        $p = new ReflectionProperty(MetricsRegistry::class, 'relayReplyDrops');
+        $p->setAccessible(true);
+        /** @var int $v */
+        $v = $p->getValue($registry);
+        return $v;
     }
 
     /**
