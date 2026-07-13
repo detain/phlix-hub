@@ -1898,3 +1898,53 @@ Verify (this box, PHP 8.3.6 + PCOV):
 - full suite → **OK 1359 / 16132 assertions / 17 skipped / 0 failures**.
 - `phpstan analyse --no-progress` → **[OK] No errors** (L9).
 - `phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
+
+## Reviewer (re-review) — HB-4.1 fix — 2026-07-12
+
+Reviewed `git diff a447294..374a972` (fix `9c4cdd9` src + `4d68b1e` tests) against the 2 prior
+Medium findings, the H-R8 finding, and migration 036. Read-only gates on this box: phpstan L9
+**[OK] No errors**; `phpunit --filter 'RelayProxyBridge|RelayProxyManager|MetricsFlush'` **OK (87
+tests)**; full suite **OK 1359 / 16132 assertions / 17 skipped / 0 failures** (baseline 1356 + 3 net
+new); phpcs PSR-12 `-n src/` **clean (exit 0)**. (psalm/migrate skipped — env, not findings.)
+
+**NO FINDINGS**
+
+Both Medium findings are genuinely closed and no new defect was introduced:
+
+- **Finding 1 (reply-drop at the wrong site) — CLOSED.** `RelayProxyBridge::dropReply()` (`:590`) now
+  calls `$this->metrics?->recordRelayReplyDrop()` — the correct recorder name (exists at
+  `MetricsCollector.php:167`) matching HB-4.1's API. `dropReply` is the H-R8-named channel-push drop:
+  reached from `onReply` (cid<=0 path, `:551`) and `deliverReplyInFiber` (`:569`, push-timeout) — the
+  reply the client's consumer channel is full/gone (H-H6 stall / H-H3 back-pressure). The
+  `MetricsCollector` is injected via the `HubServicesProvider` factory (`:362`, `metrics: $metrics` bound
+  to `get(MetricsCollector::class)`), and `RelayProxyBridgeWiringTest` asserts IDENTITY (`assertSame`) —
+  bridge collector === `get(MetricsCollector::class)` AND bridge collector->registry() ===
+  `get(MetricsRegistry::class)` the flush drains. The ctor param is BC (`private readonly ?MetricsCollector
+  $metrics = null`, nullable, LAST, defaulted) so existing positional constructions are unbroken. The
+  retained orphan-frame count at `RelayProxyManager::onResponseFrame` (`:351`) is a DISTINCT event — an
+  inbound HTTP_RESPONSE for an unknown/torn-down request, which `return`s immediately and never reaches
+  the bridge; a given reply is dropped at the manager (unknown request) OR the bridge (channel full/gone),
+  never both. No double-count.
+
+- **Finding 2 (streaming-duration pollution) — CLOSED.** The `recordRelayLatency($totalMs)` call in the
+  KIND_END block is removed. Grep-confirmed the ONLY remaining `recordRelayLatency` caller in `src/` is
+  the first-byte site (`RelayProxyManager.php:379`). First-byte still fires once per request for BOTH
+  buffered and streaming (`:376-380`, unchanged). `sent_at` is retained (first-byte + sweep). The
+  streaming test backdates `sent_at` by 1000s AFTER first-byte was recorded, then asserts exactly ONE
+  latency observation AND `>5000ms` overflow bucket == 0 — proving a long stream never lands in the
+  histogram (a re-added total would produce a ~1,000,000ms observation in the overflow bucket, failing
+  both assertions). No other code path feeds a total/session duration into the histogram.
+
+- **No new regression / scope.** Diff touches only `HubServicesProvider.php`, `RelayProxyBridge.php`,
+  `RelayProxyManager.php` + 3 test files. `Tunnel.php`, reapers, and txn-locking are untouched. The
+  accepted HB-4.1 emitters are intact: no_tunnel-503 (`RelayProxyManager.php:225`), failServer-503
+  (`:454`), timeout-504 (`:578`), pending gauge (`:288/414/469/495/577`), drain/persist to migration-036
+  columns, and the DI wiring. phpstan L9 clean; full suite green.
+
+- **Tests genuine (not tautological).** The reply-drop test injects a REAL `MetricsCollector`+`MetricsRegistry`,
+  a full/gone fake channel + no coroutine context (cid=-1 under plain PHPUnit) to drive the real
+  `onReply → dropReply` path and asserts `relayReplyDrops === 1` (fails against the pre-fix null
+  collector). The wiring test guards the injection via `assertSame`. The first-byte-only latency tests
+  would fail if the total recording were re-added (observation count 2 and overflow bucket 1).
+
+Verdict: **HB-4.1 fix DONE — NO FINDINGS.** Loop may exit (docs cycle still owed per the batched sweep).
