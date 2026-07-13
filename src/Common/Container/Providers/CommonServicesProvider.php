@@ -15,6 +15,7 @@ use DI\ContainerBuilder;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 
 use function DI\factory;
 use function DI\get;
@@ -23,28 +24,35 @@ use function DI\get;
  * Registers cross-cutting "common" primitives that are not tied to a
  * single subsystem.
  *
- * Currently binds the {@see RateLimiterInterface} to the worker-local
- * {@see RateLimiter} (finding B1 — bounded, actively-evicted TTL store
- * replacing the unbounded static map). Consumers depend on the interface,
- * so a cluster-safe backend can be swapped here later (Feature #6) without
- * touching call sites. The concrete {@see RateLimiter} is aliased to the
- * same singleton so type-hinting either the interface or the class
- * resolves the one instance per worker.
+ * Binds one {@see RateLimiter} instance PER SURFACE (HB-4.6a) — the historical
+ * single login-grade limiter (5 / 900s) was mis-injected into proxy, heartbeat
+ * and JWKS, which would trip normal operation. Each surface named in
+ * {@see RateLimitProfiles} is registered under its own container id
+ * (`rate_limiter.login`, `rate_limiter.proxy`, …) with its own
+ * `{max, window}` sourced from `config/server.php`'s `rate_limit` section
+ * (see {@see RateLimitProfiles::defaults()} for the per-worker defaults).
+ * Every id resolves to a DISTINCT instance so no two surfaces share a window.
  *
- * Window/attempt defaults mirror the historical login limiter
- * (5 attempts / 900s) and can be overridden via `config/auth.php`
- * (`rate_limit.window_seconds`, `rate_limit.max_attempts`, `rate_limit.cap`).
+ * Back-compat (LANDMINE): the legacy {@see RateLimiterInterface} and
+ * {@see RateLimiter} bindings are aliased to the `login` profile so the
+ * factories/services that still inject them keep resolving and the container
+ * still boots. Those call sites are migrated to the named profiles in the
+ * follow-on HB-4.6b–f sub-steps.
+ *
+ * Config shape (mirrors the `metrics` block in `config/server.php`):
+ * ```php
+ * 'rate_limit' => [
+ *     'cap'   => 10000,                       // shared key-count ceiling
+ *     'login' => ['max' => 5,   'window' => 900],
+ *     'proxy' => ['max' => 600, 'window' => 60],
+ *     // … one entry per surface; each falls back to RateLimitProfiles defaults
+ * ],
+ * ```
  *
  * @package Phlix\Hub\Common\Container\Providers
  */
 final class CommonServicesProvider implements ServiceProviderInterface
 {
-    /** Default counting window in seconds (15 minutes). */
-    private const int DEFAULT_WINDOW_SECONDS = 900;
-
-    /** Default attempts allowed within a window. */
-    private const int DEFAULT_MAX_ATTEMPTS = 5;
-
     /** Default ceiling on retained keys per worker. */
     private const int DEFAULT_CAP = 10000;
 
@@ -53,29 +61,6 @@ final class CommonServicesProvider implements ServiceProviderInterface
      */
     public function register(ContainerBuilder $builder, array $appConfig): void
     {
-        $rateLimit = self::resolveRateLimitConfig($appConfig);
-        $window = $rateLimit['window_seconds'];
-        $max = $rateLimit['max_attempts'];
-        $cap = $rateLimit['cap'];
-
-        $builder->addDefinitions([
-            RateLimiter::class => factory(
-                static fn (): RateLimiter => new RateLimiter($window, $max, $cap)
-            ),
-            RateLimiterInterface::class => get(RateLimiter::class),
-        ]);
-    }
-
-    /**
-     * Resolve rate-limit knobs from the merged app config, falling back to
-     * the historical login-limiter defaults.
-     *
-     * @param array<string, mixed> $appConfig
-     *
-     * @return array{window_seconds: int, max_attempts: int, cap: int}
-     */
-    private static function resolveRateLimitConfig(array $appConfig): array
-    {
         /**
          * @var mixed $section
          * @psalm-suppress MixedAssignment
@@ -83,11 +68,35 @@ final class CommonServicesProvider implements ServiceProviderInterface
         $section = $appConfig['rate_limit'] ?? null;
         $rateLimit = is_array($section) ? $section : [];
 
-        return [
-            'window_seconds' => self::intOr($rateLimit, 'window_seconds', self::DEFAULT_WINDOW_SECONDS),
-            'max_attempts' => self::intOr($rateLimit, 'max_attempts', self::DEFAULT_MAX_ATTEMPTS),
-            'cap' => self::intOr($rateLimit, 'cap', self::DEFAULT_CAP),
-        ];
+        $cap = self::intOr($rateLimit, 'cap', self::DEFAULT_CAP);
+
+        $definitions = [];
+
+        foreach (RateLimitProfiles::defaults() as $id => $spec) {
+            /**
+             * @var mixed $surfaceRaw
+             * @psalm-suppress MixedAssignment
+             */
+            $surfaceRaw = $rateLimit[$spec['key']] ?? null;
+            $surface = is_array($surfaceRaw) ? $surfaceRaw : [];
+
+            $max = self::intOr($surface, 'max', $spec['max']);
+            $window = self::intOr($surface, 'window', $spec['window']);
+
+            // Arrow fn captures $window/$max/$cap BY VALUE at definition time,
+            // so each surface gets its own thresholds (and its own instance).
+            $definitions[$id] = factory(
+                static fn (): RateLimiter => new RateLimiter($window, $max, $cap)
+            );
+        }
+
+        // Back-compat: legacy consumers still inject the interface/concrete
+        // directly; alias both to the login profile until the call sites are
+        // migrated to the named profiles (HB-4.6b–f).
+        $definitions[RateLimiter::class] = get(RateLimitProfiles::LOGIN);
+        $definitions[RateLimiterInterface::class] = get(RateLimitProfiles::LOGIN);
+
+        $builder->addDefinitions($definitions);
     }
 
     /**

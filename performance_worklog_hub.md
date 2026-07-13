@@ -2427,3 +2427,38 @@ Closed both audited hub-side gaps from the perf-4 RE-AUDIT roll-up (worklog ~lin
 - psalm not run — box PHP 8.3.6 < required (environmental, not red).
 
 **phlix-shared repin:** NOT required. Change is comment-only; hub already consumes `detain/phlix-shared ^0.20.0` from Packagist and has no behavioral dependency on the doc. The doc lands at phlix-shared HEAD and reaches consumers at the next natural release/tag; no version bump forced.
+
+## Reviewer (per-step HB-4.9 hub-half) — 2026-07-12
+
+NO FINDINGS
+
+Verified: `relayCancels` mirrors the `relayReplyDrops` idiom exactly (field decl, `recordRelayCancel()`, `cancels` drain key + zero-reset in `drainRelayMetrics()`, façade no-op-when-disabled in `MetricsCollector`). Counter increments exactly once at the REAL cancel site in `cancelRequest()` (after pending-gauge decrement, before `sendCancel()`); the `$entry === null` early return + `onCancel`'s unknown/mismatch guards prevent phantom/double-count — `cancelRequest` has no caller other than `onCancel` (browser-gone → publish CANCEL → onCancel → cancelRequest → sendCancel). Migration 039 is plain `ADD COLUMN` (no MariaDB `IF NOT EXISTS`), header comment present, `AFTER relay_decode_buffer_bytes` (exists in mig 036), appended to `MigrationFileTest` — consistent with mig 036's ADD COLUMNs. Flush `:rcancels` bind is colon-free-compliant and accumulates (`relay_cancels = relay_cancels + VALUES(...)`) like the sibling counters; idle-skip includes cancels. Shared doc is comment-only, no behavioral change; `fromValue` range `0x01–0x12` correct (HTTP_CANCEL=0x12 is the max enum case). No scope bleed into SV-4.2 server stop-work or the already-wired propagation path.
+
+Gates: hub phpunit (247 relevant tests OK), hub phpstan L9 clean on changed files, shared RelayFrameType tests green.
+
+## Orchestrator — HB-4.9 hub-half DONE (2026-07-12, perf-5)
+- [x] HB-4.9 hub-half — hub 6c0aa5f (relayCancels counter mirroring relayReplyDrops; incremented at real cancelRequest site; migration 039 relay_cancels col, MySQL-8 safe; colon-free :rcancels bind) + phlix-shared 45edc01 (HTTP_CANCEL=0x12 contract documented, comment-only, NO repin needed). REVIEW = NO FINDINGS. Hub suite 1375 green, phpstan L9 clean.
+- Server-STOP half = SV-4.2 (server repo, IN PROGRESS). X1 closes once SV-4.2 lands + on-box cancel round-trip verified (owed).
+- Docs cycle batched. Hub next: HB-4.6 (large rate-limit rework) — planning pass in progress.
+
+## Orchestrator — HB-4.6 DECOMPOSITION (2026-07-12, perf-5, from Plan pass)
+Shared-store decision: KEEP per-worker in-memory RateLimiter (NO DB limiter on proxy hot path). :8802 RelayWorker + :8803 ClientRelayWorker are count=1 ⇒ per-worker==global (the DoS surfaces). proxy/jwks/heartbeat run on HUB_WORKERS(2) ⇒ soft-global ≈2×, set per-worker threshold = target÷HUB_WORKERS + document (mirror HB-3.4). DB limiter sketched (mig 040 rate_limits table, LAST_INSERT_ID atomic) = documented FUTURE work only.
+Per-surface policy (per-worker): login 5/900 (unchanged, own instance); proxy ~600/60s key proxy:{userId} (hit AFTER userId gate); heartbeat ~30/60s key heartbeat:{JWT-serverId}; jwks ~120/60s key jwks:{ip}; relay_connect ~10/60s key {ip} (WS close on limit); client_mount ~30/60s key {ip}(+serverId) (WS close).
+Sub-steps (one active per repo, sequential on hub):
+- [ ] HB-4.6a FOUNDATION — per-surface named limiter DI in CommonServicesProvider + `rate_limit` section in config/server.php (mirror `metrics` block); keep RateLimiterInterface→login as back-compat alias. BLOCKS all others.
+- [ ] HB-4.6b proxy re-key+threshold (ServerProxyController + factory HubServicesProvider:587); hit below userId gate.
+- [ ] HB-4.6c heartbeat threshold+keying (HeartbeatHandler + factory :168); +[ ] 4.6d JWKS (HubJwksController + factory :242) — may fold into c.
+- [ ] HB-4.6e :8802 relay-connect limiter NEW (RelayWorker::onWebSocketConnect; resolve from container in onWorkerStart; WS close on limit).
+- [ ] HB-4.6f :8803 client-mount limiter NEW (ClientRelayWorker::onWebSocketConnect) + retire dead ClientMountController::handle limiter.
+- [ ] HB-4.6g 429 mapping: central catch(RateLimitException) before Application.php:1724 + explicit catch in AuthController loginForm/loginJson + ServerController::heartbeat; add RateLimitException::retryAfterSeconds(); WS paths reject (1013) NOT 429.
+- [ ] HB-4.6h test hardening: replace ALL limited:false stubs with real RateLimiter+injected clock; prove streaming burst survives, heartbeat cadence survives, over-limit trips, 429+Retry-After.
+LANDMINES: proxy limiter MUST be generous+userId-keyed or HLS breaks (test real multi-seg burst); local catches in AuthController/ServerController swallow 429→500 (need explicit catch before generic); WS≠HTTP (no 429 body, close 1013); keep RateLimiterInterface alias valid until all sites migrated or container fails to boot.
+
+## Implementer — HB-4.6a — 2026-07-12
+FOUNDATION landed (blocks HB-4.6b–h). All work committed+pushed to master.
+- **NEW** `src/Common/RateLimit/RateLimitProfiles.php` — type-safe catalogue of the per-surface container ids + per-worker default `{max,window}`. Container ids chosen: `rate_limiter.login` (5/900), `rate_limiter.proxy` (600/60), `rate_limiter.heartbeat` (30/60), `rate_limiter.jwks` (120/60), `rate_limiter.relay_connect` (10/60), `rate_limiter.client_mount` (30/60). `defaults()` maps `id => {key, max, window}` (key = the config sub-key).
+- **EDIT** `src/Common/Container/Providers/CommonServicesProvider.php` — now iterates `RateLimitProfiles::defaults()`, reads each surface's `{max,window}` (+ shared `cap`) from `$appConfig['rate_limit']`, and registers ONE distinct `RateLimiter($window,$max,$cap)` factory per surface (arrow-fn captures by value → distinct thresholds AND distinct instances). Back-compat: `RateLimiterInterface::class` AND `RateLimiter::class` both `get(RateLimitProfiles::LOGIN)` → the login instance, so the ~5 un-migrated factories (HubServicesProvider :178/:246/:302/:593, AuthServicesProvider :113) keep resolving and the container still boots. Removed the now-dead single-limiter `resolveRateLimitConfig()`; kept `intOr()`.
+- **EDIT** `config/server.php` — new `rate_limit` block mirroring the `metrics` IIFE: `cap` + per-surface `{max,window}`, each env-overridable (`PHLIX_HUB_RATELIMIT_*`), defaults matching the policy table.
+- **EDIT** `tests/Unit/Common/Container/Providers/CommonServicesProviderTest.php` — rewritten for per-surface DI: (1) each `rate_limiter.<surface>` resolves to a RateLimiter with the expected `(max,window)` (max via `peek()->limit`, window via `hit()->resetAt` range-check); (2) login is 5/900; (3) surfaces are DISTINCT instances (spl_object_id uniqueness); (4) a `rate_limit.proxy` override takes effect while others keep defaults; (5) legacy `RateLimiterInterface`/`RateLimiter` still resolve to the login profile.
+Acceptance mapping: config section ✓ (server.php mirrors metrics), named per-surface instances ✓ (RateLimitProfiles + provider loop), back-compat alias ✓ (interface+concrete → login). Call sites intentionally UNTOUCHED (deferred to 4.6b–f).
+Verification: `phpunit --filter CommonServicesProvider` 5/61 green; full suite **1377 pass / 17 skip / 0 fail**; `phpstan analyze` (L9) **0 errors** (full src); `phpcs` PSR12 clean on changed files. psalm = env-skip (PHP 8.3.6 < 8.3.16).

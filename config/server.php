@@ -85,4 +85,51 @@ return [
             'latency_buckets_ms'       => [10, 50, 100, 250, 500, 1000, 2500, 5000],
         ];
     })(),
+
+    // Per-surface rate limiting (HB-4.6). Each surface gets its OWN worker-local
+    // RateLimiter instance (see Phlix\Hub\Common\RateLimit\RateLimitProfiles);
+    // a single login-grade 5/900 limiter is wrong for everything but login.
+    // Thresholds are PER-WORKER: login/relay_connect/client_mount run on the
+    // count=1 surfaces (per-worker == global); proxy/heartbeat/jwks run across
+    // HUB_WORKERS HTTP workers, so the soft-global limit is ~max × HUB_WORKERS
+    // (mirrors HB-3.4). Any surface's `max`/`window` — and the shared `cap`
+    // (key-count ceiling) — is env-overridable; absent keys fall back to the
+    // RateLimitProfiles defaults.
+    'rate_limit' => (static function (): array {
+        $envInt = static fn (string $k, int $d): int => is_numeric(getenv($k) ?? '') ? (int) getenv($k) : $d;
+
+        return [
+            'cap'           => $envInt('PHLIX_HUB_RATELIMIT_CAP', 10000),
+            // Login: unchanged historical limiter (5 attempts / 15 min).
+            'login'         => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_LOGIN_MAX', 5),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_LOGIN_WINDOW', 900),
+            ],
+            // Proxy: generous (HLS segment bursts) — keyed by userId downstream.
+            'proxy'         => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_PROXY_MAX', 600),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_PROXY_WINDOW', 60),
+            ],
+            // Heartbeat: ~one per server every 60s + slack.
+            'heartbeat'     => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_HEARTBEAT_MAX', 30),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_HEARTBEAT_WINDOW', 60),
+            ],
+            // JWKS: keyed by client IP.
+            'jwks'          => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_JWKS_MAX', 120),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_JWKS_WINDOW', 60),
+            ],
+            // :8802 server relay-connect (WS) — keyed by IP.
+            'relay_connect' => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX', 10),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_RELAY_CONNECT_WINDOW', 60),
+            ],
+            // :8803 client-mount (WS) — keyed by IP (+ serverId).
+            'client_mount'  => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX', 30),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_WINDOW', 60),
+            ],
+        ];
+    })(),
 ];
