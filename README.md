@@ -559,11 +559,12 @@ development fallbacks.
 
 #### Rate limiting ([`config/server.php`](config/server.php) `rate_limit`)
 
-Each abuse-prone surface has its own in-memory rate limiter (a single login-grade limiter is
-wrong for everything but login). Every threshold is env-overridable; absent keys fall back to the
-per-worker defaults below. HTTP surfaces that trip return **429** with a `Retry-After` header and
-`{"error":"Too Many Requests","code":"rate_limited"}`; the WebSocket handshakes (:8802/:8803)
-reject with WS close code **1013** (Try Again Later) instead.
+Each abuse-prone surface has its own rate limiter (a single login-grade limiter is wrong for
+everything but login). Five surfaces use a per-worker in-memory limiter; **`login` alone is
+shared and DB-backed** (see the per-worker caveat below). Every threshold is env-overridable;
+absent keys fall back to the defaults below. HTTP surfaces that trip return **429** with a
+`Retry-After` header and `{"error":"Too Many Requests","code":"rate_limited"}`; the WebSocket
+handshakes (:8802/:8803) reject with WS close code **1013** (Try Again Later) instead.
 
 | Variable | Default | Surface / key |
 |----------|---------|---------------|
@@ -575,11 +576,18 @@ reject with WS close code **1013** (Try Again Later) instead.
 | `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP |
 | `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP |
 
-> **Per-worker caveat.** Thresholds are enforced **per worker process**. The :8802/:8803 relay
-> workers are `count=1`, so per-worker == global there. `proxy`, `heartbeat`, and `jwks` run
-> across `HUB_WORKERS` HTTP workers, so their effective soft-global limit is roughly
-> `max × HUB_WORKERS`. A strict global cap would require a shared store (Redis/DB) and is
-> documented as future work.
+> **Per-worker vs global caveat.** Most thresholds are enforced **per worker process**. The
+> :8802/:8803 relay workers are `count=1`, so per-worker == global for `relay_connect` /
+> `client_mount`. `proxy`, `heartbeat`, and `jwks` run across `HUB_WORKERS` HTTP workers, so
+> their effective soft-global limit is roughly `max × HUB_WORKERS` — a documented, accepted
+> tradeoff (a strict global cap for these would require a shared store, Redis/DB, and is future
+> work).
+>
+> **`login` is the exception — it is genuinely global.** Its bucket is backed by the shared
+> `login_rate_limit` DB table (migration `040_login_rate_limit`), so ALL HTTP workers share one
+> counter per key and the **5/900 budget is actually 5/900** — not the `~5 × HUB_WORKERS / 900`
+> (≈20/900 with 4 workers, first 429 near attempt ~9) it was when every surface was worker-local
+> (HB-4.6 "Option B").
 
 ### Database ([`config/database.php`](config/database.php))
 
@@ -622,6 +630,7 @@ Migrations live in [`migrations/`](migrations) and are applied in filename order
 | `server_heartbeats` | Recent heartbeats for liveness and clock-skew detection |
 | `relay_sessions` | One row per open WebSocket relay session |
 | `relay_user_quotas` | Per-user relay byte usage + download/upload caps + `max_concurrent_streams` |
+| `login_rate_limit` | Shared, cross-worker login rate-limit buckets (one row per key; the only DB-backed limiter) |
 | `metrics_rollup` | Time-bucketed hub metrics incl. relay gauges/counters (`relay_pending_requests`, `relay_reply_drops`, `relay_error_503`/`504`, `relay_cancels`, latency histogram) |
 | `shared_libraries` | Library grants from a server owner to another user |
 | `library_shares` | Per-library shares with read-only / read-write levels |

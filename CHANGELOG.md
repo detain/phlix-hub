@@ -67,6 +67,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   :8803 relay workers are `count=1`, so per-worker == global there; `proxy`/`heartbeat`/`jwks`
   run across `HUB_WORKERS` HTTP workers, so their effective soft-global limit is roughly
   `max × HUB_WORKERS` (a strict global cap would need a shared store — documented future work).
+- **Login rate limit is now shared & DB-backed (HB-4.6 "Option B")**
+  (`src/Common/RateLimit/DbRateLimiter.php` (new),
+  `src/Common/Container/Providers/CommonServicesProvider.php`,
+  migration `040_login_rate_limit.sql` + `login_rate_limit` table). An on-box check found the
+  `login` 5/900 bucket was enforced PER-WORKER in-memory like every other surface, so with
+  `HUB_WORKERS=4` the real brute-force budget was ~`5 × HUB_WORKERS` / 900 (≈20/900, the first 429
+  landing around attempt ~9 instead of ~5) — a genuine weakening on the one surface where it
+  matters. A new `DbRateLimiter` (a shared, cross-worker `RateLimiterInterface` backed by the
+  `login_rate_limit` table — one row per opaque bucket key, atomic
+  `INSERT … ON DUPLICATE KEY UPDATE` increment, read-only `peek()` on the hot path, and a bounded
+  TTL sweep) now backs **only** the `login` profile: its `RateLimitProfiles::LOGIN` binding is
+  repointed to it, so ALL HTTP workers share one counter per key and the 5/900 login budget is
+  genuinely global (actually 5/900). The other five surfaces
+  (proxy/heartbeat/jwks/relay_connect/client_mount) intentionally stay on the worker-local
+  in-memory `RateLimiter` — a documented, accepted soft-global tradeoff (`max × HUB_WORKERS`), not
+  a bug. Requires migration `040_login_rate_limit`. No threshold changed (still 5/900, still
+  env-overridable via `PHLIX_HUB_RATELIMIT_LOGIN_MAX` / `_LOGIN_WINDOW`).
 - **Per-user relay bandwidth accounting + quotas + concurrent-stream cap (HB-3.4)**
   (`src/Hub/RelaySessionManager.php`, `src/Http/ConnectionResponseSink.php`,
   `src/Http/Controllers/ServerProxyController.php`,

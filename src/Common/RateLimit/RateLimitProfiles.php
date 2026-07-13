@@ -22,27 +22,30 @@ namespace Phlix\Hub\Common\RateLimit;
  * container id to the `config/server.php` `rate_limit.<key>` override key plus
  * the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER. Only `relay_connect` (the :8802 `RelayWorker`) and
- * `client_mount` (the :8803 `ClientRelayWorker`) run on count=1 surfaces where
- * per-worker == global. `login`, `proxy`, `heartbeat` and `jwks` are all enforced
- * on the `HUB_WORKERS` HTTP workers, so each keeps an INDEPENDENT per-worker
- * counter and the effective soft-global limit is roughly `max × HUB_WORKERS`
- * (mirrors HB-3.4).
+ * Thresholds are PER-WORKER for five of the six surfaces. `proxy`, `heartbeat`
+ * and `jwks` are enforced on the `HUB_WORKERS` HTTP workers, so each keeps an
+ * INDEPENDENT per-worker counter and the effective soft-global limit is roughly
+ * `max × HUB_WORKERS` (mirrors HB-3.4); `relay_connect` (the :8802 `RelayWorker`)
+ * and `client_mount` (the :8803 `ClientRelayWorker`) run on count=1 surfaces
+ * where per-worker == global.
  *
- * ⚠️ `login` is therefore NOT a global 5/900 bucket: it is enforced in
+ * ✅ `login` is the EXCEPTION — it is genuinely global. It is enforced in
  * {@see \Phlix\Hub\Auth\AuthManager} (keyed `auth:login:<ip>`) on the HTTP
- * workers, so with `HUB_WORKERS=4` the real budget is ~`5 × HUB_WORKERS` / 900 and
- * the first 429 lands around attempt ~9 rather than 5 — a genuine brute-force
- * weakening (HB-4.6 follow-up). Migration `040_login_rate_limit` adds a shared
- * DB-backed store to unify the login bucket across workers; until the
- * forthcoming `DbRateLimiter` is built and the {@see LOGIN} binding is repointed
- * to it, the login limiter remains per-worker in-memory.
+ * workers, but its {@see LOGIN} binding is repointed (in
+ * {@see \Phlix\Hub\Common\Container\Providers\CommonServicesProvider}) to the
+ * shared, DB-backed {@see DbRateLimiter} (table `login_rate_limit`, migration
+ * `040_login_rate_limit`), so ALL workers share one counter per key and the
+ * 5 / 900 budget is ACTUALLY 5 / 900 — not the ~`5 × HUB_WORKERS` / 900 it was
+ * (e.g. ~20 / 900 with 4 workers, first 429 near attempt ~9) while every surface
+ * used the worker-local {@see RateLimiter} (HB-4.6 "Option B"). This closes the
+ * one surface where per-worker weakening was a genuine brute-force concern; the
+ * other five stay worker-local (soft-global) by design.
  *
  * @package Phlix\Hub\Common\RateLimit
  */
 final class RateLimitProfiles
 {
-    /** Container id for the login limiter (5 / 900s — unchanged). */
+    /** Container id for the login limiter (5 / 900s; shared DB-backed {@see DbRateLimiter}). */
     public const string LOGIN = 'rate_limiter.login';
 
     /** Container id for the reverse-proxy limiter (generous, userId-keyed). */

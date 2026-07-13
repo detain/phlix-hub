@@ -2977,3 +2977,37 @@ then `HUB_TEST_DB_HOST/PORT/USER/PASSWORD/NAME=… php -d max_execution_time=0 .
 --testsuite Integration --filter DbRateLimiterIntegrationTest`.
 
 Remaining for HB-4.6: sub-6 (docs) is the last piece.
+
+## Scribe — HB-4.6 login-limiter sub-6 — 2026-07-13 (perf-7)
+Sub-step 6 of 6 — DOCS for the "Option B" shared DB-backed login limiter (sub-1..5). NO behavioral
+code changes: prose (CHANGELOG/README/phlix-docs) + docblock-only corrections. Extended/corrected the
+prior 2026-07-12 rate-limiting docs sweep (did NOT write a duplicate section). Version NOT bumped
+(repo convention: accumulate under `## [Unreleased]`; `Version::VERSION` tracks the last release tag).
+
+What was documented: the `login` profile is now the ONE DB-backed/shared limiter — its
+`RateLimitProfiles::LOGIN` binding is repointed to the new `DbRateLimiter` backed by the
+`login_rate_limit` table (migration `040_login_rate_limit`), so all HTTP workers share one counter
+per key and the 5/900 login budget is ACTUALLY 5/900 (was ~5×HUB_WORKERS/900 ≈ 20/900 with 4 workers,
+first 429 near attempt ~9). The other five surfaces (proxy/heartbeat/jwks/relay_connect/client_mount)
+remain per-worker in-memory — documented as an accepted soft-global tradeoff, not a bug.
+
+Files changed (absolute):
+- `/home/sites/phlix/phlix-hub/CHANGELOG.md` — new `## [Unreleased]` › Added entry for HB-4.6
+  "Option B" (login now shared/DB-backed via DbRateLimiter + `login_rate_limit` table + migration 040;
+  the other five stay per-worker soft-global; no threshold change).
+- `/home/sites/phlix/phlix-hub/README.md` — "Rate limiting" subsection: intro + per-worker caveat now
+  state `login` is the genuinely-global exception; the other five remain per-worker soft-global. Added
+  a `login_rate_limit` row to the Database schema table.
+- `/home/sites/phlix/phlix-hub/src/Common/RateLimit/RateLimitProfiles.php` — DOCBLOCK ONLY: corrected
+  the class docblock (stale "login stays per-worker in-memory until DbRateLimiter lands" — it has
+  landed) + the `LOGIN` const comment (was "unchanged" → now notes shared DB-backed store).
+- `/home/sites/phlix/phlix-hub/config/server.php` — COMMENT ONLY: corrected the `rate_limit` header +
+  inline `login` comment (same stale "per-worker in-memory today" language, now DB-backed/global).
+- `/home/sites/phlix/phlix-docs/docs/hub-admin/relay-tuning.md` — "Rate limiting" section: intro +
+  "Per-worker vs global" now document the `login_rate_limit` table as the one DB-backed profile and
+  the operational implication (5/900 is now genuinely 5/900, not ~20/900). Committed+pushed separately.
+
+Verify: full hub suite `phpunit` → OK 1432 tests / 0 failures / 25 skipped (unchanged baseline;
+docblock-only). phpstan L9 + phpcs PSR-12 clean on the touched `src` file. psalm env-skipped.
+
+**This closes HB-4.6 login-limiter ENTIRELY (sub-1 through sub-6 all done).**
