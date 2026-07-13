@@ -2113,3 +2113,54 @@ client-relay flush but don't prune — both pass `false`; (4) flush cadence + pr
 - `./vendor/bin/phpcs --standard=PSR12 -n src/…` (4 touched src files) → **clean (exit 0)**.
 - psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red); migrate not run
   (no DB; no migration touched).
+
+## Reviewer (per-step) — HB-4.5 — 2026-07-12
+
+**NO FINDINGS.**
+
+Reviewed `git diff c63aa62..6b29113` (06f1d31 fix + 6b29113 tests) against current
+`src/Stats/Metrics/MetricsFlushService.php`, `src/Relay/RelayWorker.php`,
+`src/Relay/ClientRelayWorker.php`, `src/Application.php` (both the flush arming AND the
+relay-worker construction in `boot()`), and `tests/Unit/Stats/Metrics/MetricsFlushServiceTest.php`.
+
+- **#1 Exactly once, never zero — CONFIRMED.** Only the count=1 relay worker passes
+  `flush(0, time(), true)` (`RelayWorker.php:207`); the HTTP arming site
+  (`Application.php:1540`) and the client-relay arming site (`ClientRelayWorker.php:209`) both
+  pass `false`. `grep` over `src/` finds no other `flush()` caller. **Never zero:** the
+  `RelayWorker` is constructed unconditionally in `Application::boot()`
+  (`Application.php:1825` — `new RelayWorker($this->container, $relayPort, 1, …)`) and
+  `->start()`ed at `:1826` with ctor `count=1` — NOT behind any relay-enabled/config flag, so
+  the designated pruner is guaranteed to run. The relay flush-timer arming and BOTH non-pruning
+  arming sites gate on the SAME `MetricsCollector::isEnabled()`, so there is no divergence where
+  HTTP workers flush (growing `metrics_rollup`) while the relay worker fails to prune: metrics
+  off ⇒ nobody flushes/prunes (nothing to prune); metrics on ⇒ all arm, relay prunes. (The relay
+  arming additionally requires `TunnelManager` to resolve — a pre-existing structural coupling the
+  relay worker is fundamentally built on, not introduced by this diff and not a config toggle.)
+- **#2 Per-worker flush preserved — CONFIRMED.** `flushBuckets/Routes/Connections/Relay` run
+  unconditionally before the throttle/prune block; only the DB `prune()` is gated.
+  `test_flush_does_not_prune_when_should_prune_is_false` asserts `INSERT INTO metrics_rollup`
+  fires with `$shouldPrune=false`.
+- **#3 In-RAM eviction correctly unconditional — CONFIRMED.** `$registry->pruneStaleConnections()`
+  sits OUTSIDE the `if ($shouldPrune)` block (still inside the once-a-minute tick), so it runs on
+  every worker; `test_in_ram_connection_eviction_runs_even_when_prune_is_gated_off` proves a stale
+  connection is evicted with `$shouldPrune=false` and zero DB DELETE. Only the shared-table DELETEs
+  are gated.
+- **#4 Throttle intact — CONFIRMED.** `$this->flushTick % $ticksPerMinute === 0` is unchanged; the
+  `if ($shouldPrune)` nests inside it. The updated throttle test proves 11 flushes → 0 DELETE, the
+  12th → 1 DELETE.
+- **#5 No regression / scope — CONFIRMED.** `git diff --stat`: only the 4 source files + the one
+  test + this worklog. `prune()` SQL and flush cadence unchanged; `$shouldPrune` default `false` is
+  defensive; no migration touched; `Tunnel.php`/reaper/txn-locking untouched.
+- **#6 Tests genuine — CONFIRMED.** All three new tests fail if the gate is removed/mis-wired
+  (ungated prune → DELETEs on tick 12 → `does_not_prune` fails; gating eviction behind `$shouldPrune`
+  → `stale-1` not evicted → `eviction` fails).
+
+Read-only gates (this box, PHP 8.3.6 + PCOV):
+- `phpstan analyze --no-progress` (4 changed files) → **[OK] No errors** (L9, no baseline).
+- `phpunit --filter 'MetricsFlush'` → **OK (22 tests, 813 assertions)**.
+- Full suite `phpunit --no-coverage` → **OK, 1363 tests / 16149 assertions / 17 skipped / 0 failures**
+  (baseline 1360 + 3 new).
+- `phpcs --standard=PSR12 -n` (4 changed src files) → **clean (exit 0)**.
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental, not red).
+
+Verdict: **HB-4.5 DONE** (pending the standard Docs cycle).
