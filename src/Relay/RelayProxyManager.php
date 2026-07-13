@@ -366,10 +366,13 @@ final class RelayProxyManager
 
         // First-byte (TTFB) latency: the time from sending the HTTP_REQUEST frame
         // to the first response frame decoded for this request. Recorded once, on
-        // the first frame, for BOTH the streaming and buffered paths (the
-        // migration-036 relay-latency histogram is defined as "time from
-        // HTTP_REQUEST sent to first response byte"). The matching TOTAL latency
-        // is recorded on KIND_END below.
+        // the first frame, for BOTH the streaming and buffered paths — this is the
+        // ONLY value that feeds the migration-036 relay-latency histogram, which is
+        // defined as "time from HTTP_REQUEST sent to first response byte". The
+        // total round-trip (send → END) is deliberately NOT recorded into that
+        // histogram: for a streaming response total == the whole stream/session
+        // duration (up to the ~900s ceiling), which would pollute the "> 5s" bucket
+        // on every normal playback and fire spurious latency alerts.
         if (!$this->pending[$requestId]['first_byte_recorded']) {
             $this->pending[$requestId]['first_byte_recorded'] = true;
             $firstByteMs = (microtime(true) - $this->pending[$requestId]['sent_at']) * 1000.0;
@@ -409,12 +412,6 @@ final class RelayProxyManager
         $entry = $this->pending[$requestId];
         unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
         $this->metrics?->setRelayPendingRequests(count($this->pending));
-
-        // Total round-trip latency (HTTP_REQUEST sent → END received), recorded on
-        // completion for BOTH paths — so a STREAMING response (which returns early
-        // below) still contributes a latency observation, not just the buffered path.
-        $totalMs = (microtime(true) - $entry['sent_at']) * 1000.0;
-        $this->metrics?->recordRelayLatency($totalMs);
 
         if ($streaming) {
             $this->publishPhaseEnd($entry['reply_event'], $entry['request_id']);

@@ -359,9 +359,20 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('tunnelManager', get(TunnelManagerInterface::class))
                 ->parameter('metrics', get(MetricsCollector::class)),
 
-            RelayProxyBridge::class => factory(static function (): RelayProxyBridge {
-                return new RelayProxyBridge(LoggerFactory::get(LogChannels::RELAY));
-            }),
+            RelayProxyBridge::class => factory(static function (
+                MetricsCollector $metrics,
+            ): RelayProxyBridge {
+                // Same per-worker SHARED MetricsCollector singleton the relay
+                // worker's flush timer drains (MetricsServicesProvider) — so the
+                // channel-push reply-drop the bridge records in dropReply() lands
+                // in the drained relay_reply_drops counter (migration 036). The
+                // collector no-ops every record when metrics are disabled, so
+                // injecting it unconditionally is safe.
+                return new RelayProxyBridge(
+                    LoggerFactory::get(LogChannels::RELAY),
+                    metrics: $metrics,
+                );
+            })->parameter('metrics', get(MetricsCollector::class)),
 
             // Alias the interface to the concrete TunnelManager so callers
             // that depend on the abstraction (RelayWorker, ClientRelayWorker,

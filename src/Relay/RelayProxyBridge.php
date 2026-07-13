@@ -13,6 +13,7 @@ namespace Phlix\Hub\Relay;
 
 use Channel\Client as ChannelClient;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Swoole\Coroutine;
 use Throwable;
 use Workerman\Coroutine\Channel;
@@ -125,11 +126,14 @@ final class RelayProxyBridge
      * @param (callable(string, array<string, mixed>): void)|null $publisher Channel publisher
      *        (defaults to {@see ChannelClient::publish()}; overridable for tests).
      * @param string|null                                        $replyEvent Reply event override (tests).
+     * @param MetricsCollector|null                              $metrics   Relay metrics collector
+     *        (the per-worker SHARED singleton; no-op when null or metrics disabled).
      */
     public function __construct(
         private readonly StructuredLogger $logger,
         ?callable $publisher = null,
         ?string $replyEvent = null,
+        private readonly ?MetricsCollector $metrics = null,
     ) {
         $this->publisher = $publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
@@ -569,6 +573,13 @@ final class RelayProxyBridge
     /**
      * Drop a reply and stop tracking its request.
      *
+     * This is the operationally-critical reply-drop (the channel-push drop
+     * H-R8 names at `RelayProxyBridge.php:527-530`): the reply is discarded
+     * because the client's consumer channel is full or closed — the H-H6 stall
+     * / H-H3 back-pressure failure mode an operator needs to alert on. Counted
+     * on the shared {@see MetricsCollector} so it reaches the drained
+     * `relay_reply_drops` counter (migration 036).
+     *
      * @param string $requestId The request to stop tracking.
      *
      * @return void
@@ -576,6 +587,7 @@ final class RelayProxyBridge
     private function dropReply(string $requestId): void
     {
         unset($this->pending[$requestId]);
+        $this->metrics?->recordRelayReplyDrop();
         $this->logger->warning('Relay proxy: dropped reply — consumer channel unavailable', [
             'request_id' => $requestId,
         ]);
