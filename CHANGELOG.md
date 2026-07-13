@@ -41,6 +41,76 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   library and permission level. Double-redeem (exhausted or expired token) is rejected with 410.
   The endpoint is auth-gated via `AuthMiddleware` and delegates to the existing
   `InviteLinkHandler::redeemInviteLink()` handler.
+- **Per-surface rate limiting on the hub's abuse-prone entry points (HB-4.6)**
+  (`src/Common/RateLimit/RateLimitProfiles.php` (new),
+  `src/Common/Container/Providers/CommonServicesProvider.php`, `config/server.php`,
+  `src/Http/Controllers/ServerProxyController.php`, `src/Hub/HeartbeatHandler.php`,
+  `src/Http/Controllers/HubJwksController.php`, `src/Relay/RelayWorker.php`,
+  `src/Relay/ClientRelayWorker.php`, `src/Application.php`, `src/Auth/RateLimitException.php`).
+  Each surface now gets its OWN in-memory `RateLimiter` instance (a single login-grade
+  5/900 limiter was wrong for everything but login). A new `rate_limit` section in
+  `config/server.php` sets each surface's `{max, window}` plus a shared key-count `cap`,
+  all env-overridable via `PHLIX_HUB_RATELIMIT_*`. Per-worker defaults:
+  - `login` — **5 / 900s**, keyed by identity (unchanged).
+  - `proxy` — **600 / 60s**, keyed `proxy:{userId}` and hit only AFTER the 401 auth gate
+    (generous so normal HLS/DASH segment bursts never trip; unauth floods take the cheap
+    401 with no bucket write).
+  - `heartbeat` — **30 / 60s**, keyed `heartbeat:{serverId}` after the enrollment JWT is
+    validated (so an unproven id can't mint a bucket).
+  - `jwks` — **120 / 60s**, keyed `jwks:{ip}`.
+  - `relay_connect` — **10 / 60s**, keyed `{ip}` on the :8802 server relay-connect handshake.
+  - `client_mount` — **30 / 60s**, keyed `{ip}` on the :8803 client-mount handshake (before auth).
+  HTTP surfaces that trip return **429 Too Many Requests** with a `Retry-After` header and
+  `{"error":"Too Many Requests","code":"rate_limited"}`; the two WebSocket handshakes
+  (:8802/:8803) instead reject the connection with close code **1013** (Try Again Later),
+  since a post-upgrade socket has no HTTP status/body. **Per-worker caveat:** the :8802 and
+  :8803 relay workers are `count=1`, so per-worker == global there; `proxy`/`heartbeat`/`jwks`
+  run across `HUB_WORKERS` HTTP workers, so their effective soft-global limit is roughly
+  `max × HUB_WORKERS` (a strict global cap would need a shared store — documented future work).
+- **Per-user relay bandwidth accounting + quotas + concurrent-stream cap (HB-3.4)**
+  (`src/Hub/RelaySessionManager.php`, `src/Http/ConnectionResponseSink.php`,
+  `src/Http/Controllers/ServerProxyController.php`,
+  `src/Http/Controllers/UserQuotaController.php` (new),
+  `src/Common/Container/Providers/HubServicesProvider.php`, `src/Application.php`,
+  migration `038_relay_user_quotas_concurrency.sql`). The relay proxy now meters the REAL
+  streamed bytes off the on-the-wire counter in `ConnectionResponseSink` (recorded in a
+  `finally` on every stream exit — completion, browser-gone, or mid-stream error), and
+  `checkUserQuota()` enforces BOTH the download (`quota_bytes_in`) and upload
+  (`quota_bytes_out`) caps (the download cap was previously never checked). A new
+  operator-configurable per-user concurrent-stream cap (`relay_user_quotas.max_concurrent_streams`,
+  migration 038; `0` = unlimited) is enforced at proxy admission — over the cap returns
+  **503** `stream.limit` and never occupies a slot; slots are released in the producer
+  `finally` (leak-free). New HTTP endpoints expose the controls:
+  - `GET /api/v1/me/bandwidth` — a user reads their own current-period usage + caps (auth only).
+  - `GET /api/v1/admin/users/{id}/bandwidth` — admin reads any user's usage + caps.
+  - `PUT /api/v1/admin/users/{id}/quota` — admin sets a user's download/upload byte caps +
+    concurrent-stream cap (validated: non-negative ints, byte caps ≤ 1 PiB, streams ≤ 1000,
+    `0` = unlimited; audited via `AuditLogger::logAdminAction('user.quota.set', …)`).
+  These are hub-local admin/self endpoints (behind `AuthMiddleware` / `AdminMiddleware`), NOT
+  on the relay-proxy allowlist. **Caveat:** the concurrent-stream counter is in-memory
+  per-HTTP-worker, so the cap is enforced per worker (soft-global ≈ `max × HUB_WORKERS`); a
+  strict global cap needs a shared store (future work).
+- **Relay observability metrics (HB-4.1)**
+  (`src/Stats/Metrics/MetricsCollector.php`, `src/Stats/Metrics/MetricsRegistry.php`,
+  `src/Stats/Metrics/MetricsFlushService.php`, `src/Relay/RelayProxyManager.php`,
+  `src/Common/Container/Providers/HubServicesProvider.php`). The shared per-worker
+  `MetricsCollector` is now injected into `RelayProxyManager` (it was previously never
+  wired, so all relay metrics were inert). `MetricsFlushService` drains and UPSERTs them
+  into the migration-036 `metrics_rollup` columns: `relay_pending_requests` (gauge),
+  `relay_reply_drops`, `relay_error_503`/`relay_error_504` (counters — the `no_tunnel`
+  fast-fail now also counts a 503), `relay_decode_buffer_bytes` (gauge), and the
+  `relay_latency_h_le_10..h_gt_5000` histogram. Latency records a first-byte (TTFB)
+  observation on the first response frame and a total (send→END) observation at completion,
+  for BOTH buffered and streaming responses.
+- **`relay_cancels` metric — count of HTTP_CANCEL frames the hub emits to a server (HB-4.9)**
+  (`src/Stats/Metrics/MetricsRegistry.php`, `src/Stats/Metrics/MetricsCollector.php`,
+  `src/Relay/RelayProxyManager.php`, `src/Stats/Metrics/MetricsFlushService.php`,
+  migration `039_relay_cancel_metric.sql`). When a client abandons an in-flight proxied
+  request the hub sends the server an `HTTP_CANCEL` (0x12) frame to stop in-flight work;
+  each such cancel is now counted at the real `cancelRequest()` site and persisted to a new
+  `metrics_rollup.relay_cancels` column (migration 039). The `HTTP_CANCEL = 0x12` wire
+  contract is documented in `phlix-shared`'s `RelayFrameType` (hub→server only, advisory,
+  no response); the server-side stop-work half is tracked as SV-4.2 in `phlix-server`.
 
 ### Changed
 - **Relay proxy: dropped base64 encoding from the internal channel-broker body path (HB-1.1)**
@@ -181,6 +251,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   - See the "Hub relay: streaming pass-through (D1–D3s)" section of
     [`phlix-docs` — Stream Quality / ABR](https://detain.github.io/phlix-docs/developers/stream-quality-abr)
     for the full architecture write-up.
+- **Per-channel round-robin fairness on the tunnel data plane (HB-3.3)**
+  (`src/Relay/Tunnel.php`). The flat body FIFO was replaced with per-channel body queues
+  keyed by `RelayFrame::channelId()`; `flushBodyQueue` now drains round-robin (one frame per
+  channel per pass) so a bulk transfer can no longer starve a concurrent browse request.
+  Strict intra-channel FIFO is preserved (HEAD/BODY/END of one request never reorder).
+- **`client_relay_tokens` retention sweep now prunes expired-never-revoked rows (HB-4.2)**
+  (`src/Hub/ClientRelayTokenService.php`, `src/Relay/IdleReaper.php`). The prune predicate
+  was `expires_at < NOW()-1d AND revoked_at IS NOT NULL`, so short-TTL tokens that expired
+  but were never explicitly revoked (the common case) were never deleted and the table grew.
+  Changed to OR semantics — a row is pruned once it is expired-past-the-grace-window **or**
+  revoked.
+- **Metrics DB retention prune gated to a single worker (HB-4.5)**
+  (`src/Stats/Metrics/MetricsFlushService.php`). `flush()` took a `bool $shouldPrune` flag;
+  only the `count=1` relay worker passes `true`, so the retention DELETEs run once per tick
+  instead of from every HTTP/relay/client-relay worker (~4× churn). Per-worker in-RAM
+  connection eviction stays unconditional (each worker owns a distinct registry).
+- **Stream-timer sweep now measures inactivity, not time-since-start (HB-4.8)**
+  (`src/Relay/RelayProxyManager.php`). The sweep keyed inactivity off the fixed `sent_at`,
+  which terminated ACTIVE streams once they ran past the per-path timeout (~30s direct-play,
+  ~60s HLS/DASH). Added a `lastActivityAt` refreshed on every HEAD/BODY/END frame; the sweep
+  now tests `now - lastActivityAt >= timeout` and keeps the absolute 900s
+  (`MAX_STREAM_DURATION_SECONDS`) ceiling as a runaway backstop.
+- **Ed25519 previous-key purge wired into the maintenance reap (HB-4.7)**
+  (`src/Hub/Ed25519KeyManager.php`, `src/Relay/IdleReaper.php`). The zero-caller
+  `purgeExpiredPreviousKey()` is now invoked from the maintenance-worker reap so a rotated,
+  expired previous signing key is cleaned up in the background.
 
 ## [0.2.0] — 2026-07-07
 

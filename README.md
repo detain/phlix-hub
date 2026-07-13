@@ -557,6 +557,30 @@ development fallbacks.
 | `HUB_WORKERMAN_LOG` | `.logs/workerman.log` | Workerman's own log file |
 | `HUB_PUBLIC_DOMAIN` | `phlix.media` | Base domain for per-server subdomains |
 
+#### Rate limiting ([`config/server.php`](config/server.php) `rate_limit`)
+
+Each abuse-prone surface has its own in-memory rate limiter (a single login-grade limiter is
+wrong for everything but login). Every threshold is env-overridable; absent keys fall back to the
+per-worker defaults below. HTTP surfaces that trip return **429** with a `Retry-After` header and
+`{"error":"Too Many Requests","code":"rate_limited"}`; the WebSocket handshakes (:8802/:8803)
+reject with WS close code **1013** (Try Again Later) instead.
+
+| Variable | Default | Surface / key |
+|----------|---------|---------------|
+| `PHLIX_HUB_RATELIMIT_CAP` | `10000` | Max distinct keys tracked per limiter (memory ceiling) |
+| `PHLIX_HUB_RATELIMIT_LOGIN_MAX` / `_LOGIN_WINDOW` | `5` / `900` | Login attempts, keyed by identity |
+| `PHLIX_HUB_RATELIMIT_PROXY_MAX` / `_PROXY_WINDOW` | `600` / `60` | Relay proxy, keyed `proxy:{userId}` (hit after the auth gate; generous for HLS bursts) |
+| `PHLIX_HUB_RATELIMIT_HEARTBEAT_MAX` / `_HEARTBEAT_WINDOW` | `30` / `60` | Server heartbeat, keyed `heartbeat:{serverId}` (after JWT validation) |
+| `PHLIX_HUB_RATELIMIT_JWKS_MAX` / `_JWKS_WINDOW` | `120` / `60` | `/.well-known/jwks.json`, keyed `jwks:{ip}` |
+| `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP |
+| `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP |
+
+> **Per-worker caveat.** Thresholds are enforced **per worker process**. The :8802/:8803 relay
+> workers are `count=1`, so per-worker == global there. `proxy`, `heartbeat`, and `jwks` run
+> across `HUB_WORKERS` HTTP workers, so their effective soft-global limit is roughly
+> `max × HUB_WORKERS`. A strict global cap would require a shared store (Redis/DB) and is
+> documented as future work.
+
 ### Database ([`config/database.php`](config/database.php))
 
 | Variable | Default | Description |
@@ -597,6 +621,8 @@ Migrations live in [`migrations/`](migrations) and are applied in filename order
 | `server_claims` | Pending/paired claim codes minted during pairing |
 | `server_heartbeats` | Recent heartbeats for liveness and clock-skew detection |
 | `relay_sessions` | One row per open WebSocket relay session |
+| `relay_user_quotas` | Per-user relay byte usage + download/upload caps + `max_concurrent_streams` |
+| `metrics_rollup` | Time-bucketed hub metrics incl. relay gauges/counters (`relay_pending_requests`, `relay_reply_drops`, `relay_error_503`/`504`, `relay_cancels`, latency histogram) |
 | `shared_libraries` | Library grants from a server owner to another user |
 | `library_shares` | Per-library shares with read-only / read-write levels |
 | `invite_links` | Single-use signed invite links |
@@ -672,9 +698,23 @@ The Vue admin console at `/app/admin/*` is backed by these admin-gated endpoints
 | `POST` | `/api/v1/admin/users/{id}/reset-password` | Set a new password |
 | `GET` | `/api/v1/admin/logs`, `/logs/tail`, `/logs/tail-all` | Browse / tail the hub log files |
 | `GET`/`PUT` | `/api/v1/admin/settings` | Read / persist hub settings |
+| `GET` | `/api/v1/admin/users/{id}/bandwidth` | Read any user's current-period relay usage + caps |
+| `PUT` | `/api/v1/admin/users/{id}/quota` | Set a user's download/upload byte caps + concurrent-stream cap |
 
 The same logic is also reachable under `/api/v1/me/*` for back-compat (`/me/audit-logs`,
 `/me/logs*`, `/me/hub-settings`, `/me/federation/*`).
+
+### Bandwidth & quotas
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `GET` | `/api/v1/me/bandwidth` | Read your own current-period relay usage + caps (protected) |
+
+Per-user relay quotas cover monthly download (`quota_bytes_in`) and upload (`quota_bytes_out`)
+byte caps plus a concurrent-stream cap (`max_concurrent_streams`); `0` means unlimited. Over a
+byte cap the relay proxy refuses with **503** `quota.exceeded`; over the concurrent-stream cap it
+returns **503** `stream.limit`. The concurrent counter is in-memory per HTTP worker (soft-global
+≈ `max × HUB_WORKERS`).
 
 ### Relay (WebSocket)
 

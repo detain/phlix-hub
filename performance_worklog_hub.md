@@ -2450,7 +2450,7 @@ Sub-steps (one active per repo, sequential on hub):
 - [x] HB-4.6e :8802 relay-connect limiter NEW (RelayWorker::onWebSocketConnect; resolve from container in onWorkerStart; WS close 1013 on limit). DONE — see `## Implementer — HB-4.6e/f`.
 - [x] HB-4.6f :8803 client-mount limiter NEW (ClientRelayWorker::onWebSocketConnect, EARLY/before auth; WS close 1013) + retired dead ClientMountController::handle limiter (clean removal: ctor param + factory injection dropped). DONE — see `## Implementer — HB-4.6e/f`.
 - [x] HB-4.6g 429 mapping: central catch(RateLimitException) before Application.php:1724 + explicit catch in AuthController loginForm/loginJson + ServerController::heartbeat; add RateLimitException::retryAfterSeconds(); WS paths reject (1013) NOT 429. DONE — see `## Implementer — HB-4.6g`.
-- [ ] HB-4.6h test hardening: replace ALL limited:false stubs with real RateLimiter+injected clock; prove streaming burst survives, heartbeat cadence survives, over-limit trips, 429+Retry-After.
+- [x] HB-4.6h test hardening folded into comprehensive review (NO surviving limited:false stubs)
 LANDMINES: proxy limiter MUST be generous+userId-keyed or HLS breaks (test real multi-seg burst); local catches in AuthController/ServerController swallow 429→500 (need explicit catch before generic); WS≠HTTP (no 429 body, close 1013); keep RateLimiterInterface alias valid until all sites migrated or container fails to boot.
 
 ## Implementer — HB-4.6a — 2026-07-12
@@ -2566,3 +2566,53 @@ Verification: affected filters green; FULL suite **1381 pass / 17 skip / 0 fail*
 
 Acceptance mapping: retryAfterSeconds helper ✓; central 429 catch before generic Throwable ✓ (proxy/jwks land here — confirmed by reading both catch blocks); explicit local catches in loginForm/loginJson/heartbeat ✓; WS untouched ✓; back-compat alias + limiter thresholds/keys untouched ✓.
 Verification: `phpunit --filter 'RateLimitException|ApplicationRateLimitResponse|AuthControllerTest|ServerControllerTest'` 35/35 green; FULL suite **1393 pass / 17 skip / 0 fail** (baseline 1385 + 8 new); `phpstan analyze` (L9) **0 errors**; `phpcs -n` PSR-12 clean on all changed src + new test files. psalm = env-skip (PHP 8.3.6 < 8.3.16).
+
+## Reviewer (cumulative HB-4.6 a–g) — 2026-07-12
+
+NO FINDINGS
+
+Reviewed the full rework across 15d6404e (4.6a), f9ee4bd8 (4.6b/c/d), 255a4a3 (4.6e/f), 48fec762 (4.6g) plus final file state. Gates: full `phpunit` 1393 pass / 17 skip / 0 fail; `phpstan analyze` (L9) 0 errors; `grep -rn "limited.*false" tests/ src/` finds ONLY comment references (no surviving `limited:false` stub on any surface).
+
+Verified against the 8 acceptance/completeness criteria:
+1. No login-grade singleton on non-login surfaces — proxy/heartbeat/jwks inject `get(RateLimitProfiles::{PROXY,HEARTBEAT,JWKS})`; :8802/:8803 resolve `RELAY_CONNECT`/`CLIENT_MOUNT`. Zero `get(RateLimiterInterface::class)` remain in src/. The back-compat `RateLimiterInterface`/`RateLimiter`→LOGIN alias still resolves (container boots; legacy test green) and is injected ONLY on the login surface (AuthManager autowires by type-hint → login 5/900), never on a reworked surface.
+2. Proxy streaming-safety — `hit('proxy:'.$userId)` is BELOW the `$userId===''` 401 gate (unauth floods take the cheap 401, no bucket write); profile 600/60s; 100-segment burst test passes, 600th trips. Confirmed by reading Application.php: dispatch() at :1686 runs inside the outer try and throws BEFORE `$response->streamProducer` is set, so the trip lands in the OUTER `catch (RateLimitException)` at :1742 (→429), never the streaming-producer backstop at :1729.
+3. Heartbeat — `hit('heartbeat:'.$serverId)` moved AFTER `validateEnrollmentJwt` + server-found check (JWT-proven id); 30/60s; 20-heartbeat @60s cadence test never trips; old 5/900 mis-injection gone.
+4. WS DoS closure — RelayWorker::onWebSocketConnect and ClientRelayWorker::onWebSocketConnect both `hit()` BEFORE HELLO/auth and reject via `close((string)1013, true)` (matches the existing CLOSE_UNAUTHORIZED close signature); no `RateLimitException` thrown from any WS hook. Client-mount limiter runs before token-extract/validateClientAuth (proven by `testClientMountLimiterRunsBeforeAuth`). Limiters resolved in `onWorkerStart` (coroutine ctx) with a lazy `??=` container fallback, not the ctor. Both workers count=1 (RelayWorker ctor 3rd arg = 1 at Application.php:1853; ClientRelayWorker default `$count=1`) → per-worker == global.
+5. Dead ClientMountController limiter cleanly removed (ctor param, factory injection, dead `hit()`/throw, and unused imports all dropped); controller class + routes preserved; factory now single-arg.
+6. 429 mapping — central `catch (RateLimitException)` precedes the generic `catch (Throwable)`; explicit local catches added in AuthController::loginForm (was Throwable→500) and ::loginJson (was InvalidArgumentException→401) and ServerController::heartbeat (before mapError), each returning the 429 + `Retry-After` + `code:rate_limited` envelope; `RateLimitException::retryAfterSeconds()` delegates to `RateLimitState::retryAfter()` = `max(0, resetAt-now)`; `@throws RateLimitException` added to HeartbeatHandler::handle so PHPStan L9 accepts the new catch; WS documented as reject-not-429.
+7. Test hardening (folds 4.6h) — real `RateLimiter` + injected clock on every reworked surface; behavioral tests present: proxy burst-survives + trips, heartbeat cadence-survives, JWKS per-IP trip, WS over-limit close-1013 + per-IP keying + before-auth, login 429+Retry-After (loginForm/loginJson), heartbeat 429, Application::rateLimitResponse + retryAfterSeconds floor-at-0.
+8. Conventions — no new DB binds (colon-free N/A); no reaper/txn machinery touched (RelayWorker/ClientRelayWorker changes are additive limiter field + hook + resolve helper only); PHPStan L9 clean; per-worker soft-global caveat for the HUB_WORKERS surfaces documented in config/server.php and RateLimitProfiles docblock; no exit/die/blocking sleep introduced.
+
+## Orchestrator — HB-4.6 DONE (2026-07-12, perf-5)
+- [x] HB-4.6 rate-limit rework COMPLETE. a=15d6404e (per-surface limiter DI), b/c/d=f9ee4bd8 (proxy/heartbeat/jwks wiring, streaming-safe), e/f=255a4a3 (:8802/:8803 WS limits + dead ClientMountController limiter removed), g=48fec762 (429+Retry-After). Comprehensive REVIEW = NO FINDINGS. Suite 1393 green, phpstan L9 clean. Per-worker caveat documented (:8802/:8803 count=1 ⇒ global; proxy/jwks/heartbeat HUB_WORKERS soft-global ≈2×). New operator knobs: config/server.php `rate_limit` section (PHLIX_HUB_RATELIMIT_*). Docs cycle owed (batched sweep started).
+- HUB W0–W4 code-complete for this pass. Remaining hub: DOCS sweep + on-box verifies (SV-0.5-class start.php items don't apply; hub on-box = live relay 429/WS-close behavior).
+
+## Scribe — 2026-07-12
+
+DOCS DEBT sweep for the notable shipped hub changes (HB-4.6 rate-limiting rework, HB-3.4
+bandwidth/quotas + endpoints, HB-4.9 relay_cancels metric, HB-4.1 relay metrics, plus
+HB-3.3/4.2/4.5/4.7/4.8). NO behavioral code changes — prose + docblocks only. phlix-docs IS
+present in the working tree (`/home/sites/phlix/phlix-docs`). Version NOT bumped: repo convention
+accumulates entries under `## [Unreleased]` and `Version::VERSION` (0.2.0) tracks the last
+released heading — entries added to Unreleased, no tag.
+
+Doc files changed (absolute):
+- `/home/sites/phlix/phlix-hub/CHANGELOG.md` — Unreleased: Added entries for HB-4.6 (per-surface
+  rate limiting + `PHLIX_HUB_RATELIMIT_*` + 429/`Retry-After` + WS 1013 + per-worker caveat),
+  HB-3.4 (bandwidth quotas + concurrent-stream cap + `/me/bandwidth` & admin quota endpoints +
+  migration 038), HB-4.1 (relay observability metrics), HB-4.9 (`relay_cancels` + migration 039 +
+  HTTP_CANCEL 0x12 contract); Changed entries for HB-3.3, HB-4.2, HB-4.5, HB-4.7, HB-4.8.
+- `/home/sites/phlix/phlix-hub/README.md` — new "Rate limiting" subsection under Configuration
+  reference (env table + per-worker caveat); "Bandwidth & quotas" API subsection + admin quota
+  endpoints; `relay_user_quotas` + `metrics_rollup` rows in the schema table.
+- `/home/sites/phlix/phlix-docs/docs/hub-admin/relay-tuning.md` — replaced the 21-line stub with a
+  full operator page: rate limiting (config + env + 429/WS-1013 + per-worker caveat), per-user
+  bandwidth quotas + concurrent-stream cap + HTTP endpoints, and relay metrics (`metrics_rollup`
+  columns incl. `relay_cancels`).
+
+Verified (no edit needed): migrations `038_relay_user_quotas_concurrency.sql` and
+`039_relay_cancel_metric.sql` already carry accurate header comments; `RateLimitProfiles.php` and
+`config/server.php` `rate_limit` block already have complete/accurate docblocks. NOT covered
+(honest gaps): server-side SV-4.2 stop-work half (different repo); a strict global rate/quota cap
+(needs a shared store — documented as future work); live on-box verification of 429/WS-close/quota
+behavior is owed.
