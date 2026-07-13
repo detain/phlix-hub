@@ -61,7 +61,7 @@ final class IdleReaper
      *                                                            {@see reapDbMaintenance()} (maintenance
      *                                                            worker).
      * @param ClientRelayTokenService|null $clientRelayTokenService Optional token service whose
-     *                                                            expired revoked tokens are pruned
+     *                                                            expired-or-revoked tokens are pruned
      *                                                            on each {@see reapDbMaintenance()}
      *                                                            (HB-4.2).
      * @param HeartbeatHandler|null        $heartbeatHandler     Optional heartbeat handler whose
@@ -227,7 +227,7 @@ final class IdleReaper
      *  - HB-4.3 {@see HeartbeatHandler::pruneAllServerHeartbeats()}: keep only
      *    the most recent ~100 `server_heartbeats` rows per server.
      *  - HB-4.2 {@see ClientRelayTokenService::pruneExpiredTokens()}: prune
-     *    expired, already-revoked client relay tokens older than 1 day.
+     *    client relay tokens that expired more than 1 day ago OR were revoked.
      *
      * This method is public so it can be called directly by tests or manually
      * triggered. Normally it is called automatically by the timer armed in
@@ -246,9 +246,9 @@ final class IdleReaper
         // ~100 rows per server to prevent unbounded table growth.
         $this->heartbeatHandler?->pruneAllServerHeartbeats(100);
 
-        // HB-4.2: Prune expired, already-revoked client relay tokens older than
-        // 1 day. Tokens are only removed once both expired AND revoked so audit
-        // logs can still reference a revoked token before it naturally expires.
+        // HB-4.2: Prune client relay tokens that expired more than 1 day ago OR
+        // were revoked (H-D2). Expired-never-revoked tokens are the common case
+        // (~1 h TTL, rarely revoked), so the OR is what actually bounds growth.
         $this->clientRelayTokenService?->pruneExpiredTokens();
     }
 

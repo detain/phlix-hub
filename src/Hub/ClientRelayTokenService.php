@@ -209,12 +209,24 @@ final class ClientRelayTokenService
     }
 
     /**
-     * Prune expired, already-revoked tokens older than 1 day.
+     * Prune tokens that expired more than 1 day ago OR were revoked.
      *
      * Runs the retention sweep on each idle-reaper tick so that rows are
-     * cleaned up without extra cron or manual maintenance. Only tokens that
-     * are both expired AND revoked are removed — a revoked-but-not-yet-expired
-     * token is kept until natural expiry so audit logs can still reference it.
+     * cleaned up without extra cron or manual maintenance. A row is removed
+     * when EITHER predicate holds (H-D2):
+     *
+     *  - it expired more than a day ago — the common case, since tokens have a
+     *    ~1 h TTL and are rarely revoked, so this is what actually bounds table
+     *    growth (the 1-day grace keeps a just-expired token queryable briefly); or
+     *  - it has been explicitly revoked (removed regardless of expiry).
+     *
+     * Note the operator is OR, not AND: with AND only tokens that are BOTH
+     * expired-by->1-day AND revoked would be pruned, leaving the common
+     * expired-never-revoked rows to accumulate forever.
+     *
+     * Precedence: the comparison / `IS NOT NULL` predicates bind tighter than
+     * `OR`, so the WHERE clause parses as
+     * `(expires_at < NOW() - INTERVAL 1 DAY) OR (revoked_at IS NOT NULL)`.
      *
      * @return int Number of rows deleted.
      *
@@ -225,7 +237,7 @@ final class ClientRelayTokenService
         $result = $this->db->query(
             'DELETE FROM client_relay_tokens'
                 . ' WHERE expires_at < NOW() - INTERVAL 1 DAY'
-                . ' AND revoked_at IS NOT NULL',
+                . ' OR revoked_at IS NOT NULL',
         );
 
         return is_int($result) ? $result : 0;

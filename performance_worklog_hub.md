@@ -81,7 +81,7 @@ php bin/phlix migrate
 - [~] HB-3.3  per-channel tunnel flow control/fairness  RE-AUDIT+COMPLETE 2026-07-12: was PARTIAL (real commit b5a9dba's HTTP_REQUEST-HEAD/END=HIGH priority approach was correctly REVERTED by HB-1.2 fix-3 8d6c1c3 because it reordered chunked bodies; no replacement fairness existed). NOW DONE: replaced the flat `pendingBodyFrames` FIFO with per-channel body queues keyed by `RelayFrame::channelId()`; `flushBodyQueue` drains ROUND-ROBIN (one frame/channel/pass) so a bulk transfer can't starve a browse request; strict intra-channel FIFO preserved (per-channel array_shift → HEAD/BODY/END never reorder). removeClient + close clear per-channel buckets. +1 two-stream fairness test. See `## Implementer — HB-3.3 — 2026-07-12`.
 - [~] HB-3.4  bandwidth accounting + per-user quotas  RE-AUDIT+COMPLETE 2026-07-12 (G1–G4; G5 HTTP exposure = separate sub-step, NOT done here). was PARTIAL (1de552a): streaming path recorded NOTHING (returned before recordUserBandwidth); only the UPLOAD cap enforced; no concurrent-stream cap; no controller cap tests. NOW: G1 real streamed bytes metered from the sink's on-the-wire counter (not header estimates); G2 checkUserQuota enforces BOTH download (bytes_in) + upload (bytes_out) caps; G3 in-memory per-user concurrent-stream cap (migration 038 max_concurrent_streams) enforced at proxy admission → 503 stream.limit, leak-free release in the producer finally; G4 controller cap tests (quota.exceeded + stream.limit + under-cap admit/release). See `## Implementer — HB-3.4 — 2026-07-12`.
 - [x] HB-4.1  relay observability metrics  (commit: H-W4-batch)  DONE — pending-request gauge, reply-drop counter, per-request latency histogram, 503/504 counters, decode-buffer-size gauge fully wired in MetricsCollector/Registry/FlushService + RelayProxyManager
-- [x] HB-4.2  client_relay_tokens retention sweep  (commit: H-W4-batch)  DONE — pruneExpiredTokens() in ClientRelayTokenService, called from IdleReaper tick
+- [x] HB-4.2  client_relay_tokens retention sweep  RE-AUDIT+FIX 2026-07-12 (perf-4): was PARTIAL — DELETE predicate used `expires_at<NOW()-1d AND revoked_at IS NOT NULL` (H-D2 requires OR), so expired-never-revoked rows (~1h TTL, rarely revoked) were NEVER pruned → table still grew. FIXED: AND→OR (precedence parses as `(expiry) OR (revoked)`), corrected misleading "both expired AND revoked" docblocks (ClientRelayTokenService + IdleReaper ×3), rewrote the string-contains test into a behavioral fake-DB test proving expired-never-revoked IS deleted (regression-to-AND caught). phpstan L9 0, suite 1360/17skip/0fail, phpcs src clean. See `## Implementer — HB-4.2 — 2026-07-12`. Prior wiring (H-W4-batch: pruneExpiredTokens called from IdleReaper::reapDbMaintenance on the maintenance worker — correct).
 - [x] HB-4.3  server_heartbeats growth control  (commit: H-W4-batch)  DONE — pruneAllServerHeartbeats()/pruneServerHeartbeats() ring-delete in HeartbeatHandler, called from IdleReaper tick
 - [x] HB-4.4  heartbeat handler hash library list optimization  (commit: H-W4-batch)  DONE — SHA-256 library list hash in server_library_hashes table, skip upserts when unchanged; migration 037
 - [x] HB-4.5  metrics prune singleton  (commit: H-W4-batch)  DONE — MetricsFlushService registered as per-worker singleton via static variable in factory
@@ -1948,3 +1948,55 @@ Both Medium findings are genuinely closed and no new defect was introduced:
   would fail if the total recording were re-added (observation count 2 and overflow bucket 1).
 
 Verdict: **HB-4.1 fix DONE — NO FINDINGS.** Loop may exit (docs cycle still owed per the batched sweep).
+
+## Implementer — HB-4.2 — 2026-07-12
+
+**The bug (H-D2):** `ClientRelayTokenService::pruneExpiredTokens()` deleted only rows that were BOTH
+expired-by->1-day AND explicitly revoked. Tokens have a ~1 h TTL and are rarely revoked, so the common
+expired-never-revoked row was never pruned → `client_relay_tokens` grows unbounded (defeating the sweep).
+The sweep is genuinely wired (runs on the maintenance worker via `IdleReaper::reapDbMaintenance`); only
+the predicate was wrong.
+
+**Fix (predicate):** `src/Hub/ClientRelayTokenService.php:225-229`.
+- Before: `WHERE expires_at < NOW() - INTERVAL 1 DAY AND revoked_at IS NOT NULL`
+- After:  `WHERE expires_at < NOW() - INTERVAL 1 DAY OR  revoked_at IS NOT NULL`
+- **Operator precedence confirmed:** `<` and `IS NOT NULL` bind tighter than `OR`, so the WHERE parses
+  as `(expires_at < NOW() - INTERVAL 1 DAY) OR (revoked_at IS NOT NULL)` — a revoked token is deleted
+  regardless of expiry; an expired-by->1-day token is deleted regardless of revocation. No parentheses
+  needed / added; parameterization idiom otherwise identical (bare DELETE, no binds). Uses the existing
+  `expires_at` index; no new index added (per AC — a full OR may not use it as tightly; acceptable).
+
+**Docs corrected (the misleading "both expired AND revoked" wording):**
+- `ClientRelayTokenService::pruneExpiredTokens` docblock (`:211-232`) — rewritten to OR semantics +
+  a precedence note + the rationale (expired-never-revoked is the common growth case).
+- `IdleReaper` class-level bullet (`:229-230`) and the inline comment at the call site (`:249-252`) —
+  "expired, already-revoked … older than 1 day" → "expired more than 1 day ago OR were revoked".
+- `IdleReaper` constructor `@param $clientRelayTokenService` (`:63-66`) — "expired revoked" →
+  "expired-or-revoked".
+
+**Test rewritten (it previously locked in the bug).** `tests/Unit/Hub/ClientRelayTokenServiceTest.php`
+— the old `test_prune_expired_tokens_issues_correct_delete_query` was a string-contains that asserted
+`revoked_at IS NOT NULL` with NO AND-vs-OR check. Replaced with two tests:
+- `test_prune_expired_tokens_or_joins_expiry_and_revoked_predicates` — keeps the DELETE/predicate
+  substring checks AND extracts the joining operator via regex
+  (`/INTERVAL 1 DAY (AND|OR) revoked_at IS NOT NULL/i`) and asserts it is `OR`, not `AND`; retains the
+  null-params assertion.
+- `test_prune_deletes_expired_never_revoked_row_behaviorally` — the important one. A fake DB
+  (createMock + willReturnCallback) parses the emitted WHERE's operator and EVALUATES it over four
+  fixture rows (expired-never-revoked, revoked-not-expired, fresh-active, expired-and-revoked). Asserts
+  3 of 4 pruned, the **expired-never-revoked** row IS removed (fails under the old AND), the revoked
+  and expired-and-revoked rows removed, and the fresh-active row survives. A regression back to AND is
+  evaluated as AND by the fake → the expired-never-revoked assertion fails → the bug is caught.
+- `test_prune_expired_tokens_returns_zero_when_result_not_int` unchanged. IdleReaperTest wiring
+  coverage unaffected (docstring-only edits there).
+
+**Verify (this box, PHP 8.3.6 + PCOV):**
+- `./vendor/bin/phpstan analyse --no-progress` → **[OK] No errors** (L9, no baseline).
+- `php -d max_execution_time=0 ./vendor/bin/phpunit` → **OK, 1360 tests / 16140 assertions / 17 skipped
+  / 0 failures** (baseline 1359 + 1 net-new from the test rewrite).
+- `./vendor/bin/phpcs --standard=PSR12 -n src/` → **clean (exit 0)**. (The touched TEST file uses the
+  file's pre-existing snake_case method names, which are outside the `src/`-only phpcs gate.)
+- psalm skipped (box PHP 8.3.6 < psalm-required 8.3.16 — environmental).
+
+**AC mapping:** (1) predicate AND→OR with correct precedence ✅; (2) misleading docblocks corrected ✅;
+(3) test rewritten behaviorally incl. expired-never-revoked deletion proof ✅.
