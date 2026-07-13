@@ -11,6 +11,8 @@ use Workerman\MySQL\Connection;
 use function hash;
 use function preg_match;
 use function strlen;
+use function strtoupper;
+use function time;
 
 /**
  * Unit tests for {@see ClientRelayTokenService}.
@@ -182,7 +184,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         );
     }
 
-    public function test_prune_expired_tokens_issues_correct_delete_query(): void
+    public function test_prune_expired_tokens_or_joins_expiry_and_revoked_predicates(): void
     {
         $db = $this->createMock(Connection::class);
         $capturedSql = '';
@@ -202,8 +204,109 @@ final class ClientRelayTokenServiceTest extends TestCase
         $this->assertStringContainsString('DELETE FROM client_relay_tokens', $capturedSql);
         $this->assertStringContainsString('expires_at < NOW() - INTERVAL 1 DAY', $capturedSql);
         $this->assertStringContainsString('revoked_at IS NOT NULL', $capturedSql);
+
+        // H-D2: the expiry and revoked predicates MUST be OR-joined, NOT AND.
+        // With AND, only tokens that are BOTH expired-by->1-day AND revoked are
+        // pruned, so the common expired-never-revoked row (tokens have a ~1 h TTL
+        // and are rarely revoked) is never removed and the table grows forever.
+        $matched = preg_match(
+            '/INTERVAL\s+1\s+DAY\s+(AND|OR)\s+revoked_at\s+IS\s+NOT\s+NULL/i',
+            $capturedSql,
+            $operator,
+        );
+        $this->assertSame(
+            1,
+            $matched,
+            'prune SQL must join the expiry and revoked predicates with a single AND/OR operator',
+        );
+        $this->assertSame(
+            'OR',
+            strtoupper($operator[1]),
+            'expiry/revoked predicates must be OR-joined, not AND (H-D2)',
+        );
+
         // No params needed for this query.
         $this->assertNull($capturedParams);
+    }
+
+    /**
+     * Behavioral guard for H-D2: drive pruneExpiredTokens() against a fake DB
+     * that interprets the emitted DELETE's WHERE clause over fixture rows, and
+     * prove an expired-never-revoked row (revoked_at IS NULL) is removed. Under
+     * the old AND bug that row survives — so a regression back to AND fails here.
+     */
+    public function test_prune_deletes_expired_never_revoked_row_behaviorally(): void
+    {
+        $now = time();
+        $day = 86400;
+
+        // expires_at / revoked_at are unix timestamps; revoked_at null = never revoked.
+        $rows = [
+            // The H-D2 growth case: simply expired long ago, never revoked.
+            'expired_never_revoked' => ['expires_at' => $now - (2 * $day), 'revoked_at' => null],
+            // Revoked but not yet expired — OR removes it; AND would keep it.
+            'revoked_not_expired'   => ['expires_at' => $now + 3600,        'revoked_at' => $now - 60],
+            // Fresh, active, un-revoked — must be kept under either operator.
+            'fresh_active'          => ['expires_at' => $now + 3600,        'revoked_at' => null],
+            // Both expired and revoked — removed under either operator.
+            'expired_and_revoked'   => ['expires_at' => $now - (2 * $day),  'revoked_at' => $now - 120],
+        ];
+
+        $db = $this->createMock(Connection::class);
+        $survivors = $rows;
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$survivors, $now, $day): int {
+                // Extract the operator that joins the two predicates so a
+                // regression back to AND is evaluated as AND (and thus caught).
+                $this->assertSame(
+                    1,
+                    preg_match(
+                        '/INTERVAL\s+1\s+DAY\s+(AND|OR)\s+revoked_at\s+IS\s+NOT\s+NULL/i',
+                        $sql,
+                        $operator,
+                    ),
+                    'prune SQL must join the expiry and revoked predicates with a single AND/OR',
+                );
+                $usesOr    = strtoupper($operator[1]) === 'OR';
+                $threshold = $now - $day; // NOW() - INTERVAL 1 DAY
+
+                $deleted = 0;
+                $kept    = [];
+                foreach ($survivors as $name => $row) {
+                    $expiredBeyondGrace = $row['expires_at'] < $threshold;
+                    $revoked            = $row['revoked_at'] !== null;
+                    $matches            = $usesOr
+                        ? ($expiredBeyondGrace || $revoked)
+                        : ($expiredBeyondGrace && $revoked);
+                    if ($matches) {
+                        $deleted++;
+                    } else {
+                        $kept[$name] = $row;
+                    }
+                }
+                $survivors = $kept;
+
+                return $deleted;
+            },
+        );
+
+        $service = new ClientRelayTokenService($db);
+        $deleted = $service->pruneExpiredTokens();
+
+        // OR semantics: 3 of 4 rows pruned. The fresh active token is the only survivor.
+        $this->assertSame(3, $deleted, 'expected 3 of 4 rows pruned under OR semantics');
+        $this->assertArrayNotHasKey(
+            'expired_never_revoked',
+            $survivors,
+            'expired-never-revoked token MUST be pruned (the H-D2 unbounded-growth case)',
+        );
+        $this->assertArrayNotHasKey('revoked_not_expired', $survivors);
+        $this->assertArrayNotHasKey('expired_and_revoked', $survivors);
+        $this->assertArrayHasKey(
+            'fresh_active',
+            $survivors,
+            'a fresh, un-revoked token must NOT be pruned',
+        );
     }
 
     public function test_prune_expired_tokens_returns_zero_when_result_not_int(): void
