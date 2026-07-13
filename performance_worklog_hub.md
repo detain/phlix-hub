@@ -87,7 +87,7 @@ php bin/phlix migrate
 - [x] HB-4.5  metrics prune singleton  RE-AUDIT+COMPLETE 2026-07-12: was NOT-DONE (the "per-worker singleton" claim was orthogonal to the AC — `flush()` unconditionally `prune()`d from every worker: 2 HTTP + relay + client-relay ≈4 procs × 3 retention DELETEs/min = N× churn). NOW DONE: added `bool $shouldPrune=false` to `MetricsFlushService::flush()` gating ONLY the DB retention DELETEs; the count=1 relay worker (guaranteed single-instance, always started in boot()) passes `true`, HTTP + client-relay pass `false`. Per-worker in-RAM `pruneStaleConnections()` eviction kept UNCONDITIONAL on the throttle tick (every worker owns a distinct registry — gating it off would leak the client-relay map). Flush cadence + prune SQL untouched. +3 single-pruner tests; existing throttle/binding-contract tests updated to the pruning path. See `## Implementer — HB-4.5 — 2026-07-12`.
 - [x] HB-4.6  rate limiting on proxy/client-mount/heartbeat/JWKS  (commit: H-W4-batch)  DONE — RateLimiterInterface injected into ServerProxyController, ClientMountController, HeartbeatHandler, HubJwksController
 - [x] HB-4.7  Ed25519KeyManager in-memory previous-key cache  (commit: H-W4-batch)  DONE — unlink removed from loadPreviousKey hot path; purgeExpiredPreviousKey() available for background cleanup
-- [x] HB-4.8  stream-timer sweep instead of per-second del+add  (commit: H-W4-batch)  DONE — batch SWEEP_INTERVAL_SECONDS timer replaces per-request timer delete+add; sweepStreamTimers() method
+- [x] HB-4.8  stream-timer sweep instead of per-second del+add  RE-AUDIT+FIX 2026-07-12: was PARTIAL (⚠️ BEHAVIORAL REGRESSION — the 2s sweep measured inactivity from the FIXED `sent_at`, killing ACTIVE streams `timeout`s after they STARTED: direct-play ~30s, /hls,/dash ~60s; the 900s ceiling was unreachable). FIXED: added `lastActivityAt` to the pending entry (seeded to `sent_at`), refreshed per HEAD/BODY/END in `onResponseFrame` via `(float) time()`, sweep now tests `now - lastActivityAt >= timeout`; KEPT the `stream_opened_at + MAX_STREAM_DURATION_SECONDS` (900s) absolute ceiling (terminate on EITHER). No per-frame Timer::del/add churn reintroduced; SWEEP_INTERVAL_SECONDS untouched. +3 behavioral tests (active-long-stream SURVIVES — proven to fail vs fixed-`sent_at`; idle>timeout terminates; ceiling fires for active-but-runaway). Suite 1366 pass/17 skip/0 fail, phpstan L9 0, phpcs src clean. See `## Implementer — HB-4.8`. Prior wiring (H-W4-batch: batch SWEEP_INTERVAL_SECONDS timer + sweepStreamTimers()).
 - [x] HB-4.9  verify/implement HTTP_CANCEL server-side stop  (commit: H-W4-batch)  DONE — already implemented; full cancel path verified: Bridge→Channel→ProxyManager→Tunnel::sendCancel()→server
 - [x] HB-4.10 remove RelaySessionManager::routeRequest  (commit: H-W4-batch)  DONE — confirmed no callers; method removed; docstrings updated
 
@@ -2173,3 +2173,57 @@ Verdict: **HB-4.5 DONE** (pending the standard Docs cycle).
 - **HB-4.10 [H-I5,R5] remove routeRequest → DONE (confirmed).** `routeRequest` removed (0 callers), docblock fixed, live path uses in-memory registry via `RelayProxyManager::onRequest`, `recordBytesIn` retained. No action.
 
 Hub Complete queue (priority): HB-4.8 (regression) → HB-4.7 (small) → HB-4.9 hub-half (metric+shared doc; X1 server-stop deferred to SV-4.2) → HB-4.6 (large rate-limit rework).
+
+## Implementer — HB-4.8 (regression fix + behavioral tests) — 2026-07-12
+
+**Fixed the BEHAVIORAL REGRESSION** the RE-AUDIT flagged: the 2s periodic sweep (`sweepStreamTimers`)
+measured inactivity from the FIXED `sent_at`, so an actively-streaming entry was killed `timeout`s
+after it STARTED (direct-play `/media/{id}/stream` ~30s, `/hls`,`/dash` ~60s; the 900s
+`MAX_STREAM_DURATION` ceiling was unreachable). Restored true inactivity semantics; kept the ceiling.
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-hub/src/Relay/RelayProxyManager.php`
+  1. Added `lastActivityAt: float` to the pending-entry `@var` shape (`:141`).
+  2. Seeded `'lastActivityAt' => $now` when the entry is created (`:293`) — equals `sent_at` until
+     the first frame arrives, so a request that never gets a response still times out from send time.
+  3. Refresh `lastActivityAt` in `onResponseFrame` on every decoded activity frame (HEAD/BODY/END),
+     `:379` — `$this->pending[$requestId]['lastActivityAt'] = (float) time();` (coarse second
+     granularity: per-FRAME, not per-byte; 30-60s timeouts swept every 2s need no finer clock; kept
+     the shape `float` via the cast so PHPStan L9 stays clean). Added `use function time;`.
+  4. Sweep inactivity test (`:669`) changed from `$now - $entry['sent_at']` to
+     `$now - $entry['lastActivityAt'] >= $entry['timeout']` — terminate only when GENUINELY IDLE.
+  5. KEPT the absolute ceiling unchanged (`:662`, `$now - stream_opened_at >= MAX_STREAM_DURATION_SECONDS`
+     for streaming entries) — the sweep terminates on EITHER idle>timeout OR duration>900s. Did NOT
+     touch `SWEEP_INTERVAL_SECONDS` (2.0) or the sweep arming. Updated two stale comments (`onTimeout`
+     "timer re-armed each frame" → sweep-on-`lastActivityAt`).
+- `/home/sites/phlix/phlix-hub/tests/Unit/Relay/RelayProxyManagerTest.php`
+  - **NEW `test_active_long_running_stream_survives_sweep_despite_old_start_time`** (the regression
+    test): stream `sent_at`/`stream_opened_at` back-dated 300s (>30s timeout, <900s ceiling) but fresh
+    HEAD+BODY frames refresh `lastActivityAt` → the sweep must NOT terminate it; asserts entry still
+    pending, no END, and `lastActivityAt > sent_at`. **Proven to FAIL against the fixed-`sent_at` code**
+    via a temporary mutation (sweep terminated it → 3 publishes vs expected 2).
+  - **NEW `test_idle_stream_beyond_timeout_is_terminated_by_sweep`**: HEAD then server silent;
+    `lastActivityAt` back-dated 45s (>30s) with `stream_opened_at` recent (isolates the inactivity
+    path) → sweep terminates with head+END, entry gone.
+  - **NEW `test_absolute_ceiling_terminates_active_stream_with_recent_activity`**: `stream_opened_at`
+    back-dated 1000s (>900s) but a fresh BODY keeps `lastActivityAt` recent → sweep terminates via the
+    CEILING despite ongoing activity (head+body+END, entry gone).
+  - Updated the existing `test_sweep_times_out_inactive_request` (a "no response ever" idle case) to
+    back-date `lastActivityAt` too (it's seeded to `sent_at`; no frame refreshed it) — faithful to the
+    new inactivity field. Existing `test_sweep_terminates_stream_exceeding_absolute_duration` /
+    `test_streaming_frames_preserve_pending_entry_until_sweep_timeout` still pass unchanged.
+
+**Acceptance mapping:** (1) `lastActivityAt` field added+seeded ✔; (2) refreshed per HEAD/BODY(/END)
+in `onResponseFrame` cheaply ✔; (3) sweep tests `now - lastActivityAt >= timeout` ✔; (4) absolute
+`stream_opened_at + 900s` ceiling retained — terminate on EITHER condition ✔; (5) no per-frame
+`Timer::del/add` churn reintroduced, `SWEEP_INTERVAL_SECONDS`/arming untouched ✔.
+
+**Verify (this box, PHP 8.3.6):**
+- `./vendor/bin/phpstan analyze --no-progress` → **[OK] No errors** (L9, no baseline).
+- `./vendor/bin/phpcs --standard=PSR12 -n src/` → **clean (exit 0)**.
+- Full suite `php -d max_execution_time=0 ./vendor/bin/phpunit --no-coverage` → **OK, 1366 tests /
+  16165 assertions / 17 skipped / 0 failures** (baseline 1363 + 3 new).
+- `--filter RelayProxyManager` → **OK (52 tests, 230 assertions)**.
+- Mutation check: reverting the sweep to `sent_at` makes the new regression test FAIL (proof it guards
+  the bug); restored after.
+- (psalm skipped — box PHP 8.3.6 < psalm-required 8.3.16, environmental.)

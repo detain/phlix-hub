@@ -1063,6 +1063,260 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount($publishedBefore + 1, $this->published);
     }
 
+    /**
+     * REGRESSION (HB-4.8): an ACTIVE long-running stream must SURVIVE the sweep.
+     *
+     * The stream STARTED well past the inactivity timeout ago (`sent_at` /
+     * `stream_opened_at` back-dated 300s, far beyond the 30s timeout) but is
+     * still receiving response frames, so `lastActivityAt` is recent. Because
+     * the sweep now measures idleness from `lastActivityAt` (not the fixed
+     * `sent_at`), the entry is preserved.
+     *
+     * Against the previous fixed-`sent_at` code this test FAILS: the old sweep
+     * evaluated `now - sent_at (300s) >= timeout (30s)` → true → it terminated a
+     * normally-playing stream ~30s (direct-play `/media`) / ~60s (`/hls`,`/dash`)
+     * after it started. This is the test that catches that regression; the
+     * existing `test_streaming_frames_preserve_pending_entry_until_sweep_timeout`
+     * only exercises a fresh entry (sent_at ≈ now), so it cannot.
+     */
+    public function test_active_long_running_stream_survives_sweep_despite_old_start_time(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30, // inactivity timeout (injected default) = 30s
+            $this->publisher(),
+        );
+        // No 'timeout' in the payload → the 30s injected default applies.
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/media/item/stream',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        // The stream STARTED 300s ago (far past the 30s inactivity timeout) but
+        // is still WITHIN the 900s absolute ceiling. Back-date every clock,
+        // including the initial lastActivityAt, so nothing looks recent yet.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $old = microtime(true) - 300.0;
+        $pending[$requestId]['stream_started'] = true;
+        $pending[$requestId]['sent_at'] = $old;
+        $pending[$requestId]['stream_opened_at'] = $old;
+        $pending[$requestId]['lastActivityAt'] = $old;
+        $pendingProp->setValue($manager, $pending);
+
+        // Ongoing activity: fresh HEAD + BODY frames arrive NOW. onResponseFrame
+        // refreshes lastActivityAt to ~now on each.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('x'),
+        ));
+
+        $publishedBefore = count($this->published); // head + body
+
+        // Run the sweep: idle for ~0s (< 30s timeout) and open for 300s (< 900s
+        // ceiling) → it must NOT be terminated.
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
+
+        // No terminating END phase was published — the active stream survives.
+        $this->assertCount($publishedBefore, $this->published);
+
+        // The pending entry is still present.
+        /** @var array<int, array<string, mixed>> $after */
+        $after = $pendingProp->getValue($manager);
+        $this->assertArrayHasKey($requestId, $after, 'an actively-streaming entry must survive the sweep');
+
+        // Proof of the fix: idleness is measured from the refreshed
+        // lastActivityAt (recent), NOT the old sent_at (300s ago).
+        $this->assertGreaterThan($after[$requestId]['sent_at'], $after[$requestId]['lastActivityAt']);
+        $this->assertLessThan(30.0, microtime(true) - $after[$requestId]['lastActivityAt']);
+    }
+
+    /**
+     * A genuinely IDLE stream (no response frame for longer than the inactivity
+     * timeout) IS still terminated by the sweep, even though its absolute
+     * duration is nowhere near the 900s ceiling. This is the inactivity half of
+     * the fix — it must keep working after switching the sweep from `sent_at` to
+     * `lastActivityAt`.
+     */
+    public function test_idle_stream_beyond_timeout_is_terminated_by_sweep(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/hls/job-abc/seg-00007.ts',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        // HEAD arrives → stream_started = true, lastActivityAt refreshed.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '10'], 10)),
+        ));
+
+        // The server then goes SILENT. Back-date lastActivityAt past the timeout
+        // while keeping stream_opened_at recent, so the INACTIVITY path — not the
+        // absolute ceiling — is what terminates the stream.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $pending[$requestId]['lastActivityAt'] = microtime(true) - 45.0; // idle 45s > 30s timeout
+        $pendingProp->setValue($manager, $pending);
+
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
+
+        // Terminated with an END phase (head already on the wire → no fresh 504).
+        $this->assertCount(2, $this->published);
+        $this->assertSame('head', $this->published[0]['data']['phase']);
+        $this->assertSame('end', $this->published[1]['data']['phase']);
+
+        // The pending entry is gone.
+        /** @var array<int, array<string, mixed>> $remaining */
+        $remaining = $pendingProp->getValue($manager);
+        $this->assertArrayNotHasKey($requestId, $remaining);
+    }
+
+    /**
+     * The absolute 900s ceiling still fires for an active-but-runaway stream:
+     * response frames are STILL arriving (lastActivityAt recent, so the
+     * inactivity path can never fire) but the stream has been open past
+     * MAX_STREAM_DURATION_SECONDS. The sweep must terminate it via the ceiling
+     * regardless of ongoing activity.
+     */
+    public function test_absolute_ceiling_terminates_active_stream_with_recent_activity(): void
+    {
+        $sent = [];
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturnCallback(static function (mixed $data) use (&$sent): bool {
+            $sent[] = is_string($data) ? $data : '';
+            return true;
+        });
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+        $manager->onRequest([
+            'request_id' => 'req-1',
+            'reply_event' => 'reply.1',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/media/item/stream',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        // HEAD arrives → stream_started = true, lastActivityAt recent.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+        ));
+
+        // Back-date ONLY stream_opened_at past the 900s ceiling; leave
+        // lastActivityAt recent so the inactivity path cannot be what fires.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $pending[$requestId]['stream_opened_at'] = microtime(true) - 1000.0; // > 900s ceiling
+        $pendingProp->setValue($manager, $pending);
+
+        // A fresh BODY frame proves the stream is still active RIGHT NOW
+        // (refreshes lastActivityAt again).
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('x'),
+        ));
+
+        $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
+        $sweep->setAccessible(true);
+        $sweep->invoke($manager);
+
+        // Terminated by the ceiling despite recent activity: head, body, end.
+        $this->assertCount(3, $this->published);
+        $this->assertSame('head', $this->published[0]['data']['phase']);
+        $this->assertSame('body', $this->published[1]['data']['phase']);
+        $this->assertSame('end', $this->published[2]['data']['phase']);
+
+        // The pending entry is gone.
+        /** @var array<int, array<string, mixed>> $remaining */
+        $remaining = $pendingProp->getValue($manager);
+        $this->assertArrayNotHasKey($requestId, $remaining);
+    }
+
     public function test_response_for_unknown_request_is_dropped(): void
     {
         $logger = $this->createMock(StructuredLogger::class);
