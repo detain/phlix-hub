@@ -2350,3 +2350,54 @@ added the periodic caller.
 timer" met); runs on the MAINTENANCE worker and RECURS; verify path/cache/unlink-location unchanged.
 
 Verdict: **HB-4.7 DONE** (pending the standard Docs cycle).
+
+## Reviewer (per-step) — HB-4.7 — 2026-07-12
+
+Reviewed `git diff 0d39b46..66a10ee` (c6fdf58 fix + 66a10ee tests) against current
+`src/Relay/IdleReaper.php`, `src/Common/Container/Providers/HubServicesProvider.php`,
+`src/Hub/Ed25519KeyManager.php` (confirmed untouched), and `tests/Unit/Relay/IdleReaperTest.php`.
+
+**NO FINDINGS**
+
+All five verification points confirmed:
+
+1. **Wiring correct + on the right worker.** `reapDbMaintenance()` (`IdleReaper.php:272`) now calls
+   `$this->keyManager?->purgeExpiredPreviousKey()`. `reapDbMaintenance` is armed ONLY via
+   `startDbMaintenance()` (`:139`, a repeating `Timer::add($interval, [$this,'reapDbMaintenance'])` — no
+   `false` 3rd arg, so it RECURS) → `HubServicesProvider::startDbMaintenanceTimers()` (`:955-966`) →
+   `MaintenanceWorker::onWorkerStart()` (`MaintenanceWorker.php:66`). It is NOT on the relay worker's
+   `tick()` (which only reaps stale tunnels + `flushAll()`), NOT on any hot/per-request path. The relay
+   worker's `startInMemoryReapers()` arms only `start()`/`tick()`, so the purge never runs there.
+
+2. **DI coherent.** The `IdleReaper` factory (`HubServicesProvider.php:388-418`) passes
+   `->parameter('keyManager', get(Ed25519KeyManager::class))` — the same PHP-DI shared singleton the
+   JWKS/enrollment services resolve (`:146,:163,:245`). The new ctor param is optional + last-position
+   (`?Ed25519KeyManager $keyManager = null`, `IdleReaper.php:87`), mirroring the existing optional
+   `?RelaySessionManager`/`?HeartbeatHandler`/`?ClientRelayTokenService` deps → BC preserved; the `?->`
+   null-guard makes any key-manager-less construction a clean no-op. Cross-worker correctness holds:
+   `purgeExpiredPreviousKey()` reads the sidecar FRESH from disk via `readPreviousKeyFile()` (does NOT
+   rely on in-memory `$previousKey`), so the maintenance worker's own key-manager instance — which never
+   rotated in-process — correctly reclaims the on-disk sidecar written by whichever worker performed the
+   rotate, and only unlinks when `expiresAt <= now()` (never deletes a still-valid previous key).
+
+3. **Nothing else changed.** `Ed25519KeyManager.php` is not in the changeset (diff touches only the 4
+   files below). The verify path (`loadPreviousKey`/`getActivePublicKeys`), the in-memory `$previousKey`
+   cache, and the `@unlink` in `deletePreviousKeyFile()` are all UNTOUCHED and still off the verify path
+   (`loadPreviousKey` still does not unlink on expiry). Only the periodic caller was added.
+
+4. **Test genuine — not tautological.** `test_reap_db_maintenance_purges_expired_previous_key_when_key_manager_wired`
+   uses a REAL `Ed25519KeyManager` (it is `final`/unmockable) over a temp key path with an injectable
+   clock: `getOrCreateKeyPair()` → `rotate()` (persists sidecar) → assert sidecar exists → advance the
+   clock by `OVERLAP_TTL_SECONDS + 1` → `reapDbMaintenance()` → assert the sidecar file is unlinked.
+   Deleting the `$this->keyManager?->purgeExpiredPreviousKey()` line leaves the file on disk and fails
+   the `assertFileDoesNotExist`, so it genuinely guards the inert-wiring gap. The
+   `test_reap_db_maintenance_is_noop_for_key_manager_when_null` no-op test holds.
+
+5. **Scope / gates.** Diff touches only `performance_worklog_hub.md`,
+   `src/Common/Container/Providers/HubServicesProvider.php`, `src/Relay/IdleReaper.php`,
+   `tests/Unit/Relay/IdleReaperTest.php`. `src/Relay/Tunnel.php` and the txn-locking machinery are
+   UNTOUCHED. Gates this box (PHP 8.3.6 + PCOV): phpstan L9 `[OK] No errors`; phpcs `--standard=PSR12 -n src/`
+   clean; `phpunit --filter 'IdleReaper|Ed25519KeyManager'` OK (26/78); full suite OK 1368 tests / 17 skip /
+   0 fail (baseline 1366 → 1368, the 2 new tests). psalm skipped (environmental).
+
+Verdict: **HB-4.7 — NO FINDINGS** (ready for the Docs cycle).
