@@ -87,6 +87,9 @@ final class RelayWorker
      * @param int                 $count       Number of worker processes (default 1 for relay ordering).
      * @param string              $channelHost Host of the workerman/channel broker (cross-process proxy).
      * @param int                 $channelPort Port of the workerman/channel broker.
+     * @param bool                $useTls      Enable TLS (wss://) on the relay WebSocket.
+     * @param string|null         $tlsCert     Path to TLS certificate file (PEM).
+     * @param string|null         $tlsKey      Path to TLS private key file (PEM).
      */
     public function __construct(
         private readonly ContainerInterface $container,
@@ -94,6 +97,9 @@ final class RelayWorker
         private readonly int $count = 1,
         private readonly string $channelHost = '127.0.0.1',
         private readonly int $channelPort = RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
+        private readonly bool $useTls = false,
+        private readonly ?string $tlsCert = null,
+        private readonly ?string $tlsKey = null,
     ) {
     }
 
@@ -120,6 +126,20 @@ final class RelayWorker
         $worker = new Worker("websocket://0.0.0.0:{$this->port}");
         $worker->name = 'phlix-hub-relay-ws';
         $worker->count = $this->count;
+
+        // Enable TLS (wss://) when configured.
+        if ($this->useTls) {
+            if ($this->tlsCert === null || $this->tlsKey === null) {
+                throw new \InvalidArgumentException(
+                    'TLS enabled for relay worker but HUB_RELAY_TLS_CERT and/or HUB_RELAY_TLS_KEY env vars are not set',
+                );
+            }
+            $worker->transport = 'ssl';
+            stream_context_set_option(stream_context_get_default(), 'ssl', 'local_cert', $this->tlsCert);
+            stream_context_set_option(stream_context_get_default(), 'ssl', 'local_pk', $this->tlsKey);
+            stream_context_set_option(stream_context_get_default(), 'ssl', 'allow_self_signed', true);
+            stream_context_set_option(stream_context_get_default(), 'ssl', 'verify_peer', false);
+        }
 
         // Fired during the WS upgrade handshake (before any frames arrive).
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
