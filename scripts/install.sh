@@ -1481,12 +1481,22 @@ if [ "$TLS_ENABLED" = "yes" ]; then
     mkdir -p /etc/letsencrypt/renewal-hooks/deploy
     cat > /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh <<HOOK
 #!/bin/sh
-cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \\
+cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
     "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" > "/etc/haproxy/certs/${DOMAIN}.pem"
 chmod 600 "/etc/haproxy/certs/${DOMAIN}.pem"
 systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
 HOOK
     chmod +x /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
+
+    # Configure the relay worker TLS settings (wss:// on port 8802).
+    # The RelayWorker reads HUB_RELAY_TLS, HUB_RELAY_TLS_CERT, HUB_RELAY_TLS_KEY
+    # from the env file (config/server.php → Application::boot()).
+    phlix_ensure_env_key "$ENV_FILE" HUB_RELAY_TLS "true" \
+      "Enable TLS on the relay WebSocket worker (port 8802)."
+    phlix_ensure_env_key "$ENV_FILE" HUB_RELAY_TLS_CERT "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
+      "TLS certificate for relay worker (PEM with full chain)."
+    phlix_ensure_env_key "$ENV_FILE" HUB_RELAY_TLS_KEY "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" \
+      "TLS private key for relay worker."
 
     # Monthly auto-renewal (1st of the month, 03:00).
     cat > /etc/cron.d/phlix-hub-certbot <<CRON

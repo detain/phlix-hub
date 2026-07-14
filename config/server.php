@@ -42,6 +42,12 @@ return [
             : 5.0,
     ],
 
+    // Relay worker TLS (wss://) settings.
+    // Enable TLS on port 8802 for secure WebSocket connections.
+    'relay_tls' => filter_var(getenv('HUB_RELAY_TLS') ?: 'false', FILTER_VALIDATE_BOOLEAN),
+    'relay_tls_cert' => getenv('HUB_RELAY_TLS_CERT') ?: null,
+    'relay_tls_key' => getenv('HUB_RELAY_TLS_KEY') ?: null,
+
     // Sonarr/Radarr endpoints used by the request UI.
     // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.
     'arr' => [

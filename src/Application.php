@@ -1850,7 +1850,22 @@ final class Application
         $relayPort = is_int($relayPortRaw)
             ? $relayPortRaw
             : (int) (is_numeric($relayPortRaw) ? $relayPortRaw : 8802);
-        $relayWorker = new RelayWorker($this->container, $relayPort, 1, $channelHost, $channelPort);
+        /** @var bool $relayTls */
+        $relayTls = $this->config['relay_tls'] ?? false;
+        /** @var string|null $relayTlsCert */
+        $relayTlsCert = $this->config['relay_tls_cert'] ?? null;
+        /** @var string|null $relayTlsKey */
+        $relayTlsKey = $this->config['relay_tls_key'] ?? null;
+        $relayWorker = new RelayWorker(
+            $this->container,
+            $relayPort,
+            1,
+            $channelHost,
+            $channelPort,
+            $relayTls,
+            $relayTlsCert,
+            $relayTlsKey,
+        );
         $relayWorker->start();
 
         // Start the client-facing relay WebSocket worker on port 8803. Remote
