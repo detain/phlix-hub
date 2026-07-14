@@ -175,7 +175,7 @@ final class ServerReaper
             try {
                 /** @var mixed $result */
                 $result = $this->db->query(
-                    'DELETE FROM server_heartbeats WHERE received_at < NOW() - INTERVAL :retention DAY ORDER BY received_at LIMIT 1000',
+                    'DELETE FROM server_heartbeats WHERE received_at < NOW() - INTERVAL :retention DAY LIMIT 1000',
                     ['retention' => $this->heartbeatRetentionDays]
                 );
                 $count = is_numeric($result) ? (int) $result : 0;
@@ -185,12 +185,10 @@ final class ServerReaper
                     break;
                 }
 
-                if ($count > 0) {
-                    $this->logger->info('ServerReaper: heartbeat sweep complete', [
-                        'deleted' => $count,
-                        'retention_days' => $this->heartbeatRetentionDays,
-                    ]);
-                }
+                $this->logger->info('ServerReaper: heartbeat sweep complete', [
+                    'deleted' => $count,
+                    'retention_days' => $this->heartbeatRetentionDays,
+                ]);
 
                 if ($count < 1000) {
                     break;
@@ -201,7 +199,12 @@ final class ServerReaper
                 if ($attempt === $maxRetries || strpos($e->getMessage(), 'Deadlock') === false) {
                     throw $e;
                 }
-                usleep(100000 * $attempt);
+                $this->logger->debug('ServerReaper: heartbeat sweep deadlock, retrying', [
+                    'attempt' => $attempt,
+                    'max_retries' => $maxRetries,
+                    'error' => $e->getMessage(),
+                ]);
+                usleep(50000 * $attempt);
             }
         }
 
