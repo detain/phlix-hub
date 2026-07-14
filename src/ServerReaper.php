@@ -168,23 +168,44 @@ final class ServerReaper
      */
     public function sweepHeartbeats(): int
     {
-        /** @var mixed $result */
-        $result = $this->db->query(
-            'DELETE FROM server_heartbeats
-             WHERE received_at < NOW() - INTERVAL :retention DAY',
-            ['retention' => $this->heartbeatRetentionDays],
-        );
+        $maxRetries = 3;
+        $totalDeleted = 0;
 
-        $count = is_numeric($result) ? (int) $result : 0;
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                /** @var mixed $result */
+                $result = $this->db->query(
+                    'DELETE FROM server_heartbeats WHERE received_at < NOW() - INTERVAL :retention DAY ORDER BY received_at LIMIT 1000',
+                    ['retention' => $this->heartbeatRetentionDays]
+                );
+                $count = is_numeric($result) ? (int) $result : 0;
+                $totalDeleted += $count;
 
-        if ($count > 0) {
-            $this->logger->info('ServerReaper: heartbeat sweep complete', [
-                'deleted' => $count,
-                'retention_days' => $this->heartbeatRetentionDays,
-            ]);
+                if ($count === 0) {
+                    break;
+                }
+
+                if ($count > 0) {
+                    $this->logger->info('ServerReaper: heartbeat sweep complete', [
+                        'deleted' => $count,
+                        'retention_days' => $this->heartbeatRetentionDays,
+                    ]);
+                }
+
+                if ($count < 1000) {
+                    break;
+                }
+
+                return $totalDeleted;
+            } catch (\PDOException $e) {
+                if ($attempt === $maxRetries || strpos($e->getMessage(), 'Deadlock') === false) {
+                    throw $e;
+                }
+                usleep(100000 * $attempt);
+            }
         }
 
-        return $count;
+        return $totalDeleted;
     }
 
     /**
