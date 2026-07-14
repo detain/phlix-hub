@@ -123,9 +123,7 @@ final class RelayWorker
      */
     public function start(): Worker
     {
-        $worker = new Worker("websocket://0.0.0.0:{$this->port}");
-        $worker->name = 'phlix-hub-relay-ws';
-        $worker->count = $this->count;
+        $sslContext = null;
 
         // Enable TLS (wss://) when configured.
         if ($this->useTls) {
@@ -134,11 +132,26 @@ final class RelayWorker
                     'TLS enabled for relay worker but HUB_RELAY_TLS_CERT and/or HUB_RELAY_TLS_KEY env vars are not set',
                 );
             }
+            $sslContext = [
+                'ssl' => [
+                    'ciphers' => 'ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS',
+                    'ecdh_curve' => 'secp384r1',
+                    'disable_compression' => true,
+                    'security_level' => 2,
+                    'local_cert' => $this->tlsCert,
+                    'local_pk' => $this->tlsKey,
+                    'allow_self_signed' => true,
+                    'verify_peer' => false,
+                ],
+            ];
+        }
+
+        $worker = new Worker("websocket://0.0.0.0:{$this->port}", $sslContext);
+        $worker->name = 'phlix-hub-relay-ws';
+        $worker->count = $this->count;
+
+        if ($this->useTls) {
             $worker->transport = 'ssl';
-            stream_context_set_option(stream_context_get_default(), 'ssl', 'local_cert', $this->tlsCert);
-            stream_context_set_option(stream_context_get_default(), 'ssl', 'local_pk', $this->tlsKey);
-            stream_context_set_option(stream_context_get_default(), 'ssl', 'allow_self_signed', true);
-            stream_context_set_option(stream_context_get_default(), 'ssl', 'verify_peer', false);
         }
 
         // Fired during the WS upgrade handshake (before any frames arrive).
