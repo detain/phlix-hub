@@ -420,6 +420,76 @@ phlix_user_is_dedicated() {
 }
 
 # ---------------------------------------------------------------------------
+# Let's Encrypt cert permission fix
+#
+# Let's Encrypt's live/ directory is owned by root with mode 700, making
+# certificates unreadable by the phlix-hub service user. This is fine for
+# HAProxy (runs as root) but breaks the RelayWorker TLS on port 8802 (runs
+# as SERVICE_USER). We fix perms after certbot runs so the relay can read
+# the PEM files. Uses chmod because setfacl is not always available.
+# ---------------------------------------------------------------------------
+phlix_fix_letsencrypt_cert_perms() {
+  local env_file="${1:-$ENV_FILE}"
+  local relay_tls relay_cert relay_key
+
+  # Read relay TLS config from env file.
+  relay_tls="$(grep -m1 -E '^HUB_RELAY_TLS=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+  relay_cert="$(grep -m1 -E '^HUB_RELAY_TLS_CERT=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+  relay_key="$(grep -m1 -E '^HUB_RELAY_TLS_KEY=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+
+  # Only fix when relay TLS is enabled and certs are under /etc/letsencrypt.
+  if [ "$relay_tls" != "true" ]; then
+    return 0
+  fi
+
+  local cert_dir=""
+  case "$relay_cert" in
+    /etc/letsencrypt/live/*/fullchain.pem)
+      cert_dir="$(dirname "$relay_cert")" ;;
+    /etc/letsencrypt/live/*/cert.pem)
+      cert_dir="$(dirname "$relay_cert")" ;;
+  esac
+
+  if [ -z "$cert_dir" ] || [ ! -d "$cert_dir" ]; then
+    return 0
+  fi
+
+  # The path structure under /etc/letsencrypt/ is:
+  #   live/<domain>/fullchain.pem -> ../../archive/<domain>/fullchainN.pem
+  #   archive/<domain>/fullchainN.pem  (actual PEM files)
+  #
+  # All three levels need to be traversable (+x) by the service user:
+  #   /etc/letsencrypt/live/         (drwx------ root - blocks traversal)
+  #   /etc/letsencrypt/archive/       (drwx------ root - blocks traversal)
+  #   /etc/letsencrypt/live/<domain>/ (drwx------ root - we chmod this)
+  #   /etc/letsencrypt/archive/<domain>/ (drwx------ root - blocks traversal)
+  # We also need +r on the PEM files themselves.
+
+  local live_parent archive_parent domain_archive
+  live_parent="$(dirname "$cert_dir")"          # e.g. /etc/letsencrypt/live
+  archive_parent="/etc/letsencrypt/archive"       # parent of all domain archives
+  domain_archive="$(readlink -f "$relay_cert")"   # resolve to actual archive file
+
+  # Fix all directory levels: 755 so others (including service user) can traverse.
+  chmod 755 "$live_parent"        2>/dev/null || true   # /etc/letsencrypt/live
+  chmod 755 "$archive_parent"     2>/dev/null || true   # /etc/letsencrypt/archive
+  chmod 755 "$cert_dir"           2>/dev/null || true   # /etc/letsencrypt/live/<domain>
+  chmod 755 "$(dirname "$domain_archive")" 2>/dev/null || true  # /etc/letsencrypt/archive/<domain>
+
+  # Fix PEM files: 644 so the service user can read them.
+  if [ -f "$relay_cert" ]; then
+    chmod 644 "$relay_cert"
+    chmod 644 "$(readlink -f "$relay_cert")" 2>/dev/null || true
+  fi
+  if [ -n "$relay_key" ] && [ -f "$relay_key" ]; then
+    chmod 644 "$relay_key"
+    chmod 644 "$(readlink -f "$relay_key")" 2>/dev/null || true
+  fi
+
+  info "Fixed Let's Encrypt cert permissions for relay TLS (cert dir: $cert_dir)"
+}
+
+# ---------------------------------------------------------------------------
 # Shared HAProxy management
 #
 # Both phlix-hub and phlix-server can be installed on the same host. Each
@@ -1057,6 +1127,11 @@ do_update() {
   # HAProxy layout, convert it now. Idempotent on subsequent updates.
   phlix_haproxy_migrate_if_needed_hub
 
+  # 4c. Fix Let's Encrypt cert perms so the relay worker can read PEM files
+  # for wss:// on port 8802 (Let's Encrypt dirs are mode 700 root-only by default).
+  # Idempotent: reads HUB_RELAY_TLS from env and only acts when relay TLS is enabled.
+  phlix_fix_letsencrypt_cert_perms
+
   # 5. Migrate the systemd unit if it's pre-`start.php`. Older installs
   # had `ExecStart=… public/index.php start`; the new entry point is
   # start.php at the repo root. We only touch the ExecStart line so any
@@ -1485,6 +1560,18 @@ cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
     "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" > "/etc/haproxy/certs/${DOMAIN}.pem"
 chmod 600 "/etc/haproxy/certs/${DOMAIN}.pem"
 systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
+# Fix perms on Let's Encrypt dirs so the relay worker (runs as phlix-hub) can
+# read the PEM files via the live/ -> archive/ symlinks.
+# live/ and archive/ are drwx------ root by default; we need +x for traversal.
+chmod 755 /etc/letsencrypt/live/
+chmod 755 /etc/letsencrypt/archive/
+chmod 755 /etc/letsencrypt/live/${DOMAIN}
+chmod 644 /etc/letsencrypt/live/${DOMAIN}/fullchain.pem
+chmod 644 /etc/letsencrypt/live/${DOMAIN}/privkey.pem
+# The archive dir and its cert files also need fixing.
+ARCHIVE_DIR="/etc/letsencrypt/archive/${DOMAIN}"
+chmod 755 "$ARCHIVE_DIR"
+chmod 644 "$ARCHIVE_DIR"/*.pem
 HOOK
     chmod +x /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
 
@@ -1497,6 +1584,10 @@ HOOK
       "TLS certificate for relay worker (PEM with full chain)."
     phlix_ensure_env_key "$ENV_FILE" HUB_RELAY_TLS_KEY "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" \
       "TLS private key for relay worker."
+
+    # Fix Let's Encrypt cert perms so the relay worker (runs as SERVICE_USER)
+    # can read the PEM files for wss:// on port 8802.
+    phlix_fix_letsencrypt_cert_perms
 
     # Monthly auto-renewal (1st of the month, 03:00).
     cat > /etc/cron.d/phlix-hub-certbot <<CRON
