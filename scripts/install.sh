@@ -367,6 +367,47 @@ phlix_install_swoole_uv() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Xdebug installation and configuration
+# ---------------------------------------------------------------------------
+
+# Install and configure Xdebug with trace mode enabled via trigger value.
+# Idempotent: skips if xdebug is already loaded.
+phlix_install_xdebug() {
+  local confd xdebug_ini
+  confd="$(phlix_php_confd_dir)"
+  [ -n "$confd" ] || die "Could not determine PHP conf.d directory for Xdebug."
+
+  # Check if xdebug is already loaded
+  if php -m 2>/dev/null | grep -qi '^xdebug$'; then
+    info "Xdebug already loaded — skipping installation."
+    return 0
+  fi
+
+  log "Installing and configuring Xdebug"
+
+  # Ensure the trace output directory exists
+  mkdir -p /tmp/xdebug
+  chmod 755 /tmp/xdebug
+
+  xdebug_ini="${confd}/zz-xdebug.ini"
+  # Use XDEBUG_TRIGGER env var for the trigger value. Set XDEBUG_TRIGGER to a
+  # secure random value in production (e.g. openssl rand -hex 16) to prevent
+  # unauthorized Xdebug activation. Defaults to "devdebug" for local dev.
+  cat > "$xdebug_ini" <<'XDEBUG_EOF'
+xdebug.mode = trace
+xdebug.start_with_request = trigger
+xdebug.trigger_value = "${XDEBUG_TRIGGER:-devdebug}"
+xdebug.trace_output_dir = /tmp/xdebug
+xdebug.max_nesting_level = 512
+xdebug.collect_assignments = 1
+xdebug.collect_return_value = 1
+XDEBUG_EOF
+
+  info "Xdebug configured with trigger_value=\${XDEBUG_TRIGGER:-devdebug} (set XDEBUG_TRIGGER env var to a secure random value in production)"
+  info "Trace output will be written to /tmp/xdebug"
+}
+
 # Preflight: Workerman needs process-control / posix / socket primitives that
 # some hardened php.ini setups disable. Fail loudly (and early) if any are
 # listed in disable_functions so the operator gets an actionable message
@@ -1099,6 +1140,8 @@ do_update() {
   phlix_check_disabled_functions
   log "Ensuring Swoole + php-uv extensions are installed"
   phlix_install_swoole_uv
+  log "Ensuring Xdebug is installed and configured"
+  phlix_install_xdebug
 
   # 3. Clear Smarty compile cache so templates pick up changes immediately.
   # (compile_check is on by default, but stale entries from earlier renders
@@ -1284,6 +1327,7 @@ apt-get install -y ca-certificates curl git unzip openssl >/dev/null
 # get an older PHP — the version check below will warn if that's the case.
 apt-get install -y \
   php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip \
+  php-xdebug \
   mysql-server >/dev/null
 if [ "$SKIP_HAPROXY" = "yes" ]; then
   info "Skipping HAProxy install (--no-proxy)."
@@ -1316,6 +1360,10 @@ phlix_check_disabled_functions
 # (phlix-server docker/Dockerfile.base). Idempotent: skipped if already loaded.
 log "Ensuring Swoole + php-uv extensions are installed"
 phlix_install_swoole_uv
+
+# Xdebug — install + configure if not already present
+log "Ensuring Xdebug is installed and configured"
+phlix_install_xdebug
 
 # ---------------------------------------------------------------------------
 # 2. Application code
