@@ -395,7 +395,9 @@ phlix_install_xdebug() {
   # secure random value in production (e.g. openssl rand -hex 16) to prevent
   # unauthorized Xdebug activation. Defaults to "devdebug" for local dev.
   cat > "$xdebug_ini" <<'XDEBUG_EOF'
-xdebug.mode = trace
+; Default mode is OFF - use XDEBUG_MODE env var to enable
+; Options: off, develop, trace, debug (can combine with comma: "develop,trace")
+xdebug.mode = ${XDEBUG_MODE:-off}
 xdebug.start_with_request = trigger
 xdebug.trigger_value = "${XDEBUG_TRIGGER:-devdebug}"
 xdebug.trace_output_dir = /tmp/xdebug
@@ -404,8 +406,41 @@ xdebug.collect_assignments = 1
 xdebug.collect_return_value = 1
 XDEBUG_EOF
 
-  info "Xdebug configured with trigger_value=\${XDEBUG_TRIGGER:-devdebug} (set XDEBUG_TRIGGER env var to a secure random value in production)"
+  info "Xdebug configured: mode=\${XDEBUG_MODE:-off}, trigger_value=\${XDEBUG_TRIGGER:-devdebug}"
+  info "Set XDEBUG_MODE=develop,trace to enable xdebug (default: off)"
   info "Trace output will be written to /tmp/xdebug"
+}
+
+# ---------------------------------------------------------------------------
+# Xdebug toggle helpers
+# ---------------------------------------------------------------------------
+
+# Enable xdebug with develop + trace modes. Usage: phlix_xdebug_enable
+phlix_xdebug_enable() {
+  export XDEBUG_MODE="develop,trace"
+  local confd xdebug_ini
+  confd="$(phlix_php_confd_dir)"
+  xdebug_ini="${confd}/zz-xdebug.ini"
+  if [ -f "$xdebug_ini" ]; then
+    sed -i 's/^xdebug\.mode = .*/xdebug.mode = develop,trace/' "$xdebug_ini"
+    info "Xdebug enabled: mode=develop,trace (xdebug.ini updated, restart PHP to apply)"
+  else
+    info "Xdebug enabled: mode=develop,trace (set XDEBUG_MODE=develop,trace env var)"
+  fi
+}
+
+# Disable xdebug. Usage: phlix_xdebug_disable
+phlix_xdebug_disable() {
+  export XDEBUG_MODE="off"
+  local confd xdebug_ini
+  confd="$(phlix_php_confd_dir)"
+  xdebug_ini="${confd}/zz-xdebug.ini"
+  if [ -f "$xdebug_ini" ]; then
+    sed -i 's/^xdebug\.mode = .*/xdebug.mode = off/' "$xdebug_ini"
+    info "Xdebug disabled (xdebug.ini updated, restart PHP to apply)"
+  else
+    info "Xdebug disabled (set XDEBUG_MODE=off env var)"
+  fi
 }
 
 # Preflight: Workerman needs process-control / posix / socket primitives that
