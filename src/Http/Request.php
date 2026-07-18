@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http;
 
+use Phlix\Hub\Common\Http\TrustedProxyResolver;
+use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
@@ -135,12 +137,20 @@ class Request
     /**
      * Creates a request from a Workerman HTTP request.
      *
-     * @param WorkermanRequest $wr Workerman's HTTP request abstraction.
+     * Optionally accepts the {@see TcpConnection} so `remoteIp` / `remotePort`
+     * are populated from the direct TCP peer — the live worker passes it so the
+     * trusted-proxy-aware {@see getTrustedClientIp()} resolution has a real peer
+     * address to reason about (without it, `remoteIp` stays the `'0.0.0.0'`
+     * default and every IP-keyed rate limiter collapses into one bucket).
+     *
+     * @param WorkermanRequest      $wr   Workerman's HTTP request abstraction.
+     * @param TcpConnection|null    $conn The connection the request arrived on,
+     *                                    or null (e.g. tests / detached parsing).
      *
      * @return self Populated request.
      *
      */
-    public static function fromWorkerman(WorkermanRequest $wr): self
+    public static function fromWorkerman(WorkermanRequest $wr, ?TcpConnection $conn = null): self
     {
         $request = new self();
         $request->method = $wr->method();
@@ -160,6 +170,8 @@ class Request
             $request->body = self::collectArrayFromWorkerman($wr->post());
         }
 
+        $request->remoteIp = $conn?->getRemoteIp() ?? '0.0.0.0';
+        $request->remotePort = $conn?->getRemotePort() ?? 0;
         $request->bearerToken = $request->extractBearerToken();
 
         return $request;
@@ -291,6 +303,32 @@ class Request
             }
         }
         return null;
+    }
+
+    /**
+     * Resolve the REAL client IP for security-sensitive keys (rate limiting) in a
+     * trusted-proxy-aware way (mirrors the server's SV-4.15 fix).
+     *
+     * Delegates to {@see TrustedProxyResolver}, which walks `X-Forwarded-For`
+     * RIGHT-TO-LEFT past trusted-proxy hops (default: loopback, matching the
+     * shipped HAProxy front) and returns the first untrusted address — so a
+     * forged leftmost XFF value can no longer mint a fresh rate-limit bucket, and
+     * the loopback proxy peer no longer collapses every client into one bucket.
+     * The returned value is always a validated IP (≤45 chars).
+     *
+     * @param TrustedProxyResolver|null $resolver Optional resolver (inject a
+     *        configured one in tests); defaults to the `TRUSTED_PROXIES`-env one.
+     *
+     * @return string The trusted client IP.
+     */
+    public function getTrustedClientIp(?TrustedProxyResolver $resolver = null): string
+    {
+        $resolver ??= new TrustedProxyResolver();
+        return $resolver->resolve(
+            $this->remoteIp,
+            $this->getHeader('X-Forwarded-For'),
+            $this->getHeader('X-Real-IP'),
+        );
     }
 
     /**

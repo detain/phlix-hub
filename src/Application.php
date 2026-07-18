@@ -1682,7 +1682,10 @@ final class Application
                 }
 
                 // 2. Dynamic dispatch via the router.
-                $hubRequest = Request::fromWorkerman($request);
+                //    Pass the connection so Request::remoteIp is the real TCP
+                //    peer — the trusted-proxy-aware getTrustedClientIp() needs it
+                //    to key the login/jwks rate limiters on the real client IP.
+                $hubRequest = Request::fromWorkerman($request, $connection);
                 $response = $router->dispatch($hubRequest);
                 $status = $response->statusCode;
                 if ($response->streamProducer !== null) {
