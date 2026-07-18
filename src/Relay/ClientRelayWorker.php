@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Relay;
 
+use Phlix\Hub\Common\Http\TrustedProxyResolver;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
@@ -149,6 +150,15 @@ final class ClientRelayWorker
      * @var RateLimiterInterface|null
      */
     private ?RateLimiterInterface $clientMountLimiter = null;
+
+    /**
+     * Trusted-proxy-aware resolver used to derive the REAL client IP for the
+     * per-IP client-mount rate-limit key. The `:8803` WS surface is fronted by
+     * HAProxy over loopback, so `$connection->getRemoteIp()` is ALWAYS the
+     * proxy's loopback address — keying on it alone would collapse every client
+     * into ONE bucket. Lazily created in {@see onWebSocketConnect()}.
+     */
+    private ?TrustedProxyResolver $trustedProxyResolver = null;
 
     /**
      * @param ContainerInterface $container PSR-11 container for resolving services.
@@ -303,7 +313,18 @@ final class ClientRelayWorker
         // validateClientAuth by construction.
         $limiter = $this->clientMountLimiter ??= $this->resolveClientMountLimiter();
         if ($limiter !== null) {
-            $ip = $connection->getRemoteIp();
+            // Derive the REAL client from the trusted upgrade-request headers
+            // (HAProxy sets X-Forwarded-For / X-Real-IP), using the SAME
+            // trusted-proxy-aware resolution as the HTTP limiters. Keying on the
+            // raw loopback peer would collapse every client into ONE bucket
+            // (mirrors SV-4.15 for the WS surface). If the peer is not a trusted
+            // proxy the resolver safely falls back to the peer address.
+            $this->trustedProxyResolver ??= new TrustedProxyResolver();
+            $ip = $this->trustedProxyResolver->resolve(
+                $connection->getRemoteIp(),
+                self::upgradeHeader($request, 'x-forwarded-for'),
+                self::upgradeHeader($request, 'x-real-ip'),
+            );
             $state = $limiter->hit('client_mount:' . $ip);
             if ($state->limited) {
                 $logger->warning('Relay: client mount rate-limited', [
@@ -631,6 +652,20 @@ final class ClientRelayWorker
         }
 
         return $limiter instanceof RateLimiterInterface ? $limiter : null;
+    }
+
+    /**
+     * Read a single header value from the parsed WS upgrade request as a string,
+     * or null when absent/non-scalar. {@see WorkermanRequest::header()} returns
+     * `mixed`, so we coerce defensively for the {@see TrustedProxyResolver}.
+     *
+     * @param WorkermanRequest $request The WS upgrade HTTP request.
+     * @param string           $name    Lower-case header name to read.
+     */
+    private static function upgradeHeader(WorkermanRequest $request, string $name): ?string
+    {
+        $value = $request->header($name);
+        return is_string($value) ? $value : null;
     }
 
     /**

@@ -3177,3 +3177,66 @@ skipped (DB-gated).
   `scripts/run-migrations.php`" operator section with the same checksum-divergence behaviour note.
 
 **This closes HB-4.11 entirely** (implement → review NO FINDINGS → docs).
+
+## Implementer — Hub trusted-proxy / real-client-IP fix — 2026-07-18
+
+Mirrors the server's SV-4.15 fix. The hub is fronted by HAProxy over loopback (`option forwardfor`;
+HTTP → `127.0.0.1:8800`, client relay WS → `127.0.0.1:8803`; the server tunnel `:8802` is DIRECT
+TLS, NOT proxied). Before this change the login / jwks / client-mount limiters keyed on the loopback
+peer (or the un-populated `0.0.0.0`), collapsing every client into ONE bucket — a real availability
+DoS on login. Now all three surfaces key on the trusted-proxy-aware REAL client IP. `relay_connect`
+(:8802 direct-TLS), `proxy` (userId-keyed), and `heartbeat` (serverId-keyed) are deliberately left
+untouched.
+
+**Steps 0-3 (code) DONE. install.sh env (TRUSTED_PROXIES) is a SEPARATE follow-up — NOT touched here.**
+
+Files changed (absolute):
+- `src/Http/Request.php` — Step 0: `fromWorkerman()` now accepts `?TcpConnection $conn = null` and
+  sets `remoteIp = $conn?->getRemoteIp() ?? '0.0.0.0'` + `remotePort = $conn?->getRemotePort() ?? 0`
+  (previously `remoteIp` was never populated on the Workerman path). Step 2: added
+  `getTrustedClientIp(?TrustedProxyResolver): string` delegating to
+  `resolve($remoteIp, X-Forwarded-For, X-Real-IP)`.
+- `src/Common/Http/TrustedProxyResolver.php` — Step 1: NEW. Ported verbatim from
+  `phlix-server/src/Common/Http/TrustedProxyResolver.php` under namespace `Phlix\Hub\Common\Http`
+  (pure IP/CIDR math + `getenv('TRUSTED_PROXIES')`); only the namespace + deployment-contract docblock
+  changed (hub HAProxy topology). Loopback-only default trusted set kept.
+- `src/Application.php` — Step 0 call site: `Request::fromWorkerman($request, $connection)` (the
+  `TcpConnection` was already in scope in the `onMessage` closure).
+- `src/Http/Controllers/AuthController.php` — Step 2 login: both `loginForm` (~:127) and `loginJson`
+  (~:211) now pass `$request->getTrustedClientIp() ?: 'unknown'` into `AuthManager::login()`
+  (previously `$request->remoteIp`). `AuthManager::rateLimitKey()` unchanged; `deviceId()` fallback
+  left as-is (device marker, not the rate-limit key).
+- `src/Http/Controllers/HubJwksController.php` — Step 2 jwks (~:51): `$ip = $request->getTrustedClientIp() ?: 'unknown'`.
+- `src/Relay/ClientRelayWorker.php` — Step 3 client_mount: `onWebSocketConnect()` now derives the key
+  IP via a lazily-created `TrustedProxyResolver` from the WS UPGRADE-REQUEST headers (added a private
+  `upgradeHeader(WorkermanRequest, name)` helper reading `x-forwarded-for` / `x-real-ip`, mirroring the
+  server's `WebSocketServer::upgradeHeader()`). Key stays `client_mount:<clientIp>`; the WS 1013 close
+  idiom is untouched (no throw out of the hook).
+
+Tests (absolute):
+- `tests/Unit/Common/Http/TrustedProxyResolverTest.php` — NEW, ported (hub namespace).
+- `tests/Unit/Http/RequestTest.php` — NEW: Step 0 regression (conn populates remoteIp/port; no-conn
+  stays `0.0.0.0`/0) + `getTrustedClientIp()` resolution behind loopback proxy vs direct peer.
+- `tests/Unit/Http/Controllers/AuthControllerTest.php` — added `testLoginKeysRateLimitOnTrustedClientIp`
+  (dataprovider: SSR `/login` + JSON `/api/v1/auth/login`): peer `127.0.0.1` + forged leftmost XFF +
+  real rightmost hop → recording limiter buckets on `auth:login:203.0.113.50`, NOT `0.0.0.0`/loopback/forged.
+- `tests/Unit/Hub/JwksControllerTest.php` — added `testJwksKeysRateLimitOnTrustedClientIp` (same shape
+  → `jwks:203.0.113.50`).
+- `tests/Unit/Relay/ClientRelayWorkerTest.php` — added `testClientMountKeysOnTrustedClientIpBehindLoopbackProxy`
+  + `testDistinctRealClientsBehindLoopbackProxyGetDistinctMountBuckets` (two distinct real clients behind
+  the same loopback proxy → distinct `client_mount:*` buckets).
+
+Verification:
+- Full hub unit suite: `Tests: 1481, Assertions: 17374, Errors: 2, Skipped: 28` (+33 tests vs the
+  pre-change baseline `Tests: 1448 … Errors: 2`). The 2 errors are PRE-EXISTING and unrelated
+  (`RelayWorkerTest` — Workerman `Worker::__construct` `$socketContext` null; also surfaces as the sole
+  phpstan finding at `src/Relay/RelayWorker.php:149`). 0 new failures/errors.
+- phpstan L9: only the pre-existing `RelayWorker.php:149` finding (confirmed present on the clean tree);
+  all changed/new src is clean.
+- phpcs PSR-12: changed src clean (the lone `Application.php:1082` line-length WARNING is pre-existing,
+  far from the edited `~:1685` call site).
+
+API-shape note vs the server donor: the hub's `Request` already exposes `remotePort`, so Step 0 sets
+both `remoteIp` and `remotePort` (parity). The hub WS upgrade `Request` is the same
+`Workerman\Protocols\Http\Request` as the server, so `header('x-forwarded-for')` (lowercased) works
+identically — no API divergence.

@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Hub;
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Http\Controllers\HubJwksController;
 use Phlix\Hub\Http\Request;
@@ -145,5 +146,53 @@ final class JwksControllerTest extends TestCase
 
         $this->expectException(RateLimitException::class);
         $controller($request);
+    }
+
+    /**
+     * Hub trusted-proxy fix (mirrors SV-4.15): JWKS is unauthenticated and
+     * fronted by HAProxy over loopback, so the raw peer is `127.0.0.1` for every
+     * request. The limiter must bucket on the REAL client derived from the
+     * appended X-Forwarded-For hop — NOT `0.0.0.0`, NOT the loopback peer, and
+     * NOT the forged leftmost value.
+     */
+    public function testJwksKeysRateLimitOnTrustedClientIp(): void
+    {
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+
+        $limiter = new class implements RateLimiterInterface {
+            /** @var list<string> */
+            public array $hits = [];
+
+            public function hit(string $key): RateLimitState
+            {
+                $this->hits[] = $key;
+
+                return new RateLimitState(1, 119, time() + 60, false, 120);
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                return new RateLimitState(0, 120, 0, false, 120);
+            }
+        };
+
+        $controller = new HubJwksController($keyManager, $limiter);
+
+        $request = new Request();
+        // Loopback proxy peer + forged leftmost XFF, real client appended rightmost.
+        $request->remoteIp = '127.0.0.1';
+        $request->headers = ['X-FORWARDED-FOR' => '198.51.100.66, 203.0.113.50'];
+
+        $response = $controller($request);
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame(['jwks:203.0.113.50'], $limiter->hits);
+        self::assertNotContains('jwks:0.0.0.0', $limiter->hits);
+        self::assertNotContains('jwks:127.0.0.1', $limiter->hits);
+        self::assertNotContains('jwks:198.51.100.66', $limiter->hits);
     }
 }

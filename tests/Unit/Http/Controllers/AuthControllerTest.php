@@ -11,6 +11,8 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
@@ -251,6 +253,96 @@ final class AuthControllerTest extends TestCase
         $decoded = json_decode($response->body, true);
         self::assertSame('rate_limited', $decoded['code']);
         self::assertSame('Too Many Requests', $decoded['error']);
+    }
+
+    /**
+     * A recording {@see RateLimiterInterface} double: captures every key passed
+     * to hit()/peek()/reset() so a test can assert which IP the login limiter
+     * buckets on. Always reports not-limited so login proceeds to the (failing)
+     * credential check that records the hit.
+     */
+    private function recordingLimiter(): RateLimiterInterface
+    {
+        return new class implements RateLimiterInterface {
+            /** @var list<string> */
+            public array $hits = [];
+
+            public function hit(string $key): RateLimitState
+            {
+                $this->hits[] = $key;
+
+                return new RateLimitState(1, 4, time() + 900, false, 5);
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                return new RateLimitState(0, 5, 0, false, 5);
+            }
+        };
+    }
+
+    /**
+     * Build a REAL {@see AuthManager} whose {@see UserRepository} always fails
+     * the lookup, backed by the given limiter — so each login records one hit.
+     */
+    private function loginManagerWithLimiter(RateLimiterInterface $rl): AuthManager
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findByUsername')->willReturn(null);
+        $repo->method('findByEmail')->willReturn(null);
+
+        return new AuthManager(
+            $repo,
+            new JwtHandler(self::SECRET),
+            $this->createMock(AuditLogger::class),
+            $this->createMock(StructuredLogger::class),
+            $rl,
+        );
+    }
+
+    /**
+     * The hub trusted-proxy fix (mirrors SV-4.15): behind the shipped loopback
+     * HAProxy front, the raw peer is `127.0.0.1` for EVERY login and the forged
+     * leftmost X-Forwarded-For entry is client-controlled. The login limiter must
+     * bucket on the REAL client (the rightmost appended hop) — NOT `0.0.0.0`, NOT
+     * the loopback peer, and NOT the forged leftmost value.
+     *
+     * @dataProvider loginPathProvider
+     */
+    public function testLoginKeysRateLimitOnTrustedClientIp(string $path): void
+    {
+        $limiter = $this->recordingLimiter();
+        $controller = $this->controller($this->loginManagerWithLimiter($limiter));
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = $path;
+        // Loopback proxy peer + forged leftmost XFF, real client appended rightmost.
+        $request->remoteIp = '127.0.0.1';
+        $request->headers = ['X-FORWARDED-FOR' => '198.51.100.66, 203.0.113.50'];
+        $request->body = ['username' => 'nobody', 'password' => 'wrong'];
+
+        $controller($request);
+
+        self::assertSame(['auth:login:203.0.113.50'], $limiter->hits);
+        self::assertNotContains('auth:login:0.0.0.0', $limiter->hits);
+        self::assertNotContains('auth:login:127.0.0.1', $limiter->hits);
+        self::assertNotContains('auth:login:198.51.100.66', $limiter->hits);
+    }
+
+    /**
+     * @return list<array{0: string}>
+     */
+    public static function loginPathProvider(): array
+    {
+        return [
+            'SSR form login' => ['/login'],
+            'JSON API login' => ['/api/v1/auth/login'],
+        ];
     }
 
     public function testLogoutClearsCookies(): void

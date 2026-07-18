@@ -124,7 +124,10 @@ final class AuthController
             $result = $this->auth->login(
                 $identifier,
                 self::stringField($request, 'password'),
-                $request->remoteIp ?: 'unknown',
+                // Trusted-proxy-aware real client IP — NOT the raw peer, which is
+                // the HAProxy loopback address for every login and would collapse
+                // the limiter into one global bucket (mirrors SV-4.15).
+                $request->getTrustedClientIp() ?: 'unknown',
                 self::deviceId($request),
             );
             return $this->withSessionCookies(
@@ -208,7 +211,10 @@ final class AuthController
             $result = $this->auth->login(
                 $identifier,
                 self::stringField($request, 'password'),
-                $request->remoteIp ?: 'unknown',
+                // Trusted-proxy-aware real client IP — NOT the raw peer, which is
+                // the HAProxy loopback address for every login and would collapse
+                // the limiter into one global bucket (mirrors SV-4.15).
+                $request->getTrustedClientIp() ?: 'unknown',
                 self::deviceId($request),
             );
             return (new Response())->json([

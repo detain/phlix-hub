@@ -47,8 +47,10 @@ final class HubJwksController
     public function __invoke(Request $request): Response
     {
         // HB-4.6: rate limit by client IP since JWKS is unauthenticated
-        // and a flood of requests could be a DoS vector.
-        $ip = $request->remoteIp !== '' ? $request->remoteIp : 'unknown';
+        // and a flood of requests could be a DoS vector. Use the trusted-proxy-
+        // aware real client IP, not the raw peer (the HAProxy loopback address
+        // for every request), which would collapse the limiter into one bucket.
+        $ip = $request->getTrustedClientIp() ?: 'unknown';
         $state = $this->rateLimiter->hit('jwks:' . $ip);
         if ($state->limited) {
             throw new RateLimitException(

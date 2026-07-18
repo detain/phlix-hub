@@ -477,6 +477,89 @@ final class ClientRelayWorkerTest extends TestCase
         $worker->onWebSocketConnect($connection, $request);
     }
 
+    // ---- Trusted-proxy client-mount keying (mirrors SV-4.15) -------------
+
+    /**
+     * A recording {@see RateLimiterInterface} double: captures every key passed
+     * to hit() and always reports not-limited, so the mount proceeds far enough
+     * to record the key without needing a valid token / tunnel.
+     */
+    private function recordingMountLimiter(): RateLimiterInterface
+    {
+        return new class implements RateLimiterInterface {
+            /** @var list<string> */
+            public array $hits = [];
+
+            public function hit(string $key): RateLimitState
+            {
+                $this->hits[] = $key;
+
+                return new RateLimitState(1, 4, time() + 900, false, 5);
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                return new RateLimitState(0, 5, 0, false, 5);
+            }
+        };
+    }
+
+    /**
+     * Behind the shipped loopback HAProxy front the WS peer is `127.0.0.1` for
+     * EVERY client and the forged leftmost X-Forwarded-For entry is
+     * client-controlled. The client-mount limiter must bucket on the REAL client
+     * (the appended rightmost hop) — NOT `127.0.0.1` and NOT the forged value.
+     */
+    public function testClientMountKeysOnTrustedClientIpBehindLoopbackProxy(): void
+    {
+        $limiter = $this->recordingMountLimiter();
+        $worker = new ClientRelayWorker($this->buildContainer(null, null, null, $limiter));
+
+        // Loopback proxy peer + forged leftmost XFF, real client appended rightmost.
+        $conn = $this->createMock(TcpConnection::class);
+        $conn->method('getRemoteIp')->willReturn('127.0.0.1');
+        $request = $this->makeUpgradeRequest('/client/server-uuid-xff', [
+            'X-Forwarded-For' => '198.51.100.66, 203.0.113.50',
+        ]);
+
+        $worker->onWebSocketConnect($conn, $request);
+
+        self::assertSame(['client_mount:203.0.113.50'], $limiter->hits);
+        self::assertNotContains('client_mount:127.0.0.1', $limiter->hits);
+        self::assertNotContains('client_mount:198.51.100.66', $limiter->hits);
+    }
+
+    /**
+     * Two DISTINCT real clients arriving through the SAME loopback proxy must
+     * land in DISTINCT buckets — the availability regression (one shared loopback
+     * bucket throttling everyone) is closed. Same forged leftmost hop for both,
+     * so the distinct keys prove the REAL client (rightmost) drives the bucket.
+     */
+    public function testDistinctRealClientsBehindLoopbackProxyGetDistinctMountBuckets(): void
+    {
+        $limiter = $this->recordingMountLimiter();
+        $worker = new ClientRelayWorker($this->buildContainer(null, null, null, $limiter));
+
+        foreach (['203.0.113.1', '203.0.113.2'] as $client) {
+            $conn = $this->createMock(TcpConnection::class);
+            $conn->method('getRemoteIp')->willReturn('127.0.0.1');
+            $request = $this->makeUpgradeRequest('/client/server-uuid-distinct', [
+                'X-Forwarded-For' => '10.9.9.9, ' . $client,
+            ]);
+            $worker->onWebSocketConnect($conn, $request);
+        }
+
+        self::assertSame(
+            ['client_mount:203.0.113.1', 'client_mount:203.0.113.2'],
+            $limiter->hits,
+        );
+        self::assertCount(2, array_unique($limiter->hits));
+    }
+
     // ---- WS connect: success / binding ----------------------------------
 
     public function testOnWebSocketConnectBindsToActiveTunnel(): void
