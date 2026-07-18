@@ -43,6 +43,13 @@ HUB_WORKERS="4"
 DOMAIN=""               # public hostname; enables TLS when set with --admin-email
 ADMIN_EMAIL=""          # Let's Encrypt registration email
 JWT_SECRET=""           # generated if empty
+# Comma-separated reverse-proxy IPs/CIDRs whose X-Forwarded-For / X-Real-IP the
+# hub trusts to derive the real client IP for auth rate-limit keys. Empty => emit
+# only the commented loopback-only hint (the code's default 127.0.0.0/8,::1/128
+# is already correct for the standard HAProxy-over-loopback single-box install).
+# Declared here so the fresh-install heredoc's $(...) expansion is safe under
+# `set -euo pipefail` even when the operator never sets it.
+TRUSTED_PROXIES=""      # set to a NON-loopback proxy CIDR only if such a proxy fronts the hub
 
 WANT_TLS="auto"         # auto|yes|no
 SKIP_HAPROXY="no"       # --no-proxy: skip HAProxy install + config entirely
@@ -1254,6 +1261,29 @@ ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t
   log "Ensuring required env keys are present"
   phlix_ensure_env_key "$ENV_FILE" HUB_JWT_SECRET "$(rand_hex 32)" \
     "JWT signing secret (REQUIRED) — HS256 access/refresh tokens; must be stable across restarts."
+
+  # Document TRUSTED_PROXIES for existing installs. This key CANNOT be safely
+  # backfilled with phlix_ensure_env_key: that appends an UNCOMMENTED KEY=VALUE,
+  # and forcing a value here would either duplicate the code's loopback-only
+  # default or, worse, guess wrong. Instead append the commented guidance block
+  # ONLY when no TRUSTED_PROXIES line (commented or not) exists yet — preserving
+  # any value the operator has already set and staying idempotent across repeated
+  # `--update` runs.
+  if ! grep -qE '^[[:space:]]*#?[[:space:]]*TRUSTED_PROXIES=' "$ENV_FILE" 2>/dev/null; then
+    {
+      printf '\n# TRUSTED_PROXIES: comma-separated reverse-proxy IPs/CIDRs whose\n'
+      printf '# X-Forwarded-For / X-Real-IP are trusted when deriving the real client IP used\n'
+      printf '# to key auth rate-limiting. UNSET = loopback-only default (127.0.0.0/8,::1/128),\n'
+      printf '# correct for the standard single-box install where HAProxy fronts the hub over\n'
+      printf '# 127.0.0.1. Set it to your proxy IP/CIDR ONLY if a NON-loopback proxy/load-\n'
+      printf '# balancer fronts this hub, else every client is rate-limited under the proxy\n'
+      printf "# single IP. Do NOT add broad RFC1918 ranges on a loopback-proxy box (re-enables\n"
+      printf '# X-Forwarded-For spoofing by LAN clients).\n'
+      printf '#TRUSTED_PROXIES=127.0.0.0/8,::1/128\n'
+    } >> "$ENV_FILE"
+    info "Added TRUSTED_PROXIES guidance to $ENV_FILE"
+  fi
+
   chmod 600 "$ENV_FILE" 2>/dev/null || true
   chown root:root "$ENV_FILE" 2>/dev/null || true
 
@@ -1333,6 +1363,19 @@ elif [ "$WANT_TLS" = "no" ]; then
   TLS_ENABLED="no"
 else
   if [ -n "$DOMAIN" ] && [ -n "$ADMIN_EMAIL" ]; then TLS_ENABLED="yes"; else TLS_ENABLED="no"; fi
+fi
+
+# When the operator runs their OWN reverse proxy (--no-proxy), ask for its
+# IP/CIDR so the real client IP (not the proxy's) keys auth rate-limiting. The
+# bundled HAProxy path fronts the hub over loopback, where the code's
+# loopback-only default is already correct, so this is skipped there.
+if [ "$SKIP_HAPROXY" = "yes" ]; then
+  if [ "$INTERACTIVE" = "yes" ]; then
+    prompt TRUSTED_PROXIES \
+      "Reverse-proxy IP/CIDR for X-Forwarded-For (blank = loopback default)" ""
+  else
+    warn "--no-proxy: if a NON-loopback proxy fronts this hub, set TRUSTED_PROXIES in $ENV_FILE to its IP/CIDR, else every client is rate-limited under the proxy's single IP (see the commented block in the env file)."
+  fi
 fi
 
 # Public domain for the env file (used to build per-server subdomains).
@@ -1482,6 +1525,18 @@ HUB_DB_USER=${DB_USER}
 HUB_DB_PASSWORD=${DB_PASS}
 
 HUB_JWT_SECRET=${JWT_SECRET}
+
+# TRUSTED_PROXIES: comma-separated reverse-proxy IPs/CIDRs whose
+# X-Forwarded-For / X-Real-IP headers are TRUSTED when deriving the real client
+# IP used to key auth rate-limiting. UNSET = loopback-only default
+# (127.0.0.0/8,::1/128), which is CORRECT for the standard single-box install
+# where HAProxy fronts the hub over 127.0.0.1. Set it to your proxy's IP/CIDR
+# ONLY if a NON-loopback reverse proxy / load-balancer fronts this hub —
+# otherwise every client is rate-limited under the proxy's single IP. Do NOT add
+# broad RFC1918 ranges on a loopback-proxy box: that re-enables X-Forwarded-For
+# spoofing by LAN clients.
+$( [ -n "$TRUSTED_PROXIES" ] && printf 'TRUSTED_PROXIES=%s\n' "$TRUSTED_PROXIES" \
+                            || printf '#TRUSTED_PROXIES=127.0.0.0/8,::1/128\n' )
 EOF
 chmod 600 "$ENV_FILE"
 chown root:root "$ENV_FILE"

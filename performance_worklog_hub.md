@@ -3240,3 +3240,11 @@ API-shape note vs the server donor: the hub's `Request` already exposes `remoteP
 both `remoteIp` and `remotePort` (parity). The hub WS upgrade `Request` is the same
 `Workerman\Protocols\Http\Request` as the server, so `header('x-forwarded-for')` (lowercased) works
 identically — no API divergence.
+
+## Implementer — TRUSTED_PROXIES install.sh wiring — 2026-07-18
+`scripts/install.sh` now documents/wires `TRUSTED_PROXIES` (mirrors server 41c4b990): default var
+`TRUSTED_PROXIES=""` near the defaults (safe under `set -euo pipefail`); fresh-install heredoc emits
+`TRUSTED_PROXIES=<value>` when set via `--no-proxy` prompt else a commented `#TRUSTED_PROXIES=127.0.0.0/8,::1/128`
+hint; `do_update` appends the commented guidance block only when no `^[[:space:]]*#?[[:space:]]*TRUSTED_PROXIES=`
+line exists (idempotent across repeated `--update`); `--no-proxy` path prompts (interactive) / warns
+(non-interactive). `bash -n` clean; heredoc + guard verified in isolation. No hub source touched.
