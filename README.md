@@ -79,10 +79,13 @@ You can use the public Hub or run your own — the same codebase powers both.
 - **Media requests** — a Jellyseerr-class request queue. Users request movies/series; admins
   approve, and the Hub talks to Sonarr/Radarr to fulfil them.
 - **Web UI & admin console** — the hub's front door is a Vue SPA (the shared `@phlix/ui` design
-  system) served at `/app` (`/` redirects to `/app/servers`): My Servers, Federation, and Shares for
-  every signed-in user, plus a `requiresAdmin` **admin console** at `/app/admin/*` (Hub Dashboard,
-  Users, Logs, Settings, Audit Logs). The original Smarty pages are deprecated and will be removed
-  in a future release. Everything is backed by a full JSON API under `/api/v1` (incl. `/api/v1/admin/*`).
+  system) served at `/app` (`/` redirects to `/app/servers`). Every signed-in user gets **My Servers**,
+  **Server Detail**, **Search**, **Federation**, **Federation Shares**, **Shares**, **Shared With Me**,
+  **Invite Links**, and **Requests**; there is a public **invite-acceptance** page at `/app/invite/:token`
+  (the target of the public `GET /invite/{token}` link). On top of that a `requiresAdmin` **admin console**
+  at `/app/admin/*` (Hub Dashboard, Users, Logs, Settings, Audit Logs, request approval). The original
+  Smarty pages remain in place while the migrated `/app` pages are verified, then are slated for removal.
+  Everything is backed by a full JSON API under `/api/v1` (incl. `/api/v1/admin/*`).
 - **Operations-ready** — structured JSON logging (Monolog) across dedicated channels
   (app, error, hub, relay, audit), a `/health` endpoint, and idempotent SQL migrations.
 
@@ -698,7 +701,7 @@ routes require a `Bearer` access token (or session cookie for SSR pages).
 | `PATCH`/`DELETE` | `/api/v1/me/shares/{id}` | Update / delete a share |
 | `POST`/`GET` | `/api/v1/me/invite-links` | Create / list invite links |
 | `POST` | `/api/v1/me/invite-links/{token}/redeem` | Redeem an invite link and create a library share (protected) |
-| `GET` | `/invite/{token}` | Accept an invite (public page) |
+| `GET` | `/invite/{token}` | Accept an invite (public) — redirects to the SPA `/app/invite/{token}` acceptance page |
 | `POST`/`GET` | `/api/v1/me/requests` | Create / list media requests |
 | `GET` | `/api/v1/admin/requests` | Admin request queue |
 | `POST` | `/api/v1/admin/requests/{id}/approve` | Approve a request |

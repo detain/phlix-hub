@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Web UI
+- **WS-D — owner/user surfaces migrated to the `/app` Vue SPA (Smarty retirement pending owner verification).**
+  The hub's owner/user surfaces — **My Servers**, **Server Detail**, **Federation**, **Federation Shares**,
+  **Shares**, **Shared With Me**, **Invite Links**, and **Requests** (plus the admin request-approval queue) —
+  are now served by the shared `@phlix/ui` Vue SPA at `/app/*`, alongside the existing admin console at
+  `/app/admin/*`. Route + nav registration lives in `web-ui/src/main.ts`. The equivalent Smarty SSR pages
+  remain in place and are **not** removed — deletion is deferred until the new `/app` pages are verified live.
+- **WS-D — public invite acceptance route `/app/invite/:token` (fixes the previously-broken `/invite/{token}` 404).**
+  The public `GET /invite/{token}` link now redirects to the SPA `AcceptInvitePage` (`meta.public`, so an
+  unauthenticated invitee reaches it without the auth guard). Not logged in → Log In / Sign Up buttons that
+  carry a safe `?redirect=/app/invite/<token>` hop back here; logged in → an **Accept Invite** button calling
+  `POST /api/v1/me/invite-links/{token}/redeem`, then a **View Shared Libraries** link to `/app/shared-with-me`.
+  This restores parity with the retired Smarty `accept-invite` flow, whose PHP redirect had no matching Vue route.
+- **WS-D — safe post-auth redirect.** `LoginForm`/`SignupForm` now honour a validated internal `?redirect`
+  query (via the shared `@phlix/ui` `safeRedirect` guard, which only accepts same-origin `/app/` paths), so
+  logging in / signing up from the invite page returns the user to accept the invite. Vitest specs cover all
+  of the above pages.
+
 ### Tests
 - **HB-0.3 HEAD-over-relay anti-stall hardening** (`tests/Unit/Relay/RelayProxyManagerTest.php`,
   `tests/Unit/Http/Controllers/ServerProxyControllerTest.php`). Added coverage proving a HEAD probe
