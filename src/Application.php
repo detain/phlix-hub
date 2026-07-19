@@ -382,8 +382,11 @@ final class Application
             $r->get('', $ssrPage);
         }, [$authMiddleware]);
 
-        $this->router->group('/invite-links', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        // Redirect to Vue SPA.
+        $this->router->group('/invite-links', static function (Router $r): void {
+            $r->get('', static function (Request $request): Response {
+                return (new Response())->redirect('/app/invite-links');
+            });
         }, [$authMiddleware]);
 
         $this->router->group('/hub-settings', static function (Router $r) use ($ssrPage): void {
@@ -400,11 +403,17 @@ final class Application
 
         $this->router->group('/federation', static function (Router $r) use ($ssrPage): void {
             $r->get('', $ssrPage);
-            $r->get('/shares', $ssrPage);
+            // Redirect to Vue SPA.
+            $r->get('/shares', static function (Request $request): Response {
+                return (new Response())->redirect('/app/federation/shares');
+            });
         }, [$authMiddleware]);
 
-        $this->router->group('/servers/{id}', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        // Redirect to Vue SPA.
+        $this->router->group('/servers/{id}', static function (Router $r): void {
+            $r->get('', static function (Request $request, array $params): Response {
+                return (new Response())->redirect('/app/servers/' . $params['id']);
+            });
         }, [$authMiddleware]);
 
         $me = $this->resolveMeController();
@@ -568,13 +577,18 @@ final class Application
         $csrf = $this->resolveCsrfMiddleware();
         $ssrPage = static fn (Request $req): Response => $csrf->issue($req, $pages($req));
 
-        // SSR pages.
-        $this->router->group('/requests', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        // Redirect to Vue SPA.
+        $this->router->group('/requests', static function (Router $r): void {
+            $r->get('', static function (Request $request): Response {
+                return (new Response())->redirect('/app/requests');
+            });
         }, [$authMiddleware]);
 
-        $this->router->group('/admin/requests', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        // Redirect to Vue SPA.
+        $this->router->group('/admin/requests', static function (Router $r): void {
+            $r->get('', static function (Request $request): Response {
+                return (new Response())->redirect('/app/admin/requests');
+            });
         }, [$authMiddleware]);
 
         // User-scoped JSON API.
@@ -1026,9 +1040,11 @@ final class Application
         $csrf = $this->resolveCsrfMiddleware();
         $ssrPage = static fn (Request $req): Response => $csrf->issue($req, $pages($req));
 
-        // SSR pages.
-        $this->router->group('/shared-with-me', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        // Redirect to Vue SPA.
+        $this->router->group('/shared-with-me', static function (Router $r): void {
+            $r->get('', static function (Request $request): Response {
+                return (new Response())->redirect('/app/shared-with-me');
+            });
         }, [$authMiddleware]);
 
         $this->router->group('/manage-shares', static function (Router $r) use ($ssrPage): void {
@@ -1059,15 +1075,10 @@ final class Application
     {
         $inviteController = $this->resolveInviteLinkController();
 
-        // GET /invite/{token} — public invite acceptance page.
-        $this->router->get(
-            '/invite/{token}',
-            static function (Request $req, array $params) use ($inviteController): Response {
-                /** @var array<string, string> $typedParams */
-                $typedParams = $params;
-                return $inviteController->showAcceptInvitePage($req, $typedParams);
-            },
-        );
+        // Redirect to Vue SPA — public route (no auth required).
+        $this->router->get('/invite/{token}', static function (Request $request, array $params): Response {
+            return (new Response())->redirect('/app/invite/' . $params['token']);
+        });
 
         // JSON API for invite links (protected).
         $authMiddleware = $this->resolveAuthMiddleware();
