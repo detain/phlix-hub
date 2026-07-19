@@ -7,12 +7,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Web UI
-- **WS-D — owner/user surfaces migrated to the `/app` Vue SPA (Smarty retirement pending owner verification).**
+- **Legacy Smarty UI retired — the `/app` Vue SPA is the ONLY hub web UI; `smarty/smarty` removed.**
+  Every legacy server-rendered (Smarty) route now issues a **302 redirect** to its `/app` equivalent
+  (registered in `src/Application.php`): `/` → `/app/servers`; `/login` → `/app/login`; `/signup` →
+  `/app/signup`; `/my-servers` → `/app/servers`; `/servers/{id}` → `/app/servers/{id}`; `/invite-links`
+  → `/app/invite-links`; `/settings` → `/app/admin/settings`; `/audit-logs` → `/app/admin/audit-logs`;
+  `/logs` → `/app/admin/logs`; `/federation` → `/app/federation`; `/federation/shares` →
+  `/app/federation/shares`; `/requests` → `/app/requests`; `/admin/requests` → `/app/admin/requests`; and
+  the public `GET /invite/{token}` → `/app/invite/{token}` acceptance page. Deleted: `PageRenderer`,
+  `PageController`, `CsrfMiddleware`, every `public/templates/**/*.tpl`, and the legacy `public/assets/js/*.js`
+  + `public/assets/css/app.css`. The `smarty/smarty` composer dependency was **removed entirely** — the hub
+  has no newsletter (or any other) email, so nothing on the hub renders Smarty anymore. This supersedes the
+  earlier "Smarty retirement pending owner verification" note.
+- **WS-D — owner/user surfaces migrated to the `/app` Vue SPA.**
   The hub's owner/user surfaces — **My Servers**, **Server Detail**, **Federation**, **Federation Shares**,
   **Shares**, **Shared With Me**, **Invite Links**, and **Requests** (plus the admin request-approval queue) —
-  are now served by the shared `@phlix/ui` Vue SPA at `/app/*`, alongside the existing admin console at
-  `/app/admin/*`. Route + nav registration lives in `web-ui/src/main.ts`. The equivalent Smarty SSR pages
-  remain in place and are **not** removed — deletion is deferred until the new `/app` pages are verified live.
+  are served by the shared `@phlix/ui` Vue SPA at `/app/*`, alongside the existing admin console at
+  `/app/admin/*`. Route + nav registration lives in `web-ui/src/main.ts`.
 - **WS-D — public invite acceptance route `/app/invite/:token` (fixes the previously-broken `/invite/{token}` 404).**
   The public `GET /invite/{token}` link now redirects to the SPA `AcceptInvitePage` (`meta.public`, so an
   unauthenticated invitee reaches it without the auth guard). Not logged in → Log In / Sign Up buttons that

@@ -83,9 +83,11 @@ You can use the public Hub or run your own — the same codebase powers both.
   **Server Detail**, **Search**, **Federation**, **Federation Shares**, **Shares**, **Shared With Me**,
   **Invite Links**, and **Requests**; there is a public **invite-acceptance** page at `/app/invite/:token`
   (the target of the public `GET /invite/{token}` link). On top of that a `requiresAdmin` **admin console**
-  at `/app/admin/*` (Hub Dashboard, Users, Logs, Settings, Audit Logs, request approval). The original
-  Smarty pages remain in place while the migrated `/app` pages are verified, then are slated for removal.
-  Everything is backed by a full JSON API under `/api/v1` (incl. `/api/v1/admin/*`).
+  at `/app/admin/*` (Hub Dashboard, Users, Logs, Settings, Audit Logs, request approval). The Vue SPA is
+  now the **only** web UI: the legacy server-rendered (Smarty) pages have been **deleted** and their old
+  paths 302-redirect to `/app` (e.g. `/my-servers` → `/app/servers`, `/login` → `/app/login`, the public
+  `/invite/{token}` → `/app/invite/{token}`). The `smarty/smarty` dependency was removed — the hub renders
+  no templates. Everything is backed by a full JSON API under `/api/v1` (incl. `/api/v1/admin/*`).
 - **Operations-ready** — structured JSON logging (Monolog) across dedicated channels
   (app, error, hub, relay, audit), a `/health` endpoint, and idempotent SQL migrations.
 
@@ -96,7 +98,7 @@ process group:
 
 | Worker | Default port | Purpose |
 |--------|--------------|---------|
-| HTTP | `8800` | REST API + the Vue SPA (`/app`) + legacy SSR pages + `/health` |
+| HTTP | `8800` | REST API + the Vue SPA (`/app`; legacy page paths 302-redirect here) + `/health` |
 | Relay (server-facing) | `8802` | Servers connect here to open their outbound tunnel |
 | Relay (client-facing) | `8803` | Remote clients connect (`GET /client/{server_id}`) and are routed down a tunnel |
 
@@ -661,7 +663,8 @@ Migrations live in [`migrations/`](migrations) and are applied in filename order
 ## HTTP API
 
 Selected endpoints (full surface in [`src/Application.php`](src/Application.php)). Protected
-routes require a `Bearer` access token (or session cookie for SSR pages).
+routes require a `Bearer` access token (or the session cookie, which also gates the legacy
+page paths before they redirect to `/app`).
 
 ### Health & discovery
 

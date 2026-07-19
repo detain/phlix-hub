@@ -31,8 +31,8 @@ ls .github/workflows/              # CI pipelines: phpunit + phpstan + psalm + p
 - `src/Http/` — `Request.php` · `Response.php` · `Router.php` (regex `{id}` params) · `Controllers/` · `Middleware/` (`AuthMiddleware`, `AdminMiddleware`, `EnrollmentJwtMiddleware`, `HubProtocolMiddleware`) · `RequestContext.php` (coroutine-local user id).
 - `src/Hub/` — claim/heartbeat/renew/deregister/sharing handlers, `EnrollmentJwtService`+`Ed25519KeyManager`, `RelaySessionManager`, `DnsAliasManager`, `TlsCertificateManager`, DTOs.
 - `src/Relay/` — `RelayWorker` (:8802), `ClientRelayWorker` (:8803), `Tunnel`/`TunnelManager`, `Frame{Encoder,Decoder}`.
-- `src/Federation/`, `src/Auth/` (`AuthManager`, `JwtHandler` HS256, `UserRepository`), `src/Common/{Database,Logger,WebPortal}/`, `src/Health/`.
-- `config/{server,database,logger,auth}.php` · `migrations/` · `public/templates/` (Smarty) + `public/assets/js/` · `web-ui/` (`@phlix/hub-web-ui` consuming `@phlix/ui`) · `tests/` mirror src.
+- `src/Federation/`, `src/Auth/` (`AuthManager`, `JwtHandler` HS256, `UserRepository`), `src/Common/{Database,Logger}/`, `src/Health/`.
+- `config/{server,database,logger,auth}.php` · `migrations/` · `web-ui/` (`@phlix/hub-web-ui` consuming `@phlix/ui`, built to `public/assets/app/`) · `tests/` mirror src. **The legacy Smarty page UI was removed** (`smarty/smarty` dropped, no `public/templates/` or `public/assets/js/`); the `/app` Vue SPA is the only UI and legacy page paths 302-redirect to it.
 - `docker/` (`docker-entrypoint.sh`, `nginx.conf` — container image) · `scripts/` (`install.sh` provisioning, `run-migrations.php` standalone migrator) · `.github/workflows/` (CI gates) · `.opencode/` (`memory`, `skills`, `package.json`) + `.remember/` (cross-session agent context).
 
 ## Conventions
