@@ -123,7 +123,10 @@ final class RelayWorker
      */
     public function start(): Worker
     {
-        $sslContext = null;
+        // Workerman's Worker::__construct() types $socketContext as a non-nullable
+        // array, so default to an empty context (its own default for "no options")
+        // rather than null — passing null throws a TypeError on the non-TLS path.
+        $sslContext = [];
 
         // Enable TLS (wss://) when configured.
         if ($this->useTls) {
