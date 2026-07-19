@@ -81,8 +81,8 @@ You can use the public Hub or run your own — the same codebase powers both.
 - **Web UI & admin console** — the hub's front door is a Vue SPA (the shared `@phlix/ui` design
   system) served at `/app` (`/` redirects to `/app/servers`): My Servers, Federation, and Shares for
   every signed-in user, plus a `requiresAdmin` **admin console** at `/app/admin/*` (Hub Dashboard,
-  Users, Logs, Settings, Audit Logs). The original Smarty pages still resolve as a legacy fallback.
-  Everything is backed by a full JSON API under `/api/v1` (incl. `/api/v1/admin/*`).
+  Users, Logs, Settings, Audit Logs). The original Smarty pages are deprecated and will be removed
+  in a future release. Everything is backed by a full JSON API under `/api/v1` (incl. `/api/v1/admin/*`).
 - **Operations-ready** — structured JSON logging (Monolog) across dedicated channels
   (app, error, hub, relay, audit), a `/health` endpoint, and idempotent SQL migrations.
 
@@ -746,9 +746,8 @@ returns **503** `stream.limit`. The concurrent counter is in-memory per HTTP wor
 
 ## Connecting a media server
 
-1. On the Hub, sign in and open **My Servers** (`/app/servers`) to start a claim — the legacy
-   `/claim-server` page still works too — or the server requests a code via
-   `POST /api/v1/server-claims/new`.
+1. On the Hub, sign in and open **My Servers** (`/app/servers`) to start a claim, or the server
+   requests a code via `POST /api/v1/server-claims/new`.
 2. Enter the claim code on the server; the server is issued an **enrollment JWT** and registers
    its public key.
 3. The server opens its **outbound relay tunnel** to the Hub and begins sending heartbeats.

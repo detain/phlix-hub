@@ -130,6 +130,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   no response); the server-side stop-work half is tracked as SV-4.2 in `phlix-server`.
 
 ### Changed
+- **WS-D: D-HUB SPA migration — phase 2 (WS-D)** (`src/Application.php`). Six Smarty-rendered
+  routes (`/requests`, `/admin/requests`, `/invite-links`, `/servers/{id}`, `/federation/shares`,
+  `/invite/{token}`) now redirect to the Vue SPA (`/app/…`) instead of rendering their
+  Smarty templates. Only `/shared-with-me` was migrated in phase 1. The original Smarty pages
+  remain on disk as a deprecated fallback; they will be removed in a future release.
 - **Migration ledger: detect & safely re-apply an edited already-applied migration (checksum divergence, HB-4.11)**
   (`src/Common/Database/MigrationRunner.php`, migration `041_migrations_checksum.sql`). The
   `MigrationRunner` ledger was **name-only**: once a `migrations/*.sql` file was recorded as applied,
