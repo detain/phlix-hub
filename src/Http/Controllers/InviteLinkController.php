@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use InvalidArgumentException;
+use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
@@ -26,10 +27,12 @@ use Phlix\Hub\Http\Response;
 final class InviteLinkController
 {
     /**
-     * @param InviteLinkHandler $handler Invite link handler.
+     * @param InviteLinkHandler $handler  Invite link handler.
+     * @param PageRenderer      $renderer Smarty wrapper for SSR templates.
      */
     public function __construct(
         private readonly InviteLinkHandler $handler,
+        private readonly PageRenderer $renderer,
     ) {
     }
 
@@ -195,10 +198,12 @@ final class InviteLinkController
             return (new Response())->status(404)->html('<h1>Not Found</h1>');
         }
 
-        return (new Response())->json([
-            'token' => $token,
-            'is_authenticated' => $request->userId !== null,
-        ]);
+        return (new Response())->html(
+            $this->renderer->render('home/accept-invite.tpl', [
+                'token' => $token,
+                'is_authenticated' => $request->userId !== null,
+            ]),
+        );
     }
 
     /**

@@ -13,9 +13,11 @@
             <p>You've been invited to access a library!</p>
 
             {if $error}
-                <div class="error">
+                <div class="error" id="accept-error">
                     <p>{$error|escape:'html'}</p>
                 </div>
+            {else}
+                <div class="error" id="accept-error" style="display:none;"></div>
             {/if}
 
             {if $success}
@@ -24,9 +26,8 @@
                     <a href="/shared-with-me" class="btn btn-primary">View Shared Libraries</a>
                 </div>
             {else}
-                <form method="post" action="/invite/accept">
-                    <input type="hidden" name="token" value="{$token|escape:'html'}">
-                    <button type="submit" class="btn btn-primary">Accept Invite</button>
+                <form method="post" id="accept-invite-form" data-token="{$token|escape:'html'}">
+                    <button type="submit" id="accept-submit" class="btn btn-primary">Accept Invite</button>
                 </form>
             {/if}
         </section>
