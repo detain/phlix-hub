@@ -1,4 +1,4 @@
-import { createPhlixApp, MyServersPage, ServerDetailPage, FederationPage, FederationSharesPage, ManageSharesPage, SharedWithMePage, RequestsPage, InviteLinksPage, SearchPage, SecuritySettingsPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes } from '@phlix/ui';
+import { createPhlixApp, MyServersPage, ServerDetailPage, FederationPage, FederationSharesPage, ManageSharesPage, SharedWithMePage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, SecuritySettingsPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes } from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
 
@@ -77,6 +77,18 @@ const app = createPhlixApp({
             path: '/app/invite-links',
             name: 'invite-links',
             component: InviteLinksPage,
+        },
+        // PUBLIC invite-acceptance landing. The hub redirects the public
+        // GET /invite/{token} link here; `meta.public` opts this route out of the
+        // auth guard so an unauthenticated invitee can reach it (they then log in /
+        // sign up and hop back). `:token(.*)` captures the whole token even when a
+        // base64 fallback token contains a `/` (JWT tokens are URL-safe already).
+        {
+            path: '/app/invite/:token(.*)',
+            name: 'accept-invite',
+            component: AcceptInvitePage,
+            props: true,
+            meta: { public: true },
         },
         {
             path: '/app/requests',
