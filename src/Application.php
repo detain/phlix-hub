@@ -39,7 +39,6 @@ use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\ClientRelayTokenController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
 use Phlix\Hub\Http\Controllers\MeController;
-use Phlix\Hub\Http\Controllers\PageController;
 use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
@@ -53,7 +52,6 @@ use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Controllers\UserQuotaController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
-use Phlix\Hub\Http\Middleware\CsrfMiddleware;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\Request;
@@ -316,23 +314,17 @@ final class Application
             return (new Response())->json($health());
         });
 
-        // SSR pages.
-        $pages = $this->resolvePageController();
-        // The redesigned Vue SPA is the front door — send the bare root to the
-        // hub's home (My Servers) rather than the media-oriented browse landing.
-        // Old SSR pages (/login, /signup, /my-servers, …) stay reachable directly.
-        // CSRF: issued on SSR GET form pages (login/signup) and re-stamped on
-        // every authenticated SSR page (the base-layout logout form), then
-        // validated on the SSR mutating POSTs below.
-        $csrf = $this->resolveCsrfMiddleware();
+        // The legacy Smarty SSR UI has been retired: the bare root and the old
+        // SSR auth pages now redirect to the Vue SPA (which owns its own auth).
+        // /signup and /login stay public (no auth gate).
         $this->router->get('/', static fn (Request $r): Response => (new Response())->redirect('/app/servers'));
         $this->router->get(
             '/signup',
-            static fn (Request $r): Response => $csrf->issue($r, $pages($r)),
+            static fn (Request $r): Response => (new Response())->redirect('/app/signup'),
         );
         $this->router->get(
             '/login',
-            static fn (Request $r): Response => $csrf->issue($r, $pages($r)),
+            static fn (Request $r): Response => (new Response())->redirect('/app/login'),
         );
 
         // Shared Vue 3 SPA shell (Phase C) — no auth gate; SPA handles its own auth.
@@ -348,18 +340,11 @@ final class Application
             return $sharedUi->shell($r, $typedParams);
         });
 
-        // Auth form handlers (SSR). Each is gated by the double-submit CSRF
-        // middleware: a missing/mismatched `_csrf` field is rejected with 403
-        // before the controller runs.
-        $auth = $this->resolveAuthController();
-        $this->router->group('', static function (Router $r) use ($auth): void {
-            $r->post('/signup', static fn (Request $req): Response => $auth($req));
-            $r->post('/login', static fn (Request $req): Response => $auth($req));
-            $r->post('/logout', static fn (Request $req): Response => $auth($req));
-        }, [$csrf]);
-
         // JSON API. `/register` is the canonical signup path used by the shared
-        // @phlix/ui SPA (and phlix-server); `/signup` is kept as an alias.
+        // @phlix/ui SPA (and phlix-server); `/signup` is kept as an alias. The
+        // SPA posts auth to `/api/v1/auth/*`; the legacy form-driven SSR POSTs
+        // (`POST /signup|/login|/logout`) have been retired with the Smarty UI.
+        $auth = $this->resolveAuthController();
         $this->router->post('/api/v1/auth/register', static fn (Request $r): Response => $auth($r));
         $this->router->post('/api/v1/auth/signup', static fn (Request $r): Response => $auth($r));
         $this->router->post('/api/v1/auth/login', static fn (Request $r): Response => $auth($r));
@@ -369,17 +354,17 @@ final class Application
         // Protected pages + API.
         $authMiddleware = $this->resolveAuthMiddleware();
 
-        // SSR page renderer wrapped so the CSRF cookie + the logout form's
-        // hidden token (emitted via partials/csrf-field.tpl in the base
-        // layout) are stamped onto every authenticated page render.
-        $ssrPage = static fn (Request $req): Response => $csrf->issue($req, $pages($req));
-
-        $this->router->group('/my-servers', function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        // Legacy SSR dashboard pages now redirect to the Vue SPA. They stay
+        // auth-gated so an unauthenticated browser is bounced to /app/login by
+        // the AuthMiddleware challenge before the redirect ever runs.
+        $this->router->group('/my-servers', static function (Router $r): void {
+            $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/servers'));
         }, [$authMiddleware]);
 
-        $this->router->group('/claim-server', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        $this->router->group('/claim-server', static function (Router $r): void {
+            // No dedicated claim page — the claim modal lives in the SPA's
+            // MyServersPage (/app/servers).
+            $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/servers'));
         }, [$authMiddleware]);
 
         // Redirect to Vue SPA.
@@ -389,20 +374,20 @@ final class Application
             });
         }, [$authMiddleware]);
 
-        $this->router->group('/hub-settings', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        $this->router->group('/hub-settings', static function (Router $r): void {
+            $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/admin/settings'));
         }, [$authMiddleware]);
 
-        $this->router->group('/audit-logs', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        $this->router->group('/audit-logs', static function (Router $r): void {
+            $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/admin/audit-logs'));
         }, [$authMiddleware]);
 
-        $this->router->group('/logs', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        $this->router->group('/logs', static function (Router $r): void {
+            $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/admin/logs'));
         }, [$authMiddleware]);
 
-        $this->router->group('/federation', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        $this->router->group('/federation', static function (Router $r): void {
+            $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/federation'));
             // Redirect to Vue SPA.
             $r->get('/shares', static function (Request $request): Response {
                 return (new Response())->redirect('/app/federation/shares');
@@ -573,9 +558,6 @@ final class Application
     {
         $authMiddleware = $this->resolveAuthMiddleware();
         $requestController = $this->resolveRequestController();
-        $pages = $this->resolvePageController();
-        $csrf = $this->resolveCsrfMiddleware();
-        $ssrPage = static fn (Request $req): Response => $csrf->issue($req, $pages($req));
 
         // Redirect to Vue SPA.
         $this->router->group('/requests', static function (Router $r): void {
@@ -701,15 +683,6 @@ final class Application
         return $controller;
     }
 
-    private function resolvePageController(): PageController
-    {
-        $controller = $this->container->get(PageController::class);
-        if (!$controller instanceof PageController) {
-            throw new \RuntimeException('Container returned an unexpected PageController instance');
-        }
-        return $controller;
-    }
-
     private function resolveAuthController(): AuthController
     {
         $controller = $this->container->get(AuthController::class);
@@ -717,15 +690,6 @@ final class Application
             throw new \RuntimeException('Container returned an unexpected AuthController instance');
         }
         return $controller;
-    }
-
-    private function resolveCsrfMiddleware(): CsrfMiddleware
-    {
-        $middleware = $this->container->get(CsrfMiddleware::class);
-        if (!$middleware instanceof CsrfMiddleware) {
-            throw new \RuntimeException('Container returned an unexpected CsrfMiddleware instance');
-        }
-        return $middleware;
     }
 
     private function resolveMeController(): MeController
@@ -1035,10 +999,7 @@ final class Application
      */
     private function registerSharingRoutes(AuthMiddleware $authMiddleware): void
     {
-        $pages = $this->resolvePageController();
         $shareController = $this->resolveLibraryShareController();
-        $csrf = $this->resolveCsrfMiddleware();
-        $ssrPage = static fn (Request $req): Response => $csrf->issue($req, $pages($req));
 
         // Redirect to Vue SPA.
         $this->router->group('/shared-with-me', static function (Router $r): void {
@@ -1047,8 +1008,8 @@ final class Application
             });
         }, [$authMiddleware]);
 
-        $this->router->group('/manage-shares', static function (Router $r) use ($ssrPage): void {
-            $r->get('', $ssrPage);
+        $this->router->group('/manage-shares', static function (Router $r): void {
+            $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/shares'));
         }, [$authMiddleware]);
 
         // JSON API for shares.

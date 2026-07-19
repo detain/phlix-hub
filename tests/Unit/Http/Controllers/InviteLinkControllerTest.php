@@ -231,29 +231,6 @@ final class InviteLinkControllerTest extends TestCase
         self::assertSame(403, $response->statusCode);
     }
 
-    public function testShowAcceptInvitePageReturnsToken(): void
-    {
-        $request = new Request();
-        $request->path = '/invite/token123';
-        $request->method = 'GET';
-        $request->userId = 'user-1';
-
-        $response = $this->controller->showAcceptInvitePage($request, ['token' => 'token123']);
-
-        self::assertSame(200, $response->statusCode);
-    }
-
-    public function testShowAcceptInvitePageReturns404WhenTokenMissing(): void
-    {
-        $request = new Request();
-        $request->path = '/invite/';
-        $request->method = 'GET';
-
-        $response = $this->controller->showAcceptInvitePage($request, []);
-
-        self::assertSame(404, $response->statusCode);
-    }
-
     public function testRedeemReturns401WhenNotAuthenticated(): void
     {
         $request = new Request();

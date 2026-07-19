@@ -18,26 +18,21 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Common\Logger\AuditLogger;
-use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\MeController;
-use Phlix\Hub\Http\Controllers\PageController;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
-use Phlix\Hub\Http\Middleware\CsrfMiddleware;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
 
 /**
- * Registers the HTTP layer (controllers, middleware, PageRenderer) with
- * the container.
- *
- * The two templates / cache / compile directories default to
- * `<project>/public/templates` and `<project>/var/smarty/{compile,cache}`.
- * Override via the `templates.{dir,compile,cache}` keys on the appConfig.
+ * Registers the HTTP layer (JSON controllers + auth/admin middleware) with
+ * the container. The legacy Smarty SSR stack (renderer, page controller,
+ * CSRF middleware, and the template directories) has been retired — the Vue
+ * SPA is now the only UI.
  *
  * @package Phlix\Hub\Common\Container\Providers
  */
@@ -48,39 +43,13 @@ final class HttpServicesProvider implements ServiceProviderInterface
      */
     public function register(ContainerBuilder $builder, array $appConfig): void
     {
-        $templatesDir = self::stringOr($appConfig, 'templates.dir', dirname(__DIR__, 4) . '/public/templates');
-        $compileDir = self::stringOr($appConfig, 'templates.compile', dirname(__DIR__, 4) . '/var/smarty/compile');
-        $cacheDir = self::stringOr($appConfig, 'templates.cache', dirname(__DIR__, 4) . '/var/smarty/cache');
         $publicDomain = self::stringOr($appConfig, 'public_domain', 'phlix.media');
 
         $builder->addDefinitions([
-            PageRenderer::class => factory(static function () use (
-                $templatesDir,
-                $compileDir,
-                $cacheDir,
-            ): PageRenderer {
-                return new PageRenderer($templatesDir, $compileDir, $cacheDir);
-            }),
-
             AuthController::class => factory(static function (
                 AuthManager $auth,
-                PageRenderer $renderer,
-                CsrfMiddleware $csrf,
             ): AuthController {
-                return new AuthController($auth, $renderer, $csrf);
-            }),
-
-            CsrfMiddleware::class => factory(static function (): CsrfMiddleware {
-                return new CsrfMiddleware();
-            }),
-
-            PageController::class => factory(static function (
-                PageRenderer $renderer,
-                AuthManager $auth,
-                ServerInfoHandler $serverInfo,
-                AdminMiddleware $admin,
-            ): PageController {
-                return new PageController($renderer, $auth, $serverInfo, $admin);
+                return new AuthController($auth);
             }),
 
             MeController::class => factory(static function (

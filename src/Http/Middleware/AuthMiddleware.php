@@ -31,8 +31,8 @@ use function time;
  *
  *  - JSON routes (`Accept: application/json` or path under `/api/`)
  *    short-circuit with a 401 JSON response;
- *  - HTML routes redirect to `/login` so the browser experience is
- *    "click → bounce to login".
+ *  - HTML routes redirect to `/app/login` (the Vue SPA login) so the
+ *    browser experience is "click → bounce to login".
  *
  * On success, the middleware also publishes the authenticated user-id
  * into the coroutine-local request context via
@@ -124,8 +124,7 @@ final class AuthMiddleware
         // `SELECT * FROM users WHERE id = ?` on every authenticated request.
         // The hot-path controllers only need $request->userId (from the
         // already-validated JWT claims); controllers that need the full user
-        // row (e.g. PageController for SSR admin flags) call
-        // AuthManager::getCurrentUser() directly.
+        // row call AuthManager::getCurrentUser() directly.
         if (!$this->userExists($userId)) {
             return $this->challenge($request, 'auth.user_not_found');
         }
@@ -152,8 +151,8 @@ final class AuthMiddleware
      * the session cookie is deliberately ignored: those requests must carry
      * an explicit `Authorization: Bearer` header. This closes the
      * cookie-based CSRF vector on the API (a cross-site form/fetch can ride
-     * the cookie but cannot set an Authorization header), complementing the
-     * double-submit CSRF guard on the SSR forms ({@see CsrfMiddleware}).
+     * the cookie but cannot set an Authorization header). The legacy SSR
+     * forms and their double-submit CSRF guard have been retired.
      */
     private function extractToken(Request $request): ?string
     {
@@ -196,7 +195,7 @@ final class AuthMiddleware
     }
 
     /**
-     * Decide whether to send a JSON 401 or an HTML 302 redirect to /login.
+     * Decide whether to send a JSON 401 or an HTML 302 redirect to /app/login.
      */
     private function challenge(Request $request, string $code): Response
     {
@@ -208,7 +207,7 @@ final class AuthMiddleware
         }
         return (new Response())
             ->status(302)
-            ->header('Location', '/login');
+            ->header('Location', '/app/login');
     }
 
     /**

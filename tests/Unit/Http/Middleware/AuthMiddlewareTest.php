@@ -63,7 +63,7 @@ final class AuthMiddlewareTest extends TestCase
         $response = $mw($request);
         self::assertNotNull($response);
         self::assertSame(302, $response->statusCode);
-        self::assertSame('/login', $response->headers['Location'] ?? '');
+        self::assertSame('/app/login', $response->headers['Location'] ?? '');
     }
 
     public function testValidTokenPopulatesRequestUserAndClaims(): void

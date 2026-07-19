@@ -13,15 +13,17 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitState;
-use Phlix\Hub\Common\WebPortal\PageRenderer;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
-use Phlix\Hub\Http\Middleware\CsrfMiddleware;
 use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see AuthController}.
+ *
+ * The legacy form-driven SSR routes (`POST /signup|/login|/logout`) have been
+ * retired with the Smarty UI; this suite covers only the JSON API surface
+ * under `/api/v1/auth/*`.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  *
@@ -33,9 +35,7 @@ final class AuthControllerTest extends TestCase
 
     private function controller(AuthManager $auth): AuthController
     {
-        $renderer = $this->createMock(PageRenderer::class);
-        $renderer->method('render')->willReturn('<html>stub</html>');
-        return new AuthController($auth, $renderer, new CsrfMiddleware());
+        return new AuthController($auth);
     }
 
     private function authMgr(): AuthManager
@@ -43,131 +43,6 @@ final class AuthControllerTest extends TestCase
         $mgr = $this->createMock(AuthManager::class);
         $mgr->method('jwt')->willReturn(new JwtHandler(self::SECRET));
         return $mgr;
-    }
-
-    public function testSignupFormCreatesUserAndSetsCookies(): void
-    {
-        $jwt = new JwtHandler(self::SECRET);
-        $accessToken = $jwt->createAccessToken('u-1');
-        $refreshToken = $jwt->createRefreshToken('u-1');
-
-        $mgr = $this->createMock(AuthManager::class);
-        $mgr->method('jwt')->willReturn($jwt);
-        $mgr->expects(self::once())
-            ->method('register')
-            ->with('alice', 'a@example.com', 'correct-horse-battery')
-            ->willReturn([
-                'access_token'  => $accessToken,
-                'refresh_token' => $refreshToken,
-                'token_type'    => 'Bearer',
-                'expires_in'    => 3600,
-                'user'          => ['id' => 'u-1', 'username' => 'alice'],
-                'claims'        => [],
-            ]);
-
-        $controller = $this->controller($mgr);
-        $request = new Request();
-        $request->method = 'POST';
-        $request->path = '/signup';
-        $request->body = ['username' => 'alice', 'email' => 'a@example.com', 'password' => 'correct-horse-battery'];
-
-        $response = $controller($request);
-        self::assertSame(302, $response->statusCode);
-        self::assertSame('/my-servers', $response->headers['Location']);
-        self::assertCount(2, $response->cookies);
-        self::assertSame(AuthMiddleware::COOKIE_ACCESS, $response->cookies[0]['name']);
-        self::assertSame($accessToken, $response->cookies[0]['value']);
-    }
-
-    public function testSignupFormRendersErrorOnValidationFailure(): void
-    {
-        $mgr = $this->authMgr();
-        $mgr->method('register')->willThrowException(new InvalidArgumentException('Email already registered'));
-
-        $renderer = $this->createMock(PageRenderer::class);
-        $renderer->expects(self::once())
-            ->method('render')
-            ->with('auth/signup.tpl', self::callback(static function ($vars): bool {
-                return is_array($vars) && ($vars['error'] ?? null) === 'Email already registered';
-            }))
-            ->willReturn('<html>error</html>');
-
-        $controller = new AuthController($mgr, $renderer, new CsrfMiddleware());
-        $request = new Request();
-        $request->method = 'POST';
-        $request->path = '/signup';
-        $request->body = ['username' => 'a', 'email' => 'a@example.com', 'password' => 'short'];
-
-        $response = $controller($request);
-        self::assertSame(400, $response->statusCode);
-    }
-
-    public function testLoginFormSuccessSetsCookies(): void
-    {
-        $jwt = new JwtHandler(self::SECRET);
-        $access = $jwt->createAccessToken('u-2');
-        $refresh = $jwt->createRefreshToken('u-2');
-
-        $mgr = $this->createMock(AuthManager::class);
-        $mgr->method('jwt')->willReturn($jwt);
-        $mgr->expects(self::once())
-            ->method('login')
-            ->with('alice', 'pwd', self::anything(), self::anything())
-            ->willReturn([
-                'access_token' => $access, 'refresh_token' => $refresh,
-                'token_type' => 'Bearer', 'expires_in' => 3600,
-                'user' => ['id' => 'u-2'], 'claims' => [],
-            ]);
-
-        $controller = $this->controller($mgr);
-        $request = new Request();
-        $request->method = 'POST';
-        $request->path = '/login';
-        $request->body = ['username' => 'alice', 'password' => 'pwd'];
-
-        $response = $controller($request);
-        self::assertSame(302, $response->statusCode);
-        self::assertCount(2, $response->cookies);
-    }
-
-    public function testLoginFormFallsBackToEmailField(): void
-    {
-        $jwt = new JwtHandler(self::SECRET);
-        $mgr = $this->createMock(AuthManager::class);
-        $mgr->method('jwt')->willReturn($jwt);
-        $mgr->expects(self::once())
-            ->method('login')
-            ->with('a@example.com', 'pwd', self::anything(), self::anything())
-            ->willReturn([
-                'access_token' => $jwt->createAccessToken('u-3'),
-                'refresh_token' => $jwt->createRefreshToken('u-3'),
-                'token_type' => 'Bearer', 'expires_in' => 3600,
-                'user' => [], 'claims' => [],
-            ]);
-
-        $controller = $this->controller($mgr);
-        $request = new Request();
-        $request->method = 'POST';
-        $request->path = '/login';
-        $request->body = ['email' => 'a@example.com', 'password' => 'pwd'];
-
-        $response = $controller($request);
-        self::assertSame(302, $response->statusCode);
-    }
-
-    public function testLoginFormReturns401OnBadCredentials(): void
-    {
-        $mgr = $this->authMgr();
-        $mgr->method('login')->willThrowException(new InvalidArgumentException('Invalid'));
-
-        $controller = $this->controller($mgr);
-        $request = new Request();
-        $request->method = 'POST';
-        $request->path = '/login';
-        $request->body = ['username' => 'a', 'password' => 'wrong'];
-
-        $response = $controller($request);
-        self::assertSame(401, $response->statusCode);
     }
 
     /**
@@ -190,40 +65,6 @@ final class AuthControllerTest extends TestCase
             $this->createMock(StructuredLogger::class),
             $rl,
         );
-    }
-
-    public function testLoginFormRateLimitedReturns429WithRetryAfter(): void
-    {
-        // Real limiter: 2 failed attempts fill the window, the 3rd peeks
-        // `limited` and throws RateLimitException BEFORE checking creds.
-        $rl = new RateLimiter(windowSeconds: 900, maxAttempts: 2, cap: 1000);
-        $controller = $this->controller($this->trippableAuthManager($rl));
-
-        $makeRequest = static function (): Request {
-            $request = new Request();
-            $request->method = 'POST';
-            $request->path = '/login';
-            $request->remoteIp = '203.0.113.5';
-            $request->body = ['username' => 'nobody', 'password' => 'wrong'];
-            return $request;
-        };
-
-        // Two bad-credential attempts (each mapped to 401 HTML, no throw out).
-        self::assertSame(401, $controller($makeRequest())->statusCode);
-        self::assertSame(401, $controller($makeRequest())->statusCode);
-
-        // Third attempt trips the limiter -> the local catch maps it to 429.
-        $response = $controller($makeRequest());
-
-        self::assertSame(429, $response->statusCode);
-        self::assertArrayHasKey('Retry-After', $response->headers);
-        $retryAfter = (int) $response->headers['Retry-After'];
-        self::assertGreaterThan(0, $retryAfter);
-        self::assertLessThanOrEqual(900, $retryAfter);
-        /** @var array<string, mixed> $decoded */
-        $decoded = json_decode($response->body, true);
-        self::assertSame('rate_limited', $decoded['code']);
-        self::assertSame('Too Many Requests', $decoded['error']);
     }
 
     public function testLoginJsonRateLimitedReturns429WithRetryAfter(): void
@@ -310,17 +151,15 @@ final class AuthControllerTest extends TestCase
      * leftmost X-Forwarded-For entry is client-controlled. The login limiter must
      * bucket on the REAL client (the rightmost appended hop) — NOT `0.0.0.0`, NOT
      * the loopback peer, and NOT the forged leftmost value.
-     *
-     * @dataProvider loginPathProvider
      */
-    public function testLoginKeysRateLimitOnTrustedClientIp(string $path): void
+    public function testLoginKeysRateLimitOnTrustedClientIp(): void
     {
         $limiter = $this->recordingLimiter();
         $controller = $this->controller($this->loginManagerWithLimiter($limiter));
 
         $request = new Request();
         $request->method = 'POST';
-        $request->path = $path;
+        $request->path = '/api/v1/auth/login';
         // Loopback proxy peer + forged leftmost XFF, real client appended rightmost.
         $request->remoteIp = '127.0.0.1';
         $request->headers = ['X-FORWARDED-FOR' => '198.51.100.66, 203.0.113.50'];
@@ -332,50 +171,6 @@ final class AuthControllerTest extends TestCase
         self::assertNotContains('auth:login:0.0.0.0', $limiter->hits);
         self::assertNotContains('auth:login:127.0.0.1', $limiter->hits);
         self::assertNotContains('auth:login:198.51.100.66', $limiter->hits);
-    }
-
-    /**
-     * @return list<array{0: string}>
-     */
-    public static function loginPathProvider(): array
-    {
-        return [
-            'SSR form login' => ['/login'],
-            'JSON API login' => ['/api/v1/auth/login'],
-        ];
-    }
-
-    public function testLogoutClearsCookies(): void
-    {
-        $mgr = $this->authMgr();
-        $mgr->expects(self::once())->method('logout');
-
-        $controller = $this->controller($mgr);
-        $request = new Request();
-        $request->method = 'POST';
-        $request->path = '/logout';
-        $request->userId = 'u-1';
-
-        $response = $controller($request);
-        self::assertSame(302, $response->statusCode);
-        self::assertSame('/', $response->headers['Location']);
-        self::assertCount(2, $response->cookies);
-        self::assertSame(0, $response->cookies[0]['max_age']);
-        self::assertSame('', $response->cookies[0]['value']);
-    }
-
-    public function testLogoutSkipsAuthCallWithoutUserId(): void
-    {
-        $mgr = $this->authMgr();
-        $mgr->expects(self::never())->method('logout');
-
-        $controller = $this->controller($mgr);
-        $request = new Request();
-        $request->method = 'POST';
-        $request->path = '/logout';
-
-        $response = $controller($request);
-        self::assertSame(302, $response->statusCode);
     }
 
     public function testSignupJsonReturns201(): void
