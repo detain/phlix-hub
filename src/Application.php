@@ -33,6 +33,7 @@ use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Http\Controllers\HubJwksController;
+use Phlix\Hub\Http\Controllers\HubRestartController;
 use Phlix\Hub\Http\Controllers\HubSettingsController;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryController;
@@ -520,6 +521,9 @@ final class Application
         // hub (hubby.md H1.2). Same HubSettingsController, same auth + admin gate.
         $this->registerAdminSettingsRoutes();
 
+        // Phase 10: graceful hub restart — POST /api/v1/admin/restart (SIGUSR1).
+        $this->registerAdminRestartRoutes();
+
         // Shared admin console user-management routes — the @phlix/ui
         // AdminUsersApi calls `/api/v1/admin/users*`; this serves that surface
         // (list/get/create/update/delete + set-admin/reset-password, and an
@@ -976,6 +980,15 @@ final class Application
         return $controller;
     }
 
+    private function resolveHubRestartController(): HubRestartController
+    {
+        $controller = $this->container->get(HubRestartController::class);
+        if (!$controller instanceof HubRestartController) {
+            throw new \RuntimeException('Container returned an unexpected HubRestartController instance');
+        }
+        return $controller;
+    }
+
     private function resolveAuditLogController(): AuditLogController
     {
         $controller = $this->container->get(AuditLogController::class);
@@ -1148,6 +1161,24 @@ final class Application
         $this->router->group('/api/v1/admin/settings', static function (Router $r) use ($controller): void {
             $r->get('', static fn (Request $req): Response => $controller->getSettings($req));
             $r->put('', static fn (Request $req): Response => $controller->putSettings($req));
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
+     * Wire the graceful hub restart endpoint (admin-only) under
+     * `POST /api/v1/admin/restart`. Sends SIGUSR1 to the hub master process
+     * via the pid_file (config/server.php: worker.pid_file), mirroring the
+     * phlix-server restart surface so the shared @phlix/ui admin Settings page
+     * can trigger a hub restart when settings require it.
+     */
+    private function registerAdminRestartRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveHubRestartController();
+
+        $this->router->group('/api/v1/admin', static function (Router $r) use ($controller): void {
+            $r->post('/restart', static fn (Request $req): Response => $controller->restart($req, []));
         }, [$authMiddleware, $adminMiddleware]);
     }
 

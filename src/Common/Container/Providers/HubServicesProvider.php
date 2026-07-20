@@ -26,6 +26,7 @@ use Phlix\Hub\Http\Controllers\AdminUserController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Http\Controllers\LogController;
+use Phlix\Hub\Http\Controllers\HubRestartController;
 use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\ClientRelayTokenService;
@@ -599,6 +600,18 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): HubSettingsController {
                 return new HubSettingsController($settings);
             })->parameter('settings', get(HubSettingsRepository::class)),
+
+            // Phase 10: graceful hub restart via SIGUSR1 (POST /api/v1/admin/restart)
+            HubRestartController::class => factory(static function (
+                ContainerInterface $c,
+            ): HubRestartController {
+                /** @var array<string, mixed> $appConfig */
+                $appConfig = $c->get('app.config');
+                $pidFile = is_string($appConfig['pid_file'] ?? null)
+                    ? $appConfig['pid_file']
+                    : '/var/run/phlix/hub.pid';
+                return new HubRestartController($pidFile);
+            }),
 
             // Per-user relay bandwidth quota + concurrent-stream cap HTTP surface
             // (HB-3.4 G5). Self usage under /api/v1/me/bandwidth; admin set/view

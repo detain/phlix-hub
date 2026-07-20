@@ -4,6 +4,12 @@ All notable changes to `detain/phlix-hub` are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-20
+
+### Hub Restart Endpoint (Phase 10)
+- **`HubRestartController`** added: `POST /api/v1/admin/restart` sends SIGUSR1 to the hub master process via the pid_file (`config/server.php: pid_file`), mirroring the phlix-server restart surface so `@phlix/ui` admin Settings can trigger a hub restart when settings require it.
+- **`HubRestartControllerTest`** added (5 test cases covering missing/empty/invalid pid_file, signal failure, signal success).
+
 ## [Unreleased]
 
 ### Hub Settings (Phase 6)

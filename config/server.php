@@ -22,6 +22,9 @@ return [
     'workers'       => (int) (getenv('HUB_WORKERS') ?: 2),
     'workerman_log' => getenv('HUB_WORKERMAN_LOG') ?: __DIR__ . '/../.logs/workerman.log',
 
+    // PID file for graceful restart (SIGUSR1). Written by start.php.
+    'pid_file'      => getenv('HUB_PID_FILE') ?: '/var/run/phlix/hub.pid',
+
     // Public domain used to build relay URLs for subdomain-allocated servers.
     // Each enrolled server gets `<subdomain>.<public_domain>` (see migration
     // 008 and `Phlix\Hub\Hub\DnsAliasManager`).
