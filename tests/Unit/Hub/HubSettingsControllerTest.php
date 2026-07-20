@@ -136,8 +136,13 @@ final class HubSettingsControllerTest extends TestCase
         self::assertArrayHasKey('default', $entry);
         self::assertSame(604800, $entry['default']);
 
+        // LIVE, not boot-only: EnrollmentJwtService::effectiveTtl() calls
+        // getEffective('server.enrollment_ttl') on every mint
+        // (src/Hub/EnrollmentJwtService.php:73), so an override applies to the
+        // next enrollment with no restart. Asserting `true` here would be
+        // asserting that we lie to the operator in the UI.
         self::assertArrayHasKey('restart', $entry);
-        self::assertTrue($entry['restart']);
+        self::assertFalse($entry['restart']);
 
         self::assertArrayHasKey('secret', $entry);
         self::assertFalse($entry['secret']);
