@@ -31,6 +31,18 @@ return [
     // for heartbeats and JWKS fetches. See $hubBaseUrl derivation above.
     'hub_base_url'  => $hubBaseUrl,
 
+    // Server enrollment and heartbeat settings.
+    'enrollment_ttl'               => (int) (getenv('HUB_ENROLLMENT_TTL') ?: 604800),
+    'heartbeat_interval'          => (int) (getenv('HUB_HEARTBEAT_INTERVAL') ?: 60),
+    'enrollment_renewal_threshold' => (int) (getenv('HUB_ENROLLMENT_RENEWAL_THRESHOLD') ?: 86400),
+
+    // Subdomain auto-claim and TLS settings.
+    'subdomain_auto_claim' => filter_var(getenv('HUB_SUBDOMAIN_AUTO_CLAIM') ?: 'true', FILTER_VALIDATE_BOOLEAN),
+    'tls_enabled'          => filter_var(getenv('HUB_TLS_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN),
+
+    // Base domain for server subdomains (e.g. 'srv-abc123.phlix.media').
+    'domain'               => getenv('HUB_DOMAIN') ?: 'phlix.media',
+
     // Reverse-tunnel relay tuning.
     'relay' => [
         // Grace window (seconds) an incumbent tunnel keeps draining in-flight

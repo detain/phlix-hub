@@ -61,16 +61,22 @@ class HubSettingsRepository
      */
     public const array ALLOWED_KEYS = [
         // config/server.php
-        'server.enrollment_ttl'       => 'int',
-        'server.relay_ping_interval'   => 'int',
-        'server.max_servers_per_user'  => 'int',
-        'server.public_domain'        => 'string',
+        'server.enrollment_ttl'               => 'int',
+        'server.relay_ping_interval'          => 'int',
+        'server.max_servers_per_user'         => 'int',
+        'server.heartbeat_interval'           => 'int',
+        'server.enrollment_renewal_threshold' => 'int',
+        'server.subdomain_auto_claim'         => 'bool',
+        'server.tls_enabled'                  => 'bool',
+        'server.domain'                       => 'string',
+        'server.public_domain'                => 'string',
         // config/auth.php
-        'auth.access_token_ttl'       => 'int',
-        'auth.refresh_token_ttl'      => 'int',
+        'auth.access_token_ttl'  => 'int',
+        'auth.refresh_token_ttl' => 'int',
         // config/logger.php
-        'logger.level'                => 'string',
-        'logger.channels'            => 'json',
+        'logger.level'           => 'string',
+        'logger.audit_enabled'   => 'bool',
+        'logger.channels'        => 'json',
     ];
 
     /** @var Connection Async MySQL connection used for all queries. */

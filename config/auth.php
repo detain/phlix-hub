@@ -18,9 +18,9 @@ declare(strict_types=1);
  */
 
 return [
-    'secret'      => getenv('HUB_JWT_SECRET') ?: null,
-    'issuer'      => 'phlix-hub',
-    'audience'    => 'hub',
-    'access_ttl'  => (int) (getenv('HUB_JWT_ACCESS_TTL') ?: 3600),
-    'refresh_ttl' => (int) (getenv('HUB_JWT_REFRESH_TTL') ?: 604800),
+    'secret'            => getenv('HUB_JWT_SECRET') ?: null,
+    'issuer'            => 'phlix-hub',
+    'audience'          => 'hub',
+    'access_token_ttl'  => (int) (getenv('HUB_JWT_ACCESS_TTL') ?: 3600),
+    'refresh_token_ttl' => (int) (getenv('HUB_JWT_REFRESH_TTL') ?: 604800),
 ];

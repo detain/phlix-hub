@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Shared\Schema\SchemaPaths;
 use Phlix\Hub\Hub\HubSettingsRepository;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -29,6 +30,19 @@ use Phlix\Hub\Http\Response;
  */
 final class HubSettingsController
 {
+    /**
+     * Lazily-loaded cache of the per-key meta block derived from the hub
+     * settings schema: dotted key → meta block. Populated once by
+     * {@see loadSchemaMeta()} on the first call and reused thereafter.
+     *
+     * This is immutable config data (the schema is shipped read-only in the
+     * vendored package), NOT per-request state, so caching it in a static is
+     * resident-memory-safe.
+     *
+     * @var array<string, array<string, mixed>>|null
+     */
+    private static ?array $schemaMeta = null;
+
     /**
      * @param HubSettingsRepository $settings Hub settings store.
      */
@@ -58,6 +72,89 @@ final class HubSettingsController
     }
 
     /**
+     * Per-key meta block sourced directly from the shared hub settings schema.
+     *
+     * Each key in the returned map corresponds to a property in
+     * `hub-settings.schema.json`.  The meta block carries everything the
+     * admin SPA needs to render a settings row: label, help text, help links,
+     * tier, group, enum constraints, min/max bounds, default value, and the
+     * secret/restart flags.
+     *
+     * @return array<string, array<string, mixed>> Dotted setting key → meta block.
+     */
+    public static function schemaMeta(): array
+    {
+        if (self::$schemaMeta === null) {
+            self::$schemaMeta = self::loadSchemaMeta();
+        }
+
+        return self::$schemaMeta;
+    }
+
+    /**
+     * Read and decode the shared `hub-settings.schema.json` and project
+     * every property into a per-key meta block.
+     *
+     * Fail-safe: any unreadable, unparseable, or structurally-unexpected
+     * schema yields an empty map `[]` rather than an exception.
+     *
+     * @return array<string, array<string, mixed>> Dotted setting key → meta block.
+     */
+    private static function loadSchemaMeta(): array
+    {
+        $path = SchemaPaths::hubSettings();
+        $raw  = is_file($path) ? file_get_contents($path) : false;
+        if ($raw === false) {
+            return [];
+        }
+
+        $decoded = json_decode((string) $raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        if (!isset($decoded['properties']) || !is_array($decoded['properties'])) {
+            return [];
+        }
+
+        /** @var array<string, array<string, mixed>> $meta */
+        $meta = [];
+        foreach ($decoded['properties'] as $key => $def) {
+            if (!is_string($key) || !is_array($def)) {
+                continue;
+            }
+
+            $meta[$key] = [
+                'label'      => $def['label'] ?? null,
+                'helpText'   => $def['helpText'] ?? null,
+                'helpLinks'  => isset($def['helpLinks']) && is_array($def['helpLinks'])
+                    ? $def['helpLinks']
+                    : [],
+                'tier'       => $def['tier'] ?? 'standard',
+                'group'      => $def['group'] ?? null,
+                'enum'       => isset($def['enum']) && is_array($def['enum']) ? $def['enum'] : null,
+                'enumLabels' => isset($def['enumLabels']) && is_array($def['enumLabels'])
+                    ? $def['enumLabels']
+                    : null,
+                'optionHelp' => isset($def['optionHelp']) && is_array($def['optionHelp'])
+                    ? $def['optionHelp']
+                    : null,
+                'minimum'    => isset($def['minimum']) && is_numeric($def['minimum'])
+                    ? (float) $def['minimum']
+                    : null,
+                'maximum'    => isset($def['maximum']) && is_numeric($def['maximum'])
+                    ? (float) $def['maximum']
+                    : null,
+                'default'    => array_key_exists('default', $def) ? $def['default'] : null,
+                'secret'     => !empty($def['secret']),
+                'restart'    => !empty($def['restart']),
+            ];
+        }
+
+        return $meta;
+    }
+
+    /**
      * `GET /api/v1/me/hub-settings` — return all hub settings.
      *
      * Response shape:
@@ -66,7 +163,8 @@ final class HubSettingsController
      *   "data": {
      *     "settings": { "<key>": <value>, ... },
      *     "overridden": ["<key>", ...],
-     *     "types": { "<key>": "<type>", ... }
+     *     "types": { "<key>": "<type>", ... },
+     *     "meta": { "<key>": { label, helpText, ... }, ... }
      *   }
      * }
      *
@@ -92,6 +190,7 @@ final class HubSettingsController
                 'settings' => $effective['values'],
                 'overridden' => $effective['overridden'],
                 'types' => $types,
+                'meta' => self::schemaMeta(),
             ],
         ]);
     }

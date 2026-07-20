@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 return [
     'default' => 'file',
+    'level'  => getenv('HUB_LOG_LEVEL') ?: 'info',
+    'audit_enabled' => filter_var(getenv('HUB_AUDIT_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN),
     'handlers' => [
         'file' => [
             'type' => 'rotating_file',
