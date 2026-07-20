@@ -22,8 +22,16 @@ return [
     'workers'       => (int) (getenv('HUB_WORKERS') ?: 2),
     'workerman_log' => getenv('HUB_WORKERMAN_LOG') ?: __DIR__ . '/../.logs/workerman.log',
 
-    // PID file for graceful restart (SIGUSR1). Written by start.php.
-    'pid_file'      => getenv('HUB_PID_FILE') ?: '/var/run/phlix/hub.pid',
+    // PID file for graceful reload (SIGUSR2). SINGLE SOURCE OF TRUTH: start.php
+    // assigns `Worker::$pidFile` FROM THIS VALUE, and the DI container hands the
+    // same value to HubRestartController, so the writer and the reader can never
+    // drift again. The default must stay inside the install's var/ directory:
+    // the hardened systemd unit mounts the install root read-only and only lists
+    // .logs/, var/ and config/ in ReadWritePaths, so a /var/run/... default is
+    // both unwritable by Workerman and non-existent for the restart endpoint
+    // (which then always 500s with pid_file_not_found).
+    'pid_file'      => getenv('HUB_PID_FILE') ?: dirname(__DIR__) . '/var/hub.pid',
+    'status_file'   => getenv('HUB_STATUS_FILE') ?: dirname(__DIR__) . '/var/hub.status',
 
     // Public domain used to build relay URLs for subdomain-allocated servers.
     // Each enrolled server gets `<subdomain>.<public_domain>` (see migration
@@ -34,17 +42,12 @@ return [
     // for heartbeats and JWKS fetches. See $hubBaseUrl derivation above.
     'hub_base_url'  => $hubBaseUrl,
 
-    // Server enrollment and heartbeat settings.
-    'enrollment_ttl'               => (int) (getenv('HUB_ENROLLMENT_TTL') ?: 604800),
-    'heartbeat_interval'          => (int) (getenv('HUB_HEARTBEAT_INTERVAL') ?: 60),
-    'enrollment_renewal_threshold' => (int) (getenv('HUB_ENROLLMENT_RENEWAL_THRESHOLD') ?: 86400),
-
-    // Subdomain auto-claim and TLS settings.
-    'subdomain_auto_claim' => filter_var(getenv('HUB_SUBDOMAIN_AUTO_CLAIM') ?: 'true', FILTER_VALIDATE_BOOLEAN),
-    'tls_enabled'          => filter_var(getenv('HUB_TLS_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN),
-
-    // Base domain for server subdomains (e.g. 'srv-abc123.phlix.media').
-    'domain'               => getenv('HUB_DOMAIN') ?: 'phlix.media',
+    // Enrollment-JWT lifetime (seconds). REAL CONSUMER:
+    // Phlix\Hub\Hub\EnrollmentJwtService::createEnrollmentJwt() resolves the
+    // *effective* value (hub_settings override → this default) on every mint,
+    // so an admin override applies to the next enrolled/renewed server with no
+    // restart. Exposed as the `server.enrollment_ttl` hub setting.
+    'enrollment_ttl' => (int) (getenv('HUB_ENROLLMENT_TTL') ?: 604800),
 
     // Reverse-tunnel relay tuning.
     'relay' => [

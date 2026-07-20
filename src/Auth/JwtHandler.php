@@ -66,13 +66,37 @@ final class JwtHandler
     private int $refreshTtl;
 
     /**
+     * Optional live-TTL resolver. Called with the dotted hub-setting key and
+     * the boot-time fallback, and expected to return the *effective* TTL in
+     * seconds (hub_settings override → config default).
+     *
+     * This is what makes `auth.access_ttl` / `auth.refresh_ttl` genuinely
+     * live rather than boot-bound: without it, an admin override would sit in
+     * the `hub_settings` table and never reach a minted token. Wired by
+     * {@see \Phlix\Hub\Common\Container\Providers\AuthServicesProvider}; left
+     * null in unit tests and in the CLI smoke command, where the constructor
+     * arguments are authoritative.
+     *
+     * Holds shared configuration lookup logic, never per-request state, so it
+     * is safe on a resident-memory singleton.
+     *
+     * @var (callable(string, int): int)|null
+     */
+    private $ttlResolver;
+
+    /**
      * Build a JwtHandler.
      *
      * @param string $secretKey  HMAC secret (≥32 bytes for HS256).
      * @param string $issuer     Issuer claim. Defaults to "phlix-hub".
      * @param string $audience   Audience claim. Defaults to "hub".
-     * @param int    $accessTtl  Access TTL seconds (default 3600 = 1h).
-     * @param int    $refreshTtl Refresh TTL seconds (default 604800 = 7d).
+     * @param int    $accessTtl  Access TTL seconds (default 3600 = 1h). Used as
+     *                           the fallback when no resolver is wired or the
+     *                           resolver fails.
+     * @param int    $refreshTtl Refresh TTL seconds (default 604800 = 7d). Same
+     *                           fallback semantics as `$accessTtl`.
+     * @param (callable(string, int): int)|null $ttlResolver Optional effective-TTL
+     *                           resolver; see {@see self::$ttlResolver}.
      *
      * @throws InvalidArgumentException When the secret is too short.
      */
@@ -82,6 +106,7 @@ final class JwtHandler
         string $audience = JwtClaims::AUD_HUB,
         int $accessTtl = 3600,
         int $refreshTtl = 604800,
+        ?callable $ttlResolver = null,
     ) {
         if (strlen($secretKey) < 32) {
             throw new InvalidArgumentException('JWT secret must be at least 32 bytes for HS256.');
@@ -91,6 +116,7 @@ final class JwtHandler
         $this->audience = $audience;
         $this->accessTtl = $accessTtl;
         $this->refreshTtl = $refreshTtl;
+        $this->ttlResolver = $ttlResolver;
     }
 
     /**
@@ -116,7 +142,7 @@ final class JwtHandler
             aud: $this->audience,
             sub: $userId,
             iat: $now,
-            exp: $now + $this->accessTtl,
+            exp: $now + $this->getAccessTtl(),
             nbf: null,
             type: JwtClaims::TYPE_ACCESS,
             jti: null,
@@ -143,7 +169,7 @@ final class JwtHandler
             aud: $this->audience,
             sub: $userId,
             iat: $now,
-            exp: $now + $this->refreshTtl,
+            exp: $now + $this->getRefreshTtl(),
             nbf: null,
             type: JwtClaims::TYPE_REFRESH,
             jti: bin2hex(random_bytes(16)),
@@ -222,20 +248,52 @@ final class JwtHandler
     }
 
     /**
-     * Access token TTL, in seconds. Exposed for the JSON `expires_in`
-     * field in auth responses.
+     * *Effective* access token TTL, in seconds — the `auth.access_ttl`
+     * hub-settings override when one is stored, else the boot-time config
+     * default. Also the source of the JSON `expires_in` field in auth
+     * responses, so `expires_in` can never disagree with the `exp` claim.
      */
     public function getAccessTtl(): int
     {
-        return $this->accessTtl;
+        return $this->resolveTtl('auth.access_ttl', $this->accessTtl);
     }
 
     /**
-     * Refresh token TTL, in seconds. Used by the cookie max-age.
+     * *Effective* refresh token TTL, in seconds (`auth.refresh_ttl` override
+     * → config default). Used by the cookie max-age.
      */
     public function getRefreshTtl(): int
     {
-        return $this->refreshTtl;
+        return $this->resolveTtl('auth.refresh_ttl', $this->refreshTtl);
+    }
+
+    /**
+     * Ask the wired resolver for the effective TTL, falling back to the
+     * boot-time value.
+     *
+     * Fail-safe by construction: a missing resolver, a thrown exception (the
+     * DB being unreachable, say), or a non-positive result all degrade to
+     * `$fallback`. Token minting must never fail because a settings lookup
+     * did.
+     *
+     * @param string $key      Dotted hub-setting key.
+     * @param int    $fallback Boot-time TTL in seconds.
+     *
+     * @return int Effective TTL in seconds; always > 0.
+     */
+    private function resolveTtl(string $key, int $fallback): int
+    {
+        if ($this->ttlResolver === null) {
+            return $fallback;
+        }
+
+        try {
+            $resolved = ($this->ttlResolver)($key, $fallback);
+        } catch (Throwable) {
+            return $fallback;
+        }
+
+        return $resolved > 0 ? $resolved : $fallback;
     }
 
     /**

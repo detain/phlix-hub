@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 return [
     'default' => 'file',
-    'level'  => getenv('HUB_LOG_LEVEL') ?: 'info',
-    'audit_enabled' => filter_var(getenv('HUB_AUDIT_ENABLED') ?: 'true', FILTER_VALIDATE_BOOLEAN),
+    // NB: there is deliberately NO top-level 'level' / 'audit_enabled' key.
+    // StructuredLogger reads the PER-HANDLER 'level' below (see
+    // src/Common/Logger/StructuredLogger.php:105) — a top-level key would be
+    // read by nothing. Do not re-add one to make a settings key resolve.
     'handlers' => [
         'file' => [
             'type' => 'rotating_file',

@@ -52,31 +52,77 @@ class HubSettingsRepository
     /**
      * Allowed setting keys and their value types.
      *
-     * Maps dotted setting keys to their serialisable type.
-     * The controller (H.5b) validates incoming keys against this list;
-     * the repository itself does not enforce it (keeps it simple and
-     * aligned with the server SettingsRepository pattern).
+     * Maps dotted setting keys to their serialisable type. The key IS the
+     * dotted path into `config/<file>.php` — `auth.access_ttl` resolves
+     * `config/auth.php`'s `access_ttl`. The controller (H.5b) validates
+     * incoming keys against this list; the repository itself does not enforce
+     * it (keeps it simple and aligned with the server SettingsRepository
+     * pattern).
+     *
+     * ## Admission rules — read before adding a key
+     *
+     * 1. **A real runtime consumer must read the EFFECTIVE value.** Not the
+     *    config default — the effective value, via {@see getEffective()}. Cite
+     *    the `file:line` in the comment beside the key. A key with no such
+     *    consumer is a toggle that does nothing and must NOT be listed.
+     *    Adding a fresh `config/*.php` entry so the key "resolves" does not
+     *    count: that only makes it read `null` instead of nothing.
+     * 2. **Never rename a config key to make an allow-list key resolve.** The
+     *    dotted key here is the thing that is wrong; fix it here. Renaming
+     *    `config/auth.php`'s `access_ttl` → `access_token_ttl` silently
+     *    disabled `HUB_JWT_ACCESS_TTL` in production once already.
+     * 3. **Do not expose boot-bound infrastructure or secrets.** Deliberately
+     *    excluded, and NOT to be re-added: `secret` (HUB_JWT_SECRET),
+     *    `relay_tls_cert` / `relay_tls_key`, the Sonarr/Radarr `api_key`s,
+     *    `hub_base_url` / `public_domain` / `domain` (baked into enrollment
+     *    JWTs and the JWKS URL — editing them breaks the enrolled estate),
+     *    `tls_enabled` and `subdomain_auto_claim` (ACME/TLS provisioning; a
+     *    lockout foot-gun), and `host` / `port` / `workers`.
+     * 4. **`getDefault()` must not return `null`** for any listed key — see
+     *    `tests/Unit/Hub/HubSettingsAllowListTest.php`, which asserts exactly
+     *    this against the real `config/` directory.
      *
      * @var array<string, string>
      */
     public const array ALLOWED_KEYS = [
         // config/server.php
-        'server.enrollment_ttl'               => 'int',
-        'server.relay_ping_interval'          => 'int',
-        'server.max_servers_per_user'         => 'int',
-        'server.heartbeat_interval'           => 'int',
-        'server.enrollment_renewal_threshold' => 'int',
-        'server.subdomain_auto_claim'         => 'bool',
-        'server.tls_enabled'                  => 'bool',
-        'server.domain'                       => 'string',
-        'server.public_domain'                => 'string',
+        // LIVE: EnrollmentJwtService::createEnrollmentJwt() reads the effective
+        // value per mint — src/Hub/EnrollmentJwtService.php:98.
+        'server.enrollment_ttl' => 'int',
         // config/auth.php
-        'auth.access_token_ttl'  => 'int',
-        'auth.refresh_token_ttl' => 'int',
-        // config/logger.php
-        'logger.level'           => 'string',
-        'logger.audit_enabled'   => 'bool',
-        'logger.channels'        => 'json',
+        // LIVE: JwtHandler::getAccessTtl()/getRefreshTtl() resolve the effective
+        // value per token mint through the TTL resolver installed by
+        // AuthServicesProvider — src/Auth/JwtHandler.php:264 and
+        // src/Common/Container/Providers/AuthServicesProvider.php:113.
+        'auth.access_ttl'  => 'int',
+        'auth.refresh_ttl' => 'int',
+    ];
+
+    /**
+     * Config paths that must NEVER be added to {@see ALLOWED_KEYS}.
+     *
+     * Secrets and boot-bound infrastructure whose values are baked into
+     * already-issued enrollment JWTs, or that would lock an operator out of
+     * their own hub if edited from the web UI. Asserted by
+     * `tests/Unit/Hub/HubSettingsAllowListTest.php` so a future "just expose
+     * one more knob" change cannot quietly reintroduce them.
+     *
+     * @var list<string>
+     */
+    public const array DENIED_KEYS = [
+        'auth.secret',
+        'server.hub_base_url',
+        'server.public_domain',
+        'server.domain',
+        'server.tls_enabled',
+        'server.subdomain_auto_claim',
+        'server.relay_tls_cert',
+        'server.relay_tls_key',
+        'server.host',
+        'server.port',
+        'server.workers',
+        'server.arr.sonarr.api_key',
+        'server.arr.radarr.api_key',
     ];
 
     /** @var Connection Async MySQL connection used for all queries. */

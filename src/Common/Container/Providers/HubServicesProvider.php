@@ -141,11 +141,17 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new Ed25519KeyManager($keyPath);
             }),
 
+            // The HubSettingsRepository is injected so createEnrollmentJwt()
+            // resolves the EFFECTIVE `server.enrollment_ttl` per mint (admin
+            // override → config default) instead of a hardcoded 7 days. That
+            // is what keeps the setting's `restart: false` flag honest.
             EnrollmentJwtService::class => factory(static function (
                 Ed25519KeyManager $keyManager,
+                HubSettingsRepository $settings,
             ) use ($hubBaseUrl): EnrollmentJwtService {
-                return new EnrollmentJwtService($keyManager, $hubBaseUrl);
-            })->parameter('keyManager', get(Ed25519KeyManager::class)),
+                return new EnrollmentJwtService($keyManager, $hubBaseUrl, $settings);
+            })->parameter('keyManager', get(Ed25519KeyManager::class))
+                ->parameter('settings', get(HubSettingsRepository::class)),
 
             ClaimRequestHandler::class => factory(static function (
                 Ed25519KeyManager $keyManager,
@@ -601,15 +607,19 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new HubSettingsController($settings);
             })->parameter('settings', get(HubSettingsRepository::class)),
 
-            // Phase 10: graceful hub restart via SIGUSR1 (POST /api/v1/admin/restart)
+            // Phase 10: graceful hub reload via SIGUSR2 (POST /api/v1/admin/restart).
+            // The pid path MUST be the config/server.php value — start.php assigns
+            // Worker::$pidFile from the very same key, so writer and reader cannot
+            // drift. The fallback mirrors start.php's own fallback (install var/),
+            // never /var/run, which nothing creates under the hardened unit.
             HubRestartController::class => factory(static function (
                 ContainerInterface $c,
             ): HubRestartController {
                 /** @var array<string, mixed> $appConfig */
                 $appConfig = $c->get('app.config');
-                $pidFile = is_string($appConfig['pid_file'] ?? null)
+                $pidFile = is_string($appConfig['pid_file'] ?? null) && $appConfig['pid_file'] !== ''
                     ? $appConfig['pid_file']
-                    : '/var/run/phlix/hub.pid';
+                    : dirname(__DIR__, 4) . '/var/hub.pid';
                 return new HubRestartController($pidFile);
             }),
 

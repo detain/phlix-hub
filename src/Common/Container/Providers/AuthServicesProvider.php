@@ -23,6 +23,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Hub\HubSettingsRepository;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
@@ -81,6 +82,11 @@ final class AuthServicesProvider implements ServiceProviderInterface
     {
         $authConfig = self::resolveAuthConfig($appConfig);
         $secret = self::resolveSecret($authConfig);
+        // ⚠️ These key names MUST match config/auth.php verbatim. intOr()
+        // falls back to its literal when the key is absent, so a rename there
+        // does not fail loudly — it just silently ignores HUB_JWT_ACCESS_TTL /
+        // HUB_JWT_REFRESH_TTL. Covered by AuthServicesProviderTest's
+        // "env var reaches the minted token" regression tests.
         $accessTtl = self::intOr($authConfig, 'access_ttl', 3600);
         $refreshTtl = self::intOr($authConfig, 'refresh_ttl', 604800);
         $issuer = self::stringOr($authConfig, 'issuer', 'phlix-hub');
@@ -94,7 +100,14 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 $accessTtl,
                 $refreshTtl,
             ): JwtHandler {
-                return new JwtHandler($secret, $issuer, $audience, $accessTtl, $refreshTtl);
+                return new JwtHandler(
+                    $secret,
+                    $issuer,
+                    $audience,
+                    $accessTtl,
+                    $refreshTtl,
+                    self::makeTtlResolver(),
+                );
             }),
 
             UserRepository::class => factory(static function (Connection $db): UserRepository {
@@ -129,6 +142,56 @@ final class AuthServicesProvider implements ServiceProviderInterface
             })->parameter('logger', get('logger.' . LogChannels::AUTH))
                 ->parameter('dispatcher', null),
         ]);
+    }
+
+    /**
+     * Build the live-TTL resolver handed to {@see JwtHandler}.
+     *
+     * This is the wiring that makes the `auth.access_ttl` / `auth.refresh_ttl`
+     * hub settings genuinely live: the returned closure reads the EFFECTIVE
+     * value ({@see HubSettingsRepository::getEffective()} — override row, else
+     * `config/auth.php` default) at token-mint time, so an admin edit applies
+     * to the very next login with no worker restart.
+     *
+     * Deliberately does NOT resolve {@see HubSettingsRepository} out of the
+     * PHP-DI container: first-time container resolution from inside a
+     * coroutine can trip PHP-DI's `entriesBeingResolved` race. The repository
+     * is a thin wrapper over a {@see Connection}, so it is built directly from
+     * the static {@see ConnectionPool} and memoised in the closure instead.
+     *
+     * The memoised repository is shared *configuration* access, never
+     * per-request state, so holding it in the closure is resident-memory-safe.
+     * Every failure path (pool not initialised under PHPUnit, DB down, a
+     * non-numeric override) degrades to the caller's boot-time fallback.
+     *
+     * @return callable(string, int): int
+     */
+    private static function makeTtlResolver(): callable
+    {
+        $repository = null;
+
+        return static function (string $key, int $fallback) use (&$repository): int {
+            if (!$repository instanceof HubSettingsRepository) {
+                // Not booted (unit tests, CLI smoke commands): there is no
+                // store to consult, so the config default IS the effective
+                // value. Checked explicitly rather than caught, because
+                // ConnectionPool::getConnection() on an uninitialised pool
+                // emits warnings instead of throwing.
+                if (ConnectionPool::getInstance() === null) {
+                    return $fallback;
+                }
+                $repository = new HubSettingsRepository(ConnectionPool::getConnection('mysql'));
+            }
+
+            /** @var mixed $value */
+            $value = $repository->getEffective($key);
+
+            if (is_int($value)) {
+                return $value;
+            }
+
+            return is_numeric($value) ? (int) $value : $fallback;
+        };
     }
 
     /**

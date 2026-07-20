@@ -26,8 +26,8 @@ use Workerman\MySQL\Connection;
  * onto a fresh {@see Router} with the same group/middleware shape Application
  * uses, exercising the *real* AdminMiddleware, HubSettingsController, and
  * HubSettingsRepository over a mocked {@see Connection} and a temp config-dir
- * fixture so {@see HubSettingsRepository::getDefault()} resolves the eight
- * allow-listed keys.
+ * fixture so {@see HubSettingsRepository::getDefault()} resolves every
+ * allow-listed key.
  *
  * @package Phlix\Hub\Tests\Unit\Http
  *
@@ -50,22 +50,17 @@ final class AdminSettingsRoutesTest extends TestCase
     {
         parent::setUp();
 
-        // Temp config dir with three fixture files so getDefault() resolves
-        // the eight allow-listed keys to known defaults.
+        // Temp config dir mirroring the shape of the real config/ files, so
+        // getDefault() resolves every allow-listed key to a known default.
         $dir = sys_get_temp_dir() . '/phlix-hub-adminsettings-' . bin2hex(random_bytes(6));
         mkdir($dir, 0775, true);
         file_put_contents(
             $dir . '/server.php',
-            "<?php\n\nreturn ['enrollment_ttl' => 3600, 'relay_ping_interval' => 30,"
-            . " 'max_servers_per_user' => 10, 'public_domain' => 'phlix.test'];\n",
+            "<?php\n\nreturn ['enrollment_ttl' => 3600];\n",
         );
         file_put_contents(
             $dir . '/auth.php',
-            "<?php\n\nreturn ['access_token_ttl' => 900, 'refresh_token_ttl' => 1209600];\n",
-        );
-        file_put_contents(
-            $dir . '/logger.php',
-            "<?php\n\nreturn ['level' => 'info', 'channels' => ['app', 'relay']];\n",
+            "<?php\n\nreturn ['access_ttl' => 900, 'refresh_ttl' => 1209600];\n",
         );
         $this->configDir = $dir;
 
@@ -201,16 +196,21 @@ final class AdminSettingsRoutesTest extends TestCase
         self::assertArrayHasKey('settings', $data);
         $settings = $data['settings'];
         self::assertIsArray($settings);
-        self::assertArrayHasKey('server.enrollment_ttl', $settings);
-        self::assertArrayHasKey('server.relay_ping_interval', $settings);
-        self::assertArrayHasKey('server.max_servers_per_user', $settings);
-        self::assertArrayHasKey('server.public_domain', $settings);
-        self::assertArrayHasKey('auth.access_token_ttl', $settings);
-        self::assertArrayHasKey('auth.refresh_token_ttl', $settings);
-        self::assertArrayHasKey('logger.level', $settings);
-        self::assertArrayHasKey('logger.channels', $settings);
+        // The envelope must expose exactly the allow-list — no more (a key the
+        // UI cannot render), no fewer (a key the UI renders but PUT rejects).
+        self::assertSame(
+            array_keys(HubSettingsRepository::ALLOWED_KEYS),
+            array_keys($settings),
+        );
         self::assertSame(3600, $settings['server.enrollment_ttl']);
-        self::assertSame(['app', 'relay'], $settings['logger.channels']);
+        self::assertSame(900, $settings['auth.access_ttl']);
+        self::assertSame(1209600, $settings['auth.refresh_ttl']);
+
+        // Every value must resolve — a null here means the dotted key names a
+        // config path that does not exist (the Phase 6 orphaned-key defect).
+        foreach ($settings as $key => $value) {
+            self::assertNotNull($value, "setting '{$key}' resolved to null");
+        }
 
         self::assertArrayHasKey('overridden', $data);
         self::assertSame([], $data['overridden']);
@@ -218,15 +218,7 @@ final class AdminSettingsRoutesTest extends TestCase
         self::assertArrayHasKey('types', $data);
         $types = $data['types'];
         self::assertIsArray($types);
-        self::assertArrayHasKey('server.enrollment_ttl', $types);
-        self::assertArrayHasKey('server.relay_ping_interval', $types);
-        self::assertArrayHasKey('server.max_servers_per_user', $types);
-        self::assertArrayHasKey('server.public_domain', $types);
-        self::assertArrayHasKey('auth.access_token_ttl', $types);
-        self::assertArrayHasKey('auth.refresh_token_ttl', $types);
-        self::assertArrayHasKey('logger.level', $types);
-        self::assertArrayHasKey('logger.channels', $types);
-        self::assertSame('json', $types['logger.channels']);
+        self::assertSame(HubSettingsRepository::ALLOWED_KEYS, $types);
     }
 
     public function testPutRequires401WhenUnauthenticated(): void
@@ -299,13 +291,12 @@ final class AdminSettingsRoutesTest extends TestCase
         self::assertArrayNotHasKey('types', $data);
     }
 
-    public function testPutPersistsStringAndJsonTypesForAdmin(): void
+    public function testPutPersistsMultipleKeysForAdmin(): void
     {
         $this->asAdmin('admin-1', true);
 
         $db = $this->createMock(Connection::class);
-        // Two INSERTs (string + json) then one SELECT echoing both overrides.
-        // The json override's setting_value is the JSON text decode() expects.
+        // Two INSERTs then one SELECT echoing both overrides.
         $db->method('query')->willReturnCallback(function (string $sql): array|bool {
             if (str_contains($sql, 'INSERT INTO hub_settings')) {
                 return true;
@@ -313,14 +304,14 @@ final class AdminSettingsRoutesTest extends TestCase
             self::assertStringContainsString('SELECT setting_key', $sql);
             return [
                 [
-                    'setting_key' => 'server.public_domain',
-                    'setting_value' => 'example.org',
-                    'value_type' => 'string',
+                    'setting_key' => 'auth.access_ttl',
+                    'setting_value' => '1800',
+                    'value_type' => 'int',
                 ],
                 [
-                    'setting_key' => 'logger.channels',
-                    'setting_value' => '["x","y"]',
-                    'value_type' => 'json',
+                    'setting_key' => 'auth.refresh_ttl',
+                    'setting_value' => '43200',
+                    'value_type' => 'int',
                 ],
             ];
         });
@@ -328,7 +319,7 @@ final class AdminSettingsRoutesTest extends TestCase
 
         $res = $router->dispatch($this->put(
             '/api/v1/admin/settings',
-            ['settings' => ['server.public_domain' => 'example.org', 'logger.channels' => ['x', 'y']]],
+            ['settings' => ['auth.access_ttl' => 1800, 'auth.refresh_ttl' => 43200]],
             'admin-1',
         ));
         self::assertSame(200, $res->statusCode);
@@ -344,17 +335,26 @@ final class AdminSettingsRoutesTest extends TestCase
         self::assertArrayHasKey('settings', $data);
         $settings = $data['settings'];
         self::assertIsArray($settings);
-        self::assertSame('example.org', $settings['server.public_domain']);
-        self::assertSame(['x', 'y'], $settings['logger.channels']);
+        self::assertSame(1800, $settings['auth.access_ttl']);
+        self::assertSame(43200, $settings['auth.refresh_ttl']);
 
         self::assertArrayHasKey('overridden', $data);
         $overridden = $data['overridden'];
         self::assertIsArray($overridden);
-        self::assertContains('server.public_domain', $overridden);
-        self::assertContains('logger.channels', $overridden);
+        self::assertContains('auth.access_ttl', $overridden);
+        self::assertContains('auth.refresh_ttl', $overridden);
     }
 
-    public function testPutRejectsUnknownKey(): void
+    /**
+     * The hub PUT must emit the SERVER's validation-error shape:
+     * `{success:false, error:'Validation failed', errors:{key: message}}`.
+     *
+     * `phlix-ui`'s shared admin SettingsPage reads `e.body.errors` to paint
+     * inline per-field messages (`SettingsPage.vue:288-291`). The hub used to
+     * return a single `error` code with no `errors` map, so hub admins got a
+     * generic toast and no highlighted field.
+     */
+    public function testPutRejectsUnknownKeyWithAnErrorsMap(): void
     {
         $this->asAdmin('admin-1', true);
         $db = $this->createMock(Connection::class);
@@ -370,10 +370,12 @@ final class AdminSettingsRoutesTest extends TestCase
         $payload = json_decode((string) $res->body, true);
         self::assertIsArray($payload);
         self::assertSame(false, $payload['success'] ?? null);
-        self::assertSame('invalid_key', $payload['error'] ?? null);
+        self::assertSame('Validation failed', $payload['error'] ?? null);
+        self::assertIsArray($payload['errors'] ?? null);
+        self::assertArrayHasKey('bogus.key', $payload['errors']);
     }
 
-    public function testPutRejectsWrongTypeInt(): void
+    public function testPutRejectsWrongTypeWithAnErrorsMap(): void
     {
         $this->asAdmin('admin-1', true);
         $db = $this->createMock(Connection::class);
@@ -388,43 +390,40 @@ final class AdminSettingsRoutesTest extends TestCase
         $payload = json_decode((string) $res->body, true);
         self::assertIsArray($payload);
         self::assertSame(false, $payload['success'] ?? null);
-        self::assertSame('invalid_type', $payload['error'] ?? null);
+        self::assertSame('Validation failed', $payload['error'] ?? null);
+        self::assertIsArray($payload['errors'] ?? null);
+        self::assertArrayHasKey('server.enrollment_ttl', $payload['errors']);
+        self::assertStringContainsString('int', (string) $payload['errors']['server.enrollment_ttl']);
     }
 
-    public function testPutRejectsWrongTypeString(): void
+    /**
+     * All failures must be reported at once, not one per round-trip — matching
+     * the server, which accumulates before returning.
+     */
+    public function testPutAccumulatesEveryValidationErrorInOneResponse(): void
     {
         $this->asAdmin('admin-1', true);
         $db = $this->createMock(Connection::class);
         $db->expects(self::never())->method('query');
         $router = $this->buildRouter($db);
 
-        $res = $router->dispatch(
-            $this->put('/api/v1/admin/settings', ['settings' => ['server.public_domain' => 123]], 'admin-1'),
-        );
+        $res = $router->dispatch($this->put('/api/v1/admin/settings', [
+            'settings' => [
+                'bogus.key'             => 1,
+                'server.enrollment_ttl' => 'not-an-int',
+                'auth.access_ttl'       => [],
+            ],
+        ], 'admin-1'));
         self::assertSame(400, $res->statusCode);
 
         $payload = json_decode((string) $res->body, true);
         self::assertIsArray($payload);
-        self::assertSame(false, $payload['success'] ?? null);
-        self::assertSame('invalid_type', $payload['error'] ?? null);
-    }
-
-    public function testPutRejectsWrongTypeJson(): void
-    {
-        $this->asAdmin('admin-1', true);
-        $db = $this->createMock(Connection::class);
-        $db->expects(self::never())->method('query');
-        $router = $this->buildRouter($db);
-
-        $res = $router->dispatch(
-            $this->put('/api/v1/admin/settings', ['settings' => ['logger.channels' => 'not-an-array']], 'admin-1'),
+        self::assertIsArray($payload['errors'] ?? null);
+        self::assertSame(
+            ['bogus.key', 'server.enrollment_ttl', 'auth.access_ttl'],
+            array_keys($payload['errors']),
+            'every bad key must be reported, not just the first',
         );
-        self::assertSame(400, $res->statusCode);
-
-        $payload = json_decode((string) $res->body, true);
-        self::assertIsArray($payload);
-        self::assertSame(false, $payload['success'] ?? null);
-        self::assertSame('invalid_type', $payload['error'] ?? null);
     }
 
     public function testPutRejectsNonArrayBody(): void
@@ -440,6 +439,6 @@ final class AdminSettingsRoutesTest extends TestCase
         $payload = json_decode((string) $res->body, true);
         self::assertIsArray($payload);
         self::assertSame(false, $payload['success'] ?? null);
-        self::assertSame('invalid_body', $payload['error'] ?? null);
+        self::assertSame('Invalid payload', $payload['error'] ?? null);
     }
 }

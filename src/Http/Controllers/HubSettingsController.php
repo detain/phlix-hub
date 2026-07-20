@@ -209,6 +209,7 @@ final class HubSettingsController
      * Response shape (success):
      * {
      *   "success": true,
+     *   "message": "Settings updated.",
      *   "data": {
      *     "settings": { "<key>": <value>, ... },
      *     "overridden": ["<key>", ...]
@@ -221,8 +222,22 @@ final class HubSettingsController
      * It is purely additive: the SSR `/api/v1/me/hub-settings` consumer reads
      * only `success`.
      *
-     * Response shape (error):
-     * { "success": false, "error": "<code>", "message": "<human message>" }
+     * Response shape (validation error, 400):
+     * {
+     *   "success": false,
+     *   "error": "Validation failed",
+     *   "errors": { "<key>": "<human message>", ... }
+     * }
+     *
+     * The `errors` MAP (not a single first-failure `error` code) is the shape
+     * the shared `@phlix/ui` admin Settings page consumes: it reads
+     * `e.body.errors` to paint inline per-field messages
+     * (`phlix-ui/src/pages/admin/SettingsPage.vue:288-291`). It is identical,
+     * field for field, to the server's
+     * {@see \Phlix\Server\Http\Controllers\Admin\AdminSettingsController::update()}
+     * so one page component can serve both back ends. Every submitted key is
+     * checked, so the user sees ALL problems at once rather than one per
+     * round-trip.
      *
      * Status codes:
      * - 200: success
@@ -235,43 +250,52 @@ final class HubSettingsController
         $body = $request->body;
         $settings = $body['settings'] ?? null;
 
-        if (!is_array($settings)) {
+        if (!is_array($settings) || $settings === []) {
             return (new Response())->status(400)->json([
                 'success' => false,
-                'error' => 'invalid_body',
-                'message' => 'Body must contain { settings: { ... } }',
+                'error' => 'Invalid payload',
+                'message' => 'Body must contain a non-empty "settings" object.',
             ]);
         }
 
         $allowedKeys = HubSettingsRepository::ALLOWED_KEYS;
 
-        // Validate all keys and types before persisting anything.
+        // Validate EVERY key/type before persisting anything, accumulating an
+        // errors map instead of bailing on the first failure.
+        /** @var array<string, string> $errors */
+        $errors = [];
+        /** @var array<string, array{value: mixed, type: string}> $validated */
+        $validated = [];
+
         /** @var mixed $value */
         foreach ($settings as $key => $value) {
-            if (!array_key_exists($key, $allowedKeys)) {
-                return (new Response())->status(400)->json([
-                    'success' => false,
-                    'error' => 'invalid_key',
-                    'message' => "Unknown setting key: {$key}",
-                ]);
+            if (!is_string($key) || !array_key_exists($key, $allowedKeys)) {
+                $errors[(string) $key] = 'Unknown setting key.';
+                continue;
             }
 
             $expectedType = $allowedKeys[$key];
             [$valid, $actualType] = $this->validateValueType($value, $expectedType);
 
             if (!$valid) {
-                return (new Response())->status(400)->json([
-                    'success' => false,
-                    'error' => 'invalid_type',
-                    'message' => "Setting '{$key}' expects {$expectedType}, got {$actualType}",
-                ]);
+                $errors[$key] = sprintf('Expected type %s, got %s.', $expectedType, $actualType);
+                continue;
             }
+
+            $validated[$key] = ['value' => $value, 'type' => $expectedType];
+        }
+
+        if ($errors !== []) {
+            return (new Response())->status(400)->json([
+                'success' => false,
+                'error' => 'Validation failed',
+                'errors' => $errors,
+            ]);
         }
 
         // All-or-nothing persist.
-        /** @var mixed $value */
-        foreach ($settings as $key => $value) {
-            $this->settings->set((string) $key, $value, $allowedKeys[$key]);
+        foreach ($validated as $key => $entry) {
+            $this->settings->set($key, $entry['value'], $entry['type']);
         }
 
         // Re-resolve the full effective set so the response can echo the new
@@ -283,6 +307,7 @@ final class HubSettingsController
 
         return (new Response())->json([
             'success' => true,
+            'message' => 'Settings updated.',
             'data' => [
                 'settings' => $effective['values'],
                 'overridden' => $effective['overridden'],

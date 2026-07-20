@@ -1597,7 +1597,18 @@ ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t
 # for the full pattern). public/index.php no longer exists; public/ is
 # a pure document root containing only static assets + templates.
 ExecStart=/usr/bin/php ${INSTALL_PATH}/start.php start
-ExecReload=/bin/kill -SIGUSR1 \$MAINPID
+# GRACEFUL reload. Workerman treats BOTH SIGUSR1 and SIGUSR2 as "reload", but
+# only SIGUSR2 is graceful: Worker.php:1390 sets \$gracefulStop = (\$signal ===
+# SIGUSR2), and Worker.php:2010 arms a SIGKILL timer only when that flag is
+# FALSE. SIGUSR1 therefore hard-kills workers after \$stopTimeout, cutting live
+# relay tunnels and in-flight HLS proxying mid-stream. The admin endpoint
+# POST /api/v1/admin/restart (HubRestartController) sends the same SIGUSR2, so
+# 'systemctl reload phlix-hub' and the in-app Restart button behave identically.
+# NOTE: the pid file lives at \${INSTALL_PATH}/var/hub.pid (config/server.php's
+# 'pid_file', which start.php assigns to Worker::\$pidFile). It is inside the
+# ReadWritePaths below; do NOT set HUB_PID_FILE to a /var/run path — the
+# hardened sandbox cannot write there and the restart endpoint would 500.
+ExecReload=/bin/kill -SIGUSR2 \$MAINPID
 ExecStop=/bin/kill -SIGTERM \$MAINPID
 Restart=on-failure
 RestartSec=3s

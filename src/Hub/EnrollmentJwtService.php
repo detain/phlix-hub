@@ -29,26 +29,75 @@ class EnrollmentJwtService
     private const string ISSUER = 'phlix-hub';
     private const string AUDIENCE = 'server';
 
+    /** Fallback TTL (7 days) when no setting and no explicit override apply. */
+    public const int DEFAULT_TTL = 604800;
+
     /**
-     * @param Ed25519KeyManager $keyManager Key manager for signing.
-     * @param string            $hubBaseUrl  Hub's public base URL (e.g. "https://hub.example.com").
+     * @param Ed25519KeyManager           $keyManager Key manager for signing.
+     * @param string                      $hubBaseUrl Hub's public base URL
+     *                                                (e.g. "https://hub.example.com").
+     * @param HubSettingsRepository|null  $settings   Optional hub-settings store. When
+     *                                                supplied, {@see createEnrollmentJwt()}
+     *                                                resolves the EFFECTIVE
+     *                                                `server.enrollment_ttl` on every
+     *                                                mint, so an admin override applies
+     *                                                to the next claim/renewal without a
+     *                                                restart. Null in unit tests and the
+     *                                                CLI, where {@see DEFAULT_TTL} applies.
      */
     public function __construct(
         private readonly Ed25519KeyManager $keyManager,
         private readonly string $hubBaseUrl,
+        private readonly ?HubSettingsRepository $settings = null,
     ) {
+    }
+
+    /**
+     * Effective enrollment-JWT TTL in seconds.
+     *
+     * Resolution order: the `server.enrollment_ttl` hub-settings override →
+     * `config/server.php`'s `enrollment_ttl` → {@see DEFAULT_TTL}. Fail-safe:
+     * an unreachable store or a non-positive value degrades to the default
+     * rather than minting a token that is already expired.
+     *
+     * @return int Effective TTL in seconds; always > 0.
+     */
+    public function effectiveTtl(): int
+    {
+        if ($this->settings === null) {
+            return self::DEFAULT_TTL;
+        }
+
+        try {
+            /** @var mixed $value */
+            $value = $this->settings->getEffective('server.enrollment_ttl');
+        } catch (\Throwable) {
+            return self::DEFAULT_TTL;
+        }
+
+        if (!is_numeric($value)) {
+            return self::DEFAULT_TTL;
+        }
+
+        $ttl = (int) $value;
+
+        return $ttl > 0 ? $ttl : self::DEFAULT_TTL;
     }
 
     /**
      * Mint an enrollment JWT for a newly claimed server.
      *
-     * @param string $serverId  Hub-assigned server UUID.
-     * @param int    $ttl        Token TTL in seconds (default 604800 = 7 days).
+     * @param string   $serverId Hub-assigned server UUID.
+     * @param int|null $ttl      Explicit TTL in seconds. `null` (the normal
+     *                           case) resolves the effective
+     *                           `server.enrollment_ttl` hub setting via
+     *                           {@see effectiveTtl()}.
      *
      * @return string Encoded JWT signed with Ed25519.
      */
-    public function createEnrollmentJwt(string $serverId, int $ttl = 604800): string
+    public function createEnrollmentJwt(string $serverId, ?int $ttl = null): string
     {
+        $ttl ??= $this->effectiveTtl();
         $now = time();
         $kid = $this->keyManager->getKid();
         $header = [

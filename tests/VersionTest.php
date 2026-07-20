@@ -17,9 +17,9 @@ use ReflectionClass;
  */
 final class VersionTest extends TestCase
 {
-    public function testVersionIsExactlyZeroPointFourPointZero(): void
+    public function testVersionIsExactlyZeroPointFivePointZero(): void
     {
-        self::assertSame('0.4.0', Version::VERSION);
+        self::assertSame('0.5.0', Version::VERSION);
     }
 
     public function testVersionIsValidSemver(): void

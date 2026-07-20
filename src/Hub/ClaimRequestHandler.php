@@ -49,6 +49,25 @@ class ClaimRequestHandler
     }
 
     /**
+     * Build the enrollment-JWT minter used by the claim paths.
+     *
+     * Wires the {@see HubSettingsRepository} so the mint reads the EFFECTIVE
+     * `server.enrollment_ttl` (admin override → `config/server.php` default)
+     * rather than a hardcoded 7 days — see
+     * {@see EnrollmentJwtService::effectiveTtl()}. Built per call (it is a
+     * stateless wrapper) so no per-request state is retained on this
+     * long-lived, resident-memory handler.
+     */
+    private function makeEnrollmentJwtService(): EnrollmentJwtService
+    {
+        return new EnrollmentJwtService(
+            $this->keyManager,
+            $this->hubBaseUrl,
+            new HubSettingsRepository($this->db),
+        );
+    }
+
+    /**
      * Process a new server claim request.
      *
      * @param ClaimRequest $request Validated claim request from the server.
@@ -256,7 +275,7 @@ class ClaimRequestHandler
         // JWT minting is read-only/CPU work — do it after committing so the
         // transaction (and the per-connection coroutine mutex it holds) is
         // released as soon as the row writes land.
-        $jwtService = new EnrollmentJwtService($this->keyManager, $this->hubBaseUrl);
+        $jwtService = $this->makeEnrollmentJwtService();
         $enrollmentJwt = $jwtService->createEnrollmentJwt($serverId);
 
         $this->logger->info('Server claimed successfully', [
@@ -310,7 +329,7 @@ class ClaimRequestHandler
         $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
 
         if ($status === 'paired' && is_string($claimedBy) && $claimedBy !== '' && $serverId !== '') {
-            $jwtService = new EnrollmentJwtService($this->keyManager, $this->hubBaseUrl);
+            $jwtService = $this->makeEnrollmentJwtService();
             $enrollmentJwt = $jwtService->createEnrollmentJwt($serverId);
             // One-time retrieval: drop the claim now the server has its JWT.
             $this->db->query('DELETE FROM server_claims WHERE id = :id', ['id' => $claimId]);

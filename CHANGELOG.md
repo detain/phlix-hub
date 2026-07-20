@@ -4,18 +4,150 @@ All notable changes to `detain/phlix-hub` are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-20
+
+Remediation of the Phase 6 / Phase 10 settings work, which shipped a silent
+production regression, a restart endpoint that could never succeed, and
+fourteen settings keys that did nothing.
+
+### Fixed
+
+- **`HUB_JWT_ACCESS_TTL` / `HUB_JWT_REFRESH_TTL` were being ignored in production.**
+  Phase 6 renamed `config/auth.php`'s `access_ttl` / `refresh_ttl` to
+  `access_token_ttl` / `refresh_token_ttl` so an orphaned allow-list key would
+  resolve. The only consumer,
+  `AuthServicesProvider::register()`, still read the old names, and its
+  `intOr()` helper falls back to a hardcoded literal when a key is missing — so
+  both env vars silently reverted to 3600 / 604800 on the next deploy with no
+  error anywhere. The config keys are restored; the *allow-list* key is what was
+  wrong and is now `auth.access_ttl` / `auth.refresh_ttl`.
+  Regression tests assert the CONSEQUENCE end-to-end through the real
+  `config/auth.php`: a minted access/refresh token's `exp - iat` must equal the
+  env-supplied TTL (`AuthServicesProviderTest`). A test asserting only that a
+  config key exists would not have caught this.
+- **`POST /api/v1/admin/restart` always returned HTTP 500 `pid_file_not_found`.**
+  `config/server.php` declared the pid file at `/var/run/phlix/hub.pid` while
+  `start.php` wrote `<install>/var/hub.pid`, and `scripts/install.sh` never set
+  `HUB_PID_FILE` nor created `/var/run/phlix`. `config/server.php` is now the
+  single source of truth: `start.php` assigns `Worker::$pidFile` (and
+  `$statusFile`) *from* it, and the container hands the same value to
+  `HubRestartController`. The default resolves inside the install's `var/`
+  directory, which is a systemd `ReadWritePath`.
+- **The restart endpoint signalled before flushing its response.** Per
+  plan_settings.md §3.35 the JSON ack is now built and returned first, and the
+  reload is deferred onto a *one-shot* `Workerman\Timer` (`repeat = false`) that
+  fires after the response has been written. A `posix_kill($pid, 0)` liveness
+  probe still runs inline, so a stale pid file yields a real error instead of an
+  ack whose deferred signal silently fails.
+
+### Changed
+
+- **The restart signal is now SIGUSR2 (graceful), not SIGUSR1.** Workerman
+  treats both as "reload", but only SIGUSR2 is graceful: `Worker.php:1390` sets
+  `$gracefulStop = ($signal === SIGUSR2)` and `Worker.php:2010` arms a SIGKILL
+  timer only when that flag is false. SIGUSR1 therefore hard-killed workers
+  after `$stopTimeout`, cutting live relay tunnels and in-flight HLS proxying
+  mid-stream. `HubRestartController`, `scripts/install.sh`'s `ExecReload`, and
+  the docblocks now all send and document SIGUSR2.
+- **`HubSettingsRepository::ALLOWED_KEYS` reduced from 14 keys to 3, each with a
+  cited runtime consumer.** Every retained key is read *live* via
+  `getEffective()` at use time, so an admin edit applies with no restart:
+  - `server.enrollment_ttl` — `EnrollmentJwtService::createEnrollmentJwt()`
+    resolves the effective value on every mint (claim, claim-poll and renew
+    paths); previously the TTL was a hardcoded 7-day default parameter.
+  - `auth.access_ttl`, `auth.refresh_ttl` — `JwtHandler::getAccessTtl()` /
+    `getRefreshTtl()` resolve the effective value per token mint through a
+    resolver installed by `AuthServicesProvider`, so both the `exp` claim and
+    the `expires_in` field honour an override. Failure to reach the store
+    degrades to the config default rather than failing the login.
+  Removed: `server.relay_ping_interval`, `server.max_servers_per_user` and
+  `logger.channels` (all resolved to `null` — no such config path existed);
+  `server.heartbeat_interval`, `server.enrollment_renewal_threshold`,
+  `logger.level` and `logger.audit_enabled` (config entries invented by Phase 6
+  that no line of `src/` reads); and `server.public_domain`, `server.domain`,
+  `server.tls_enabled` and `server.subdomain_auto_claim`, which are on the
+  DO-NOT-EXPOSE list — the first two are baked into already-issued enrollment
+  JWTs and the JWKS URL, and the latter two drive ACME/TLS provisioning.
+  `server.max_servers_per_user` in particular advertised a `default: 10` cap
+  that was enforced nowhere; it is removed rather than left as a user-visible
+  lie. A new `HubSettingsRepository::DENIED_KEYS` list plus
+  `HubSettingsAllowListTest` assert — against the *real* `config/` directory —
+  that no allow-listed key resolves to `null`, that declared types match the
+  resolved defaults, and that no DO-NOT-EXPOSE path can be re-added.
+- **`PUT /api/v1/admin/settings` now returns the server's validation-error
+  shape.** It accumulates `{success:false, error:'Validation failed',
+  errors:{key: message}}` across *all* submitted keys instead of returning a
+  single `invalid_key` / `invalid_type` code and bailing on the first failure.
+  The shared `@phlix/ui` admin Settings page reads `e.body.errors` to paint
+  inline per-field errors (`SettingsPage.vue:288-291`); on the hub that key was
+  never present, so admins got a generic toast and no highlighted field. The
+  success response also gained the server's `message` field. The GET `meta`
+  block already matched the server field-for-field and is unchanged.
+
+### Reverted config additions
+
+`config/server.php` lost the `heartbeat_interval`,
+`enrollment_renewal_threshold`, `subdomain_auto_claim`, `tls_enabled` and
+`domain` entries, and `config/logger.php` lost its top-level `level` and
+`audit_enabled` entries. All seven were added by Phase 6 purely so an
+allow-list key would resolve; nothing read them. `config/logger.php`'s
+per-handler `level` keys (the ones `StructuredLogger` actually reads) are
+untouched.
+
+### Known gaps (NOT fixed here)
+
+- The hub Settings page still renders **zero fields** in production. The
+  vendored `detain/phlix-shared` v0.23.0 ships `hub-settings.schema.json` with
+  `"properties": {}`, and `SettingsPage.vue` derives its tabs and field list
+  exclusively from the `meta` block. Three tests in `HubSettingsControllerTest`
+  are RED for exactly this reason. The fix is to tag `phlix-shared` and
+  re-vendor; both are tracked outside this repo.
+- The allow-list is still a hardcoded const rather than being derived from the
+  schema the way `phlix-server`'s `loadAllowedKeysFromSchema()` does, so
+  allow-list ↔ schema drift is *detected* (`testEveryAllowedKeyHasRenderableSchemaMeta`)
+  but not *prevented*.
+- Neither the hub nor the server validates schema `minimum` / `maximum` /
+  `enum` on PUT; those constraints remain client-side only.
+- The twelve net-new hub toggles from plan_settings.md §10 Phase 6
+  (`registration_open`, `maintenance_mode`, `auto_approve`,
+  `federation.enabled`, `public_server_listing`, invite expiry, quotas, …) are
+  still unimplemented, as is the §9 `PageHint` pass on MyServers / Federation /
+  ManageShares.
+
 ## [0.4.0] - 2026-07-20
 
 ### Hub Restart Endpoint (Phase 10)
-- **`HubRestartController`** added: `POST /api/v1/admin/restart` sends SIGUSR1 to the hub master process via the pid_file (`config/server.php: pid_file`), mirroring the phlix-server restart surface so `@phlix/ui` admin Settings can trigger a hub restart when settings require it.
-- **`HubRestartControllerTest`** added (5 test cases covering missing/empty/invalid pid_file, signal failure, signal success).
+- **`HubRestartController`** added: `POST /api/v1/admin/restart` signals the hub master process via the pid_file (`config/server.php: pid_file`), mirroring the phlix-server restart surface so `@phlix/ui` admin Settings can trigger a hub restart when settings require it.
+  **Correction (0.5.0):** as shipped this endpoint could never succeed — the configured pid_file path was not the path `start.php` wrote — and it sent the non-graceful SIGUSR1. Both are fixed in 0.5.0.
+- **`HubRestartControllerTest`** added (5 test cases covering missing/empty/invalid pid_file, signal failure, signal success). These passed only because they injected a temp pid path, so they did not catch the misconfigured default.
 
 ## [Unreleased]
 
 ### Hub Settings (Phase 6)
-- **`HubSettingsRepository`** extended with 12 new hub settings keys (`server.*`, `auth.*`, `logger.*`) sourced from `hub-settings.schema.json`.
-- **`HubSettingsController`** now emits a `meta` block in the GET response (schema, settings version, hub version).
-- **`hub-settings.schema.json`** populated with 12 hub-specific settings: `server.name`, `server.description`, `server.logo_url`, `server.contact_email`, `server.base_url`, `server.cors_allowed_origins`, `auth.jwt_ttl`, `auth.refresh_ttl`, `auth.mfa_enabled`, `logger.level`, `logger.format`, `logger.output`.
+
+> **Correction (0.5.0).** The original entries here were inaccurate and have
+> been rewritten to match the code. For the record, they claimed: (a) "12 new
+> hub settings keys" — the allow-list actually went from 8 to 14 keys, of which
+> 3 resolved to `null` and none had a runtime consumer; (b) that the GET `meta`
+> block carries "schema, settings version, hub version" — it carries per-key
+> `label`/`helpText`/`helpLinks`/`tier`/`group`/`enum`/`enumLabels`/
+> `optionHelp`/`minimum`/`maximum`/`default`/`secret`/`restart`; and (c) that
+> `hub-settings.schema.json` was populated with `server.name`,
+> `server.description`, `server.logo_url`, `server.contact_email`,
+> `server.base_url`, `server.cors_allowed_origins`, `auth.jwt_ttl`,
+> `auth.mfa_enabled`, `logger.format` and `logger.output` — **none of those keys
+> exist**, and that file lives in `phlix-shared`, not this repo.
+
+- **`HubSettingsRepository::ALLOWED_KEYS`** grew from 8 to 14 dotted keys.
+  Superseded by 0.5.0, which cut it to 3 keys that each have a cited runtime
+  consumer.
+- **`HubSettingsController`** now emits a per-key `meta` block in the GET
+  response, projected from the vendored `hub-settings.schema.json`
+  (`label`, `helpText`, `helpLinks`, `tier`, `group`, `enum`, `enumLabels`,
+  `optionHelp`, `minimum`, `maximum`, `default`, `secret`, `restart`). This
+  matches `phlix-server`'s `AdminSettingsController` field for field. The block
+  is empty in production until a `phlix-shared` release ships a populated
+  schema.
 
 ### Web UI
 - **Legacy Smarty UI retired — the `/app` Vue SPA is the ONLY hub web UI; `smarty/smarty` removed.**

@@ -99,25 +99,41 @@ $workerLogFile = __DIR__ . '/.logs/workerman.log';
 @mkdir(dirname($workerLogFile), 0775, true);
 Worker::$logFile = $workerLogFile;
 
-// Same rationale for the pid + status files. Workerman writes its master pid
-// (unconditionally, in Worker::runAll() → saveMasterPid(), which throws if the
-// write fails) and its status/statistics/connections files next to the start
-// file — i.e. into the install ROOT. Under the hardened unit that root is
-// read-only (only var/, .logs/, config/ are ReadWritePaths), so pin these into
-// var/ (a ReadWritePath and the service HOME) to keep the install root
-// read-only while the sandbox can still write them. Under systemd Type=simple
-// the pid file is only used by Workerman's own CLI stop/reload/status, not by
-// systemctl, so its location is otherwise immaterial.
-@mkdir(__DIR__ . '/var', 0775, true);
-Worker::$pidFile = __DIR__ . '/var/hub.pid';
-Worker::$statusFile = __DIR__ . '/var/hub.status';
-
 // -----------------------------------------------------------------------------
-// 3. Build the PSR-11 container from server.php + injected paths
+// 3. Load server config, then pin the pid/status files FROM IT
 // -----------------------------------------------------------------------------
 
 /** @var array<string, mixed> $serverConfig */
 $serverConfig = include $configDir . '/server.php';
+
+// Same rationale as the log file for the pid + status files. Workerman writes
+// its master pid (unconditionally, in Worker::runAll() → saveMasterPid(), which
+// throws if the write fails) and its status/statistics/connections files next to
+// the start file — i.e. into the install ROOT. Under the hardened unit that root
+// is read-only (only var/, .logs/, config/ are ReadWritePaths), so these live in
+// var/ (a ReadWritePath and the service HOME).
+//
+// ⚠️ SINGLE SOURCE OF TRUTH: the path comes from config/server.php's `pid_file`
+// — the SAME value the container hands to HubRestartController. When these two
+// were independent literals the admin restart endpoint read a file nobody ever
+// wrote and returned 500 `pid_file_not_found` on every deployed hub. Do not
+// re-inline a literal here.
+$hubPidFile = is_string($serverConfig['pid_file'] ?? null) && $serverConfig['pid_file'] !== ''
+    ? (string) $serverConfig['pid_file']
+    : __DIR__ . '/var/hub.pid';
+$hubStatusFile = is_string($serverConfig['status_file'] ?? null) && $serverConfig['status_file'] !== ''
+    ? (string) $serverConfig['status_file']
+    : __DIR__ . '/var/hub.status';
+
+@mkdir(dirname($hubPidFile), 0775, true);
+@mkdir(dirname($hubStatusFile), 0775, true);
+Worker::$pidFile = $hubPidFile;
+Worker::$statusFile = $hubStatusFile;
+
+// -----------------------------------------------------------------------------
+// 4. Build the PSR-11 container from server.php + injected paths
+// -----------------------------------------------------------------------------
+
 $serverConfig['db_config_path']     = $dbConfigPath;
 $serverConfig['logger_config_path'] = $loggerConfigPath;
 $serverConfig['auth_config_path']   = $authConfigPath;
@@ -130,7 +146,7 @@ $container = ContainerFactory::create($serverConfig);
 HubServicesProvider::setContainer($container);
 
 // -----------------------------------------------------------------------------
-// 4. Boot all workers (HTTP + server-relay + client-relay) and runAll()
+// 5. Boot all workers (HTTP + server-relay + client-relay) and runAll()
 // -----------------------------------------------------------------------------
 
 $app = new Application($container, $serverConfig);
