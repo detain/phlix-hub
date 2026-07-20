@@ -6,6 +6,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Hub Settings (Phase 6)
+- **`HubSettingsRepository`** extended with 12 new hub settings keys (`server.*`, `auth.*`, `logger.*`) sourced from `hub-settings.schema.json`.
+- **`HubSettingsController`** now emits a `meta` block in the GET response (schema, settings version, hub version).
+- **`hub-settings.schema.json`** populated with 12 hub-specific settings: `server.name`, `server.description`, `server.logo_url`, `server.contact_email`, `server.base_url`, `server.cors_allowed_origins`, `auth.jwt_ttl`, `auth.refresh_ttl`, `auth.mfa_enabled`, `logger.level`, `logger.format`, `logger.output`.
+
 ### Web UI
 - **Legacy Smarty UI retired — the `/app` Vue SPA is the ONLY hub web UI; `smarty/smarty` removed.**
   Every legacy server-rendered (Smarty) route now issues a **302 redirect** to its `/app` equivalent
