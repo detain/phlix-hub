@@ -302,6 +302,12 @@ class LibrarySharingHandler
             $expiresAt = isset($row['expires_at']) && is_numeric($row['expires_at'])
                 ? (int) $row['expires_at']
                 : null;
+            // `ls.created_at` is selected above and stored as UNIX seconds, same as
+            // `expires_at`; null when the column is absent/non-numeric so the UI
+            // renders a placeholder rather than a 1970 date.
+            $createdAt = isset($row['created_at']) && is_numeric($row['created_at'])
+                ? (int) $row['created_at']
+                : null;
 
             /** @var mixed $rawOwnerName */
             $rawOwnerName = $row['owner_name'] ?? null;
@@ -322,6 +328,7 @@ class LibrarySharingHandler
                 permissionLevel: $permissionLevel,
                 accessUrls: $hostnames,
                 expiresAt: $expiresAt,
+                createdAt: $createdAt,
             );
         }
         return $shares;

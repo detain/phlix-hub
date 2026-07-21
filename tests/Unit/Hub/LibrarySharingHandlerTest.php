@@ -297,7 +297,7 @@ final class LibrarySharingHandlerTest extends TestCase
                 'library_id' => 'lib-1',
                 'library_name' => 'My Movies',
                 'permission_level' => 'read',
-                'created_at' => time(),
+                'created_at' => 1700000123,
                 'expires_at' => null,
                 'owner_name' => 'Owner User',
                 'server_name' => 'My Server',
@@ -317,6 +317,37 @@ final class LibrarySharingHandlerTest extends TestCase
         self::assertSame('My Server', $result[0]->serverName);
         self::assertSame('lib-1', $result[0]->libraryId);
         self::assertSame('My Movies', $result[0]->libraryName);
+        // The SQL already SELECTs ls.created_at — carry it through to the DTO so the
+        // SPA's "Received" date is real data instead of a missing key.
+        self::assertSame(1700000123, $result[0]->createdAt);
+        self::assertSame(1700000123, $result[0]->toPayload()['created_at']);
+    }
+
+    public function testGetSharedWithMeLeavesCreatedAtNullWhenRowHasNoTimestamp(): void
+    {
+        $rows = [
+            [
+                'id' => 'share-1',
+                'owner_user_id' => 'owner-1',
+                'collaborator_user_id' => 'collab-1',
+                'server_id' => 'server-1',
+                'library_id' => 'lib-1',
+                'library_name' => 'My Movies',
+                'permission_level' => 'read',
+                'created_at' => null,
+                'expires_at' => null,
+                'owner_name' => 'Owner User',
+                'server_name' => 'My Server',
+                'hostname_candidates_json' => '[]',
+            ],
+        ];
+
+        $this->db->method('query')->willReturn($rows);
+
+        $result = $this->handler->getSharedWithMe('collab-1');
+
+        self::assertCount(1, $result);
+        self::assertNull($result[0]->createdAt);
     }
 
     public function testGetSharedWithMeEmpty(): void

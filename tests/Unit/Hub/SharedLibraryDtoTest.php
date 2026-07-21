@@ -67,6 +67,7 @@ final class SharedLibraryDtoTest extends TestCase
             permissionLevel: LibraryShare::PERMISSION_READ,
             accessUrls: ['https://server.example.com', 'https://192.168.1.100:32400'],
             expiresAt: 1700086400,
+            createdAt: 1699999999,
         );
 
         $payload = $dto->toPayload();
@@ -82,6 +83,31 @@ final class SharedLibraryDtoTest extends TestCase
         self::assertSame('read', $payload['permission_level']);
         self::assertCount(2, $payload['access_urls']);
         self::assertSame(1700086400, $payload['expires_at']);
+        // The SPA's "Received" column reads `created_at`; it must be on the wire as
+        // UNIX seconds (same encoding as `expires_at`), not omitted.
+        self::assertArrayHasKey('created_at', $payload);
+        self::assertSame(1699999999, $payload['created_at']);
+    }
+
+    public function testToPayloadEmitsNullCreatedAtWhenUnknown(): void
+    {
+        $dto = new SharedLibraryDto(
+            shareId: 'share-1',
+            ownerUserId: 'owner-1',
+            ownerName: 'Owner User',
+            serverId: 'server-1',
+            serverName: 'My Server',
+            libraryId: 'lib-1',
+            libraryName: 'My Movies',
+            libraryItemCount: 0,
+            permissionLevel: LibraryShare::PERMISSION_READ,
+            accessUrls: [],
+        );
+
+        $payload = $dto->toPayload();
+
+        self::assertArrayHasKey('created_at', $payload);
+        self::assertNull($payload['created_at']);
     }
 
     public function testConstructorSetsAllProperties(): void
@@ -98,6 +124,7 @@ final class SharedLibraryDtoTest extends TestCase
             permissionLevel: LibraryShare::PERMISSION_READWRITE,
             accessUrls: ['https://example.com'],
             expiresAt: null,
+            createdAt: 1700000000,
         );
 
         self::assertSame('share-1', $dto->shareId);
@@ -111,5 +138,6 @@ final class SharedLibraryDtoTest extends TestCase
         self::assertSame('readwrite', $dto->permissionLevel);
         self::assertSame(['https://example.com'], $dto->accessUrls);
         self::assertNull($dto->expiresAt);
+        self::assertSame(1700000000, $dto->createdAt);
     }
 }

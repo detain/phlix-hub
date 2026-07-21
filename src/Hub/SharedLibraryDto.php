@@ -32,6 +32,7 @@ final class SharedLibraryDto
      * @param string      $permissionLevel  Permission level (read or readwrite).
      * @param array<int, string> $accessUrls  URLs to access the library (direct + relay).
      * @param int|null    $expiresAt         Unix timestamp when share expires, or null.
+     * @param int|null    $createdAt         Unix timestamp when the share was created, or null.
      */
     public function __construct(
         public readonly string $shareId,
@@ -45,6 +46,7 @@ final class SharedLibraryDto
         public readonly string $permissionLevel,
         public readonly array $accessUrls,
         public readonly ?int $expiresAt = null,
+        public readonly ?int $createdAt = null,
     ) {
     }
 
@@ -74,6 +76,7 @@ final class SharedLibraryDto
             'library_item_count' => $this->libraryItemCount,
             'permission_level' => $this->permissionLevel,
             'access_urls' => $this->accessUrls,
+            'created_at' => $this->createdAt,
             'expires_at' => $this->expiresAt,
         ];
     }

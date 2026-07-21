@@ -177,6 +177,8 @@ final class LibraryShareControllerTest extends TestCase
                 libraryItemCount: 50,
                 permissionLevel: LibraryShare::PERMISSION_READ,
                 accessUrls: ['https://other.example.com'],
+                expiresAt: null,
+                createdAt: 1700000123,
             ),
         ];
 
@@ -191,6 +193,21 @@ final class LibraryShareControllerTest extends TestCase
         $response = $this->controller->listShares($request);
 
         self::assertSame(200, $response->statusCode);
+
+        // Pin the incoming wire contract the SPA's "Shared With Me" page consumes.
+        /** @var array{incoming: list<array<string, mixed>>} $body */
+        $body = json_decode((string) $response->body, true);
+        self::assertCount(1, $body['incoming']);
+        $share = $body['incoming'][0];
+        self::assertSame('share-2', $share['share_id']);
+        self::assertSame('Other User', $share['owner_name']);
+        self::assertSame('read', $share['permission_level']);
+        self::assertSame(1700000123, $share['created_at']);
+        self::assertNull($share['expires_at']);
+        // Keys the SPA must NOT expect — there is no status field because
+        // getSharedWithMe() never returns a revoked share.
+        self::assertArrayNotHasKey('status', $share);
+        self::assertArrayNotHasKey('owner_email', $share);
     }
 
     public function testListSharesReturns401WhenNotAuthenticated(): void
