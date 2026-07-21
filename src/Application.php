@@ -1027,8 +1027,21 @@ final class Application
 
         // JSON API for shares.
         $this->router->group('/api/v1/me/shares', static function (Router $r) use ($shareController): void {
-            $r->post('/', static fn (Request $req): Response => $shareController->createShare($req));
-            $r->get('/', static fn (Request $req): Response => $shareController->listShares($req));
+            // Registered at BOTH '' and '/'. Router::addRoute builds an anchored
+            // `#^{prefix}{path}$#` and Request does no trailing-slash
+            // normalisation, so '/' alone serves ONLY `/api/v1/me/shares/` and the
+            // slashless form 404s. That was a live production bug:
+            // SharedWithMePage.vue called the slashless form and every load 404'd,
+            // while its sibling ManageSharesPage.vue happened to call the slashed
+            // one and worked. Registering both is additive — no existing caller
+            // changes behaviour — and matches the `/api/v1/me/requests` group,
+            // which registers '' and has never had this problem.
+            $create = static fn (Request $req): Response => $shareController->createShare($req);
+            $list   = static fn (Request $req): Response => $shareController->listShares($req);
+            $r->post('', $create);
+            $r->post('/', $create);
+            $r->get('', $list);
+            $r->get('/', $list);
             $r->delete('/{id}', static function (Request $req, array $params) use ($shareController): Response {
                 /** @var array<string, string> $typedParams */
                 $typedParams = $params;
@@ -1057,8 +1070,15 @@ final class Application
         // JSON API for invite links (protected).
         $authMiddleware = $this->resolveAuthMiddleware();
         $this->router->group('/api/v1/me/invite-links', static function (Router $r) use ($inviteController): void {
-            $r->post('/', static fn (Request $req): Response => $inviteController->createInviteLink($req));
-            $r->get('/', static fn (Request $req): Response => $inviteController->listInviteLinks($req));
+            // Both '' and '/' — see the note on the /api/v1/me/shares group.
+            // InviteLinksPage.vue calls the slashless form for BOTH list and
+            // create, so the page could never load and New Invite always failed.
+            $create = static fn (Request $req): Response => $inviteController->createInviteLink($req);
+            $list   = static fn (Request $req): Response => $inviteController->listInviteLinks($req);
+            $r->post('', $create);
+            $r->post('/', $create);
+            $r->get('', $list);
+            $r->get('/', $list);
             $r->delete('/{id}', static function (Request $req, array $params) use ($inviteController): Response {
                 /** @var array<string, string> $typedParams */
                 $typedParams = $params;
