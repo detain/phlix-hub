@@ -59,6 +59,16 @@ final class ServerReaper
     public const DEFAULT_INTERVAL_SECONDS = 60;
 
     /**
+     * Maximum heartbeat rows purged per {@see sweepHeartbeats()} call.
+     *
+     * Bounds the lock footprint of a single sweep; the leftover backlog (if
+     * any) is caught by the next tick.
+     *
+     * @var int
+     */
+    private const HEARTBEAT_SWEEP_BATCH_SIZE = 1000;
+
+    /**
      * @param \Workerman\MySQL\Connection $db                       Database connection.
      * @param StructuredLogger             $logger                  Structured logger.
      * @param int                          $intervalSeconds         Interval between scans.
@@ -154,47 +164,88 @@ final class ServerReaper
      * {@see HeartbeatHandler::getHeartbeatHistory()}), so aggressive retention
      * is safe.
      *
-     * NOTE: The existing index `ix_server_heartbeats_server_time (server_id,
-     * received_at)` has `server_id` as its leading column, so this plain
-     * `WHERE received_at < ...` filter cannot use it as a range scan and
-     * falls back to a full table scan.  Given the table is bounded (≤20 rows
-     * per server × servers × 7 days retention), this is acceptable.  If
-     * retention grows or the table becomes large, consider adding a partial
-     * index on `received_at` alone, or rewriting as:
-     *   DELETE FROM server_heartbeats WHERE id IN (SELECT id FROM ...)
-     *   using a server-scoped subquery that can hit the composite index.
+     * Two-phase keyed delete (deadlock avoidance):
+     *
+     *  1. A plain, non-locking consistent SELECT picks the primary keys of up
+     *     to {@see HEARTBEAT_SWEEP_BATCH_SIZE} expired rows, ordered by `id`.
+     *     This read takes no row/gap locks at all. The index
+     *     `idx_server_heartbeats_received_at` (migration 034) keeps it a tight
+     *     range scan.
+     *  2. `DELETE ... WHERE id IN (:id_0, …)` removes exactly those rows by
+     *     PRIMARY KEY. Locking only the specific PK rows (in PK order) avoids
+     *     the next-key/gap locks that a single `DELETE ... WHERE received_at <
+     *     :cutoff LIMIT 1000` takes across the whole expired range — which is
+     *     what deadlocked against concurrent heartbeat INSERTs (each inserting
+     *     a fresh row + touching the same `received_at` index) and the
+     *     `servers` UPDATE in {@see markStaleServersOffline()}.
+     *
+     * Retention semantics are unchanged: at most one batch of
+     * {@see HEARTBEAT_SWEEP_BATCH_SIZE} rows older than the cutoff is deleted
+     * per call; any leftover backlog is drained by the next tick. The bounded
+     * deadlock-retry loop is retained as a backstop.
      *
      * @return int Number of rows deleted.
      */
     public function sweepHeartbeats(): int
     {
         $maxRetries = 3;
-        $totalDeleted = 0;
 
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
             try {
+                // Phase 1: non-locking read of the expired PKs, PK-ordered so
+                // phase 2 acquires row locks in a deterministic order.
+                /** @var mixed $rows */
+                $rows = $this->db->query(
+                    'SELECT id FROM server_heartbeats
+                     WHERE received_at < NOW() - INTERVAL :retention DAY
+                     ORDER BY id
+                     LIMIT ' . self::HEARTBEAT_SWEEP_BATCH_SIZE,
+                    ['retention' => $this->heartbeatRetentionDays],
+                );
+
+                $ids = [];
+                if (is_array($rows)) {
+                    foreach ($rows as $row) {
+                        if (!is_array($row)) {
+                            continue;
+                        }
+                        $rawId = $row['id'] ?? null;
+                        if (is_string($rawId) && $rawId !== '') {
+                            $ids[] = $rawId;
+                        }
+                    }
+                }
+
+                // Nothing expired — no lock-taking DELETE needed.
+                if ($ids === []) {
+                    return 0;
+                }
+
+                // Phase 2: delete exactly those rows by PRIMARY KEY. Colon-free
+                // named placeholders (workerman/mysql prepends `:`).
+                $placeholders = [];
+                $params = [];
+                foreach ($ids as $i => $id) {
+                    $key = 'id_' . $i;
+                    $placeholders[] = ':' . $key;
+                    $params[$key] = $id;
+                }
+
                 /** @var mixed $result */
                 $result = $this->db->query(
-                    'DELETE FROM server_heartbeats WHERE received_at < NOW() - INTERVAL :retention DAY LIMIT 1000',
-                    ['retention' => $this->heartbeatRetentionDays]
+                    'DELETE FROM server_heartbeats WHERE id IN (' . implode(', ', $placeholders) . ')',
+                    $params,
                 );
                 $count = is_numeric($result) ? (int) $result : 0;
-                $totalDeleted += $count;
 
-                if ($count === 0) {
-                    break;
+                if ($count > 0) {
+                    $this->logger->info('ServerReaper: heartbeat sweep complete', [
+                        'deleted' => $count,
+                        'retention_days' => $this->heartbeatRetentionDays,
+                    ]);
                 }
 
-                $this->logger->info('ServerReaper: heartbeat sweep complete', [
-                    'deleted' => $count,
-                    'retention_days' => $this->heartbeatRetentionDays,
-                ]);
-
-                if ($count < 1000) {
-                    break;
-                }
-
-                return $totalDeleted;
+                return $count;
             } catch (\PDOException $e) {
                 if ($attempt === $maxRetries || strpos($e->getMessage(), 'Deadlock') === false) {
                     throw $e;
@@ -208,7 +259,7 @@ final class ServerReaper
             }
         }
 
-        return $totalDeleted;
+        return 0;
     }
 
     /**
