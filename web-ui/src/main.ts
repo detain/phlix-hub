@@ -19,8 +19,8 @@ const app = createPhlixApp({
     menu: [
         { id: 'my-servers', label: 'My Servers', to: '/app/servers' },
         { id: 'search', label: 'Search', to: '/app/search' },
-        { id: 'federation', label: 'Federation', to: '/app/federation' },
-        { id: 'federation-shares', label: 'Federation Shares', to: '/app/federation/shares' },
+        { id: 'federation', label: 'Federation', to: '/app/federation', requiresAdmin: true },
+        { id: 'federation-shares', label: 'Federation Shares', to: '/app/federation/shares', requiresAdmin: true },
         { id: 'manage-shares', label: 'Shares', to: '/app/shares' },
         { id: 'shared-with-me', label: 'Shared With Me', to: '/app/shared-with-me' },
         { id: 'invite-links', label: 'Invite Links', to: '/app/invite-links' },
