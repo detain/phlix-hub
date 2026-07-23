@@ -36,7 +36,7 @@ class RelaySessionManager
      * stored default agree, exactly as {@see self::getUserMaxConcurrentStreams()}
      * mirrors the migration-038 column default of 0.
      */
-    public const DEFAULT_THROTTLE_BPS = 3000000;
+    public const int DEFAULT_THROTTLE_BPS = 3000000;
 
     /**
      * In-memory accumulator: sessionId => bytes to add to bytes_out.
