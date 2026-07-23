@@ -31,10 +31,11 @@ class RelaySessionManager
     /**
      * Default per-user relay throttle in bits/sec (3 Mbps) — the value a user
      * carries until an admin sets one, and the value read back when the user has
-     * no rollup row for the current period (S41, migration 042). 0 = Unlimited.
-     * Mirrors the migration-042 column DEFAULT so the "no row" read and the
-     * stored default agree, exactly as {@see self::getUserMaxConcurrentStreams()}
-     * mirrors the migration-038 column default of 0.
+     * no row in the durable per-user settings store (S41 stored this on the
+     * per-period usage rollup; the S42 review moved it to the durable
+     * `relay_user_settings` table, migration 043). 0 = Unlimited. Mirrors the
+     * migration-043 column DEFAULT so the "no row" read and the stored default
+     * agree.
      */
     public const int DEFAULT_THROTTLE_BPS = 3000000;
 
@@ -725,17 +726,18 @@ class RelaySessionManager
 
     /**
      * Set or update a user's per-user relay THROTTLE (sustained rate cap in
-     * bits/sec) for the current period (S41, updates.md #50).
+     * bits/sec) — a DURABLE per-user admin setting (S41, updates.md #50).
      *
-     * Mirrors {@see self::setUserQuota()}: an INSERT ... ON DUPLICATE KEY UPDATE
-     * upsert keyed on (user_id, period_start) that creates the current-period
-     * rollup row on first write and updates the throttle in place thereafter.
-     * Only `throttle_bps` is touched — the monthly byte-cap quota columns and the
-     * concurrent-stream cap keep whatever value they already hold (untouched on
-     * UPDATE, their column DEFAULTs on a fresh INSERT). 0 = Unlimited.
+     * Persisted in the dedicated {@see relay_user_settings} store (migration 043)
+     * as an INSERT ... ON DUPLICATE KEY UPDATE upsert keyed on `user_id` ALONE —
+     * NOT period-scoped. An admin-configured setting must survive every calendar-
+     * month rollover: the S41 original stored it on the per-period usage rollup
+     * (`relay_user_quotas`, PK `(user_id, period_start)`), so on the 1st of each
+     * month the value was absent for the new period and the read reverted to the
+     * 3 Mbps default. Storing it keyed by user id alone fixes that.
      *
-     * NOT enforced here: S41 only persists the value. Rate limiting lands in
-     * S42 (WS relay) / S43 (HTTP proxy).
+     * The monthly BYTE-CAP quota and the concurrent-stream cap stay period-scoped
+     * on `relay_user_quotas` and are untouched by this method. 0 = Unlimited.
      *
      * @param string $userId      Hub user UUID.
      * @param int    $throttleBps Sustained rate cap in bits/sec (0 = unlimited).
@@ -744,31 +746,28 @@ class RelaySessionManager
      */
     public function setUserThrottle(string $userId, int $throttleBps): void
     {
-        $periodStart = $this->currentPeriodStart();
-
         $this->db->query(
-            'INSERT INTO relay_user_quotas (user_id, period_start, bytes_in, bytes_out, throttle_bps)
-             VALUES (:user_id, :period_start, 0, 0, :throttle_bps)
+            'INSERT INTO relay_user_settings (user_id, throttle_bps)
+             VALUES (:user_id, :throttle_bps)
              ON DUPLICATE KEY UPDATE
                  throttle_bps = VALUES(throttle_bps)',
             [
                 'user_id' => $userId,
-                'period_start' => $periodStart,
                 'throttle_bps' => $throttleBps,
             ],
         );
     }
 
     /**
-     * Read a user's operator-configured relay throttle (bits/sec) for the current
-     * period (S41, updates.md #50).
+     * Read a user's operator-configured relay throttle (bits/sec) — a DURABLE
+     * per-user admin setting (S41, updates.md #50).
      *
-     * Stored on the {@see relay_user_quotas} rollup row (migration 042,
-     * `throttle_bps`). Mirrors {@see self::getUserMaxConcurrentStreams()} except
-     * the "no row for the period" (and non-numeric) fallback is the migration-042
-     * column DEFAULT of {@see self::DEFAULT_THROTTLE_BPS} (3 Mbps) rather than 0 —
-     * an unconfigured user carries the 3 Mbps default, not "unlimited". A stored
-     * value of 0 means Unlimited.
+     * Read from the dedicated {@see relay_user_settings} store (migration 043),
+     * keyed by `user_id` ALONE with NO period scoping, so the value is stable
+     * across calendar-month rollovers. The "no row" (and non-numeric) fallback is
+     * {@see self::DEFAULT_THROTTLE_BPS} (3 Mbps) rather than 0 — an unconfigured
+     * user carries the 3 Mbps default, not "unlimited". A stored value of 0 means
+     * Unlimited and is returned verbatim.
      *
      * @param string $userId Hub user UUID.
      *
@@ -776,16 +775,13 @@ class RelaySessionManager
      */
     public function getUserThrottleBps(string $userId): int
     {
-        $periodStart = $this->currentPeriodStart();
-
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT throttle_bps FROM relay_user_quotas
-             WHERE user_id = :user_id AND period_start = :period_start
+            'SELECT throttle_bps FROM relay_user_settings
+             WHERE user_id = :user_id
              LIMIT 1',
             [
                 'user_id' => $userId,
-                'period_start' => $periodStart,
             ],
         );
 

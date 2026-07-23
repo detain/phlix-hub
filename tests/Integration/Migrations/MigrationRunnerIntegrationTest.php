@@ -275,6 +275,116 @@ final class MigrationRunnerIntegrationTest extends TestCase
         self::assertIsString($row['checksum'] ?? null, 'NULL checksum must be backfilled to a value');
     }
 
+    /**
+     * S42 review fix (043_relay_user_settings): the per-user relay THROTTLE moves
+     * off the period-scoped `relay_user_quotas` rollup into the durable
+     * `relay_user_settings` store, and the data migration preserves each user's
+     * most-recent NON-DEFAULT throttle so no admin setting is lost — proving the
+     * "throttle silently reverts to 3 Mbps on the 1st of the month" bug is fixed.
+     */
+    public function testThrottleSettingDataMigratesFromQuotasToDurableStore(): void
+    {
+        $this->runner->run();
+
+        self::assertTrue(
+            $this->tableExists('relay_user_settings'),
+            'relay_user_settings must exist after migration 043',
+        );
+
+        // Seed a realistic pre-existing state on the OLD period-scoped rollup:
+        //  u-A: admin set 50 Mbps in an old month, then a NEW-month default row
+        //       was auto-created (the exact monthly-revert scenario) — 50 Mbps
+        //       must survive because we take the most-recent NON-default value.
+        //  u-B: admin set Unlimited (0) — must survive as 0, not the 3 Mbps default.
+        //  u-C: only ever default rows — nothing to preserve (no durable row).
+        $this->insertUser('u-A', 'alice', 'a@example.com');
+        $this->insertUser('u-B', 'bob', 'b@example.com');
+        $this->insertUser('u-C', 'carol', 'c@example.com');
+
+        $this->seedQuotaThrottle('u-A', '2026-05-01', 50000000);
+        $this->seedQuotaThrottle('u-A', '2026-06-01', 3000000);
+        $this->seedQuotaThrottle('u-B', '2026-06-01', 0);
+        $this->seedQuotaThrottle('u-C', '2026-06-01', 3000000);
+
+        // The initial run() applied the data migration when quotas was empty (a
+        // no-op). Re-run ONLY the data-migration statement from the shipped 043
+        // file against the now-seeded rollup — this exercises the actual SQL.
+        $this->db->query($this->dataMigrationStatement());
+
+        self::assertSame(
+            50000000,
+            $this->settingsThrottle('u-A'),
+            'admin-set high cap must survive a calendar-month rollover',
+        );
+        self::assertSame(
+            0,
+            $this->settingsThrottle('u-B'),
+            'Unlimited (0) must be preserved, not coerced to the 3 Mbps default',
+        );
+        self::assertNull(
+            $this->settingsThrottle('u-C'),
+            'a default-only user needs no durable row (the read falls back to the default)',
+        );
+    }
+
+    private function seedQuotaThrottle(string $userId, string $periodStart, int $throttleBps): void
+    {
+        $this->db->query(
+            'INSERT INTO relay_user_quotas (user_id, period_start, throttle_bps)'
+            . ' VALUES (:user_id, :period_start, :throttle_bps)',
+            ['user_id' => $userId, 'period_start' => $periodStart, 'throttle_bps' => $throttleBps],
+        );
+    }
+
+    /**
+     * Read a user's throttle from the durable store, or null when no row exists.
+     */
+    private function settingsThrottle(string $userId): ?int
+    {
+        $rows = $this->db->query(
+            'SELECT throttle_bps FROM relay_user_settings WHERE user_id = :user_id',
+            ['user_id' => $userId],
+        );
+        if (!is_array($rows) || $rows === []) {
+            return null;
+        }
+        $row = $rows[0];
+        if (!is_array($row) || !isset($row['throttle_bps']) || !is_numeric($row['throttle_bps'])) {
+            return null;
+        }
+        return (int) $row['throttle_bps'];
+    }
+
+    /**
+     * Extract the data-migration `INSERT INTO relay_user_settings ... SELECT ...`
+     * statement from the shipped 043 file, so the test runs the real SQL rather
+     * than a hand-copied duplicate that could drift.
+     */
+    private function dataMigrationStatement(): string
+    {
+        $sql = file_get_contents(dirname(__DIR__, 3) . '/migrations/043_relay_user_settings.sql');
+        self::assertNotFalse($sql, 'migration 043 must be readable');
+
+        $lines = preg_split('/\r\n|\r|\n/', $sql) ?: [];
+        $kept = [];
+        foreach ($lines as $line) {
+            if (preg_match('/^\s*--/', $line) === 1) {
+                continue; // drop full-line comments
+            }
+            $kept[] = $line;
+        }
+        $body = implode("\n", $kept);
+
+        foreach (explode(';', $body) as $statement) {
+            $trimmed = trim($statement);
+            if (str_contains($trimmed, 'INSERT INTO relay_user_settings')) {
+                return $trimmed;
+            }
+        }
+
+        self::fail('migration 043 must contain an INSERT INTO relay_user_settings data-migration statement');
+    }
+
     private function insertUser(string $id, string $username, string $email): void
     {
         $this->db->query(

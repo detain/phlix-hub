@@ -62,6 +62,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     `ClientMountController`), fail-OPEN: a lookup error mounts the connection
     Unlimited rather than refusing/delaying the mount.
 
+### Fixed
+
+- **Per-user relay THROTTLE reverted to 3 Mbps on the 1st of every month (S42
+  review, MEDIUM; S41-rooted).** The admin-configured throttle was stored on the
+  per-calendar-month usage rollup `relay_user_quotas` (PK `(user_id,
+  period_start)`) and read for the CURRENT month only. On the 1st of each month no
+  row exists yet for the new period, so `getUserThrottleBps()` fell back to the
+  3 Mbps default — silently reverting users set to Unlimited (`0`) or a high cap.
+  S42's live enforcement turned that latent revert into real monthly throttling.
+  A per-user admin SETTING must be durable, not usage-period-scoped.
+  - **New migration `043_relay_user_settings.sql`** adds a dedicated durable store
+    `relay_user_settings` (`user_id CHAR(36)` PK, `throttle_bps BIGINT UNSIGNED
+    NOT NULL DEFAULT 3000000`, `created_at`/`updated_at`) keyed by `user_id`
+    ALONE — no period dimension. It **data-migrates** each user's most-recent
+    NON-default `throttle_bps` out of `relay_user_quotas` so no existing admin
+    setting is lost (a stored `0` = Unlimited is non-default and is carried
+    across). The `relay_user_quotas.throttle_bps` column is left in place but is
+    no longer read for throttle.
+  - **`RelaySessionManager::setUserThrottle()` / `getUserThrottleBps()`** now
+    upsert/read the durable `relay_user_settings` store keyed by `user_id` with NO
+    period scoping, so the value is stable across calendar-month rollovers. The
+    monthly BYTE-CAP quota and the concurrent-stream cap stay period-scoped on
+    `relay_user_quotas` and are untouched. The admin endpoint
+    (`PUT /api/v1/admin/users/{id}/throttle`) round-trips through these unchanged.
+
 ## [0.5.0] - 2026-07-20
 
 Remediation of the Phase 6 / Phase 10 settings work, which shipped a silent

@@ -64,6 +64,7 @@ final class MigrationFileTest extends TestCase
             '040_login_rate_limit.sql',
             '041_migrations_checksum.sql',
             '042_relay_user_throttle.sql',
+            '043_relay_user_settings.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
