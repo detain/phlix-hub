@@ -295,6 +295,176 @@ final class UserQuotaControllerTest extends TestCase
         self::assertSame(200, $response->statusCode);
     }
 
+    // ---- setUserThrottle (admin or 403) — S41 -----------------------------
+
+    public function testSetUserThrottleReturns401WhenUnauthenticated(): void
+    {
+        $response = $this->controller->setUserThrottle(
+            $this->request('PUT', '/api/v1/admin/users/u-target/throttle'),
+            ['id' => 'u-target'],
+        );
+
+        self::assertSame(401, $response->statusCode);
+        self::assertStringContainsString('auth.required', $response->body);
+    }
+
+    public function testSetUserThrottleReturns403WhenCallerNotAdmin(): void
+    {
+        $this->users->method('findAdminById')->willReturn(null);
+        $this->audit->expects(self::once())->method('logPermissionDenied');
+        $this->sessions->expects(self::never())->method('setUserThrottle');
+
+        $response = $this->controller->setUserThrottle(
+            $this->request('PUT', '/api/v1/admin/users/u-target/throttle', userId: 'u-nonadmin', body: [
+                'throttle_bps' => 5000000,
+            ]),
+            ['id' => 'u-target'],
+        );
+
+        self::assertSame(403, $response->statusCode);
+        self::assertStringContainsString('admin_required', $response->body);
+    }
+
+    public function testSetUserThrottleReturns400WhenIdMissing(): void
+    {
+        $this->users->method('findAdminById')->willReturn(['id' => 'admin', 'is_admin' => 1]);
+
+        $response = $this->controller->setUserThrottle(
+            $this->request('PUT', '/api/v1/admin/users//throttle', userId: 'admin', body: [
+                'throttle_bps' => 5000000,
+            ]),
+            ['id' => ''],
+        );
+
+        self::assertSame(400, $response->statusCode);
+        self::assertStringContainsString('missing_user_id', $response->body);
+    }
+
+    /**
+     * @dataProvider invalidThrottleBodies
+     *
+     * @param array<string, mixed> $body
+     */
+    public function testSetUserThrottleReturns400OnInvalidBody(array $body): void
+    {
+        $this->users->method('findAdminById')->willReturn(['id' => 'admin', 'is_admin' => 1]);
+        $this->sessions->expects(self::never())->method('setUserThrottle');
+
+        $response = $this->controller->setUserThrottle(
+            $this->request('PUT', '/api/v1/admin/users/u-target/throttle', userId: 'admin', body: $body),
+            ['id' => 'u-target'],
+        );
+
+        self::assertSame(400, $response->statusCode);
+        self::assertStringContainsString('invalid_throttle', $response->body);
+    }
+
+    /**
+     * Values NOT in the fixed allow-list {0,1,3,5,10,20,50 Mbps} must be rejected.
+     *
+     * @return array<string, array{0: array<string, mixed>}>
+     */
+    public static function invalidThrottleBodies(): array
+    {
+        return [
+            'missing throttle_bps' => [[]],
+            'negative' => [['throttle_bps' => -1]],
+            'non-integer float' => [['throttle_bps' => 3000000.5]],
+            'non-numeric string' => [['throttle_bps' => 'fast']],
+            'off-list value (2 Mbps)' => [['throttle_bps' => 2000000]],
+            'off-list value (100 Mbps)' => [['throttle_bps' => 100000000]],
+            'off-list value (1 bps)' => [['throttle_bps' => 1]],
+        ];
+    }
+
+    /**
+     * @dataProvider validThrottleLevels
+     */
+    public function testSetUserThrottleAcceptsEachAllowedLevelAndAudits(int $level): void
+    {
+        $this->users->method('findAdminById')->willReturn(['id' => 'admin', 'is_admin' => 1]);
+        $this->sessions->expects(self::once())->method('setUserThrottle')->with('u-target', $level);
+        $this->audit->expects(self::once())
+            ->method('logAdminAction')
+            ->with('admin', 'user.throttle.set', 'u-target', ['throttle_bps' => $level]);
+        // Read-back for the 200 response body — throttle_bps is surfaced.
+        $this->sessions->method('getUserBandwidth')->willReturn(null);
+        $this->sessions->method('getUserMaxConcurrentStreams')->willReturn(0);
+        $this->sessions->method('getUserThrottleBps')->willReturn($level);
+
+        $response = $this->controller->setUserThrottle(
+            $this->request('PUT', '/api/v1/admin/users/u-target/throttle', userId: 'admin', body: [
+                'throttle_bps' => $level,
+            ]),
+            ['id' => 'u-target'],
+        );
+
+        self::assertSame(200, $response->statusCode);
+        $payload = $this->decode($response->body);
+        self::assertSame($level, $payload['throttle_bps']);
+    }
+
+    /**
+     * The full allowed dropdown set: 0 (Unlimited) + 1/3/5/10/20/50 Mbps.
+     *
+     * @return array<string, array{0: int}>
+     */
+    public static function validThrottleLevels(): array
+    {
+        return [
+            'unlimited' => [0],
+            '1 Mbps' => [1000000],
+            '3 Mbps' => [3000000],
+            '5 Mbps' => [5000000],
+            '10 Mbps' => [10000000],
+            '20 Mbps' => [20000000],
+            '50 Mbps' => [50000000],
+        ];
+    }
+
+    public function testSetUserThrottleAcceptsDigitStringLevel(): void
+    {
+        // Some clients send JSON numbers as strings; a digit-only string that maps
+        // to an allowed level is accepted (mirrors the quota parser's narrowing).
+        $this->users->method('findAdminById')->willReturn(['id' => 'admin', 'is_admin' => 1]);
+        $this->sessions->expects(self::once())->method('setUserThrottle')->with('u-target', 10000000);
+        $this->sessions->method('getUserBandwidth')->willReturn(null);
+        $this->sessions->method('getUserMaxConcurrentStreams')->willReturn(0);
+        $this->sessions->method('getUserThrottleBps')->willReturn(10000000);
+
+        $response = $this->controller->setUserThrottle(
+            $this->request('PUT', '/api/v1/admin/users/u-target/throttle', userId: 'admin', body: [
+                'throttle_bps' => '10000000',
+            ]),
+            ['id' => 'u-target'],
+        );
+
+        self::assertSame(200, $response->statusCode);
+    }
+
+    public function testThrottleValueIsSurfacedOnBandwidthGetPayload(): void
+    {
+        // The admin GET user-detail payload exposes the current throttle_bps so
+        // the UI can display it — round-trips the read path (S41).
+        $this->users->method('findAdminById')->willReturn(['id' => 'admin', 'is_admin' => 1]);
+        $this->sessions->method('getUserBandwidth')->willReturn(null);
+        $this->sessions->method('getUserMaxConcurrentStreams')->willReturn(0);
+        $this->sessions->expects(self::once())->method('getUserThrottleBps')
+            ->with('u-target')->willReturn(20000000);
+
+        $response = $this->controller->viewUserBandwidth(
+            $this->request('GET', '/api/v1/admin/users/u-target/bandwidth', userId: 'admin'),
+            ['id' => 'u-target'],
+        );
+
+        self::assertSame(200, $response->statusCode);
+        $payload = $this->decode($response->body);
+        self::assertSame(20000000, $payload['throttle_bps']);
+        // Setting/reading throttle must NOT disturb the monthly byte-cap quota.
+        self::assertSame(0, $payload['quota_bytes_in']);
+        self::assertSame(0, $payload['quota_bytes_out']);
+    }
+
     // ---- helpers ----------------------------------------------------------
 
     /**

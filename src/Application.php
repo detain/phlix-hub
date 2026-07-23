@@ -631,8 +631,10 @@ final class Application
      * OWN usage). Admin surface under `/api/v1/admin/users/{id}/...` gated by
      * {@see AdminMiddleware} in addition to the controller's own requireAdmin()
      * so a non-admin can neither set another user's caps nor read another
-     * user's usage (403). These are hub-local admin/self endpoints and are NOT
-     * exposed over the relay proxy allowlist.
+     * user's usage (403). This covers both the monthly byte-cap quota
+     * (`PUT …/quota`) and the per-user relay throttle (`PUT …/throttle`, S41).
+     * These are hub-local admin/self endpoints and are NOT exposed over the
+     * relay proxy allowlist.
      */
     private function registerUserQuotaRoutes(): void
     {
@@ -656,6 +658,11 @@ final class Application
                 /** @var array<string, string> $typedParams */
                 $typedParams = $params;
                 return $controller->setUserQuota($req, $typedParams);
+            });
+            $r->put('/{id}/throttle', static function (Request $req, array $params) use ($controller): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $controller->setUserThrottle($req, $typedParams);
             });
         }, [$authMiddleware, $adminMiddleware]);
     }
