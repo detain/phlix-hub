@@ -65,6 +65,61 @@ final class ClientConnectionTest extends TestCase
         $this->assertSame('', $client->sessionId);
     }
 
+    public function testDefaultsToUnlimitedWithNoThrottleBucket(): void
+    {
+        // S42: no throttle argument → Unlimited (0), so no bucket is built and
+        // the send path bypasses throttling entirely (no timer overhead).
+        $client = new ClientConnection(
+            $this->clientWs,
+            'server-123',
+            'client-456',
+            $this->logger,
+        );
+
+        $this->assertSame(0, $client->throttleBps);
+        $this->assertFalse($client->isThrottled());
+        $this->assertNull($client->throttleBucket);
+        $this->assertNull($client->throttleDrainTimerId);
+    }
+
+    public function testZeroThrottleIsUnlimitedAndNeverThrottles(): void
+    {
+        // Explicit 0 = Unlimited (S41 semantics) — no bucket, isThrottled false.
+        $client = new ClientConnection(
+            $this->clientWs,
+            'server-123',
+            'client-456',
+            $this->logger,
+            '',
+            0,
+        );
+
+        $this->assertFalse($client->isThrottled());
+        $this->assertNull($client->throttleBucket);
+    }
+
+    public function testThrottledConnectionBuildsBucketSizedFromBps(): void
+    {
+        // 8 Mbps → 1,000,000 bytes/sec sustained rate; capacity = rate × 1 s burst.
+        $client = new ClientConnection(
+            $this->clientWs,
+            'server-123',
+            'client-456',
+            $this->logger,
+            '',
+            8_000_000,
+        );
+
+        $this->assertSame(8_000_000, $client->throttleBps);
+        $this->assertTrue($client->isThrottled());
+        $this->assertNotNull($client->throttleBucket);
+        $this->assertSame(1_000_000.0, $client->throttleBucket->ratePerSecond());
+        $this->assertSame(
+            1_000_000.0 * ClientConnection::THROTTLE_BURST_SECONDS,
+            $client->throttleBucket->capacity(),
+        );
+    }
+
     public function testOnMessageUpdatesLastFrameAtTimestamp(): void
     {
         $client = new ClientConnection(

@@ -403,7 +403,9 @@ final class ClientRelayWorker
             // the connection itself if no active tunnel exists (server_offline);
             // the metrics row is then left for onClose's final touch + the flush
             // TTL to reap (mirrors RelayWorker / the server's WS close hook).
-            $controller->onWebSocketConnect($connection, $request, $serverId);
+            // $userId (S42) is forwarded so the mounted connection enforces this
+            // user's per-user relay throttle.
+            $controller->onWebSocketConnect($connection, $request, $serverId, $userId);
         } catch (Throwable $e) {
             $logger->error('Relay: client WS connect error', [
                 'server_id' => $serverId,

@@ -49,6 +49,12 @@ interface TunnelManagerInterface
      * @param TcpConnection $clientWs Workerman connection to the client.
      * @param string      $clientId Client UUID assigned by the hub.
      * @param string      $sessionId Optional relay session ID for this client.
+     * @param string|null $userId   Authenticated owning-user UUID (S42, updates.md #50).
+     *                              When provided, the user's per-user relay throttle
+     *                              (`throttle_bps`) is resolved and attached to the
+     *                              created connection so {@see Tunnel::sendToClient()}
+     *                              enforces it. Null (or unresolvable) mounts the
+     *                              connection Unlimited.
      *
      * @return ClientConnection|null The created ClientConnection, or null if tunnel not found.
      */
@@ -57,6 +63,7 @@ interface TunnelManagerInterface
         TcpConnection $clientWs,
         string $clientId,
         string $sessionId = '',
+        ?string $userId = null,
     ): ?ClientConnection;
 
     /**

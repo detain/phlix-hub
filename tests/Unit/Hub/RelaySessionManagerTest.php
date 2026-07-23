@@ -789,9 +789,9 @@ final class RelaySessionManagerTest extends TestCase
         self::assertSame(0, $manager2->getUserMaxConcurrentStreams('user-none'));
     }
 
-    // ---- per-user throttle (S41) ------------------------------------------
+    // ---- per-user throttle (S41 setting; S42-review durable store) ---------
 
-    public function testSetUserThrottleUpsertsOnlyTheThrottleColumn(): void
+    public function testSetUserThrottleUpsertsIntoDurablePerUserStore(): void
     {
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
@@ -808,17 +808,23 @@ final class RelaySessionManagerTest extends TestCase
         $manager = new RelaySessionManager($db, $logger);
         $manager->setUserThrottle('user-t', 5000000);
 
-        self::assertStringContainsString('INSERT INTO relay_user_quotas', $capturedSql);
+        // Durable per-user settings store, keyed by user_id ALONE — NOT the
+        // period-scoped relay_user_quotas rollup.
+        self::assertStringContainsString('INSERT INTO relay_user_settings', $capturedSql);
         self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
         self::assertStringContainsString('throttle_bps = VALUES(throttle_bps)', $capturedSql);
+        // The throttle is a durable admin setting: it must NOT be period-scoped.
+        self::assertStringNotContainsString('period_start', $capturedSql);
+        self::assertStringNotContainsString('relay_user_quotas', $capturedSql);
         // Must NOT disturb the monthly byte-cap quota columns or the stream cap.
         self::assertStringNotContainsString('quota_bytes_in = VALUES', $capturedSql);
         self::assertStringNotContainsString('quota_bytes_out = VALUES', $capturedSql);
         self::assertStringNotContainsString('max_concurrent_streams = VALUES', $capturedSql);
 
         self::assertSame('user-t', $capturedParams['user_id']);
-        self::assertSame(date('Y-m-01'), $capturedParams['period_start']);
         self::assertSame(5000000, $capturedParams['throttle_bps']);
+        // No period dimension is bound anywhere on the throttle write path.
+        self::assertArrayNotHasKey('period_start', $capturedParams);
         self::assertArrayNotHasKey('quota_bytes_in', $capturedParams);
         self::assertArrayNotHasKey('quota_bytes_out', $capturedParams);
         self::assertArrayNotHasKey('max_concurrent_streams', $capturedParams);
@@ -858,9 +864,13 @@ final class RelaySessionManagerTest extends TestCase
         $manager = new RelaySessionManager($db, $logger);
         self::assertSame(50000000, $manager->getUserThrottleBps('user-t'));
         self::assertStringContainsString('throttle_bps', $capturedSql);
-        self::assertStringContainsString('FROM relay_user_quotas', $capturedSql);
+        // Read from the durable per-user store, keyed by user_id ALONE — never
+        // the period-scoped relay_user_quotas rollup.
+        self::assertStringContainsString('FROM relay_user_settings', $capturedSql);
+        self::assertStringNotContainsString('period_start', $capturedSql);
+        self::assertStringNotContainsString('relay_user_quotas', $capturedSql);
 
-        // No row for the period → the migration-042 column default (3 Mbps),
+        // No durable row → the migration-043 column default (3 Mbps),
         // NOT 0/unlimited — an unconfigured user carries the 3 Mbps default.
         $db2 = $this->createMock(Connection::class);
         $db2->method('query')->willReturn([]);
@@ -870,6 +880,77 @@ final class RelaySessionManagerTest extends TestCase
             $manager2->getUserThrottleBps('user-none'),
         );
         self::assertSame(3000000, $manager2->getUserThrottleBps('user-none'));
+    }
+
+    /**
+     * Core regression for the S42 review finding (MEDIUM): a per-user admin
+     * THROTTLE must be durable, NOT usage-period-scoped. The S41 original stored
+     * it on the per-calendar-month usage rollup and read the CURRENT month only,
+     * so on the 1st of each month the value was absent for the new period and the
+     * read silently reverted to the 3 Mbps default — throttling users set to
+     * Unlimited (0) or a high cap. This test proves the read/write no longer
+     * depend on the calendar month.
+     */
+    public function testThrottleSurvivesMonthRolloverBecauseItIsNotPeriodScoped(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+
+        // A durable per-user store simulated as a map keyed by user_id ALONE —
+        // exactly the fix: there is no period_start dimension, so a calendar-
+        // month rollover cannot make a set value "disappear". Every query on the
+        // throttle path is also asserted to carry NO period_start, so a
+        // reintroduction of period scoping would fail this test.
+        /** @var array<string, int> $store */
+        $store = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$store): ?array {
+                self::assertStringNotContainsString(
+                    'period_start',
+                    $sql,
+                    'the throttle path must not be period-scoped',
+                );
+                if (is_array($params)) {
+                    self::assertArrayNotHasKey(
+                        'period_start',
+                        $params,
+                        'the throttle path must not bind a period',
+                    );
+                }
+                if (str_contains($sql, 'INSERT INTO relay_user_settings')) {
+                    self::assertIsArray($params);
+                    $store[(string) $params['user_id']] = (int) $params['throttle_bps'];
+                    return null;
+                }
+                if (str_contains($sql, 'SELECT throttle_bps FROM relay_user_settings')) {
+                    self::assertIsArray($params);
+                    $uid = (string) $params['user_id'];
+                    return array_key_exists($uid, $store)
+                        ? [['throttle_bps' => (string) $store[$uid]]]
+                        : [];
+                }
+                return null;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+
+        // Admin configures a high cap and an Unlimited user "this month".
+        $manager->setUserThrottle('user-high', 50000000);
+        $manager->setUserThrottle('user-unlimited', 0);
+
+        // Simulate a calendar-month rollover: nothing about the durable store
+        // changes (it is keyed by user_id only, and the read carries no period),
+        // so the configured values MUST still be returned verbatim — NOT the
+        // 3 Mbps default. This is the S41 durability bug, now fixed.
+        self::assertSame(50000000, $manager->getUserThrottleBps('user-high'));
+        self::assertSame(0, $manager->getUserThrottleBps('user-unlimited'));
+
+        // An unconfigured user still resolves to the 3 Mbps default.
+        self::assertSame(
+            RelaySessionManager::DEFAULT_THROTTLE_BPS,
+            $manager->getUserThrottleBps('user-never-set'),
+        );
     }
 
     public function testGetUserThrottleBpsReadsStoredZeroAsUnlimited(): void
