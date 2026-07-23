@@ -93,16 +93,21 @@ final class MigrationRunnerIntegrationTest extends TestCase
     {
         $applied = $this->runner->run();
 
+        // Assert the runner applies EVERY migration file, in ascending filename
+        // order, against an empty DB — derived from the on-disk set rather than a
+        // hard-coded prefix so the test does not rot as new migrations land (it
+        // previously pinned only the first six files, authored when the repo had
+        // six migrations, and broke once 007+ were added).
+        $expected = array_values(array_map(
+            'basename',
+            glob(dirname(__DIR__, 3) . '/migrations/*.sql') ?: [],
+        ));
+        sort($expected);
+        self::assertNotEmpty($expected, 'migrations directory must contain SQL files');
         self::assertSame(
-            [
-                '001_users.sql',
-                '002_servers.sql',
-                '003_shared_libraries.sql',
-                '004_relay_sessions.sql',
-                '005_webhooks.sql',
-                '006_server_heartbeats_sent_at.sql',
-            ],
+            $expected,
             $applied,
+            'Every migration file must be applied, in ascending filename order',
         );
 
         foreach (
@@ -122,8 +127,14 @@ final class MigrationRunnerIntegrationTest extends TestCase
 
     public function testRerunningIsIdempotent(): void
     {
+        $migrationFiles = glob(dirname(__DIR__, 3) . '/migrations/*.sql') ?: [];
         $first = $this->runner->run();
-        self::assertCount(6, $first);
+        self::assertCount(
+            count($migrationFiles),
+            $first,
+            'The first run against an empty DB applies every migration file',
+        );
+        self::assertNotEmpty($first);
 
         $second = $this->runner->run();
         self::assertSame([], $second, 'Re-running migrations should apply nothing new');
@@ -144,8 +155,12 @@ final class MigrationRunnerIntegrationTest extends TestCase
         $this->runner->run();
 
         $this->insertUser('u-100', 'bob', 'b@example.com');
+        // `public_key_jwk` (migration 007) is NOT NULL with no default; include it
+        // so the fixture matches the current servers schema (the original INSERT
+        // predated that column and now trips a 1364 "no default value").
         $this->db->query(
-            "INSERT INTO servers (id, user_id, server_name, version, jwks_json, hostname_candidates_json, status)"
+            "INSERT INTO servers"
+            . " (id, user_id, server_name, version, public_key_jwk, hostname_candidates_json, status)"
             . " VALUES ('s-1', 'u-100', 'srv', '0.1.0', '{}', '[]', 'online')",
         );
 
