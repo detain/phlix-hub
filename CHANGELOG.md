@@ -33,6 +33,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     build of it, pinned by tag) and currently has no quota control to sit beside —
     the throttle control is a follow-up in that repo.
 
+- **Per-user relay bandwidth THROTTLE — enforcement on the native-client WS relay
+  path (S42, updates.md #50).** The `throttle_bps` value persisted by S41 is now
+  ACTUALLY enforced for clients that reach a NAT'd server over the client relay
+  WebSocket (`:8803`). An unconfigured user is capped at the 3 Mbps default; `0`
+  means Unlimited (unthrottled). The HTTP-over-relay proxy path is enforced
+  separately in S43.
+  - **New `Relay\TokenBucket`** — a small, dependency-free, monotonic-time byte
+    token bucket (rate + burst capacity, injectable clock) shared as the reusable
+    enforcement primitive (S43 will reuse it). It never blocks or owns a timer.
+  - **`Relay\ClientConnection`** now carries the owning user's `throttleBps` and,
+    when a finite cap applies, a per-connection `TokenBucket` sized from it
+    (capacity = rate × 1 s burst). `0` builds no bucket (Unlimited).
+  - **`Relay\Tunnel::sendToClient()`** consults the per-connection bucket: when
+    tokens are available the frame is delivered and debited; when the bucket is
+    dry the frame is re-queued into the EXISTING per-channel `pendingClientFrames`
+    backlog and released by a 50 ms `Workerman\Timer` drain as tokens refill.
+    Unlimited (`0`) bypasses the bucket, queue, and timer entirely (unchanged fast
+    path). Throttling is strictly per-CHANNEL — it NEVER `pauseRecv()`s the shared
+    server tunnel, so one throttled/slow user cannot throttle the other users
+    multiplexed over the same server connection.
+  - **Bounded buffer.** The rate-limit backlog reuses the existing
+    `MAX_CLIENT_QUEUE` cap; a throttled channel that sustains over-rate input past
+    the cap has ONLY that channel closed (a visible per-channel failure), never the
+    whole tunnel and never the shared server — so memory cannot grow without bound.
+  - **`throttle_bps` is resolved at mount** (`TunnelManager::acceptClient()`,
+    fed the authenticated user id from `ClientRelayWorker` →
+    `ClientMountController`), fail-OPEN: a lookup error mounts the connection
+    Unlimited rather than refusing/delaying the mount.
+
 ## [0.5.0] - 2026-07-20
 
 Remediation of the Phase 6 / Phase 10 settings work, which shipped a silent

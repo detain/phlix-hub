@@ -28,6 +28,7 @@ use Workerman\Connection\ConnectionInterface;
 use Workerman\Connection\TcpConnection;
 use Workerman\Timer;
 
+use function array_shift;
 use function base64_decode;
 use function count;
 use function explode;
@@ -35,6 +36,7 @@ use function is_array;
 use function is_string;
 use function json_decode;
 use function json_encode;
+use function microtime;
 use function strlen;
 use function strtr;
 use function time;
@@ -228,8 +230,24 @@ final class Tunnel implements TunnelInterface
      * we pause the server, so at most the single in-flight frame lands here; the
      * cap is a safety valve. Exceeding it closes the tunnel (hard failure) rather
      * than dropping a DATA frame (silent corruption).
+     *
+     * The SAME per-channel {@see $pendingClientFrames} queue and cap also bound a
+     * THROTTLED client's rate-limit backlog (S42); there, overflow closes only
+     * that ONE channel ({@see closeThrottledChannel()}), never the whole tunnel,
+     * since a slow throttled stream must not tear down the other users
+     * multiplexed on the shared server tunnel.
      */
     private const MAX_CLIENT_QUEUE = 256;
+
+    /**
+     * Drain-timer interval (seconds) for a throttled client's rate-limit backlog
+     * (S42, updates.md #50). When the token bucket runs dry, queued server→client
+     * frames are released on this cadence as the bucket refills. 50 ms (20 ticks/s)
+     * paces delivery smoothly without busy-spinning the event loop; the timer is
+     * armed only while a backlog exists and cancelled the moment it drains, so a
+     * stream that keeps up within its cap carries zero idle timer overhead.
+     */
+    private const float THROTTLE_DRAIN_INTERVAL_SECONDS = 0.05;
 
     /**
      * High-priority frame queue. These frames (control + small JSON) are always
@@ -973,6 +991,18 @@ final class Tunnel implements TunnelInterface
         }
 
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
+
+        // Per-user bandwidth throttle (S42, updates.md #50). A client mounted with
+        // a finite cap (throttle_bps > 0) is paced by its own per-connection token
+        // bucket; 0 = Unlimited bypasses this entirely and takes the unchanged
+        // fast path below (no bucket, no queue, no timer overhead). The throttle
+        // is strictly per-CHANNEL: it NEVER pauseRecv()s the shared server tunnel
+        // (that would throttle every user multiplexed over it).
+        if ($client->isThrottled()) {
+            $this->sendToClientThrottled($client, $encoded);
+            return;
+        }
+
         $frameLen = strlen($encoded);
 
         // If this client already has queued frames it is congested — do not send
@@ -996,6 +1026,206 @@ final class Tunnel implements TunnelInterface
         }
 
         // Record bytes in to the session manager for this client (DB)
+        $this->recordClientBytesIn($frameLen);
+    }
+
+    /**
+     * Rate-limited server→client delivery for a THROTTLED client (S42).
+     *
+     * The frame is appended to the shared per-channel {@see $pendingClientFrames}
+     * re-queue (bounded by {@see MAX_CLIENT_QUEUE}; overflow closes only THIS
+     * channel — see {@see enqueueThrottledFrame()}) and then {@see drainThrottled()}
+     * releases whatever the token budget currently allows. Routing every frame
+     * through the queue — even when the bucket has budget to send immediately —
+     * keeps strict FIFO and collapses the immediate-send and timer-drain paths
+     * into ONE code path, so tokens can never be double-charged or frames
+     * reordered.
+     *
+     * @param ClientConnection $client  The throttled client.
+     * @param string           $encoded The already-encoded wire frame.
+     *
+     * @return void
+     */
+    private function sendToClientThrottled(ClientConnection $client, string $encoded): void
+    {
+        if (!$this->enqueueThrottledFrame($client, $encoded)) {
+            // Queue overflowed — the channel was closed. Nothing more to do.
+            return;
+        }
+
+        $this->drainThrottled($client);
+    }
+
+    /**
+     * Append a throttled frame to its channel's re-queue, bounded by
+     * {@see MAX_CLIENT_QUEUE}. On overflow the single congested channel is closed
+     * ({@see closeThrottledChannel()}) — a visible per-channel failure — rather
+     * than dropping a DATA frame (silent corruption) or buffering without bound
+     * (resident-worker memory leak). Crucially it does NOT close the tunnel or
+     * pause the shared server, so the other users on it are unaffected.
+     *
+     * @param ClientConnection $client  The throttled client.
+     * @param string           $encoded The already-encoded wire frame.
+     *
+     * @return bool True when queued; false when the queue overflowed and the
+     *              channel was closed.
+     */
+    private function enqueueThrottledFrame(ClientConnection $client, string $encoded): bool
+    {
+        $channelId = $client->channelId;
+        if (count($this->pendingClientFrames[$channelId] ?? []) >= self::MAX_CLIENT_QUEUE) {
+            $this->logger->warning('Relay: throttled client queue full, closing channel', [
+                'server_id' => $this->serverId,
+                'tunnel_id' => $this->tunnelId,
+                'client_id' => $client->clientId,
+                'channel_id' => $channelId,
+            ]);
+            $this->closeThrottledChannel($client);
+            return false;
+        }
+
+        $this->pendingClientFrames[$channelId][] = $encoded;
+        return true;
+    }
+
+    /**
+     * Release as many queued frames for a throttled client as its token bucket
+     * and the client's send buffer currently allow, in strict FIFO order.
+     *
+     * Stops (leaving the remainder queued) when the bucket runs dry — the drain
+     * timer will resume as tokens refill — or when the client's send buffer fills
+     * even at the throttled rate (retried on the next tick; the bounded queue is
+     * the safety valve, we never pause the shared server). Tokens are debited only
+     * after a successful send, so a frame that could not go out is never charged.
+     * The drain timer is (re-)armed while a backlog remains and cancelled the
+     * moment the queue empties.
+     *
+     * Exposed with an injectable clock so the rate behaviour is deterministically
+     * testable without a running event loop (the timer callback passes null =
+     * real time).
+     *
+     * @param ClientConnection $client The throttled client to drain.
+     * @param float|null       $now    Injectable clock (seconds); null = real time.
+     *
+     * @return void
+     */
+    private function drainThrottled(ClientConnection $client, ?float $now = null): void
+    {
+        $channelId = $client->channelId;
+        $bucket = $client->throttleBucket;
+        $now ??= microtime(true);
+
+        while (!empty($this->pendingClientFrames[$channelId])) {
+            if ($bucket !== null && !$bucket->canSpend($now)) {
+                // No budget this instant — the drain timer resumes on refill.
+                break;
+            }
+
+            $encoded = $this->pendingClientFrames[$channelId][0];
+            if ($client->sendRaw($encoded) === false) {
+                // Client socket full even at the throttled rate — leave the frame
+                // queued and retry next tick. Do NOT pause the shared server.
+                break;
+            }
+
+            array_shift($this->pendingClientFrames[$channelId]);
+            $frameLen = strlen($encoded);
+            $bucket?->spend((float) $frameLen);
+            $this->recordClientBytesIn($frameLen);
+        }
+
+        if (empty($this->pendingClientFrames[$channelId])) {
+            unset($this->pendingClientFrames[$channelId]);
+            $this->cancelThrottleDrain($client);
+        } else {
+            $this->armThrottleDrain($client);
+        }
+    }
+
+    /**
+     * Arm the repeating throttle drain timer for a client if one is not already
+     * running. {@see Timer::add} throws outside a Workerman event loop (e.g. under
+     * PHPUnit) — swallow that so unit tests can exercise the enqueue path; the
+     * drain itself is driven directly in tests. Idempotent.
+     *
+     * @param ClientConnection $client The throttled client.
+     *
+     * @return void
+     */
+    private function armThrottleDrain(ClientConnection $client): void
+    {
+        if ($client->throttleDrainTimerId !== null) {
+            return;
+        }
+
+        try {
+            $client->throttleDrainTimerId = Timer::add(
+                self::THROTTLE_DRAIN_INTERVAL_SECONDS,
+                function () use ($client): void {
+                    $this->drainThrottled($client);
+                },
+            );
+        } catch (Throwable) {
+            // Timer unavailable (outside the event loop / tests) — no-op.
+            $client->throttleDrainTimerId = null;
+        }
+    }
+
+    /**
+     * Cancel a client's throttle drain timer if one is armed. Idempotent; safe
+     * when none is armed or when called outside the event loop.
+     *
+     * @param ClientConnection $client The throttled client.
+     *
+     * @return void
+     */
+    private function cancelThrottleDrain(ClientConnection $client): void
+    {
+        if ($client->throttleDrainTimerId === null) {
+            return;
+        }
+
+        try {
+            Timer::del($client->throttleDrainTimerId);
+        } catch (Throwable) {
+            // Timer unavailable (outside the event loop / tests) — no-op.
+        }
+
+        $client->throttleDrainTimerId = null;
+    }
+
+    /**
+     * Close a single throttled client's channel after its rate-limit backlog
+     * overflowed {@see MAX_CLIENT_QUEUE}. Cancels the drain timer, drops the
+     * backlog, and closes ONLY this client's connection — the shared server
+     * tunnel and every other channel multiplexed on it are untouched (no tunnel
+     * close, no server pauseRecv). The owning worker's onClose →
+     * {@see removeClient()} completes routing teardown (CLIENT_DISCONNECT etc.).
+     *
+     * @param ClientConnection $client The client whose channel to close.
+     *
+     * @return void
+     */
+    private function closeThrottledChannel(ClientConnection $client): void
+    {
+        $this->cancelThrottleDrain($client);
+        $channelId = $client->channelId;
+        if ($channelId > 0) {
+            unset($this->pendingClientFrames[$channelId]);
+        }
+        $client->close();
+    }
+
+    /**
+     * Record a delivered server→client frame's bytes against the relay session
+     * (DB accounting) and the tunnel's running total.
+     *
+     * @param int $frameLen Byte length of the delivered frame.
+     *
+     * @return void
+     */
+    private function recordClientBytesIn(int $frameLen): void
+    {
         if ($this->relaySessionId !== null) {
             $this->sessionManager->recordBytesIn($this->relaySessionId, $frameLen);
         }
@@ -1443,6 +1673,11 @@ final class Tunnel implements TunnelInterface
 
         $this->clientConnections->detach($client);
 
+        // Cancel any throttle drain timer for this client (S42) so a stale timer
+        // cannot fire on a departed connection. Idempotent + null-safe for
+        // Unlimited clients that never armed one.
+        $this->cancelThrottleDrain($client);
+
         $channelId = $client->channelId;
         if ($channelId > 0) {
             unset($this->channelClients[$channelId]);
@@ -1455,7 +1690,12 @@ final class Tunnel implements TunnelInterface
         if ($channelId > 0 && isset($this->pendingClientFrames[$channelId])) {
             unset($this->pendingClientFrames[$channelId]);
             $client->clientWs->onBufferDrain = null;
-            if ($this->serverBackpressureCount > 0) {
+            // A THROTTLED client's backlog is a rate-limit queue (S42), NOT a
+            // send-buffer backpressure queue: throttled clients never pause the
+            // shared server, so they hold no serverBackpressureCount slot.
+            // Releasing one here would corrupt the count and could falsely resume
+            // or false-close the tunnel — so only unthrottled clients decrement.
+            if (!$client->isThrottled() && $this->serverBackpressureCount > 0) {
                 $this->serverBackpressureCount--;
                 if ($this->serverBackpressureCount === 0) {
                     // Last congested client gone — cancel the episode safety
@@ -1519,6 +1759,9 @@ final class Tunnel implements TunnelInterface
 
         foreach ($this->clientConnections as $client) {
             /** @var ClientConnection $client */
+            // Cancel any per-client throttle drain timer (S42) before teardown so
+            // no stale timer fires on a discarded tunnel/connection.
+            $this->cancelThrottleDrain($client);
             $client->sendRaw($encoded);
             $client->close();
         }

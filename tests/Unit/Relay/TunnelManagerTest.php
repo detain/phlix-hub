@@ -361,6 +361,98 @@ class TunnelManagerTest extends TestCase
         $this->assertNotNull($result);
         $this->assertSame($clientWs, $result->clientWs);
         $this->assertSame('client-1', $result->clientId);
+        // No user id passed → mounted Unlimited (S42): getUserThrottleBps must
+        // not even be consulted.
+        $this->assertSame(0, $result->throttleBps);
+        $this->assertFalse($result->isThrottled());
+    }
+
+    public function test_accept_client_attaches_resolved_user_throttle(): void
+    {
+        $manager = new TunnelManager(
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel = $manager->acceptServer('server-abc', $serverWs);
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $tunnel->relaySessionId = 'session-123';
+
+        // The owning user's throttle is resolved from S41 storage and attached.
+        $this->sessionManager->expects($this->once())
+            ->method('getUserThrottleBps')
+            ->with('user-42')
+            ->willReturn(5_000_000);
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $result = $manager->acceptClient('server-abc', $clientWs, 'client-1', '', 'user-42');
+
+        $this->assertNotNull($result);
+        $this->assertSame(5_000_000, $result->throttleBps);
+        $this->assertTrue($result->isThrottled());
+        $this->assertNotNull($result->throttleBucket);
+    }
+
+    public function test_accept_client_unlimited_when_user_throttle_is_zero(): void
+    {
+        $manager = new TunnelManager(
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel = $manager->acceptServer('server-abc', $serverWs);
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $tunnel->relaySessionId = 'session-123';
+
+        // Admin set this user to Unlimited (0).
+        $this->sessionManager->method('getUserThrottleBps')->willReturn(0);
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $result = $manager->acceptClient('server-abc', $clientWs, 'client-1', '', 'user-42');
+
+        $this->assertNotNull($result);
+        $this->assertSame(0, $result->throttleBps);
+        $this->assertFalse($result->isThrottled());
+        $this->assertNull($result->throttleBucket);
+    }
+
+    public function test_accept_client_fails_open_to_unlimited_when_throttle_lookup_throws(): void
+    {
+        $manager = new TunnelManager(
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel = $manager->acceptServer('server-abc', $serverWs);
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $tunnel->relaySessionId = 'session-123';
+
+        // A transient DB error during the lookup must NOT refuse the mount — the
+        // connection is mounted Unlimited (fail-open) and the failure is logged.
+        $this->sessionManager->method('getUserThrottleBps')
+            ->willThrowException(new \RuntimeException('db down'));
+        $this->logger->expects($this->atLeastOnce())
+            ->method('warning')
+            ->with($this->stringContains('throttle lookup failed'), $this->anything());
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $result = $manager->acceptClient('server-abc', $clientWs, 'client-1', '', 'user-42');
+
+        $this->assertNotNull($result);
+        $this->assertSame(0, $result->throttleBps);
+        $this->assertFalse($result->isThrottled());
     }
 
     public function test_close_tunnel_closes_server_and_removes_from_map(): void

@@ -32,11 +32,25 @@ use function time;
 final class ClientConnection
 {
     /**
-     * @param TcpConnection        $clientWs  Workerman connection to the client.
-     * @param string               $serverId  Server UUID this client is connected through.
-     * @param string               $clientId  Client UUID (assigned by the hub).
-     * @param StructuredLogger     $logger    Structured logger for relay events.
-     * @param string               $sessionId Optional relay session ID for this client.
+     * Burst window, in seconds, used to size the per-connection throttle token
+     * bucket ({@see $throttleBucket}). Capacity = rate × this, i.e. a
+     * freshly-mounted stream may burst up to ~1 second of data immediately for a
+     * snappy start, then settle to the sustained per-user cap.
+     */
+    public const float THROTTLE_BURST_SECONDS = 1.0;
+
+    /**
+     * @param TcpConnection        $clientWs   Workerman connection to the client.
+     * @param string               $serverId   Server UUID this client is connected through.
+     * @param string               $clientId   Client UUID (assigned by the hub).
+     * @param StructuredLogger     $logger     Structured logger for relay events.
+     * @param string               $sessionId  Optional relay session ID for this client.
+     * @param int                  $throttleBps Per-user sustained relay rate cap in BITS/sec
+     *                                          (S41/S42, updates.md #50). `0` = Unlimited: no
+     *                                          bucket is built and {@see Tunnel::sendToClient()}
+     *                                          takes the unthrottled fast path. Resolved from the
+     *                                          owning user's `throttle_bps` at mount time
+     *                                          ({@see \Phlix\Hub\Relay\TunnelManager::acceptClient()}).
      */
     public function __construct(
         public readonly TcpConnection $clientWs,
@@ -44,10 +58,22 @@ final class ClientConnection
         public readonly string $clientId,
         StructuredLogger $logger,
         public readonly string $sessionId = '',
+        public readonly int $throttleBps = 0,
     ) {
         $this->lastFrameAt = time();
         $this->tunnel = null;
         $this->logger = $logger;
+
+        // Build the per-connection token bucket only when a real cap applies.
+        // 0 = Unlimited leaves $throttleBucket null so the send path is bypassed
+        // entirely (no bucket, no queue, no timer overhead).
+        if ($throttleBps > 0) {
+            $ratePerSecond = $throttleBps / 8.0; // bits/sec → bytes/sec
+            $this->throttleBucket = new TokenBucket(
+                $ratePerSecond,
+                $ratePerSecond * self::THROTTLE_BURST_SECONDS,
+            );
+        }
     }
 
     /**
@@ -72,6 +98,38 @@ final class ClientConnection
      * @var int Timestamp of the last frame received from the client.
      */
     public int $lastFrameAt;
+
+    /**
+     * @var TokenBucket|null Per-connection byte-rate token bucket enforcing this
+     *          user's relay throttle (S42, updates.md #50). Null when the user is
+     *          Unlimited ({@see $throttleBps} `=== 0`). Public so the owning
+     *          {@see Tunnel} can consult/debit it on the server→client data path
+     *          (and so tests can inject a bucket seeded at a known clock base for
+     *          deterministic rate assertions); it is otherwise mutated only by
+     *          {@see Tunnel::drainThrottled()}.
+     */
+    public ?TokenBucket $throttleBucket = null;
+
+    /**
+     * @var int|null Workerman timer id of the throttle drain timer for this
+     *          connection (S42). Armed by {@see Tunnel::armThrottleDrain()} when a
+     *          throttled frame is queued and cancelled once the queue drains, so a
+     *          stream that keeps up never carries idle timer overhead. Null when no
+     *          drain is currently scheduled.
+     */
+    public ?int $throttleDrainTimerId = null;
+
+    /**
+     * Whether this connection is bandwidth-throttled (a finite per-user cap
+     * applies). `false` means Unlimited ({@see $throttleBps} `=== 0`), in which
+     * case the send path bypasses the token bucket entirely.
+     *
+     * @return bool
+     */
+    public function isThrottled(): bool
+    {
+        return $this->throttleBps > 0;
+    }
 
     /**
      * Handle an incoming message from the client.

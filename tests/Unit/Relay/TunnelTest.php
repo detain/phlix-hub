@@ -8,6 +8,7 @@ use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
+use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
@@ -1661,5 +1662,288 @@ class TunnelTest extends TestCase
             'tunnel must close on frame-buffer overflow instead of leaking the exception',
         );
         $this->assertCount(0, $tunnel->clientConnections, 'all clients detached on overflow close');
+    }
+
+    // ---------------------------------------------------------------------
+    // S42 — per-user WS bandwidth throttle (token bucket in sendToClient).
+    // ---------------------------------------------------------------------
+
+    /**
+     * Build an ACTIVE tunnel wired for the throttle tests (server send stubbed
+     * so registerClient's CLIENT_CONNECT frame is accepted).
+     */
+    private function activeThrottleTunnel(string $sessionId = 'session-throttle'): Tunnel
+    {
+        $this->sessionManager->method('registerServer')->willReturn($sessionId);
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = $sessionId;
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $this->serverWs->method('send')->willReturn(true);
+
+        return $tunnel;
+    }
+
+    /**
+     * A throttled client whose bucket is empty (deep debt) at ~real time, so any
+     * server→client frame is queued rather than sent immediately — the throttle
+     * gate, driven by the real-time send path.
+     *
+     * Throttle enforcement must NOT pauseRecv() the shared server tunnel, and an
+     * Unlimited (throttle_bps=0) channel multiplexed on the same tunnel must keep
+     * sending immediately.
+     */
+    public function test_throttled_frame_is_queued_not_sent_and_never_pauses_server(): void
+    {
+        $tunnel = $this->activeThrottleTunnel();
+
+        // The shared server tunnel must NEVER be paused for a per-user throttle.
+        $this->serverWs->expects($this->never())->method('pauseRecv');
+
+        // Channel 1: throttled, bucket in deep debt at ~now → frame must queue.
+        $clientWs1 = $this->createMock(TcpConnection::class);
+        $clientWs1->expects($this->never())->method('send');
+        $client1 = new ClientConnection($clientWs1, 'server-123', 'client-1', $this->clientLogger, '', 8_000_000);
+        $now = microtime(true);
+        $emptyBucket = new TokenBucket(1000.0, 1000.0, $now);
+        $emptyBucket->spend(1_000_000.0); // far below zero — absorbs µs-scale real-time drift
+        $client1->throttleBucket = $emptyBucket;
+        $tunnel->registerClient($client1);
+
+        // Channel 2: Unlimited (0) — must bypass the bucket and send immediately.
+        $clientWs2 = $this->createMock(TcpConnection::class);
+        $clientWs2->expects($this->once())->method('send')->willReturn(true);
+        $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2', $this->clientLogger, '', 0);
+        $this->assertFalse($client2->isThrottled());
+        $tunnel->registerClient($client2);
+
+        // Throttled DATA for channel 1 is queued (not delivered).
+        $tunnel->sendToClient($client1->channelId, new RelayFrame(RelayFrameType::DATA, $client1->channelId, 'blocked'));
+
+        // Unlimited DATA for channel 2 is delivered immediately (unaffected).
+        $tunnel->sendToClient($client2->channelId, new RelayFrame(RelayFrameType::DATA, $client2->channelId, 'through'));
+
+        $queues = $this->readPendingClientFrames($tunnel);
+        $this->assertArrayHasKey($client1->channelId, $queues);
+        $this->assertCount(1, $queues[$client1->channelId]);
+        // Channel 2 (Unlimited) never queues.
+        $this->assertArrayNotHasKey($client2->channelId, $queues);
+    }
+
+    /**
+     * A throttled backlog drains in strict FIFO order, paced by the token bucket
+     * as simulated time advances, while a second (Unlimited) channel on the SAME
+     * server tunnel keeps delivering immediately.
+     */
+    public function test_throttled_queue_drains_in_fifo_at_token_rate_other_channel_unaffected(): void
+    {
+        $tunnel = $this->activeThrottleTunnel();
+        $this->serverWs->expects($this->never())->method('pauseRecv');
+
+        // Channel 1: throttled. Deterministic bucket: 100 B/s, 100 B burst, base t=1000.
+        $sent1 = [];
+        $clientWs1 = $this->createMock(TcpConnection::class);
+        $clientWs1->method('send')->willReturnCallback(function (string $d) use (&$sent1): bool {
+            $sent1[] = $d;
+            return true;
+        });
+        $client1 = new ClientConnection($clientWs1, 'server-123', 'client-1', $this->clientLogger, '', 8_000_000);
+        $client1->throttleBucket = new TokenBucket(100.0, 100.0, 1000.0); // starts full (100 B)
+        $tunnel->registerClient($client1);
+
+        // Channel 2: Unlimited — a direct send must go through untouched while
+        // channel 1 is throttled/queued (proves per-channel isolation).
+        $clientWs2 = $this->createMock(TcpConnection::class);
+        $clientWs2->expects($this->once())->method('send')->willReturn(true);
+        $client2 = new ClientConnection($clientWs2, 'server-123', 'client-2', $this->clientLogger, '', 0);
+        $tunnel->registerClient($client2);
+        $tunnel->sendToClient($client2->channelId, new RelayFrame(RelayFrameType::DATA, $client2->channelId, 'direct'));
+
+        // Inject a 3-frame backlog for channel 1 (each 100 bytes → 1 per second).
+        $this->writePendingClientFrames($tunnel, [
+            $client1->channelId => [str_repeat('A', 100), str_repeat('B', 100), str_repeat('C', 100)],
+        ]);
+
+        $drain = new \ReflectionMethod($tunnel, 'drainThrottled');
+
+        // t=1000: bucket full (100 B) → exactly ONE 100-byte frame released, then
+        // the balance is spent (0) so no further frame goes out this instant.
+        $drain->invoke($tunnel, $client1, 1000.0);
+        $this->assertSame([str_repeat('A', 100)], $sent1);
+        $this->assertCount(2, $this->readPendingClientFrames($tunnel)[$client1->channelId]);
+
+        // Draining AGAIN at the same instant releases nothing — the bucket is
+        // empty, so a throttled stream cannot flush its backlog ahead of its cap.
+        $drain->invoke($tunnel, $client1, 1000.0);
+        $this->assertCount(2, $this->readPendingClientFrames($tunnel)[$client1->channelId]);
+
+        // t=1001: +100 B refilled (one frame's worth) → the SECOND frame releases.
+        $drain->invoke($tunnel, $client1, 1001.0);
+        $this->assertSame([str_repeat('A', 100), str_repeat('B', 100)], $sent1);
+        $this->assertCount(1, $this->readPendingClientFrames($tunnel)[$client1->channelId]);
+
+        // t=1002: +100 B → the THIRD frame releases and the queue empties.
+        $drain->invoke($tunnel, $client1, 1002.0);
+        $this->assertSame(
+            [str_repeat('A', 100), str_repeat('B', 100), str_repeat('C', 100)],
+            $sent1,
+        );
+        $this->assertArrayNotHasKey($client1->channelId, $this->readPendingClientFrames($tunnel));
+        $this->assertNull($client1->throttleDrainTimerId, 'drain timer cleared once the backlog is empty');
+    }
+
+    /**
+     * A sustained over-rate throttled backlog is BOUNDED: once it reaches
+     * MAX_CLIENT_QUEUE, the next frame closes only THAT channel (a visible
+     * per-channel failure), never the whole tunnel and never the shared server —
+     * so memory cannot grow without limit.
+     */
+    public function test_throttled_queue_is_bounded_and_overflow_closes_only_the_channel(): void
+    {
+        $tunnel = $this->activeThrottleTunnel();
+        $this->serverWs->expects($this->never())->method('pauseRecv');
+        // Overflow must close the CHANNEL, not the tunnel/server.
+        $this->serverWs->expects($this->never())->method('close');
+
+        $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_CLIENT_QUEUE'))->getValue();
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->expects($this->once())->method('close'); // the channel is closed
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '', 8_000_000);
+        $tunnel->registerClient($client);
+
+        // The overflow warning is logged (channel_id present).
+        $this->logger->expects($this->atLeastOnce())
+            ->method('warning')
+            ->with($this->stringContains('throttled client queue full'), $this->anything());
+
+        // Pre-fill the channel's queue right up to the cap, then one more frame.
+        $this->writePendingClientFrames($tunnel, [
+            $client->channelId => array_fill(0, $max, 'x'),
+        ]);
+
+        $tunnel->sendToClient($client->channelId, new RelayFrame(RelayFrameType::DATA, $client->channelId, 'overflow'));
+
+        // The over-cap queue was dropped and the tunnel stays ACTIVE (only the
+        // one channel was torn down — the shared tunnel keeps serving others).
+        $this->assertArrayNotHasKey($client->channelId, $this->readPendingClientFrames($tunnel));
+        $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
+    }
+
+    /**
+     * Removing a throttled client must NOT decrement the server-backpressure
+     * count: a throttled client's backlog is a rate-limit queue, never a
+     * send-buffer backpressure slot, so mis-releasing one would corrupt the
+     * count (and could false-resume/false-close the tunnel).
+     */
+    public function test_remove_throttled_client_does_not_touch_backpressure_count(): void
+    {
+        $tunnel = $this->activeThrottleTunnel();
+        $this->serverWs->expects($this->never())->method('resumeRecv');
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '', 8_000_000);
+        $tunnel->registerClient($client);
+
+        // Give the throttled client a backlog (looks like a queue, but is NOT a
+        // backpressure slot).
+        $this->writePendingClientFrames($tunnel, [$client->channelId => ['a', 'b']]);
+
+        $countProp = new \ReflectionProperty($tunnel, 'serverBackpressureCount');
+        $this->assertSame(0, $countProp->getValue($tunnel));
+
+        $tunnel->removeClient($client);
+
+        // Count untouched (no spurious decrement), queue reclaimed.
+        $this->assertSame(0, $countProp->getValue($tunnel));
+        $this->assertArrayNotHasKey($client->channelId, $this->readPendingClientFrames($tunnel));
+    }
+
+    /**
+     * If a throttled client's socket fills mid-drain (sendRaw returns false even
+     * though tokens are available), the frame stays queued for the next tick and
+     * the shared server is NOT paused — tokens are not charged for a frame that
+     * did not go out.
+     */
+    public function test_throttled_drain_stops_when_client_buffer_full_without_pausing_server(): void
+    {
+        $tunnel = $this->activeThrottleTunnel();
+        $this->serverWs->expects($this->never())->method('pauseRecv');
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(false); // send buffer full
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '', 8_000_000);
+        $client->throttleBucket = new TokenBucket(1000.0, 1000.0, 1000.0); // ample budget
+        $tunnel->registerClient($client);
+
+        $this->writePendingClientFrames($tunnel, [$client->channelId => ['x', 'y']]);
+
+        $drain = new \ReflectionMethod($tunnel, 'drainThrottled');
+        $drain->invoke($tunnel, $client, 1000.0);
+
+        // Budget was available but the socket was full → nothing delivered, both
+        // frames remain queued, and the shared server tunnel was never paused.
+        $this->assertCount(2, $this->readPendingClientFrames($tunnel)[$client->channelId]);
+        // Tokens were not charged for the undelivered frame.
+        $this->assertSame(1000.0, $client->throttleBucket->tokens(1000.0));
+    }
+
+    /**
+     * The drain timer is armed at most once (an already-armed id is left intact)
+     * and is cancelled when the client is removed.
+     */
+    public function test_throttle_drain_timer_guard_and_cancel_paths(): void
+    {
+        $tunnel = $this->activeThrottleTunnel();
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '', 8_000_000);
+        $bucket = new TokenBucket(100.0, 100.0, 1000.0);
+        $bucket->spend(100.0); // empty at t=1000 → drain leaves the backlog
+        $client->throttleBucket = $bucket;
+        $tunnel->registerClient($client);
+
+        $this->writePendingClientFrames($tunnel, [$client->channelId => ['x']]);
+
+        // Simulate a drain timer already armed: draining with a leftover backlog
+        // must NOT overwrite the existing id (arm is idempotent).
+        $client->throttleDrainTimerId = 4242;
+        $drain = new \ReflectionMethod($tunnel, 'drainThrottled');
+        $drain->invoke($tunnel, $client, 1000.0);
+        $this->assertSame(4242, $client->throttleDrainTimerId, 'existing drain timer left intact');
+
+        // Removing the client cancels the timer and clears the id.
+        $tunnel->removeClient($client);
+        $this->assertNull($client->throttleDrainTimerId, 'drain timer cancelled on removal');
+    }
+
+    /**
+     * Read the private per-channel client re-queue.
+     *
+     * @return array<int, list<string>>
+     */
+    private function readPendingClientFrames(Tunnel $tunnel): array
+    {
+        $prop = new \ReflectionProperty($tunnel, 'pendingClientFrames');
+        /** @var array<int, list<string>> $value */
+        $value = $prop->getValue($tunnel);
+        return $value;
+    }
+
+    /**
+     * Seed the private per-channel client re-queue.
+     *
+     * @param array<int, list<string>> $queues
+     */
+    private function writePendingClientFrames(Tunnel $tunnel, array $queues): void
+    {
+        $prop = new \ReflectionProperty($tunnel, 'pendingClientFrames');
+        $prop->setValue($tunnel, $queues);
     }
 }

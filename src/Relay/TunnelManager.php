@@ -16,6 +16,7 @@ use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Generator;
+use Throwable;
 use Workerman\Connection\TcpConnection;
 
 use function gethostname;
@@ -201,6 +202,9 @@ final class TunnelManager implements TunnelManagerInterface
      * @param TcpConnection $clientWs Workerman connection to the client.
      * @param string      $clientId Client UUID assigned by the hub.
      * @param string      $sessionId Optional relay session ID for this client.
+     * @param string|null $userId   Authenticated owning-user UUID (S42, updates.md #50).
+     *                              When provided, the user's per-user relay throttle
+     *                              is resolved and attached to the connection.
      *
      * @return ClientConnection|null The created ClientConnection, or null if tunnel not found.
      */
@@ -209,6 +213,7 @@ final class TunnelManager implements TunnelManagerInterface
         TcpConnection $clientWs,
         string $clientId,
         string $sessionId = '',
+        ?string $userId = null,
     ): ?ClientConnection {
         $tunnel = $this->getTunnelForServer($serverId);
 
@@ -230,7 +235,21 @@ final class TunnelManager implements TunnelManagerInterface
             return null;
         }
 
-        $client = new ClientConnection($clientWs, $serverId, $clientId, $this->logger, $sessionId);
+        // Resolve the owning user's per-user relay throttle (S42, updates.md #50)
+        // so the created connection enforces it. Best-effort + fail-OPEN: a DB
+        // hiccup must never break a mount, so on error the connection is Unlimited
+        // (0) rather than refused. An unconfigured user reads back the migration
+        // default (3 Mbps) — the intended product default.
+        $throttleBps = $this->resolveThrottleBps($userId, $serverId, $clientId);
+
+        $client = new ClientConnection(
+            $clientWs,
+            $serverId,
+            $clientId,
+            $this->logger,
+            $sessionId,
+            $throttleBps,
+        );
         $client->tunnel = $tunnel;
         $tunnel->registerClient($client);
 
@@ -241,6 +260,41 @@ final class TunnelManager implements TunnelManagerInterface
         ]);
 
         return $client;
+    }
+
+    /**
+     * Resolve a mounting user's per-user relay throttle in bits/sec (S42,
+     * updates.md #50), reading the `throttle_bps` value persisted by S41 via
+     * {@see RelaySessionManager::getUserThrottleBps()}.
+     *
+     * Fail-OPEN and non-blocking-friendly: no `$userId` (or an empty one) mounts
+     * the connection Unlimited (`0`), and any lookup failure is logged and also
+     * treated as Unlimited — a transient DB error must never refuse or delay a
+     * relay mount. An unconfigured user resolves to the migration-042 column
+     * default (3 Mbps) inside the session manager, the intended product default.
+     *
+     * @param string|null $userId   The authenticated owning-user UUID, or null.
+     * @param string      $serverId Server UUID (for the failure log only).
+     * @param string      $clientId Client UUID (for the failure log only).
+     *
+     * @return int Throttle in bits/sec; `0` = Unlimited.
+     */
+    private function resolveThrottleBps(?string $userId, string $serverId, string $clientId): int
+    {
+        if ($userId === null || $userId === '') {
+            return 0;
+        }
+
+        try {
+            return $this->sessionManager->getUserThrottleBps($userId);
+        } catch (Throwable $e) {
+            $this->logger->warning('Relay: throttle lookup failed, mounting client unthrottled', [
+                'server_id' => $serverId,
+                'client_id' => $clientId,
+                'error' => $e->getMessage(),
+            ]);
+            return 0;
+        }
     }
 
     /**

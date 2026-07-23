@@ -140,6 +140,12 @@ final class ClientMountController
      * @param TcpConnection    $connection Workerman TCP connection.
      * @param WorkermanRequest $request    The WS upgrade request (path/headers).
      * @param string           $serverId   Server UUID the client wants to reach.
+     * @param string           $userId     Authenticated owning-user UUID resolved by
+     *                                     {@see ClientRelayWorker::validateClientAuth()}
+     *                                     (S42, updates.md #50). Passed to
+     *                                     {@see TunnelManagerInterface::acceptClient()}
+     *                                     so the mounted connection enforces the user's
+     *                                     per-user relay throttle. Empty mounts Unlimited.
      *
      * @return void
      */
@@ -147,6 +153,7 @@ final class ClientMountController
         TcpConnection $connection,
         WorkermanRequest $request,
         string $serverId,
+        string $userId = '',
     ): void {
         $connId = spl_object_id($connection);
         $logger = LoggerFactory::get(LogChannels::RELAY);
@@ -161,8 +168,16 @@ final class ClientMountController
             // Generate a client ID for this connection
             $clientId = $this->generateUuid();
 
-            // Accept the client connection and attach to tunnel
-            $client = $tunnelManager->acceptClient($serverId, $connection, $clientId);
+            // Accept the client connection and attach to tunnel. The owning
+            // user id (S42) is forwarded so acceptClient() resolves + attaches
+            // that user's per-user relay throttle to the new connection.
+            $client = $tunnelManager->acceptClient(
+                $serverId,
+                $connection,
+                $clientId,
+                '',
+                $userId !== '' ? $userId : null,
+            );
 
             if ($client === null) {
                 // No active server tunnel for this server_id — reject.
