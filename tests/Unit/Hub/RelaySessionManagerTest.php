@@ -788,4 +788,100 @@ final class RelaySessionManagerTest extends TestCase
         $manager2 = new RelaySessionManager($db2, $logger);
         self::assertSame(0, $manager2->getUserMaxConcurrentStreams('user-none'));
     }
+
+    // ---- per-user throttle (S41) ------------------------------------------
+
+    public function testSetUserThrottleUpsertsOnlyTheThrottleColumn(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): void {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        $manager->setUserThrottle('user-t', 5000000);
+
+        self::assertStringContainsString('INSERT INTO relay_user_quotas', $capturedSql);
+        self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
+        self::assertStringContainsString('throttle_bps = VALUES(throttle_bps)', $capturedSql);
+        // Must NOT disturb the monthly byte-cap quota columns or the stream cap.
+        self::assertStringNotContainsString('quota_bytes_in = VALUES', $capturedSql);
+        self::assertStringNotContainsString('quota_bytes_out = VALUES', $capturedSql);
+        self::assertStringNotContainsString('max_concurrent_streams = VALUES', $capturedSql);
+
+        self::assertSame('user-t', $capturedParams['user_id']);
+        self::assertSame(date('Y-m-01'), $capturedParams['period_start']);
+        self::assertSame(5000000, $capturedParams['throttle_bps']);
+        self::assertArrayNotHasKey('quota_bytes_in', $capturedParams);
+        self::assertArrayNotHasKey('quota_bytes_out', $capturedParams);
+        self::assertArrayNotHasKey('max_concurrent_streams', $capturedParams);
+    }
+
+    public function testSetUserThrottleAcceptsZeroAsUnlimited(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedParams): void {
+                $capturedParams = $params;
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        $manager->setUserThrottle('user-t', 0);
+
+        self::assertSame(0, $capturedParams['throttle_bps']);
+    }
+
+    public function testGetUserThrottleBpsReadsColumnOrDefaultsToThreeMbps(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $capturedSql = '';
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$capturedSql): array {
+                $capturedSql = $sql;
+                return [['throttle_bps' => '50000000']];
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $logger);
+        self::assertSame(50000000, $manager->getUserThrottleBps('user-t'));
+        self::assertStringContainsString('throttle_bps', $capturedSql);
+        self::assertStringContainsString('FROM relay_user_quotas', $capturedSql);
+
+        // No row for the period → the migration-042 column default (3 Mbps),
+        // NOT 0/unlimited — an unconfigured user carries the 3 Mbps default.
+        $db2 = $this->createMock(Connection::class);
+        $db2->method('query')->willReturn([]);
+        $manager2 = new RelaySessionManager($db2, $logger);
+        self::assertSame(
+            RelaySessionManager::DEFAULT_THROTTLE_BPS,
+            $manager2->getUserThrottleBps('user-none'),
+        );
+        self::assertSame(3000000, $manager2->getUserThrottleBps('user-none'));
+    }
+
+    public function testGetUserThrottleBpsReadsStoredZeroAsUnlimited(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        // A row that explicitly stores 0 means Unlimited — do NOT coerce to the
+        // default; 0 is a real, numeric stored value.
+        $db->method('query')->willReturn([['throttle_bps' => '0']]);
+
+        $manager = new RelaySessionManager($db, $logger);
+        self::assertSame(0, $manager->getUserThrottleBps('user-unlimited'));
+    }
 }

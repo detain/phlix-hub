@@ -4,6 +4,35 @@ All notable changes to `detain/phlix-hub` are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Per-user relay bandwidth THROTTLE — schema + admin surface (S41, updates.md #50).**
+  An admin can now set a sustained per-user relay rate cap chosen from a fixed set
+  of levels — 1 / 3 / 5 / 10 / 20 / 50 Mbps or Unlimited. This is a NEW value,
+  separate from the existing monthly BYTE-CAP quota (`quota_bytes_in/out`); it
+  reuses the same identity + admin plumbing but never touches the quota columns.
+  - **Migration `042_relay_user_throttle.sql`** adds a `throttle_bps BIGINT
+    UNSIGNED NOT NULL DEFAULT 3000000` column to `relay_user_quotas`, mirroring
+    the migration-038 `max_concurrent_streams` column exactly (same per-period
+    rollup row). Default is 3 Mbps (`3000000`); `0` means Unlimited.
+  - **`PUT /api/v1/admin/users/{id}/throttle`** (`UserQuotaController::setUserThrottle()`)
+    mirrors `PUT …/quota`: same `AuthMiddleware` + `AdminMiddleware` gate plus the
+    controller's inline `requireAdmin()`, same JSON envelope + audited mutation
+    (`user.throttle.set`). The body `{ "throttle_bps": int }` is validated against
+    the fixed allow-list of levels (any other value → 400 `invalid_throttle`).
+    The current value is surfaced as `throttle_bps` on the existing
+    `GET …/bandwidth` and `GET /api/v1/me/bandwidth` payloads.
+  - **`RelaySessionManager::setUserThrottle()` / `getUserThrottleBps()`** persist
+    and read the value (upsert on the current-period row; unconfigured users read
+    back the 3 Mbps default, a stored `0` reads back as Unlimited).
+  - **No enforcement yet.** S41 is schema + admin surface only; the actual rate
+    limiting (token buckets on the WS relay + HTTP proxy paths) lands in S42/S43.
+    The admin dropdown UI lives in the separate `@phlix/ui` repo (the hub SPA is a
+    build of it, pinned by tag) and currently has no quota control to sit beside —
+    the throttle control is a follow-up in that repo.
+
 ## [0.5.0] - 2026-07-20
 
 Remediation of the Phase 6 / Phase 10 settings work, which shipped a silent

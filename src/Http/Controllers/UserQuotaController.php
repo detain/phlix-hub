@@ -34,6 +34,11 @@ use Phlix\Hub\Http\Response;
  *  - `PUT /api/v1/admin/users/{id}/quota` {@see self::setUserQuota()} — set a
  *    user's monthly download/upload caps + concurrent-stream cap for the current
  *    period.
+ *  - `PUT /api/v1/admin/users/{id}/throttle` {@see self::setUserThrottle()} — set
+ *    a user's sustained relay bandwidth THROTTLE (rate cap in bits/sec), chosen
+ *    from a fixed set of levels (S41, updates.md #50). Distinct from the monthly
+ *    byte-cap quota above; NOT enforced yet (enforcement is S42/S43). The current
+ *    value is surfaced as `throttle_bps` on the bandwidth GET payloads.
  *
  * NOTE (per the HB-3.4 caveat): the concurrent-stream cap is enforced
  * per-HTTP-worker (HUB_WORKERS), so the effective global ceiling is
@@ -54,6 +59,24 @@ final class UserQuotaController
      * Upper bound for the concurrent-stream cap. 0 means "unlimited".
      */
     private const MAX_CONCURRENT_STREAMS = 1000;
+
+    /**
+     * The fixed set of allowed relay-throttle levels in bits/sec (S41): the
+     * 1/3/5/10/20/50 Mbps dropdown levels plus 0 = Unlimited. The admin API
+     * accepts ONLY these discrete values (the UI dropdown produces exactly this
+     * set) — a raw arbitrary bps is rejected. 3000000 (3 Mbps) is the default.
+     *
+     * @var list<int>
+     */
+    private const ALLOWED_THROTTLE_BPS = [
+        0,          // Unlimited
+        1000000,    // 1 Mbps
+        3000000,    // 3 Mbps (default)
+        5000000,    // 5 Mbps
+        10000000,   // 10 Mbps
+        20000000,   // 20 Mbps
+        50000000,   // 50 Mbps
+    ];
 
     /**
      * @param RelaySessionManager $sessions Bandwidth accounting + quota store.
@@ -164,6 +187,56 @@ final class UserQuotaController
     }
 
     /**
+     * `PUT /api/v1/admin/users/{id}/throttle` — set a user's sustained relay
+     * bandwidth THROTTLE (rate cap in bits/sec) for the current period. Admin-only
+     * (S41, updates.md #50).
+     *
+     * Body: `{ "throttle_bps": int }`. The value MUST be one of the fixed allowed
+     * levels ({@see self::ALLOWED_THROTTLE_BPS}: 1/3/5/10/20/50 Mbps in bps, or 0
+     * for Unlimited); any other value is rejected with a 400. Distinct from the
+     * monthly byte-cap quota — this endpoint never touches the quota columns.
+     *
+     * NOT enforced yet: S41 persists the value only (enforcement is S42/S43).
+     *
+     * Mirrors {@see self::setUserQuota()} exactly: same admin gate, same
+     * envelope, same audited mutation + 200 read-back.
+     *
+     * @param array<string, string> $params Path params; expects `id`.
+     */
+    public function setUserThrottle(Request $request, array $params): Response
+    {
+        $forbid = $this->requireAdmin($request);
+        if ($forbid !== null) {
+            return $forbid;
+        }
+
+        $targetId = $params['id'] ?? '';
+        if ($targetId === '') {
+            return $this->missingUserId();
+        }
+
+        $body = $request->body;
+
+        /** @var mixed $rawThrottle */
+        $rawThrottle = $body['throttle_bps'] ?? null;
+        $throttleBps = $this->parseThrottleBps($rawThrottle);
+        if ($throttleBps === null) {
+            return $this->invalidThrottle();
+        }
+
+        $this->sessions->setUserThrottle($targetId, $throttleBps);
+
+        $this->audit->logAdminAction(
+            $request->userId ?? '',
+            'user.throttle.set',
+            $targetId,
+            ['throttle_bps' => $throttleBps],
+        );
+
+        return (new Response())->json($this->bandwidthPayload($targetId));
+    }
+
+    /**
      * Build the JSON usage/quota rollup for a user for the current period.
      * Absent rows read back as zeroed usage + unlimited caps (a real,
      * meaningful response rather than a 404).
@@ -174,13 +247,15 @@ final class UserQuotaController
      *     bytes_out: int,
      *     quota_bytes_in: int,
      *     quota_bytes_out: int,
-     *     max_concurrent_streams: int
+     *     max_concurrent_streams: int,
+     *     throttle_bps: int
      * }
      */
     private function bandwidthPayload(string $userId): array
     {
         $bandwidth = $this->sessions->getUserBandwidth($userId);
         $maxStreams = $this->sessions->getUserMaxConcurrentStreams($userId);
+        $throttleBps = $this->sessions->getUserThrottleBps($userId);
 
         return [
             'user_id' => $userId,
@@ -189,6 +264,7 @@ final class UserQuotaController
             'quota_bytes_in' => $bandwidth['quota_bytes_in'] ?? 0,
             'quota_bytes_out' => $bandwidth['quota_bytes_out'] ?? 0,
             'max_concurrent_streams' => $maxStreams,
+            'throttle_bps' => $throttleBps,
         ];
     }
 
@@ -213,6 +289,28 @@ final class UserQuotaController
         }
 
         return $int;
+    }
+
+    /**
+     * Narrow a body value to one of the allowed throttle levels
+     * ({@see self::ALLOWED_THROTTLE_BPS}). Accepts a native int or a digit-only
+     * string (JSON numbers arrive as int; some clients send strings) — the same
+     * input narrowing {@see self::parseBoundedInt()} uses — but validates against
+     * the discrete allow-list instead of a range, since the throttle is a fixed
+     * dropdown of levels. Returns null on any non-integer / out-of-set value so
+     * the caller can emit a 400.
+     */
+    private function parseThrottleBps(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            $int = $value;
+        } elseif (is_string($value) && $value !== '' && ctype_digit($value)) {
+            $int = (int) $value;
+        } else {
+            return null;
+        }
+
+        return in_array($int, self::ALLOWED_THROTTLE_BPS, true) ? $int : null;
     }
 
     /**
@@ -259,6 +357,18 @@ final class UserQuotaController
             'error'   => 'Bad Request',
             'code'    => 'invalid_quota',
             'message' => sprintf('"%s" must be a non-negative integer within range.', $field),
+        ]);
+    }
+
+    private function invalidThrottle(): Response
+    {
+        return (new Response())->status(400)->json([
+            'error'   => 'Bad Request',
+            'code'    => 'invalid_throttle',
+            'message' => sprintf(
+                '"throttle_bps" must be one of the allowed levels (%s).',
+                implode(', ', self::ALLOWED_THROTTLE_BPS),
+            ),
         ]);
     }
 }
