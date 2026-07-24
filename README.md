@@ -725,8 +725,9 @@ The Vue admin console at `/app/admin/*` is backed by these admin-gated endpoints
 | `POST` | `/api/v1/admin/users/{id}/reset-password` | Set a new password |
 | `GET` | `/api/v1/admin/logs`, `/logs/tail`, `/logs/tail-all` | Browse / tail the hub log files |
 | `GET`/`PUT` | `/api/v1/admin/settings` | Read / persist hub settings |
-| `GET` | `/api/v1/admin/users/{id}/bandwidth` | Read any user's current-period relay usage + caps |
+| `GET` | `/api/v1/admin/users/{id}/bandwidth` | Read any user's current-period relay usage + caps (incl. `throttle_bps`) |
 | `PUT` | `/api/v1/admin/users/{id}/quota` | Set a user's download/upload byte caps + concurrent-stream cap |
+| `PUT` | `/api/v1/admin/users/{id}/throttle` | Set a user's durable relay bandwidth throttle (`throttle_bps`; `0` = Unlimited) |
 
 The same logic is also reachable under `/api/v1/me/*` for back-compat (`/me/audit-logs`,
 `/me/logs*`, `/me/hub-settings`, `/me/federation/*`).
@@ -742,6 +743,14 @@ byte caps plus a concurrent-stream cap (`max_concurrent_streams`); `0` means unl
 byte cap the relay proxy refuses with **503** `quota.exceeded`; over the concurrent-stream cap it
 returns **503** `stream.limit`. The concurrent counter is in-memory per HTTP worker (soft-global
 ≈ `max × HUB_WORKERS`).
+
+Independent of the monthly byte caps, each user also has a **durable relay bandwidth throttle**
+(`throttle_bps`, migration `043_relay_user_settings`) — a fixed-level rate cap (`0` = Unlimited, or
+1/3/5/10/20/50 Mbps; default 3 Mbps) set via `PUT /api/v1/admin/users/{id}/throttle` and surfaced on
+both `bandwidth` GETs. Unlike the period-scoped quota it does **not** reset each month. It is enforced
+by a per-connection token bucket on both relay transports (native-client WS relay and the browser
+HTTP-over-relay proxy). See `docs/hub-admin/relay-tuning.md` in
+[phlix-docs](https://github.com/detain/phlix-docs) for the full reference.
 
 ### Relay (WebSocket)
 
