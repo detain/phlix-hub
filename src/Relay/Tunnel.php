@@ -1115,7 +1115,7 @@ final class Tunnel implements TunnelInterface
         $bucket = $client->throttleBucket;
         $now ??= microtime(true);
 
-        while (!empty($this->pendingClientFrames[$channelId])) {
+        while (($this->pendingClientFrames[$channelId] ?? []) !== []) {
             if ($bucket !== null && !$bucket->canSpend($now)) {
                 // No budget this instant — the drain timer resumes on refill.
                 break;
@@ -1134,7 +1134,7 @@ final class Tunnel implements TunnelInterface
             $this->recordClientBytesIn($frameLen);
         }
 
-        if (empty($this->pendingClientFrames[$channelId])) {
+        if (($this->pendingClientFrames[$channelId] ?? []) === []) {
             unset($this->pendingClientFrames[$channelId]);
             $this->cancelThrottleDrain($client);
         } else {

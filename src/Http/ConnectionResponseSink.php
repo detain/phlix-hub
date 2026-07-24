@@ -12,17 +12,21 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http;
 
 use Phlix\Hub\Relay\RelayResponseSink;
+use Phlix\Hub\Relay\TokenBucket;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Coroutine\Channel;
 use Workerman\Protocols\Http\Chunk;
 use Workerman\Protocols\Http\Response as WorkermanResponse;
+use Workerman\Timer;
 
 use function in_array;
 use function is_numeric;
+use function microtime;
 use function strlen;
 use function strpbrk;
 use function strtolower;
+use function strtoupper;
 
 /**
  * Streams a relayed HTTP response straight to the browser {@see TcpConnection},
@@ -58,6 +62,19 @@ use function strtolower;
  * {@see TcpConnection::$maxSendBufferSize}) the sink parks the producing
  * coroutine until `onBufferDrain`, so the upstream relay→hub channel fills and
  * exerts real back-pressure rather than letting the hub queue an unbounded body.
+ *
+ * ### Per-user bandwidth throttle (S43, updates.md #50)
+ * When constructed with a {@see TokenBucket} (built from the owning user's durable
+ * `throttle_bps` by {@see \Phlix\Hub\Http\Controllers\ServerProxyController}), each
+ * body fragment is paced against that bucket in {@see self::body()} before it is
+ * released, mirroring the WS relay path's enforcement (S42). `0` = Unlimited passes
+ * a `null` bucket and the throttle is bypassed entirely (fast path unchanged). The
+ * pace-wait yields the current coroutine via {@see Timer::sleep()} — NEVER a
+ * blocking `sleep()` — so the resident worker's event loop keeps serving every
+ * other request; and because a paced (slow) sink stops pulling the bridge's
+ * capacity-bounded stream channel, throttling exerts real upstream back-pressure
+ * through the SAME bounded mechanism as a slow browser, so the hub never buffers
+ * without bound.
  *
  * ### Short fixed-length responses force-close the connection
  * A fixed-length head promises exactly N body bytes over what may be a
@@ -102,6 +119,15 @@ final class ConnectionResponseSink implements RelayResponseSink
      */
     private const BACKPRESSURE_WAIT_SECONDS = 30.0;
 
+    /**
+     * Minimum coroutine-sleep slice (seconds) used while pacing a throttled body
+     * stream ({@see self::awaitThrottleBudget()}). A tiny positive floor so the
+     * pacing loop always makes forward progress even when the computed wait rounds
+     * to zero — and so a deterministic test whose injected clock advances ONLY via
+     * the sleeper can never spin.
+     */
+    private const float THROTTLE_MIN_SLEEP_SECONDS = 0.001;
+
     /** @var bool Whether the head (status line + headers) has been emitted. */
     private bool $headSent = false;
 
@@ -140,6 +166,30 @@ final class ConnectionResponseSink implements RelayResponseSink
     private readonly Channel $resume;
 
     /**
+     * @var TokenBucket|null Per-user byte-rate throttle bucket (S43, updates.md
+     *          #50). Null when the owning user is Unlimited (`throttle_bps === 0`),
+     *          in which case {@see self::body()} bypasses pacing entirely. Built
+     *          once at stream admission by {@see \Phlix\Hub\Http\Controllers\ServerProxyController}
+     *          from {@see \Phlix\Hub\Hub\RelaySessionManager::getUserThrottleBps()}.
+     */
+    private readonly ?TokenBucket $throttleBucket;
+
+    /**
+     * @var callable(float): void Coroutine-yielding sleeper used to pace a
+     *          throttled stream. Defaults to {@see Timer::sleep()} (suspends only
+     *          the current coroutine, never the event loop); tests inject a fake
+     *          that advances their virtual clock for deterministic pacing.
+     */
+    private $sleeper;
+
+    /**
+     * @var callable(): float Monotonic clock (seconds). Defaults to
+     *          {@see microtime()}; tests inject a virtual clock so the token-bucket
+     *          refill/pace behaviour is deterministic without a running event loop.
+     */
+    private $clock;
+
+    /**
      * @var bool True for a HEAD request. A HEAD response legitimately carries
      *           zero body bytes regardless of its `Content-Length` (RFC 9110
      *           §9.3.2 — the server MUST NOT send content), so the short-body
@@ -149,14 +199,31 @@ final class ConnectionResponseSink implements RelayResponseSink
     private readonly bool $isHead;
 
     /**
-     * @param TcpConnection $connection The live browser connection to stream to.
-     * @param string        $method     The inbound request method (used only to
-     *                                  exempt HEAD from the short-body safeguard).
+     * @param TcpConnection         $connection    The live browser connection to stream to.
+     * @param string                $method        The inbound request method (used only to
+     *                                             exempt HEAD from the short-body safeguard).
+     * @param TokenBucket|null      $throttleBucket Per-user throttle bucket, or null for
+     *                                             Unlimited (S43, updates.md #50) — null
+     *                                             bypasses pacing entirely.
+     * @param (callable(float): void)|null $sleeper Coroutine-yielding sleeper; null uses
+     *                                             {@see Timer::sleep()}. Overridable for tests.
+     * @param (callable(): float)|null     $clock   Monotonic clock; null uses {@see microtime()}.
+     *                                             Overridable for deterministic pacing tests.
      */
-    public function __construct(private readonly TcpConnection $connection, string $method = 'GET')
-    {
+    public function __construct(
+        private readonly TcpConnection $connection,
+        string $method = 'GET',
+        ?TokenBucket $throttleBucket = null,
+        ?callable $sleeper = null,
+        ?callable $clock = null,
+    ) {
         $this->resume = new Channel(1);
         $this->isHead = strtoupper($method) === 'HEAD';
+        $this->throttleBucket = $throttleBucket;
+        $this->sleeper = $sleeper ?? static function (float $seconds): void {
+            Timer::sleep($seconds);
+        };
+        $this->clock = $clock ?? static fn (): float => microtime(true);
     }
 
     /**
@@ -225,6 +292,14 @@ final class ConnectionResponseSink implements RelayResponseSink
             return true;
         }
 
+        // Per-user bandwidth throttle (S43, updates.md #50). Pace this fragment
+        // against the connection's token bucket BEFORE releasing it; Unlimited
+        // (null bucket) skips entirely so the fast path is byte-for-byte
+        // unchanged. The wait yields the coroutine — never a blocking sleep — and
+        // back-pressures the upstream relay→hub channel through the same bounded
+        // mechanism as a slow browser, so throttling grows no unbounded buffer.
+        $this->awaitThrottleBudget();
+
         $payload = $this->chunked ? (string) new Chunk($bytes) : $bytes;
         if ($this->connection->send($payload, true) === false) {
             $this->closed = true;
@@ -241,6 +316,12 @@ final class ConnectionResponseSink implements RelayResponseSink
         // count the raw body bytes regardless of framing.
         $this->bytesStreamed += strlen($bytes);
 
+        // Debit the throttle bucket only AFTER a successful send (mirrors the WS
+        // relay path): a fragment that never reached the wire is never charged.
+        // No-op when Unlimited (null bucket). Meters raw body bytes — the rate the
+        // user perceives — regardless of chunk framing overhead.
+        $this->throttleBucket?->spend((float) strlen($bytes));
+
         // Respect the socket send buffer: if it filled, park until it drains so a
         // slow client cannot make the hub queue the body without bound.
         if ($this->paused) {
@@ -254,6 +335,48 @@ final class ConnectionResponseSink implements RelayResponseSink
         }
 
         return true;
+    }
+
+    /**
+     * Wait — by coroutine yield, NEVER a real sleep — until the per-user token
+     * bucket has positive budget for the next body fragment, then return so the
+     * caller can send it and debit the bucket. A no-op when the stream is
+     * Unlimited (null bucket): the fast path takes no clock read and no yield.
+     *
+     * Pacing is analytic and self-correcting: each iteration refills the bucket
+     * for the real elapsed time and, while still in debt, sleeps exactly long
+     * enough (deficit ÷ rate, plus a tiny floor) for the balance to turn
+     * positive; the loop re-checks in case a sleep under-shot. Gating on
+     * "any positive budget" (not "≥ this fragment's size") mirrors the WS path's
+     * {@see TokenBucket::canSpend()} so an oversized fragment can never deadlock
+     * the stream — it drives the balance into debt that later refills pay off.
+     *
+     * The sleeper suspends only THIS coroutine (via {@see Timer::sleep()}), so
+     * the event loop and every other request on the worker keep running while a
+     * throttled stream waits (Cardinal rule: no blocking sleep in a resident
+     * worker).
+     *
+     * @return void
+     */
+    private function awaitThrottleBudget(): void
+    {
+        $bucket = $this->throttleBucket;
+        if ($bucket === null) {
+            return;
+        }
+
+        while (true) {
+            $available = $bucket->tokens(($this->clock)());
+            if ($available > 0.0) {
+                return;
+            }
+
+            $rate = $bucket->ratePerSecond();
+            $wait = $rate > 0.0
+                ? ((-$available) / $rate) + self::THROTTLE_MIN_SLEEP_SECONDS
+                : self::THROTTLE_MIN_SLEEP_SECONDS;
+            ($this->sleeper)($wait);
+        }
     }
 
     /**

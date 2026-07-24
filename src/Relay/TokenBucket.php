@@ -38,6 +38,16 @@ use function min;
 final class TokenBucket
 {
     /**
+     * Burst window (seconds) used to size a per-user throttle bucket built by
+     * {@see self::fromThrottleBps()}: capacity = rate × this, so a freshly
+     * started stream may burst ~1 second of data immediately for a snappy start,
+     * then settle to the sustained cap. Kept identical to the WS relay path's
+     * {@see \Phlix\Hub\Relay\ClientConnection::THROTTLE_BURST_SECONDS} so the WS
+     * (S42) and HTTP-over-relay proxy (S43) paths pace to the SAME effective cap.
+     */
+    public const float THROTTLE_BURST_SECONDS = 1.0;
+
+    /**
      * @var float Current token balance in bytes. MAY be negative: a frame larger
      *            than the whole bucket is still released (see {@see canSpend()})
      *            and drives the balance into debt that later refills must pay off
@@ -67,6 +77,37 @@ final class TokenBucket
     ) {
         $this->tokens = $capacity;
         $this->updatedAt = $now ?? microtime(true);
+    }
+
+    /**
+     * Build a token bucket for a per-user relay throttle expressed in BITS/sec
+     * (the unit stored in `relay_user_settings.throttle_bps` and returned by
+     * {@see \Phlix\Hub\Hub\RelaySessionManager::getUserThrottleBps()}), or null
+     * when the cap is Unlimited.
+     *
+     * `0` (or any non-positive) = Unlimited returns null so the caller can take an
+     * unthrottled fast path with no bucket overhead — the SAME bypass the WS relay
+     * path uses. A positive cap is converted bits→bytes (÷8) for the sustained
+     * rate and given a {@see self::THROTTLE_BURST_SECONDS}-second burst capacity,
+     * identical to the bucket {@see \Phlix\Hub\Relay\ClientConnection} builds, so
+     * both relay paths enforce the same effective rate.
+     *
+     * @param int        $throttleBps Sustained cap in BITS/sec; `0` = Unlimited.
+     * @param float|null $now         Injectable start clock (seconds); null uses
+     *                                {@see microtime()}. Tests pass a base for
+     *                                deterministic pacing assertions.
+     *
+     * @return self|null A bucket for a finite cap, or null for Unlimited.
+     */
+    public static function fromThrottleBps(int $throttleBps, ?float $now = null): ?self
+    {
+        if ($throttleBps <= 0) {
+            return null;
+        }
+
+        $ratePerSecond = $throttleBps / 8.0; // bits/sec → bytes/sec
+
+        return new self($ratePerSecond, $ratePerSecond * self::THROTTLE_BURST_SECONDS, $now);
     }
 
     /**
