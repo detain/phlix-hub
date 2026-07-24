@@ -748,6 +748,53 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('bar', $written[2]);
     }
 
+    public function test_streaming_read_consults_the_per_user_throttle_for_the_owner(): void
+    {
+        // S43: the streaming path must resolve the OWNING user's durable throttle
+        // (getUserThrottleBps) at admission so the response-body sink can pace
+        // against it. Assert it is read exactly once, for the authenticated
+        // owner. Return 0 = Unlimited so the produced sink streams without pacing
+        // (a positive cap would engage the real Timer::sleep and is exercised
+        // deterministically in ConnectionResponseSinkTest, not here).
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $sessionManager = $this->createMock(RelaySessionManager::class);
+        $sessionManager->method('checkUserQuota')->willReturn(
+            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0],
+        );
+        $sessionManager->expects($this->once())
+            ->method('getUserThrottleBps')
+            ->with('user-1')
+            ->willReturn(0);
+
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge): void {
+            /** @var RelayProxyBridge $bridge */
+            $id = $data['request_id'];
+            $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 200, 'headers' => [
+                'Content-Type' => 'video/mp2t',
+                'Content-Length' => '6',
+            ]]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'foo']);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'bar']);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge, $sessionManager);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'hls/job-abc/seg-00007.ts'],
+        );
+
+        // Unlimited → the full body streams straight through.
+        $connection = $this->drive($response);
+        $written = $connection->written;
+        $this->assertSame('foo', $written[1]);
+        $this->assertSame('bar', $written[2]);
+    }
+
     /**
      * D1 method-denial matrix: mutating methods against the same streaming paths
      * (and the admin `POST /media/merge` sibling) stay always-denied — this is a

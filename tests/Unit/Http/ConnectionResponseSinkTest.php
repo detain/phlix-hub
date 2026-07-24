@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http;
 
 use Phlix\Hub\Http\ConnectionResponseSink;
+use Phlix\Hub\Relay\TokenBucket;
 use PHPUnit\Framework\TestCase;
 use Workerman\Connection\TcpConnection;
 
+use function count;
 use function implode;
 use function str_contains;
+use function str_repeat;
 
 /**
  * @covers \Phlix\Hub\Http\ConnectionResponseSink
@@ -499,5 +502,179 @@ final class ConnectionResponseSinkTest extends TestCase
 
         $head = $connection->written[0];
         $this->assertFalse(str_contains($head, 'Injected'));
+    }
+
+    // ---------------------------------------------------------------------
+    // Per-user bandwidth throttle (S43, updates.md #50)
+    // ---------------------------------------------------------------------
+
+    public function test_unlimited_stream_is_never_paced(): void
+    {
+        // 0 = Unlimited → fromThrottleBps() returns null → the sink takes its
+        // fast path: body() must never invoke the sleeper (no pacing overhead)
+        // and streams every byte immediately.
+        $bucket = TokenBucket::fromThrottleBps(0);
+        $this->assertNull($bucket, '0 = Unlimited must yield no bucket');
+
+        $connection = $this->connection();
+        $sleeperCalls = 0;
+        $sleeper = static function (float $seconds) use (&$sleeperCalls): void {
+            $sleeperCalls++;
+        };
+        $sink = new ConnectionResponseSink($connection, 'GET', $bucket, $sleeper);
+
+        $sink->head(200, ['Content-Type' => 'application/vnd.apple.mpegurl']);
+        for ($i = 0; $i < 50; $i++) {
+            $this->assertTrue($sink->body(str_repeat('y', 1000)));
+        }
+        $sink->end();
+
+        $this->assertSame(0, $sleeperCalls, 'Unlimited (null bucket) must never pace');
+        $this->assertSame(50 * 1000, $sink->bytesStreamed());
+    }
+
+    public function test_throttled_body_stream_is_paced_to_the_configured_cap(): void
+    {
+        // Drive the token bucket deterministically: a virtual clock advanced ONLY
+        // by the injected sleeper, so total elapsed == the time the pacing loop
+        // chose to sleep — no real event loop, no wall-clock flakiness.
+        $now = 1000.0;
+        $slept = 0.0;
+        $clock = static function () use (&$now): float {
+            return $now;
+        };
+        $sleeper = static function (float $seconds) use (&$now, &$slept): void {
+            $now += $seconds;
+            $slept += $seconds;
+        };
+
+        // 8000 bits/sec = 1000 bytes/sec cap, 1 s burst (1000 B capacity).
+        $bucket = TokenBucket::fromThrottleBps(8000, $now);
+        $this->assertNotNull($bucket);
+
+        $connection = $this->connection();
+        $sink = new ConnectionResponseSink($connection, 'GET', $bucket, $sleeper, $clock);
+
+        // Chunked (no Content-Length) so we can stream many fragments freely
+        // without tripping the fixed-length short-body safeguard.
+        $sink->head(200, ['Content-Type' => 'application/vnd.apple.mpegurl']);
+
+        $fragment = str_repeat('x', 100); // 100-byte fragments
+        $fragments = 200;                 // 20 000 bytes total
+        for ($i = 0; $i < $fragments; $i++) {
+            $this->assertTrue($sink->body($fragment));
+        }
+        $sink->end();
+
+        $bytes = $fragments * 100;
+        $this->assertSame($bytes, $sink->bytesStreamed());
+
+        // The stream was actually paced (a real, substantial virtual wait), not
+        // let through instantly — this is the anti-tautology guard.
+        $this->assertGreaterThan(0.0, $slept, 'a finite cap must pace (sleep) the stream');
+
+        // Realised throughput must track the 1000 B/s cap. It sits slightly ABOVE
+        // the cap for a finite run (the initial 1 s burst is delivered "for free")
+        // and converges downward to the cap as the run grows; it is never far
+        // below it. Assert a tight band around the configured cap.
+        $realisedRate = $bytes / $slept;
+        $this->assertGreaterThanOrEqual(1000.0 * 0.95, $realisedRate, 'throttle under-delivered vs cap');
+        $this->assertLessThanOrEqual(1000.0 * 1.10, $realisedRate, 'throttle over-delivered vs cap');
+
+        // Bounded memory: the sink buffers nothing — each fragment is passed
+        // straight through as exactly one chunk write, so under sustained
+        // over-rate the sink's footprint stays O(1). Writes = head (1) + one per
+        // fragment + the terminating zero-chunk from end() (1) — none dropped,
+        // duplicated, or accumulated.
+        $this->assertSame($fragments + 2, count($connection->written));
+    }
+
+    public function test_a_throttled_stream_does_not_affect_a_concurrent_unlimited_stream(): void
+    {
+        // Model two users multiplexed on one worker: each has its OWN sink +
+        // bucket + clock. Throttling one must not pace the other — the throttle
+        // is strictly per-connection state (no shared/static throttle).
+
+        // User A — throttled at 1000 B/s.
+        $aNow = 0.0;
+        $aSlept = 0.0;
+        $aClock = static function () use (&$aNow): float {
+            return $aNow;
+        };
+        $aSleeper = static function (float $seconds) use (&$aNow, &$aSlept): void {
+            $aNow += $seconds;
+            $aSlept += $seconds;
+        };
+        $aConn = $this->connection();
+        $aSink = new ConnectionResponseSink(
+            $aConn,
+            'GET',
+            TokenBucket::fromThrottleBps(8000, $aNow),
+            $aSleeper,
+            $aClock,
+        );
+
+        // User B — Unlimited (null bucket). Its sleeper must NEVER fire.
+        $bSleeperCalls = 0;
+        $bSleeper = static function (float $seconds) use (&$bSleeperCalls): void {
+            $bSleeperCalls++;
+        };
+        $bConn = $this->connection();
+        $bSink = new ConnectionResponseSink(
+            $bConn,
+            'GET',
+            TokenBucket::fromThrottleBps(0),
+            $bSleeper,
+        );
+
+        $aSink->head(200, ['Content-Type' => 'application/vnd.apple.mpegurl']);
+        $bSink->head(200, ['Content-Type' => 'application/vnd.apple.mpegurl']);
+
+        // Interleave the two streams.
+        $fragment = str_repeat('z', 500);
+        for ($i = 0; $i < 60; $i++) {
+            $this->assertTrue($aSink->body($fragment));
+            $this->assertTrue($bSink->body($fragment));
+        }
+        $aSink->end();
+        $bSink->end();
+
+        // A was paced; B was never touched by A's throttle.
+        $this->assertGreaterThan(0.0, $aSlept, 'the throttled stream must have been paced');
+        $this->assertSame(0, $bSleeperCalls, 'the Unlimited concurrent stream must never be paced');
+        $this->assertSame(60 * 500, $aSink->bytesStreamed());
+        $this->assertSame(60 * 500, $bSink->bytesStreamed());
+    }
+
+    public function test_an_oversized_fragment_never_deadlocks_a_throttled_stream(): void
+    {
+        // A fragment far larger than the whole bucket must still be released
+        // (mirrors the WS path: canSpend gates on ANY positive budget, so an
+        // oversized fragment drives the balance into debt that later refills pay
+        // off — it can never permanently block the stream).
+        $now = 0.0;
+        $slept = 0.0;
+        $clock = static function () use (&$now): float {
+            return $now;
+        };
+        $sleeper = static function (float $seconds) use (&$now, &$slept): void {
+            $now += $seconds;
+            $slept += $seconds;
+        };
+
+        // 8000 bits/sec = 1000 B/s cap, 1000 B burst capacity.
+        $bucket = TokenBucket::fromThrottleBps(8000, $now);
+        $connection = $this->connection();
+        $sink = new ConnectionResponseSink($connection, 'GET', $bucket, $sleeper, $clock);
+
+        $sink->head(200, ['Content-Type' => 'video/mp2t']);
+        // 10 000 bytes — 10x the whole bucket — must still be delivered.
+        $this->assertTrue($sink->body(str_repeat('q', 10_000)));
+        // A second fragment must wait off the debt the first one drove, then go.
+        $this->assertTrue($sink->body(str_repeat('q', 10_000)));
+        $sink->end();
+
+        $this->assertSame(20_000, $sink->bytesStreamed());
+        $this->assertGreaterThan(0.0, $slept, 'the second oversized fragment must wait off the debt');
     }
 }

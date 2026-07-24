@@ -62,6 +62,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     `ClientMountController`), fail-OPEN: a lookup error mounts the connection
     Unlimited rather than refusing/delaying the mount.
 
+- **Per-user relay bandwidth THROTTLE — enforcement on the browser HTTP-over-relay
+  proxy path (S43, updates.md #50).** The same `throttle_bps` cap is now enforced
+  for browser playback proxied through the hub (`/api/v1/servers/{id}/proxy/…`
+  HLS/DASH segments + the direct-play byte stream), completing S42's WS-path work
+  so both remote-streaming paths pace to one cap. `0` = Unlimited streams
+  unthrottled; an unconfigured user is capped at the 3 Mbps default.
+  - **Reuses `Relay\TokenBucket`** (the S42 primitive — not reimplemented) via a
+    new static named-constructor `TokenBucket::fromThrottleBps()` that builds a
+    bucket from a bits/sec cap (bits→bytes, 1 s burst capacity) or returns `null`
+    for Unlimited — the SAME rate/capacity the WS `ClientConnection` builds.
+  - **`ServerProxyController::buildStreamingResponse()`** resolves the owning
+    user's durable throttle once at stream admission
+    (`RelaySessionManager::getUserThrottleBps()`) and hands the bucket to the
+    response-body sink; the buffered JSON-browse path is unaffected.
+  - **`Http\ConnectionResponseSink::body()`** paces each response-body fragment
+    against the bucket before releasing it and debits it only after a successful
+    send. The wait is a COROUTINE yield (`Workerman\Timer::sleep`) — never a
+    blocking `sleep()` — so the resident worker keeps serving every other request;
+    Unlimited (null bucket) takes the unchanged fast path.
+  - **Bounded buffer.** The sink buffers nothing (O(1) pass-through); a paced sink
+    stops pulling the bridge's capacity-bounded stream channel, so throttling
+    exerts real upstream back-pressure through the SAME mechanism as a slow browser
+    — the hub never queues the body without bound.
+
 ### Fixed
 
 - **Per-user relay THROTTLE reverted to 3 Mbps on the 1st of every month (S42

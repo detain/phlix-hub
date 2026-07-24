@@ -118,4 +118,43 @@ final class TokenBucketTest extends TestCase
         $this->assertGreaterThanOrEqual($expected - (2 * $frame), $sent);
         $this->assertLessThanOrEqual($expected + (2 * $frame), $sent);
     }
+
+    public function testFromThrottleBpsReturnsNullForUnlimited(): void
+    {
+        // 0 = Unlimited must yield NO bucket so the caller (WS/HTTP paths) takes
+        // its unthrottled fast path.
+        $this->assertNull(TokenBucket::fromThrottleBps(0));
+        // Defensive: any non-positive cap is treated as Unlimited too.
+        $this->assertNull(TokenBucket::fromThrottleBps(-1));
+    }
+
+    public function testFromThrottleBpsConvertsBitsToBytesAndSizesBurst(): void
+    {
+        // 24 Mbps = 24_000_000 bits/sec → 3_000_000 bytes/sec sustained rate,
+        // with a THROTTLE_BURST_SECONDS (1 s) burst capacity = 3_000_000 bytes.
+        $bucket = TokenBucket::fromThrottleBps(24_000_000, 500.0);
+
+        $this->assertNotNull($bucket);
+        $this->assertSame(3_000_000.0, $bucket->ratePerSecond());
+        $this->assertSame(3_000_000.0 * TokenBucket::THROTTLE_BURST_SECONDS, $bucket->capacity());
+        // Starts full at capacity for a snappy burst at the injected base clock.
+        $this->assertSame(3_000_000.0, $bucket->tokens(500.0));
+    }
+
+    public function testFromThrottleBpsMatchesTheWsPathBucketForTheSameCap(): void
+    {
+        // The HTTP-proxy factory (S43) must produce the SAME rate + capacity the
+        // WS path (S42, ClientConnection) builds inline, so both enforce one cap.
+        $throttleBps = 3_000_000; // the S41 default (3 Mbps)
+        $bucket = TokenBucket::fromThrottleBps($throttleBps, 0.0);
+        $this->assertNotNull($bucket);
+
+        // Mirror of ClientConnection's inline construction.
+        $rate = $throttleBps / 8.0;
+        $expected = new TokenBucket($rate, $rate * TokenBucket::THROTTLE_BURST_SECONDS, 0.0);
+
+        $this->assertSame($expected->ratePerSecond(), $bucket->ratePerSecond());
+        $this->assertSame($expected->capacity(), $bucket->capacity());
+        $this->assertSame($expected->tokens(0.0), $bucket->tokens(0.0));
+    }
 }

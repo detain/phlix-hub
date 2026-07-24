@@ -19,6 +19,7 @@ use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\ConnectionResponseSink;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
+use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Hub\ServerInfoDto;
@@ -660,6 +661,14 @@ final class ServerProxyController
      * server — so a multi-MB segment (or a whole direct-play file) never has to
      * be buffered on the hub before the first byte reaches the client.
      *
+     * ### Per-user bandwidth throttle (S43, updates.md #50)
+     * The owning user's durable throttle (`throttle_bps`; `0` = Unlimited) is read
+     * ONCE here and turned into a {@see TokenBucket} the {@see ConnectionResponseSink}
+     * paces the response body against, mirroring the WS relay path (S42). Unlimited
+     * passes a null bucket so the sink streams unthrottled. Pacing is a coroutine
+     * yield inside the sink (never a blocking sleep) and rides the existing bounded
+     * back-pressure, so it adds no unbounded buffering.
+     *
      * ### Bandwidth accounting + concurrency (HB-3.4 G1/G3)
      * The user has already cleared the concurrent-stream cap in {@see self::proxy()};
      * here we OCCUPY a stream slot for them ({@see RelaySessionManager::beginUserStream()})
@@ -698,6 +707,15 @@ final class ServerProxyController
     ): Response {
         $sessionManager = $this->sessionManager;
 
+        // Per-user bandwidth throttle (S43, updates.md #50): resolve the owning
+        // user's DURABLE cap (bits/sec; `0` = Unlimited) ONCE at stream admission
+        // — never per fragment — and build the token bucket the response-body sink
+        // paces against. Unlimited yields a null bucket so the sink takes its
+        // unthrottled fast path. This is the SAME cap the WS relay path enforces.
+        $throttleBucket = TokenBucket::fromThrottleBps(
+            $sessionManager->getUserThrottleBps($userId),
+        );
+
         // HB-3.4 G3: occupy a concurrent-stream slot for this admitted stream.
         $sessionManager->beginUserStream($userId);
 
@@ -727,8 +745,9 @@ final class ServerProxyController
             $userId,
             $requestBodyBytes,
             $release,
+            $throttleBucket,
         ): void {
-            $sink = new ConnectionResponseSink($connection, $method);
+            $sink = new ConnectionResponseSink($connection, $method, $throttleBucket);
             try {
                 $bridge->stream(
                     $serverId,
