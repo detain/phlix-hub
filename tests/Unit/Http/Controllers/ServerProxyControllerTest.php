@@ -538,6 +538,254 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertFalse($forwarded);
     }
 
+    // ---------------------------------------------------------------------
+    // S100: music library browse scope (`/api/v1/music`).
+    // ---------------------------------------------------------------------
+
+    /**
+     * S100 scope matrix for the music prefix, asserted DIRECTLY against
+     * {@see ServerProxyController::isWithinBrowseScope()} so both the allow and
+     * the DENY side are pinned — a test that only asserted the allow case would
+     * still pass if the gate were removed altogether.
+     *
+     * Allowed: every music READ the SPA issues, under GET and HEAD, reached via
+     * the single `/api/v1/music` prefix (exact collection path + `/`-delimited
+     * sub-paths, including the two-segment `tracks/{id}` the player calls at play
+     * time to mint a `stream_url`).
+     *
+     * Denied: (a) `POST /api/v1/music/scan` — a REAL server route registered
+     * under the same prefix (`WebPortalRouter`), so it proves the prefix did not
+     * leak a write; (b) every other write verb on a music path, incl. PATCH;
+     * (c) bare textual siblings (`/api/v1/musicXYZ`, `/api/v1/music-admin`) which
+     * share the prefix string but are not sub-paths; (d) an unlisted sibling API
+     * family (`/api/v1/musicbrainz`).
+     *
+     * @return iterable<string, array{0: string, 1: string, 2: bool}>
+     */
+    public static function musicBrowseScopeProvider(): iterable
+    {
+        $allowedPaths = [
+            'music collection root' => '/api/v1/music',
+            'artists list' => '/api/v1/music/artists',
+            'artist detail' => '/api/v1/music/artists/mbid-123',
+            'albums list' => '/api/v1/music/albums',
+            'album detail' => '/api/v1/music/albums/mbid-456',
+            'tracks list' => '/api/v1/music/tracks',
+            'track by id' => '/api/v1/music/tracks/track-789',
+            'now playing' => '/api/v1/music/now-playing',
+        ];
+
+        foreach (['GET', 'HEAD'] as $method) {
+            foreach ($allowedPaths as $label => $path) {
+                yield "{$method} {$label} allowed" => [$method, $path, true];
+            }
+        }
+
+        // Lower-case verbs are upper-cased before the gate.
+        yield 'lower-case get artists allowed' => ['get', '/api/v1/music/artists', true];
+
+        // (a) The scan POST is a real route on the SAME prefix — must stay denied.
+        yield 'POST music scan denied' => ['POST', '/api/v1/music/scan', false];
+        yield 'POST artists denied' => ['POST', '/api/v1/music/artists', false];
+
+        // (b) Every other write verb on a music path fails closed.
+        yield 'PUT music track denied' => ['PUT', '/api/v1/music/tracks/track-789', false];
+        yield 'DELETE music track denied' => ['DELETE', '/api/v1/music/tracks/track-789', false];
+        yield 'PATCH music track denied' => ['PATCH', '/api/v1/music/tracks/track-789', false];
+        yield 'PATCH music root denied' => ['PATCH', '/api/v1/music', false];
+
+        // (c) Bare textual siblings are NOT sub-paths of the prefix.
+        yield 'GET musicXYZ sibling denied' => ['GET', '/api/v1/musicXYZ', false];
+        yield 'GET musicXYZ sub-path denied' => ['GET', '/api/v1/musicXYZ/artists', false];
+        yield 'GET music-admin sibling denied' => ['GET', '/api/v1/music-admin/scan', false];
+        yield 'HEAD musicXYZ sibling denied' => ['HEAD', '/api/v1/musicXYZ', false];
+
+        // (d) An unlisted neighbouring API family stays denied.
+        yield 'GET musicbrainz denied' => ['GET', '/api/v1/musicbrainz/artists', false];
+
+        // Control: an admin path must never ride the widened allowlist.
+        yield 'GET admin music denied' => ['GET', '/api/v1/admin/music/scan', false];
+    }
+
+    /**
+     * @dataProvider musicBrowseScopeProvider
+     */
+    public function test_music_browse_scope_gate(string $method, string $path, bool $expected): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+        /** @var bool $inScope */
+        $inScope = $reflected->invoke($controller, $method, $path);
+
+        $this->assertSame(
+            $expected,
+            $inScope,
+            $expected
+                ? "{$method} {$path} must be within browse scope"
+                : "{$method} {$path} must fail closed (out of browse scope)",
+        );
+    }
+
+    /**
+     * S100 end-to-end: a music browse GET clears every gate and is forwarded over
+     * the relay bridge with the path intact. Before the `/api/v1/music` allowlist
+     * entry this was 403 `proxy.scope_denied`, which the SPA's
+     * `catch { artists.value = [] }` rendered as an EMPTY music library.
+     */
+    public function test_music_artists_get_is_forwarded(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{"artists":[]}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/music/artists'],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertIsArray($forwarded);
+        $this->assertSame('/api/v1/music/artists', $forwarded['path']);
+    }
+
+    /**
+     * S100 end-to-end: the two-segment `tracks/{id}` read (the player mints a
+     * `stream_url` from it at play time) is covered by the same prefix.
+     */
+    public function test_music_track_by_id_get_is_forwarded(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{"track":{"id":"track-789"}}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/music/tracks/track-789'],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertIsArray($forwarded);
+        $this->assertSame('/api/v1/music/tracks/track-789', $forwarded['path']);
+    }
+
+    /**
+     * S100 deny side, end-to-end. The widened READ prefix must not have leaked a
+     * write: `POST /api/v1/music/scan` is a real server route under the same
+     * prefix, and a bare sibling (`/api/v1/musicXYZ`) is not a sub-path. Both
+     * must 403 `proxy.scope_denied` and never reach the relay bridge.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function deniedMusicScopeProvider(): iterable
+    {
+        yield 'POST music scan (write on the read prefix)' => ['POST', 'api/v1/music/scan'];
+        yield 'PUT music track' => ['PUT', 'api/v1/music/tracks/track-789'];
+        yield 'DELETE music track' => ['DELETE', 'api/v1/music/tracks/track-789'];
+        yield 'PATCH music artists' => ['PATCH', 'api/v1/music/artists'];
+        yield 'GET musicXYZ sibling' => ['GET', 'api/v1/musicXYZ'];
+        yield 'GET musicbrainz sibling family' => ['GET', 'api/v1/musicbrainz/artists'];
+    }
+
+    /**
+     * @dataProvider deniedMusicScopeProvider
+     */
+    public function test_denied_music_paths_return_403_and_are_not_forwarded(string $method, string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request($method, 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(403, $response->statusCode, "{$method} /{$path} must fail closed");
+        $this->assertFalse($forwarded, "{$method} /{$path} must never reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * S100 must not weaken the DLNA posture. The hub allowlist has no `/dlna`
+     * entry (phlix-server's `RelayRequestDispatcher` additionally hard-denies
+     * `/dlna/`, `/cds/`, `/scpd/` and `/description.xml` precisely because it
+     * trusts that omission). `/api/v1/music` and `/dlna` are separate surfaces:
+     * allowing music must leave every DLNA path scope-denied.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function dlnaStillDeniedProvider(): iterable
+    {
+        yield 'dlna description' => ['/dlna/description.xml'];
+        yield 'dlna content directory' => ['/dlna/content_directory'];
+        yield 'dlna stream' => ['/dlna/stream/item-123'];
+        yield 'cds control' => ['/cds/control'];
+        yield 'scpd service' => ['/scpd/ContentDirectory.xml'];
+        yield 'bare description.xml' => ['/description.xml'];
+    }
+
+    /**
+     * @dataProvider dlnaStillDeniedProvider
+     */
+    public function test_dlna_paths_remain_out_of_browse_scope(string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        foreach (['GET', 'HEAD'] as $method) {
+            $this->assertFalse(
+                $reflected->invoke($controller, $method, $path),
+                "{$method} {$path} must stay out of browse scope (DLNA is a separate surface)",
+            );
+        }
+    }
+
     /**
      * D1 accept matrix: GET and HEAD to representative playback-read paths under
      * the newly-allowed `/hls`, `/dash`, `/media`, `/api/v1/transcode` prefixes

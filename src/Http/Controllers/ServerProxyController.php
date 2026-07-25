@@ -51,9 +51,9 @@ use const JSON_THROW_ON_ERROR;
  * process that owns the tunnel) and returns the server's response.
  *
  * Scope: read-only traffic only — JSON browse (libraries, media lists, detail,
- * search) PLUS playback reads (HLS/DASH playlists + segments, the direct-play
- * byte stream, and transcode-job status polling) — with ONE narrowly-scoped
- * write exception: starting an on-demand transcode
+ * search, music library) PLUS playback reads (HLS/DASH playlists + segments, the
+ * direct-play byte stream, and transcode-job status polling) — with ONE
+ * narrowly-scoped write exception: starting an on-demand transcode
  * (`POST /api/v1/media/{id}/transcode`), which a player needs before it can
  * stream an incompatible title. See {@see self::BROWSE_SCOPE_ALLOWLIST} for the
  * GET/HEAD path prefixes and {@see self::BROWSE_SCOPE_PATTERNS} for the exact,
@@ -120,9 +120,9 @@ final class ServerProxyController
      *
      * The proxy exposes READ-ONLY traffic to an authenticated, server-owning
      * hub user in two families: (1) JSON browse — libraries, media lists/detail,
-     * search, images/posters, OPDS catalog; and (2) playback reads — the HLS and
-     * DASH playlists + segments, the direct-play byte stream, and transcode-job
-     * status polling. Anything outside this set — notably admin, mutating, or
+     * search, images/posters, OPDS catalog, music library (artists/albums/tracks);
+     * and (2) playback reads — the HLS and DASH playlists + segments, the
+     * direct-play byte stream, and transcode-job status polling. Anything outside this set — notably admin, mutating, or
      * scan endpoints — is rejected with 403 `proxy.scope_denied` BEFORE
      * forwarding, so a compromised/confused client cannot use the hub as a
      * deputy to reach privileged server APIs. (The one permitted write — the
@@ -161,6 +161,25 @@ final class ServerProxyController
             '/api/v1/people',
             '/api/v1/images',
             '/api/v1/opds',
+            // S100: music library browse (Artist→Album→Track). One prefix covers
+            // every music READ the SPA issues — `/artists`, `/artists/{mbid}`,
+            // `/albums`, `/albums/{mbid}`, `/tracks`, `/tracks/{id}` (called
+            // lazily at play time to mint a `stream_url`) and `/now-playing` —
+            // because each is a `/`-delimited sub-path of `/api/v1/music`.
+            // Without this entry every one of them was 403 `proxy.scope_denied`,
+            // which the SPA renders as an EMPTY music library rather than an
+            // error. Server-side these are all inside an `AuthMiddleware` group
+            // on BOTH dispatch paths (`Application::loadMusicRoutes()` and
+            // `WebPortalRouter::registerRoutes()`), so no unauthenticated
+            // surface is exposed by allowing them here.
+            //
+            // GET/HEAD ONLY, deliberately: the server also registers a
+            // `POST /api/v1/music/scan` under this SAME prefix (a library-scan
+            // trigger). Adding `/api/v1/music` to any write-method key — or
+            // converting this to a broad write prefix — would expose that scan
+            // trigger over the relay. Browse scope stays read-only; the scan
+            // POST has no entry in EITHER map and fails closed.
+            '/api/v1/music',
             // Playback reads (bytes). The server exposes HLS/DASH and the direct
             // byte stream at the ROOT (not under /api/v1), so the forward tail is
             // bare. `/hls` + `/dash` cover every per-variant playlist
@@ -187,6 +206,9 @@ final class ServerProxyController
             '/api/v1/people',
             '/api/v1/images',
             '/api/v1/opds',
+            // S100: music library browse — mirror of the GET block (same
+            // read-only prefix; `POST /api/v1/music/scan` stays unlisted).
+            '/api/v1/music',
             // Playback reads — mirror of the GET block (players issue HEAD to
             // probe segment size / range support before a ranged GET).
             '/hls',
