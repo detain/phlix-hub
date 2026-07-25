@@ -26,15 +26,20 @@ use Phlix\Shared\Hub\ServerInfoDto;
 use Workerman\Connection\TcpConnection;
 
 use function base64_decode;
+use function count;
 use function explode;
+use function implode;
 use function in_array;
 use function is_int;
 use function is_string;
 use function json_encode;
 use function ltrim;
 use function preg_match;
+use function preg_replace;
 use function rawurldecode;
+use function rtrim;
 use function str_contains;
+use function str_replace;
 use function str_starts_with;
 use function strtolower;
 use function strtoupper;
@@ -122,21 +127,53 @@ final class ServerProxyController
      * hub user in two families: (1) JSON browse — libraries, media lists/detail,
      * search, images/posters, OPDS catalog, music library (artists/albums/tracks);
      * and (2) playback reads — the HLS and DASH playlists + segments, the
-     * direct-play byte stream, and transcode-job status polling. Anything outside this set — notably admin, mutating, or
-     * scan endpoints — is rejected with 403 `proxy.scope_denied` BEFORE
-     * forwarding, so a compromised/confused client cannot use the hub as a
-     * deputy to reach privileged server APIs. (The one permitted write — the
-     * transcode-START POST — lives in {@see self::BROWSE_SCOPE_PATTERNS}, since
-     * its id is a variable middle segment a prefix cannot express.)
+     * direct-play byte stream, and transcode-job status polling. Anything
+     * outside this set — notably admin, mutating, or scan endpoints — is
+     * rejected with 403 `proxy.scope_denied` BEFORE forwarding, so a
+     * compromised/confused client cannot use the hub as a deputy to reach
+     * privileged server APIs. (The one permitted write — the transcode-START
+     * POST — lives in {@see self::BROWSE_SCOPE_PATTERNS}, since its id is a
+     * variable middle segment a prefix cannot express.)
      *
      * Keyed by HTTP method (upper-case); each value is a list of allowed path
      * prefixes matched against the resolved `/`-prefixed forward path by
      * {@see self::isWithinBrowseScope()} (exact match, or a `/`-delimited
      * sub-path — never a bare sibling like `/hlsX`). Path traversal can never
      * ride a widened prefix: {@see self::hasTraversalSegment()} rejects any
-     * dot-segment or encoded separator BEFORE this allowlist is consulted.
+     * dot-segment, path-parameter (`..;`), control byte or encoded separator —
+     * in the raw path AND in every successive percent-decoding of it — BEFORE
+     * this allowlist is consulted. A short {@see self::SCOPE_DENY_PATTERNS} list
+     * is consulted before BOTH maps for the handful of real server routes that
+     * sit INSIDE an allowlisted read prefix but must never be forwarded under
+     * any method.
      *
-     * NOTE: only GET/HEAD read families are listed HERE. Every WRITE action
+     * ### HEAD is not exposed through the proxy (deliberate, and inert by design)
+     * {@see \Phlix\Hub\Http\Router} has no `head()` registrar and
+     * {@see \Phlix\Hub\Http\Router::dispatch()} 404s an unregistered method with
+     * NO HEAD→GET fallback (unlike phlix-server's router), and
+     * {@see \Phlix\Hub\Application} registers the proxy for GET/POST/PUT/PATCH/
+     * DELETE only — so a HEAD can never reach this controller. The `HEAD` key
+     * below therefore documents INTENT for the playback families that already
+     * have SOME HEAD-aware machinery (HB-0.3). Be precise about what that
+     * machinery is, because it is less than it sounds: the buffered bridge path
+     * completes a HEAD on END without waiting for body frames,
+     * {@see self::replyTimeoutForPath()} branches on `GET`/`HEAD`, and
+     * {@see ConnectionResponseSink::forceCloseIfShort()} EXEMPTS a HEAD from the
+     * short-body force-close safeguard. That is all of it. There is NO body
+     * suppression anywhere in the hub, and the sink is only reached on the
+     * STREAMING path — which {@see self::isStreamingPath()} restricts to GET —
+     * so that exemption is doubly inert. The key grants nothing today. Do NOT
+     * read it as working behaviour, and do not add a family to it expecting HEAD
+     * to work. Making HEAD live needs three things landed TOGETHER: (1) a
+     * `Router::head()` registrar + a HEAD proxy route, (2) body suppression
+     * ADDED to the BUFFERED reply path
+     * ({@see self::buildResponse()} would otherwise return a body on a HEAD,
+     * desyncing keep-alive clients), and (3) an accepted cost for buffered
+     * families — a HEAD to a JSON browse prefix makes the server produce the
+     * WHOLE body (and, for music, mint an HMAC URL per row) only for the hub to
+     * throw it away. That cost is why the S100 music prefix is GET-only.
+     *
+     * NOTE: only GET read families are reachable HERE. Every WRITE action
      * (HB-3.1 write-over-relay) is an ANCHORED per-action PCRE in
      * {@see self::BROWSE_SCOPE_PATTERNS} (POST/PUT/DELETE keys) — never a broad
      * prefix — so a future non-intended `/api/v1/media/{id}/…` write route
@@ -173,12 +210,17 @@ final class ServerProxyController
             // `WebPortalRouter::registerRoutes()`), so no unauthenticated
             // surface is exposed by allowing them here.
             //
-            // GET/HEAD ONLY, deliberately: the server also registers a
+            // GET ONLY, deliberately (S100 fix round 1: not mirrored under HEAD
+            // either — see the HEAD block). The server also registers a
             // `POST /api/v1/music/scan` under this SAME prefix (a library-scan
             // trigger). Adding `/api/v1/music` to any write-method key — or
             // converting this to a broad write prefix — would expose that scan
-            // trigger over the relay. Browse scope stays read-only; the scan
-            // POST has no entry in EITHER map and fails closed.
+            // trigger over the relay. Browse scope stays read-only; the scan POST
+            // has no entry in EITHER map, and `/api/v1/music/scan` is
+            // additionally pinned in {@see self::SCOPE_DENY_PATTERNS} so the READ
+            // verbs cannot reach it either (it 404s server-side today only
+            // because that route happens to be registered POST-only — the hub
+            // must not depend on that accident).
             '/api/v1/music',
             // Playback reads (bytes). The server exposes HLS/DASH and the direct
             // byte stream at the ROOT (not under /api/v1), so the forward tail is
@@ -206,11 +248,17 @@ final class ServerProxyController
             '/api/v1/people',
             '/api/v1/images',
             '/api/v1/opds',
-            // S100: music library browse — mirror of the GET block (same
-            // read-only prefix; `POST /api/v1/music/scan` stays unlisted).
-            '/api/v1/music',
-            // Playback reads — mirror of the GET block (players issue HEAD to
-            // probe segment size / range support before a ranged GET).
+            // S100 fix round 1: `/api/v1/music` is deliberately NOT mirrored
+            // here. HEAD cannot reach this controller at all (see the HEAD
+            // section of this docblock), no Phlix client issues HEAD through the
+            // proxy, and a HEAD to this BUFFERED family would cost the server a
+            // whole music payload (plus one HMAC signed URL per track row) for a
+            // body the hub then discards. Music browse is GET-only.
+            //
+            // Playback reads — mirror of the GET block. These are the families a
+            // player WOULD probe with HEAD for size/range support before a ranged
+            // GET, and their HEAD machinery exists (HB-0.3), but no HEAD is
+            // routed to this controller today, so these grant nothing yet.
             '/hls',
             '/dash',
             '/media',
@@ -321,6 +369,98 @@ final class ServerProxyController
             '#^/api/v1/media/[^/]+/rating$#',
         ],
     ];
+
+    /**
+     * Hard denies, consulted by {@see self::isWithinBrowseScope()} BEFORE both
+     * scope maps and for EVERY method: real phlix-server routes that sit INSIDE
+     * an allowlisted read prefix but must never be forwarded over the relay.
+     *
+     * The prefix allowlist is a coarse instrument — allowing `/api/v1/music`
+     * necessarily allows every sub-path under it, including sub-paths the server
+     * registers for a WRITE verb. Today `POST /api/v1/music/scan`
+     * (`WebPortalRouter`, an arbitrary-path `is_dir()` + blocking
+     * `scanDirectory()` that is auth-gated but NOT admin-gated) is refused
+     * because it appears in no scope map, and `GET`/`HEAD /api/v1/music/scan`
+     * 404 on the server only because that route happens to be registered
+     * POST-only. That is the SERVER's route table doing the work, not this gate:
+     * one `$r->get('/api/v1/music/scan', …)` or one
+     * `GET /api/v1/music/{action}` catch-all on the server would silently turn
+     * the hub into a deputy for a scan trigger. Pinning it here makes the hub's
+     * own gate authoritative.
+     *
+     * ### Matched against every SPELLING, not just the literal one (S100 fix r2)
+     * A deny list compared only against the raw path is trivially evaded, and the
+     * evasions all land back on the SAME accidental peer behaviour this pin
+     * exists to stop relying on. `/api/v1/music/%73can`, `/%2573can`,
+     * `//scan`, `/scan;x`, `/scan.` and `/scan%20` used to be forwarded, and
+     * 404'd only because phlix-server (a) never `rawurldecode()`s
+     * `Request::$path`, (b) never collapses duplicate `/`, and (c) never strips
+     * path parameters. {@see self::isWithinBrowseScope()} therefore matches each
+     * pattern against EVERY candidate form {@see self::decodeCandidates()}
+     * produces (the raw path plus each successive percent-decoding) after
+     * {@see self::normaliseForDenyMatch()} applies the normalisations a downstream
+     * HTTP stack, router or filesystem plausibly applies: `;` treated as a segment
+     * terminator, trailing `.`/space stripped from every segment, and duplicate
+     * `/` collapsed. That is what makes the claim above TRUE rather than
+     * aspirational.
+     *
+     * Scope of the guarantee, stated precisely — this is the exact bound, not an
+     * aspiration. The pin is authoritative for these four transformations and for
+     * **any composition of them, in any order**:
+     *  1. percent-decoding, up to {@see self::MAX_TRAVERSAL_DECODE_PASSES} passes
+     *     (a form still decoding at the cap is refused outright by
+     *     {@see self::hasTraversalSegment()}, so nothing escapes past the bound);
+     *  2. `;` as a segment terminator — which subsumes path-parameter stripping;
+     *  3. trailing `.` and space trimmed from EVERY segment (not merely from the
+     *     end of the path — see {@see self::normaliseForDenyMatch()}, where a
+     *     tail-only trim let `scan./` and `scan.;x` through in r2);
+     *  4. duplicate `/` collapsed.
+     * It does NOT model a normaliser the hub has no reason to expect: IIS-style
+     * overlong-UTF-8 (`%c0%ae`), `%uXXXX` or fullwidth-`．` folding, because
+     * neither PHP, Workerman nor phlix-server performs any of them, so such a form
+     * can never BECOME `scan` downstream either. `+`→space is likewise not
+     * modelled: that is `urldecode()`, not `rawurldecode()`, and no component in
+     * the chain applies it to a path (verified by grep against phlix-server's
+     * `Router`/`Request`/`WebPortalRouter`/`Application`) — so `scan+` never
+     * becomes a trimmable `scan `. If a peer ever adds one of these, this deny
+     * matcher must be widened in the same commit. Encoded/literal separators
+     * (`%2f`, `%5c`, `\`) need no handling here: they are rejected outright,
+     * earlier, by {@see self::hasTraversalSegment()}.
+     *
+     * Each entry is a FULLY-ANCHORED PCRE covering the route and any sub-path
+     * (`(/|$)`), matched case-INsensitively because the allowlist match is
+     * case-sensitive and would otherwise let `/api/v1/music/SCAN` past while the
+     * server's route table decides for us. Deliberately anchored on the FULL
+     * path (never a bare `scan` segment): music artist/album ids are the artist
+     * and album NAMES, so a bare segment rule would 403 a band called "Scan"
+     * (`/api/v1/music/artists/Scan` — pinned allowed by a test).
+     *
+     * @var list<non-empty-string>
+     */
+    private const SCOPE_DENY_PATTERNS = [
+        '#^/api/v1/music/scan(/|$)#i',
+    ];
+
+    /**
+     * Maximum percent-decoding passes {@see self::hasTraversalSegment()} applies
+     * while normalising a forward path.
+     *
+     * A legitimate path reaches a fixed point in ONE pass (`Pink%20Floyd` →
+     * `Pink Floyd`); two or more passes only ever appear in a double-encoding
+     * attack (`%252e%252e%252f` → `%2e%2e%2f` → `../`). The cap bounds the loop
+     * so a pathologically nested path cannot spin the worker; a path still
+     * changing at the cap is rejected outright.
+     *
+     * ⚠ Do NOT lower this value and do NOT "simplify" the reject-on-unstable
+     * branch in {@see self::hasTraversalSegment()} — that branch is the SOLE
+     * defence against an encoding nested deeper than the cap, and lowering the
+     * cap starts refusing real names. Both directions are pinned by tests
+     * (S100 fix r2, MED-2): `traversalPathProvider`'s
+     * "encoding nested past the decode cap" row fails if the branch fails OPEN,
+     * and `legitimateMusicReadProvider`'s `%2525252520` row (an artist whose
+     * name needs exactly 5 decodings) fails if the cap is lowered.
+     */
+    private const MAX_TRAVERSAL_DECODE_PASSES = 5;
 
     /**
      * Response headers stripped before relaying back to the browser (the hub's
@@ -643,11 +783,13 @@ final class ServerProxyController
      * fragment-by-fragment rather than buffered whole.
      *
      * Only **GET** under a {@see self::STREAMING_BODY_PREFIXES} family qualifies.
-     * HEAD is deliberately EXCLUDED so it flows through the buffered
-     * {@see RelayProxyBridge::request()} path (HB-0.3): a server `withFile()`
-     * HEAD emits a head frame + zero-body END with no body frames, and the
-     * buffered path completes promptly on that END — streaming a body-less
-     * response would add no value. These paths already passed the browse-scope
+     * HEAD is deliberately EXCLUDED so that IF it ever becomes routable it flows
+     * through the buffered {@see RelayProxyBridge::request()} path (HB-0.3): a
+     * server `withFile()` HEAD emits a head frame + zero-body END with no body
+     * frames, and the buffered path completes promptly on that END — streaming a
+     * body-less response would add no value. (No HEAD reaches this controller
+     * today — {@see self::BROWSE_SCOPE_ALLOWLIST} explains why.) These paths
+     * already passed the browse-scope
      * gate (so a mutating method never reaches here). The match uses the same
      * exact-or-`/`-subpath rule as the allowlist — never a bare sibling like
      * `/hlsX`.
@@ -800,13 +942,59 @@ final class ServerProxyController
 
     /**
      * Detect any path-traversal / dot-segment smuggling in the raw forward
-     * path, in either literal or percent-encoded form.
+     * path, in literal, percent-encoded, DOUBLE-percent-encoded,
+     * path-parameter (`..;`) or NUL/control-byte form.
      *
      * The hub does not normalise paths before forwarding, so a single dot
-     * segment (`.` / `..`) — or a percent-encoded variant such as `%2e`,
-     * `%2E`, `..%2f`, or `%2f` used to smuggle an extra separator — must be
-     * rejected outright. We decode percent-encoding once and re-scan, and also
-     * reject back-slashes (alternative separators on some stacks).
+     * segment (`.` / `..`) — or an encoded variant such as `%2e`, `%2E`,
+     * `..%2f`, `%2f`, or `%252e%252e%252f` — must be rejected outright.
+     *
+     * ### Why decode UNTIL STABLE, not once (S100 fix round 1, MED-3)
+     * The previous guard tested the raw path plus exactly ONE `rawurldecode()`,
+     * so `%252e%252e%252fadmin` (whose FIRST decoding is the `%2e%2e%2f` the
+     * guard does catch) sailed through. Nothing but phlix-server's own habits
+     * stopped it there: `Request::$path` is never decoded and every route is an
+     * exact static-map key or an anchored `#^…$#` with `[^/]+` params, so it
+     * 404s — but one future `rawurldecode()` or one multi-segment route on the
+     * server turns that into a live traversal out of browse scope. A security
+     * gate must not depend on a peer repo's incidental behaviour, so we now
+     * decode to a FIXED POINT (bounded by
+     * {@see self::MAX_TRAVERSAL_DECODE_PASSES}) and run every check over the raw
+     * path AND each intermediate decoding.
+     *
+     * Decode-until-stable is chosen over the simpler "reject any literal `%`"
+     * because percent-encoding is LEGITIMATE inside the allowlisted prefixes:
+     * `/api/v1/music/artists/{mbid}` and `/albums/{mbid}` are keyed by the
+     * artist/album NAME (`ApiClient` sends `encodeURIComponent(name)`), so
+     * `GET /api/v1/music/artists/Pink%20Floyd` is a normal browse read that a
+     * blanket `%` rejection would 403. (An encoded SEPARATOR — `%2f`/`%5c` — has
+     * no legitimate use in any allowlisted family and is still rejected
+     * outright, so a name containing `/` remains unreachable, exactly as before.)
+     *
+     * Checks applied to every candidate form:
+     *  - encoded separators `%2f` / `%5c` (case-insensitive) and literal `\`;
+     *  - NUL and other control bytes (`%00../` truncates a path in any
+     *    C-string consumer, and no legitimate REST path contains one);
+     *  - `.` / `..` segments, splitting on `;` as well as `/` so the
+     *    path-parameter trick `..;/admin` cannot hide a dot-segment inside one
+     *    `/`-delimited segment.
+     *
+     * ### Two KNOWN, DELIBERATE limitations (S100 fix r2, LOW-3 + LOW-4)
+     * Both are documented at their check sites below and pinned by
+     * `ServerProxyControllerTest::knownUnreachableMusicNameProvider`. Neither is
+     * to be "fixed" by relaxing the check — each relaxation reopens traversal:
+     *  1. An artist/album/track whose NAME contains `/` or `\` is unreachable
+     *     over the relay (`AC/DC` → `AC%2FDC` → 403). Not a hub-only bound:
+     *     phlix-server does not decode route params either, so the name is
+     *     unreachable direct as well. Tracked as its own step; the correct fix is
+     *     upstream (key music by id with the name as a QUERY parameter), never a
+     *     weaker separator check here.
+     *  2. An artist/album named exactly `.` or `..` is unreachable, because a
+     *     dot is unreserved so `encodeURIComponent()` leaves it literal and the
+     *     segment arrives as a real dot-segment. Names that merely CONTAIN dots
+     *     are unaffected — the test is a strict whole-segment `=== '.'`/`=== '..'`,
+     *     never a `str_contains`, so `...`, `S.C.I.E.N.C.E.`,
+     *     `... And Justice For All` and `Vol%2E%201` all forward (pinned).
      *
      * @param string $path The raw `/`-prefixed forward path (un-normalised).
      *
@@ -814,27 +1002,59 @@ final class ServerProxyController
      */
     private function hasTraversalSegment(string $path): bool
     {
-        // A `%2f`/`%2F` in the raw path is an encoded separator used to smuggle
-        // an extra path segment past the single-pass split below; treat it as a
-        // traversal attempt regardless of what surrounds it.
-        $rawLower = strtolower($path);
-        if (str_contains($rawLower, '%2f') || str_contains($rawLower, '%5c')) {
+        // Every form a downstream consumer could see: the raw path plus each
+        // successive decoding, up to the fixed point.
+        $candidates = $this->decodeCandidates($path);
+        $current = $candidates[count($candidates) - 1];
+        if (rawurldecode($current) !== $current) {
+            // Still changing at the cap: pathologically nested encoding that no
+            // legitimate browse path uses. Fail closed. ⚠ This branch is the ONLY
+            // thing standing between the relay and an encoding nested deeper than
+            // MAX_TRAVERSAL_DECODE_PASSES — see that constant's docblock for the
+            // two tests that pin it in both directions.
             return true;
         }
 
-        // Back-slashes are never legitimate in our REST paths and act as
-        // separators on some downstream stacks.
-        if (str_contains($path, '\\')) {
-            return true;
-        }
-
-        // Scan both the raw path and its once-decoded form so `.`/`..` survive
-        // neither literally nor via `%2e`/`%2E` encoding.
-        foreach ([$path, rawurldecode($path)] as $candidate) {
+        foreach ($candidates as $candidate) {
+            // An encoded separator smuggles an extra path segment past the split
+            // below; a literal back-slash is a separator on some downstream
+            // stacks. Neither is legitimate in any allowlisted family.
+            //
+            // KNOWN LIMITATION (LOW-3), accepted deliberately: music artist and
+            // album ids are NAMES, so a band whose name contains `/` or `\`
+            // (`AC/DC`, `N/A`, `+/-`, `AC\DC`) arrives as `AC%2FDC` and is
+            // refused here — the SPA renders that 403 as an empty page. The name
+            // is equally unreachable DIRECT (phlix-server does not decode route
+            // params either), so this is not a relay-only regression, and it must
+            // NOT be fixed by narrowing this check: an encoded separator is how
+            // every double-decode traversal in the attack matrix travels. The fix
+            // belongs upstream — key music by id, name as a query parameter.
+            $lower = strtolower($candidate);
+            if (str_contains($lower, '%2f') || str_contains($lower, '%5c')) {
+                return true;
+            }
             if (str_contains($candidate, '\\')) {
                 return true;
             }
-            foreach (explode('/', $candidate) as $segment) {
+
+            // NUL / control bytes (raw, or arriving via `%00`, `%0a`, …).
+            if (preg_match('/[\x00-\x1f\x7f]/', $candidate) === 1) {
+                return true;
+            }
+
+            // Treat `;` as a segment terminator too, so `..;` is scanned as the
+            // `..` it becomes on any stack that strips path parameters.
+            //
+            // BY DESIGN (LOW-4): the comparison is a strict WHOLE-segment
+            // `=== '.'`/`=== '..'`, never a `str_contains`. Consequence in both
+            // directions, and both are pinned by tests: an artist/album named
+            // exactly `.` or `..` is unreachable (a dot is unreserved, so
+            // `encodeURIComponent()` leaves it literal and it arrives as a real
+            // dot-segment), while a name that merely CONTAINS dots — `...`,
+            // `S.C.I.E.N.C.E.`, `... And Justice For All`, `Vol%2E%201` — passes
+            // untouched. Do NOT widen this to a substring test to "harden" it;
+            // that 403s a large slice of real album titles.
+            foreach (explode('/', str_replace(';', '/', $candidate)) as $segment) {
                 if ($segment === '.' || $segment === '..') {
                     return true;
                 }
@@ -845,16 +1065,127 @@ final class ServerProxyController
     }
 
     /**
+     * Build every form of a forward path a downstream consumer could see: the
+     * raw path plus each successive percent-decoding, up to the fixed point or
+     * {@see self::MAX_TRAVERSAL_DECODE_PASSES}, whichever comes first.
+     *
+     * Shared by BOTH gates on purpose (S100 fix r2, MED-1). Before this was
+     * extracted, {@see self::hasTraversalSegment()} decoded to a fixed point
+     * while {@see self::SCOPE_DENY_PATTERNS} was matched against the raw path
+     * only — so one commit shipped two different ideas of what "the path" is, and
+     * `/api/v1/music/%73can` walked straight through the deny pin. Every path
+     * gate in this controller must reason over the SAME candidate set.
+     *
+     * The caller decides what an unstable tail means: a still-decoding last
+     * candidate is a rejection for the traversal guard (see that method), and the
+     * deny matcher needs no such rule because it is matching for a DENY, so
+     * examining fewer forms can only ever under-deny, never over-deny.
+     *
+     * @param string $path The raw `/`-prefixed forward path (un-normalised).
+     *
+     * @return non-empty-list<string> Raw path first, then each decoding in order.
+     */
+    private function decodeCandidates(string $path): array
+    {
+        $candidates = [$path];
+        $current = $path;
+        for ($pass = 0; $pass < self::MAX_TRAVERSAL_DECODE_PASSES; $pass++) {
+            $decoded = rawurldecode($current);
+            if ($decoded === $current) {
+                break;
+            }
+            $candidates[] = $decoded;
+            $current = $decoded;
+        }
+
+        return $candidates;
+    }
+
+    /**
+     * Normalise one candidate form before matching it against
+     * {@see self::SCOPE_DENY_PATTERNS}.
+     *
+     * Applies only normalisations a real downstream consumer plausibly applies,
+     * each of which was a live evasion of the raw-path-only deny check
+     * (S100 fix r2, MED-1):
+     *  - `;` → `/`: some routers/containers treat a semicolon as a segment
+     *    terminator, so `/api/v1/music/scan;x` addresses the scan route. Split
+     *    rather than truncated on purpose: splitting subsumes path-parameter
+     *    STRIPPING for an anchored whole-segment pattern (stripping truncates a
+     *    segment exactly where splitting inserts a `/`), and it additionally
+     *    catches `/api/v1/music;scan` and `/api/v1/music/;scan`, which
+     *    truncation would not;
+     *  - trailing `.` and space stripped from EVERY segment: `scan.` / `scan%20`
+     *    (the decoded candidate ends in a space) resolve to `scan` on stacks that
+     *    trim them;
+     *  - duplicate `/` collapsed: `/api/v1/music//scan` and `///scan` address it
+     *    too (`proxy()` normalises only LEADING slashes).
+     *
+     * ### Per SEGMENT, not on the path tail (S100 fix r3)
+     * The trim runs on each segment because a single tail `rtrim()` is evaded by
+     * a COMPOSITION of two rules this method already claims: as soon as anything
+     * follows the `scan` segment its trailing dot/space is no longer trailing on
+     * the path. `/api/v1/music/scan.` was denied while `/api/v1/music/scan./`,
+     * `scan.;x`, `scan /` and `scan%2e/status` were forwarded — 210 of the 1 464
+     * suffixes of length ≤3 over `{. ␠ ; / x %20 %2e %2E %3b %25 status}`.
+     * Ordering matters and is load-bearing: `;`→`/` must run BEFORE the trim (so
+     * `scan.;x` exposes `scan.` as its own segment) and the `/+` collapse must run
+     * AFTER it (trimming a segment down to nothing manufactures a `//` of its own).
+     *
+     * The result is idempotent and closed under composition of the four modelled
+     * rules in any order: the output contains no `;`, no `//`, and no segment
+     * ending in `.` or a space, and normalising it again is a no-op. Combined with
+     * matching EVERY candidate from {@see self::decodeCandidates()}, that also
+     * covers a downstream that interleaves trimming with decoding, since none of
+     * these rules can complete a `%XX` escape and so none can unlock a decoding
+     * pass the candidate chain has not already taken.
+     *
+     * Deliberately NOT a general-purpose path canonicaliser: it never resolves
+     * `.`/`..` segments and never touches separators other than the two above,
+     * because anything carrying a dot-segment or an encoded/literal separator has
+     * already been refused by {@see self::hasTraversalSegment()} before this runs.
+     * It is also used ONLY for deny matching — never for the allowlist, and never
+     * for the path actually forwarded, which stays byte-for-byte as sent, so
+     * `/api/v1/music/albums/Etc.` still reaches the server with its dot intact.
+     *
+     * @param string $candidate One form from {@see self::decodeCandidates()}.
+     *
+     * @return string The form to match deny patterns against.
+     */
+    private function normaliseForDenyMatch(string $candidate): string
+    {
+        $segments = explode('/', str_replace(';', '/', $candidate));
+        foreach ($segments as $index => $segment) {
+            $segments[$index] = rtrim($segment, '. ');
+        }
+
+        $normalised = implode('/', $segments);
+
+        return preg_replace('#/+#', '/', $normalised) ?? $normalised;
+    }
+
+    /**
      * Determine whether a method + resolved path is within the browse-scope the
      * proxy is permitted to forward.
      *
-     * Two layers, checked in order: the prefix
-     * {@see self::BROWSE_SCOPE_ALLOWLIST} (GET/HEAD read families) and the
+     * Three layers, checked in order: the method-independent hard denies
+     * {@see self::SCOPE_DENY_PATTERNS} (routes that sit inside an allowlisted
+     * read prefix but must never be forwarded), then the prefix
+     * {@see self::BROWSE_SCOPE_ALLOWLIST} (GET read families) and the
      * anchored-PCRE {@see self::BROWSE_SCOPE_PATTERNS} (every HB-3.1 write action
      * — favorite/rating/like/watched/unwatched/poster/playlist/transcode — plus a
-     * few non-prefix reads). A request is in scope when it matches EITHER layer
-     * for its method; every other method/path (incl. all PATCH) returns false
-     * and fails closed.
+     * few non-prefix reads). A request is in scope when it matches NO deny
+     * pattern AND matches EITHER allow layer for its method; every other
+     * method/path (incl. all PATCH) returns false and fails closed.
+     *
+     * The deny layer is matched against every candidate form of the path
+     * ({@see self::decodeCandidates()}, each run through
+     * {@see self::normaliseForDenyMatch()}), not just its literal spelling — see
+     * {@see self::SCOPE_DENY_PATTERNS} for why that is what makes the pin
+     * authoritative instead of dependent on phlix-server's route table. The ALLOW
+     * layers stay deliberately literal: they are matched against the path that
+     * will actually be forwarded, and a decoded form must never be able to WIDEN
+     * scope — only to deny.
      *
      * @param string $method The inbound HTTP method.
      * @param string $path   The resolved `/`-prefixed forward path.
@@ -864,6 +1195,19 @@ final class ServerProxyController
     private function isWithinBrowseScope(string $method, string $path): bool
     {
         $method = strtoupper($method);
+
+        // Hard denies win over every allow entry, for every method: a read verb
+        // must not reach a scan trigger just because it shares a browse prefix.
+        // Matched against EVERY decoding of the path, each normalised — the raw
+        // spelling alone left `%73can`, `//scan`, `scan;x` and `scan.` forwarded.
+        foreach ($this->decodeCandidates($path) as $candidate) {
+            $normalised = $this->normaliseForDenyMatch($candidate);
+            foreach (self::SCOPE_DENY_PATTERNS as $denied) {
+                if (preg_match($denied, $normalised) === 1) {
+                    return false;
+                }
+            }
+        }
 
         $allowedPrefixes = self::BROWSE_SCOPE_ALLOWLIST[$method] ?? [];
         foreach ($allowedPrefixes as $prefix) {
@@ -958,9 +1302,19 @@ final class ServerProxyController
         // Trust markers: the hub has authenticated the user and verified
         // ownership, so the server runs the request as this user.
         $headers['X-Phlix-Relay'] = '1';
-        // P5-S5: Parental controls are enforced by the server via AccessScheduleMiddleware.
-        // The hub relays user identity via X-Phlix-Relay-User header so the server
-        // can apply the authenticated user's parental control profile.
+        // The relayed user identity. CAVEAT (do not read more into this header
+        // than it delivers): this is the HUB user's UUID, which matches no row in
+        // the paired server's `users` table. `RelayConsumer::buildRequest()`
+        // applies it as `$request->userId`, which is enough to satisfy the
+        // server's `AuthMiddleware` presence check and to attribute the request
+        // in logs — but any server-side protection that RESOLVES the id against
+        // its own user rows is inert for relay traffic: `RatingGate` finds no
+        // parental-control cap for it, and per-user session lookups (music
+        // `now-playing`) find no sessions. Mapping the hub identity to a server
+        // identity is tracked as its own step; until it lands, do NOT claim the
+        // server applies this user's parental-control profile to relayed
+        // requests. The hub-side gate (authenticated user → server ownership →
+        // traversal → browse scope) is what actually protects this surface.
         $headers['X-Phlix-Relay-User'] = $userId;
         if ($request->remoteIp !== '') {
             $headers['X-Forwarded-For'] = $request->remoteIp;

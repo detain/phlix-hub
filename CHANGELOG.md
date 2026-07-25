@@ -8,23 +8,33 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- **Music library browse over the relay proxy (S100).** `GET`/`HEAD
-  /api/v1/music` is now in `ServerProxyController::BROWSE_SCOPE_ALLOWLIST`, so
-  browsing a paired server's music library through the hub works. Previously the
-  fail-closed scope gate rejected every music endpoint with 403
-  `proxy.scope_denied`; because the SPA's music page swallows the error into an
-  empty list, this surfaced as a permanently EMPTY music library rather than a
-  failure — so a server-side music read-path fix alone changed nothing for anyone
-  browsing via the hub.
+- **Music library browse is no longer blocked by the relay proxy (S100).**
+  `GET /api/v1/music` is now in
+  `ServerProxyController::BROWSE_SCOPE_ALLOWLIST`, so the hub's fail-closed scope
+  gate stops rejecting music reads with 403 `proxy.scope_denied`. This removes
+  the **hub-side block only** — it does not by itself make hub music browsing
+  correct: the paired server's music read path is fixed separately (phlix-server
+  S99), and until that lands a relayed music request returns `200` with the
+  server's current (wrong) payload — a single bogus `Unknown Artist` — instead of
+  a 403. The two changes are required together; this one is the half that stops
+  the request being refused at the hub.
+  - Previously the 403 was invisible: the SPA's music page swallows the error into
+    an empty list, so it surfaced as a permanently EMPTY music library rather than
+    a failure — which is why a server-side read-path fix alone would have changed
+    nothing for anyone browsing via the hub.
   - The single prefix covers every music READ the SPA issues (`/artists`,
     `/artists/{mbid}`, `/albums`, `/albums/{mbid}`, `/tracks`, `/tracks/{id}` —
     used at play time to mint a `stream_url` — and `/now-playing`), since
     `isWithinBrowseScope()` matches an exact path or a `/`-delimited sub-path.
-  - **Read-only, deliberately.** phlix-server registers a
+  - **GET only, deliberately.** phlix-server registers a
     `POST /api/v1/music/scan` under the SAME prefix, so `/api/v1/music` was added
-    to the `GET` and `HEAD` keys ONLY. That scan trigger has no entry in either
-    scope map and still fails closed with 403 `proxy.scope_denied`; a regression
-    test asserts it is never forwarded.
+    to the `GET` key ONLY — not to any write key, and not to `HEAD` (the hub
+    router registers no HEAD route at all, so a `HEAD` entry would be inert
+    configuration; see `BROWSE_SCOPE_ALLOWLIST`). The scan trigger is refused
+    twice over: it appears in no allow map, and `/api/v1/music/scan` is pinned in
+    the new `SCOPE_DENY_PATTERNS`, so even a read verb is denied rather than
+    relying on the server having registered it POST-only. Regression tests assert
+    it is never forwarded.
   - Security precondition verified before widening: all music routes sit inside an
     `AuthMiddleware` group on BOTH server dispatch paths
     (`Application::loadMusicRoutes()` and `WebPortalRouter::registerRoutes()`), so
@@ -110,6 +120,89 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     stops pulling the bridge's capacity-bounded stream channel, so throttling
     exerts real upstream back-pressure through the SAME mechanism as a slow browser
     — the hub never queues the body without bound.
+
+### Security
+
+- **Relay-proxy traversal guard is now decode-safe (S100 follow-up).**
+  `ServerProxyController::hasTraversalSegment()` previously scanned the raw path
+  plus exactly ONE `rawurldecode()`, so a double-encoded traversal
+  (`/api/v1/music/%252e%252e%252fadmin%252fusers`), the path-parameter trick
+  (`/api/v1/music/..;/admin/users`) and a NUL-byte variant
+  (`/api/v1/music/artists/%00../admin`) were all forwarded to the paired server —
+  harmless only because phlix-server never decodes `Request::$path` and anchors
+  every route, i.e. because of a peer repo's incidental behaviour. The guard now
+  decodes to a fixed point (bounded, 5 passes; a path still changing at the cap is
+  rejected) and applies every check — encoded separators `%2f`/`%5c`, literal `\`,
+  NUL/control bytes, and `.`/`..` segments split on `;` as well as `/` — to the
+  raw path and each intermediate decoding. Legitimate percent-encoding still
+  passes (`/api/v1/music/artists/Pink%20Floyd` — artist and album ids are NAMES),
+  which is why the guard decodes rather than rejecting every `%`.
+  - **Known limitation, deliberate and documented.** Because an encoded separator
+    is refused outright, an artist/album/track whose NAME contains `/` or `\` is
+    unreachable over the relay — a library containing **AC/DC** (also `N/A`,
+    `+/-`, `AC\DC`) shows an EMPTY artist page through the hub, because the SPA
+    swallows the 403 into an empty list. This is **not** relay-specific: the name
+    is equally unreachable direct, since phlix-server does not decode route
+    parameters either. The correct fix is upstream — key music by id and pass the
+    name as a query parameter — and is tracked as its own step; the separator
+    check must NOT be weakened to accommodate it. Likewise an artist/album named
+    exactly `.` or `..` is unreachable by design (a dot is unreserved, so it
+    arrives as a real dot-segment). Names that merely CONTAIN dots are unaffected
+    (`...`, `S.C.I.E.N.C.E.`, `... And Justice For All`, `Vol. 1`). All of these
+    bounds are pinned by tests so they stay deliberate.
+
+- **`SCOPE_DENY_PATTERNS`: the relay proxy no longer depends on phlix-server's
+  route table to refuse a scan trigger.** `/api/v1/music/scan` (and any sub-path)
+  is now denied for EVERY method before either scope map is consulted, so
+  `GET`/`HEAD /api/v1/music/scan` are refused by the hub's own gate instead of
+  404-ing server-side purely because that route happens to be registered
+  POST-only.
+  - The deny list is matched against **every spelling** of the path, not just the
+    literal one: each pattern is tested against the raw path AND each successive
+    percent-decoding, with `;` treated as a segment terminator, a trailing
+    `.`/space stripped from **every segment** and duplicate `/` collapsed. Without
+    that, `//scan`, `///scan`, `scan;x`, `scan;`, `scan.`, `scan%20`, `scan%2e`,
+    `%73can`, `s%63an`, `sca%6e`, `%53%43%41%4e` and `%2573can` were all still
+    forwarded — 404-ing only because phlix-server happens not to decode
+    `Request::$path`, not to collapse duplicate slashes and not to strip path
+    parameters, i.e. on the very incidental peer behaviour this pin exists to stop
+    relying on. All twelve are now regression-tested end to end.
+  - The trim is applied **per segment, not to the path tail**. A tail-only trim was
+    evaded by a *composition* of two rules the pin already claimed: a trailing
+    dot/space on the `scan` segment is no longer trailing on the path as soon as
+    anything follows it, so `scan.` was denied while `scan./`, `scan.;`, `scan.;x`,
+    `scan%20/` and `scan./status` were forwarded — 210 of the 1,464 suffixes of
+    length ≤3 over `{. ␠ ; / x %20 %2e %2E %3b %25 status}`. Now 0 of 1,464 (and 0
+    of a wider 6,139-path sweep), with no new refusal on a legitimate name; the
+    five representatives are pinned end to end.
+  - Scope of the guarantee, stated precisely — this is the exact bound. The pin is
+    authoritative for four transformations and for **any composition of them, in
+    any order**: (1) percent-decoding up to `MAX_TRAVERSAL_DECODE_PASSES` passes (a
+    form still decoding at the cap is refused outright by the traversal guard);
+    (2) `;` as a segment terminator, which subsumes path-parameter stripping;
+    (3) trailing `.`/space trimmed from every segment; (4) duplicate `/` collapsed.
+    It does not model IIS-style overlong-UTF-8 (`%c0%ae`), `%uXXXX` or
+    fullwidth-`．` folding, because neither PHP, Workerman nor phlix-server
+    performs any of them, so such a form can never become `scan` downstream
+    either; nor `+`→space, which is `urldecode()` rather than `rawurldecode()` and
+    is applied to a path by no component in the chain (verified by grep against
+    phlix-server's `Router`/`Request`/`WebPortalRouter`/`Application`). If a peer
+    ever gains one of those, this matcher must be widened in the same commit.
+    Encoded/literal separators need no handling here — they are rejected earlier by
+    the traversal guard.
+  - Normalisation is **deny-match only** and provably cannot widen scope: both
+    allow layers read the raw path, the forwarded path is byte-identical to the one
+    received, and the two call sites of the decode/normalise helpers can only
+    return "deny". `/api/v1/music/albums/Etc.` still reaches the server with its
+    dot intact.
+  - The **same defect still exists** for `POST /api/v1/libraries/{id}/scan`,
+    `/rescan` and `/theme-media/scan`, which sit inside the allowlisted
+    `GET /api/v1/libraries` browse prefix and 404 only because the server
+    registered them POST-only. That is deliberately left to a follow-up step that
+    sweeps every phlix-server write route living under an allowlisted read prefix,
+    rather than a spot fix. Relay traffic cannot pass the server's
+    `AdminMiddleware` regardless, so the exposure is availability/consistency, not
+    privilege escalation.
 
 ### Fixed
 
