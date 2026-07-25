@@ -2,7 +2,7 @@
     "name": "detain/phlix-hub",
     "description": "Central cloud directory + reverse-tunnel relay for Phlix media servers. Sign in once, reach any of your servers from anywhere. Self-hostable.",
     "type": "project",
-    "license": "MIT",
+    "license": "MPL-2.0",
     "require": {
         "php": "^8.3",
         "crell/tukio": "^2.0",

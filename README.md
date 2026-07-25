@@ -818,4 +818,25 @@ phlix-hub/
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+[Mozilla Public License 2.0](LICENSE) — see [`LICENSE`](LICENSE) for the full text.
+
+MPL-2.0 is **per-file weak copyleft**: you may run, modify, self-host and embed
+the Hub in a larger project, including a commercial one, but if you modify a file
+that is part of the Hub you must make that file's source available under MPL-2.0.
+Files you add alongside it can be licensed however you like.
+
+This matches [phlix-server](https://github.com/detain/phlix-server), since both
+are server-side applications. The **interop layer stays MIT on purpose** —
+[`phlix-shared`](https://github.com/detain/phlix-shared),
+[`phlix-contracts`](https://github.com/detain/phlix-contracts),
+[`phlix-tokens`](https://github.com/detain/phlix-tokens) and
+[`phlix-syncplay`](https://github.com/detain/phlix-syncplay) are consumed by
+third-party clients and plugins, where copyleft would reach into every consumer.
+
+"Phlix" is a trademark; see
+[TRADEMARK.md](https://github.com/detain/phlix-server/blob/master/TRADEMARK.md)
+for what that does and doesn't restrict. Attribution is appreciated, not required.
+
+Note that `crell/tukio` (the event dispatcher) is LGPL-3.0-or-later. MPL-2.0
+lists the GPL family as Secondary Licenses (§1.12, §3.3), so it is compatible;
+redistributors must still meet each dependency's own terms.
