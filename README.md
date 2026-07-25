@@ -592,6 +592,7 @@ handshakes (:8802/:8803) reject with WS close code **1013** (Try Again Later) in
 | `PHLIX_HUB_RATELIMIT_JWKS_MAX` / `_JWKS_WINDOW` | `120` / `60` | `/.well-known/jwks.json`, keyed `jwks:{ip}` |
 | `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP |
 | `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP |
+| `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` | Trusted proxy IPs/CIDRs used to resolve the real client address for the IP-keyed limiters (`src/Common/Http/TrustedProxyResolver.php`) — a forgeable leftmost `X-Forwarded-For` is never trusted |
 
 > **Per-worker vs global caveat.** Most thresholds are enforced **per worker process**. The
 > :8802/:8803 relay workers are `count=1`, so per-worker == global for `relay_connect` /
@@ -647,6 +648,7 @@ Migrations live in [`migrations/`](migrations) and are applied in filename order
 | `server_heartbeats` | Recent heartbeats for liveness and clock-skew detection |
 | `relay_sessions` | One row per open WebSocket relay session |
 | `relay_user_quotas` | Per-user relay byte usage + download/upload caps + `max_concurrent_streams` |
+| `relay_user_settings` | Durable per-user relay settings — the operator-configured bandwidth throttle (`throttle_bps`), which survives the monthly quota rollover |
 | `login_rate_limit` | Shared, cross-worker login rate-limit buckets (one row per key; the only DB-backed limiter) |
 | `metrics_rollup` | Time-bucketed hub metrics incl. relay gauges/counters (`relay_pending_requests`, `relay_reply_drops`, `relay_error_503`/`504`, `relay_cancels`, latency histogram) |
 | `shared_libraries` | Library grants from a server owner to another user |
@@ -748,8 +750,9 @@ Independent of the monthly byte caps, each user also has a **durable relay bandw
 (`throttle_bps`, migration `043_relay_user_settings`) — a fixed-level rate cap (`0` = Unlimited, or
 1/3/5/10/20/50 Mbps; default 3 Mbps) set via `PUT /api/v1/admin/users/{id}/throttle` and surfaced on
 both `bandwidth` GETs. Unlike the period-scoped quota it does **not** reset each month. It is enforced
-by a per-connection token bucket on both relay transports (native-client WS relay and the browser
-HTTP-over-relay proxy). See `docs/hub-admin/relay-tuning.md` in
+by a per-connection token bucket (`src/Relay/TokenBucket.php`) on both relay transports (native-client
+WS relay and the browser HTTP-over-relay proxy via `src/Http/ConnectionResponseSink.php`). See
+`docs/hub-admin/relay-tuning.md` in
 [phlix-docs](https://github.com/detain/phlix-docs) for the full reference.
 
 ### Relay (WebSocket)
@@ -800,11 +803,11 @@ phlix-hub/
 ├── src/
 │   ├── Application.php   # Worker bootstrap + route registration
 │   ├── Auth/            # JWT, users, auth manager
-│   ├── Common/          # Container, database pool, logging, web portal
-│   ├── Http/            # Router, request/response, controllers, middleware
+│   ├── Common/          # Container, database pool, logging, rate limiting, trusted-proxy resolver
+│   ├── Http/            # Router, request/response, controllers, middleware, response sink
 │   ├── Hub/             # Claims, heartbeats, sharing, DNS, TLS, relay sessions
 │   ├── Federation/      # Hub-to-hub federation peers, shares, sessions
-│   ├── Relay/           # Reverse-tunnel relay workers, frame codec, tunnels
+│   ├── Relay/           # Reverse-tunnel relay workers, frame codec, tunnels, throttle token bucket
 │   └── Requests/        # Media request manager
 ├── tests/           # PHPUnit Unit + Integration suites
 ├── web-ui/          # Vite + TypeScript SPA (@phlix/hub-web-ui), built to public/assets/app/

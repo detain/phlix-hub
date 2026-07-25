@@ -28,10 +28,10 @@ ls .github/workflows/              # CI pipelines: phpunit + phpstan + psalm + p
 
 **Entry** `start.php` → `src/Application.php` boots routes + Workerman workers. **Container** PHP-DI 7 `src/Common/Container/ContainerFactory.php` — register services via `ServiceProviderInterface`, never `set()`.
 
-- `src/Http/` — `Request.php` · `Response.php` · `Router.php` (regex `{id}` params) · `Controllers/` · `Middleware/` (`AuthMiddleware`, `AdminMiddleware`, `EnrollmentJwtMiddleware`, `HubProtocolMiddleware`) · `RequestContext.php` (coroutine-local user id).
-- `src/Hub/` — claim/heartbeat/renew/deregister/sharing handlers, `EnrollmentJwtService`+`Ed25519KeyManager`, `RelaySessionManager`, `DnsAliasManager`, `TlsCertificateManager`, DTOs.
-- `src/Relay/` — `RelayWorker` (:8802), `ClientRelayWorker` (:8803), `Tunnel`/`TunnelManager`, `Frame{Encoder,Decoder}`.
-- `src/Federation/`, `src/Auth/` (`AuthManager`, `JwtHandler` HS256, `UserRepository`), `src/Common/{Database,Logger}/`, `src/Health/`.
+- `src/Http/` — `Request.php` · `Response.php` · `Router.php` (regex `{id}` params) · `ConnectionResponseSink.php` (chunked relay→HTTP streaming, per-user throttle) · `Controllers/` · `Middleware/` (`AuthMiddleware`, `AdminMiddleware`, `EnrollmentJwtMiddleware`, `HubProtocolMiddleware`) · `RequestContext.php` (coroutine-local user id).
+- `src/Hub/` — claim/heartbeat/renew/deregister/sharing handlers, `EnrollmentJwtService`+`Ed25519KeyManager`, `RelaySessionManager` (per-user `throttle_bps`), `DnsAliasManager`, `TlsCertificateManager`, DTOs.
+- `src/Relay/` — `RelayWorker` (:8802), `ClientRelayWorker` (:8803), `Tunnel`/`TunnelManager`, `TokenBucket` (per-user byte-rate throttle), `Frame{Encoder,Decoder}`.
+- `src/Federation/`, `src/Auth/` (`AuthManager`, `JwtHandler` HS256, `UserRepository`), `src/Common/{Database,Http,Logger,RateLimit}/` (`Common/Http/TrustedProxyResolver.php` resolves the real client IP via `TRUSTED_PROXIES` for IP-keyed limiters), `src/Health/`.
 - `config/{server,database,logger,auth}.php` · `migrations/` · `web-ui/` (`@phlix/hub-web-ui` consuming `@phlix/ui`, built to `public/assets/app/`) · `tests/` mirror src. **The legacy Smarty page UI was removed** (`smarty/smarty` dropped, no `public/templates/` or `public/assets/js/`); the `/app` Vue SPA is the only UI and legacy page paths 302-redirect to it.
 - `docker/` (`docker-entrypoint.sh`, `nginx.conf` — container image) · `scripts/` (`install.sh` provisioning, `run-migrations.php` standalone migrator) · `.github/workflows/` (CI gates) · `.opencode/` (`memory`, `skills`, `package.json`) + `.remember/` (cross-session agent context).
 
@@ -41,7 +41,7 @@ ls .github/workflows/              # CI pipelines: phpunit + phpstan + psalm + p
 - **DB**: only `Workerman\MySQL\Connection` with named `:param` placeholders (positional `?` breaks `bindMore()`); no PDO/mysqli; no string interpolation. Example: `src/Common/Database/MigrationRunner.php`.
 - **Logging**: `LoggerFactory::get(LogChannels::*)` (`src/Common/Logger/LogChannels.php`).
 - **Controllers**: `final`, return `Response->json([...'error','code'])`, gate on `$request->userId` (401 `auth.required`), map handler exception codes to HTTP.
-- **Migrations**: `-- migration: NNN_name` header, `CREATE TABLE IF NOT EXISTS`, `ENGINE=InnoDB` utf8mb4, `CHAR(36)` PK — enforced by `tests/Unit/Migrations/MigrationFileTest.php`. Column/index DDL must be **plain** (`ADD COLUMN …`, `CREATE INDEX …`); **never** write `IF [NOT] EXISTS` on a column/index/key — that is MariaDB-only and the MySQL 8 deploy target rejects it (1064). Idempotency comes from the `MigrationRunner` tracking table (each file applied once), not from `IF NOT EXISTS` guards.
+- **Migrations**: `-- migration: NNN_name` header, `CREATE TABLE IF NOT EXISTS`, `ENGINE=InnoDB` utf8mb4, `CHAR(36)` PK — enforced by `tests/Unit/Migrations/MigrationFileTest.php`. Column/index DDL must be **plain** (`ADD COLUMN …`, `CREATE INDEX …`); **never** write `IF [NOT] EXISTS` on a column/index/key — that is MariaDB-only and the MySQL 8 deploy target rejects it (1064). Idempotency comes from the `MigrationRunner` tracking table (each file applied once), not from `IF NOT EXISTS` guards. Editing an already-applied file changes its stored `checksum` (migration `041_migrations_checksum`) and the runner warns + re-applies it, so keep DDL re-run-safe.
 - **Shared types**: cross-repo DTOs live in the `Phlix\Shared\*` namespace (the shared composer package); do not duplicate.
 - PHPStan 9 + Psalm 1 green, **no baselines**; PHPDoc on public API.
 
