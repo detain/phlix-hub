@@ -28,6 +28,7 @@ use Workerman\Connection\TcpConnection;
 use function base64_decode;
 use function count;
 use function explode;
+use function implode;
 use function in_array;
 use function is_int;
 use function is_string;
@@ -397,19 +398,34 @@ final class ServerProxyController
      * path parameters. {@see self::isWithinBrowseScope()} therefore matches each
      * pattern against EVERY candidate form {@see self::decodeCandidates()}
      * produces (the raw path plus each successive percent-decoding) after
-     * {@see self::normaliseForDenyMatch()} applies the four normalisations a
-     * downstream HTTP stack, router or filesystem plausibly applies: `;` treated
-     * as a segment terminator, duplicate `/` collapsed, and trailing `.`/space
-     * stripped. That is what makes the claim above TRUE rather than aspirational.
+     * {@see self::normaliseForDenyMatch()} applies the normalisations a downstream
+     * HTTP stack, router or filesystem plausibly applies: `;` treated as a segment
+     * terminator, trailing `.`/space stripped from every segment, and duplicate
+     * `/` collapsed. That is what makes the claim above TRUE rather than
+     * aspirational.
      *
-     * Scope of the guarantee, stated honestly: the pin is authoritative for
-     * percent-decoding, `;` path parameters, duplicate separators and trailing
-     * dot/space. It does NOT model a normaliser the hub has no reason to expect —
-     * IIS-style overlong-UTF-8 (`%c0%ae`), `%uXXXX` or fullwidth-`．` folding —
-     * because neither PHP, Workerman nor phlix-server performs any of them, so
-     * such a form can never BECOME `scan` downstream either. Encoded/literal
-     * separators (`%2f`, `%5c`, `\`) need no handling here: they are rejected
-     * outright, earlier, by {@see self::hasTraversalSegment()}.
+     * Scope of the guarantee, stated precisely — this is the exact bound, not an
+     * aspiration. The pin is authoritative for these four transformations and for
+     * **any composition of them, in any order**:
+     *  1. percent-decoding, up to {@see self::MAX_TRAVERSAL_DECODE_PASSES} passes
+     *     (a form still decoding at the cap is refused outright by
+     *     {@see self::hasTraversalSegment()}, so nothing escapes past the bound);
+     *  2. `;` as a segment terminator — which subsumes path-parameter stripping;
+     *  3. trailing `.` and space trimmed from EVERY segment (not merely from the
+     *     end of the path — see {@see self::normaliseForDenyMatch()}, where a
+     *     tail-only trim let `scan./` and `scan.;x` through in r2);
+     *  4. duplicate `/` collapsed.
+     * It does NOT model a normaliser the hub has no reason to expect: IIS-style
+     * overlong-UTF-8 (`%c0%ae`), `%uXXXX` or fullwidth-`．` folding, because
+     * neither PHP, Workerman nor phlix-server performs any of them, so such a form
+     * can never BECOME `scan` downstream either. `+`→space is likewise not
+     * modelled: that is `urldecode()`, not `rawurldecode()`, and no component in
+     * the chain applies it to a path (verified by grep against phlix-server's
+     * `Router`/`Request`/`WebPortalRouter`/`Application`) — so `scan+` never
+     * becomes a trimmable `scan `. If a peer ever adds one of these, this deny
+     * matcher must be widened in the same commit. Encoded/literal separators
+     * (`%2f`, `%5c`, `\`) need no handling here: they are rejected outright,
+     * earlier, by {@see self::hasTraversalSegment()}.
      *
      * Each entry is a FULLY-ANCHORED PCRE covering the route and any sub-path
      * (`(/|$)`), matched case-INsensitively because the allowlist match is
@@ -1092,19 +1108,45 @@ final class ServerProxyController
      * Applies only normalisations a real downstream consumer plausibly applies,
      * each of which was a live evasion of the raw-path-only deny check
      * (S100 fix r2, MED-1):
-     *  - `;` → `/`: some routers/containers strip path parameters, so
-     *    `/api/v1/music/scan;x` addresses the scan route;
+     *  - `;` → `/`: some routers/containers treat a semicolon as a segment
+     *    terminator, so `/api/v1/music/scan;x` addresses the scan route. Split
+     *    rather than truncated on purpose: splitting subsumes path-parameter
+     *    STRIPPING for an anchored whole-segment pattern (stripping truncates a
+     *    segment exactly where splitting inserts a `/`), and it additionally
+     *    catches `/api/v1/music;scan` and `/api/v1/music/;scan`, which
+     *    truncation would not;
+     *  - trailing `.` and space stripped from EVERY segment: `scan.` / `scan%20`
+     *    (the decoded candidate ends in a space) resolve to `scan` on stacks that
+     *    trim them;
      *  - duplicate `/` collapsed: `/api/v1/music//scan` and `///scan` address it
-     *    too (`proxy()` normalises only LEADING slashes);
-     *  - trailing `.` and space stripped: `scan.` / `scan%20` (the decoded
-     *    candidate ends in a space) resolve to `scan` on stacks that trim them.
+     *    too (`proxy()` normalises only LEADING slashes).
+     *
+     * ### Per SEGMENT, not on the path tail (S100 fix r3)
+     * The trim runs on each segment because a single tail `rtrim()` is evaded by
+     * a COMPOSITION of two rules this method already claims: as soon as anything
+     * follows the `scan` segment its trailing dot/space is no longer trailing on
+     * the path. `/api/v1/music/scan.` was denied while `/api/v1/music/scan./`,
+     * `scan.;x`, `scan /` and `scan%2e/status` were forwarded — 210 of the 1 464
+     * suffixes of length ≤3 over `{. ␠ ; / x %20 %2e %2E %3b %25 status}`.
+     * Ordering matters and is load-bearing: `;`→`/` must run BEFORE the trim (so
+     * `scan.;x` exposes `scan.` as its own segment) and the `/+` collapse must run
+     * AFTER it (trimming a segment down to nothing manufactures a `//` of its own).
+     *
+     * The result is idempotent and closed under composition of the four modelled
+     * rules in any order: the output contains no `;`, no `//`, and no segment
+     * ending in `.` or a space, and normalising it again is a no-op. Combined with
+     * matching EVERY candidate from {@see self::decodeCandidates()}, that also
+     * covers a downstream that interleaves trimming with decoding, since none of
+     * these rules can complete a `%XX` escape and so none can unlock a decoding
+     * pass the candidate chain has not already taken.
      *
      * Deliberately NOT a general-purpose path canonicaliser: it never resolves
      * `.`/`..` segments and never touches separators other than the two above,
      * because anything carrying a dot-segment or an encoded/literal separator has
      * already been refused by {@see self::hasTraversalSegment()} before this runs.
      * It is also used ONLY for deny matching — never for the allowlist, and never
-     * for the path actually forwarded, which stays byte-for-byte as sent.
+     * for the path actually forwarded, which stays byte-for-byte as sent, so
+     * `/api/v1/music/albums/Etc.` still reaches the server with its dot intact.
      *
      * @param string $candidate One form from {@see self::decodeCandidates()}.
      *
@@ -1112,10 +1154,14 @@ final class ServerProxyController
      */
     private function normaliseForDenyMatch(string $candidate): string
     {
-        $normalised = str_replace(';', '/', $candidate);
-        $normalised = preg_replace('#/+#', '/', $normalised) ?? $normalised;
+        $segments = explode('/', str_replace(';', '/', $candidate));
+        foreach ($segments as $index => $segment) {
+            $segments[$index] = rtrim($segment, '. ');
+        }
 
-        return rtrim($normalised, '. ');
+        $normalised = implode('/', $segments);
+
+        return preg_replace('#/+#', '/', $normalised) ?? $normalised;
     }
 
     /**

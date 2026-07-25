@@ -159,21 +159,42 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   POST-only.
   - The deny list is matched against **every spelling** of the path, not just the
     literal one: each pattern is tested against the raw path AND each successive
-    percent-decoding, with `;` treated as a segment terminator, duplicate `/`
-    collapsed and a trailing `.`/space stripped. Without that, `//scan`,
-    `///scan`, `scan;x`, `scan;`, `scan.`, `scan%20`, `scan%2e`, `%73can`,
-    `s%63an`, `sca%6e`, `%53%43%41%4e` and `%2573can` were all still forwarded —
-    404-ing only because phlix-server happens not to decode `Request::$path`, not
-    to collapse duplicate slashes and not to strip path parameters, i.e. on the
-    very incidental peer behaviour this pin exists to stop relying on. All twelve
-    are now regression-tested end to end.
-  - Scope of the guarantee, stated precisely: the pin is authoritative for
-    percent-decoding, `;` path parameters, duplicate separators and trailing
-    dot/space. It does not model IIS-style overlong-UTF-8 (`%c0%ae`), `%uXXXX` or
+    percent-decoding, with `;` treated as a segment terminator, a trailing
+    `.`/space stripped from **every segment** and duplicate `/` collapsed. Without
+    that, `//scan`, `///scan`, `scan;x`, `scan;`, `scan.`, `scan%20`, `scan%2e`,
+    `%73can`, `s%63an`, `sca%6e`, `%53%43%41%4e` and `%2573can` were all still
+    forwarded — 404-ing only because phlix-server happens not to decode
+    `Request::$path`, not to collapse duplicate slashes and not to strip path
+    parameters, i.e. on the very incidental peer behaviour this pin exists to stop
+    relying on. All twelve are now regression-tested end to end.
+  - The trim is applied **per segment, not to the path tail**. A tail-only trim was
+    evaded by a *composition* of two rules the pin already claimed: a trailing
+    dot/space on the `scan` segment is no longer trailing on the path as soon as
+    anything follows it, so `scan.` was denied while `scan./`, `scan.;`, `scan.;x`,
+    `scan%20/` and `scan./status` were forwarded — 210 of the 1,464 suffixes of
+    length ≤3 over `{. ␠ ; / x %20 %2e %2E %3b %25 status}`. Now 0 of 1,464 (and 0
+    of a wider 6,139-path sweep), with no new refusal on a legitimate name; the
+    five representatives are pinned end to end.
+  - Scope of the guarantee, stated precisely — this is the exact bound. The pin is
+    authoritative for four transformations and for **any composition of them, in
+    any order**: (1) percent-decoding up to `MAX_TRAVERSAL_DECODE_PASSES` passes (a
+    form still decoding at the cap is refused outright by the traversal guard);
+    (2) `;` as a segment terminator, which subsumes path-parameter stripping;
+    (3) trailing `.`/space trimmed from every segment; (4) duplicate `/` collapsed.
+    It does not model IIS-style overlong-UTF-8 (`%c0%ae`), `%uXXXX` or
     fullwidth-`．` folding, because neither PHP, Workerman nor phlix-server
     performs any of them, so such a form can never become `scan` downstream
-    either. Encoded/literal separators need no handling here — they are rejected
-    earlier by the traversal guard.
+    either; nor `+`→space, which is `urldecode()` rather than `rawurldecode()` and
+    is applied to a path by no component in the chain (verified by grep against
+    phlix-server's `Router`/`Request`/`WebPortalRouter`/`Application`). If a peer
+    ever gains one of those, this matcher must be widened in the same commit.
+    Encoded/literal separators need no handling here — they are rejected earlier by
+    the traversal guard.
+  - Normalisation is **deny-match only** and provably cannot widen scope: both
+    allow layers read the raw path, the forwarded path is byte-identical to the one
+    received, and the two call sites of the decode/normalise helpers can only
+    return "deny". `/api/v1/music/albums/Etc.` still reaches the server with its
+    dot intact.
   - The **same defect still exists** for `POST /api/v1/libraries/{id}/scan`,
     `/rescan` and `/theme-media/scan`, which sit inside the allowlisted
     `GET /api/v1/libraries` browse prefix and 404 only because the server

@@ -546,14 +546,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * Every alternative SPELLING of `POST /api/v1/music/scan` that the raw-path
      * deny check used to FORWARD (S100 fix r2, MED-1). Shared by the gate-level
-     * matrix and the end-to-end deny test so both layers pin the same twelve.
+     * matrix and the end-to-end deny test so both layers pin the same seventeen.
      *
-     * Three evasion families, each corresponding to one normalisation a
-     * downstream stack plausibly performs and phlix-server happens not to:
+     * Four evasion families, each corresponding to one normalisation a downstream
+     * stack plausibly performs and phlix-server happens not to:
      *  - percent-encoding of the route literal itself (`%73can`, `%2573can` — the
      *    hub must decode to a fixed point, not compare the raw bytes);
      *  - duplicate separators (`proxy()` collapses only LEADING slashes);
-     *  - path parameters and trailing dot/space (`scan;x`, `scan.`, `scan%20`).
+     *  - path parameters and trailing dot/space (`scan;x`, `scan.`, `scan%20`);
+     *  - **COMPOSITIONS of two of the above** (S100 fix r3): a trailing dot/space
+     *    on the `scan` segment stops being trailing on the PATH the instant
+     *    anything follows it, so a single tail `rtrim()` denied `scan.` while
+     *    forwarding `scan./`, `scan.;x`, `scan%20/` and `scan./status` — each one
+     *    character from a row already pinned as denied. The fix trims per SEGMENT;
+     *    these rows are what stop it regressing to a tail trim.
      *
      * @return array<string, string> label => `/`-prefixed path
      */
@@ -572,6 +578,12 @@ final class ServerProxyControllerTest extends TestCase
             'encoded n' => '/api/v1/music/sca%6e',
             'fully encoded upper-case' => '/api/v1/music/%53%43%41%4e',
             'double-encoded s' => '/api/v1/music/%2573can',
+            // Compositions (r3): dot/space + a following separator or parameter.
+            'trailing dot then slash' => '/api/v1/music/scan./',
+            'trailing dot then bare semicolon' => '/api/v1/music/scan.;',
+            'trailing dot then path parameter' => '/api/v1/music/scan.;x',
+            'encoded trailing space then slash' => '/api/v1/music/scan%20/',
+            'trailing dot then sub-path' => '/api/v1/music/scan./status',
         ];
     }
 
@@ -670,6 +682,15 @@ final class ServerProxyControllerTest extends TestCase
         // A semicolon inside a NAME is normalised to `/` for deny matching only;
         // that must not manufacture a match, and must not affect the allowlist.
         yield 'GET artist name containing a semicolon allowed' => ['GET', '/api/v1/music/artists/A;B', true];
+        // r3: the trim is now PER SEGMENT, so it reaches names it previously could
+        // not. It must still only ever match `scan` directly under `/api/v1/music`.
+        yield 'GET album named Etc. allowed' => ['GET', '/api/v1/music/albums/Etc.', true];
+        yield 'GET scanner with a path parameter allowed' => ['GET', '/api/v1/music/scanner;x', true];
+        yield 'GET band called Scan. with a trailing dot allowed' => [
+            'GET',
+            '/api/v1/music/artists/Scan./albums',
+            true,
+        ];
 
         // (b) Every other write verb on a music path fails closed.
         yield 'PUT music track denied' => ['PUT', '/api/v1/music/tracks/track-789', false];
@@ -800,7 +821,9 @@ final class ServerProxyControllerTest extends TestCase
      * S100 fix r2 (MED-1) extends that end-to-end pin to every alternative
      * SPELLING of the scan path ({@see self::scanSpellingEvasions()}): all twelve
      * cleared the raw-path deny check and reached the relay bridge, which is what
-     * made the docblock's "the hub's own gate is authoritative" claim false.
+     * made the docblock's "the hub's own gate is authoritative" claim false. S100
+     * fix r3 adds the five COMPOSITION spellings (`scan./`, `scan.;`, `scan.;x`,
+     * `scan%20/`, `scan./status`) that the tail-only trim still forwarded.
      *
      * @return iterable<string, array{0: string, 1: string}>
      */
@@ -1020,6 +1043,12 @@ final class ServerProxyControllerTest extends TestCase
      *    and a `;` inside a name must not be caught by the now decode-aware +
      *    normalised `SCOPE_DENY_PATTERNS` match.
      *
+     * S100 fix r3 adds a fourth group for the PER-SEGMENT trim: names carrying a
+     * trailing dot, a trailing space or a semicolon somewhere OTHER than the last
+     * segment (`Etc.`, `Wish You Were Here.`, `Vol. 1 `, `Sun;set`, `scanner;x`,
+     * `Scan./albums`). The trim now reaches them, and each row asserts the path is
+     * still forwarded BYTE-IDENTICALLY — normalisation is deny-match only.
+     *
      * @return iterable<string, array{0: string}>
      */
     public static function legitimateMusicReadProvider(): iterable
@@ -1056,6 +1085,18 @@ final class ServerProxyControllerTest extends TestCase
         yield 'artist named Scanner Darkly' => ['api/v1/music/artists/Scanner%20Darkly'];
         yield 'albums of a band called Scan' => ['api/v1/music/artists/Scan/albums'];
         yield 'artist name containing a semicolon' => ['api/v1/music/artists/A;B'];
+        // r3: the deny trim is now PER SEGMENT rather than on the path tail, so it
+        // sees trailing dots/spaces on names in the MIDDLE of a path for the first
+        // time. These rows pin that widening as deny-match-only: the name keeps its
+        // dot/space/semicolon on the wire (the test asserts the forwarded path is
+        // byte-identical), and nothing under `artists|albums|tracks` can normalise
+        // into `/api/v1/music/scan`.
+        yield 'album named Etc. with a trailing dot' => ['api/v1/music/albums/Etc.'];
+        yield 'album ending in a dot' => ['api/v1/music/albums/Wish%20You%20Were%20Here.'];
+        yield 'album with a trailing encoded space' => ['api/v1/music/albums/Vol.%201%20'];
+        yield 'artist name with an encoded semicolon' => ['api/v1/music/artists/Sun%3Bset'];
+        yield 'scanner with a path parameter' => ['api/v1/music/scanner;x'];
+        yield 'band called Scan. with a trailing dot' => ['api/v1/music/artists/Scan./albums'];
     }
 
     /**
