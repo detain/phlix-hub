@@ -8,6 +8,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Music library browse over the relay proxy (S100).** `GET`/`HEAD
+  /api/v1/music` is now in `ServerProxyController::BROWSE_SCOPE_ALLOWLIST`, so
+  browsing a paired server's music library through the hub works. Previously the
+  fail-closed scope gate rejected every music endpoint with 403
+  `proxy.scope_denied`; because the SPA's music page swallows the error into an
+  empty list, this surfaced as a permanently EMPTY music library rather than a
+  failure — so a server-side music read-path fix alone changed nothing for anyone
+  browsing via the hub.
+  - The single prefix covers every music READ the SPA issues (`/artists`,
+    `/artists/{mbid}`, `/albums`, `/albums/{mbid}`, `/tracks`, `/tracks/{id}` —
+    used at play time to mint a `stream_url` — and `/now-playing`), since
+    `isWithinBrowseScope()` matches an exact path or a `/`-delimited sub-path.
+  - **Read-only, deliberately.** phlix-server registers a
+    `POST /api/v1/music/scan` under the SAME prefix, so `/api/v1/music` was added
+    to the `GET` and `HEAD` keys ONLY. That scan trigger has no entry in either
+    scope map and still fails closed with 403 `proxy.scope_denied`; a regression
+    test asserts it is never forwarded.
+  - Security precondition verified before widening: all music routes sit inside an
+    `AuthMiddleware` group on BOTH server dispatch paths
+    (`Application::loadMusicRoutes()` and `WebPortalRouter::registerRoutes()`), so
+    no unauthenticated surface is exposed. DLNA is untouched — `/dlna`, `/cds`,
+    `/scpd` and `/description.xml` remain absent from the allowlist (a test pins
+    that), preserving the posture phlix-server's `RelayRequestDispatcher` relies
+    on.
+
 - **Per-user relay bandwidth THROTTLE — schema + admin surface (S41, updates.md #50).**
   An admin can now set a sustained per-user relay rate cap chosen from a fixed set
   of levels — 1 / 3 / 5 / 10 / 20 / 50 Mbps or Unlimited. This is a NEW value,
