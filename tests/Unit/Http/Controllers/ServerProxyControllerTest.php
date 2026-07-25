@@ -13,6 +13,7 @@ use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
+use Phlix\Hub\Http\Router;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyManager;
@@ -548,17 +549,23 @@ final class ServerProxyControllerTest extends TestCase
      * the DENY side are pinned — a test that only asserted the allow case would
      * still pass if the gate were removed altogether.
      *
-     * Allowed: every music READ the SPA issues, under GET and HEAD, reached via
-     * the single `/api/v1/music` prefix (exact collection path + `/`-delimited
+     * Allowed: every music READ the SPA issues, under **GET**, reached via the
+     * single `/api/v1/music` prefix (exact collection path + `/`-delimited
      * sub-paths, including the two-segment `tracks/{id}` the player calls at play
-     * time to mint a `stream_url`).
+     * time to mint a `stream_url`), and including the percent-encoded artist/album
+     * NAMES the SPA actually sends (`encodeURIComponent(name)`).
      *
      * Denied: (a) `POST /api/v1/music/scan` — a REAL server route registered
      * under the same prefix (`WebPortalRouter`), so it proves the prefix did not
-     * leak a write; (b) every other write verb on a music path, incl. PATCH;
-     * (c) bare textual siblings (`/api/v1/musicXYZ`, `/api/v1/music-admin`) which
-     * share the prefix string but are not sub-paths; (d) an unlisted sibling API
-     * family (`/api/v1/musicbrainz`).
+     * leak a write — plus every READ verb on that same scan path, which
+     * `SCOPE_DENY_PATTERNS` refuses so the hub does not rely on the server having
+     * registered it POST-only; (b) every other write verb on a music path, incl.
+     * PATCH; (c) bare textual siblings (`/api/v1/musicXYZ`,
+     * `/api/v1/music-admin`) which share the prefix string but are not sub-paths;
+     * (d) an unlisted sibling API family (`/api/v1/musicbrainz`); (e) **HEAD on
+     * every music path** — S100 fix round 1 removed the inert HEAD mirror (the hub
+     * router registers no HEAD route at all, see
+     * {@see self::test_head_is_never_routed_to_the_relay_proxy()}).
      *
      * @return iterable<string, array{0: string, 1: string, 2: bool}>
      */
@@ -575,17 +582,31 @@ final class ServerProxyControllerTest extends TestCase
             'now playing' => '/api/v1/music/now-playing',
         ];
 
-        foreach (['GET', 'HEAD'] as $method) {
-            foreach ($allowedPaths as $label => $path) {
-                yield "{$method} {$label} allowed" => [$method, $path, true];
-            }
+        foreach ($allowedPaths as $label => $path) {
+            yield "GET {$label} allowed" => ['GET', $path, true];
+            // (e) HEAD grants nothing: the hub registers no HEAD proxy route, so
+            // mirroring the prefix under HEAD would be dead configuration.
+            yield "HEAD {$label} denied" => ['HEAD', $path, false];
         }
 
         // Lower-case verbs are upper-cased before the gate.
         yield 'lower-case get artists allowed' => ['get', '/api/v1/music/artists', true];
 
-        // (a) The scan POST is a real route on the SAME prefix — must stay denied.
+        // The scan deny is anchored on the FULL path, never a bare `scan`
+        // segment: artist/album ids are NAMES, so a band called "Scan" must still
+        // be browsable.
+        yield 'GET artist named scan allowed' => ['GET', '/api/v1/music/artists/Scan', true];
+        yield 'GET album named rescan allowed' => ['GET', '/api/v1/music/albums/Rescan', true];
+        // Percent-encoded names are how the SPA sends multi-word artists/albums.
+        yield 'GET percent-encoded artist name allowed' => ['GET', '/api/v1/music/artists/Pink%20Floyd', true];
+
+        // (a) The scan POST is a real route on the SAME prefix — must stay denied,
+        // and so must every READ verb on it (SCOPE_DENY_PATTERNS).
         yield 'POST music scan denied' => ['POST', '/api/v1/music/scan', false];
+        yield 'GET music scan denied' => ['GET', '/api/v1/music/scan', false];
+        yield 'HEAD music scan denied' => ['HEAD', '/api/v1/music/scan', false];
+        yield 'GET music scan sub-path denied' => ['GET', '/api/v1/music/scan/status', false];
+        yield 'GET music scan mixed case denied' => ['GET', '/api/v1/music/SCAN', false];
         yield 'POST artists denied' => ['POST', '/api/v1/music/artists', false];
 
         // (b) Every other write verb on a music path fails closed.
@@ -709,11 +730,19 @@ final class ServerProxyControllerTest extends TestCase
      * prefix, and a bare sibling (`/api/v1/musicXYZ`) is not a sub-path. Both
      * must 403 `proxy.scope_denied` and never reach the relay bridge.
      *
+     * The READ verbs on that same scan path are pinned here too (S100 fix round 1,
+     * MED-3): before `SCOPE_DENY_PATTERNS` they were FORWARDED and 404'd only
+     * because phlix-server registers `scan` POST-only — the server's route table
+     * doing the hub gate's job.
+     *
      * @return iterable<string, array{0: string, 1: string}>
      */
     public static function deniedMusicScopeProvider(): iterable
     {
         yield 'POST music scan (write on the read prefix)' => ['POST', 'api/v1/music/scan'];
+        yield 'GET music scan (read verb on the scan trigger)' => ['GET', 'api/v1/music/scan'];
+        yield 'GET music scan sub-path' => ['GET', 'api/v1/music/scan/status'];
+        yield 'GET music scan upper-case' => ['GET', 'api/v1/music/SCAN'];
         yield 'PUT music track' => ['PUT', 'api/v1/music/tracks/track-789'];
         yield 'DELETE music track' => ['DELETE', 'api/v1/music/tracks/track-789'];
         yield 'PATCH music artists' => ['PATCH', 'api/v1/music/artists'];
@@ -787,9 +816,182 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
+     * S100 fix round 1 (MED-2), END-TO-END THROUGH THE REAL ROUTER — the whole
+     * point of this test is that it does NOT use reflection on a private constant.
+     *
+     * `ServerProxyController::BROWSE_SCOPE_ALLOWLIST` used to carry a `HEAD` key
+     * (music included), and the docblock + CHANGELOG advertised HEAD as working.
+     * It never was: {@see Router} has no `head()` registrar,
+     * {@see Router::dispatch()} 404s an unregistered method with no HEAD→GET
+     * fallback, and {@see \Phlix\Hub\Application} registers the proxy catch-all for
+     * GET/PUT/DELETE/PATCH/POST only. Reflection-only assertions over the constant
+     * could never catch that class of dead configuration; a dispatch-level test
+     * can.
+     *
+     * Registers exactly the five methods `Application::registerRoutes()` registers,
+     * then proves:
+     *  - the router has NO `HEAD` bucket at all;
+     *  - `HEAD` on an allowlisted music path 404s in the ROUTER (not 403 from the
+     *    controller) and never reaches the relay bridge;
+     *  - the same for a playback path, whose HEAD machinery does exist (HB-0.3);
+     *  - the identical `GET` is forwarded and answered 200, so the 404 is about the
+     *    METHOD and nothing else.
+     *
+     * ⚠ If HEAD is ever made routable, this test is the tripwire: it must be
+     * updated TOGETHER with a `Router::head()` registrar, a HEAD proxy route, a
+     * HEAD allowlist key, and body suppression on the buffered reply path. That
+     * coupling is exactly what this asserts.
+     */
+    public function test_head_is_never_routed_to_the_relay_proxy(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var list<array<string, mixed>> $forwarded */
+        $forwarded = [];
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded[] = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{"artists":[]}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+        $controller = $this->controller($info, $bridge);
+
+        // Mirror Application::registerRoutes(): the proxy catch-all lives under the
+        // `/api/v1` group and is registered for GET/PUT/DELETE/PATCH/POST — and
+        // NOTHING else.
+        $handler = static function (Request $req, array $params) use ($controller): Response {
+            /** @var array<string, string> $typedParams */
+            $typedParams = $params;
+            return $controller->proxy($req, $typedParams);
+        };
+        $router = new Router();
+        $router->group('/api/v1', static function (Router $r) use ($handler): void {
+            $r->get('/servers/{id}/proxy/{path:.*}', $handler);
+            $r->put('/servers/{id}/proxy/{path:.*}', $handler);
+            $r->delete('/servers/{id}/proxy/{path:.*}', $handler);
+            $r->patch('/servers/{id}/proxy/{path:.*}', $handler);
+            $r->post('/servers/{id}/proxy/{path:.*}', $handler);
+        });
+
+        $this->assertArrayNotHasKey(
+            'HEAD',
+            $router->getRoutes(),
+            'The hub router has no HEAD bucket: a HEAD allowlist entry would be dead configuration',
+        );
+
+        $dispatch = static function (string $method, string $tail) use ($router): Response {
+            $req = new Request();
+            $req->method = $method;
+            $req->path = '/api/v1/servers/srv-1/proxy/' . $tail;
+            $req->userId = 'user-1';
+            $req->headers = ['Accept' => 'application/json'];
+            return $router->dispatch($req);
+        };
+
+        // GET is routed, cleared and forwarded — the control case.
+        $getResponse = $dispatch('GET', 'api/v1/music/artists');
+        $this->assertSame(200, $getResponse->statusCode);
+        $this->assertCount(1, $forwarded, 'GET must reach the relay bridge');
+        $this->assertSame('/api/v1/music/artists', $forwarded[0]['path']);
+
+        // HEAD dies in the router with a 404 — not a 403 from the scope gate, and
+        // never a forward.
+        foreach (['api/v1/music/artists', 'media/item-123/stream', 'hls/job-abc/seg-00007.ts'] as $tail) {
+            $headResponse = $dispatch('HEAD', $tail);
+            $this->assertSame(
+                404,
+                $headResponse->statusCode,
+                "HEAD /{$tail} must 404 in the router (no HEAD route is registered)",
+            );
+            /** @var array<string, mixed> $body */
+            $body = json_decode($headResponse->body, true, 8, JSON_THROW_ON_ERROR);
+            $this->assertSame(
+                'Not Found',
+                $body['error'] ?? null,
+                "HEAD /{$tail} must be refused by the ROUTER, not reach the controller's scope gate",
+            );
+            $this->assertCount(1, $forwarded, "HEAD /{$tail} must never reach the relay bridge");
+        }
+    }
+
+    /**
+     * S100 fix round 1 (MED-3) regression guard for the DECODE-SAFE traversal
+     * check: the eight legitimate music reads must still be forwarded, including
+     * the PERCENT-ENCODED artist/album names the SPA actually sends
+     * (`ApiClient` builds `/api/v1/music/artists/${encodeURIComponent(name)}` —
+     * artist and album ids are NAMES, not MBIDs). This is why the guard decodes
+     * until stable instead of rejecting every literal `%`: a blanket `%` rejection
+     * would 403 every multi-word artist and album.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function legitimateMusicReadProvider(): iterable
+    {
+        yield 'artists list' => ['api/v1/music/artists'];
+        yield 'artist detail' => ['api/v1/music/artists/mbid-123'];
+        yield 'albums list' => ['api/v1/music/albums'];
+        yield 'album detail' => ['api/v1/music/albums/mbid-456'];
+        yield 'tracks list' => ['api/v1/music/tracks'];
+        yield 'track by id' => ['api/v1/music/tracks/track-789'];
+        yield 'now playing' => ['api/v1/music/now-playing'];
+        yield 'music collection root' => ['api/v1/music'];
+        // Percent-encoded names: space, ampersand, apostrophe, non-ASCII.
+        yield 'encoded space in artist name' => ['api/v1/music/artists/Pink%20Floyd'];
+        yield 'encoded ampersand in artist name' => ['api/v1/music/artists/Earth%2C%20Wind%20%26%20Fire'];
+        yield 'encoded apostrophe in album name' => ['api/v1/music/albums/Guns%20N%27%20Roses'];
+        yield 'encoded non-ascii in artist name' => ['api/v1/music/artists/Bj%C3%B6rk'];
+        yield 'encoded dot in album name' => ['api/v1/music/albums/Vol%2E%201'];
+        yield 'artist literally named scan' => ['api/v1/music/artists/Scan'];
+    }
+
+    /**
+     * @dataProvider legitimateMusicReadProvider
+     */
+    public function test_legitimate_music_reads_still_pass_the_hardened_guard(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{"artists":[]}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(200, $response->statusCode, "GET /{$path} must still be forwarded");
+        $this->assertIsArray($forwarded, "GET /{$path} must reach the relay bridge");
+        // Forwarded VERBATIM — the guard inspects decoded forms but never rewrites
+        // the path, so the server still receives exactly what the client sent.
+        $this->assertSame('/' . $path, $forwarded['path']);
+    }
+
+    /**
      * D1 accept matrix: GET and HEAD to representative playback-read paths under
      * the newly-allowed `/hls`, `/dash`, `/media`, `/api/v1/transcode` prefixes
      * must pass the scope gate and be forwarded verbatim over the relay bridge.
+     * (The HEAD rows are controller-level intent only — see the test's docblock.)
      *
      * @return iterable<string, array{0: string, 1: string}>
      */
@@ -813,8 +1015,14 @@ final class ServerProxyControllerTest extends TestCase
 
     /**
      * A GET/HEAD to a real streaming path must clear the scope gate and reach the
-     * relay bridge with the path + method intact (players issue HEAD to probe
-     * segment size / range support before a ranged GET).
+     * relay bridge with the path + method intact.
+     *
+     * ⚠ The HEAD rows here are CONTROLLER-level only: no HEAD ever arrives via
+     * {@see \Phlix\Hub\Http\Router} (no `head()` registrar, no HEAD proxy route —
+     * pinned by {@see self::test_head_is_never_routed_to_the_relay_proxy()}), so
+     * they assert what the playback families WOULD do for a player probing
+     * segment size / range support if HEAD were ever registered, not what is
+     * reachable today. Do not cite them as evidence that HEAD works.
      *
      * @dataProvider acceptedStreamingScopeProvider
      */
@@ -1948,6 +2156,22 @@ final class ServerProxyControllerTest extends TestCase
         yield 'media streaming percent-encoded dot-dot' => ['media/%2e%2e/api/v1/admin'];
         yield 'dash streaming encoded separator' => ['dash/job-abc/..%2fadmin'];
         yield 'transcode streaming bare encoded separator' => ['api/v1/transcode%2fadmin'];
+        // S100 fix round 1 (MED-3): these three were FORWARDED by the old
+        // single-decode guard. They only 404'd because phlix-server never decodes
+        // Request::$path and anchors every route — one rawurldecode() or one
+        // multi-segment route there would have turned each into a live traversal
+        // out of browse scope. The guard now decodes to a fixed point, treats `;`
+        // as a segment terminator, and rejects NUL/control bytes.
+        yield 'double-encoded dot-dot into admin' => ['api/v1/music/%252e%252e%252fadmin%252fusers'];
+        yield 'double-encoded dot-dot on a browse prefix' => ['api/v1/media/%252e%252e%252fadmin'];
+        yield 'triple-encoded dot-dot into admin' => ['api/v1/music/%25252e%25252e%25252fadmin'];
+        yield 'path-parameter dot-dot (semicolon trick)' => ['api/v1/music/..;/admin/users'];
+        yield 'path-parameter dot-dot on a browse prefix' => ['api/v1/libraries/..;/admin/users'];
+        yield 'NUL byte before dot-dot' => ['api/v1/music/artists/%00../admin'];
+        yield 'bare NUL byte truncation' => ['api/v1/music/artists/name%00.mp3'];
+        yield 'encoded newline control byte' => ['api/v1/music/artists/name%0aX-Injected'];
+        // Double-encoded back-slash separator survives no decoding pass either.
+        yield 'double-encoded back-slash' => ['api/v1/music/%255c..%255cadmin'];
     }
 
     /**
