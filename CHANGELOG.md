@@ -137,6 +137,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   raw path and each intermediate decoding. Legitimate percent-encoding still
   passes (`/api/v1/music/artists/Pink%20Floyd` — artist and album ids are NAMES),
   which is why the guard decodes rather than rejecting every `%`.
+  - **Known limitation, deliberate and documented.** Because an encoded separator
+    is refused outright, an artist/album/track whose NAME contains `/` or `\` is
+    unreachable over the relay — a library containing **AC/DC** (also `N/A`,
+    `+/-`, `AC\DC`) shows an EMPTY artist page through the hub, because the SPA
+    swallows the 403 into an empty list. This is **not** relay-specific: the name
+    is equally unreachable direct, since phlix-server does not decode route
+    parameters either. The correct fix is upstream — key music by id and pass the
+    name as a query parameter — and is tracked as its own step; the separator
+    check must NOT be weakened to accommodate it. Likewise an artist/album named
+    exactly `.` or `..` is unreachable by design (a dot is unreserved, so it
+    arrives as a real dot-segment). Names that merely CONTAIN dots are unaffected
+    (`...`, `S.C.I.E.N.C.E.`, `... And Justice For All`, `Vol. 1`). All of these
+    bounds are pinned by tests so they stay deliberate.
 
 - **`SCOPE_DENY_PATTERNS`: the relay proxy no longer depends on phlix-server's
   route table to refuse a scan trigger.** `/api/v1/music/scan` (and any sub-path)
@@ -144,6 +157,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `GET`/`HEAD /api/v1/music/scan` are refused by the hub's own gate instead of
   404-ing server-side purely because that route happens to be registered
   POST-only.
+  - The deny list is matched against **every spelling** of the path, not just the
+    literal one: each pattern is tested against the raw path AND each successive
+    percent-decoding, with `;` treated as a segment terminator, duplicate `/`
+    collapsed and a trailing `.`/space stripped. Without that, `//scan`,
+    `///scan`, `scan;x`, `scan;`, `scan.`, `scan%20`, `scan%2e`, `%73can`,
+    `s%63an`, `sca%6e`, `%53%43%41%4e` and `%2573can` were all still forwarded —
+    404-ing only because phlix-server happens not to decode `Request::$path`, not
+    to collapse duplicate slashes and not to strip path parameters, i.e. on the
+    very incidental peer behaviour this pin exists to stop relying on. All twelve
+    are now regression-tested end to end.
+  - Scope of the guarantee, stated precisely: the pin is authoritative for
+    percent-decoding, `;` path parameters, duplicate separators and trailing
+    dot/space. It does not model IIS-style overlong-UTF-8 (`%c0%ae`), `%uXXXX` or
+    fullwidth-`．` folding, because neither PHP, Workerman nor phlix-server
+    performs any of them, so such a form can never become `scan` downstream
+    either. Encoded/literal separators need no handling here — they are rejected
+    earlier by the traversal guard.
+  - The **same defect still exists** for `POST /api/v1/libraries/{id}/scan`,
+    `/rescan` and `/theme-media/scan`, which sit inside the allowlisted
+    `GET /api/v1/libraries` browse prefix and 404 only because the server
+    registered them POST-only. That is deliberately left to a follow-up step that
+    sweeps every phlix-server write route living under an allowlisted read prefix,
+    rather than a spot fix. Relay traffic cannot pass the server's
+    `AdminMiddleware` regardless, so the exposure is availability/consistency, not
+    privilege escalation.
 
 ### Fixed
 
