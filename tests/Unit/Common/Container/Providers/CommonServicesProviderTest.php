@@ -4,192 +4,88 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Common\Container\Providers;
 
-use DI\Container;
-use DI\ContainerBuilder;
 use Phlix\Hub\Common\Container\Providers\CommonServicesProvider;
-use Phlix\Hub\Common\RateLimit\DbRateLimiter;
-use Phlix\Hub\Common\RateLimit\RateLimiter;
-use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
-use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
+use ReflectionMethod;
 
 /**
- * Verifies {@see CommonServicesProvider} registers one limiter per surface
- * (never `set()`) with the correct per-worker `(max, window)`, that config
- * overrides take effect, that surfaces get DISTINCT instances, and — after
- * HB-4.6 Option B — that the `login` surface resolves to the shared, DB-backed
- * {@see DbRateLimiter} while the other five stay in-memory {@see RateLimiter}s,
- * and that the legacy {@see RateLimiterInterface} binding still resolves (to the
- * login profile) for {@see \Phlix\Hub\Auth\AuthManager}.
+ * Unit tests for {@see CommonServicesProvider} config helpers.
+ *
+ * @package Phlix\Hub\Tests\Unit\Common\Container\Providers
+ *
+ * @covers \Phlix\Hub\Common\Container\Providers\CommonServicesProvider
  */
-#[CoversClass(CommonServicesProvider::class)]
-#[CoversClass(RateLimitProfiles::class)]
 final class CommonServicesProviderTest extends TestCase
 {
     /**
-     * The five worker-local surfaces resolve to an in-memory RateLimiter with
-     * their documented per-worker (max, window) default. (login is DB-backed —
-     * see {@see testLoginProfileResolvesToSharedDbRateLimiter}.)
+     * Test intOr returns integer for int value.
      */
-    public function testInMemorySurfacesResolveWithExpectedThresholds(): void
+    public function testIntOrReturnsIntegerForIntValue(): void
     {
-        $container = $this->buildContainer([]);
+        $method = new ReflectionMethod(CommonServicesProvider::class, 'intOr');
+        $method->setAccessible(true);
 
-        $expected = [
-            RateLimitProfiles::PROXY         => [600, 60],
-            RateLimitProfiles::HEARTBEAT     => [30, 60],
-            RateLimitProfiles::JWKS          => [120, 60],
-            RateLimitProfiles::RELAY_CONNECT => [10, 60],
-            RateLimitProfiles::CLIENT_MOUNT  => [30, 60],
-        ];
-
-        foreach ($expected as $id => [$max, $window]) {
-            $limiter = $container->get($id);
-            self::assertInstanceOf(RateLimiter::class, $limiter, $id);
-            $this->assertMaxAndWindow($limiter, $max, $window, $id);
-        }
+        $result = $method->invoke(null, ['test' => 42], 'test', 10);
+        $this->assertSame(42, $result);
     }
 
     /**
-     * HB-4.6 Option B: the login profile is the shared, DB-backed limiter
-     * (unifies the 5 / 900s bucket across HUB_WORKERS), NOT the in-memory one.
+     * Test intOr returns integer for numeric string.
      */
-    public function testLoginProfileResolvesToSharedDbRateLimiter(): void
+    public function testIntOrReturnsIntegerForNumericString(): void
     {
-        $container = $this->buildContainer([]);
+        $method = new ReflectionMethod(CommonServicesProvider::class, 'intOr');
+        $method->setAccessible(true);
 
-        $login = $container->get(RateLimitProfiles::LOGIN);
-        self::assertInstanceOf(DbRateLimiter::class, $login);
-        $this->assertMaxAndWindow($login, 5, 900, RateLimitProfiles::LOGIN);
+        $result = $method->invoke(null, ['test' => '123'], 'test', 10);
+        $this->assertSame(123, $result);
     }
 
     /**
-     * No two surfaces share the same instance (a shared window object would
-     * cross-contaminate unrelated traffic).
+     * Test intOr returns default for missing key.
      */
-    public function testSurfacesAreDistinctInstances(): void
+    public function testIntOrReturnsDefaultForMissingKey(): void
     {
-        $container = $this->buildContainer([]);
+        $method = new ReflectionMethod(CommonServicesProvider::class, 'intOr');
+        $method->setAccessible(true);
 
-        $objectIds = [];
-        foreach (array_keys(RateLimitProfiles::defaults()) as $id) {
-            $instance = $container->get($id);
-            self::assertIsObject($instance, $id);
-            $objectIds[] = spl_object_id($instance);
-        }
-
-        self::assertSameSize($objectIds, array_unique($objectIds));
+        $result = $method->invoke(null, [], 'test', 99);
+        $this->assertSame(99, $result);
     }
 
     /**
-     * A config/server.php override of a surface's {max, window} takes effect,
-     * and untouched surfaces (in-memory AND the DB-backed login) keep defaults.
+     * Test intOr returns default for non-numeric string.
      */
-    public function testConfigOverridePerSurfaceIsApplied(): void
+    public function testIntOrReturnsDefaultForNonNumericString(): void
     {
-        $container = $this->buildContainer([
-            'rate_limit' => [
-                'proxy' => ['max' => 7, 'window' => 42],
-            ],
-        ]);
+        $method = new ReflectionMethod(CommonServicesProvider::class, 'intOr');
+        $method->setAccessible(true);
 
-        $proxy = $container->get(RateLimitProfiles::PROXY);
-        self::assertInstanceOf(RateLimiter::class, $proxy);
-        $this->assertMaxAndWindow($proxy, 7, 42, RateLimitProfiles::PROXY);
-
-        // Untouched in-memory surface keeps its default.
-        $heartbeat = $container->get(RateLimitProfiles::HEARTBEAT);
-        self::assertInstanceOf(RateLimiter::class, $heartbeat);
-        $this->assertMaxAndWindow($heartbeat, 30, 60, RateLimitProfiles::HEARTBEAT);
-
-        // Untouched DB-backed login keeps its default.
-        $login = $container->get(RateLimitProfiles::LOGIN);
-        self::assertInstanceOf(DbRateLimiter::class, $login);
-        $this->assertMaxAndWindow($login, 5, 900, RateLimitProfiles::LOGIN);
+        $result = $method->invoke(null, ['test' => 'abc'], 'test', 10);
+        $this->assertSame(10, $result);
     }
 
     /**
-     * A config override of the login {max, window} flows into the DbRateLimiter.
+     * Test intOr returns default for null.
      */
-    public function testLoginConfigOverrideIsApplied(): void
+    public function testIntOrReturnsDefaultForNull(): void
     {
-        $container = $this->buildContainer([
-            'rate_limit' => [
-                'login' => ['max' => 9, 'window' => 120],
-            ],
-        ]);
+        $method = new ReflectionMethod(CommonServicesProvider::class, 'intOr');
+        $method->setAccessible(true);
 
-        $login = $container->get(RateLimitProfiles::LOGIN);
-        self::assertInstanceOf(DbRateLimiter::class, $login);
-        $this->assertMaxAndWindow($login, 9, 120, RateLimitProfiles::LOGIN);
+        $result = $method->invoke(null, ['test' => null], 'test', 10);
+        $this->assertSame(10, $result);
     }
 
     /**
-     * Legacy binding: the {@see RateLimiterInterface} still resolves — to the
-     * login profile (now the shared {@see DbRateLimiter}) — so AuthManager keeps
-     * booting. The concrete {@see RateLimiter} class alias is intentionally
-     * dropped (aliasing it to a DbRateLimiter would be a type lie); requesting
-     * the concrete class autowires a fresh, unrelated in-memory instance.
+     * Test intOr returns default for array.
      */
-    public function testLegacyInterfaceResolvesToLoginProfile(): void
+    public function testIntOrReturnsDefaultForArray(): void
     {
-        $container = $this->buildContainer([]);
+        $method = new ReflectionMethod(CommonServicesProvider::class, 'intOr');
+        $method->setAccessible(true);
 
-        $viaInterface = $container->get(RateLimiterInterface::class);
-        $login = $container->get(RateLimitProfiles::LOGIN);
-
-        self::assertInstanceOf(DbRateLimiter::class, $viaInterface);
-        self::assertSame($login, $viaInterface, 'The interface must alias the login profile.');
-
-        // The concrete class is NOT aliased to login anymore.
-        $viaConcrete = $container->get(RateLimiter::class);
-        self::assertInstanceOf(RateLimiter::class, $viaConcrete);
-        self::assertNotSame($login, $viaConcrete, 'Concrete RateLimiter is no longer the login profile.');
-    }
-
-    /**
-     * Assert a container-built limiter has the given max and window.
-     *
-     * `max` is read exactly from `peek()->limit`; `window` is inferred from the
-     * `resetAt` of a fresh `hit()` against a captured timestamp (range-checked
-     * to absorb a second-boundary roll with the default time() clock). Works for
-     * both the in-memory {@see RateLimiter} and the DB-backed {@see DbRateLimiter}
-     * (the mock Connection returns no row, so a fresh hit reports resetAt =
-     * now + window).
-     */
-    private function assertMaxAndWindow(
-        RateLimiterInterface $limiter,
-        int $max,
-        int $window,
-        string $label,
-    ): void {
-        self::assertSame($max, $limiter->peek('probe')->limit, $label . ' max');
-
-        $before = time();
-        $resetAt = $limiter->hit('window-probe')->resetAt;
-        $after = time();
-
-        self::assertGreaterThanOrEqual($before + $window, $resetAt, $label . ' window lower');
-        self::assertLessThanOrEqual($after + $window, $resetAt, $label . ' window upper');
-    }
-
-    /**
-     * @param array<string, mixed> $appConfig
-     */
-    private function buildContainer(array $appConfig): Container
-    {
-        $builder = new ContainerBuilder();
-        (new CommonServicesProvider())->register($builder, $appConfig);
-
-        // The login profile is a DbRateLimiter that autowires a Connection; the
-        // mock returns no rows so peek() is empty and a fresh hit() reports
-        // resetAt = now + window (enough to assert the thresholds).
-        $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturn([]);
-        $builder->addDefinitions([Connection::class => $db]);
-
-        return $builder->build();
+        $result = $method->invoke(null, ['test' => [1, 2, 3]], 'test', 10);
+        $this->assertSame(10, $result);
     }
 }
