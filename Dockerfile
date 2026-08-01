@@ -37,4 +37,6 @@ RUN composer dump-autoload --no-dev --optimize
 
 EXPOSE 80 443
 
+USER nobody
+
 CMD ["sh", "/docker-entrypoint.sh"]
