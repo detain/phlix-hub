@@ -98,8 +98,10 @@ final class MetricsServicesProvider implements ServiceProviderInterface
                     if ($instance === null) {
                         /** @var MetricsCollector $collector */
                         $collector = $c->get(MetricsCollector::class);
+                        /** @var MetricsFlushService $instance */
                         $instance = new MetricsFlushService($collector, $config);
                     }
+                    /** @var MetricsFlushService $instance */
                     return $instance;
                 }
             ),

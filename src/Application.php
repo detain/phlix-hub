@@ -119,6 +119,7 @@ final class Application
      */
     private static function getRealPathMemo(string $path): string|false
     {
+        /** @var array<string, string|false> $memo */
         static $memo = [];
         if (isset($memo[$path])) {
             return $memo[$path];
@@ -171,8 +172,8 @@ final class Application
 
         return $memo[$candidate] = [
             'real' => $real,
-            'mtime' => (int) $stat['mtime'],
-            'size' => (int) $stat['size'],
+            'mtime' => $stat['mtime'],
+            'size' => $stat['size'],
         ];
     }
 
@@ -398,7 +399,9 @@ final class Application
         // Redirect to Vue SPA.
         $this->router->group('/servers/{id}', static function (Router $r): void {
             $r->get('', static function (Request $request, array $params): Response {
-                return (new Response())->redirect('/app/servers/' . $params['id']);
+                /** @var string $id */
+                $id = $params['id'];
+                return (new Response())->redirect('/app/servers/' . $id);
             });
         }, [$authMiddleware]);
 
@@ -1071,7 +1074,9 @@ final class Application
 
         // Redirect to Vue SPA — public route (no auth required).
         $this->router->get('/invite/{token}', static function (Request $request, array $params): Response {
-            return (new Response())->redirect('/app/invite/' . $params['token']);
+            /** @var string $token */
+            $token = $params['token'];
+            return (new Response())->redirect('/app/invite/' . $token);
         });
 
         // JSON API for invite links (protected).
@@ -1687,7 +1692,9 @@ final class Application
                         // paths get a short max-age + ETag/Last-Modified so a
                         // conditional GET can be answered 304 (no body).
                         $isHashedAsset = (bool) preg_match('/\.([a-f0-9]{6,12})\./i', $path);
+                        /** @var string|null $ifNoneMatch */
                         $ifNoneMatch = $request->header('if-none-match');
+                        /** @var string|null $ifModifiedSince */
                         $ifModifiedSince = $request->header('if-modified-since');
                         $decision = self::computeStaticCacheDecision(
                             $mime,
@@ -1830,35 +1837,35 @@ final class Application
         try {
             /** @var array<string, array{enabled?: bool, count?: int, poll_seconds?: int}> $processConfig */
             $processConfig = require __DIR__ . '/../config/process.php';
-            if (is_array($processConfig)) {
-                $settings = $processConfig['maintenance'] ?? null;
-                if (is_array($settings) && ($settings['enabled'] ?? false) === true) {
-                    $count = (int) ($settings['count'] ?? 1);
+            $settings = $processConfig['maintenance'] ?? null;
+            if (is_array($settings) && ($settings['enabled'] ?? false) === true) {
+                /** @var int $count */
+                $count = $settings['count'] ?? 1;
 
-                    $maintenanceWorker = new Worker();
-                    $maintenanceWorker->count = $count > 0 ? $count : 1;
-                    $maintenanceWorker->name = 'phlix-hub-maintenance';
-                    $maintenanceWorker->onWorkerStart = static function (Worker $w) use (
-                        $serverConfig
-                    ): void {
-                        try {
-                            // Built inside the fork so the child owns its own DB/HTTP state.
-                            $container = \Phlix\Hub\Common\Container\ContainerFactory::create($serverConfig);
-                            $maintenance = $container->get(\Phlix\Hub\MaintenanceWorker::class);
-                            if ($maintenance instanceof \Phlix\Hub\MaintenanceWorker) {
-                                $maintenance->start($container);
-                            }
-                        } catch (\Throwable $e) {
-                            // Guard the fork: log and idle rather than exit, so a build
-                            // failure can't put the worker into a tight re-fork loop.
-                            trigger_error(
-                                'Maintenance worker failed to start: ' . $e->getMessage(),
-                                E_USER_WARNING,
-                            );
+                $maintenanceWorker = new Worker();
+                $maintenanceWorker->count = $count > 0 ? $count : 1;
+                $maintenanceWorker->name = 'phlix-hub-maintenance';
+                $maintenanceWorker->onWorkerStart = static function (Worker $w) use (
+                    $serverConfig
+                ): void {
+                    try {
+                        // Built inside the fork so the child owns its own DB/HTTP state.
+                        $container = \Phlix\Hub\Common\Container\ContainerFactory::create($serverConfig);
+                        /** @var \Phlix\Hub\MaintenanceWorker|null $maintenance */
+                        $maintenance = $container->get(\Phlix\Hub\MaintenanceWorker::class);
+                        if ($maintenance instanceof \Phlix\Hub\MaintenanceWorker) {
+                            $maintenance->start($container);
                         }
-                    };
-                    \Phlix\Hub\Common\Database\ConnectionPool::armWorkerStopCleanup($maintenanceWorker);
-                }
+                    } catch (\Throwable $e) {
+                        // Guard the fork: log and idle rather than exit, so a build
+                        // failure can't put the worker into a tight re-fork loop.
+                        trigger_error(
+                            'Maintenance worker failed to start: ' . $e->getMessage(),
+                            E_USER_WARNING,
+                        );
+                    }
+                };
+                \Phlix\Hub\Common\Database\ConnectionPool::armWorkerStopCleanup($maintenanceWorker);
             }
         } catch (\Throwable $e) {
             LoggerFactory::get(LogChannels::RELAY)->error(

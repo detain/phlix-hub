@@ -749,6 +749,7 @@ final class Tunnel implements TunnelInterface
 
             // One frame per channel per pass = fair interleave across channels.
             foreach (array_keys($this->pendingBodyFrames) as $channel) {
+                /** @psalm-suppress RiskyTruthyFalsyComparison */
                 if (empty($this->pendingBodyFrames[$channel])) {
                     unset($this->pendingBodyFrames[$channel]);
                     continue;
@@ -763,6 +764,7 @@ final class Tunnel implements TunnelInterface
                 }
 
                 array_shift($this->pendingBodyFrames[$channel]);
+                /** @psalm-suppress DocblockTypeContradiction */
                 if (empty($this->pendingBodyFrames[$channel])) {
                     unset($this->pendingBodyFrames[$channel]);
                 }
@@ -1008,6 +1010,7 @@ final class Tunnel implements TunnelInterface
         // If this client already has queued frames it is congested — do not send
         // ahead of the backlog (that would reorder its stream). Re-queue to
         // preserve FIFO order; the backlog is flushed on this client's drain.
+        /** @psalm-suppress RiskyTruthyFalsyComparison */
         if (!empty($this->pendingClientFrames[$channelId])) {
             $this->enqueueClientFrame($client, $encoded);
             return;
@@ -1275,6 +1278,7 @@ final class Tunnel implements TunnelInterface
     private function flushClientQueue(ClientConnection $client): bool
     {
         $channelId = $client->channelId;
+        /** @psalm-suppress RiskyTruthyFalsyComparison */
         while (!empty($this->pendingClientFrames[$channelId])) {
             $encoded = $this->pendingClientFrames[$channelId][0];
             if ($client->sendRaw($encoded) === false) {

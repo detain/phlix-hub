@@ -178,6 +178,7 @@ class HeartbeatHandler
             ['server_id' => $serverId],
         );
 
+        /** @var string|null $previousHash */
         $previousHash = $rows[0]['hash'] ?? null;
 
         // Hash matches previous heartbeat — nothing changed, skip upserts.
@@ -324,6 +325,7 @@ class HeartbeatHandler
             'SELECT COUNT(*) AS cnt FROM server_heartbeats WHERE server_id = :server_id',
             ['server_id' => $serverId],
         );
+        /** @var int|numeric-string|null $rawCount */
         $rawCount = $countRows[0]['cnt'] ?? null;
         $count = is_numeric($rawCount) ? (int) $rawCount : 0;
         if ($count <= $keepLast) {
@@ -382,6 +384,7 @@ class HeartbeatHandler
 
         $totalDeleted = 0;
         foreach ($serverIds as $row) {
+            /** @var mixed $rawServerId */
             $rawServerId = $row['server_id'] ?? null;
             $serverId = is_string($rawServerId) ? $rawServerId : '';
             if ($serverId === '') {

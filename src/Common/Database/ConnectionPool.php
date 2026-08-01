@@ -153,6 +153,7 @@ class ConnectionPool
             // would otherwise re-create a hooked PDO connection after closeAll,
             // which then fatals at RSHUTDOWN. Worker::stop() only closes
             // connections AFTER onWorkerStop, so do it here first.
+            /** @psalm-suppress InternalProperty */
             foreach ($w->connections as $connection) {
                 $connection->close();
             }

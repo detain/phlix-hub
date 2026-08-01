@@ -212,7 +212,9 @@ class ServerInfoHandler
 
         $libraryCount = is_numeric($row['library_count'] ?? null) ? (int) $row['library_count'] : null;
 
-        $subdomain = is_string($row['subdomain'] ?? null) && $row['subdomain'] !== '' ? $row['subdomain'] : null;
+        /** @var mixed $subdomainRaw */
+        $subdomainRaw = $row['subdomain'] ?? null;
+        $subdomain = is_string($subdomainRaw) && $subdomainRaw !== '' ? $subdomainRaw : null;
 
         return new ServerInfoDto(
             serverId: $serverId,

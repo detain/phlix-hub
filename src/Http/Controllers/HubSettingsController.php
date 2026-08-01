@@ -108,7 +108,7 @@ final class HubSettingsController
             return [];
         }
 
-        $decoded = json_decode((string) $raw, true);
+        $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
             return [];
         }

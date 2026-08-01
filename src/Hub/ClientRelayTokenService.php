@@ -234,6 +234,7 @@ final class ClientRelayTokenService
      */
     public function pruneExpiredTokens(): int
     {
+        /** @var int|bool $result */
         $result = $this->db->query(
             'DELETE FROM client_relay_tokens'
                 . ' WHERE expires_at < NOW() - INTERVAL 1 DAY'

@@ -2,7 +2,11 @@
 
 declare(strict_types=1);
 
-$hubPort = (int) (getenv('HUB_PORT') ?: 8800);
+$envStr = static fn (string $k, string $d): string => ($v = getenv($k)) !== false && $v !== '' ? $v : $d;
+$envInt = static fn (string $k, int $d): int => is_numeric($v = getenv($k)) ? (int) $v : $d;
+$envFloat = static fn (string $k, float $d): float => is_numeric($v = getenv($k)) ? (float) $v : $d;
+
+$hubPort = $envInt('HUB_PORT', 8800);
 
 // Public-facing base URL of the hub. This is baked into the enrollment
 // JWT and the JWKS URL handed to enrolled servers, so it MUST be reachable
@@ -10,17 +14,18 @@ $hubPort = (int) (getenv('HUB_PORT') ?: 8800);
 //   1. HUB_BASE_URL (explicit override, incl. scheme),
 //   2. https://<HUB_PUBLIC_DOMAIN> when a public domain is configured,
 //   3. http://localhost:<port> as the single-host / dev fallback.
-$hubPublicDomain = getenv('HUB_PUBLIC_DOMAIN') ?: '';
-$hubBaseUrl = getenv('HUB_BASE_URL')
-    ?: ($hubPublicDomain !== ''
+$hubPublicDomain = $envStr('HUB_PUBLIC_DOMAIN', '');
+$hubBaseUrl = ($v = getenv('HUB_BASE_URL')) !== false && $v !== ''
+    ? $v
+    : ($hubPublicDomain !== ''
         ? 'https://' . $hubPublicDomain
         : 'http://localhost:' . $hubPort);
 
 return [
-    'host'          => getenv('HUB_HOST') ?: '0.0.0.0',
+    'host'          => $envStr('HUB_HOST', '0.0.0.0'),
     'port'          => $hubPort,
-    'workers'       => (int) (getenv('HUB_WORKERS') ?: 2),
-    'workerman_log' => getenv('HUB_WORKERMAN_LOG') ?: __DIR__ . '/../.logs/workerman.log',
+    'workers'       => $envInt('HUB_WORKERS', 2),
+    'workerman_log' => $envStr('HUB_WORKERMAN_LOG', __DIR__ . '/../.logs/workerman.log'),
 
     // PID file for graceful reload (SIGUSR2). SINGLE SOURCE OF TRUTH: start.php
     // assigns `Worker::$pidFile` FROM THIS VALUE, and the DI container hands the
@@ -30,13 +35,13 @@ return [
     // .logs/, var/ and config/ in ReadWritePaths, so a /var/run/... default is
     // both unwritable by Workerman and non-existent for the restart endpoint
     // (which then always 500s with pid_file_not_found).
-    'pid_file'      => getenv('HUB_PID_FILE') ?: dirname(__DIR__) . '/var/hub.pid',
-    'status_file'   => getenv('HUB_STATUS_FILE') ?: dirname(__DIR__) . '/var/hub.status',
+    'pid_file'      => $envStr('HUB_PID_FILE', dirname(__DIR__) . '/var/hub.pid'),
+    'status_file'   => $envStr('HUB_STATUS_FILE', dirname(__DIR__) . '/var/hub.status'),
 
     // Public domain used to build relay URLs for subdomain-allocated servers.
     // Each enrolled server gets `<subdomain>.<public_domain>` (see migration
     // 008 and `Phlix\Hub\Hub\DnsAliasManager`).
-    'public_domain' => getenv('HUB_PUBLIC_DOMAIN') ?: 'phlix.media',
+    'public_domain' => $envStr('HUB_PUBLIC_DOMAIN', 'phlix.media'),
 
     // Public base URL (scheme + host) the hub advertises to enrolled servers
     // for heartbeats and JWKS fetches. See $hubBaseUrl derivation above.
@@ -47,7 +52,7 @@ return [
     // *effective* value (hub_settings override → this default) on every mint,
     // so an admin override applies to the next enrolled/renewed server with no
     // restart. Exposed as the `server.enrollment_ttl` hub setting.
-    'enrollment_ttl' => (int) (getenv('HUB_ENROLLMENT_TTL') ?: 604800),
+    'enrollment_ttl' => $envInt('HUB_ENROLLMENT_TTL', 604800),
 
     // Reverse-tunnel relay tuning.
     'relay' => [
@@ -55,29 +60,27 @@ return [
         // requests after a VALIDATED server reconnect displaces it (H-R6), so a
         // deploy/network blip does not instantly kill active playback. `0`
         // disables the drain (immediate hard displacement).
-        'reconnect_drain_grace_seconds' => is_numeric(getenv('HUB_RELAY_RECONNECT_DRAIN_GRACE') ?: '')
-            ? (float) getenv('HUB_RELAY_RECONNECT_DRAIN_GRACE')
-            : 5.0,
+        'reconnect_drain_grace_seconds' => $envFloat('HUB_RELAY_RECONNECT_DRAIN_GRACE', 5.0),
     ],
 
     // Relay worker TLS (wss://) settings.
     // Enable TLS on port 8802 for secure WebSocket connections.
-    'relay_tls' => filter_var(getenv('HUB_RELAY_TLS') ?: 'false', FILTER_VALIDATE_BOOLEAN),
-    'relay_tls_cert' => getenv('HUB_RELAY_TLS_CERT') ?: null,
-    'relay_tls_key' => getenv('HUB_RELAY_TLS_KEY') ?: null,
+    'relay_tls' => filter_var(($v = getenv('HUB_RELAY_TLS')) !== false && $v !== '' ? $v : 'false', FILTER_VALIDATE_BOOLEAN),
+    'relay_tls_cert' => ($v = getenv('HUB_RELAY_TLS_CERT')) !== false && $v !== '' ? $v : null,
+    'relay_tls_key' => ($v = getenv('HUB_RELAY_TLS_KEY')) !== false && $v !== '' ? $v : null,
 
     // Sonarr/Radarr endpoints used by the request UI.
     // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.
     'arr' => [
         'sonarr' => [
-            'url'     => getenv('HUB_SONARR_URL') ?: 'http://localhost:8989',
-            'api_key' => getenv('HUB_SONARR_API_KEY') ?: '',
-            'enabled' => filter_var(getenv('HUB_SONARR_ENABLED') ?: '0', FILTER_VALIDATE_BOOLEAN),
+            'url'     => $envStr('HUB_SONARR_URL', 'http://localhost:8989'),
+            'api_key' => $envStr('HUB_SONARR_API_KEY', ''),
+            'enabled' => filter_var($envStr('HUB_SONARR_ENABLED', '0'), FILTER_VALIDATE_BOOLEAN),
         ],
         'radarr' => [
-            'url'     => getenv('HUB_RADARR_URL') ?: 'http://localhost:7878',
-            'api_key' => getenv('HUB_RADARR_API_KEY') ?: '',
-            'enabled' => filter_var(getenv('HUB_RADARR_ENABLED') ?: '0', FILTER_VALIDATE_BOOLEAN),
+            'url'     => $envStr('HUB_RADARR_URL', 'http://localhost:7878'),
+            'api_key' => $envStr('HUB_RADARR_API_KEY', ''),
+            'enabled' => filter_var($envStr('HUB_RADARR_ENABLED', '0'), FILTER_VALIDATE_BOOLEAN),
         ],
     ],
 
@@ -97,7 +100,7 @@ return [
             }
             return in_array(strtolower($raw), ['1', 'true', 'yes', 'on'], true);
         };
-        $envInt = static fn (string $k, int $d): int => is_numeric(getenv($k) ?? '') ? (int) getenv($k) : $d;
+        $envInt = static fn (string $k, int $d): int => is_numeric($v = getenv($k)) ? (int) $v : $d;
 
         return [
             'enabled'                  => $envBool('PHLIX_HUB_METRICS_ENABLED', true),
@@ -125,7 +128,7 @@ return [
     // ceiling) — is env-overridable; absent keys fall back to the
     // RateLimitProfiles defaults.
     'rate_limit' => (static function (): array {
-        $envInt = static fn (string $k, int $d): int => is_numeric(getenv($k) ?? '') ? (int) getenv($k) : $d;
+        $envInt = static fn (string $k, int $d): int => is_numeric($v = getenv($k)) ? (int) $v : $d;
 
         return [
             'cap'           => $envInt('PHLIX_HUB_RATELIMIT_CAP', 10000),

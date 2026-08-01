@@ -666,6 +666,7 @@ final class ClientRelayWorker
      */
     private static function upgradeHeader(WorkermanRequest $request, string $name): ?string
     {
+        /** @var mixed $value */
         $value = $request->header($name);
         return is_string($value) ? $value : null;
     }

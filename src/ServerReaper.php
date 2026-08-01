@@ -205,10 +205,9 @@ final class ServerReaper
 
                 $ids = [];
                 if (is_array($rows)) {
+                    /** @var list<array<string, mixed>> $rows */
                     foreach ($rows as $row) {
-                        if (!is_array($row)) {
-                            continue;
-                        }
+                        /** @var mixed $rawId */
                         $rawId = $row['id'] ?? null;
                         if (is_string($rawId) && $rawId !== '') {
                             $ids[] = $rawId;

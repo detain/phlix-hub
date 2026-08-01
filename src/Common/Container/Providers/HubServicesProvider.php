@@ -617,6 +617,7 @@ final class HubServicesProvider implements ServiceProviderInterface
             ): HubRestartController {
                 /** @var array<string, mixed> $appConfig */
                 $appConfig = $c->get('app.config');
+                /** @var string $pidFile */
                 $pidFile = is_string($appConfig['pid_file'] ?? null) && $appConfig['pid_file'] !== ''
                     ? $appConfig['pid_file']
                     : dirname(__DIR__, 4) . '/var/hub.pid';

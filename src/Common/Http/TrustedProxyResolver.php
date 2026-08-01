@@ -208,6 +208,7 @@ final class TrustedProxyResolver
             return $ip === $range;
         }
 
+        /** @psalm-suppress PossiblyUndefinedArrayOffset */
         [$subnet, $bitsRaw] = explode('/', $range, 2);
         if (!ctype_digit($bitsRaw)) {
             return false;

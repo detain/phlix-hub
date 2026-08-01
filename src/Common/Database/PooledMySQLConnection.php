@@ -51,6 +51,9 @@ use Workerman\MySQL\Connection;
  * socket serialised by its per-connection coroutine mutex.
  *
  * @since 1.7
+ * @psalm-suppress PropertyNotSetInConstructor The front intentionally does not
+ *        call the parent constructor (which would open a socket). It delegates
+ *        all queries to leased connections from the pool.
  */
 final class PooledMySQLConnection extends Connection
 {
@@ -142,7 +145,7 @@ final class PooledMySQLConnection extends Connection
      * @param string                        $query
      * @param array<int|string, mixed>|null  $params
      * @param int                            $fetchmode
-     * @return mixed
+     * @return array<array-key, mixed>
      */
     public function row($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
     {
@@ -155,7 +158,7 @@ final class PooledMySQLConnection extends Connection
      *
      * @param string                        $query
      * @param array<int|string, mixed>|null  $params
-     * @return mixed
+     * @return string
      */
     public function single($query = '', $params = null)
     {
@@ -168,7 +171,7 @@ final class PooledMySQLConnection extends Connection
      *
      * @param string                        $query
      * @param array<int|string, mixed>|null  $params
-     * @return mixed
+     * @return array<array-key, mixed>
      */
     public function column($query = '', $params = null)
     {
@@ -179,6 +182,7 @@ final class PooledMySQLConnection extends Connection
     {
         $conn = $this->lease();
         $cid = $this->currentCoroutineId();
+        /** @var bool $result */
         $result = $conn->beginTrans();
         if ($result && $cid >= 0) {
             $this->txPending[$cid] = true;
@@ -190,6 +194,7 @@ final class PooledMySQLConnection extends Connection
     {
         $conn = $this->lease();
         $cid = $this->currentCoroutineId();
+        /** @var bool $result */
         $result = $conn->commitTrans();
         if ($cid >= 0) {
             unset($this->txPending[$cid]);
@@ -201,6 +206,7 @@ final class PooledMySQLConnection extends Connection
     {
         $conn = $this->lease();
         $cid = $this->currentCoroutineId();
+        /** @var bool $result */
         $result = $conn->rollBackTrans();
         if ($cid >= 0) {
             unset($this->txPending[$cid]);
@@ -235,6 +241,7 @@ final class PooledMySQLConnection extends Connection
         // "API must be called in the coroutine" during SIGTERM shutdown.
         if ($this->idle !== null && $this->currentCoroutineId() >= 0) {
             while (!$this->idle->isEmpty()) {
+                /** @var Connection|false $conn */
                 $conn = $this->idle->pop(0.001);
                 if ($conn instanceof Connection) {
                     $conn->closeConnection();
@@ -378,7 +385,6 @@ final class PooledMySQLConnection extends Connection
         if (!class_exists(\Swoole\Coroutine::class)) {
             return -1;
         }
-        $cid = \Swoole\Coroutine::getCid();
-        return is_int($cid) ? $cid : -1;
+        return \Swoole\Coroutine::getCid();
     }
 }
