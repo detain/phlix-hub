@@ -8,6 +8,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`scripts/install.sh` now applies the Workerman kernel tuning, on both fresh
+  install and `--update`.** Implements the applicable parts of the
+  [kernel-optimization appendix](https://www.workerman.net/doc/workerman/appendices/kernel-optimization.html):
+  - `LimitNOFILE=1048576` in the systemd unit. This is the one that mattered:
+    systemd does **not** read `/etc/security/limits.conf`, so the hub was
+    running at systemd's soft default of **1024** open files. That bites here
+    harder than anywhere else in the stack — the relay surfaces (`:8802`
+    servers, `:8803` clients) run on `count=1` workers, so a *single* process
+    holds a socket for every paired server and every connected client at once,
+    and the hub would stop accepting tunnels with "Too many open files" long
+    before any other resource ran out. Retrofitted into existing units by
+    `--update`, only when the directive is absent.
+  - `/etc/sysctl.d/99-phlix-hub-net.conf` — `net.core.somaxconn=65535` (was
+    4096, and it silently clamps every listen backlog),
+    `tcp_max_syn_backlog=262144`, `netdev_max_backlog=30000`,
+    and `ip_local_port_range=16384 65535` (a *widening* — 49,152 ephemeral
+    ports vs the 28,232 of the 32768-60999 default; the floor stops at 16384
+    rather than the page's 10240 so the registered-port band, which includes
+    every port the hub listens on, stays outside the ephemeral range).
+  - `/etc/security/limits.d/99-phlix-hub.conf` — nofile soft 65536 / hard
+    1048576 for `root` and the service user, covering login shells and CLI
+    invocations (systemd is unaffected by this file; see `LimitNOFILE` above).
+
+  Four settings from that page are deliberately **not** applied, each with the
+  reason recorded in the generated sysctl file: `fs.file-max` and
+  `tcp_max_tw_buckets` would *lower* modern kernel defaults,
+  `tcp_tw_recycle` was removed from Linux in 4.12, and `nf_conntrack_max` is
+  only meaningful behind a stateful firewall. `--uninstall` removes both
+  drop-ins.
+
 - **Music library browse is no longer blocked by the relay proxy (S100).**
   `GET /api/v1/music` is now in
   `ServerProxyController::BROWSE_SCOPE_ALLOWLIST`, so the hub's fail-closed scope
