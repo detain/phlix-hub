@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * Smoke test for the JwtHandler → JwtClaims round-trip wiring.
  *
@@ -16,6 +14,8 @@ declare(strict_types=1);
  *
  * @package Phlix\Hub
  */
+
+declare(strict_types=1);
 
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Shared\Auth\JwtClaims;
@@ -55,8 +55,15 @@ $actual = [
 
 foreach ($expected as $key => $value) {
     if ($actual[$key] !== $value) {
-        fwrite(STDERR, sprintf("FAIL: %s mismatch: expected %s, got %s\n",
-            $key, json_encode($value), json_encode($actual[$key])));
+        fwrite(
+            STDERR,
+            sprintf(
+                "FAIL: %s mismatch: expected %s, got %s\n",
+                $key,
+                json_encode($value),
+                json_encode($actual[$key])
+            )
+        );
         exit(1);
     }
 }
@@ -65,6 +72,7 @@ echo "OK: JWT round-trip succeeded\n";
 echo "  Token (first 40 chars): " . substr($token, 0, 40) . "...\n";
 echo "  Decoded claim class:    " . get_class($claims) . "\n";
 echo "  iss=" . $claims->iss . " aud=" . $claims->aud . " sub=" . $claims->sub . "\n";
-echo "  type=" . $claims->type . " scope=" . implode(',', $claims->scope) . " serverId=" . ($claims->serverId ?? 'null') . "\n";
+echo "  type=" . $claims->type . " scope=" . implode(',', $claims->scope)
+    . " serverId=" . ($claims->serverId ?? 'null') . "\n";
 echo "  iat=" . $claims->iat . " exp=" . $claims->exp . "\n";
 exit(0);
