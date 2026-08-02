@@ -13,12 +13,33 @@ use Workerman\Events\Swoole as SwooleEventLoop;
 use Workerman\Worker;
 
 use function extension_loaded;
+use function file_get_contents;
+use function file_put_contents;
+use function function_exists;
 use function hrtime;
+use function is_array;
 use function max;
 use function microtime;
+use function pcntl_fork;
+use function pcntl_waitpid;
+use function pcntl_wexitstatus;
+use function pcntl_wifexited;
+use function pcntl_wifsignaled;
+use function pcntl_wtermsig;
+use function posix_getpid;
+use function posix_kill;
+use function serialize;
 use function sprintf;
 use function str_repeat;
 use function strlen;
+use function sys_get_temp_dir;
+use function tempnam;
+use function unlink;
+use function unserialize;
+use function usleep;
+
+use const SIGKILL;
+use const WNOHANG;
 
 /**
  * S43 acceptance-criteria LOAD test for the HTTP-over-relay proxy throttle,
@@ -62,6 +83,37 @@ use function strlen;
  * by the Swoole runtime, so it holds only while ext-swoole is loaded — `start.php`
  * merely warns when it is absent, and `Timer::sleep()` then blocks for real.
  *
+ * ### Why the measurement runs in a forked child
+ * Xdebug installs a `zend_observer` fcall begin/end pair in EVERY mode that
+ * needs to know which function is executing — including `xdebug.mode=coverage`,
+ * which is what CI's PHPUnit job uses (`.github/workflows/ci.yml`,
+ * `coverage: xdebug`). Swoole gives each coroutine its OWN `zend_execute_data`
+ * stack and frees it when the coroutine ends, so the observer's begin records
+ * for those frames are never balanced by an end. At `php_request_shutdown()`
+ * Zend calls `zend_observer_fcall_end_all()`, which walks the leftover frames
+ * and hands each one to Xdebug — pointing at coroutine stacks that Swoole has
+ * already released. Xdebug dereferences the dangling `execute_data` and the
+ * process dies with SIGSEGV (exit 139) AFTER the suite has reported OK.
+ *
+ * Measured on ext-swoole 6.2.1 + Xdebug 3.5.1 + PHP 8.3:
+ * - two concurrent coroutines that yield is the minimum reproducer; ONE
+ *   coroutine that yields does not crash,
+ * - the crash is NOT a leaked coroutine that could be drained: at the point of
+ *   the crash `Coroutine::stats()['coroutine_num']` is `0` and
+ *   `Coroutine::getCid()` is `-1`, i.e. every coroutine has already been joined
+ *   and the scheduler wound down. There is no userland state left to clean up,
+ *   so no amount of joining/draining inside this test can avoid it,
+ * - gdb backtrace: `xdebug_execute_user_code_end` <- `xdebug_execute_end`
+ *   <- `zend_observer_fcall_end_all` <- `php_request_shutdown`.
+ *
+ * The fix is therefore isolation, not avoidance: the whole coroutine run
+ * happens in a `pcntl_fork()` child that reports its measurements back over a
+ * temp file and then removes itself with `SIGKILL`, so PHP's request shutdown —
+ * and with it `zend_observer_fcall_end_all()` — never runs on a process that
+ * has touched a coroutine stack. Every assertion below still executes, on real
+ * measured numbers, in every environment. A child that dies before reporting is
+ * a hard test FAILURE, never a silent pass.
+ *
  * @covers \Phlix\Hub\Http\ConnectionResponseSink
  * @covers \Phlix\Hub\Relay\TokenBucket
  */
@@ -76,6 +128,13 @@ final class ConnectionResponseSinkThrottleLoadTest extends TestCase
     private const int FRAGMENT_BYTES = 12_500;
     private const int FRAGMENTS = 20; // 250 000 bytes == 1.0 s at the 2 Mbps cap
 
+    /**
+     * Wall-clock budget for the forked measurement child. The run itself is
+     * ~1.0 s (the 2 Mbps stream is the long pole); this is a hang guard, not a
+     * timing assertion, so it is deliberately two orders of magnitude looser.
+     */
+    private const int CHILD_BUDGET_SECONDS = 120;
+
     private ?string $previousEventLoopClass = null;
 
     protected function setUp(): void
@@ -86,13 +145,22 @@ final class ConnectionResponseSinkThrottleLoadTest extends TestCase
             $this->markTestSkipped('ext-swoole is required to exercise the production Timer::sleep() pacing path.');
         }
 
+        // The coroutine run has to happen in a forked child — see the class
+        // docblock: Xdebug's zend_observer hook segfaults at request shutdown on
+        // any process that has run concurrent Swoole coroutines. CI installs
+        // pcntl + posix explicitly (`.github/workflows/ci.yml`), so this guard
+        // is for stripped-down PHP builds only, never for the pipeline.
+        foreach (['pcntl_fork', 'pcntl_waitpid', 'posix_kill', 'posix_getpid'] as $required) {
+            if (!function_exists($required)) {
+                $this->markTestSkipped(
+                    "ext-pcntl + ext-posix are required ({$required}() is missing): the Swoole scheduler run must be "
+                    . 'forked into a throwaway child so PHP request shutdown never walks a freed coroutine stack.',
+                );
+            }
+        }
+
         $this->previousEventLoopClass = Worker::$eventLoopClass;
         Worker::$eventLoopClass = SwooleEventLoop::class;
-
-        // Silence the per-yield TRACE spam emitted by trace-log-enabled ext-swoole
-        // builds (present on the dev box, absent from the CI build). Purely
-        // cosmetic — it changes no scheduling behaviour.
-        Coroutine::set(['trace_flags' => 0]);
     }
 
     protected function tearDown(): void
@@ -110,36 +178,9 @@ final class ConnectionResponseSinkThrottleLoadTest extends TestCase
      */
     public function test_throttled_proxy_body_realises_its_cap_on_a_real_clock(): void
     {
-        /** @var array<string, array{bytes:int, seconds:float}> $result */
-        $result = [];
-        $ticks = 0;
-        $done = 0;
-
-        Coroutine\run(function () use (&$result, &$ticks, &$done): void {
-            // Concurrency probe: if the pacing wait blocked the process instead
-            // of yielding the coroutine, this loop could never advance.
-            Coroutine::create(static function () use (&$ticks, &$done): void {
-                while ($done < 3) {
-                    Coroutine::sleep(0.001);
-                    $ticks++;
-                }
-            });
-
-            Coroutine::create(function () use (&$result, &$done): void {
-                $result['throttled'] = $this->streamThrottled(self::CAP_BPS);
-                $done++;
-            });
-
-            Coroutine::create(function () use (&$result, &$done): void {
-                $result['other'] = $this->streamThrottled(self::OTHER_CAP_BPS);
-                $done++;
-            });
-
-            Coroutine::create(function () use (&$result, &$done): void {
-                $result['unlimited'] = $this->streamThrottled(0);
-                $done++;
-            });
-        });
+        $measurement = $this->measureInForkedChild();
+        $result = $measurement['streams'];
+        $ticks = $measurement['ticks'];
 
         $capBytes = self::CAP_BPS / 8.0;
         $otherCapBytes = self::OTHER_CAP_BPS / 8.0;
@@ -214,6 +255,161 @@ final class ConnectionResponseSinkThrottleLoadTest extends TestCase
             $ticks,
             "the pacing wait blocked the scheduler (only {$ticks} ticks) — {$detail}",
         );
+    }
+
+    /**
+     * Fork a child, run the whole Swoole scheduler workload there, and bring the
+     * measurements back.
+     *
+     * The child never reaches PHP's request shutdown: once its report is on disk
+     * it SIGKILLs itself, which is what keeps `zend_observer_fcall_end_all()`
+     * away from the coroutine stacks Swoole has already freed (see the class
+     * docblock). The parent process therefore never runs a coroutine at all and
+     * shuts down normally under any coverage driver.
+     *
+     * Every failure mode of the child — fork refused, child killed, child exited
+     * without a report, unreadable report — is an explicit assertion failure
+     * naming the wait status. None of them can be mistaken for a pass.
+     *
+     * @return array{streams: array<string, array{bytes:int, seconds:float}>, ticks:int}
+     */
+    private function measureInForkedChild(): array
+    {
+        $reportFile = tempnam(sys_get_temp_dir(), 'phlix-throttle-load-');
+        if ($reportFile === false) {
+            $this->fail('could not allocate a temp file for the forked measurement report');
+        }
+
+        $pid = pcntl_fork();
+        if ($pid === -1) {
+            unlink($reportFile);
+            $this->fail('pcntl_fork() failed — the Swoole scheduler run cannot be isolated from this process');
+        }
+
+        if ($pid === 0) {
+            // ---- child ----
+            // Silence the per-yield TRACE spam emitted by trace-log-enabled
+            // ext-swoole builds (present on the dev box, absent from the CI
+            // build). Purely cosmetic — it changes no scheduling behaviour.
+            Coroutine::set(['trace_flags' => 0]);
+
+            file_put_contents($reportFile, serialize($this->runSchedulerWorkload()));
+
+            // Leave WITHOUT running php_request_shutdown(). Any normal exit path
+            // (return, exit(), or an uncaught error) would run the Zend observer
+            // teardown that segfaults on this process. SIGKILL cannot be caught,
+            // so nothing below this line ever executes.
+            posix_kill(posix_getpid(), SIGKILL);
+            exit(1);
+        }
+
+        // ---- parent ----
+        $status = 0;
+        $deadlineNs = hrtime(true) + (self::CHILD_BUDGET_SECONDS * 1_000_000_000);
+        while (pcntl_waitpid($pid, $status, WNOHANG) === 0) {
+            if (hrtime(true) > $deadlineNs) {
+                posix_kill($pid, SIGKILL);
+                pcntl_waitpid($pid, $status);
+                unlink($reportFile);
+                $this->fail(
+                    'the forked measurement child did not finish within '
+                    . self::CHILD_BUDGET_SECONDS . 's and was killed',
+                );
+            }
+
+            usleep(2000);
+        }
+
+        $raw = file_get_contents($reportFile);
+        unlink($reportFile);
+
+        // SIGKILL by our own hand is the ONLY expected end for the child. Spell
+        // every other outcome out, so a child that died before writing its
+        // report can never read as a skipped or passing measurement.
+        $ended = 'ended with an unrecognised wait status ' . $status;
+        if (pcntl_wifsignaled($status)) {
+            $ended = 'was killed by signal ' . pcntl_wtermsig($status);
+        } elseif (pcntl_wifexited($status)) {
+            $ended = 'exited with code ' . pcntl_wexitstatus($status);
+        }
+
+        if ($raw === false || $raw === '') {
+            $this->fail("the forked measurement child produced no report — it {$ended}");
+        }
+
+        /** @var mixed $decoded */
+        $decoded = unserialize($raw, ['allowed_classes' => false]);
+        if (
+            !is_array($decoded)
+            || !isset($decoded['streams'], $decoded['ticks'])
+            || !is_array($decoded['streams'])
+        ) {
+            $this->fail("the forked measurement child wrote an unreadable report — it {$ended}");
+        }
+
+        // The isolation checks ITSELF: the child's only sanctioned exit is the
+        // SIGKILL it raises on itself. If a later edit lets the child fall
+        // through to PHP's request shutdown instead, it dies of SIGSEGV (11)
+        // under Xdebug — the report would still have been written first, so the
+        // measurement would pass while the crash quietly came back. Pin the
+        // terminating signal so that regression is RED, not invisible.
+        $this->assertTrue(
+            pcntl_wifsignaled($status),
+            "the forked measurement child must terminate by signal, but it {$ended} — "
+            . 'the Swoole/Xdebug shutdown isolation has been neutered',
+        );
+        $this->assertSame(
+            SIGKILL,
+            pcntl_wtermsig($status),
+            "the forked measurement child must terminate by SIGKILL, but it {$ended} — "
+            . 'the Swoole/Xdebug shutdown isolation has been neutered',
+        );
+
+        /** @var array{streams: array<string, array{bytes:int, seconds:float}>, ticks:int} $decoded */
+        return $decoded;
+    }
+
+    /**
+     * The measurement itself: three concurrently streaming connections with
+     * different caps plus a 1 ms scheduler-tick probe, all on one real Swoole
+     * scheduler. Runs ONLY inside the forked child.
+     *
+     * @return array{streams: array<string, array{bytes:int, seconds:float}>, ticks:int}
+     */
+    private function runSchedulerWorkload(): array
+    {
+        /** @var array<string, array{bytes:int, seconds:float}> $result */
+        $result = [];
+        $ticks = 0;
+        $done = 0;
+
+        Coroutine\run(function () use (&$result, &$ticks, &$done): void {
+            // Concurrency probe: if the pacing wait blocked the process instead
+            // of yielding the coroutine, this loop could never advance.
+            Coroutine::create(static function () use (&$ticks, &$done): void {
+                while ($done < 3) {
+                    Coroutine::sleep(0.001);
+                    $ticks++;
+                }
+            });
+
+            Coroutine::create(function () use (&$result, &$done): void {
+                $result['throttled'] = $this->streamThrottled(self::CAP_BPS);
+                $done++;
+            });
+
+            Coroutine::create(function () use (&$result, &$done): void {
+                $result['other'] = $this->streamThrottled(self::OTHER_CAP_BPS);
+                $done++;
+            });
+
+            Coroutine::create(function () use (&$result, &$done): void {
+                $result['unlimited'] = $this->streamThrottled(0);
+                $done++;
+            });
+        });
+
+        return ['streams' => $result, 'ticks' => $ticks];
     }
 
     /**
