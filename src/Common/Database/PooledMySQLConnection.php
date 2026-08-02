@@ -385,7 +385,6 @@ final class PooledMySQLConnection extends Connection
         if (!class_exists(\Swoole\Coroutine::class)) {
             return -1;
         }
-        $cid = \Swoole\Coroutine::getCid();
-        return is_int($cid) ? $cid : -1;
+        return \Swoole\Coroutine::getCid();
     }
 }
