@@ -125,8 +125,8 @@ final class ServerProxyController
      *
      * The proxy exposes READ-ONLY traffic to an authenticated, server-owning
      * hub user in two families: (1) JSON browse — libraries, media lists/detail,
-     * search, images/posters, OPDS catalog, music library (artists/albums/tracks);
-     * and (2) playback reads — the HLS and DASH playlists + segments, the
+     * search, collections, music library (artists/albums/tracks); and (2)
+     * playback reads — the HLS and DASH playlists + segments, the
      * direct-play byte stream, and transcode-job status polling. Anything
      * outside this set — notably admin, mutating, or scan endpoints — is
      * rejected with 403 `proxy.scope_denied` BEFORE forwarding, so a
@@ -148,6 +148,37 @@ final class ServerProxyController
      * never be forwarded under any method. ⚠ Widening this allowlist re-opens
      * that sweep for the new prefix — see the enumeration rule on
      * {@see self::SCOPE_DENY_PATTERNS}.
+     *
+     * ### Every prefix MUST name a real upstream family (S107 follow-up)
+     * A prefix that matches no phlix-server route is not harmless: it is relay
+     * surface the hub will happily forward without delivering any feature, and
+     * it is surface that a future server route lands INSIDE without ever passing
+     * the S107 enumeration. Five such entries shipped with the original
+     * allowlist and were removed here — `/api/v1/images`, `/api/v1/opds`,
+     * `/api/v1/genres`, `/api/v1/studios` and `/api/v1/people`. None of them
+     * exists on phlix-server: a boot of BOTH production registrars
+     * (`Server\Core\Application::loadRoutes()`, invoked from that class's
+     * constructor, and `Server\WebPortal\WebPortalRouter::registerRoutes()`,
+     * likewise — the exact pair `Hub\RelayRequestDispatcher::dispatch()` consults
+     * for a relayed request) produces 379 routes and not one of them lies under
+     * any of the five. Three of the five have a REAL upstream twin at a DIFFERENT
+     * path, and each twin is deliberately still out of scope:
+     *   - images/posters  → `GET /api/v1/artwork/{id}` (a pre-router fast path in
+     *     `Server\Workerman\HttpHandler::serveArtwork()`, which the relay
+     *     dispatcher does not even reach);
+     *   - OPDS catalog    → `GET /opds/v1.2[/…]`, mounted at the ROOT per the OPDS
+     *     1.2 spec, never under `/api/v1` (note `Server\Http\Router::opds()` also
+     *     registers it, but that registrar has ZERO production callers — only a
+     *     unit test — so `Application::loadBookRoutes()` is the live one);
+     *   - genre facets    → `GET /api/v1/media/facets`, i.e. already inside the
+     *     `/api/v1/media` prefix.
+     * `/api/v1/studios` and `/api/v1/people` have no upstream twin at all.
+     * ⚠ Do NOT re-add any of them, and do not "fix" the omission by allowlisting
+     * the twin: exposing `/api/v1/artwork` or `/opds/v1.2` over the relay is a
+     * deliberate product decision that must run the S107 enumeration first.
+     * `ServerProxyControllerTest::s107FollowupDeadPrefixProvider()` and
+     * `test_browse_scope_allowlist_matches_the_pinned_upstream_backed_set()` pin
+     * both halves.
      *
      * ### HEAD is not exposed through the proxy (deliberate, and inert by design)
      * {@see \Phlix\Hub\Http\Router} has no `head()` registrar and
@@ -190,16 +221,13 @@ final class ServerProxyController
      */
     private const BROWSE_SCOPE_ALLOWLIST = [
         'GET' => [
-            // Browse / metadata (JSON).
+            // Browse / metadata (JSON). Each of these names a REAL phlix-server
+            // family — see the "Every prefix MUST name a real upstream family"
+            // section above before adding a sixth.
             '/api/v1/libraries',
             '/api/v1/media',
             '/api/v1/search',
             '/api/v1/collections',
-            '/api/v1/genres',
-            '/api/v1/studios',
-            '/api/v1/people',
-            '/api/v1/images',
-            '/api/v1/opds',
             // S100: music library browse (Artist→Album→Track). One prefix covers
             // every music READ the SPA issues — `/artists`, `/artists/{mbid}`,
             // `/albums`, `/albums/{mbid}`, `/tracks`, `/tracks/{id}` (called
@@ -240,16 +268,13 @@ final class ServerProxyController
             '/api/v1/transcode',
         ],
         'HEAD' => [
-            // Browse / metadata (JSON).
+            // Browse / metadata (JSON). Mirror of the GET block's browse family —
+            // the five upstream-less prefixes were removed from BOTH keys, since
+            // a dead entry under an inert method key is dead twice over.
             '/api/v1/libraries',
             '/api/v1/media',
             '/api/v1/search',
             '/api/v1/collections',
-            '/api/v1/genres',
-            '/api/v1/studios',
-            '/api/v1/people',
-            '/api/v1/images',
-            '/api/v1/opds',
             // S100 fix round 1: `/api/v1/music` is deliberately NOT mirrored
             // here. HEAD cannot reach this controller at all (see the HEAD
             // section of this docblock), no Phlix client issues HEAD through the
