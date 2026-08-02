@@ -1924,6 +1924,159 @@ class TunnelTest extends TestCase
     }
 
     /**
+     * The S42 drain timer must be REPEATING, and must be cancelled through the
+     * event driver when the client goes away.
+     *
+     * `Workerman\Timer::add()` is persistent by DEFAULT, and here that default is
+     * load-bearing: the drain timer is the only thing that releases a throttled
+     * client's backlog as tokens refill, so a one-shot timer stalls the stream
+     * permanently after a single 50 ms tick. Adding `null, false` to that
+     * `Timer::add()` call — a one-character-class change that freezes every
+     * throttled user's playback — previously left the ENTIRE suite green
+     * (2503 tests, 19750 assertions), because `Timer::add()` throws outside a
+     * Workerman runtime and `armThrottleDrain()` swallows that by design.
+     *
+     * Installing a recording event driver into `Timer::$event` makes
+     * `Timer::add()` take its real dispatch branch — `repeat()` when persistent,
+     * `delay()` when one-shot — so the flag becomes observable. The negative
+     * control (`delay()` never called) is asserted alongside the positive one, so
+     * the test fails in BOTH directions.
+     */
+    public function test_throttle_drain_timer_is_repeating_and_is_cancelled_via_the_event_driver(): void
+    {
+        $recorder = new class implements \Workerman\Events\EventInterface {
+            /** @var list<float> */
+            public array $repeats = [];
+            /** @var list<float> */
+            public array $delays = [];
+            /** @var list<int> */
+            public array $cancelled = [];
+            private int $nextId = 900;
+
+            public function delay(float $delay, callable $func, array $args = []): int
+            {
+                $this->delays[] = $delay;
+                return ++$this->nextId;
+            }
+
+            public function repeat(float $interval, callable $func, array $args = []): int
+            {
+                $this->repeats[] = $interval;
+                return ++$this->nextId;
+            }
+
+            public function offDelay(int $timerId): bool
+            {
+                $this->cancelled[] = $timerId;
+                return true;
+            }
+
+            public function offRepeat(int $timerId): bool
+            {
+                return $this->offDelay($timerId);
+            }
+
+            public function onReadable($stream, callable $func): void
+            {
+            }
+
+            public function offReadable($stream): bool
+            {
+                return true;
+            }
+
+            public function onWritable($stream, callable $func): void
+            {
+            }
+
+            public function offWritable($stream): bool
+            {
+                return true;
+            }
+
+            public function onSignal(int $signal, callable $func): void
+            {
+            }
+
+            public function offSignal(int $signal): bool
+            {
+                return true;
+            }
+
+            public function deleteAllTimer(): void
+            {
+            }
+
+            public function run(): void
+            {
+            }
+
+            public function stop(): void
+            {
+            }
+
+            public function getTimerCount(): int
+            {
+                return 0;
+            }
+
+            public function setErrorHandler(callable $errorHandler): void
+            {
+            }
+        };
+
+        $eventProp = new \ReflectionProperty(\Workerman\Timer::class, 'event');
+        /** @var \Workerman\Events\EventInterface|null $previousEvent */
+        $previousEvent = $eventProp->getValue();
+        $eventProp->setValue(null, $recorder);
+
+        try {
+            $tunnel = $this->activeThrottleTunnel();
+
+            $clientWs = $this->createMock(TcpConnection::class);
+            $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '', 8_000_000);
+            $bucket = new TokenBucket(100.0, 100.0, 1000.0);
+            $bucket->spend(100.0); // empty at t=1000 → the drain leaves a backlog
+            $client->throttleBucket = $bucket;
+            $tunnel->registerClient($client);
+
+            $this->writePendingClientFrames($tunnel, [$client->channelId => ['x']]);
+
+            $drain = new \ReflectionMethod($tunnel, 'drainThrottled');
+            $drain->invoke($tunnel, $client, 1000.0);
+
+            $interval = (float) (new \ReflectionClassConstant(
+                Tunnel::class,
+                'THROTTLE_DRAIN_INTERVAL_SECONDS',
+            ))->getValue();
+
+            $this->assertSame(
+                [$interval],
+                $recorder->repeats,
+                'the throttle drain timer must be armed as a REPEATING timer at the drain interval',
+            );
+            $this->assertSame(
+                [],
+                $recorder->delays,
+                'the throttle drain timer must NOT be one-shot — a one-shot timer stalls the backlog forever',
+            );
+            $this->assertNotNull($client->throttleDrainTimerId, 'the armed timer id must be retained for cancellation');
+
+            $armedId = $client->throttleDrainTimerId;
+            $tunnel->removeClient($client);
+
+            $this->assertSame(
+                [$armedId],
+                $recorder->cancelled,
+                'the repeating drain timer must be cancelled through the event driver on client removal',
+            );
+            $this->assertNull($client->throttleDrainTimerId);
+        } finally {
+            $eventProp->setValue(null, $previousEvent);
+        }
+    }
+
+    /**
      * Read the private per-channel client re-queue.
      *
      * @return array<int, list<string>>
