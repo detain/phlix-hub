@@ -41,10 +41,12 @@ SIGALRM exit 142 on long suites with Xdebug coverage)
 
 **Lint — PHPCS PSR-12:**
 ```bash
-./vendor/bin/phpcs --standard=PSR12 -n --colors src/
+./vendor/bin/phpcs --standard=PSR12 --colors src/
 ```
-(composer script: `composer cs`; CI uses `-n --colors` flags; any phpcs violations are
-considered blocking)
+(composer script: `composer cs`; CI adds `--colors`; any phpcs violation is considered
+blocking. S109 dropped `-n`: warnings are no longer suppressed, so a line-length
+warning now fails the gate. Note phpcs exits non-zero on WARNINGS alone — judge a run
+by its `FOUND n ERRORS AND m WARNINGS` lines, never by the exit code.)
 
 **Build:** N/A — hub is a pure PHP daemon (no frontend asset pipeline)
 

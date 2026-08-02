@@ -389,7 +389,12 @@ final class SyncPlayRelayWorker
             'client_id' => $client->clientId,
             'display_name' => $client->displayName,
         ];
-        $this->broadcastToRoom($scopedRoom, json_encode($joinNotification, JSON_THROW_ON_ERROR), $client->clientId, true);
+        $this->broadcastToRoom(
+            $scopedRoom,
+            json_encode($joinNotification, JSON_THROW_ON_ERROR),
+            $client->clientId,
+            true,
+        );
 
         $logger->info('SyncPlay: client joined room', [
             'client_id' => $client->clientId,
@@ -479,8 +484,12 @@ final class SyncPlayRelayWorker
      *
      * @return void
      */
-    private function broadcastToRoom(string $room, string $message, string $excludeId = '', bool $includeSelf = false): void
-    {
+    private function broadcastToRoom(
+        string $room,
+        string $message,
+        string $excludeId = '',
+        bool $includeSelf = false,
+    ): void {
         $clients = self::$rooms[$room] ?? [];
         foreach ($clients as $client) {
             if (!$includeSelf && $client->clientId === $excludeId) {

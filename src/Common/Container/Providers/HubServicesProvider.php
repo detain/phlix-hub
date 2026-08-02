@@ -595,7 +595,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                 RelaySessionManager $sessionManager,
                 RateLimiterInterface $rateLimiter,
             ): ServerProxyController {
-                return new ServerProxyController($serverInfo, $bridge, LoggerFactory::get(LogChannels::RELAY), $sessionManager, $rateLimiter);
+                return new ServerProxyController(
+                    $serverInfo,
+                    $bridge,
+                    LoggerFactory::get(LogChannels::RELAY),
+                    $sessionManager,
+                    $rateLimiter,
+                );
             })->parameter('serverInfo', get(ServerInfoHandler::class))
                 ->parameter('bridge', get(RelayProxyBridge::class))
                 ->parameter('sessionManager', get(RelaySessionManager::class))

@@ -151,6 +151,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     exerts real upstream back-pressure through the SAME mechanism as a slow browser
     — the hub never queues the body without bound.
 
+### Changed
+
+- **The phpcs CI gate no longer hides warnings (S109).** `.github/workflows/ci.yml`
+  ran `phpcs --standard=PSR12 -n --colors src/`; `-n` suppresses warnings entirely,
+  which is how a PSR-12 line-length regression reached review during S100. The flag
+  is gone. Because removing it alone would have turned `master` red — measured on
+  `origin/master`: `A TOTAL OF 0 ERRORS AND 6 WARNINGS WERE FOUND IN 5 FILES`, exit
+  1 — the six pre-existing over-120-character lines are reflowed in the SAME commit
+  (`Application.php`, `Common/Container/Providers/HubServicesProvider.php`,
+  `Hub/RelaySessionManager.php`, `Relay/RelayProxyManager.php`, and two in
+  `SyncPlay/SyncPlayRelayWorker.php`). All six are pure reflows: a multi-line call
+  or signature, a wrapped `@param` continuation, and a SQL column list split to
+  match the shape the sibling statement in the same method already uses. No warning
+  was silenced with an inline `phpcs:ignore`, and no baseline was added.
+  `vendor/bin/phpcs --standard=PSR12 src/` is now `0 errors / 0 warnings`, exit 0.
+  ⚠ Note for future runs: phpcs exits non-zero on WARNINGS alone, so judge a run by
+  its `FOUND n ERRORS AND m WARNINGS` lines and never by the exit code.
+  (`phpcs.xml.dist`'s `<arg value="np"/>` still carries an `n` for a *bare* `phpcs`
+  invocation, which no gate or documented command uses — left alone deliberately:
+  removing it turns bare `phpcs` red on a `PSR1.Files.SideEffects` warning in
+  `scripts/add-headers.php` that cannot be fixed without splitting that script,
+  which is outside this change.)
+
 ### Security
 
 - **The music browse scope's write-refusal is now pinned END-TO-END for `POST`

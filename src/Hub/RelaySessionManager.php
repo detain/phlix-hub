@@ -559,7 +559,8 @@ class RelaySessionManager
 
         if ($maxConcurrentStreams === null) {
             $this->db->query(
-                'INSERT INTO relay_user_quotas (user_id, period_start, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out)
+                'INSERT INTO relay_user_quotas
+                     (user_id, period_start, bytes_in, bytes_out, quota_bytes_in, quota_bytes_out)
                  VALUES (:user_id, :period_start, 0, 0, :quota_bytes_in, :quota_bytes_out)
                  ON DUPLICATE KEY UPDATE
                      quota_bytes_in = VALUES(quota_bytes_in),

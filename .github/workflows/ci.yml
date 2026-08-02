@@ -40,8 +40,11 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
+      # S109: no `-n`. Warnings are gate failures here — `-n` suppressed them
+      # entirely, which is how a PSR-12 line-length regression reached review.
+      # phpcs exits non-zero on warnings alone, so this step is red on either.
       - name: Run PHPCS
-        run: ./vendor/bin/phpcs --standard=PSR12 -n --colors src/
+        run: ./vendor/bin/phpcs --standard=PSR12 --colors src/
 
   phpstan:
     name: PHPStan Static Analysis
