@@ -124,8 +124,9 @@ final class ServerProxyController
      * relay proxy is permitted to forward to a paired media server.
      *
      * The proxy exposes READ-ONLY traffic to an authenticated, server-owning
-     * hub user in two families: (1) JSON browse — libraries, media lists/detail,
-     * search, collections, music library (artists/albums/tracks); and (2)
+     * hub user in two families: (1) JSON browse — libraries, media lists/detail
+     * (which is also where SEARCH lives: `GET /api/v1/media/search`),
+     * collections, music library (artists/albums/tracks); and (2)
      * playback reads — the HLS and DASH playlists + segments, the
      * direct-play byte stream, and transcode-job status polling. Anything
      * outside this set — notably admin, mutating, or scan endpoints — is
@@ -153,25 +154,32 @@ final class ServerProxyController
      * A prefix that matches no phlix-server route is not harmless: it is relay
      * surface the hub will happily forward without delivering any feature, and
      * it is surface that a future server route lands INSIDE without ever passing
-     * the S107 enumeration. Five such entries shipped with the original
-     * allowlist and were removed here — `/api/v1/images`, `/api/v1/opds`,
-     * `/api/v1/genres`, `/api/v1/studios` and `/api/v1/people`. None of them
+     * the S107 enumeration. SIX such entries shipped with the original
+     * allowlist and have been removed — `/api/v1/images`, `/api/v1/opds`,
+     * `/api/v1/genres`, `/api/v1/studios`, `/api/v1/people` (the first five, in
+     * the S107 follow-up) and `/api/v1/search` (S165). None of them
      * exists on phlix-server: a boot of BOTH production registrars
      * (`Server\Core\Application::loadRoutes()`, invoked from that class's
      * constructor, and `Server\WebPortal\WebPortalRouter::registerRoutes()`,
      * likewise — the exact pair `Hub\RelayRequestDispatcher::dispatch()` consults
      * for a relayed request) produces 379 routes and not one of them lies under
-     * any of the five. Three of the five have a REAL upstream twin at a DIFFERENT
-     * path, and each twin is deliberately still out of scope:
+     * any of the six. Four of the six have a REAL upstream twin at a DIFFERENT
+     * path:
      *   - images/posters  → `GET /api/v1/artwork/{id}` (a pre-router fast path in
      *     `Server\Workerman\HttpHandler::serveArtwork()`, which the relay
-     *     dispatcher does not even reach);
+     *     dispatcher does not even reach) — deliberately still OUT of scope;
      *   - OPDS catalog    → `GET /opds/v1.2[/…]`, mounted at the ROOT per the OPDS
      *     1.2 spec, never under `/api/v1` (note `Server\Http\Router::opds()` also
      *     registers it, but that registrar has ZERO production callers — only a
-     *     unit test — so `Application::loadBookRoutes()` is the live one);
+     *     unit test — so `Application::loadBookRoutes()` is the live one) —
+     *     deliberately still OUT of scope;
      *   - genre facets    → `GET /api/v1/media/facets`, i.e. already inside the
-     *     `/api/v1/media` prefix.
+     *     `/api/v1/media` prefix, so already IN scope and unaffected;
+     *   - SEARCH          → `GET /api/v1/media/search` (`WebPortalRouter`, inside
+     *     its auth group), plus the sibling `GET /api/v1/media/search/by-marker`.
+     *     Both are already inside the `/api/v1/media` prefix, so search over the
+     *     relay is unaffected by dropping `/api/v1/search` — the SPA's
+     *     `SearchPage.vue` calls `/api/v1/media/search` and always has.
      * `/api/v1/studios` and `/api/v1/people` have no upstream twin at all.
      * ⚠ Do NOT re-add any of them, and do not "fix" the omission by allowlisting
      * the twin: exposing `/api/v1/artwork` or `/opds/v1.2` over the relay is a
@@ -223,10 +231,14 @@ final class ServerProxyController
         'GET' => [
             // Browse / metadata (JSON). Each of these names a REAL phlix-server
             // family — see the "Every prefix MUST name a real upstream family"
-            // section above before adding a sixth.
+            // section above before adding a fifth.
             '/api/v1/libraries',
+            // Also carries SEARCH: the real endpoint is
+            // `GET /api/v1/media/search` (+ `/search/by-marker`), a `/`-delimited
+            // sub-path of this prefix. There is no `/api/v1/search` route on
+            // phlix-server — that spelling was allowlisted here for a route that
+            // never existed and was dropped in S165.
             '/api/v1/media',
-            '/api/v1/search',
             '/api/v1/collections',
             // S100: music library browse (Artist→Album→Track). One prefix covers
             // every music READ the SPA issues — `/artists`, `/artists/{mbid}`,
@@ -269,11 +281,10 @@ final class ServerProxyController
         ],
         'HEAD' => [
             // Browse / metadata (JSON). Mirror of the GET block's browse family —
-            // the five upstream-less prefixes were removed from BOTH keys, since
+            // all six upstream-less prefixes were removed from BOTH keys, since
             // a dead entry under an inert method key is dead twice over.
             '/api/v1/libraries',
             '/api/v1/media',
-            '/api/v1/search',
             '/api/v1/collections',
             // S100 fix round 1: `/api/v1/music` is deliberately NOT mirrored
             // here. HEAD cannot reach this controller at all (see the HEAD

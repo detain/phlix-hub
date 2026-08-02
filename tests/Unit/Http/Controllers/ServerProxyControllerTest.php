@@ -3332,8 +3332,11 @@ final class ServerProxyControllerTest extends TestCase
     // S107 follow-up: an allowlist prefix that matches NO phlix-server route is
     // dead relay surface — it widens what the hub forwards without delivering
     // any feature, and it is surface a future server route can land inside
-    // without ever passing the S107 enumeration. Five such entries shipped with
-    // the original allowlist and are removed here.
+    // without ever passing the S107 enumeration. SIX such entries shipped with
+    // the original allowlist: five removed in the S107 follow-up, and
+    // `/api/v1/search` removed in S165 (the real endpoint is
+    // `GET /api/v1/media/search`, already inside the surviving `/api/v1/media`
+    // prefix).
     // -----------------------------------------------------------------------
 
     /**
@@ -3342,12 +3345,17 @@ final class ServerProxyControllerTest extends TestCase
      * This asserts against the real `BROWSE_SCOPE_ALLOWLIST` constant — not a
      * hand-made copy — so it is RED in BOTH directions a reviewer cares about:
      *  - **re-adding a dead prefix** (`/api/v1/images`, `/api/v1/opds`,
-     *    `/api/v1/genres`, `/api/v1/studios`, `/api/v1/people`) fails the
-     *    `assertSame()` on the affected key;
-     *  - **any other widening** — a sixth browse family, a `/api/v1/admin`
+     *    `/api/v1/genres`, `/api/v1/studios`, `/api/v1/people`, `/api/v1/search`)
+     *    fails the `assertSame()` on the affected key;
+     *  - **any other widening** — a fifth browse family, a `/api/v1/admin`
      *    prefix, a write-method key, a HEAD mirror of `/api/v1/music` — fails
      *    too, because the lists are pinned EXACTLY and by order, and the key set
-     *    is pinned to `GET`+`HEAD`.
+     *    is pinned to `GET`+`HEAD`;
+     *  - **an over-removal** — dropping a LIVE prefix such as `/api/v1/media`
+     *    (which is what actually carries search, facets, detail and the chapter
+     *    thumbnail) fails the same `assertSame()`. That is the dangerous
+     *    direction on a removal change, so it is asserted explicitly here rather
+     *    than left to the forward-path rows alone.
      *
      * The strictness is the point: `SCOPE_DENY_PATTERNS` is derived from this
      * list (a prefix's write routes must be swept when the prefix is added), so
@@ -3380,7 +3388,6 @@ final class ServerProxyControllerTest extends TestCase
             [
                 '/api/v1/libraries',
                 '/api/v1/media',
-                '/api/v1/search',
                 '/api/v1/collections',
                 '/api/v1/music',
                 '/hls',
@@ -3397,7 +3404,6 @@ final class ServerProxyControllerTest extends TestCase
             [
                 '/api/v1/libraries',
                 '/api/v1/media',
-                '/api/v1/search',
                 '/api/v1/collections',
                 '/hls',
                 '/dash',
@@ -3412,16 +3418,16 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * The five removed prefixes, plus the REAL upstream twins they were probably
+     * The six removed prefixes, plus the REAL upstream twins they were probably
      * meant to reach — all of which must stay out of scope.
      *
-     * Rows 1–10 are the removed spellings themselves (bare prefix + a `/`-sub-path,
-     * because {@see ServerProxyController::isWithinBrowseScope()} matches both
-     * shapes, so a re-added entry has two ways to go green).
+     * The first rows are the removed spellings themselves (bare prefix + a
+     * `/`-sub-path, because {@see ServerProxyController::isWithinBrowseScope()}
+     * matches both shapes, so a re-added entry has two ways to go green).
      *
-     * Rows 11+ are the load-bearing half. Three of the five DO have a real
-     * upstream family, just at a different path, and the tempting "fix" for a
-     * removed entry is to allowlist the real one:
+     * The trailing rows are the load-bearing half. Two of the six have a real
+     * upstream family that is still NOT relay surface, and the tempting "fix"
+     * for a removed entry is to allowlist the real one:
      *  - `/api/v1/artwork/{id}` — the poster/image surface, served by
      *    `HttpHandler::serveArtwork()` as a pre-router fast path that the relay
      *    dispatcher never even reaches, so allowlisting it would be relay surface
@@ -3430,8 +3436,11 @@ final class ServerProxyControllerTest extends TestCase
      *    OPDS 1.2 spec. It is also an UNAUTHENTICATED-adjacent surface with its
      *    own Basic-auth story, so exposing it over the hub tunnel is a product
      *    decision, not a typo fix.
-     * (The third, genre facets, needs nothing: `GET /api/v1/media/facets` is
-     * already inside the `/api/v1/media` prefix and is pinned allowed below.)
+     * The other two twins need nothing at all, because they are already inside
+     * the surviving `/api/v1/media` prefix and are pinned ALLOWED below:
+     * `GET /api/v1/media/facets` (the real `/api/v1/genres`) and
+     * `GET /api/v1/media/search` + `/api/v1/media/search/by-marker` (the real
+     * `/api/v1/search`, S165).
      *
      * @return iterable<string, array{0: string}>
      */
@@ -3443,6 +3452,17 @@ final class ServerProxyControllerTest extends TestCase
             '/api/v1/genres' => '/api/v1/genres/Action',
             '/api/v1/studios' => '/api/v1/studios/A24',
             '/api/v1/people' => '/api/v1/people/nm0000123',
+            // S165. Verified by booting BOTH production registrars and dumping
+            // `Router::getRoutes()` (379 routes): no route is registered at or
+            // under `/api/v1/search` for ANY method, no parametric route matches
+            // it, and a live `Application::dispatch()` → `WebPortalRouter::
+            // dispatch()` of `GET /api/v1/search` 404s while
+            // `GET /api/v1/media/search` 401s (i.e. the route exists, auth-gated).
+            // None of the four pre-router `HttpHandler` fast paths matches it
+            // either (`serveStatic` returns null for every `/api/` path;
+            // `serveArtwork`, `serveUserAvatar` and `serveMediaStream` are
+            // anchored regexes that do not).
+            '/api/v1/search' => '/api/v1/search/movies',
         ];
         foreach ($removed as $prefix => $subPath) {
             yield "removed prefix {$prefix}" => [$prefix];
@@ -3516,12 +3536,19 @@ final class ServerProxyControllerTest extends TestCase
      * The false-positive boundary for THIS removal, mirroring
      * {@see self::s107LegitimateReadProvider()}'s role for the deny sweep.
      *
-     * Dropping five prefixes must not drop a read that a real client issues. The
-     * genre/image/person surfaces phlix-server actually serves all live INSIDE a
-     * prefix that survives, so each is asserted still forwarded:
+     * Dropping six prefixes must not drop a read that a real client issues. The
+     * genre/image/person/SEARCH surfaces phlix-server actually serves all live
+     * INSIDE a prefix that survives, so each is asserted still forwarded:
      *  - `GET /api/v1/media/facets` — the genre facet list the filter UI reads
      *    (`ItemRepository::distinctGenres()`), i.e. what `/api/v1/genres` looked
      *    like it was for;
+     *  - `GET /api/v1/media/search` — the REAL search endpoint (`WebPortalRouter`,
+     *    inside its auth group), i.e. what `/api/v1/search` looked like it was
+     *    for. This is the load-bearing row for S165: the SPA's `SearchPage.vue`
+     *    issues exactly this path through the relay-proxy base, so if dropping
+     *    `/api/v1/search` had broken search, THIS row would be red;
+     *  - `GET /api/v1/media/search/by-marker` — its sibling, proving the whole
+     *    `search` sub-tree still forwards, not just the exact leaf;
      *  - `GET /api/v1/media/{id}` — carries the item's genres/studios/cast in its
      *    metadata payload, which is the only people/studio surface there is;
      *  - `GET /api/v1/media/{id}/chapters/{n}/thumbnail` — a real image read, and
@@ -3533,6 +3560,9 @@ final class ServerProxyControllerTest extends TestCase
     public static function s107FollowupSurvivingReadProvider(): iterable
     {
         yield 'genre facets (the real /api/v1/genres)' => ['/api/v1/media/facets'];
+        yield 'media search (the real /api/v1/search, S165)' => ['/api/v1/media/search'];
+        yield 'media search by-marker (sibling of the real search leaf)'
+            => ['/api/v1/media/search/by-marker'];
         yield 'media detail (carries genres/studios/cast)' => ['/api/v1/media/item-1'];
         yield 'media list' => ['/api/v1/media'];
         yield 'chapter thumbnail (a real image read, via BROWSE_SCOPE_PATTERNS)'
