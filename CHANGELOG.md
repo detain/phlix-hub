@@ -176,6 +176,34 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Security
 
+- **`/api/v1/search` removed from the relay-proxy browse allowlist — the sixth
+  and last upstream-less prefix (S165).** The S107 follow-up below dropped five
+  dead prefixes and deliberately left `/api/v1/search` alone for scope
+  discipline, even though the same route dump already showed it matching
+  nothing. This change removes it from BOTH read keys. Re-established by
+  execution, independently of that audit: booting both production registrars
+  (`Application::loadRoutes()` + `WebPortalRouter::registerRoutes()` — the exact
+  pair `RelayRequestDispatcher::dispatch()` consults) yields **379 routes, zero
+  of them at or under `/api/v1/search` for any method**, zero parametric routes
+  matching it, and zero catch-alls under `/api/v1/`; a **live dispatch** of
+  `GET|HEAD /api/v1/search` through that pair returns **404**, while
+  `GET /api/v1/media/search` returns **401** (route present, auth-gated).
+  A route table is not the whole surface, so the four pre-router fast paths in
+  `Server\Workerman\HttpHandler` were probed too — `serveStatic` (returns null
+  for every `/api/` path), `serveArtwork`, `serveUserAvatar`, `serveMediaStream`
+  — each with a firing positive control, and `/api/v1/search` misses all four.
+  The literal appears **zero** times anywhere in phlix-server (including
+  `vendor/` and the built SPA bundles) and in `phlix-mobile-client`,
+  `phlix-contracts`, `phlix-docs` and `phlix-hub/web-ui`; its one occurrence in
+  `phlix-ui` is an arbitrary placeholder path in a `fetchImpl`-mocked unit test
+  of the generic query-param appender, not a caller. **Search itself is
+  unaffected** — the real endpoints are `GET /api/v1/media/search` and
+  `GET /api/v1/media/search/by-marker`, already inside the surviving
+  `/api/v1/media` prefix, and `SearchPage.vue` has always called the former.
+  Both are now pinned as still-forwarded so the over-removal direction is red
+  too. Net effect is attack-surface reduction only: the prefix delivered no
+  feature but pre-authorised any future server route landing inside it.
+
 - **Five dead prefixes removed from the relay-proxy browse allowlist (S107
   follow-up).** `ServerProxyController::BROWSE_SCOPE_ALLOWLIST` carried
   `/api/v1/images`, `/api/v1/opds`, `/api/v1/genres`, `/api/v1/studios` and
