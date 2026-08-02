@@ -28,9 +28,11 @@ use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 use ReflectionMethod;
 use Workerman\Connection\TcpConnection;
 
+use function array_keys;
 use function array_pop;
 use function base64_encode;
 use function count;
@@ -3324,5 +3326,253 @@ final class ServerProxyControllerTest extends TestCase
             $reflected->invoke($controller, $method, $path),
             "{$method} {$path} is an intended HB-3.1 write and must survive the S107 deny sweep",
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // S107 follow-up: an allowlist prefix that matches NO phlix-server route is
+    // dead relay surface — it widens what the hub forwards without delivering
+    // any feature, and it is surface a future server route can land inside
+    // without ever passing the S107 enumeration. Five such entries shipped with
+    // the original allowlist and are removed here.
+    // -----------------------------------------------------------------------
+
+    /**
+     * The allowlist as PRODUCTION reads it, pinned whole.
+     *
+     * This asserts against the real `BROWSE_SCOPE_ALLOWLIST` constant — not a
+     * hand-made copy — so it is RED in BOTH directions a reviewer cares about:
+     *  - **re-adding a dead prefix** (`/api/v1/images`, `/api/v1/opds`,
+     *    `/api/v1/genres`, `/api/v1/studios`, `/api/v1/people`) fails the
+     *    `assertSame()` on the affected key;
+     *  - **any other widening** — a sixth browse family, a `/api/v1/admin`
+     *    prefix, a write-method key, a HEAD mirror of `/api/v1/music` — fails
+     *    too, because the lists are pinned EXACTLY and by order, and the key set
+     *    is pinned to `GET`+`HEAD`.
+     *
+     * The strictness is the point: `SCOPE_DENY_PATTERNS` is derived from this
+     * list (a prefix's write routes must be swept when the prefix is added), so
+     * this list must not be able to grow silently. Widening it legitimately means
+     * updating this expectation IN THE SAME COMMIT as the deny-sweep re-run,
+     * which is exactly the review moment the enumeration rule asks for.
+     *
+     * Every entry below names a family that phlix-server really registers —
+     * verified by booting BOTH production registrars (`Application::loadRoutes()`
+     * and `WebPortalRouter::registerRoutes()`, the pair
+     * `RelayRequestDispatcher::dispatch()` consults for a relayed request) and
+     * dumping `Router::getRoutes()`.
+     */
+    public function test_browse_scope_allowlist_matches_the_pinned_upstream_backed_set(): void
+    {
+        $raw = (new ReflectionClass(ServerProxyController::class))
+            ->getConstant('BROWSE_SCOPE_ALLOWLIST');
+        $this->assertIsArray($raw, 'BROWSE_SCOPE_ALLOWLIST must still be an array constant');
+        /** @var array<string, list<string>> $allowlist */
+        $allowlist = $raw;
+
+        $this->assertSame(
+            ['GET', 'HEAD'],
+            array_keys($allowlist),
+            'Only read verbs may carry a broad PREFIX; every write is an anchored '
+            . 'BROWSE_SCOPE_PATTERNS entry (adding a write key here re-opens the S107 sweep)',
+        );
+
+        $this->assertSame(
+            [
+                '/api/v1/libraries',
+                '/api/v1/media',
+                '/api/v1/search',
+                '/api/v1/collections',
+                '/api/v1/music',
+                '/hls',
+                '/dash',
+                '/media',
+                '/api/v1/transcode',
+            ],
+            $allowlist['GET'],
+            'GET browse scope changed: every prefix must name a REAL phlix-server family, '
+            . 'and adding one requires re-running the S107 write-route enumeration in the same commit',
+        );
+
+        $this->assertSame(
+            [
+                '/api/v1/libraries',
+                '/api/v1/media',
+                '/api/v1/search',
+                '/api/v1/collections',
+                '/hls',
+                '/dash',
+                '/media',
+                '/api/v1/transcode',
+            ],
+            $allowlist['HEAD'],
+            'HEAD browse scope changed. HEAD is inert (no Router::head() registrar), so a new '
+            . 'entry here grants nothing and only documents intent — and a DEAD entry here is '
+            . 'dead twice over. `/api/v1/music` stays deliberately absent (S100 fix round 1).',
+        );
+    }
+
+    /**
+     * The five removed prefixes, plus the REAL upstream twins they were probably
+     * meant to reach — all of which must stay out of scope.
+     *
+     * Rows 1–10 are the removed spellings themselves (bare prefix + a `/`-sub-path,
+     * because {@see ServerProxyController::isWithinBrowseScope()} matches both
+     * shapes, so a re-added entry has two ways to go green).
+     *
+     * Rows 11+ are the load-bearing half. Three of the five DO have a real
+     * upstream family, just at a different path, and the tempting "fix" for a
+     * removed entry is to allowlist the real one:
+     *  - `/api/v1/artwork/{id}` — the poster/image surface, served by
+     *    `HttpHandler::serveArtwork()` as a pre-router fast path that the relay
+     *    dispatcher never even reaches, so allowlisting it would be relay surface
+     *    with no relay handler behind it;
+     *  - `/opds/v1.2[/…]` — the real OPDS catalog, mounted at the ROOT per the
+     *    OPDS 1.2 spec. It is also an UNAUTHENTICATED-adjacent surface with its
+     *    own Basic-auth story, so exposing it over the hub tunnel is a product
+     *    decision, not a typo fix.
+     * (The third, genre facets, needs nothing: `GET /api/v1/media/facets` is
+     * already inside the `/api/v1/media` prefix and is pinned allowed below.)
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function s107FollowupDeadPrefixProvider(): iterable
+    {
+        $removed = [
+            '/api/v1/images' => '/api/v1/images/poster-1.jpg',
+            '/api/v1/opds' => '/api/v1/opds/v1.2/libraries',
+            '/api/v1/genres' => '/api/v1/genres/Action',
+            '/api/v1/studios' => '/api/v1/studios/A24',
+            '/api/v1/people' => '/api/v1/people/nm0000123',
+        ];
+        foreach ($removed as $prefix => $subPath) {
+            yield "removed prefix {$prefix}" => [$prefix];
+            yield "removed prefix sub-path {$subPath}" => [$subPath];
+        }
+
+        yield 'real artwork route (pre-router fast path, not relay-reachable)' => ['/api/v1/artwork/item-1'];
+        yield 'real OPDS root (root-mounted, never under /api/v1)' => ['/opds/v1.2'];
+        yield 'real OPDS library feed' => ['/opds/v1.2/libraries/lib-1'];
+        yield 'real OPDS book download' => ['/opds/v1.2/books/book-1/download'];
+    }
+
+    /**
+     * The gate itself, for BOTH read keys.
+     *
+     * `GET` is the verb that would actually forward; `HEAD` is asserted too
+     * because the entries were removed from that key as well and a partial
+     * re-add (GET only, or HEAD only) must not slip through.
+     *
+     * @dataProvider s107FollowupDeadPrefixProvider
+     */
+    public function test_s107_followup_dead_prefixes_are_out_of_browse_scope(string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertFalse(
+            $reflected->invoke($controller, 'GET', $path),
+            "GET {$path} names no relay-reachable phlix-server route and must not be relay surface",
+        );
+        $this->assertFalse(
+            $reflected->invoke($controller, 'HEAD', $path),
+            "HEAD {$path} must be out of scope under the HEAD key too (no partial re-add)",
+        );
+    }
+
+    /**
+     * End-to-end through `proxy()`: a removed prefix 403s `proxy.scope_denied`
+     * and never reaches the relay bridge.
+     *
+     * @dataProvider s107FollowupDeadPrefixProvider
+     */
+    public function test_s107_followup_dead_prefixes_403_and_are_not_forwarded(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(403, $response->statusCode, "GET {$path} must fail closed");
+        $this->assertFalse($forwarded, "GET {$path} must never reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * The false-positive boundary for THIS removal, mirroring
+     * {@see self::s107LegitimateReadProvider()}'s role for the deny sweep.
+     *
+     * Dropping five prefixes must not drop a read that a real client issues. The
+     * genre/image/person surfaces phlix-server actually serves all live INSIDE a
+     * prefix that survives, so each is asserted still forwarded:
+     *  - `GET /api/v1/media/facets` — the genre facet list the filter UI reads
+     *    (`ItemRepository::distinctGenres()`), i.e. what `/api/v1/genres` looked
+     *    like it was for;
+     *  - `GET /api/v1/media/{id}` — carries the item's genres/studios/cast in its
+     *    metadata payload, which is the only people/studio surface there is;
+     *  - `GET /api/v1/media/{id}/chapters/{n}/thumbnail` — a real image read, and
+     *    one that survives via BROWSE_SCOPE_PATTERNS rather than a prefix, so it
+     *    proves the removal did not disturb that map either.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function s107FollowupSurvivingReadProvider(): iterable
+    {
+        yield 'genre facets (the real /api/v1/genres)' => ['/api/v1/media/facets'];
+        yield 'media detail (carries genres/studios/cast)' => ['/api/v1/media/item-1'];
+        yield 'media list' => ['/api/v1/media'];
+        yield 'chapter thumbnail (a real image read, via BROWSE_SCOPE_PATTERNS)'
+            => ['/api/v1/media/item-1/chapters/3/thumbnail'];
+        yield 'library detail' => ['/api/v1/libraries/lib-1'];
+        yield 'collections' => ['/api/v1/collections'];
+        yield 'music browse' => ['/api/v1/music/artists'];
+    }
+
+    /**
+     * @dataProvider s107FollowupSurvivingReadProvider
+     */
+    public function test_s107_followup_removal_does_not_break_surviving_reads(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(200, $response->statusCode, "GET {$path} must still be forwarded");
+        $this->assertIsArray($forwarded, "GET {$path} must reach the relay bridge");
+        $this->assertSame($path, $forwarded['path'], 'the forward path must be byte-identical');
     }
 }

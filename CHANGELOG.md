@@ -176,6 +176,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Security
 
+- **Five dead prefixes removed from the relay-proxy browse allowlist (S107
+  follow-up).** `ServerProxyController::BROWSE_SCOPE_ALLOWLIST` carried
+  `/api/v1/images`, `/api/v1/opds`, `/api/v1/genres`, `/api/v1/studios` and
+  `/api/v1/people` under BOTH read keys, and **none of the five matches any
+  phlix-server route.** Established by execution, not by grep: booting both
+  production registrars (`Application::loadRoutes()` and
+  `WebPortalRouter::registerRoutes()` — the exact pair
+  `RelayRequestDispatcher::dispatch()` consults for a relayed request) and
+  dumping `Router::getRoutes()` yields 379 routes, zero of them under any of the
+  five; no client in `phlix-ui`, `phlix-mobile-client`, `phlix-contracts` or
+  `phlix-docs` calls any of them either. Three have a real upstream twin at a
+  *different* path — posters at `GET /api/v1/artwork/{id}` (a pre-router
+  `HttpHandler` fast path the relay dispatcher never reaches), OPDS at the
+  root-mounted `GET /opds/v1.2[/…]` (spec-mandated, never under `/api/v1`), and
+  genre facets already inside the surviving `/api/v1/media` prefix via
+  `GET /api/v1/media/facets`. Each twin stays deliberately OUT of scope and is
+  pinned so, because exposing it is a product decision that must re-run the S107
+  write-route enumeration first. Net effect is attack-surface reduction only: a
+  prefix matching no upstream route delivers no feature, but does pre-authorise
+  any *future* server route that lands inside it — bypassing the enumeration.
+  The allowlist is now pinned WHOLE against the real constant
+  (`test_browse_scope_allowlist_matches_the_pinned_upstream_backed_set`), so any
+  re-add or widening is red. Behaviour for every live path is unchanged.
+
 - **The music browse scope's write-refusal is now pinned END-TO-END for `POST`
   (S100 coverage gap).** `deniedMusicScopeProvider` pinned `PUT`, `DELETE` and
   `PATCH` on ordinary music read paths through `proxy()`, but `POST` appeared only
