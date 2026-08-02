@@ -836,6 +836,16 @@ final class ServerProxyControllerTest extends TestCase
         yield 'PUT music track' => ['PUT', 'api/v1/music/tracks/track-789'];
         yield 'DELETE music track' => ['DELETE', 'api/v1/music/tracks/track-789'];
         yield 'PATCH music artists' => ['PATCH', 'api/v1/music/artists'];
+        // POST on an ORDINARY music read path — the gap a mutation exposed. Every
+        // other write verb (PUT/DELETE/PATCH) was pinned end to end here, but POST
+        // only ever appeared on `/scan`, where `SCOPE_DENY_PATTERNS` refuses it
+        // before either scope map is read. So a widening of the POST scope — the
+        // verb every real server write actually uses, and the one an S107-style
+        // sweep is most likely to touch — was pinned only by the reflection-level
+        // gate matrix, never through `proxy()`. Both shapes: the prefix itself and
+        // a sub-path under it.
+        yield 'POST music root (write verb on the prefix itself)' => ['POST', 'api/v1/music'];
+        yield 'POST music artists (write verb on a read sub-path)' => ['POST', 'api/v1/music/artists'];
         yield 'GET musicXYZ sibling' => ['GET', 'api/v1/musicXYZ'];
         yield 'GET musicbrainz sibling family' => ['GET', 'api/v1/musicbrainz/artists'];
 

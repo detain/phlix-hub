@@ -162,7 +162,8 @@ final class RelayProxyManager
      *        non-positive.
      * @param (callable(string, array<string, mixed>): void)|null $publisher     Channel publisher
      *        (defaults to {@see ChannelClient::publish()}; overridable for tests).
-     * @param MetricsCollector|null                               $metrics       Relay metrics collector (optional; no-op when null).
+     * @param MetricsCollector|null                               $metrics       Relay metrics collector
+     *        (optional; no-op when null).
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
