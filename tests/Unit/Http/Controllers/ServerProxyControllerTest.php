@@ -38,8 +38,10 @@ use function base64_encode;
 use function count;
 use function dechex;
 use function explode;
+use function hrtime;
 use function implode;
 use function is_string;
+use function sprintf;
 use function json_decode;
 use function json_encode;
 use function ltrim;
@@ -1416,6 +1418,107 @@ final class ServerProxyControllerTest extends TestCase
         $written = $connection->written;
         $this->assertSame('foo', $written[1]);
         $this->assertSame('bar', $written[2]);
+    }
+
+    /**
+     * S43 AC — the resolved bucket must actually REACH the response-body sink.
+     *
+     * The sibling test above returns `0` = Unlimited, so the sink it produces is
+     * byte-for-byte identical whether the bucket is handed over or thrown away.
+     * Deleting the `$throttleBucket` argument from the
+     * `new ConnectionResponseSink($connection, $method, $throttleBucket)` call —
+     * which turns S43 off completely in production, every relayed stream
+     * Unlimited — left the ENTIRE suite green (2502 tests, 19744 assertions).
+     * This test pins that wire by driving a POSITIVE cap and observing that the
+     * body is genuinely paced.
+     *
+     * Sizing is analytic, not a guess: `8_000_000` bits/sec is 1 000 000 B/s with
+     * a `TokenBucket::THROTTLE_BURST_SECONDS` (1 s) burst, so the bucket holds
+     * 1 000 000 bytes. The first fragment is 1 050 000 bytes: it empties the
+     * bucket and leaves 50 000 bytes of debt, so the second fragment cannot be
+     * released for 50 000 / 1 000 000 = 50 ms (plus the 1 ms sleep floor). With
+     * the bucket disconnected the two writes land microseconds apart, so the
+     * separation between pass and fail is three orders of magnitude.
+     */
+    public function test_the_resolved_throttle_bucket_actually_reaches_the_response_body_sink(): void
+    {
+        $capBps = 8_000_000;                                    // 1 000 000 B/s
+        $first = str_repeat('a', 1_050_000);                    // empties the 1 s burst
+        $second = str_repeat('b', 1_000);
+        $expectedWaitSeconds = 50_000 / ($capBps / 8);          // 0.05 s
+
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $sessionManager = $this->createMock(RelaySessionManager::class);
+        $sessionManager->method('checkUserQuota')->willReturn(
+            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0],
+        );
+        $sessionManager->expects($this->once())
+            ->method('getUserThrottleBps')
+            ->with('user-1')
+            ->willReturn($capBps);
+
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, $first, $second): void {
+            /** @var RelayProxyBridge $bridge */
+            $id = $data['request_id'];
+            $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 200, 'headers' => [
+                'Content-Type' => 'video/mp2t',
+                'Content-Length' => (string) (strlen($first) + strlen($second)),
+            ]]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => $first]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => $second]);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge, $sessionManager);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'hls/job-abc/seg-00007.ts'],
+        );
+
+        // A connection double that timestamps every write, so the pacing gap
+        // between the two body fragments is directly observable.
+        $connection = new class extends TcpConnection {
+            /** @var list<int> Bytes written, per call. */
+            public array $sizes = [];
+            /** @var list<float> Monotonic seconds at each write. */
+            public array $at = [];
+
+            public function __construct()
+            {
+            }
+
+            public function send(mixed $sendBuffer, bool $raw = false): bool
+            {
+                $this->sizes[] = strlen((string) $sendBuffer);
+                $this->at[] = hrtime(true) / 1_000_000_000;
+
+                return true;
+            }
+        };
+
+        $this->assertNotNull($response->streamProducer);
+        ($response->streamProducer)($connection);
+
+        // head + two body fragments, all bytes delivered.
+        $this->assertCount(3, $connection->sizes);
+        $this->assertSame(strlen($first), $connection->sizes[1]);
+        $this->assertSame(strlen($second), $connection->sizes[2]);
+
+        $gap = $connection->at[2] - $connection->at[1];
+        $this->assertGreaterThan(
+            $expectedWaitSeconds * 0.5,
+            $gap,
+            sprintf(
+                'the second fragment was released after only %.4f s — the resolved throttle '
+                . 'bucket never reached ConnectionResponseSink (expected a ~%.3f s pacing wait)',
+                $gap,
+                $expectedWaitSeconds,
+            ),
+        );
     }
 
     /**

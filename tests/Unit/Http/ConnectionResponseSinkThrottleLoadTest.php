@@ -47,10 +47,20 @@ use function strlen;
  * ### Why it needs a Swoole coroutine scheduler
  * {@see \Workerman\Timer::sleep()} dispatches on `Worker::$eventLoopClass`: it
  * yields the coroutine only for the Fiber and Swoole drivers and otherwise falls
- * through to a BLOCKING `usleep()`. Production sets the Swoole driver in
- * `start.php`. Runtime coroutine hooks are deliberately NOT enabled here, so a
- * blocking sleep really would freeze the scheduler — which is what makes the
- * concurrent ticker a genuine discriminator rather than decoration.
+ * through to `usleep()`. Production sets the Swoole driver in `start.php`, so
+ * setting it here is what makes the pacing wait take its real branch.
+ *
+ * ### What the concurrent ticker does and does NOT discriminate (measured)
+ * ext-swoole 6.2.1 hooks the sleep family inside a coroutine BY DEFAULT, so
+ * swapping `Timer::sleep()` for a raw `usleep()` still yields and the ticker
+ * cannot tell them apart (measured: 863 ticks either way). What the ticker DOES
+ * catch, sharply, is an un-yieldable block: replacing the sleeper with a
+ * `microtime()` busy-wait drops the counter from ~860 to **1**. So the ticker is
+ * a genuine detector for "this wait froze the worker", which is the property the
+ * cardinal rule is about — it is not a detector for "which sleep function was
+ * called". The corollary worth knowing: the non-blocking guarantee is delivered
+ * by the Swoole runtime, so it holds only while ext-swoole is loaded — `start.php`
+ * merely warns when it is absent, and `Timer::sleep()` then blocks for real.
  *
  * @covers \Phlix\Hub\Http\ConnectionResponseSink
  * @covers \Phlix\Hub\Relay\TokenBucket
@@ -195,8 +205,12 @@ final class ConnectionResponseSinkThrottleLoadTest extends TestCase
         );
 
         // 4. The pacing wait yielded: the scheduler kept running throughout.
+        // A 1 ms ticker over a ~0.95 s paced run reaches ~860 ticks while the wait
+        // keeps yielding. Measured discrimination (not assumed): replacing the
+        // sleeper with an un-yieldable busy-wait drops this counter to 1. The
+        // threshold sits two orders of magnitude clear of that.
         $this->assertGreaterThan(
-            50,
+            300,
             $ticks,
             "the pacing wait blocked the scheduler (only {$ticks} ticks) — {$detail}",
         );
