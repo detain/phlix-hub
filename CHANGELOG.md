@@ -153,6 +153,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Security
 
+- **The music browse scope's write-refusal is now pinned END-TO-END for `POST`
+  (S100 coverage gap).** `deniedMusicScopeProvider` pinned `PUT`, `DELETE` and
+  `PATCH` on ordinary music read paths through `proxy()`, but `POST` appeared only
+  on `/api/v1/music/scan` — where `SCOPE_DENY_PATTERNS` refuses it before either
+  scope map is consulted. So a widening of the **POST** scope (the verb every real
+  phlix-server write uses) was pinned only by the reflection-level gate matrix.
+  Found by mutation: adding `#^/api/v1/music(/.*)?$#` to the `POST` key of
+  `BROWSE_SCOPE_PATTERNS` reddened exactly ONE test and no end-to-end one. Two rows
+  added (`POST /api/v1/music` and `POST /api/v1/music/artists`); the same mutation
+  now reddens three, as does the prefix-shaped variant. Test-only — the gate itself
+  is unchanged and was verified byte-identical (md5) after every mutation.
+
 - **Relay-proxy traversal guard is now decode-safe (S100 follow-up).**
   `ServerProxyController::hasTraversalSegment()` previously scanned the raw path
   plus exactly ONE `rawurldecode()`, so a double-encoded traversal
