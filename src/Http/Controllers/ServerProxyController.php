@@ -142,10 +142,12 @@ final class ServerProxyController
      * ride a widened prefix: {@see self::hasTraversalSegment()} rejects any
      * dot-segment, path-parameter (`..;`), control byte or encoded separator —
      * in the raw path AND in every successive percent-decoding of it — BEFORE
-     * this allowlist is consulted. A short {@see self::SCOPE_DENY_PATTERNS} list
-     * is consulted before BOTH maps for the handful of real server routes that
-     * sit INSIDE an allowlisted read prefix but must never be forwarded under
-     * any method.
+     * this allowlist is consulted. {@see self::SCOPE_DENY_PATTERNS} is consulted
+     * before BOTH maps and carries the SWEPT set (S107) of real phlix-server
+     * mutating ACTION routes that sit INSIDE an allowlisted read prefix and must
+     * never be forwarded under any method. ⚠ Widening this allowlist re-opens
+     * that sweep for the new prefix — see the enumeration rule on
+     * {@see self::SCOPE_DENY_PATTERNS}.
      *
      * ### HEAD is not exposed through the proxy (deliberate, and inert by design)
      * {@see \Phlix\Hub\Http\Router} has no `head()` registrar and
@@ -435,10 +437,130 @@ final class ServerProxyController
      * and album NAMES, so a bare segment rule would 403 a band called "Scan"
      * (`/api/v1/music/artists/Scan` — pinned allowed by a test).
      *
+     * ### S107: the whole class, not one prefix (the enumeration rule)
+     * S100 pinned `/api/v1/music/scan`. The SAME accident holds for every other
+     * phlix-server write route that happens to live under a GET-allowlisted
+     * browse prefix, and `GET /api/v1/libraries/{id}/scan` was the live proof: the
+     * hub FORWARDS it (it is a `/`-sub-path of the `/api/v1/libraries` read
+     * prefix) and it 404s only because `Application.php` registers scan/rescan
+     * POST-only. Half-applying the principle leaves a gate that LOOKS
+     * authoritative and is not, so the sweep below is derived mechanically, not
+     * route-by-route. A path is pinned here when ALL of the following hold:
+     *
+     *  (a) it lies under a prefix in {@see self::BROWSE_SCOPE_ALLOWLIST}`['GET']`
+     *      (so a GET to it is forwarded on the prefix's authority);
+     *  (b) phlix-server registers it for a WRITE verb (POST/PUT/PATCH/DELETE);
+     *  (c) phlix-server registers NO GET at that same path — so today's refusal of
+     *      a READ verb comes from the server's route table, not from this gate;
+     *  (d) it is a mutating ACTION endpoint (it changes server-side state that is
+     *      not the calling user's own playback/user-data), so a hypothetical GET
+     *      twin would plausibly TRIGGER it rather than describe it.
+     *
+     * Every write route under an allowlisted read prefix that is NOT listed below
+     * fails one of those tests, and each disposition is deliberate:
+     *  - **has a real GET twin at the same path** — `POST /api/v1/libraries`,
+     *    `PUT|DELETE /api/v1/libraries/{id}`, `DELETE /api/v1/libraries/{id}/theme-media`,
+     *    `POST /api/v1/collections`, `PUT|DELETE /api/v1/collections/{id}`,
+     *    `DELETE /api/v1/media/{id}`, `POST /api/v1/media/{id}/markers`,
+     *    `POST /api/v1/media/{id}/ratings`. Pinning these would 403 the browse READ
+     *    that shares the path, which is a worse bug than the one being fixed. The
+     *    hub's own METHOD gate already refuses the write: no write method has a
+     *    prefix entry, and no {@see self::BROWSE_SCOPE_PATTERNS} entry matches — so
+     *    there is no dependency on the peer's route table to remove.
+     *  - **resource-shaped, no GET twin** — `PATCH /api/v1/media/{id}/metadata`,
+     *    `DELETE /api/v1/media/{id}/markers/{markerId}`,
+     *    `POST|DELETE /api/v1/collections/{id}/items/{mediaItemId}`. Fails (d): a
+     *    GET at a resource path reads that resource, it does not mutate it, so the
+     *    hypothetical twin is a browse read and denying it would pre-emptively
+     *    break a legitimate future read. (`markers/{markerId}` additionally shares
+     *    its shape with the REAL reads `markers/intro`, `markers/outro` and
+     *    `markers/search`, which a segment-wildcard pin would 403 outright.)
+     *  - **intentionally allowed writes** — the HB-3.1 user-data actions
+     *    (`…/watched`, `…/unwatched`, `…/favorite`, `…/rating`, `…/like`,
+     *    `…/poster`, `…/transcode`, `/api/v1/playlists`). These are ALREADY
+     *    authoritative: each is an anchored entry in
+     *    {@see self::BROWSE_SCOPE_PATTERNS} for exactly the verb the server
+     *    registers, so the hub decides them on its own. A deny here would be
+     *    consulted BEFORE the allow maps and would break the feature.
+     *
+     * ⚠ Adding a prefix to {@see self::BROWSE_SCOPE_ALLOWLIST} re-opens this
+     * question for that prefix. Re-run the enumeration against phlix-server's
+     * route table in the same commit.
+     *
+     * ### S107: two matcher extensions, both load-bearing for a `{id}` segment
+     * S100's patterns had no variable segment, which hid two under-denies that
+     * appear the moment one does:
+     *
+     *  1. **The id segment is `[^/]*`, not `[^/]+`.** `normaliseForDenyMatch()`
+     *     collapses duplicate `/`, so `/api/v1/libraries//scan` normalises to
+     *     `/api/v1/libraries/scan` and a `[^/]+` id can no longer match it.
+     *     `[^/]*` matches the empty id in the RAW form while still NOT matching
+     *     the collapsed `/api/v1/libraries/scan` (that needs a `/` after the id
+     *     group, and the collapsed form has none) — so a library whose id is
+     *     literally `scan` stays browsable. Both directions are pinned by tests.
+     *  2. **Each pattern is matched against the raw candidate AND its normalised
+     *     form** (see {@see self::isWithinBrowseScope()}). Normalisation can
+     *     DESTROY a match as well as create one: `/api/v1/libraries/%20/scan`
+     *     decodes to `/api/v1/libraries/ /scan`, whose id segment trims to empty
+     *     and then collapses away, leaving `/api/v1/libraries/scan` — which is
+     *     not the scan route. The literal spelling IS the scan route on any stack
+     *     that does not trim, so the raw form must be matched too. Matching more
+     *     forms can only ever over-deny, and no legitimate read can match an
+     *     anchored action pattern in its raw spelling.
+     *
      * @var list<non-empty-string>
      */
     private const SCOPE_DENY_PATTERNS = [
+        // --- under the `/api/v1/music` read prefix (S100) ------------------
+        // POST /api/v1/music/scan — WebPortalRouter.php:389.
         '#^/api/v1/music/scan(/|$)#i',
+
+        // --- under the `/api/v1/libraries` read prefix (S107) --------------
+        // POST /api/v1/libraries/{id}/scan   — Application.php:1698
+        // POST /api/v1/libraries/{id}/rescan — Application.php:1699
+        // The `(/|$)` anchor is what keeps the two REAL reads
+        // `/scan-status` (Application.php:1653) and `/scan-history` (:1654)
+        // working — `scan-status` has no `/` or end-of-string after `scan`.
+        '#^/api/v1/libraries/[^/]*/(re)?scan(/|$)#i',
+        // POST /api/v1/libraries/{id}/match-metadata   — Application.php:1712
+        '#^/api/v1/libraries/[^/]*/match-metadata(/|$)#i',
+        // POST /api/v1/libraries/{id}/refresh-metadata — Application.php:1717
+        '#^/api/v1/libraries/[^/]*/refresh-metadata(/|$)#i',
+        // POST /api/v1/libraries/{id}/prune          — Application.php:1727
+        '#^/api/v1/libraries/[^/]*/prune(/|$)#i',
+        // POST /api/v1/libraries/{id}/clear-metadata — Application.php:1728
+        '#^/api/v1/libraries/[^/]*/clear-metadata(/|$)#i',
+        // POST /api/v1/libraries/{id}/clear-artwork  — Application.php:1729
+        '#^/api/v1/libraries/[^/]*/clear-artwork(/|$)#i',
+        // POST /api/v1/libraries/{id}/delete-all     — Application.php:1730
+        // (DESTRUCTIVE: removes every item in the library.)
+        '#^/api/v1/libraries/[^/]*/delete-all(/|$)#i',
+        // POST /api/v1/libraries/{id}/theme-media/scan — Application.php:1734.
+        // Needs its own entry: the `(re)?scan` pattern above cannot reach it,
+        // because `[^/]*` never crosses a `/`. GET /theme-media (:1733) and
+        // DELETE /theme-media (:1735) share a path, so only the `/scan` ACTION
+        // is pinned — see the disposition list above.
+        '#^/api/v1/libraries/[^/]*/theme-media/scan(/|$)#i',
+
+        // --- under the `/api/v1/collections` read prefix (S107) ------------
+        // POST /api/v1/collections/{id}/bulk-add — Application.php:1783
+        '#^/api/v1/collections/[^/]*/bulk-add(/|$)#i',
+        // POST /api/v1/collections/{id}/refresh  — Application.php:1784
+        // (re-evaluates a smart collection's membership).
+        '#^/api/v1/collections/[^/]*/refresh(/|$)#i',
+
+        // --- under the `/api/v1/media` read prefix (S107) ------------------
+        // POST /api/v1/media/{id}/match/apply — Application.php:587. The sibling
+        // READ `/match/search` (:586) is a different literal segment and stays
+        // allowed.
+        '#^/api/v1/media/[^/]*/match/apply(/|$)#i',
+        // POST /api/v1/media/{id}/subtitles/download — Application.php:660: it
+        // FETCHES a subtitle from a remote provider and attaches it as an
+        // external track, i.e. a server-side mutation, not a read. The sibling
+        // reads `/subtitles`, `/subtitles/search` and `/subtitles/{index}` stay
+        // allowed (pinned by tests); `{index}` is an integer track index, so no
+        // real read addresses the literal `download` segment.
+        '#^/api/v1/media/[^/]*/subtitles/download(/|$)#i',
     ];
 
     /**
@@ -1140,6 +1262,14 @@ final class ServerProxyController
      * these rules can complete a `%XX` escape and so none can unlock a decoding
      * pass the candidate chain has not already taken.
      *
+     * ⚠ This output is a SUPPLEMENT to the raw candidate, never a replacement for
+     * it (S107). Normalisation is lossy by construction, and for a deny pattern
+     * with a variable `{id}` segment it can DESTROY a match: the id of
+     * `/api/v1/libraries/%20/scan` trims to empty and is then collapsed away,
+     * yielding `/api/v1/libraries/scan`, which is the library-SHOW route rather
+     * than the scan action. {@see self::isWithinBrowseScope()} therefore matches
+     * the deny patterns against the raw candidate as well as this form.
+     *
      * Deliberately NOT a general-purpose path canonicaliser: it never resolves
      * `.`/`..` segments and never touches separators other than the two above,
      * because anything carrying a dot-segment or an encoded/literal separator has
@@ -1179,13 +1309,14 @@ final class ServerProxyController
      * method/path (incl. all PATCH) returns false and fails closed.
      *
      * The deny layer is matched against every candidate form of the path
-     * ({@see self::decodeCandidates()}, each run through
-     * {@see self::normaliseForDenyMatch()}), not just its literal spelling — see
+     * ({@see self::decodeCandidates()}), in BOTH its raw spelling and the form
+     * {@see self::normaliseForDenyMatch()} produces — see
      * {@see self::SCOPE_DENY_PATTERNS} for why that is what makes the pin
-     * authoritative instead of dependent on phlix-server's route table. The ALLOW
-     * layers stay deliberately literal: they are matched against the path that
-     * will actually be forwarded, and a decoded form must never be able to WIDEN
-     * scope — only to deny.
+     * authoritative instead of dependent on phlix-server's route table, and why
+     * neither form alone is sufficient once a pattern carries a variable `{id}`
+     * segment. The ALLOW layers stay deliberately literal: they are matched
+     * against the path that will actually be forwarded, and a decoded form must
+     * never be able to WIDEN scope — only to deny.
      *
      * @param string $method The inbound HTTP method.
      * @param string $path   The resolved `/`-prefixed forward path.
@@ -1198,13 +1329,20 @@ final class ServerProxyController
 
         // Hard denies win over every allow entry, for every method: a read verb
         // must not reach a scan trigger just because it shares a browse prefix.
-        // Matched against EVERY decoding of the path, each normalised — the raw
-        // spelling alone left `%73can`, `//scan`, `scan;x` and `scan.` forwarded.
+        // Matched against EVERY decoding of the path, each in BOTH its raw and
+        // its normalised spelling — the raw spelling alone left `%73can`,
+        // `//scan`, `scan;x` and `scan.` forwarded (S100 r2), and the normalised
+        // spelling ALONE lets `/api/v1/libraries/%20/scan` through, because the
+        // per-segment trim empties the id segment and the `/+` collapse then
+        // deletes it, leaving a path that is no longer the scan route (S107).
+        // Neither form dominates the other, so both are matched.
         foreach ($this->decodeCandidates($path) as $candidate) {
-            $normalised = $this->normaliseForDenyMatch($candidate);
-            foreach (self::SCOPE_DENY_PATTERNS as $denied) {
-                if (preg_match($denied, $normalised) === 1) {
-                    return false;
+            $forms = [$candidate, $this->normaliseForDenyMatch($candidate)];
+            foreach ($forms as $form) {
+                foreach (self::SCOPE_DENY_PATTERNS as $denied) {
+                    if (preg_match($denied, $form) === 1) {
+                        return false;
+                    }
                 }
             }
         }

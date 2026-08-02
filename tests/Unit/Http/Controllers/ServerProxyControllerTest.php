@@ -31,15 +31,22 @@ use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Workerman\Connection\TcpConnection;
 
+use function array_pop;
 use function base64_encode;
 use function count;
+use function dechex;
+use function explode;
+use function implode;
 use function is_string;
 use function json_decode;
 use function json_encode;
 use function ltrim;
 use function ord;
 use function str_repeat;
+use function str_split;
 use function strlen;
+use function strtoupper;
+use function substr;
 
 /**
  * @covers \Phlix\Hub\Http\Controllers\ServerProxyController
@@ -2840,5 +2847,482 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertNotNull($response->streamProducer);
         $connection = $this->drive($response);
         $this->assertStringContainsString('HTTP/1.1 200 OK', $connection->written[0]);
+    }
+
+    // ---------------------------------------------------------------------
+    // S107: sweep EVERY write route sitting under an allowlisted READ prefix.
+    // ---------------------------------------------------------------------
+
+    /**
+     * The S107 enumeration, as executable data: every phlix-server mutating
+     * ACTION route that sits under a prefix in
+     * `ServerProxyController::BROWSE_SCOPE_ALLOWLIST['GET']` and that the server
+     * registers for a WRITE verb only.
+     *
+     * Each of these was FORWARDED under a read verb before S107 — the hub's
+     * `/api/v1/libraries`, `/api/v1/collections` and `/api/v1/media` prefixes
+     * cover them as `/`-delimited sub-paths — and 404'd only because phlix-server
+     * happens to register them POST-only. That is the server's route table doing
+     * the hub gate's job, which is exactly the accidental peer dependency S100
+     * removed for `/api/v1/music/scan` and S107 removes for the whole class. The
+     * exposure is availability/consistency, not privilege escalation: relay
+     * traffic cannot pass phlix-server's `AdminMiddleware` (the hub's UUID matches
+     * no `users` row), so the risk is "someone kicks off a scan/prune they should
+     * not", not "someone becomes admin".
+     *
+     * Server registration sites (phlix-server `69497171`), read-only:
+     *   Application.php:1698 scan · :1699 rescan · :1712 match-metadata ·
+     *   :1717 refresh-metadata · :1727 prune · :1728 clear-metadata ·
+     *   :1729 clear-artwork · :1730 delete-all · :1734 theme-media/scan ·
+     *   :1783 bulk-add · :1784 collection refresh · :587 match/apply ·
+     *   :660 subtitles/download.
+     *
+     * @return array<string, string> label => `/`-prefixed concrete path
+     */
+    private static function s107DeniedActionPaths(): array
+    {
+        return [
+            'library scan' => '/api/v1/libraries/lib-1/scan',
+            'library rescan' => '/api/v1/libraries/lib-1/rescan',
+            'library match-metadata' => '/api/v1/libraries/lib-1/match-metadata',
+            'library refresh-metadata' => '/api/v1/libraries/lib-1/refresh-metadata',
+            'library prune' => '/api/v1/libraries/lib-1/prune',
+            'library clear-metadata' => '/api/v1/libraries/lib-1/clear-metadata',
+            'library clear-artwork' => '/api/v1/libraries/lib-1/clear-artwork',
+            'library delete-all' => '/api/v1/libraries/lib-1/delete-all',
+            'library theme-media scan' => '/api/v1/libraries/lib-1/theme-media/scan',
+            'collection bulk-add' => '/api/v1/collections/col-1/bulk-add',
+            'collection refresh' => '/api/v1/collections/col-1/refresh',
+            'media match apply' => '/api/v1/media/item-1/match/apply',
+            'media subtitle download' => '/api/v1/media/item-1/subtitles/download',
+        ];
+    }
+
+    /**
+     * Twenty-one alternative SPELLINGS of one denied action path, generated from
+     * the path itself so every route in the sweep gets the same treatment rather
+     * than one hand-picked plant.
+     *
+     * The shapes deliberately VARY rather than repeat — each family corresponds to
+     * a distinct normalisation a downstream stack plausibly applies and
+     * phlix-server happens not to, and each is a spelling that reaches the same
+     * server route:
+     *  - duplicate separators (`//`, `///`) — `proxy()` collapses only LEADING
+     *    slashes;
+     *  - path parameters (`;x`, `;`) and a `;` used INSTEAD of the separator
+     *    between the id and the action;
+     *  - trailing `.` / encoded space / encoded dot on the action segment;
+     *  - percent-encoding of the action literal (first char, last char,
+     *    double-encoded, fully encoded) and a bare upper-case spelling;
+     *  - COMPOSITIONS of a trailing dot/space with a following separator,
+     *    parameter or sub-path — the S100-r3 family that a tail-only `rtrim()`
+     *    forwarded;
+     *  - **S107-specific: four shapes on the `{id}` SEGMENT** — an EMPTY id, a
+     *    whitespace-only encoded id, an id with a trailing dot, and an id carrying
+     *    a path parameter. These only exist once a deny pattern has a variable
+     *    segment, and the first two are precisely the forms
+     *    `normaliseForDenyMatch()` DESTROYS (the id is trimmed to nothing and then
+     *    collapsed away), so they are the rows that prove the raw-form match and
+     *    the `[^/]*` id class are load-bearing.
+     *
+     * @return array<string, string> label => `/`-prefixed path
+     */
+    private static function s107EvasionSpellings(string $path): array
+    {
+        $segments = explode('/', $path);
+        $action = (string) array_pop($segments);
+        $head = implode('/', $segments);
+        $id = $segments[4];
+
+        $withId = static function (string $replacement) use ($segments, $action): string {
+            $copy = $segments;
+            $copy[4] = $replacement;
+            return implode('/', $copy) . '/' . $action;
+        };
+
+        $hex = static fn (string $char): string => '%' . strtoupper(dechex(ord($char)));
+
+        $fullyEncoded = '';
+        foreach (str_split(strtoupper($action)) as $char) {
+            $fullyEncoded .= $hex($char);
+        }
+
+        return [
+            'double slash before the action' => $head . '//' . $action,
+            'triple slash before the action' => $head . '///' . $action,
+            'path parameter' => $path . ';x',
+            'bare semicolon' => $path . ';',
+            'trailing dot' => $path . '.',
+            'trailing encoded space' => $path . '%20',
+            'trailing encoded dot' => $path . '%2e',
+            'encoded first character' => $head . '/' . $hex($action[0]) . substr($action, 1),
+            'encoded last character' => $head . '/' . substr($action, 0, -1) . $hex($action[strlen($action) - 1]),
+            'double-encoded first character' => $head . '/%25' . substr($hex($action[0]), 1) . substr($action, 1),
+            'fully encoded upper case' => $head . '/' . $fullyEncoded,
+            'upper-case action' => $head . '/' . strtoupper($action),
+            'semicolon instead of the separator' => $head . ';' . $action,
+            'trailing dot then slash' => $path . './',
+            'trailing dot then path parameter' => $path . '.;x',
+            'encoded trailing space then slash' => $path . '%20/',
+            'trailing dot then sub-path' => $path . './status',
+            'empty id segment' => $withId(''),
+            'whitespace-only encoded id' => $withId('%20'),
+            'id with a trailing dot' => $withId($id . '.'),
+            'id with a path parameter' => $withId($id . ';x'),
+        ];
+    }
+
+    /**
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s107DeniedActionEvasionProvider(): iterable
+    {
+        foreach (self::s107DeniedActionPaths() as $route => $path) {
+            yield "{$route} (literal)" => [$route, $path];
+            foreach (self::s107EvasionSpellings($path) as $shape => $spelling) {
+                yield "{$route} via {$shape}" => [$route, $spelling];
+            }
+        }
+    }
+
+    /**
+     * Every S107 route, in every spelling, is out of browse scope under the READ
+     * verb the prefix allowlist would otherwise forward.
+     *
+     * GET is the verb that matters here: the write verbs were already refused by
+     * the hub's own method gate (no write method has a `/api/v1/libraries`,
+     * `/api/v1/collections` or `/api/v1/media` prefix entry). It is the READ verb
+     * that the prefix forwarded, leaving phlix-server's POST-only registration as
+     * the only thing standing between the relay and a scan trigger.
+     *
+     * @dataProvider s107DeniedActionEvasionProvider
+     */
+    public function test_s107_write_action_paths_are_denied_under_a_read_verb(string $route, string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertFalse(
+            $reflected->invoke($controller, 'GET', $path),
+            "GET {$path} ({$route}) must be hard-denied by the hub's own gate",
+        );
+    }
+
+    /**
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s107DeniedActionMethodProvider(): iterable
+    {
+        foreach (self::s107DeniedActionPaths() as $route => $path) {
+            foreach (['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+                yield "{$method} {$route}" => [$method, $path];
+            }
+        }
+    }
+
+    /**
+     * The deny layer is method-INDEPENDENT: it is consulted before both scope maps
+     * for every verb, so no future widening of a write map can re-expose one of
+     * these action routes.
+     *
+     * @dataProvider s107DeniedActionMethodProvider
+     */
+    public function test_s107_write_action_paths_are_denied_for_every_method(string $method, string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertFalse(
+            $reflected->invoke($controller, $method, $path),
+            "{$method} {$path} must fail closed for every method",
+        );
+    }
+
+    /**
+     * End-to-end through `proxy()`, not just the private gate: every S107 route
+     * 403s `proxy.scope_denied` and never reaches the relay bridge.
+     *
+     * Rows: all thirteen routes under GET (the verb the prefix forwarded) and
+     * under POST (the verb the server actually registers — proving the refusal now
+     * comes from the deny layer, which runs BEFORE both scope maps, rather than
+     * from the absence of a POST entry), plus all twenty-one evasion spellings of
+     * the flagship `GET /api/v1/libraries/{id}/scan` that S107 was filed for.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s107DeniedEndToEndProvider(): iterable
+    {
+        foreach (self::s107DeniedActionPaths() as $route => $path) {
+            yield "GET {$route}" => ['GET', ltrim($path, '/')];
+            yield "POST {$route}" => ['POST', ltrim($path, '/')];
+        }
+
+        foreach (self::s107EvasionSpellings('/api/v1/libraries/lib-1/scan') as $shape => $spelling) {
+            yield "GET library scan via {$shape}" => ['GET', ltrim($spelling, '/')];
+        }
+    }
+
+    /**
+     * @dataProvider s107DeniedEndToEndProvider
+     */
+    public function test_s107_denied_action_paths_403_and_are_not_forwarded(string $method, string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request($method, 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(403, $response->statusCode, "{$method} /{$path} must fail closed");
+        $this->assertFalse($forwarded, "{$method} /{$path} must never reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * The false-positive boundary. A deny sweep that breaks reads is worse than
+     * the bug it fixes, so every read the swept prefixes serve is pinned as
+     * ALLOWED — with the boundary rows chosen to fail if a pattern is loosened in
+     * any of the four ways that would over-reach:
+     *  - **the `(/|$)` anchor**: `scan-status` and `scan-history`
+     *    (`Application.php:1653-1654`) are the reads the whole S107 sweep must not
+     *    touch, and they differ from `scan` by a single `-`;
+     *  - **the `[^/]*` id class**: a library whose id is literally `scan`,
+     *    `prune` or `delete-all` must stay browsable — `[^/]*` deliberately
+     *    cannot match the collapsed `/api/v1/libraries/scan`;
+     *  - **segment-prefix bleed**: `scanner`, `rescanned`, `refresh-metadata-v2`;
+     *  - **sibling literals under the same parent**: `/match/search` next to
+     *    `/match/apply`, `/subtitles`, `/subtitles/search`, `/subtitles/0` next to
+     *    `/subtitles/download`, and `/theme-media` next to `/theme-media/scan`.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function s107LegitimateReadProvider(): iterable
+    {
+        // --- /api/v1/libraries -------------------------------------------
+        yield 'libraries list' => ['api/v1/libraries'];
+        yield 'library detail' => ['api/v1/libraries/lib-1'];
+        yield 'library items' => ['api/v1/libraries/lib-1/items'];
+        yield 'library scan-status' => ['api/v1/libraries/lib-1/scan-status'];
+        yield 'library scan-history' => ['api/v1/libraries/lib-1/scan-history'];
+        yield 'library theme-media' => ['api/v1/libraries/lib-1/theme-media'];
+        yield 'library collections' => ['api/v1/libraries/lib-1/collections'];
+        yield 'library id literally scan' => ['api/v1/libraries/scan'];
+        yield 'library id literally rescan' => ['api/v1/libraries/rescan'];
+        yield 'library id literally prune' => ['api/v1/libraries/prune'];
+        yield 'library id literally delete-all' => ['api/v1/libraries/delete-all'];
+        yield 'library id scan then a read sub-path' => ['api/v1/libraries/scan/scan-status'];
+        yield 'library scanner sub-path' => ['api/v1/libraries/lib-1/scanner'];
+        yield 'library rescanned sub-path' => ['api/v1/libraries/lib-1/rescanned'];
+        yield 'library prune-history sub-path' => ['api/v1/libraries/lib-1/prune-history'];
+        yield 'library refresh-metadata-v2 sub-path' => ['api/v1/libraries/lib-1/refresh-metadata-v2'];
+        yield 'library theme-media-scan hyphenated' => ['api/v1/libraries/lib-1/theme-media-scan'];
+        yield 'encoded library name with a space' => ['api/v1/libraries/My%20Movies'];
+
+        // --- /api/v1/collections -----------------------------------------
+        yield 'collections list' => ['api/v1/collections'];
+        yield 'collection detail' => ['api/v1/collections/col-1'];
+        yield 'collection id literally refresh' => ['api/v1/collections/refresh'];
+        yield 'collection id literally bulk-add' => ['api/v1/collections/bulk-add'];
+        yield 'collection refreshed sub-path' => ['api/v1/collections/col-1/refreshed'];
+        yield 'collection bulk-added sub-path' => ['api/v1/collections/col-1/bulk-added'];
+
+        // --- /api/v1/media -------------------------------------------------
+        yield 'media list' => ['api/v1/media'];
+        yield 'media detail' => ['api/v1/media/item-1'];
+        yield 'media match search (sibling of match/apply)' => ['api/v1/media/item-1/match/search'];
+        yield 'media subtitle list' => ['api/v1/media/item-1/subtitles'];
+        yield 'media subtitle search' => ['api/v1/media/item-1/subtitles/search'];
+        yield 'media embedded subtitle track by index' => ['api/v1/media/item-1/subtitles/0'];
+        yield 'media subtitle downloads sub-path' => ['api/v1/media/item-1/subtitles/downloads'];
+        yield 'media markers list' => ['api/v1/media/item-1/markers'];
+        yield 'media intro marker' => ['api/v1/media/item-1/markers/intro'];
+        yield 'media outro marker' => ['api/v1/media/item-1/markers/outro'];
+        yield 'media marker search' => ['api/v1/media/item-1/markers/search'];
+        yield 'media ratings' => ['api/v1/media/item-1/ratings'];
+        yield 'media chapters' => ['api/v1/media/item-1/chapters'];
+        yield 'media playback info' => ['api/v1/media/item-1/playback-info'];
+        yield 'media download' => ['api/v1/media/item-1/download'];
+        yield 'media facets' => ['api/v1/media/facets'];
+    }
+
+    /**
+     * Each legitimate read still clears every gate, reaches the relay bridge and
+     * is forwarded BYTE-IDENTICALLY (deny normalisation never rewrites the path).
+     *
+     * @dataProvider s107LegitimateReadProvider
+     */
+    public function test_s107_legitimate_reads_under_the_swept_prefixes_still_forward(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{"ok":true}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => $path],
+        );
+
+        $this->assertSame(200, $response->statusCode, "GET /{$path} must still be forwarded");
+        $this->assertIsArray($forwarded, "GET /{$path} must reach the relay bridge");
+        // Deny normalisation is match-only: the server still gets the exact bytes.
+        $this->assertSame('/' . $path, $forwarded['path'], 'the deny match must never rewrite the path');
+    }
+
+    /**
+     * The rest of the S107 enumeration, as executable dispositions: every write
+     * route under an allowlisted read prefix that is deliberately NOT pinned in
+     * `SCOPE_DENY_PATTERNS`, with the reason encoded as an assertion.
+     *
+     * Two disposition classes, and the rows prove BOTH halves of each — that the
+     * read still passes AND that the write still fails — because a sweep can break
+     * either one:
+     *
+     *  (1) **Has a real GET twin at the same path.** Pinning the path would 403
+     *      the browse read that shares it. The write is already refused by the
+     *      hub's OWN method gate (no write method carries these prefixes and no
+     *      anchored pattern matches), so there is no peer dependency to remove.
+     *  (2) **Resource-shaped, no GET twin.** A GET at a resource path reads the
+     *      resource; it cannot trigger it. Denying it would pre-emptively break a
+     *      legitimate future read, and for `markers/{markerId}` a wildcard pin
+     *      would 403 the REAL reads `markers/intro`, `markers/outro` and
+     *      `markers/search` today.
+     *
+     * @return iterable<string, array{0: string, 1: string, 2: bool}>
+     */
+    public static function s107DispositionProvider(): iterable
+    {
+        // (1) GET twin exists — read allowed, write refused by the method gate.
+        $withGetTwin = [
+            'libraries collection' => ['/api/v1/libraries', ['POST']],
+            'library detail' => ['/api/v1/libraries/lib-1', ['PUT', 'DELETE']],
+            'library theme-media' => ['/api/v1/libraries/lib-1/theme-media', ['DELETE']],
+            'collections collection' => ['/api/v1/collections', ['POST']],
+            'collection detail' => ['/api/v1/collections/col-1', ['PUT', 'DELETE']],
+            'media detail' => ['/api/v1/media/item-1', ['DELETE']],
+            'media markers' => ['/api/v1/media/item-1/markers', ['POST']],
+            'media ratings' => ['/api/v1/media/item-1/ratings', ['POST']],
+        ];
+        foreach ($withGetTwin as $label => [$path, $writeMethods]) {
+            yield "GET {$label} allowed (real read on the shared path)" => ['GET', $path, true];
+            foreach ($writeMethods as $method) {
+                yield "{$method} {$label} denied by the method gate" => [$method, $path, false];
+            }
+        }
+
+        // (2) Resource-shaped, no GET twin — a GET would READ it, not trigger it.
+        $resourceShaped = [
+            'media metadata' => ['/api/v1/media/item-1/metadata', ['PATCH']],
+            'media marker by id' => ['/api/v1/media/item-1/markers/mk-1', ['DELETE']],
+            'collection item' => ['/api/v1/collections/col-1/items/item-9', ['POST', 'DELETE']],
+        ];
+        foreach ($resourceShaped as $label => [$path, $writeMethods]) {
+            yield "GET {$label} allowed (resource read, not an action)" => ['GET', $path, true];
+            foreach ($writeMethods as $method) {
+                yield "{$method} {$label} denied by the method gate" => [$method, $path, false];
+            }
+        }
+    }
+
+    /**
+     * @dataProvider s107DispositionProvider
+     */
+    public function test_s107_unpinned_write_routes_keep_their_disposition(
+        string $method,
+        string $path,
+        bool $expected,
+    ): void {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+        /** @var bool $inScope */
+        $inScope = $reflected->invoke($controller, $method, $path);
+
+        $this->assertSame(
+            $expected,
+            $inScope,
+            $expected
+                ? "{$method} {$path} must stay within browse scope after the S107 sweep"
+                : "{$method} {$path} must stay out of browse scope",
+        );
+    }
+
+    /**
+     * The intentionally-allowed HB-3.1 writes are the third disposition class, and
+     * the one a deny sweep is most likely to break: `SCOPE_DENY_PATTERNS` is
+     * consulted BEFORE both scope maps, so a pattern that over-reaches by one
+     * segment silently kills a shipped feature. Every allowed write action is
+     * re-asserted here against the widened deny list.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s107AllowedWriteStillAllowedProvider(): iterable
+    {
+        yield 'POST transcode start' => ['POST', '/api/v1/media/item-1/transcode'];
+        yield 'POST watched' => ['POST', '/api/v1/media/item-1/watched'];
+        yield 'POST unwatched' => ['POST', '/api/v1/media/item-1/unwatched'];
+        yield 'POST favorite' => ['POST', '/api/v1/media/item-1/favorite'];
+        yield 'POST playlists' => ['POST', '/api/v1/playlists'];
+        yield 'PUT rating' => ['PUT', '/api/v1/media/item-1/rating'];
+        yield 'PUT like' => ['PUT', '/api/v1/media/item-1/like'];
+        yield 'PUT poster' => ['PUT', '/api/v1/media/item-1/poster'];
+        yield 'DELETE favorite' => ['DELETE', '/api/v1/media/item-1/favorite'];
+        yield 'DELETE rating' => ['DELETE', '/api/v1/media/item-1/rating'];
+    }
+
+    /**
+     * @dataProvider s107AllowedWriteStillAllowedProvider
+     */
+    public function test_s107_sweep_does_not_break_the_allowed_writes(string $method, string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertTrue(
+            $reflected->invoke($controller, $method, $path),
+            "{$method} {$path} is an intended HB-3.1 write and must survive the S107 deny sweep",
+        );
     }
 }
