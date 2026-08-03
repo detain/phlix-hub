@@ -288,6 +288,40 @@ switch ($scenario) {
         echo $dump($conns) . "\n";
         break;
 
+    // S188: the coroutine-id narrowing itself. currentCoroutineId() must hand
+    // back the REAL positive cid inside a coroutine and -1 outside one. This is
+    // the only place that distinction can be observed: PHPUnit never runs inside
+    // a coroutine, so in the runner `Coroutine::getCid()` is -1 and the
+    // in-coroutine result is indistinguishable from the out-of-coroutine one.
+    // Read by reflection because the method is private and its two callers
+    // (lease(), and the defer registered from it) only expose it as a
+    // pool-vs-CLI branch, which cannot tell "real cid" from "some other int".
+    case 'cid_narrowing':
+        $read = static function (PooledMySQLConnection $pool): mixed {
+            $method = new \ReflectionMethod(PooledMySQLConnection::class, 'currentCoroutineId');
+            return $method->invoke($pool);
+        };
+        /** @var list<RecordingConnection> $conns */
+        $conns = [];
+        $pool = $makePool(2, $conns);
+        // Branch 1: no coroutine on the stack at all.
+        $outside = $read($pool);
+        echo 'outside_type=' . get_debug_type($outside) . "\noutside=" . var_export($outside, true) . "\n";
+        run(static function () use ($pool, $read): void {
+            $d = new Channel(1);
+            Coroutine::create(static function () use ($pool, $read, $d): void {
+                // Branch 2: a live coroutine, so getCid() is a positive int.
+                $inside = $read($pool);
+                $d->push([$inside, Coroutine::getCid()]);
+            });
+            [$inside, $actualCid] = $d->pop();
+            echo 'inside_type=' . get_debug_type($inside) . "\ninside=" . var_export($inside, true) . "\n";
+            // Pinned against the scheduler's own answer, so the assertion cannot
+            // be satisfied by any hardcoded constant.
+            echo 'inside_matches_scheduler=' . ($inside === $actualCid ? 'yes' : 'no') . "\n";
+        });
+        break;
+
     default:
         // Deliberately NOT signal-terminated: an unknown scenario is a genuine
         // error, and SwooleFixtureProcess reports the exit code plus this

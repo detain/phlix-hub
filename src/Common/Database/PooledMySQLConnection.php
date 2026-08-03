@@ -379,12 +379,35 @@ final class PooledMySQLConnection extends Connection
 
     /**
      * Current Swoole coroutine id, or -1 when not in a coroutine / no Swoole.
+     *
+     * ⚠ S188 — the `is_int()` guard is load-bearing for STATIC ANALYSIS and must
+     * not be removed. PHPStan bundles jetbrains/phpstorm-stubs, whose
+     * `swoole/Swoole/Coroutine.stub` annotates `getCid()` as `@return mixed`, and
+     * that stub takes precedence over ext-swoole's real `int` return type — so
+     * PHPStan infers `mixed` whether or not the extension is loaded (measured
+     * both ways; the phpstan CI job installs `json, pcntl, posix` only). Handing
+     * that value straight back from an `int` method was the single `return.type`
+     * error that had kept hub master's PHPStan check red, which is worse than a
+     * missing gate: a genuinely new error arrives as "still 1 failure".
+     *
+     * Psalm reflects the REAL extension (its CI job installs swoole on purpose,
+     * for `\Swoole\Coroutine\Channel`), so to Psalm the guard reads as redundant
+     * — hence the suppression rather than dropping a guard a sibling tool needs.
+     * Identical construct and rationale to
+     * {@see PhlixMySQLConnection::currentCoroutineId()}.
+     *
+     * Falling back to -1 (rather than 0) keeps the failure direction safe: a
+     * caller that cannot learn its coroutine id takes the shared non-coroutine
+     * connection instead of colliding with cid 0's lease.
+     *
+     * @psalm-suppress RedundantCondition,TypeDoesNotContainType
      */
     private function currentCoroutineId(): int
     {
         if (!class_exists(\Swoole\Coroutine::class)) {
             return -1;
         }
-        return \Swoole\Coroutine::getCid();
+        $cid = \Swoole\Coroutine::getCid();
+        return is_int($cid) ? $cid : -1;
     }
 }
