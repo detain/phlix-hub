@@ -425,9 +425,17 @@ final class TunnelThrottleLoadTest extends TestCase
      *
      * The band is asymmetric on purpose: a finite run always sits slightly ABOVE
      * the sustained cap because the bucket starts FULL and delivers one burst
-     * window (`TokenBucket::THROTTLE_BURST_SECONDS`) "for free"; the excess is
-     * `capacity / window` and shrinks as the window grows. It must never sit
-     * meaningfully below the cap (that would be under-delivery).
+     * window "for free"; the excess is `capacity / window` and shrinks as the
+     * window grows. It must never sit meaningfully below the cap (that would be
+     * under-delivery).
+     *
+     * ⚠ S191 — the burst allowance is the LITERAL documented window (1.0 s), not
+     * `TokenBucket::THROTTLE_BURST_SECONDS`. Deriving the expected ceiling from
+     * the production constant made this band self-adjust: widening the window
+     * raised the ceiling by exactly the amount the extra burst delivered, so the
+     * assertion followed the change instead of reporting it (measured: all three
+     * tests in this file passed with the window mutated 1.0 → 5.0, a 5× capacity
+     * change). If the window is deliberately changed, update this literal.
      */
     private function assertThrottledToCap(
         int $capBps,
@@ -436,8 +444,9 @@ final class TunnelThrottleLoadTest extends TestCase
         int $bytes,
         int $frames,
     ): void {
+        $expectedBurstSeconds = 1.0;
         $capBytes = $capBps / 8.0;
-        $burstBytes = $capBytes * TokenBucket::THROTTLE_BURST_SECONDS;
+        $burstBytes = $capBytes * $expectedBurstSeconds;
         $expectedCeiling = ($capBytes * $window + $burstBytes) / $window;
         $detail = sprintf(
             'cap=%d bps (%.0f B/s) | delivered=%d B in %d frames | window=%.2f s '

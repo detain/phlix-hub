@@ -100,7 +100,16 @@ final class ClientConnectionTest extends TestCase
 
     public function testThrottledConnectionBuildsBucketSizedFromBps(): void
     {
-        // 8 Mbps → 1,000,000 bytes/sec sustained rate; capacity = rate × 1 s burst.
+        // 8 Mbps = 8_000_000 bits/sec ÷ 8 = 1_000_000 bytes/sec sustained rate;
+        // capacity = that rate × the documented 1-second burst window
+        // = 1_000_000 bytes.
+        //
+        // ⚠ S191 — the expected capacity is a hand-derived LITERAL, NOT
+        // `1_000_000.0 * ClientConnection::THROTTLE_BURST_SECONDS`. An expectation
+        // multiplied by the constant under test self-adjusts to any value the
+        // production code takes, so it could never detect a change to the burst
+        // window (measured: it passed with the window mutated 1.0 → 5.0). If the
+        // window is deliberately changed, update this literal and the comment.
         $client = new ClientConnection(
             $this->clientWs,
             'server-123',
@@ -114,10 +123,7 @@ final class ClientConnectionTest extends TestCase
         $this->assertTrue($client->isThrottled());
         $this->assertNotNull($client->throttleBucket);
         $this->assertSame(1_000_000.0, $client->throttleBucket->ratePerSecond());
-        $this->assertSame(
-            1_000_000.0 * ClientConnection::THROTTLE_BURST_SECONDS,
-            $client->throttleBucket->capacity(),
-        );
+        $this->assertSame(1_000_000.0, $client->throttleBucket->capacity());
     }
 
     public function testOnMessageUpdatesLastFrameAtTimestamp(): void

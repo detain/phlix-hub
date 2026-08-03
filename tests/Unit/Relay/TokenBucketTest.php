@@ -130,13 +130,22 @@ final class TokenBucketTest extends TestCase
 
     public function testFromThrottleBpsConvertsBitsToBytesAndSizesBurst(): void
     {
-        // 24 Mbps = 24_000_000 bits/sec → 3_000_000 bytes/sec sustained rate,
-        // with a THROTTLE_BURST_SECONDS (1 s) burst capacity = 3_000_000 bytes.
+        // 24 Mbps = 24_000_000 bits/sec ÷ 8 = 3_000_000 bytes/sec sustained rate.
+        // Capacity is that rate × the documented 1-second burst window
+        // = 3_000_000 bytes.
+        //
+        // ⚠ S191 — the expected capacity is a LITERAL, worked out by hand above,
+        // NOT `3_000_000.0 * TokenBucket::THROTTLE_BURST_SECONDS`. Multiplying by
+        // the constant under test makes the expectation self-adjust: it followed
+        // the production value to any number and could never report a change to
+        // it. Measured: with the window mutated 1.0 → 5.0 this assertion PASSED
+        // on a bucket holding 15_000_000 bytes. If the burst window is
+        // deliberately changed, update this literal and the comment together.
         $bucket = TokenBucket::fromThrottleBps(24_000_000, 500.0);
 
         $this->assertNotNull($bucket);
         $this->assertSame(3_000_000.0, $bucket->ratePerSecond());
-        $this->assertSame(3_000_000.0 * TokenBucket::THROTTLE_BURST_SECONDS, $bucket->capacity());
+        $this->assertSame(3_000_000.0, $bucket->capacity());
         // Starts full at capacity for a snappy burst at the injected base clock.
         $this->assertSame(3_000_000.0, $bucket->tokens(500.0));
     }
@@ -149,9 +158,22 @@ final class TokenBucketTest extends TestCase
         $bucket = TokenBucket::fromThrottleBps($throttleBps, 0.0);
         $this->assertNotNull($bucket);
 
-        // Mirror of ClientConnection's inline construction.
-        $rate = $throttleBps / 8.0;
-        $expected = new TokenBucket($rate, $rate * TokenBucket::THROTTLE_BURST_SECONDS, 0.0);
+        // ⚠ S191 — both sides of this parity check used to be computed with
+        // `* TokenBucket::THROTTLE_BURST_SECONDS`, so the two agreed for ANY value
+        // of the window: the test proved the two paths matched each other while
+        // being blind to what they matched AT. Anchored on hand-derived literals
+        // instead: 3_000_000 bits/sec ÷ 8 = 375_000 bytes/sec sustained, × the
+        // documented 1-second burst window = 375_000 bytes of capacity.
+        $expectedRate = 375_000.0;
+        $expectedCapacity = 375_000.0;
+
+        $this->assertSame($expectedRate, $bucket->ratePerSecond());
+        $this->assertSame($expectedCapacity, $bucket->capacity());
+        $this->assertSame($expectedCapacity, $bucket->tokens(0.0));
+
+        // Parity is then asserted against the WS path's inline shape, which is
+        // pinned to the same literals rather than to the constant.
+        $expected = new TokenBucket($expectedRate, $expectedCapacity, 0.0);
 
         $this->assertSame($expected->ratePerSecond(), $bucket->ratePerSecond());
         $this->assertSame($expected->capacity(), $bucket->capacity());

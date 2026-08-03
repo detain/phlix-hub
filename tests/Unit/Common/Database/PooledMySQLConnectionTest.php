@@ -278,4 +278,51 @@ final class PooledMySQLConnectionTest extends TestCase
             "the evicted dead connection must be closeConnection()'d (FD-churn fix)\n{$out}",
         );
     }
+
+    /**
+     * S188 — both branches of `currentCoroutineId()`'s coroutine-id narrowing.
+     *
+     * The method returns `int` but reads `\Swoole\Coroutine::getCid()`, which
+     * PHPStan types as `mixed` (its bundled phpstorm-stubs entry says
+     * `@return mixed`), so the value is narrowed with an `is_int()` guard. The
+     * narrowing must not flatten the two outcomes into one: a lease keyed by a
+     * wrong id silently reintroduces the cross-coroutine result-crossing this
+     * class exists to prevent.
+     *
+     * ⚠ Why this runs in a CHILD process rather than here. PHPUnit never
+     * executes inside a coroutine, so in the runner `getCid()` is **-1**, and a
+     * `-1` observed here cannot be told apart from the no-extension branch or
+     * from a hardcoded `return -1;`. Only a real scheduler produces a positive
+     * cid, so the in-coroutine half is unreachable in-process by construction —
+     * not merely inconvenient. The fixture therefore reports the id it read AND
+     * whether it equals the scheduler's own `Coroutine::getCid()`, so no constant
+     * can satisfy the assertion.
+     */
+    public function testCoroutineIdNarrowingKeepsBothBranchesDistinct(): void
+    {
+        $out = $this->runHarness('cid_narrowing');
+
+        // Branch A — no coroutine on the stack: the documented -1 sentinel,
+        // typed int (a `mixed` leak would surface here as a different type).
+        self::assertStringContainsString('outside_type=int', $out, "harness output:\n{$out}");
+        self::assertStringContainsString('outside=-1', $out, "outside a coroutine the id must be -1\n{$out}");
+
+        // Branch B — inside a live coroutine: the REAL cid, still typed int.
+        self::assertStringContainsString('inside_type=int', $out, "harness output:\n{$out}");
+        self::assertStringContainsString(
+            'inside_matches_scheduler=yes',
+            $out,
+            "in-coroutine id must equal Swoole's own getCid(), not a substitute\n{$out}",
+        );
+
+        // The two branches must not collapse: a positive cid is what makes the
+        // per-coroutine lease (and its defer release) addressable at all.
+        self::assertMatchesRegularExpression('/^inside=(\d+)$/m', $out, "harness output:\n{$out}");
+        preg_match('/^inside=(\d+)$/m', $out, $inside);
+        self::assertGreaterThan(
+            0,
+            (int) ($inside[1] ?? 0),
+            "the in-coroutine id must be a positive cid, not the -1 sentinel\n{$out}",
+        );
+    }
 }

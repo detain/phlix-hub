@@ -41,9 +41,16 @@ final class TokenBucket
      * Burst window (seconds) used to size a per-user throttle bucket built by
      * {@see self::fromThrottleBps()}: capacity = rate × this, so a freshly
      * started stream may burst ~1 second of data immediately for a snappy start,
-     * then settle to the sustained cap. Kept identical to the WS relay path's
-     * {@see \Phlix\Hub\Relay\ClientConnection::THROTTLE_BURST_SECONDS} so the WS
-     * (S42) and HTTP-over-relay proxy (S43) paths pace to the SAME effective cap.
+     * then settle to the sustained cap.
+     *
+     * S191 — this is THE single source of truth for the burst window, for both
+     * the WS relay path (S42) and the HTTP-over-relay proxy path (S43).
+     * {@see \Phlix\Hub\Relay\ClientConnection::THROTTLE_BURST_SECONDS} is an alias
+     * of this constant, so the two paths cannot drift to different effective caps.
+     * It used to be a second independent literal kept in step by a docblock
+     * request alone. Changing the value here therefore changes both paths — which
+     * is intended; the tests pin the window to its documented value with
+     * independent literals so a change is reported rather than absorbed.
      */
     public const float THROTTLE_BURST_SECONDS = 1.0;
 
