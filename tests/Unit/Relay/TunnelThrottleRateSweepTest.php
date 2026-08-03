@@ -44,6 +44,21 @@ use function strlen;
  * 65 535-byte DATA payload limit). 18 combinations, each an independent
  * measurement with its own derived band.
  *
+ * 🔴 The FRAME-SIZE dimension is load-bearing, measured on master 2026-08-03.
+ * {@see TunnelThrottleLoadTest} measures 3 Mbps and 10 Mbps with 65 000-byte
+ * frames, where the cap permits FEWER THAN ONE frame per 50 ms drain interval
+ * (3 Mbps ÷ 65 007 B ≈ 5.8 frames/s ≈ 0.29 per tick). Any per-call release limit is
+ * therefore invisible to it. Two such mutations of `Tunnel::drainThrottled()` left
+ * master's whole suite green — 2532 tests, 19894 assertions, exit 0:
+ *   - releasing at most ONE frame per drain call (a stray `break`), and
+ *   - capping the batch at EIGHT frames (a plausible "don't hog the event loop"
+ *     guard).
+ * Both throttle a 50 Mbps stream to a fraction of its cap in production. The
+ * one-frame case is caught here and by {@see TunnelThrottleTimerLoopTest}; the
+ * eight-frame case is caught ONLY here, because only this file exercises an
+ * operating point (50 Mbps with 1 KB frames ⇒ ~310 frames per tick) where a batch
+ * cap binds.
+ *
  * ## Determinism
  * Time is injected, never slept: the bucket is seeded on a clock anchored ~11.6
  * days in the future so the real-time refills performed by the production ingress

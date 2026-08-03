@@ -55,6 +55,13 @@ use function strlen;
  * timer callback RAN — and the release-batch count asserts it ran REPEATEDLY
  * (a one-shot timer produces exactly one batch).
  *
+ * A second master blind spot falls out of the same setup: limiting the drain to ONE
+ * frame per call (a stray `break` in `Tunnel::drainThrottled()`'s release loop) also
+ * left master's suite green, because its only rate test uses 65 KB frames at 3–10
+ * Mbps where the cap permits under one frame per tick anyway. At 1 Mbps with 1 KB
+ * frames the cap permits ~6 frames per tick, so the limit bites and the pacing band
+ * below rejects it.
+ *
  * ## The rate measurement, and why each window edge is where it is
  *
  * - **Numerator** — bytes counted inside the client {@see TcpConnection::send()}
