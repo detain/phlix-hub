@@ -14,6 +14,7 @@ use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
@@ -588,6 +589,171 @@ final class ClientRelayWorkerTest extends TestCase
 
         // A client connection is now attached to the tunnel.
         self::assertCount(1, $tunnel->clientConnections);
+    }
+
+    // ---- S42: per-user throttle attached AT MOUNT -------------------------
+
+    /**
+     * The authenticated user's `throttle_bps` must reach the mounted
+     * {@see ClientConnection} — the whole of S42's enforcement hangs off this one
+     * plumbing chain, and nothing pinned it.
+     *
+     * Chain under test, end to end and all production code:
+     * {@see ClientRelayWorker::onWebSocketConnect()} resolves the owning user from
+     * the relay token, forwards it to
+     * {@see ClientMountController::onWebSocketConnect()}, which forwards it to
+     * {@see \Phlix\Hub\Relay\TunnelManager::acceptClient()}, which reads
+     * {@see RelaySessionManager::getUserThrottleBps()} and constructs the
+     * connection's token bucket.
+     *
+     * 🔴 Measured on master (2026-08-03): deleting the `$userId` argument from the
+     * worker's `$controller->onWebSocketConnect(...)` call — a one-token edit that
+     * mounts EVERY native client Unlimited and makes the entire S42 feature inert
+     * in production — left the whole suite green (2532 tests, 19894 assertions,
+     * exit 0, byte-identical to baseline). Same for passing `null` instead of
+     * `$userId` in the controller's `acceptClient()` call. This is the same
+     * "one argument from inert" shape the S42/S43 audit found on the HTTP path at
+     * `ServerProxyController.php:1072`.
+     *
+     * The lookup is asserted to happen exactly ONCE and with the authenticated
+     * user id, and the attached rate is asserted to be the value that user (and
+     * only that user) resolves to, so neither a dropped argument nor a hardcoded
+     * default can satisfy this test.
+     */
+    public function testOnWebSocketConnectAttachesTheOwningUsersThrottleToTheMountedConnection(): void
+    {
+        $serverId = 'server-uuid-throttled';
+        $token = 'valid-token-throttled';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        // Only the authenticated owner resolves to 5 Mbps; anybody else (and the
+        // no-user case a dropped argument produces) resolves to Unlimited.
+        $this->sessionManager->expects($this->once())
+            ->method('getUserThrottleBps')
+            ->with(self::OWNER_USER_ID)
+            ->willReturn(5_000_000);
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+        $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
+        $tunnel->relaySessionId = 'session-123';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $worker = new ClientRelayWorker($this->buildContainer());
+        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
+            'Authorization' => 'Bearer ' . $token,
+        ]);
+
+        $delivered = 0;
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturnCallback(
+            static function (mixed $data) use (&$delivered): bool {
+                $delivered++;
+                unset($data);
+                return true;
+            },
+        );
+
+        $worker->onWebSocketConnect($clientWs, $request);
+
+        $client = null;
+        foreach ($tunnel->clientConnections as $mounted) {
+            $client = $mounted;
+        }
+
+        self::assertInstanceOf(ClientConnection::class, $client);
+        self::assertSame(
+            5_000_000,
+            $client->throttleBps,
+            'the mounted connection must carry the authenticated user’s throttle_bps',
+        );
+        self::assertTrue($client->isThrottled());
+        self::assertNotNull($client->throttleBucket, 'a capped user must mount WITH a token bucket');
+        // bits/sec -> bytes/sec conversion happens once, at construction.
+        self::assertSame(625_000.0, $client->throttleBucket->ratePerSecond());
+        self::assertSame(625_000.0, $client->throttleBucket->capacity());
+
+        // …and the attached bucket is actually CONSULTED by the send path: with
+        // the bucket in debt, a server->client DATA frame must not reach the
+        // socket (it is queued for the drain timer instead).
+        $client->throttleBucket->spend(1_000_000.0);
+        self::assertSame(0, $delivered, 'no client frame should have been delivered before the DATA send');
+
+        $tunnel->sendToClient(
+            $client->channelId,
+            new RelayFrame(RelayFrameType::DATA, $client->channelId, 'payload'),
+        );
+
+        self::assertSame(
+            0,
+            $delivered,
+            'a mounted, throttled connection with an empty bucket must queue rather than deliver',
+        );
+    }
+
+    /**
+     * The negative half of the pair above: a user configured Unlimited (`0`)
+     * mounts with NO bucket and takes the unthrottled fast path.
+     *
+     * Together with the 5 Mbps case this proves the attached cap TRACKS the
+     * per-user lookup rather than being a constant, and it independently pins the
+     * lookup call itself (a dropped `$userId` argument never queries at all, so
+     * `expects($this->once())` fails).
+     */
+    public function testOnWebSocketConnectMountsAnUnlimitedUserWithNoBucket(): void
+    {
+        $serverId = 'server-uuid-unlimited';
+        $token = 'valid-token-unlimited';
+        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
+        $this->setServerOwner($serverId, self::OWNER_USER_ID);
+
+        $this->sessionManager->expects($this->once())
+            ->method('getUserThrottleBps')
+            ->with(self::OWNER_USER_ID)
+            ->willReturn(0);
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $serverWs->method('send')->willReturn(true);
+        $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
+        $tunnel->relaySessionId = 'session-123';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $worker = new ClientRelayWorker($this->buildContainer());
+        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
+            'Authorization' => 'Bearer ' . $token,
+        ]);
+
+        $delivered = 0;
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturnCallback(
+            static function (mixed $data) use (&$delivered): bool {
+                $delivered++;
+                unset($data);
+                return true;
+            },
+        );
+
+        $worker->onWebSocketConnect($clientWs, $request);
+
+        $client = null;
+        foreach ($tunnel->clientConnections as $mounted) {
+            $client = $mounted;
+        }
+
+        self::assertInstanceOf(ClientConnection::class, $client);
+        self::assertSame(0, $client->throttleBps);
+        self::assertFalse($client->isThrottled());
+        self::assertNull($client->throttleBucket, 'Unlimited must build no bucket at all');
+
+        // Unlimited delivers immediately — no queue, no timer.
+        $tunnel->sendToClient(
+            $client->channelId,
+            new RelayFrame(RelayFrameType::DATA, $client->channelId, 'payload'),
+        );
+
+        self::assertSame(1, $delivered, 'an Unlimited mount must deliver on the fast path');
+        self::assertNull($client->throttleDrainTimerId);
     }
 
     // ---- Frame round-trip through the router ----------------------------
