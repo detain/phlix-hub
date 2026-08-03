@@ -69,22 +69,39 @@ use function strlen;
  *   at exactly the configured rate. The window therefore cannot start before the
  *   first token grant: at `t0` the balance is exactly zero.
  * - **RIGHT edge `tLast`** — the timestamp of the LAST byte released. At that
- *   instant the drain loop stopped because the balance went non-positive (the
+ *   instant the drain loop had stopped because the balance went non-positive (the
  *   backlog is asserted non-empty at the end, so it did not stop for want of
  *   frames). Ending on a token-exhaustion event means the window contains no
  *   post-drain idle tail, which would deflate the figure into "the throughput of
  *   nothing".
  *
- * With both edges anchored to token-bucket events the achievable band is exact
- * rather than a tolerance guess. Let `R` be the cap in bytes/sec and `W' = tLast −
- * t0`. Tokens granted over the window are `R·W'`; the balance after the last
- * release is in `(−frameBytes, 0]`; therefore
+ * `Tunnel::drainThrottled()` samples `microtime(true)` ONCE per firing and reuses
+ * it for every frame in that batch, so the bucket's clock at the final release,
+ * `nowLast`, is *earlier* than the wall-clock `tLast` by however long the batch
+ * took to hand its frames to the socket. That gives an exact ONE-SIDED bound over
+ * `[t0, tLast]` — with `R` the cap in bytes/sec and `W' = tLast − t0`:
  *
- *     delivered ∈ [R·W', R·W' + frameBytes)   ⇒   realised ∈ [R, R + frameBytes/W')
+ *     delivered ≤ R·(nowLast − t0) + frameBytes ≤ R·W' + frameBytes
+ *     ⇒ realised ≤ R + frameBytes/W'          (asserted: over-delivery is impossible)
  *
- * Both edges of that band are asserted. The floor is what a missing bucket
- * consult cannot satisfy in reverse (it over-delivers), and the ceiling is what an
- * unlimited or bits-as-bytes drain cannot satisfy.
+ * The matching floor is NOT exact on that window, and assuming it was cost one
+ * false red here: at 1 Mbps the final batch's own mock-call latency (~2.4 ms of a
+ * ~0.95 s window) inflated the denominator and produced 0.9971 × cap against a
+ * `≥ cap` assertion — a measurement artefact, not under-delivery. So the pacing
+ * band is measured on a second, artefact-free window instead:
+ *
+ * - **BATCH-TO-BATCH window** — from the first release of the first batch during
+ *   `run()` to the first release of the LAST batch, counting only the whole batches
+ *   in between. Both edges are instants at which the balance had just been found
+ *   positive, and a batch begins with a balance in `(0, R·τ]` (one drain interval's
+ *   worth of grant, since the previous batch left it non-positive). Therefore
+ *
+ *     delivered ∈ (R·W'' − R·τ, R·W'' + R·τ)  ⇒  realised ∈ R·(1 ± τ/W'')
+ *
+ *   with `τ` read from the production constant. That band is derived, symmetric,
+ *   and immune to how long a batch takes to execute.
+ *
+ * The exact figures both windows produce are reported per run.
  *
  * ## Not a single run
  * The loop is timing-dependent, so the whole measurement is repeated
@@ -154,7 +171,8 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         /**
          * @var list<array{
          *     realised: float, ratio: float, window: float, bytes: int, frames: int,
-         *     batches: int, duringRun: int, loopRate: float, backlog: int
+         *     batches: int, duringRun: int, loopRate: float, backlog: int,
+         *     batchWindow: float, batchBytes: int, batchRealised: float, batchRatio: float
          * }> $runs
          */
         $runs = [];
@@ -168,7 +186,8 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         foreach ($runs as $index => $run) {
             $detail = sprintf(
                 'run %d/%d: cap=%d bps (%.0f B/s) | delivered=%d B in %d frames | '
-                . 'steady-state window=%.4f s | realised=%.0f B/s (%.4f x cap) | '
+                . 't0-anchored window=%.4f s -> %.0f B/s (%.4f x cap) | '
+                . 'batch-to-batch window=%.4f s over %d B -> %.0f B/s (%.4f x cap) | '
                 . 'release batches=%d | bytes during run()=%d | backlog left=%d frames',
                 $index + 1,
                 self::ITERATIONS,
@@ -179,6 +198,10 @@ final class TunnelThrottleTimerLoopTest extends TestCase
                 $run['window'],
                 $run['realised'],
                 $run['ratio'],
+                $run['batchWindow'],
+                $run['batchBytes'],
+                $run['batchRealised'],
+                $run['batchRatio'],
                 $run['batches'],
                 $run['duringRun'],
                 $run['backlog'],
@@ -216,21 +239,36 @@ final class TunnelThrottleTimerLoopTest extends TestCase
                 'byte counter must be complete: frames x frameSize === bytes: ' . $detail,
             );
 
-            // (5) Floor: delivered >= R x W' exactly (the balance is non-positive
-            // after the last release). 0.999 absorbs float noise only.
-            $this->assertGreaterThanOrEqual(
-                $capBytesPerSecond * 0.999,
-                $run['realised'],
-                'throttle UNDER-delivered against its own cap: ' . $detail,
-            );
-
-            // (6) Ceiling: R + one frame per window. A drain that skips the bucket
-            // consult, or treats bits as bytes, cannot fit under this.
+            // (5) EXACT CEILING on the t0-anchored window: the bucket cannot have
+            // granted more than R x W', and the drain overshoots by at most the one
+            // frame that took the balance non-positive. A drain that skips the
+            // bucket consult, or treats bits as bytes, cannot fit under this.
             $ceiling = $capBytesPerSecond + ($this->frameBytes() / $run['window']);
             $this->assertLessThanOrEqual(
                 $ceiling * 1.001,
                 $run['realised'],
                 'throttle OVER-delivered beyond cap + one frame: ' . $detail,
+            );
+
+            // (6) DERIVED SYMMETRIC BAND on the batch-to-batch window: each batch
+            // starts with a balance in (0, R x tick], so the two residuals bound the
+            // error at +/- R x tick over the window. This is the pacing assertion,
+            // and it fails in BOTH directions (too fast and too slow).
+            $this->assertGreaterThan(
+                1,
+                $run['batches'],
+                'need at least two batches to measure batch-to-batch: ' . $detail,
+            );
+            $bandHalfWidth = ($capBytesPerSecond * $tick) / $run['batchWindow'];
+            $this->assertGreaterThanOrEqual(
+                $capBytesPerSecond - $bandHalfWidth,
+                $run['batchRealised'],
+                'throttle UNDER-delivered against its own cap: ' . $detail,
+            );
+            $this->assertLessThanOrEqual(
+                $capBytesPerSecond + $bandHalfWidth,
+                $run['batchRealised'],
+                'throttle OVER-delivered against its own cap: ' . $detail,
             );
 
             // (7) The whole-loop window (which includes the idle tail after the
@@ -253,15 +291,15 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         // is still a failure.
         $ratios = [];
         foreach ($runs as $run) {
-            $ratios[] = $run['ratio'];
+            $ratios[] = $run['batchRatio'];
         }
         $spread = max($ratios) - min($ratios);
         $this->assertLessThan(
             0.05,
             $spread,
             sprintf(
-                'realised/cap ratio varied by %.4f across %d runs (min %.4f, max %.4f) — '
-                . 'the pacing is not stable',
+                'batch-to-batch realised/cap ratio varied by %.4f across %d runs '
+                . '(min %.4f, max %.4f) — the pacing is not stable',
                 $spread,
                 self::ITERATIONS,
                 min($ratios),
@@ -278,7 +316,8 @@ final class TunnelThrottleTimerLoopTest extends TestCase
      *
      * @return array{
      *     realised: float, ratio: float, window: float, bytes: int, frames: int,
-     *     batches: int, duringRun: int, loopRate: float, backlog: int
+     *     batches: int, duringRun: int, loopRate: float, backlog: int,
+     *     batchWindow: float, batchBytes: int, batchRealised: float, batchRatio: float
      * }
      */
     private function measureOneWindow(float $tick, float $capBytesPerSecond): array
@@ -336,6 +375,7 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         $tunnel->registerClient($client);
 
         $bytesBeforeRun = 0;
+        $framesBeforeRun = 0;
         $backlog = 0;
         $loopEnd = $t0;
 
@@ -363,6 +403,7 @@ final class TunnelThrottleTimerLoopTest extends TestCase
             );
 
             $bytesBeforeRun = $meter->bytes;
+            $framesBeforeRun = $meter->frames;
 
             // Bound the loop: a one-shot stop timer ends run() after the window.
             $event->delay(self::WINDOW_SECONDS, static function () use ($event): void {
@@ -383,16 +424,39 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         $window = max($tLast - $t0, 1.0e-6);
         $realised = $meter->bytes / $window;
 
-        // Count release batches: consecutive sends separated by more than half a
-        // drain interval belong to different timer firings.
-        $batches = 0;
+        // Count release batches, and remember where each one STARTED: consecutive
+        // sends separated by more than half a drain interval belong to different
+        // timer firings. Every frame is the same size, so a send's index is also a
+        // cumulative byte count — which is what makes the batch-to-batch numerator
+        // exact (whole batches only, no partial batch at either edge).
+        $batchStartIndex = [];
         $previous = null;
-        foreach ($meter->sentAt as $at) {
+        foreach ($meter->sentAt as $index => $at) {
             if ($previous === null || ($at - $previous) > ($tick / 2)) {
-                $batches++;
+                $batchStartIndex[] = $index;
             }
             $previous = $at;
         }
+        $batches = count($batchStartIndex);
+
+        // BATCH-TO-BATCH window: first batch that ran during run() -> last batch,
+        // counting only the whole batches between those two starts.
+        $firstDuringRun = null;
+        foreach ($batchStartIndex as $index) {
+            if ($index >= $framesBeforeRun) {
+                $firstDuringRun = $index;
+                break;
+            }
+        }
+        $lastStart = $batchStartIndex === [] ? null : $batchStartIndex[$batches - 1];
+
+        $batchWindow = 1.0e-6;
+        $batchBytes = 0;
+        if ($firstDuringRun !== null && $lastStart !== null && $lastStart > $firstDuringRun) {
+            $batchWindow = max($meter->sentAt[$lastStart] - $meter->sentAt[$firstDuringRun], 1.0e-6);
+            $batchBytes = ($lastStart - $firstDuringRun) * $this->frameBytes();
+        }
+        $batchRealised = $batchBytes / $batchWindow;
 
         return [
             'realised' => $realised,
@@ -404,6 +468,10 @@ final class TunnelThrottleTimerLoopTest extends TestCase
             'duringRun' => $meter->bytes - $bytesBeforeRun,
             'loopRate' => $meter->bytes / max($loopEnd - $t0, 1.0e-6),
             'backlog' => $backlog,
+            'batchWindow' => $batchWindow,
+            'batchBytes' => $batchBytes,
+            'batchRealised' => $batchRealised,
+            'batchRatio' => $batchRealised / $capBytesPerSecond,
         ];
     }
 
@@ -417,7 +485,8 @@ final class TunnelThrottleTimerLoopTest extends TestCase
      *
      * @param list<array{
      *     realised: float, ratio: float, window: float, bytes: int, frames: int,
-     *     batches: int, duringRun: int, loopRate: float, backlog: int
+     *     batches: int, duringRun: int, loopRate: float, backlog: int,
+     *     batchWindow: float, batchBytes: int, batchRealised: float, batchRatio: float
      * }> $runs
      */
     private function report(array $runs, float $capBytesPerSecond, float $tick): void
@@ -437,9 +506,9 @@ final class TunnelThrottleTimerLoopTest extends TestCase
 
         $ratios = [];
         foreach ($runs as $index => $run) {
-            $ratios[] = $run['ratio'];
+            $ratios[] = $run['batchRatio'];
             fwrite(STDERR, sprintf(
-                "  run %d: %d B in %d frames over %.4f s = %.0f B/s (%.4f Mbps) | ratio %.4f | "
+                "  run %d: %d B in %d frames | t0-anchored %.4f s = %.0f B/s (%.4f Mbps, ratio %.4f) | "
                 . "batches %d | during run() %d B | loop-window %.0f B/s | backlog %d\n",
                 $index + 1,
                 $run['bytes'],
@@ -453,6 +522,16 @@ final class TunnelThrottleTimerLoopTest extends TestCase
                 $run['loopRate'],
                 $run['backlog'],
             ));
+            fwrite(STDERR, sprintf(
+                "         batch-to-batch %.4f s over %d B = %.0f B/s (%.4f Mbps, ratio %.4f) "
+                . "| band +/- %.0f B/s\n",
+                $run['batchWindow'],
+                $run['batchBytes'],
+                $run['batchRealised'],
+                ($run['batchRealised'] * 8) / 1_000_000,
+                $run['batchRatio'],
+                ($capBytesPerSecond * $tick) / $run['batchWindow'],
+            ));
         }
 
         $mean = 0.0;
@@ -462,7 +541,7 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         $mean /= max(count($ratios), 1);
 
         fwrite(STDERR, sprintf(
-            "  ratio min=%.4f max=%.4f mean=%.4f spread=%.4f (n=%d)\n",
+            "  batch-to-batch ratio min=%.4f max=%.4f mean=%.4f spread=%.4f (n=%d)\n",
             min($ratios),
             max($ratios),
             $mean,
