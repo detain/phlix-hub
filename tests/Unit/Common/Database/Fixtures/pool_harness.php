@@ -13,6 +13,17 @@
  * doubles, then prints `key=value` marker lines the parent asserts on.
  *
  * Usage: php pool_harness.php <scenario>
+ *
+ * ⚠ S179 — this script MUST end by SIGKILLing itself via
+ * {@see \Phlix\Hub\Tests\Support\SwooleShutdownIsolation::terminateWithoutRequestShutdown()}.
+ * Under CI's `coverage: xdebug` shape PHP's request shutdown segfaults on the
+ * coroutine stacks Swoole already freed — measured exit 139 for every scenario
+ * that holds two coroutines at once (`distinct`, `exhaust_handoff`,
+ * `exhaust_throw`) and exit 0 for the sequential ones, while all seven exit 0
+ * without xdebug. The crash used to be invisible because the parent launched
+ * this script with `shell_exec('… 2>/dev/null')`, which discards the exit
+ * status. Removing the terminator fails every `PooledMySQLConnectionTest`
+ * harness test on BOTH coverage drivers.
  */
 
 declare(strict_types=1);
@@ -26,6 +37,7 @@ require __DIR__ . '/../../../../../vendor/autoload.php';
 
 use Phlix\Hub\Common\Database\PooledMySQLConnection;
 use Phlix\Hub\Tests\Support\RecordingConnection;
+use Phlix\Hub\Tests\Support\SwooleShutdownIsolation;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Channel;
 use Workerman\MySQL\Connection;
@@ -277,6 +289,13 @@ switch ($scenario) {
         break;
 
     default:
+        // Deliberately NOT signal-terminated: an unknown scenario is a genuine
+        // error, and SwooleFixtureProcess reports the exit code plus this
+        // stderr line rather than reading it as a sanctioned exit.
         fwrite(STDERR, "unknown scenario: {$scenario}\n");
         exit(2);
 }
+
+// S179: flush the markers, then die by SIGKILL so PHP's request shutdown never
+// runs in a process that used Swoole coroutines. Never returns.
+SwooleShutdownIsolation::terminateWithoutRequestShutdown();

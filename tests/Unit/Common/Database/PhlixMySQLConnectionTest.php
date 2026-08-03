@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Common\Database;
 
 use Phlix\Hub\Common\Database\PhlixMySQLConnection;
+use Phlix\Hub\Tests\Support\SwooleFixtureProcess;
 use Phlix\Hub\Tests\Support\TransactionLockConnection;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -334,6 +335,13 @@ final class PhlixMySQLConnectionTest extends TestCase
      * the child prints the event order and we assert B's "got lock" event lands
      * strictly AFTER A's commit, proving no interleaving into A's open
      * transaction.
+     *
+     * ⚠ S179 — "run it in a child process" is only half a guarantee: until this
+     * step the child was launched with `shell_exec('… 2>/dev/null')`, which
+     * discards the exit status, so the crash it was meant to survive happened on
+     * every CI run (exit 139 under `coverage: xdebug`) and nothing noticed.
+     * {@see SwooleFixtureProcess} now asserts the child died of SIGKILL, the
+     * fixture's own pre-shutdown isolation.
      */
     public function testConcurrentTransactionSerialisesSecondCoroutine(): void
     {
@@ -344,10 +352,14 @@ final class PhlixMySQLConnectionTest extends TestCase
         $script = __DIR__ . '/Fixtures/transaction_lock_smoke.php';
         self::assertFileExists($script);
 
-        $cmd = escapeshellarg(PHP_BINARY)
-            . ' -d swoole.enable_library=1 '
-            . escapeshellarg($script) . ' 2>/dev/null';
-        $output = (string) shell_exec($cmd);
+        // S179: the child's exit status is ASSERTED, not discarded. The previous
+        // `shell_exec('… 2>/dev/null')` returned stdout only, so this test passed
+        // on a process that printed these four markers and then died of SIGSEGV
+        // in PHP's request shutdown under CI's `coverage: xdebug` shape
+        // (measured exit 139 on master). SwooleFixtureProcess fails the test
+        // unless the child died of SIGKILL — the fixture's own isolation.
+        $result = SwooleFixtureProcess::run($script);
+        $output = $result['stdout'];
         $events = array_values(array_filter(explode("\n", trim($output))));
 
         // The child emits exactly these four ordered markers on success.

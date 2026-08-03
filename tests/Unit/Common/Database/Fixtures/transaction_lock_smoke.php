@@ -21,6 +21,16 @@ declare(strict_types=1);
  *
  * Emits ONLY those markers on stdout (swoole trace/debug noise is silenced via
  * the log level) so the parent can assert the ordering deterministically.
+ *
+ * ⚠ S179 — this script MUST end by SIGKILLing itself via
+ * {@see \Phlix\Hub\Tests\Support\SwooleShutdownIsolation::terminateWithoutRequestShutdown()}.
+ * Under CI's `coverage: xdebug` shape PHP's request shutdown segfaults on the
+ * coroutine stacks Swoole already freed (exit 139, measured; exit 0 without
+ * xdebug), and the crash used to be invisible because the parent launched this
+ * script with `shell_exec('… 2>/dev/null')`, which discards the exit status.
+ * Removing the terminator fails
+ * `PhlixMySQLConnectionTest::testConcurrentTransactionSerialisesSecondCoroutine()`
+ * on BOTH coverage drivers.
  */
 
 // Silence swoole's reactor/coroutine TRACE/DEBUG chatter so stdout is clean.
@@ -30,6 +40,7 @@ if (\function_exists('swoole_async_set')) {
 
 require __DIR__ . '/../../../../../vendor/autoload.php';
 
+use Phlix\Hub\Tests\Support\SwooleShutdownIsolation;
 use Phlix\Hub\Tests\Support\TransactionLockConnection;
 
 /** @var list<string> $order */
@@ -66,3 +77,7 @@ $order = [];
 });
 
 echo implode("\n", $order) . "\n";
+
+// S179: flush the markers, then die by SIGKILL so PHP's request shutdown never
+// runs in a process that used Swoole coroutines. Never returns.
+SwooleShutdownIsolation::terminateWithoutRequestShutdown();

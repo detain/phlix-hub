@@ -323,6 +323,58 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **CI reported success for tests it never ran: all 31 real-database tests were
+  permanently skipped (S173).** `.github/workflows/ci.yml` had no `services:`
+  block, no MySQL and no `HUB_TEST_DB_*`, and every test under
+  `tests/Integration/` gates on those variables — so all 31 of them called
+  `markTestSkipped()` on every run since the workflow was written, identically on
+  master and on branches. Auth, login rate-limiting, the migration chain and the
+  relay throttle all had real-DB tests that had **never executed in CI**. ⚠ A
+  skipped test is not a neutral absence: PHPUnit exits `0` with *"OK, but some
+  tests were skipped!"*, so the signal that nothing was verified looked exactly
+  like success.
+  - The PHPUnit job now provisions a `mysql:8.0` service, applies the whole
+    `migrations/` chain to it with `scripts/run-migrations.php` (a genuine gate —
+    the runner rethrows any statement error and the script exits 1), supplies
+    `HUB_TEST_DB_*`, and writes a JUnit report.
+  - **New `scripts/assert-integration-tests-ran.php`** fails the build when any
+    test was skipped, and when fewer than 31 real-database test cases executed —
+    the second half because "0 skipped" is also satisfiable by *deleting* the
+    integration tests. `tests/Unit/Support/IntegrationDbCiWiringTest.php` pins the
+    wiring itself, so removing the service, a `HUB_TEST_DB_*` variable,
+    `--log-junit` or the gate step turns the unit suite red on any box.
+  - Measured: with the service in place the suite reports **0 skipped** and 31
+    real-database tests executed; with the database configuration removed PHPUnit
+    still exits 0 with `Skipped: 31` and the new gate turns that green-with-skips
+    run **red**.
+  - **`tests/Integration/Hub/MyServersFlowTest.php` had rotted into a
+    guaranteed-error state** while it was being skipped: it passed `null` for
+    `AuthManager`'s now-required `RateLimiterInterface` (6/6 tests raised
+    `TypeError`), inserted UNIX timestamps into the DATETIME `servers.last_seen_at`
+    / `created_at` (`SQLSTATE[22007] 1292`), omitted the `NOT NULL`
+    `public_key_jwk`, and asserted a compact-JSON substring against a
+    `JSON_PRETTY_PRINT` body. Repaired against the live schema and the production
+    writer; it now passes for the first time.
+
+- **A Swoole/Xdebug shutdown SIGSEGV on master was hidden by
+  `shell_exec(… 2>/dev/null)` (S179).** `tests/Unit/Common/Database/Fixtures/transaction_lock_smoke.php`
+  and `pool_harness.php` run concurrent Swoole coroutines and exit **139
+  (SIGSEGV)** under CI's `coverage: xdebug` shape — PHP's request shutdown calls
+  `zend_observer_fcall_end_all()`, which hands Xdebug frames from coroutine stacks
+  Swoole has already freed. Both were launched with `shell_exec('… 2>/dev/null')`,
+  which returns stdout and **discards the exit status**, and the fixtures print
+  their markers *before* shutdown — so the assertions read good output from a
+  process that then crashed, and the tests passed.
+  - The fixtures now end with
+    `SwooleShutdownIsolation::terminateWithoutRequestShutdown()` (an uncatchable
+    SIGKILL after flushing), so request shutdown never runs in a process that used
+    coroutines, and the new `SwooleFixtureProcess` launcher **asserts** the child
+    died of exactly that signal. A child that exits normally, exits non-zero, dies
+    of another signal (e.g. SIGSEGV) or overruns its budget now fails the test — on
+    pcov as well as Xdebug, so the guarantee is enforced on developer boxes where
+    the crash itself cannot manifest. `2>/dev/null` is gone: stderr is captured and
+    reported.
+
 - **Per-user relay THROTTLE reverted to 3 Mbps on the 1st of every month (S42
   review, MEDIUM; S41-rooted).** The admin-configured throttle was stored on the
   per-calendar-month usage rollup `relay_user_quotas` (PK `(user_id,

@@ -92,7 +92,35 @@ jobs:
   phpunit:
     name: PHPUnit Test Suite
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # S173: raised from 10. The 31 real-database tests each drop every table and
+    # re-apply the whole 29-file migration chain in their setUp(), measured at
+    # ~14 s per test against MySQL 8.0.46 (≈8 min for the Integration suite on
+    # top of the unit suite). This is a failsafe, NOT a gate — do not lower it to
+    # "fix" a slow run, and do not shorten the suite to fit it.
+    timeout-minutes: 30
+
+    # S173: without a real database every test under tests/Integration/ called
+    # markTestSkipped() — all 31 of them, on every run since this workflow was
+    # written, identically on master and on branches. Auth, login rate-limiting,
+    # the migration chain and the relay throttle all have real-DB tests that had
+    # NEVER executed here. A skipped test is not a neutral absence: phpunit exits
+    # 0 with "OK, but some tests were skipped!" and the check goes green, so the
+    # signal that nothing was verified looked exactly like success.
+    # The "Assert the integration tests actually ran" step below makes that
+    # impossible to repeat silently.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: phlix_hub_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
       - name: Checkout code
@@ -118,10 +146,57 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Apply database migrations
+        # S173: applies the whole migrations/ chain forward against the service DB
+        # with the standalone runner the deploy scripts use, so a migration that
+        # cannot apply to an empty MySQL 8 database fails HERE rather than on a
+        # production box. It is a genuine gate: MigrationRunner::applyFile()
+        # rethrows any statement error and scripts/run-migrations.php exits 1 on it
+        # (verified locally: an unreachable database exits 1, a replay of an
+        # already-applied chain prints "Nothing to do" and exits 0). Do NOT add
+        # `|| true` or `continue-on-error` — read the error and fix the migration.
+        #
+        # HUB_DB_* (not HUB_TEST_DB_*) because the runner reads
+        # config/database.php. Scoped to this step so no unit test sees them.
+        env:
+          HUB_DB_HOST: 127.0.0.1
+          HUB_DB_PORT: '3306'
+          HUB_DB_USER: root
+          HUB_DB_PASSWORD: root
+          HUB_DB_NAME: phlix_hub_test
+        run: php scripts/run-migrations.php
+
       - name: Run PHPUnit
         # Use php -d max_execution_time=0 to prevent PHP's default 30s timeout
         # which causes SIGALRM (exit 142) in long-running test suites with Xdebug coverage.
-        run: php -d max_execution_time=0 ./vendor/bin/phpunit --colors=always
+        #
+        # S173: HUB_TEST_DB_* is what every tests/Integration/** case gates on —
+        # without it they skip and this job goes green having proven nothing about
+        # the real schema. Each of those tests drops all tables and re-runs the
+        # migration chain in setUp(), so it is independent of the step above.
+        # --log-junit feeds the assertion step that follows; it is the only way to
+        # tell "ran" from "skipped" after the fact, since both exit 0.
+        env:
+          HUB_TEST_DB_HOST: 127.0.0.1
+          HUB_TEST_DB_PORT: '3306'
+          HUB_TEST_DB_USER: root
+          HUB_TEST_DB_PASSWORD: root
+          HUB_TEST_DB_NAME: phlix_hub_test
+        run: php -d max_execution_time=0 ./vendor/bin/phpunit --colors=always --log-junit junit.xml
+
+      - name: Assert the integration tests actually ran (S173)
+        # ADDITIVE gate. It fails the build when any test was SKIPPED, and when
+        # fewer than 31 real-database test cases executed — the second half exists
+        # because "0 skipped" is also satisfiable by deleting the integration
+        # tests. `if: always()` so a red suite still reports whether its real-DB
+        # half ran at all, which is exactly when that is most informative.
+        #
+        # Do NOT delete this step, add continue-on-error to it, or drop the
+        # --log-junit flag above: tests/Unit/Support/IntegrationDbCiWiringTest.php
+        # parses this file and fails on each of those edits, on the removal of the
+        # mysql service, and on a missing HUB_TEST_DB_* variable.
+        if: always()
+        run: php scripts/assert-integration-tests-ran.php junit.xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
