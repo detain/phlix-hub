@@ -36,8 +36,17 @@ final class ClientConnection
      * bucket ({@see $throttleBucket}). Capacity = rate × this, i.e. a
      * freshly-mounted stream may burst up to ~1 second of data immediately for a
      * snappy start, then settle to the sustained per-user cap.
+     *
+     * ⚠ S191 — this is an ALIAS, not a second copy. It previously repeated the
+     * literal `1.0` alongside {@see TokenBucket::THROTTLE_BURST_SECONDS} with only
+     * a docblock asking the two to "stay identical" and nothing enforcing it, so
+     * the WS relay path (S42) and the HTTP-over-relay proxy path (S43) could drift
+     * to different effective caps silently. Deriving the value makes that drift
+     * unrepresentable rather than merely detectable: TokenBucket owns the window,
+     * and this constant is retained because it is the public name the WS path and
+     * its tests refer to. Do NOT re-inline a literal here.
      */
-    public const float THROTTLE_BURST_SECONDS = 1.0;
+    public const float THROTTLE_BURST_SECONDS = TokenBucket::THROTTLE_BURST_SECONDS;
 
     /**
      * @param TcpConnection        $clientWs   Workerman connection to the client.
