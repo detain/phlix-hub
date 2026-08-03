@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Common\Database;
 
 use Phlix\Hub\Common\Database\PooledMySQLConnection;
+use Phlix\Hub\Tests\Support\SwooleFixtureProcess;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -141,6 +142,17 @@ final class PooledMySQLConnectionTest extends TestCase
     /**
      * Run one scenario from tests/.../Fixtures/pool_harness.php in a child
      * process and return its stdout marker lines.
+     *
+     * ⚠ S179 — the child's exit status is ASSERTED by
+     * {@see SwooleFixtureProcess}, not discarded. This used to be
+     * `shell_exec('… 2>/dev/null')`: it returned stdout only, so every harness
+     * test below passed on a process that printed its markers and then died of
+     * SIGSEGV in PHP's request shutdown under CI's `coverage: xdebug` shape
+     * (measured exit 139 for `distinct`, `exhaust_handoff` and `exhaust_throw`
+     * on master). The fixture now SIGKILLs itself before shutdown and this
+     * helper fails the test unless that is exactly how the child died — which
+     * also makes a removed terminator red on the pcov dev box, where the
+     * segfault itself cannot happen.
      */
     private function runHarness(string $scenario): string
     {
@@ -151,11 +163,7 @@ final class PooledMySQLConnectionTest extends TestCase
         $script = __DIR__ . '/Fixtures/pool_harness.php';
         self::assertFileExists($script);
 
-        $cmd = escapeshellarg(PHP_BINARY)
-            . ' -d swoole.enable_library=1 '
-            . escapeshellarg($script) . ' ' . escapeshellarg($scenario) . ' 2>/dev/null';
-
-        return (string) shell_exec($cmd);
+        return SwooleFixtureProcess::run($script, [$scenario])['stdout'];
     }
 
     /**

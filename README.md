@@ -781,13 +781,37 @@ composer stan     # PHPStan (level 9)
 composer psalm    # Psalm (errorLevel 1)
 ```
 
+### Running the Integration suite (real MySQL)
+
+`tests/Integration/**` talks to a real database and **self-skips** when the
+`HUB_TEST_DB_*` variables are absent, so `composer test` on a box without MySQL
+runs the unit suite only. Point them at a throwaway database — every test drops
+and re-creates all tables and re-applies the whole `migrations/` chain, so never
+aim them at a database you care about:
+
+```bash
+HUB_TEST_DB_HOST=127.0.0.1 HUB_TEST_DB_PORT=3306 \
+HUB_TEST_DB_USER=root HUB_TEST_DB_PASSWORD=root HUB_TEST_DB_NAME=phlix_hub_test \
+  ./vendor/bin/phpunit --testsuite Integration
+```
+
+The named database must already exist (the tests create tables, not schemas).
+Expect roughly 15 s per test: each one re-applies all 29 migrations.
+
 CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci.yml):
 
 - Composer validation
 - PHP_CodeSniffer (PSR-12)
 - PHPStan (level 9)
 - Psalm (errorLevel 1)
-- PHPUnit (with coverage uploaded to Codecov)
+- PHPUnit (with coverage uploaded to Codecov) — provisions a `mysql:8.0` service,
+  applies the migration chain to it, and runs **both** suites
+- **Zero-skip gate** — `scripts/assert-integration-tests-ran.php` reads PHPUnit's
+  JUnit report and fails the build if any test was skipped, or if fewer than 31
+  real-database tests executed. ⚠ A skipped test is not a neutral absence:
+  PHPUnit exits `0` with *"OK, but some tests were skipped!"*, so before this gate
+  a missing MySQL service made all 31 integration tests skip on every run while
+  the check stayed green
 - Composer security audit
 
 ## Project structure

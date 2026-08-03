@@ -3,6 +3,8 @@
 /.phpunit.cache/
 /coverage-report/
 /coverage.xml
+# S173: PHPUnit's --log-junit report, read by scripts/assert-integration-tests-ran.php
+/junit.xml
 /build/
 /templates_c/
 /var/
