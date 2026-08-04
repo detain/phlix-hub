@@ -21,6 +21,14 @@ use Psr\Container\ContainerInterface;
  * contract. The WS-upgrade handlers (onWebSocketConnect et al.) are covered by
  * {@see \Phlix\Hub\Tests\Unit\Relay\ClientRelayWorkerTest}.
  *
+ * ⚠ S205 — these tests assign `$request->headers['Upgrade']` on a bare
+ * `new Request()`, which SKIPS the case normalisation every real request goes
+ * through, so they can never detect a header read that misses in production.
+ * They stayed green while the 501 branch below was unreachable for every real
+ * caller. The header plumbing is pinned at the boundary instead, by
+ * {@see \Phlix\Hub\Tests\Unit\Http\Controllers\WorkermanHeaderBoundaryTest};
+ * do not add coverage of a header READ here.
+ *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  *
  * @covers \Phlix\Hub\Http\Controllers\ClientMountController

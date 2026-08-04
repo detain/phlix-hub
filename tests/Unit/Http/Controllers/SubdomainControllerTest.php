@@ -14,6 +14,16 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
+/**
+ * ⚠ S205 — `createRequest()` below assigns `$request->headers['Authorization']`
+ * on a bare `new Request()`, which SKIPS the case normalisation every real
+ * request goes through, so these tests can never detect a header read that
+ * misses in production. They stayed green while both bearer gates rejected
+ * unconditionally on the live hub. The header plumbing is pinned at the
+ * boundary instead, by
+ * {@see \Phlix\Hub\Tests\Unit\Http\Controllers\WorkermanHeaderBoundaryTest};
+ * do not add coverage of a header READ here.
+ */
 class SubdomainControllerTest extends TestCase
 {
     public function test_allocate_returns_401_without_auth_header(): void

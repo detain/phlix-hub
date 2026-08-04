@@ -59,7 +59,15 @@ final class RelayController
             ]);
         }
 
-        $authHeader = $request->headers['Authorization'] ?? '';
+        // Read through getHeader(): $request->headers is case-NORMALISED at the
+        // Workerman boundary (Workerman lowercases, collectHeadersFromWorkerman()
+        // then uppercases), so indexing the raw bag with a literal key is a
+        // silent miss — and with `?? ''` it degrades to "no token" rather than
+        // erroring, which made this gate reject unconditionally in production
+        // while its unit tests, which hand-set the mixed-case key, stayed green.
+        // getHeader() compares with strcasecmp() and is correct whatever the
+        // boundary does. See tests/Unit/Http/RawHeaderIndexGateTest.php.
+        $authHeader = $request->getHeader('Authorization') ?? '';
         if (!str_starts_with($authHeader, 'Bearer ')) {
             return (new Response())->status(401)->json([
                 'error' => 'UNAUTHORIZED',
@@ -87,7 +95,10 @@ final class RelayController
             return $this->unauthorized($e->getMessage());
         }
 
-        if ((($request->headers['Upgrade'] ?? '') !== 'websocket')) {
+        // Same normalisation caveat as the Authorization read above — the raw
+        // bag only ever holds 'UPGRADE', so the literal 'Upgrade' never matched
+        // and this branch fired for every caller, making the 501 below dead.
+        if ($request->getHeader('Upgrade') !== 'websocket') {
             return (new Response())->status(426)->json([
                 'error' => 'UPGRADE_REQUIRED',
                 'message' => 'This endpoint requires a WebSocket upgrade. Please connect via WSS.',
