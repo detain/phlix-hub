@@ -20,6 +20,14 @@ use Phlix\Hub\Http\Request;
  * endpoint. These tests pin that contract along with the surrounding auth
  * gates (401 / 426 / 400).
  *
+ * ⚠ S205 — these tests assign `$request->headers['Authorization']` on a bare
+ * `new Request()`, which SKIPS the case normalisation every real request goes
+ * through, so they can never detect a header read that misses in production.
+ * They stayed green for the entire life of the defect. The header plumbing is
+ * pinned at the boundary instead, by
+ * {@see \Phlix\Hub\Tests\Unit\Http\Controllers\WorkermanHeaderBoundaryTest};
+ * do not add coverage of a header READ here.
+ *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  *
  * @covers \Phlix\Hub\Http\Controllers\RelayController

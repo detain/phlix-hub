@@ -102,7 +102,13 @@ final class ClientMountController
         $wsEndpoint = 'ws://' . $hubWsHost . ':' . \Phlix\Hub\Relay\ClientRelayWorker::DEFAULT_PORT
             . '/client/' . $serverId;
 
-        if ((($request->headers['Upgrade'] ?? '') !== 'websocket')) {
+        // Read through getHeader(): $request->headers is case-NORMALISED at the
+        // Workerman boundary (Workerman lowercases, collectHeadersFromWorkerman()
+        // then uppercases), so the literal 'Upgrade' never matched and this
+        // branch fired for every caller — the 501 steer below was unreachable.
+        // getHeader() compares with strcasecmp(). See
+        // tests/Unit/Http/RawHeaderIndexGateTest.php.
+        if ($request->getHeader('Upgrade') !== 'websocket') {
             return (new Response())
                 ->header('X-WS-Endpoint', $wsEndpoint)
                 ->status(426)
