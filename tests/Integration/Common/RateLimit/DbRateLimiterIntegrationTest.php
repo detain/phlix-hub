@@ -5,10 +5,9 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Integration\Common\RateLimit;
 
 use Phlix\Hub\Common\RateLimit\DbRateLimiter;
+use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Group;
-use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
 
 /**
  * Real-MySQL integration tests for {@see DbRateLimiter}, the shared DB-backed
@@ -45,37 +44,33 @@ use Workerman\MySQL\Connection;
  * user must have full privileges on it — the `login_rate_limit` table is dropped
  * and recreated fresh at setUp()).
  *
+ * ## S185
+ *
+ * This suite never ran the migration chain, so it was never part of the cost this
+ * step targets — but its teardown used to `DROP TABLE login_rate_limit` and leave
+ * it dropped, which punched a hole in the schema {@see RealDatabaseTestCase}
+ * shares. Under `executionOrder="random"` that cost the NEXT real-database suite
+ * a full 16 s chain re-apply, measured. It now extends the shared harness: the
+ * base leaves a complete, empty schema, this class still recreates
+ * `login_rate_limit` from the shipped migration DDL (that is a deliberate
+ * schema-drift assertion, not setup convenience), and the base's teardown empties
+ * the tables that exist rather than removing one.
+ *
  * @package Phlix\Hub\Tests\Integration\Common\RateLimit
  *
  * @group integration
  */
 #[CoversClass(DbRateLimiter::class)]
 #[Group('integration')]
-final class DbRateLimiterIntegrationTest extends TestCase
+final class DbRateLimiterIntegrationTest extends RealDatabaseTestCase
 {
     private const string TABLE = 'login_rate_limit';
 
-    private Connection $db;
-
     protected function setUp(): void
     {
-        $host = getenv('HUB_TEST_DB_HOST');
-        $name = getenv('HUB_TEST_DB_NAME');
-        if ($host === false || $host === '' || $name === false || $name === '') {
-            self::markTestSkipped(
-                'HUB_TEST_DB_* environment variables not set — skipping DbRateLimiter integration suite.',
-            );
-        }
+        parent::setUp();
 
-        $this->db = $this->newConnection();
         $this->recreateTable();
-    }
-
-    protected function tearDown(): void
-    {
-        if (isset($this->db)) {
-            $this->db->query('DROP TABLE IF EXISTS ' . self::TABLE);
-        }
     }
 
     /**
@@ -328,17 +323,6 @@ final class DbRateLimiterIntegrationTest extends TestCase
             $this->readAttempts($key),
             "Concurrent hits must not lose increments: expected {$expected} "
             . '(writers × iterations) with no lost updates under row-lock contention.',
-        );
-    }
-
-    private function newConnection(): Connection
-    {
-        return new Connection(
-            (string) getenv('HUB_TEST_DB_HOST'),
-            (int) (getenv('HUB_TEST_DB_PORT') ?: '3306'),
-            (string) (getenv('HUB_TEST_DB_USER') ?: 'root'),
-            (string) (getenv('HUB_TEST_DB_PASSWORD') ?: ''),
-            (string) getenv('HUB_TEST_DB_NAME'),
         );
     }
 

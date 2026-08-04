@@ -7,7 +7,6 @@ namespace Phlix\Hub\Tests\Integration\Hub;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
-use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\Logger\StructuredLogger;
@@ -15,8 +14,7 @@ use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Request;
-use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
+use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 
 /**
  * End-to-end My Servers dashboard flow:
@@ -24,6 +22,11 @@ use Workerman\MySQL\Connection;
  * and server removal.
  *
  * Skipped when `HUB_TEST_DB_*` env vars are not set.
+ *
+ * S185: the connect / skip-gate / schema / data-reset boilerplate moved to
+ * {@see RealDatabaseTestCase}, which builds the schema once per process and
+ * empties every table before and after each test instead of re-applying all 29
+ * migrations six times over.
  *
  * @package Phlix\Hub\Tests\Integration\Hub
  *
@@ -33,11 +36,10 @@ use Workerman\MySQL\Connection;
  *
  * @group integration
  */
-final class MyServersFlowTest extends TestCase
+final class MyServersFlowTest extends RealDatabaseTestCase
 {
     private const SECRET = 'integration-test-secret-32-bytes-minimum';
 
-    private Connection $db;
     private AuthManager $auth;
     private JwtHandler $jwt;
     private ServerInfoHandler $serverInfo;
@@ -46,24 +48,7 @@ final class MyServersFlowTest extends TestCase
 
     protected function setUp(): void
     {
-        $host = getenv('HUB_TEST_DB_HOST');
-        $name = getenv('HUB_TEST_DB_NAME');
-        if ($host === false || $host === '' || $name === false || $name === '') {
-            self::markTestSkipped(
-                'HUB_TEST_DB_* environment variables not set — skipping integration suite.',
-            );
-        }
-
-        $port = (int) (getenv('HUB_TEST_DB_PORT') ?: '3306');
-        $user = (string) (getenv('HUB_TEST_DB_USER') ?: 'root');
-        $pass = (string) (getenv('HUB_TEST_DB_PASSWORD') ?: '');
-
-        $this->db = new Connection($host, $port, $user, $pass, $name);
-        $this->skipOnIncompatibleCluster();
-        $this->dropAllTables();
-
-        $runner = new MigrationRunner($this->db, dirname(__DIR__, 3) . '/migrations');
-        $runner->run();
+        parent::setUp();
 
         $loggerConfig = [
             'handlers' => [
@@ -101,13 +86,6 @@ final class MyServersFlowTest extends TestCase
         $this->serverInfo = new ServerInfoHandler($this->db);
         $this->serverListController = new ServerListController($this->serverInfo);
         $this->serverManageController = new ServerManageController($this->serverInfo, $this->db);
-    }
-
-    protected function tearDown(): void
-    {
-        if (isset($this->db)) {
-            $this->dropAllTables();
-        }
     }
 
     public function testListServersReturnsEmptyWhenNoServers(): void
@@ -289,48 +267,5 @@ final class MyServersFlowTest extends TestCase
         );
 
         return $serverId;
-    }
-
-    private function skipOnIncompatibleCluster(): void
-    {
-        try {
-            $rows = $this->db->query(
-                "SHOW VARIABLES LIKE 'group_replication_enforce_update_everywhere_checks'",
-            );
-        } catch (\Throwable) {
-            return;
-        }
-        if (!is_array($rows) || $rows === []) {
-            return;
-        }
-        $row = $rows[0];
-        $rawValue = is_array($row) && isset($row['Value']) ? $row['Value'] : '';
-        $value = is_string($rawValue) ? $rawValue : '';
-        if (strtoupper($value) === 'ON') {
-            self::markTestSkipped(
-                'Test DB runs Group Replication multi-primary; integration suite needs single-primary.',
-            );
-        }
-    }
-
-    private function dropAllTables(): void
-    {
-        $name = (string) getenv('HUB_TEST_DB_NAME');
-        $rows = $this->db->query(
-            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = :schema",
-            ['schema' => $name],
-        );
-        if (!is_array($rows)) {
-            return;
-        }
-        $this->db->query('SET FOREIGN_KEY_CHECKS=0');
-        foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['TABLE_NAME']) || !is_string($row['TABLE_NAME'])) {
-                continue;
-            }
-            $table = $row['TABLE_NAME'];
-            $this->db->query("DROP TABLE IF EXISTS `{$table}`");
-        }
-        $this->db->query('SET FOREIGN_KEY_CHECKS=1');
     }
 }

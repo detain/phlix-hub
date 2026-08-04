@@ -4,11 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Integration\Hub;
 
-use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\RelaySessionManager;
-use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
+use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 
 /**
  * Real-MySQL round-trip for the DURABLE per-user relay THROTTLE (S42 review fix,
@@ -24,8 +22,13 @@ use Workerman\MySQL\Connection;
  *
  * Required env vars: `HUB_TEST_DB_HOST`, `HUB_TEST_DB_PORT`, `HUB_TEST_DB_USER`,
  * `HUB_TEST_DB_PASSWORD`, `HUB_TEST_DB_NAME`. The named database **must already
- * exist** and the user must have full privileges on it — every table is dropped
+ * exist** and the user must have full privileges on it — every table is emptied
  * at setUp().
+ *
+ * S185: the connect / skip-gate / schema / data-reset boilerplate moved to
+ * {@see RealDatabaseTestCase}, which builds the real schema (including migration
+ * 043 `relay_user_settings`) once per process and empties every table before and
+ * after each test instead of re-applying all 29 migrations twice over.
  *
  * @package Phlix\Hub\Tests\Integration\Hub
  *
@@ -33,40 +36,16 @@ use Workerman\MySQL\Connection;
  *
  * @group integration
  */
-final class RelaySessionManagerThrottleIntegrationTest extends TestCase
+final class RelaySessionManagerThrottleIntegrationTest extends RealDatabaseTestCase
 {
-    private Connection $db;
     private RelaySessionManager $manager;
 
     protected function setUp(): void
     {
-        $host = getenv('HUB_TEST_DB_HOST');
-        $name = getenv('HUB_TEST_DB_NAME');
-        if ($host === false || $host === '' || $name === false || $name === '') {
-            self::markTestSkipped(
-                'HUB_TEST_DB_* environment variables not set — skipping integration suite.',
-            );
-        }
-
-        $port = (int) (getenv('HUB_TEST_DB_PORT') ?: '3306');
-        $user = (string) (getenv('HUB_TEST_DB_USER') ?: 'root');
-        $pass = (string) (getenv('HUB_TEST_DB_PASSWORD') ?: '');
-
-        $this->db = new Connection($host, $port, $user, $pass, $name);
-        $this->dropAllTables();
-
-        // Build the real schema (including migration 043 relay_user_settings).
-        (new MigrationRunner($this->db, dirname(__DIR__, 3) . '/migrations'))->run();
+        parent::setUp();
 
         $logger = $this->createMock(StructuredLogger::class);
         $this->manager = new RelaySessionManager($this->db, $logger);
-    }
-
-    protected function tearDown(): void
-    {
-        if (isset($this->db)) {
-            $this->dropAllTables();
-        }
     }
 
     public function testThrottleRoundTripsThroughDurableStore(): void
@@ -171,26 +150,5 @@ final class RelaySessionManagerThrottleIntegrationTest extends TestCase
             return null;
         }
         return (int) $row['throttle_bps'];
-    }
-
-    private function dropAllTables(): void
-    {
-        $name = (string) getenv('HUB_TEST_DB_NAME');
-        $rows = $this->db->query(
-            'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = :schema',
-            ['schema' => $name],
-        );
-        if (!is_array($rows)) {
-            return;
-        }
-        $this->db->query('SET FOREIGN_KEY_CHECKS=0');
-        foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['TABLE_NAME']) || !is_string($row['TABLE_NAME'])) {
-                continue;
-            }
-            $table = $row['TABLE_NAME'];
-            $this->db->query("DROP TABLE IF EXISTS `{$table}`");
-        }
-        $this->db->query('SET FOREIGN_KEY_CHECKS=1');
     }
 }
