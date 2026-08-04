@@ -176,7 +176,7 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
 
             $expected = match ($route['gate']) {
                 RouteManifest::GATE_AUTH_JSON, RouteManifest::GATE_ADMIN, RouteManifest::GATE_ENROLLMENT => 401,
-                RouteManifest::GATE_AUTH_HTML => 302,
+                RouteManifest::GATE_AUTH_HTML, RouteManifest::GATE_ADMIN_HTML => 302,
                 RouteManifest::GATE_HUB_PROTOCOL => 400,
                 default => self::fail('unhandled gate: ' . $route['gate']),
             };
@@ -239,7 +239,10 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
         $table  = $this->routeMiddlewareByKey($router);
 
         foreach (RouteManifest::allRoutes() as $route) {
-            if ($route['gate'] !== RouteManifest::GATE_ADMIN) {
+            if (
+                $route['gate'] !== RouteManifest::GATE_ADMIN
+                && $route['gate'] !== RouteManifest::GATE_ADMIN_HTML
+            ) {
                 continue;
             }
             $key = RouteManifest::key($route);

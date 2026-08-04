@@ -48,6 +48,16 @@ final class RouteManifest
     /** Auth + admin: no credentials ⇒ 401; authenticated non-admin ⇒ 403. */
     public const GATE_ADMIN = 'admin';
 
+    /**
+     * Auth + admin on an HTML page path (S206). Same middleware chain as
+     * {@see self::GATE_ADMIN}, but the UNAUTHENTICATED outcome differs: the
+     * chain short-circuits inside {@see \Phlix\Hub\Http\Middleware\AuthMiddleware},
+     * which answers a non-`/api/` path with a 302 to `/app/login` rather than a
+     * JSON 401 — so an anonymous caller never reaches the admin check at all.
+     * An authenticated NON-admin does reach it and gets the JSON 403.
+     */
+    public const GATE_ADMIN_HTML = 'admin-html';
+
     /** Ed25519 enrollment JWT (server-facing): no token ⇒ 401. */
     public const GATE_ENROLLMENT = 'enrollment';
 
@@ -308,7 +318,7 @@ final class RouteManifest
                 ],
                 [
                     'method' => 'GET', 'path' => '/admin/requests', 'url' => '/admin/requests',
-                    'gate' => self::GATE_AUTH_HTML,
+                    'gate' => self::GATE_ADMIN_HTML,
                 ],
                 [
                     'method' => 'POST', 'path' => '/api/v1/me/requests', 'url' => '/api/v1/me/requests',
