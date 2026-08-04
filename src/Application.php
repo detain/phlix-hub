@@ -20,7 +20,6 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
-use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
@@ -564,6 +563,7 @@ final class Application
     private function registerRequestRoutes(): void
     {
         $authMiddleware = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
         $requestController = $this->resolveRequestController();
 
         // Redirect to Vue SPA.
@@ -573,12 +573,14 @@ final class Application
             });
         }, [$authMiddleware]);
 
-        // Redirect to Vue SPA.
+        // Redirect to Vue SPA. Admin-gated like every other `/admin/*` surface:
+        // the page it points at is the admin queue, so a non-admin is refused
+        // here (403) rather than bounced into an SPA route they cannot use.
         $this->router->group('/admin/requests', static function (Router $r): void {
             $r->get('', static function (Request $request): Response {
                 return (new Response())->redirect('/app/admin/requests');
             });
-        }, [$authMiddleware]);
+        }, [$authMiddleware, $adminMiddleware]);
 
         // User-scoped JSON API.
         $this->router->group('/api/v1/me/requests', static function (Router $r) use ($requestController): void {
@@ -607,7 +609,6 @@ final class Application
         // Admin queue + actions. Gated by AdminMiddleware in addition to the
         // controller's own requireAdmin() so the group is protected even if a
         // future handler in this group forgets the inline check.
-        $adminMiddleware = $this->resolveAdminMiddleware();
         $this->router->group('/api/v1/admin/requests', static function (Router $r) use ($requestController): void {
             $r->get('', static function (Request $req, array $params) use ($requestController): Response {
                 /** @var array<string, string> $typedParams */

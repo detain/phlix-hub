@@ -62,7 +62,10 @@ final class RegistrarAuthGateTest extends RouteRegistrationTestCase
     {
         foreach (RouteManifest::subRegistrarRoutes() as $registrar => $routes) {
             foreach ($routes as $route) {
-                if ($route['gate'] !== RouteManifest::GATE_ADMIN) {
+                if (
+                    $route['gate'] !== RouteManifest::GATE_ADMIN
+                    && $route['gate'] !== RouteManifest::GATE_ADMIN_HTML
+                ) {
                     continue;
                 }
                 $label = $registrar . ': ' . RouteManifest::key($route);
@@ -116,6 +119,11 @@ final class RegistrarAuthGateTest extends RouteRegistrationTestCase
                 break;
 
             case RouteManifest::GATE_AUTH_HTML:
+            case RouteManifest::GATE_ADMIN_HTML:
+                // An admin PAGE path is still fronted by AuthMiddleware, which
+                // bounces an anonymous browser to the SPA login before the
+                // admin check ever runs. The 403 half of GATE_ADMIN_HTML is
+                // asserted by testAdminRouteRefusesAnAuthenticatedNonAdmin().
                 self::assertSame(
                     302,
                     $response->statusCode,
