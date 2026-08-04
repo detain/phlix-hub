@@ -7,19 +7,23 @@ namespace Phlix\Hub\Tests\Integration\Auth;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
-use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
+use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use Phlix\Shared\Auth\JwtClaims;
-use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
 
 /**
  * End-to-end signup → login → protected → logout flow against a real DB.
  *
  * Skipped when `HUB_TEST_DB_*` env vars are not set, matching the
  * gating pattern from the MigrationRunnerIntegrationTest.
+ *
+ * S185: the connect / skip-gate / schema / data-reset boilerplate moved to
+ * {@see RealDatabaseTestCase}, which builds the schema once per process and
+ * empties every table before and after each test instead of re-applying all 29
+ * migrations six times over. The isolation contract is unchanged — see that
+ * class for how the cached schema is re-validated on every `setUp()`.
  *
  * @package Phlix\Hub\Tests\Integration\Auth
  *
@@ -29,36 +33,17 @@ use Workerman\MySQL\Connection;
  *
  * @group integration
  */
-final class SignupLoginFlowTest extends TestCase
+final class SignupLoginFlowTest extends RealDatabaseTestCase
 {
     private const SECRET = 'integration-test-secret-32-bytes-minimum';
 
-    private Connection $db;
     private AuthManager $auth;
     private JwtHandler $jwt;
     private UserRepository $users;
 
     protected function setUp(): void
     {
-        $host = getenv('HUB_TEST_DB_HOST');
-        $name = getenv('HUB_TEST_DB_NAME');
-        if ($host === false || $host === '' || $name === false || $name === '') {
-            self::markTestSkipped(
-                'HUB_TEST_DB_* environment variables not set — skipping integration suite.',
-            );
-        }
-
-        $port = (int) (getenv('HUB_TEST_DB_PORT') ?: '3306');
-        $user = (string) (getenv('HUB_TEST_DB_USER') ?: 'root');
-        $pass = (string) (getenv('HUB_TEST_DB_PASSWORD') ?: '');
-
-        $this->db = new Connection($host, $port, $user, $pass, $name);
-        $this->skipOnIncompatibleCluster();
-        $this->dropAllTables();
-
-        // Apply migrations so the users table exists.
-        $runner = new MigrationRunner($this->db, dirname(__DIR__, 3) . '/migrations');
-        $runner->run();
+        parent::setUp();
 
         $loggerConfig = ['handlers' => ['stream' => ['type' => 'stream', 'path' => 'php://memory', 'level' => 'debug']], 'processors' => []];
         $logger = new StructuredLogger('test', $loggerConfig);
@@ -75,13 +60,6 @@ final class SignupLoginFlowTest extends TestCase
             null,
             $this->db,
         );
-    }
-
-    protected function tearDown(): void
-    {
-        if (isset($this->db)) {
-            $this->dropAllTables();
-        }
     }
 
     public function testEndToEndSignupThenLoginThenProtectedRoute(): void
@@ -163,48 +141,5 @@ final class SignupLoginFlowTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Username already taken');
         $this->auth->register('alice', 'b@example.com', 'correct-horse-battery');
-    }
-
-    private function skipOnIncompatibleCluster(): void
-    {
-        try {
-            $rows = $this->db->query(
-                "SHOW VARIABLES LIKE 'group_replication_enforce_update_everywhere_checks'",
-            );
-        } catch (\Throwable) {
-            return;
-        }
-        if (!is_array($rows) || $rows === []) {
-            return;
-        }
-        $row = $rows[0];
-        $rawValue = is_array($row) && isset($row['Value']) ? $row['Value'] : '';
-        $value = is_string($rawValue) ? $rawValue : '';
-        if (strtoupper($value) === 'ON') {
-            self::markTestSkipped(
-                'Test DB runs Group Replication multi-primary; integration suite needs single-primary.',
-            );
-        }
-    }
-
-    private function dropAllTables(): void
-    {
-        $name = (string) getenv('HUB_TEST_DB_NAME');
-        $rows = $this->db->query(
-            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = :schema",
-            ['schema' => $name],
-        );
-        if (!is_array($rows)) {
-            return;
-        }
-        $this->db->query('SET FOREIGN_KEY_CHECKS=0');
-        foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['TABLE_NAME']) || !is_string($row['TABLE_NAME'])) {
-                continue;
-            }
-            $table = $row['TABLE_NAME'];
-            $this->db->query("DROP TABLE IF EXISTS `{$table}`");
-        }
-        $this->db->query('SET FOREIGN_KEY_CHECKS=1');
     }
 }

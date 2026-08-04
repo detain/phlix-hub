@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Integration\Migrations;
 
 use Phlix\Hub\Common\Database\MigrationRunner;
-use PHPUnit\Framework\TestCase;
-use Workerman\MySQL\Connection;
+use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 
 /**
  * Integration tests for the migration runner against a real MySQL test
@@ -17,7 +16,35 @@ use Workerman\MySQL\Connection;
  * Required env vars to enable: `HUB_TEST_DB_HOST`, `HUB_TEST_DB_PORT`,
  * `HUB_TEST_DB_USER`, `HUB_TEST_DB_PASSWORD`, `HUB_TEST_DB_NAME`. The
  * named database **must already exist** and the user must have full
- * privileges on it — every table is dropped at setUp().
+ * privileges on it — every table in it is dropped or emptied.
+ *
+ * ## S185 — which tests here need an EMPTY database, and which need a SCHEMA
+ *
+ * This file is the one place where "re-apply the whole chain" is the SUBJECT of
+ * the test rather than a way to get a schema, so it does not get the shared
+ * once-per-process schema for free. The split is explicit and per test:
+ *
+ *  - a test that asserts on what `run()` RETURNS, or on the ledger a CLEAN apply
+ *    produces, calls {@see dropAllTables()} as its first statement. That is
+ *    exactly the old `setUp()` behaviour, kept verbatim where it is load-bearing:
+ *    {@see testRunsAllMigrationsInOrderAgainstEmptyDb()},
+ *    {@see testRerunningIsIdempotent()},
+ *    {@see testCleanApplyPopulatesChecksumColumn()},
+ *    {@see testChainApplyLeavesEveryLedgerRowWithItsOwnOnDiskChecksum()};
+ *  - every other test here asserts on the SCHEMA the chain produces (a UNIQUE
+ *    key, a CASCADE, the FK inventory) or on the runner's behaviour against an
+ *    ALREADY-applied ledger (checksum divergence, NULL-checksum backfill). Those
+ *    keep `$this->runner->run()` where they had it — it is now a 0.02 s replay
+ *    against the schema {@see RealDatabaseTestCase} already built, which leaves
+ *    the identical state a fresh apply would (asserted by
+ *    {@see testChainApplyLeavesEveryLedgerRowWithItsOwnOnDiskChecksum()}, whose
+ *    replay must apply nothing and warn nothing).
+ *
+ * The `migrations` ledger is deliberately NOT emptied between tests — see
+ * {@see RealDatabaseTestCase::resetAllTableData()}. The two tests that
+ * deliberately corrupt a ledger row both leave it repaired, and a run against a
+ * diverged or NULL checksum self-heals by design, so neither can hand a broken
+ * ledger to a sibling.
  *
  * @package Phlix\Hub\Tests\Integration\Migrations
  *
@@ -25,72 +52,22 @@ use Workerman\MySQL\Connection;
  *
  * @group integration
  */
-final class MigrationRunnerIntegrationTest extends TestCase
+final class MigrationRunnerIntegrationTest extends RealDatabaseTestCase
 {
-    private Connection $db;
     private MigrationRunner $runner;
 
     protected function setUp(): void
     {
-        $host = getenv('HUB_TEST_DB_HOST');
-        $name = getenv('HUB_TEST_DB_NAME');
-        if ($host === false || $host === '' || $name === false || $name === '') {
-            self::markTestSkipped(
-                'HUB_TEST_DB_* environment variables not set — skipping integration suite.',
-            );
-        }
+        parent::setUp();
 
-        $port = (int) (getenv('HUB_TEST_DB_PORT') ?: '3306');
-        $user = (string) (getenv('HUB_TEST_DB_USER') ?: 'root');
-        $pass = (string) (getenv('HUB_TEST_DB_PASSWORD') ?: '');
-
-        $this->db = new Connection($host, $port, $user, $pass, $name);
-        $this->skipOnIncompatibleCluster();
-        $this->dropAllTables();
-        $this->runner = new MigrationRunner(
-            $this->db,
-            dirname(__DIR__, 3) . '/migrations',
-        );
-    }
-
-    /**
-     * MySQL Group Replication in multi-primary mode rejects tables with
-     * `ON DELETE CASCADE` foreign keys (`group_replication_enforce_update_everywhere_checks=ON`).
-     * Skip the integration tests on such a cluster — the schema is
-     * designed for a single-primary deployment.
-     */
-    private function skipOnIncompatibleCluster(): void
-    {
-        try {
-            $rows = $this->db->query(
-                "SHOW VARIABLES LIKE 'group_replication_enforce_update_everywhere_checks'",
-            );
-        } catch (\Throwable) {
-            return;
-        }
-        if (!is_array($rows) || $rows === []) {
-            return;
-        }
-        $row = $rows[0];
-        $rawValue = is_array($row) && isset($row['Value']) ? $row['Value'] : '';
-        $value = is_string($rawValue) ? $rawValue : '';
-        if (strtoupper($value) === 'ON') {
-            self::markTestSkipped(
-                'Test DB runs Group Replication multi-primary (enforce_update_everywhere_checks=ON), '
-                . 'which forbids CASCADE foreign keys. Schema targets a single-primary deployment.',
-            );
-        }
-    }
-
-    protected function tearDown(): void
-    {
-        if (isset($this->db)) {
-            $this->dropAllTables();
-        }
+        $this->runner = new MigrationRunner($this->db, self::migrationsDirectory());
     }
 
     public function testRunsAllMigrationsInOrderAgainstEmptyDb(): void
     {
+        // The subject of this test IS the apply against an empty database.
+        $this->dropAllTables();
+
         $applied = $this->runner->run();
 
         // Assert the runner applies EVERY migration file, in ascending filename
@@ -127,6 +104,9 @@ final class MigrationRunnerIntegrationTest extends TestCase
 
     public function testRerunningIsIdempotent(): void
     {
+        // "The FIRST run against an empty DB applies every file" — so start empty.
+        $this->dropAllTables();
+
         $migrationFiles = glob(dirname(__DIR__, 3) . '/migrations/*.sql') ?: [];
         $first = $this->runner->run();
         self::assertCount(
@@ -179,7 +159,7 @@ final class MigrationRunnerIntegrationTest extends TestCase
     {
         $this->runner->run();
 
-        $name = (string) getenv('HUB_TEST_DB_NAME');
+        $name = self::testDatabaseName();
         $rows = $this->db->query(
             "SELECT TABLE_NAME, CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS"
             . " WHERE CONSTRAINT_SCHEMA = :schema AND CONSTRAINT_TYPE = 'FOREIGN KEY'",
@@ -221,6 +201,11 @@ final class MigrationRunnerIntegrationTest extends TestCase
         // previously needed two run() calls, which is exactly why a
         // freshly-provisioned hub sat with 26 of 29 rows at checksum IS NULL until
         // some later deploy happened to backfill them.)
+        //
+        // S185: "clean apply" is the whole point — the ledger row under test must
+        // be written by THIS run, not inherited from a warm schema — so empty the
+        // database first, exactly as the old per-test setUp() did.
+        $this->dropAllTables();
         $this->runner->run();
 
         $rows = $this->db->query(
@@ -248,6 +233,10 @@ final class MigrationRunnerIntegrationTest extends TestCase
      */
     public function testChainApplyLeavesEveryLedgerRowWithItsOwnOnDiskChecksum(): void
     {
+        // S185: this asserts on a CHAIN APPLY against an empty database (and then
+        // on the silence of the replay that follows it), so it drops first.
+        $this->dropAllTables();
+
         [$applied, $warnings] = $this->runCapturingWarnings();
         self::assertNotEmpty($applied, 'the chain must actually apply against the empty DB');
         self::assertSame(
@@ -298,12 +287,18 @@ final class MigrationRunnerIntegrationTest extends TestCase
 
     public function testDivergedChecksumTriggersReapplyAndRefresh(): void
     {
-        // Fully apply + backfill checksums.
+        // Reach the fully-applied, checksum-backfilled state. S185: on the shared
+        // schema this is a 0.02 s replay that applies nothing; the state it leaves
+        // is asserted to be identical to a fresh apply's by
+        // testChainApplyLeavesEveryLedgerRowWithItsOwnOnDiskChecksum().
         $this->runner->run();
 
         // Simulate a rewrite-class edit: corrupt the recorded checksum so it no
         // longer matches the on-disk file. 001_users.sql is CREATE TABLE IF NOT
-        // EXISTS, so re-applying it is a safe no-op.
+        // EXISTS, so re-applying it is a safe no-op — that is why THIS file is the
+        // one corrupted, and it stays true whether the `users` table already
+        // exists (shared schema) or not (clean apply). Do not repoint this at a
+        // migration whose DDL is not re-run-safe.
         $stale = str_repeat('0', 32);
         $this->db->query(
             'UPDATE `migrations` SET checksum = :c WHERE filename = :f',
@@ -343,6 +338,8 @@ final class MigrationRunnerIntegrationTest extends TestCase
 
     public function testNullChecksumBackfillsWithoutReapplying(): void
     {
+        // S185: a replay on the shared schema; the assertion is about what the
+        // NEXT run does to a NULL-checksum row, not about this call.
         $this->runner->run();
 
         // Simulate the day-one state: a recorded row with no checksum baseline.
@@ -424,9 +421,10 @@ final class MigrationRunnerIntegrationTest extends TestCase
         $this->seedQuotaThrottle('u-B', '2026-06-01', 0);
         $this->seedQuotaThrottle('u-C', '2026-06-01', 3000000);
 
-        // The initial run() applied the data migration when quotas was empty (a
-        // no-op). Re-run ONLY the data-migration statement from the shipped 043
-        // file against the now-seeded rollup — this exercises the actual SQL.
+        // Run ONLY the data-migration statement from the shipped 043 file against
+        // the now-seeded rollup — this exercises the actual SQL. (When 043 ran as
+        // part of the chain it saw an empty relay_user_quotas and was a no-op, so
+        // it is this explicit invocation that is under test either way.)
         $this->db->query($this->dataMigrationStatement());
 
         self::assertSame(
@@ -513,32 +511,11 @@ final class MigrationRunnerIntegrationTest extends TestCase
 
     private function tableExists(string $table): bool
     {
-        $name = (string) getenv('HUB_TEST_DB_NAME');
+        $name = self::testDatabaseName();
         $rows = $this->db->query(
             "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :tbl",
             ['schema' => $name, 'tbl' => $table],
         );
         return is_array($rows) && count($rows) === 1;
-    }
-
-    private function dropAllTables(): void
-    {
-        $name = (string) getenv('HUB_TEST_DB_NAME');
-        $rows = $this->db->query(
-            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = :schema",
-            ['schema' => $name],
-        );
-        if (!is_array($rows)) {
-            return;
-        }
-        $this->db->query('SET FOREIGN_KEY_CHECKS=0');
-        foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['TABLE_NAME']) || !is_string($row['TABLE_NAME'])) {
-                continue;
-            }
-            $table = $row['TABLE_NAME'];
-            $this->db->query("DROP TABLE IF EXISTS `{$table}`");
-        }
-        $this->db->query('SET FOREIGN_KEY_CHECKS=1');
     }
 }
