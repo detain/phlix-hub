@@ -215,10 +215,12 @@ final class MigrationRunnerIntegrationTest extends TestCase
 
     public function testCleanApplyPopulatesChecksumColumn(): void
     {
-        $this->runner->run();
-
-        // Migration 041 adds the checksum column; a second run backfills the
-        // earlier files that were recorded before the column existed.
+        // ONE run is enough. Migration 041 adds the checksum column part-way
+        // through the chain, and run()'s post-loop flush stamps the files that were
+        // recorded before it existed — no second invocation required. (S199: this
+        // previously needed two run() calls, which is exactly why a
+        // freshly-provisioned hub sat with 26 of 29 rows at checksum IS NULL until
+        // some later deploy happened to backfill them.)
         $this->runner->run();
 
         $rows = $this->db->query(
@@ -233,10 +235,70 @@ final class MigrationRunnerIntegrationTest extends TestCase
         self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', (string) $row['checksum']);
     }
 
+    /**
+     * S199 — the ledger invariant. After the chain applies, EVERY recorded
+     * migration must carry the comment-normalised md5 of its own on-disk file:
+     * no NULL (a NULL row cannot detect a later edit any more than a bogus one
+     * can), no all-zero sentinel, and no value belonging to some other content.
+     *
+     * The all-zero check is the one the step names. It is worth stating explicitly
+     * because `00000000000000000000000000000000` is a well-formed CHAR(32) that
+     * passes a `/^[0-9a-f]{32}$/` shape assertion while being able to match
+     * nothing, so a shape-only test cannot see it.
+     */
+    public function testChainApplyLeavesEveryLedgerRowWithItsOwnOnDiskChecksum(): void
+    {
+        [$applied, $warnings] = $this->runCapturingWarnings();
+        self::assertNotEmpty($applied, 'the chain must actually apply against the empty DB');
+        self::assertSame(
+            '',
+            $warnings,
+            'A clean chain apply must emit NO checksum warning. Emitted: ' . $warnings,
+        );
+
+        $rows = $this->db->query('SELECT filename, checksum FROM `migrations` ORDER BY filename ASC');
+        self::assertIsArray($rows);
+
+        $files = glob(dirname(__DIR__, 3) . '/migrations/*.sql') ?: [];
+        self::assertCount(
+            count($files),
+            $rows,
+            'every migration file must have a ledger row after the chain applies',
+        );
+
+        foreach ($rows as $row) {
+            self::assertIsArray($row);
+            $filename = (string) ($row['filename'] ?? '');
+            $recorded = $row['checksum'] ?? null;
+
+            self::assertIsString(
+                $recorded,
+                "migration {$filename} carries a NULL checksum, so an edit to it cannot be detected",
+            );
+            self::assertNotSame(
+                str_repeat('0', 32),
+                $recorded,
+                "migration {$filename} carries an all-zero checksum, which can never match any file",
+            );
+
+            $path = dirname(__DIR__, 3) . '/migrations/' . $filename;
+            self::assertFileExists($path);
+            self::assertSame(
+                MigrationRunner::checksum((string) file_get_contents($path)),
+                $recorded,
+                "migration {$filename}'s recorded checksum must be the checksum of its own file",
+            );
+        }
+
+        // Steady state: the very next run executes nothing and says nothing.
+        [$replay, $replayWarnings] = $this->runCapturingWarnings();
+        self::assertSame([], $replay);
+        self::assertSame('', $replayWarnings, 'A replay must stay silent. Emitted: ' . $replayWarnings);
+    }
+
     public function testDivergedChecksumTriggersReapplyAndRefresh(): void
     {
         // Fully apply + backfill checksums.
-        $this->runner->run();
         $this->runner->run();
 
         // Simulate a rewrite-class edit: corrupt the recorded checksum so it no
@@ -248,8 +310,25 @@ final class MigrationRunnerIntegrationTest extends TestCase
             ['c' => $stale, 'f' => '001_users.sql'],
         );
 
-        $applied = $this->runner->run();
+        // S199: this run PROVOKES the divergence warning on purpose, so capture it
+        // and assert it instead of letting error_log() dump it on the suite's
+        // stderr. That stray line is what got read as a production defect
+        // ("001_users.sql's recorded checksum is all zeros") when the zeros are in
+        // fact planted three lines above. Note this only redirects where PHP sends
+        // error_log() for the duration of the call — MigrationRunner's warning is
+        // untouched and is now ASSERTED rather than merely emitted.
+        [$applied, $warnings] = $this->runCapturingWarnings();
         self::assertContains('001_users.sql', $applied, 'A diverged file must be re-applied');
+        self::assertStringContainsString('checksum diverged', $warnings);
+        self::assertStringContainsString('001_users.sql', $warnings);
+        self::assertStringContainsString('recorded=' . $stale, $warnings);
+        self::assertStringContainsString(
+            'current=' . MigrationRunner::checksum(
+                (string) file_get_contents(dirname(__DIR__, 3) . '/migrations/001_users.sql'),
+            ),
+            $warnings,
+            'the warning must name the on-disk checksum it compared against',
+        );
 
         $rows = $this->db->query(
             'SELECT checksum FROM `migrations` WHERE filename = :f',
@@ -265,7 +344,6 @@ final class MigrationRunnerIntegrationTest extends TestCase
     public function testNullChecksumBackfillsWithoutReapplying(): void
     {
         $this->runner->run();
-        $this->runner->run();
 
         // Simulate the day-one state: a recorded row with no checksum baseline.
         $this->db->query(
@@ -273,12 +351,13 @@ final class MigrationRunnerIntegrationTest extends TestCase
             ['f' => '001_users.sql'],
         );
 
-        $applied = $this->runner->run();
+        [$applied, $warnings] = $this->runCapturingWarnings();
         self::assertNotContains(
             '001_users.sql',
             $applied,
             'A NULL-checksum row must be backfilled, not re-applied',
         );
+        self::assertSame('', $warnings, 'A NULL baseline is not a divergence. Emitted: ' . $warnings);
 
         $rows = $this->db->query(
             'SELECT checksum FROM `migrations` WHERE filename = :f',
@@ -288,6 +367,30 @@ final class MigrationRunnerIntegrationTest extends TestCase
         $row = $rows[0] ?? null;
         self::assertIsArray($row);
         self::assertIsString($row['checksum'] ?? null, 'NULL checksum must be backfilled to a value');
+    }
+
+    /**
+     * Run the migrator with PHP's `error_log` destination pointed at a temp file,
+     * so anything {@see MigrationRunner} warns about is captured and assertable
+     * rather than escaping onto the test suite's stderr.
+     *
+     * @return array{0: list<string>, 1: string} [files executed, captured log text]
+     */
+    private function runCapturingWarnings(): array
+    {
+        $logFile = (string) tempnam(sys_get_temp_dir(), 'phlix-hub-mig-log-');
+        $previous = ini_set('error_log', $logFile);
+
+        try {
+            $applied = $this->runner->run();
+        } finally {
+            ini_set('error_log', $previous === false ? '' : $previous);
+        }
+
+        $log = trim((string) @file_get_contents($logFile));
+        @unlink($logFile);
+
+        return [$applied, $log];
     }
 
     /**
