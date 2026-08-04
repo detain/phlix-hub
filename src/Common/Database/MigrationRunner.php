@@ -54,7 +54,15 @@ use Workerman\MySQL\Connection;
  * The `checksum` column (migration `041_migrations_checksum.sql`) is nullable and
  * may be absent entirely on a fresh database until that migration runs; the
  * read/record helpers below degrade to name-only behaviour when the column is
- * missing so a fresh boot still works, backfilling checksums on the next run.
+ * missing so a fresh boot still works. Any checksum that could not be written for
+ * that reason is DEFERRED and re-written at the end of the same {@see run()} — by
+ * then migration 041 has added the column — so a SINGLE chain apply leaves every
+ * ledger row carrying a real checksum. Before that flush existed, a fresh (or
+ * newly-upgraded) hub finished its first apply with 26 of 29 rows at
+ * `checksum IS NULL`, so divergence detection was dead for all of them until some
+ * later run happened to backfill: nothing in the deploy path guarantees a second
+ * run, and an edit landing inside that window is swallowed by the NULL branch
+ * (backfilled as the new baseline, never re-applied).
  *
  * @package Phlix\Hub\Common\Database
  */
@@ -83,6 +91,14 @@ class MigrationRunner
      * checksum backfilled from disk WITHOUT re-executing. Neither appears in the
      * return value.
      *
+     * Checksum writes that the schema could not accept yet (the `checksum` column
+     * does not exist until migration `041_migrations_checksum.sql` runs, which
+     * happens part-way through this very loop on a fresh database) are collected and
+     * flushed once after the loop, so the ledger is fully populated by the time this
+     * method returns rather than one run later. The flush only writes the `checksum`
+     * column of rows that are already recorded, so it cannot mark anything applied
+     * that was not.
+     *
      * @return list<string> Filenames (basename only) of migrations executed this run.
      */
     public function run(): array
@@ -91,6 +107,8 @@ class MigrationRunner
         $ledger = $this->loadLedger();
         $files = $this->discoverFiles();
         $ranNow = [];
+        /** @var array<string, string> $deferredChecksums filename => checksum */
+        $deferredChecksums = [];
 
         foreach ($files as $file) {
             $basename = basename($file);
@@ -112,7 +130,9 @@ class MigrationRunner
                     // re-executing. This is what keeps the day-one column
                     // addition from forcing a mass re-apply of hub's existing
                     // migrations.
-                    $this->backfillChecksum($basename, $checksum);
+                    if (!$this->backfillChecksum($basename, $checksum)) {
+                        $deferredChecksums[$basename] = $checksum;
+                    }
                     continue;
                 }
 
@@ -129,8 +149,20 @@ class MigrationRunner
             }
 
             $this->applyFile($file);
-            $this->recordApplied($basename, $checksum);
+            if (!$this->recordApplied($basename, $checksum)) {
+                $deferredChecksums[$basename] = $checksum;
+            }
             $ranNow[] = $basename;
+        }
+
+        // Second pass for the checksums the schema could not take during the loop.
+        // By now migration 041 has added the column, so these succeed. Ordered
+        // after applyFile()/recordApplied() on purpose: a row is only ever stamped
+        // with a checksum once its migration is already recorded as applied, so a
+        // migration that failed mid-loop (and therefore threw, never reaching here)
+        // can still be re-run by the next invocation.
+        foreach ($deferredChecksums as $basename => $checksum) {
+            $this->backfillChecksum($basename, $checksum);
         }
 
         return $ranNow;
@@ -379,10 +411,14 @@ class MigrationRunner
      *
      * If the `checksum` column does not exist yet (a fresh database before
      * migration `041_migrations_checksum.sql` runs — earlier files in the same
-     * run are recorded before it), fall back to a name-only insert; the checksum
-     * is backfilled on the next run once the column exists.
+     * run are recorded before it), fall back to a name-only insert and report
+     * `false` so {@see run()} re-stamps the checksum after the loop, once 041 has
+     * added the column.
+     *
+     * @return bool `true` when the checksum was stored, `false` when the row was
+     *              recorded name-only and its checksum still needs writing.
      */
-    private function recordApplied(string $filename, ?string $checksum): void
+    private function recordApplied(string $filename, ?string $checksum): bool
     {
         // workerman/mysql `bindMore` keys on the array keys; use named
         // placeholders (colon-free array keys) to avoid the 0-based positional
@@ -394,17 +430,21 @@ class MigrationRunner
                 . ' ON DUPLICATE KEY UPDATE checksum = VALUES(checksum)',
                 ['filename' => $filename, 'checksum' => $checksum],
             );
+
+            return true;
         } catch (Throwable $e) {
             if (!self::isMissingChecksumColumnError($e)) {
                 throw $e;
             }
-            // Pre-041 schema: record the filename only; the checksum backfills
-            // on the next run once the column exists.
+            // Pre-041 schema: record the filename only. run()'s post-loop flush
+            // writes the checksum once the column exists.
             $this->db->query(
                 'INSERT INTO `' . self::TRACKING_TABLE . '` (filename) VALUES (:filename)'
                 . ' ON DUPLICATE KEY UPDATE filename = VALUES(filename)',
                 ['filename' => $filename],
             );
+
+            return false;
         }
     }
 
@@ -415,10 +455,13 @@ class MigrationRunner
      * on-disk checksum as the baseline for future divergence detection.
      *
      * Failure-tolerant: if the checksum column is not present yet (a fresh
-     * database before migration `041` runs this same pass), the backfill is a
-     * no-op and simply happens on the next run.
+     * database before migration `041` runs this same pass), the backfill is a no-op
+     * and reports `false` so {@see run()} retries it after the loop.
+     *
+     * @return bool `true` when the UPDATE was accepted, `false` when it failed and
+     *              the checksum still needs writing.
      */
-    private function backfillChecksum(string $filename, string $checksum): void
+    private function backfillChecksum(string $filename, string $checksum): bool
     {
         try {
             $this->db->query(
@@ -426,10 +469,14 @@ class MigrationRunner
                 . ' WHERE filename = :filename',
                 ['filename' => $filename, 'checksum' => $checksum],
             );
+
+            return true;
         } catch (Throwable) {
             // Column not present yet, or a transient write failure — the row is
-            // already recorded, so a missing backfill only means it is retried
-            // (still without re-executing) on the next run.
+            // already recorded, so a missed backfill only means it is retried
+            // (still without re-executing) by run()'s post-loop flush or, failing
+            // that, on the next run.
+            return false;
         }
     }
 
@@ -495,11 +542,26 @@ class MigrationRunner
      * before migration `041_migrations_checksum.sql` runs). MySQL reports this
      * as "Unknown column 'checksum' in 'field list'". Used to degrade the
      * checksum read/write to name-only rather than aborting.
+     *
+     * The classifier must not self-match. `Workerman\MySQL\Connection` prefixes the
+     * FAILING SQL onto the message — measured shape:
+     * `SQL:INSERT INTO ... checksum ... SQLSTATE[42S22]: Column not found: 1054
+     * Unknown column 'checksum' in 'field list'` — and every statement this class
+     * guards mentions `checksum` in its own SQL. A test for "unknown column" plus
+     * "checksum" anywhere in that string therefore also matched an unknown-column
+     * error about a DIFFERENT column, swallowing a genuine schema fault as a
+     * "pre-041 database" and silently degrading to name-only recording. So: drop the
+     * echoed SQL (everything before the last `SQLSTATE[`) and require the column
+     * name to appear QUOTED, as MySQL renders it in error 1054.
      */
     private static function isMissingChecksumColumnError(Throwable $e): bool
     {
-        $message = strtolower($e->getMessage());
+        $message = $e->getMessage();
+        $sqlState = strrpos($message, 'SQLSTATE[');
+        if ($sqlState !== false) {
+            $message = substr($message, $sqlState);
+        }
 
-        return str_contains($message, 'unknown column') && str_contains($message, 'checksum');
+        return str_contains(strtolower($message), "unknown column 'checksum'");
     }
 }

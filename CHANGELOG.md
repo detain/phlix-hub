@@ -151,6 +151,53 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     exerts real upstream back-pressure through the SAME mechanism as a slow browser
     — the hub never queues the body without bound.
 
+### Fixed
+
+- **A single migration chain apply now leaves every ledger row with a real
+  checksum, so edit-detection is live after ONE run instead of two (S199).**
+  `MigrationRunner::run()` collects the checksums the schema could not accept
+  during the loop — the `migrations.checksum` column does not exist until
+  migration `041_migrations_checksum.sql` runs, which happens part-way through the
+  chain — and flushes them once after the loop. Measured against MySQL 8.0.46 on
+  an empty database, before: `run 1 -> rows=29 nulls=26`, i.e. 26 of 29 migrations
+  had `checksum IS NULL` and an edit to any of them could not be detected, until
+  whenever a second run happened to backfill; nothing in the deploy path
+  guarantees one (`scripts/run-migrations.php` runs once per deploy). After:
+  `run 1 -> rows=29 nulls=0 zeros=0 mismatched=0`. The flush only writes the
+  `checksum` column of rows that are already recorded, so it cannot mark anything
+  applied that was not, and a migration that fails mid-loop still throws before
+  reaching it and is still re-runnable.
+  `tests/Integration/Migrations/MigrationRunnerIntegrationTest::testChainApplyLeavesEveryLedgerRowWithItsOwnOnDiskChecksum`
+  asserts the invariant against a real database: no NULL, no all-zero sentinel,
+  and every recorded value equal to the comment-normalised md5 of its own file.
+- **`isMissingChecksumColumnError()` no longer matches itself (S199).**
+  `Workerman\MySQL\Connection` prefixes the failing SQL onto the `PDOException`
+  message — measured: ``SQL:INSERT INTO `migrations` (filename, checksum) ...
+  SQLSTATE[42S22]: Column not found: 1054 Unknown column 'checksum' in 'field
+  list'`` — and every statement guarded by that classifier mentions `checksum` in
+  its own SQL. Testing for "unknown column" plus "checksum" anywhere in that
+  string therefore also matched an unknown-column error about a *different*
+  column, swallowing a genuine schema fault as a "pre-041 database" and silently
+  degrading to name-only recording. The classifier now drops the echoed SQL
+  (everything before the last `SQLSTATE[`) and requires the column name quoted as
+  MySQL renders it in error 1054.
+- **The migration integration test no longer dumps its own expected warning on the
+  suite's stderr (S199).** `testDivergedChecksumTriggersReapplyAndRefresh` plants
+  `str_repeat('0', 32)` as a recorded checksum on purpose and then runs the
+  migrator, so every full PHPUnit run against a real database printed
+  `WARNING: migration 001_users.sql checksum diverged
+  (recorded=00000000000000000000000000000000 current=22ebae62966f94a03c276888dad726a1)`.
+  That line was read as a production defect; it is the fixture. Pinned by A/B:
+  running only that test reproduces the line, running the other eight cases of the
+  same class emits 0 bytes of stderr. The production hub's ledger was audited
+  read-only in the same session — 29 rows, 0 NULL, 0 zero — so no data needed
+  backfilling. The test now redirects PHP's `error_log` destination for the
+  duration of the call and ASSERTS the warning (file name, `recorded=`, and
+  `current=`), which is strictly more than it checked before; the runner's
+  `error_log()` call and the divergence branch itself are untouched, and an
+  all-zero recorded checksum is still treated as divergence rather than
+  special-cased away.
+
 ### Changed
 
 - **The phpcs CI gate no longer hides warnings (S109).** `.github/workflows/ci.yml`

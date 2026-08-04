@@ -457,29 +457,44 @@ final class MigrationRunnerTest extends TestCase
     {
         // Fresh database: earlier files are recorded before migration 041 adds
         // the checksum column. recordApplied() must degrade to a name-only
-        // insert instead of aborting the run.
+        // insert instead of aborting the run — and, S199, run() must then come back
+        // after the loop (once 041 has added the column) and stamp the checksum, so
+        // the ledger is not left with a NULL that no later run is guaranteed to fix.
+        //
+        // The thrown message uses the shape `Workerman\MySQL\Connection` really
+        // produces (measured against MySQL 8.0.46): the FAILING SQL is prefixed onto
+        // the PDOException message, ahead of the SQLSTATE.
         $content = 'CREATE TABLE foo (id INT);';
         file_put_contents($this->migrationsDir . '/001_a.sql', $content);
 
         $db = $this->createMock(Connection::class);
         $nameOnlyInsertParams = null;
+        $deferredBackfill = null;
         $db->method('query')
-            ->willReturnCallback(function ($sql, $params = null) use (&$nameOnlyInsertParams) {
-                if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
-                    return []; // empty ledger — un-recorded
-                }
-                if (
-                    is_string($sql)
-                    && str_contains($sql, 'INSERT INTO `migrations`')
-                    && str_contains($sql, 'checksum')
-                ) {
-                    throw new \RuntimeException("Unknown column 'checksum' in 'field list'");
-                }
-                if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
-                    $nameOnlyInsertParams = is_array($params) ? $params : null;
-                }
-                return null;
-            });
+            ->willReturnCallback(
+                function ($sql, $params = null) use (&$nameOnlyInsertParams, &$deferredBackfill) {
+                    if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                        return []; // empty ledger — un-recorded
+                    }
+                    if (
+                        is_string($sql)
+                        && str_contains($sql, 'INSERT INTO `migrations`')
+                        && str_contains($sql, 'checksum')
+                    ) {
+                        throw new \RuntimeException(
+                            'SQL:' . $sql . " SQLSTATE[42S22]: Column not found: 1054"
+                            . " Unknown column 'checksum' in 'field list'",
+                        );
+                    }
+                    if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
+                        $nameOnlyInsertParams = is_array($params) ? $params : null;
+                    }
+                    if (is_string($sql) && str_contains($sql, 'UPDATE `migrations` SET checksum')) {
+                        $deferredBackfill = is_array($params) ? $params : null;
+                    }
+                    return null;
+                },
+            );
 
         $runner = new MigrationRunner($db, $this->migrationsDir);
         self::assertSame(['001_a.sql'], $runner->run());
@@ -487,6 +502,63 @@ final class MigrationRunnerTest extends TestCase
         self::assertIsArray($nameOnlyInsertParams);
         self::assertSame('001_a.sql', $nameOnlyInsertParams['filename'] ?? null);
         self::assertArrayNotHasKey('checksum', $nameOnlyInsertParams);
+
+        // The deferred flush ran, for that file, with that file's checksum.
+        self::assertIsArray(
+            $deferredBackfill,
+            'a name-only record must be followed by a deferred checksum write in the SAME run',
+        );
+        self::assertSame('001_a.sql', $deferredBackfill['filename'] ?? null);
+        self::assertSame(MigrationRunner::checksum($content), $deferredBackfill['checksum'] ?? null);
+    }
+
+    /**
+     * S199 guard: `isMissingChecksumColumnError()` must not match itself.
+     *
+     * The driver prefixes the failing SQL onto the exception message, and every
+     * statement guarded by that classifier mentions `checksum` in its own SQL. A
+     * classifier that looked for "unknown column" plus "checksum" anywhere in the
+     * message therefore also matched an unknown-column error about a DIFFERENT
+     * column, silently degrading a genuine schema fault to name-only recording
+     * instead of surfacing it.
+     */
+    public function testUnknownColumnErrorAboutAnotherColumnIsNotTreatedAsMissingChecksum(): void
+    {
+        file_put_contents($this->migrationsDir . '/001_a.sql', 'CREATE TABLE foo (id INT);');
+
+        $db = $this->createMock(Connection::class);
+        $nameOnlyInsertAttempted = false;
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$nameOnlyInsertAttempted) {
+                if (is_string($sql) && str_contains($sql, 'SELECT filename')) {
+                    return [];
+                }
+                if (is_string($sql) && str_contains($sql, 'INSERT INTO `migrations`')) {
+                    if (str_contains($sql, 'checksum')) {
+                        // Note the SQL echoed into the message mentions `checksum`
+                        // three times, while the unknown column is `filename`.
+                        throw new \RuntimeException(
+                            'SQL:' . $sql . " SQLSTATE[42S22]: Column not found: 1054"
+                            . " Unknown column 'filename' in 'field list'",
+                        );
+                    }
+                    $nameOnlyInsertAttempted = true;
+                }
+                return null;
+            });
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage("Unknown column 'filename'");
+        try {
+            $runner->run();
+        } finally {
+            self::assertFalse(
+                $nameOnlyInsertAttempted,
+                'an unrelated unknown-column fault must not be degraded to a name-only insert',
+            );
+        }
     }
 
     public function testRunWrapsStatementFailureWithFilename(): void
