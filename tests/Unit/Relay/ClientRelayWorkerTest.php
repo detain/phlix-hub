@@ -28,6 +28,8 @@ use Phlix\Shared\Hub\ServerInfoDto;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
+use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
@@ -56,6 +58,13 @@ use function hash;
  */
 final class ClientRelayWorkerTest extends TestCase
 {
+    // `start()` builds a real Workerman `Worker`, which latches itself into the
+    // process-global `Worker::$workers` and is never cleared; `setUp()` points the
+    // static LoggerFactory at a temp config it later deletes. Both traits snapshot
+    // before setUp() and restore after tearDown(), so neither escapes this class.
+    use WorkermanTimerRuntimeControl;
+    use LoggerFactoryIsolation;
+
     /** Server id used by the "owned, online" happy-path fixtures. */
     private const OWNER_USER_ID = 'user-owner-1';
 

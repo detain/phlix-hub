@@ -9,6 +9,7 @@ use Phlix\Hub\MaintenanceWorker;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -20,6 +21,10 @@ use Psr\Container\ContainerInterface;
  */
 final class MaintenanceWorkerTest extends TestCase
 {
+    // LoggerFactory's static $configPath/$loggers are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use LoggerFactoryIsolation;
+
     private string $tmpDir;
 
     protected function setUp(): void

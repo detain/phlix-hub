@@ -18,6 +18,7 @@ use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
@@ -54,8 +55,8 @@ use Workerman\Connection\TcpConnection;
  * | file | site | throw arm | success arm |
  * |---|---|---|---|
  * | `Tunnel.php` | `armThrottleDrain()` | `1171-1173` | `1165` + `cancelThrottleDrain()` `1191-1197` |
- * | `Tunnel.php` | `armClientBackpressureTimer()` | `1358-1360` | `1354` + `cancelClientBackpressureTimer()` `1376-80` |
- * | `Tunnel.php` | `armServerBackpressureTimer()` | `1547-1549` | `1543` + `cancelServerBackpressureTimer()` `1565-69` |
+ * | `Tunnel.php` | `armClientBackpressureTimer()` | `1358-60` | `1354` + `cancelClientBackpressureTimer()` `1376-80` |
+ * | `Tunnel.php` | `armServerBackpressureTimer()` | `1547-49` | `1543` + `cancelServerBackpressureTimer()` `1565-69` |
  * | `Tunnel.php` | `beginDrain()` | `1921-1922` | `1917` + `close()` `1811-1815` + `onServerClose()` `654-658` |
  * | `ClientRelayWorker.php` | `onWorkerStart()` | `277-280` | `244`, `267`, `268`, `276` |
  * | `RelayProxyManager.php` | `__construct()` | `186` | `183` |
@@ -69,19 +70,10 @@ use Workerman\Connection\TcpConnection;
 final class RelayTimerArmDeterminismTest extends TestCase
 {
     use WorkermanTimerRuntimeControl;
+    use LoggerFactoryIsolation;
 
     /** Temp dir holding this test's memory-stream logger config. */
     private string $tmpDir = '';
-
-    /** Snapshot of {@see LoggerFactory}'s private static config path. */
-    private string $loggerConfigPathSnapshot = '';
-
-    /**
-     * Snapshot of {@see LoggerFactory}'s private static logger cache.
-     *
-     * @var array<string, StructuredLogger>
-     */
-    private array $loggerCacheSnapshot = [];
 
     /**
      * `ClientRelayWorker`'s Timer-failure arm logs through the static
@@ -89,14 +81,12 @@ final class RelayTimerArmDeterminismTest extends TestCase
      * earlier tests set (to a temp dir they then delete) and never restore. Left
      * alone, `include ''` raises `ValueError: Path cannot be empty` — so whether
      * this test passed would itself depend on suite order. Point the factory at a
-     * `php://memory` config of our own and put the previous values back after.
+     * `php://memory` config of our own; {@see LoggerFactoryIsolation} puts the
+     * previous values back after tearDown().
      */
     protected function setUp(): void
     {
         parent::setUp();
-
-        $this->loggerConfigPathSnapshot = self::loggerConfigPath();
-        $this->loggerCacheSnapshot = self::loggerCache();
 
         $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-relay-timer-determinism-' . bin2hex(random_bytes(6));
         mkdir($this->tmpDir, 0700, true);
@@ -114,8 +104,6 @@ final class RelayTimerArmDeterminismTest extends TestCase
     protected function tearDown(): void
     {
         LoggerFactory::reset();
-        self::setLoggerConfigPath($this->loggerConfigPathSnapshot);
-        self::setLoggerCache($this->loggerCacheSnapshot);
 
         $files = glob($this->tmpDir . '/*');
         if ($files !== false) {
@@ -441,38 +429,6 @@ final class RelayTimerArmDeterminismTest extends TestCase
                     || $id === RateLimitProfiles::CLIENT_MOUNT;
             }
         };
-    }
-
-    private static function loggerConfigPath(): string
-    {
-        /** @var string $value */
-        $value = (new ReflectionProperty(LoggerFactory::class, 'configPath'))->getValue();
-
-        return $value;
-    }
-
-    private static function setLoggerConfigPath(string $path): void
-    {
-        (new ReflectionProperty(LoggerFactory::class, 'configPath'))->setValue(null, $path);
-    }
-
-    /**
-     * @return array<string, StructuredLogger>
-     */
-    private static function loggerCache(): array
-    {
-        /** @var array<string, StructuredLogger> $value */
-        $value = (new ReflectionProperty(LoggerFactory::class, 'loggers'))->getValue();
-
-        return $value;
-    }
-
-    /**
-     * @param array<string, StructuredLogger> $loggers
-     */
-    private static function setLoggerCache(array $loggers): void
-    {
-        (new ReflectionProperty(LoggerFactory::class, 'loggers'))->setValue(null, $loggers);
     }
 
     /** Invoke a private/protected method on $object. */

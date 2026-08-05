@@ -27,6 +27,7 @@ use Phlix\Shared\Relay\RelayHttpRequestChunk;
 use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
+use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
@@ -57,6 +58,10 @@ use function substr;
  */
 final class ServerProxyControllerTest extends TestCase
 {
+    // Workerman's Timer statics and Worker registry are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use WorkermanTimerRuntimeControl;
+
     private function dto(
         string $userId,
         bool $relayActive,

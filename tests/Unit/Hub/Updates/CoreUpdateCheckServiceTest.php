@@ -10,6 +10,7 @@ use Phlix\Hub\Hub\Updates\CoreUpdateCheckService;
 use Phlix\Hub\Hub\Updates\CoreUpdateStatus;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -28,6 +29,10 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(CoreUpdateStatus::class)]
 final class CoreUpdateCheckServiceTest extends TestCase
 {
+    // LoggerFactory's static $configPath/$loggers are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use LoggerFactoryIsolation;
+
     private const MARKER_URL = 'https://example.invalid/VERSION';
 
     private const UPDATE_COMMAND = 'curl -fsSL https://example.invalid/install.sh | sudo bash -s -- --update -y';

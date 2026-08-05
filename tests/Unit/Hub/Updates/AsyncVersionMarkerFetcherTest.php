@@ -6,12 +6,12 @@ namespace Phlix\Hub\Tests\Unit\Hub\Updates;
 
 use Phlix\Hub\Hub\Updates\AsyncVersionMarkerFetcher;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
+use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\Http\Client;
 use Workerman\Timer;
-use Workerman\Worker;
 
 /**
  * {@see AsyncVersionMarkerFetcher} — the only class in S75 that touches the
@@ -30,6 +30,10 @@ use Workerman\Worker;
 #[CoversClass(AsyncVersionMarkerFetcher::class)]
 final class AsyncVersionMarkerFetcherTest extends TestCase
 {
+    // Workerman's Timer statics and Worker registry are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use WorkermanTimerRuntimeControl;
+
     private const URL = 'https://example.invalid/VERSION';
 
     /**
@@ -307,34 +311,31 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
      */
     public function testTheVendorDefersASynchronousFailureThroughATimer(): void
     {
-        $this->resetTimerState();
-        $this->seedWorkerRegistry();
+        // Seeds Worker::$workers so Timer::add() reaches its task-table path
+        // instead of throwing. The trait restores the previous value afterwards,
+        // so the `finally` that used to do it by hand is no longer needed.
+        $this->forceWorkermanRuntime();
 
-        try {
-            $fetcher = new AsyncVersionMarkerFetcher(5);
+        $fetcher = new AsyncVersionMarkerFetcher(5);
 
-            $seen = [];
-            $fetcher->fetch('not-a-url', static function (?string $body, ?string $error) use (&$seen): void {
-                $seen[] = [$body, $error];
-            });
+        $seen = [];
+        $fetcher->fetch('not-a-url', static function (?string $body, ?string $error) use (&$seen): void {
+            $seen[] = [$body, $error];
+        });
 
-            self::assertSame([], $seen, 'the vendor defers the error — it must not arrive inside fetch()');
+        self::assertSame([], $seen, 'the vendor defers the error — it must not arrive inside fetch()');
 
-            $tasks = $this->pendingTimerTasks();
-            self::assertNotSame([], $tasks, 'the vendor must have deferred an error callback onto a timer');
+        $tasks = $this->pendingTimerTasks();
+        self::assertNotSame([], $tasks, 'the vendor must have deferred an error callback onto a timer');
 
-            foreach ($tasks as $task) {
-                ($task[0])(...$task[1]);
-            }
-
-            self::assertCount(1, $seen, 'exactly one completion, on the deferred tick');
-            self::assertNull($seen[0][0]);
-            self::assertIsString($seen[0][1]);
-            self::assertStringContainsString('invalid url', $seen[0][1]);
-        } finally {
-            $this->resetTimerState();
-            $this->clearWorkerRegistry();
+        foreach ($tasks as $task) {
+            ($task[0])(...$task[1]);
         }
+
+        self::assertCount(1, $seen, 'exactly one completion, on the deferred tick');
+        self::assertNull($seen[0][0]);
+        self::assertIsString($seen[0][1]);
+        self::assertStringContainsString('invalid url', $seen[0][1]);
     }
 
     /**
@@ -358,34 +359,5 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
         }
 
         return $out;
-    }
-
-    /** Wipe Workerman's timer statics so tests cannot leak into each other. */
-    private function resetTimerState(): void
-    {
-        $reflection = new ReflectionClass(Timer::class);
-        foreach (['tasks' => [], 'status' => []] as $name => $empty) {
-            $property = $reflection->getProperty($name);
-            $property->setAccessible(true);
-            $property->setValue(null, $empty);
-        }
-        if (function_exists('pcntl_alarm')) {
-            pcntl_alarm(0);
-        }
-    }
-
-    /** `Timer::add()` throws unless `Worker::getAllWorkers()` is non-empty. */
-    private function seedWorkerRegistry(): void
-    {
-        $property = (new ReflectionClass(Worker::class))->getProperty('workers');
-        $property->setAccessible(true);
-        $property->setValue(null, ['s75-fetcher-test' => new Worker()]);
-    }
-
-    private function clearWorkerRegistry(): void
-    {
-        $property = (new ReflectionClass(Worker::class))->getProperty('workers');
-        $property->setAccessible(true);
-        $property->setValue(null, []);
     }
 }

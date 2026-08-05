@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Common\Logger;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -18,6 +19,10 @@ use PHPUnit\Framework\TestCase;
  */
 final class LoggerFactoryTest extends TestCase
 {
+    // LoggerFactory's static $configPath/$loggers are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use LoggerFactoryIsolation;
+
     private string $tempConfigPath;
 
     protected function setUp(): void
