@@ -19,6 +19,7 @@ use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Router;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
@@ -49,6 +50,10 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 #[CoversClass(AdminUpdatesController::class)]
 final class AdminUpdatesRouteRegistrationTest extends TestCase
 {
+    // LoggerFactory's static $configPath/$loggers are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use LoggerFactoryIsolation;
+
     /** A >=32-byte HS256 secret so the real JwtHandler accepts it. */
     private const JWT_SECRET = 'S75-admin-updates-route-secret-key-0123456789';
 

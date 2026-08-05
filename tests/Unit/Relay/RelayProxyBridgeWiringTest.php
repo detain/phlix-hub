@@ -12,6 +12,7 @@ use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
@@ -31,6 +32,10 @@ use ReflectionProperty;
 #[CoversClass(HubServicesProvider::class)]
 final class RelayProxyBridgeWiringTest extends TestCase
 {
+    // LoggerFactory's static $configPath/$loggers are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use LoggerFactoryIsolation;
+
     /** @var non-empty-string */
     private string $tmpDir;
 

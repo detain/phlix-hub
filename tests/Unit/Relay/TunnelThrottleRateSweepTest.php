@@ -12,6 +12,7 @@ use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionClassConstant;
@@ -96,6 +97,10 @@ use function strlen;
  */
 final class TunnelThrottleRateSweepTest extends TestCase
 {
+    // Workerman's Timer statics and Worker registry are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use WorkermanTimerRuntimeControl;
+
     /**
      * Seconds added to `microtime(true)` when seeding a bucket so the production
      * ingress path's real-time refills are inert. ~11.6 days.

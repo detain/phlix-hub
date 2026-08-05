@@ -13,11 +13,16 @@ use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use Workerman\Connection\TcpConnection;
 
 class TunnelManagerTest extends TestCase
 {
+    // Workerman's Timer statics and Worker registry are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use WorkermanTimerRuntimeControl;
+
     private RelayWireCodecInterface $codec;
     private StructuredLogger $logger;
     private RelaySessionManager $sessionManager;

@@ -11,10 +11,11 @@ use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
 use PHPUnit\Framework\Attributes\CoversClass;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
+use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\Timer;
-use Workerman\Worker;
 
 /**
  * {@see CoreUpdateCheckWorker} — the S75 acceptance criterion "the worker fires
@@ -58,6 +59,12 @@ use Workerman\Worker;
 #[CoversClass(CoreUpdateCheckWorker::class)]
 final class CoreUpdateCheckWorkerTest extends TestCase
 {
+    // Workerman's Worker/Timer statics and LoggerFactory's $configPath are both
+    // process-global; the traits snapshot them before setUp() and restore them
+    // after tearDown(), so nothing escapes this class.
+    use WorkermanTimerRuntimeControl;
+    use LoggerFactoryIsolation;
+
     private string $tmpDir = '';
 
     private InMemoryHubSettingsConnection $db;
@@ -91,14 +98,13 @@ final class CoreUpdateCheckWorkerTest extends TestCase
             }
         };
 
-        $this->resetTimerState();
-        $this->seedWorkerRegistry();
+        // Seeds Worker::$workers so the production Timer::add() reaches its
+        // task-table path. The trait restores the previous value after tearDown().
+        $this->forceWorkermanRuntime();
     }
 
     protected function tearDown(): void
     {
-        $this->resetTimerState();
-        $this->clearWorkerRegistry();
         LoggerFactory::reset();
         foreach (glob($this->tmpDir . '/*') ?: [] as $file) {
             @unlink($file);
@@ -297,37 +303,5 @@ final class CoreUpdateCheckWorkerTest extends TestCase
         }
 
         self::fail('Timer id ' . $timerId . ' is not in Timer::$tasks — start() armed no repeating poll');
-    }
-
-    /** Wipe Workerman's timer statics so tests cannot leak into each other. */
-    private function resetTimerState(): void
-    {
-        $reflection = new ReflectionClass(Timer::class);
-        foreach (['tasks' => [], 'status' => []] as $name => $empty) {
-            $property = $reflection->getProperty($name);
-            $property->setAccessible(true);
-            $property->setValue(null, $empty);
-        }
-        if (function_exists('pcntl_alarm')) {
-            pcntl_alarm(0);
-        }
-    }
-
-    /**
-     * `Timer::add()` throws unless `Worker::getAllWorkers()` is non-empty; seed
-     * it so the production call reaches its task-table path.
-     */
-    private function seedWorkerRegistry(): void
-    {
-        $property = (new ReflectionClass(Worker::class))->getProperty('workers');
-        $property->setAccessible(true);
-        $property->setValue(null, ['s75-update-check-test' => new Worker()]);
-    }
-
-    private function clearWorkerRegistry(): void
-    {
-        $property = (new ReflectionClass(Worker::class))->getProperty('workers');
-        $property->setAccessible(true);
-        $property->setValue(null, []);
     }
 }

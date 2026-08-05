@@ -8,6 +8,7 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
@@ -42,6 +43,10 @@ use function json_encode;
  */
 final class SyncPlayRelayWorkerTest extends TestCase
 {
+    // LoggerFactory's static $configPath/$loggers are process-global; the trait
+    // snapshots them before setUp() and restores them after tearDown().
+    use LoggerFactoryIsolation;
+
     private string $tmpDir;
 
     /**
