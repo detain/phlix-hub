@@ -1,0 +1,70 @@
+# Codecov configuration for phlix-hub.
+#
+# S195 — why this file exists.
+#
+# Until now this repo had no codecov.yml at all, so `codecov/project` ran on
+# Codecov's defaults: `target: auto` (compare against the base commit) with
+# `threshold: 0%`. That means ANY decrease, however small, posts a failure.
+#
+# MEASURED (2026-08-05, via the public Codecov API v2 — this repo is public, so
+# the numbers are readable without a token):
+#
+#   * `codecov/project` reds if and only if the rendered delta is strictly
+#     negative. 21/21 PRs (#180-#203) separate on the sign of the delta and on
+#     nothing else. It is NOT related to whether the PR touches src/: #182,
+#     #183, #190, #192 and #198 changed no src/ file and PASSED, while #186
+#     changed five src/ files and FAILED at -0.01%.
+#
+#   * The status description was never empty. Codecov posts a GitHub *check
+#     run*, not a commit status (the /statuses API returns zero entries for
+#     these commits), and a check run has no `description` field — only
+#     `output.title`. Read via `output.title` every failing run says, e.g.,
+#     "69.48% (-0.01%) compared to b017d1f".
+#
+#   * The tiny negative deltas are measurement noise, not regressions. phpunit.xml
+#     sets executionOrder="random", and ~30 lines in src/Relay/Tunnel.php,
+#     src/Relay/ClientRelayWorker.php and src/Relay/RelayProxyManager.php sit on
+#     either side of `try { Timer::add(...) } catch (Throwable) {}`. Whether
+#     Workerman's Timer is usable depends on whether an earlier test left an
+#     event loop alive, so those lines flip run to run. Diffing Codecov's
+#     per-line reports for seven src-identical PR pairs found flips ONLY in
+#     those three files: 1 to 16 lines per run, 30 distinct lines in total
+#     (= 0.237% of the 12,661-line base), net swing observed -0.03%..+0.05%.
+#
+# So the gate was not illegible — it was more sensitive (0%) than the suite it
+# measures is repeatable (about +/-0.05%, worst case 0.237%). A gate that reds on
+# its own noise is the textbook way for a rule to get tuned out, taking its real
+# signal with it.
+#
+# THE FIX: raise the threshold above the measured noise floor. This keeps the
+# status ENFORCING and keeps it rendering the percentage and the comparison —
+# it is not `informational: true` (which would pass no matter what) and the
+# status is not removed. 0.5% is roughly 2x the entire measured flake universe
+# (30 lines) and roughly 10x the largest single-PR swing ever observed, while
+# still being about 63 lines out of 12,661 — far smaller than any real
+# regression (deleting a test class, skipping a suite).
+#
+# STOPPING RULE — do not widen this again. New relay code adds more
+# Timer try/catch sites (48 `Timer::` call sites exist across 13 files today,
+# only 3 of which the suite currently reaches). If the flake universe ever grows
+# past ~60 lines, make the coverage deterministic instead of raising this number.
+#
+# NOT CHANGED, deliberately:
+#   * `codecov/patch` keeps its defaults. It guards NEW code at threshold 0 and
+#     is what actually catches "this PR added untested lines", so raising the
+#     project threshold opens no hole for new code.
+#   * `removed_code_behavior` keeps its default (`adjust_base`), which is already
+#     working — see #187: "passed because coverage increased by 0% when compared
+#     to adjusted base (69.22%)".
+#   * No `strict_yaml_branch`, so Codecov uses the YAML on the branch being
+#     tested. A change to this file therefore takes effect on its own PR.
+#
+# Validate any edit before merging:
+#   curl --data-binary @codecov.yml https://codecov.io/validate
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0.5%
