@@ -857,7 +857,17 @@ final class Application
         $this->router->group('/api/v1', $serverGroup, [$enrollmentJwt, $hubProtocol]);
 
         // Relay tunnel endpoint — server-initiated WSS.
-        $this->router->post('/servers/{id}/relay', static function (
+        //
+        // ⚠ The `/api/v1` prefix is written out in full here rather than being
+        // inherited from a `group()`, matching the style of every other hub
+        // route. It is NOT decoration: `phlix-server` addresses this endpoint
+        // as `/api/v1/servers/{id}/relay` (its `config/relay.php` `hub_wss_url`
+        // default, and `RelayConfig`'s own docblocks), as do this controller's
+        // docblock and `phlix-docs`. Registering it bare — as it was from
+        // hub commit 19d05b7 until S204 — meant the only URL any caller was
+        // ever told to use answered 404 instead of this handler's 501 signpost
+        // to the `:8802` WS worker. See HubServerPathContractTest.
+        $this->router->post('/api/v1/servers/{id}/relay', static function (
             Request $req,
             array $params,
         ) use ($relayController): Response {
@@ -867,6 +877,12 @@ final class Application
         });
 
         // Client relay mount — client-initiated WSS to reach servers via hub.
+        //
+        // ⚠ This one is CORRECTLY bare and must stay bare: it mirrors the path
+        // that {@see \Phlix\Hub\Relay\ClientRelayWorker} parses on `:8803`
+        // (`~^/client/([^/?#]+)/?(?:[?#].*)?$~`), which is where clients
+        // actually mount. Adding an `/api/v1` prefix here would make the HTTP
+        // mirror disagree with the WS worker. (S204 inventory.)
         $clientMountController = $this->resolveClientMountController();
         $this->router->get('/client/{server_id}', static function (
             Request $req,
@@ -878,7 +894,14 @@ final class Application
         });
 
         // Subdomain allocation and revocation.
-        $this->router->post('/servers/{id}/subdomain', static function (
+        //
+        // ⚠ The literal path below is duplicated, verbatim, in phlix-server's
+        // `src/Hub/SubdomainClient.php` (`claimSubdomain()` and
+        // `releaseSubdomain()` both request
+        // `"/api/v1/servers/{$this->serverId}/subdomain"`). Keep the two in
+        // step — `HubServerPathContractTest` dispatches that exact URL through
+        // the real composed router and goes red if either side moves.
+        $this->router->post('/api/v1/servers/{id}/subdomain', static function (
             Request $req,
             array $params,
         ) use ($subdomainController): Response {
@@ -887,7 +910,7 @@ final class Application
             return $subdomainController->allocate($req, $typedParams);
         });
 
-        $this->router->delete('/servers/{id}/subdomain', static function (
+        $this->router->delete('/api/v1/servers/{id}/subdomain', static function (
             Request $req,
             array $params,
         ) use ($subdomainController): Response {
