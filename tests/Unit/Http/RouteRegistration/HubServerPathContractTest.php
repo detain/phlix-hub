@@ -38,6 +38,24 @@ use Phlix\Hub\Http\Router;
  * another repository's source; if they no longer match it, the two repos have
  * diverged and one of them has to move.
  *
+ * ## What this file deliberately does NOT cover
+ *
+ * Every test here is UNCONDITIONAL — none of them can skip, on any machine. That
+ * is a requirement, not a preference: `scripts/assert-integration-tests-ran.php`
+ * fails the build on any skipped test, because a skip exits 0 and reads as a
+ * pass. The hub's CI clones one repository, so a test that READS phlix-server
+ * could only ever be conditional, and the first cut of this file shipped exactly
+ * that mistake — a check that ran green on the dev box (sibling checkout
+ * present) and skipped in CI, reddening the S173 gate on PR #209.
+ *
+ * The consequence is real and is stated here rather than papered over: the
+ * constants below are a hand-transcription, so **this file cannot detect
+ * phlix-server changing its path.** It detects the HUB moving away from the
+ * transcription. The other direction is covered by
+ * `scripts/assert-cross-repo-hub-paths.php`, which reads both repositories'
+ * source and compares them, and which FAILS rather than passing when phlix-server
+ * is not present. Run it wherever both checkouts exist.
+ *
  * @package Phlix\Hub\Tests\Unit\Http\RouteRegistration
  */
 final class HubServerPathContractTest extends RouteRegistrationTestCase
@@ -142,39 +160,6 @@ final class HubServerPathContractTest extends RouteRegistrationTestCase
                 . 'the /api/v1 form would let the two repos silently diverge again.',
             );
         }
-    }
-
-    /**
-     * The literal really is still the literal phlix-server ships.
-     *
-     * Only runs where a sibling `phlix-server` checkout exists (the dev box and
-     * any full-estate checkout); CI clones one repo, so it is skipped there and
-     * the dispatch tests above carry the pin on their own. Its value is that it
-     * catches the OTHER direction — phlix-server moving its path — which no
-     * hub-only assertion can see.
-     */
-    public function testTheServerSideLiteralStillMatchesThisContract(): void
-    {
-        $clientPath = dirname(__DIR__, 5) . '/phlix-server/src/Hub/SubdomainClient.php';
-
-        if (!is_file($clientPath)) {
-            self::markTestSkipped('no sibling phlix-server checkout at ' . $clientPath);
-        }
-
-        $source = file_get_contents($clientPath);
-        self::assertIsString($source, 'could not read ' . $clientPath);
-
-        // The server interpolates its own property into the path, so compare
-        // against that exact spelling rather than the resolved URL.
-        $serverLiteral = str_replace('{serverId}', '{$this->serverId}', self::SERVER_SUBDOMAIN_PATH);
-
-        self::assertSame(
-            2,
-            substr_count($source, $serverLiteral),
-            'phlix-server no longer requests "' . $serverLiteral . '" twice (claim + release) in '
-            . $clientPath . '. The hub registers ' . self::SERVER_SUBDOMAIN_PATH
-            . '; if the server has moved, the hub route must move with it.',
-        );
     }
 
     /**
