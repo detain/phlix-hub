@@ -25,6 +25,7 @@ use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
+use Phlix\Hub\Http\Controllers\AdminUpdatesController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\LogController;
@@ -526,6 +527,10 @@ final class Application
         // Phase 10: graceful hub restart — POST /api/v1/admin/restart (SIGUSR1).
         $this->registerAdminRestartRoutes();
 
+        // Core update check (S75 / updates.md #48) — read the update status the
+        // maintenance worker polls for, and toggle the poll on/off.
+        $this->registerAdminUpdatesRoutes();
+
         // Shared admin console user-management routes — the @phlix/ui
         // AdminUsersApi calls `/api/v1/admin/users*`; this serves that surface
         // (list/get/create/update/delete + set-admin/reset-password, and an
@@ -1000,6 +1005,15 @@ final class Application
         return $controller;
     }
 
+    private function resolveAdminUpdatesController(): AdminUpdatesController
+    {
+        $controller = $this->container->get(AdminUpdatesController::class);
+        if (!$controller instanceof AdminUpdatesController) {
+            throw new \RuntimeException('Container returned an unexpected AdminUpdatesController instance');
+        }
+        return $controller;
+    }
+
     private function resolveAuditLogController(): AuditLogController
     {
         $controller = $this->container->get(AuditLogController::class);
@@ -1215,6 +1229,32 @@ final class Application
 
         $this->router->group('/api/v1/admin', static function (Router $r) use ($controller): void {
             $r->post('/restart', static fn (Request $req): Response => $controller->restart($req, []));
+        }, [$authMiddleware, $adminMiddleware]);
+    }
+
+    /**
+     * Wire the core update-check API (admin-only) under `/api/v1/admin/updates`
+     * (S75 / updates.md #48).
+     *
+     * `GET /api/v1/admin/updates/status`   — current + latest version, whether
+     * an update is available, the last check time, and the copy-to-clipboard
+     * update command.
+     * `PUT /api/v1/admin/updates/settings` — persist `updates.check_enabled`.
+     *
+     * Neither route performs outbound I/O: the marker fetch runs on the
+     * maintenance worker ({@see \Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker}),
+     * and these read/write persisted state only. There is deliberately no
+     * apply/upgrade route — the hub never runs git/composer/systemctl.
+     */
+    private function registerAdminUpdatesRoutes(): void
+    {
+        $authMiddleware  = $this->resolveAuthMiddleware();
+        $adminMiddleware = $this->resolveAdminMiddleware();
+        $controller      = $this->resolveAdminUpdatesController();
+
+        $this->router->group('/api/v1/admin/updates', static function (Router $r) use ($controller): void {
+            $r->get('/status', static fn (Request $req): Response => $controller->status($req));
+            $r->put('/settings', static fn (Request $req): Response => $controller->updateSettings($req));
         }, [$authMiddleware, $adminMiddleware]);
     }
 

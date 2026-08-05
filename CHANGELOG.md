@@ -8,6 +8,34 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Core update check (S75 / updates.md #48).** The hub now learns when a newer
+  hub release exists, instead of an operator having to watch the repository.
+  - New root `VERSION` marker file, kept in lockstep with
+    `Phlix\Hub\Version::VERSION` (pinned by
+    `tests/Unit/Hub/Updates/VersionMarkerFileTest.php` — the file is what every
+    other install compares itself against, so drift in either direction is a
+    bug).
+  - New `Phlix\Hub\Hub\Updates\CoreUpdateCheckService`: fetches the remote
+    marker, compares it against the compiled constant, and PERSISTS the result
+    in `hub_settings`. New `config/updates.php` with `check_enabled` (default
+    **true**), `marker_url`, `update_command`, `poll_seconds`, `timeout_seconds`
+    — all env-overridable (`HUB_UPDATES_*`).
+  - New `CoreUpdateCheckWorker`: a **boot catch-up check plus** a daily poll,
+    armed on the dedicated `count=1` maintenance worker. A bare
+    `Timer::add(86400, …)` never fires on a box that restarts more often than
+    the interval, so the immediate check is not an optimisation — it is the
+    only thing that runs on most installs.
+  - New admin API, gated `[auth, admin]`:
+    `GET /api/v1/admin/updates/status` and
+    `PUT /api/v1/admin/updates/settings` (`{"checkEnabled": bool}`).
+  - Outbound I/O is non-blocking and event-loop driven
+    (`workerman/http-client`, callback mode — never `file_get_contents`, never
+    a coroutine-conditional code path), and **no HTTP handler ever reaches the
+    network**: the status endpoint reads persisted state only.
+  - **The hub never applies an update.** There is deliberately no apply/upgrade
+    route; the status payload carries a copy-to-clipboard `curl … | sudo bash
+    -s -- --update -y` command for the operator to run themselves. No git, no
+    composer, no systemctl from a web request.
 - **`scripts/install.sh` now applies the Workerman kernel tuning, on both fresh
   install and `--update`.** Implements the applicable parts of the
   [kernel-optimization appendix](https://www.workerman.net/doc/workerman/appendices/kernel-optimization.html):
