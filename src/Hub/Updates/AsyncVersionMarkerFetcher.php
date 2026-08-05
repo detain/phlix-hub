@@ -101,7 +101,12 @@ final class AsyncVersionMarkerFetcher implements VersionMarkerFetcherInterface
             $client->request($url, [
                 'method'  => 'GET',
                 'success' => static function (mixed $response) use ($complete): void {
-                    $complete(...self::readBody($response));
+                    // Destructured rather than spread: an argument-unpack against
+                    // a Closure-typed variable is opaque to static analysis (the
+                    // parameter list is not related to the unpacked list), so the
+                    // pair is bound to typed locals and passed positionally.
+                    [$body, $error] = self::readBody($response);
+                    $complete($body, $error);
                 },
                 'error'   => static function (mixed $exception) use ($complete): void {
                     $complete(null, self::describe($exception));
