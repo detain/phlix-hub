@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Common\Container\Providers;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Federation\FederationSessionManager;
+use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\ServerReaper;
@@ -99,6 +100,10 @@ final class HubServicesProviderTest extends TestCase
             IdleReaper::class,
             ServerReaper::class,
             FederationSessionManager::class,
+            // S75: the core update check polls a remote VERSION marker and
+            // writes hub_settings rows — DB + outbound HTTP, no tunnel
+            // registry — so it belongs on this count=1 worker.
+            CoreUpdateCheckWorker::class,
         ];
     }
 

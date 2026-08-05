@@ -13,6 +13,7 @@
         "psr/event-dispatcher": "^1.0",
         "webman/console": "^2.2",
         "workerman/channel": "^1.2",
+        "workerman/http-client": "^3.1",
         "workerman/mysql": "^1.0",
         "workerman/webman-framework": "~2.2",
         "workerman/workerman": "~5.1"

@@ -53,6 +53,11 @@ use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Hub\Updates\AsyncVersionMarkerFetcher;
+use Phlix\Hub\Hub\Updates\CoreUpdateCheckService;
+use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
+use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
+use Phlix\Hub\Http\Controllers\AdminUpdatesController;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
@@ -613,6 +618,59 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new HubSettingsController($settings);
             })->parameter('settings', get(HubSettingsRepository::class)),
 
+            // --- Core update check (S75 / updates.md #48) -------------------
+            // The fetcher is bound to its INTERFACE so the service can never
+            // acquire a blocking implementation by accident; the concrete
+            // class is the only thing that touches the network, and it does so
+            // through workerman/http-client's callback API (event-loop driven,
+            // never blocking, no coroutine fork).
+            VersionMarkerFetcherInterface::class => factory(
+                static function (): AsyncVersionMarkerFetcher {
+                    return new AsyncVersionMarkerFetcher(self::updatesInt('timeout_seconds', 10));
+                },
+            ),
+
+            CoreUpdateCheckService::class => factory(static function (
+                HubSettingsRepository $settings,
+                VersionMarkerFetcherInterface $fetcher,
+            ): CoreUpdateCheckService {
+                return new CoreUpdateCheckService(
+                    $settings,
+                    $fetcher,
+                    LoggerFactory::get(LogChannels::HUB),
+                    self::updatesString(
+                        'marker_url',
+                        'https://raw.githubusercontent.com/detain/phlix-hub/master/VERSION',
+                    ),
+                    self::updatesString(
+                        'update_command',
+                        'curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh'
+                        . ' | sudo bash -s -- --update -y',
+                    ),
+                );
+            })->parameter('settings', get(HubSettingsRepository::class))
+                ->parameter('fetcher', get(VersionMarkerFetcherInterface::class)),
+
+            CoreUpdateCheckWorker::class => factory(static function (
+                CoreUpdateCheckService $service,
+            ): CoreUpdateCheckWorker {
+                return new CoreUpdateCheckWorker(
+                    $service,
+                    LoggerFactory::get(LogChannels::HUB),
+                    self::updatesInt('poll_seconds', CoreUpdateCheckWorker::DEFAULT_INTERVAL_SECONDS),
+                );
+            })->parameter('service', get(CoreUpdateCheckService::class)),
+
+            AdminUpdatesController::class => factory(static function (
+                CoreUpdateCheckService $updates,
+                UserRepository $users,
+                AuditLogger $audit,
+            ): AdminUpdatesController {
+                return new AdminUpdatesController($updates, $users, $audit);
+            })->parameter('updates', get(CoreUpdateCheckService::class))
+                ->parameter('users', get(UserRepository::class))
+                ->parameter('audit', get(AuditLogger::class)),
+
             // Phase 10: graceful hub reload via SIGUSR2 (POST /api/v1/admin/restart).
             // The pid path MUST be the config/server.php value — start.php assigns
             // Worker::$pidFile from the very same key, so writer and reader cannot
@@ -801,6 +859,69 @@ final class HubServicesProvider implements ServiceProviderInterface
         /** @var mixed $value */
         $value = $config[$key] ?? null;
         return is_string($value) && $value !== '' ? $value : $default;
+    }
+
+    /**
+     * Decoded `config/updates.php`, memoised per process (S75).
+     *
+     * Shared read-only config, not request data, so caching it on the class is
+     * resident-memory-safe. `null` marks "the file is absent or unusable" and
+     * every reader then falls back to its own literal default, so a missing
+     * config file degrades the update check rather than breaking boot.
+     *
+     * @var array<array-key, mixed>|null
+     */
+    private static ?array $updatesConfig = null;
+
+    /** Whether {@see $updatesConfig} has been resolved yet. */
+    private static bool $updatesConfigLoaded = false;
+
+    /**
+     * Load (once) and return `config/updates.php`.
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function updatesConfig(): array
+    {
+        if (!self::$updatesConfigLoaded) {
+            self::$updatesConfigLoaded = true;
+            $path = dirname(__DIR__, 4) . '/config/updates.php';
+            if (is_file($path)) {
+                /** @var mixed $loaded */
+                $loaded = include $path;
+                self::$updatesConfig = is_array($loaded) ? $loaded : null;
+            }
+        }
+
+        return self::$updatesConfig ?? [];
+    }
+
+    /**
+     * A string entry of `config/updates.php`, or `$default`.
+     *
+     * @param string $key     Config key.
+     * @param string $default Fallback when absent/blank.
+     */
+    private static function updatesString(string $key, string $default): string
+    {
+        /** @var mixed $value */
+        $value = self::updatesConfig()[$key] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : $default;
+    }
+
+    /**
+     * A positive-int entry of `config/updates.php`, or `$default`.
+     *
+     * @param string $key     Config key.
+     * @param int    $default Fallback when absent/non-positive.
+     */
+    private static function updatesInt(string $key, int $default): int
+    {
+        /** @var mixed $value */
+        $value = self::updatesConfig()[$key] ?? null;
+
+        return is_int($value) && $value > 0 ? $value : $default;
     }
 
     /**
@@ -1030,6 +1151,26 @@ final class HubServicesProvider implements ServiceProviderInterface
         } catch (\Throwable $e) {
             $logger->error(
                 'Maintenance: failed to start federation-session reaper timer',
+                ['error' => $e->getMessage()],
+            );
+        }
+
+        // Core update check (S75): daily poll of the remote VERSION marker,
+        // preceded by a boot catch-up inside CoreUpdateCheckWorker::start().
+        // It belongs on THIS worker (count=1, its own DB connection, its own
+        // event loop) rather than the HTTP workers: the poll is once-hub-wide,
+        // it writes hub_settings rows, and it must never share a tick with a
+        // request. It is DB+HTTP only — no tunnel-registry access — so the
+        // maintenance fork's empty TunnelManager is irrelevant to it.
+        try {
+            /** @var mixed $updateWorker */
+            $updateWorker = $container->get(CoreUpdateCheckWorker::class);
+            if ($updateWorker instanceof CoreUpdateCheckWorker) {
+                $updateWorker->start();
+            }
+        } catch (\Throwable $e) {
+            $logger->error(
+                'Maintenance: failed to start core update check timer',
                 ['error' => $e->getMessage()],
             );
         }

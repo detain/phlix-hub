@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http\RouteRegistration;
 
 /**
- * Hand-written golden manifest of every route the hub's SIXTEEN
+ * Hand-written golden manifest of every route the hub's SEVENTEEN
  * `Application::register*Routes()` methods are expected to register.
  *
  * WHY A HAND-WRITTEN LIST — the whole point of S174 is that a test must fail
@@ -143,6 +143,11 @@ final class RouteManifest
             \Phlix\Hub\Http\Middleware\AdminMiddleware::class,
             \Phlix\Hub\Http\Controllers\HubRestartController::class,
         ],
+        'registerAdminUpdatesRoutes' => [
+            \Phlix\Hub\Http\Middleware\AuthMiddleware::class,
+            \Phlix\Hub\Http\Middleware\AdminMiddleware::class,
+            \Phlix\Hub\Http\Controllers\AdminUpdatesController::class,
+        ],
         'registerAdminUserRoutes' => [
             \Phlix\Hub\Http\Middleware\AuthMiddleware::class,
             \Phlix\Hub\Http\Middleware\AdminMiddleware::class,
@@ -167,7 +172,7 @@ final class RouteManifest
 
     /**
      * The routes `Application::registerRoutes()` registers DIRECTLY (i.e. not
-     * via one of the fifteen sub-registrars it also calls).
+     * via one of the sixteen sub-registrars it also calls).
      *
      * @return list<array<string, string>>
      */
@@ -304,7 +309,7 @@ final class RouteManifest
     }
 
     /**
-     * Golden route table for each of the fifteen sub-registrars.
+     * Golden route table for each of the sixteen sub-registrars.
      *
      * @return array<string, list<array<string, string>>>
      */
@@ -555,6 +560,17 @@ final class RouteManifest
                 ],
             ],
 
+            'registerAdminUpdatesRoutes' => [
+                [
+                    'method' => 'GET', 'path' => '/api/v1/admin/updates/status',
+                    'url' => '/api/v1/admin/updates/status', 'gate' => self::GATE_ADMIN,
+                ],
+                [
+                    'method' => 'PUT', 'path' => '/api/v1/admin/updates/settings',
+                    'url' => '/api/v1/admin/updates/settings', 'gate' => self::GATE_ADMIN,
+                ],
+            ],
+
             'registerAdminUserRoutes' => [
                 [
                     'method' => 'GET', 'path' => '/api/v1/admin/users', 'url' => '/api/v1/admin/users',
@@ -690,7 +706,7 @@ final class RouteManifest
     }
 
     /**
-     * Every route in the manifest — the fifteen sub-registrars plus the routes
+     * Every route in the manifest — the sixteen sub-registrars plus the routes
      * `registerRoutes()` registers directly.
      *
      * @return list<array<string, string>>
