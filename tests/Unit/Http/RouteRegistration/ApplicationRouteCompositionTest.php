@@ -39,14 +39,15 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
      *  - `POST /api/v1/auth/*` — these MINT the credentials.
      *  - `/.well-known/jwks.json` — public key discovery.
      *  - `GET /invite/{token}` — an invite link must open for a logged-out user.
-     *  - `/servers/{id}/relay`, `/client/{server_id}`, `/servers/{id}/subdomain`
-     *    — server-facing; RelayController/ClientMountController/SubdomainController
-     *    each validate an Ed25519 enrollment JWT themselves.
+     *  - `/api/v1/servers/{id}/relay`, `/client/{server_id}`,
+     *    `/api/v1/servers/{id}/subdomain` — server-facing;
+     *    RelayController/ClientMountController/SubdomainController each
+     *    validate an Ed25519 enrollment JWT themselves.
      *
      * @var list<string>
      */
     private const UNGATED_ROUTES = [
-        'DELETE /servers/{id}/subdomain',
+        'DELETE /api/v1/servers/{id}/subdomain',
         'GET /',
         'GET /.well-known/jwks.json',
         'GET /app',
@@ -61,8 +62,8 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
         'POST /api/v1/auth/refresh',
         'POST /api/v1/auth/register',
         'POST /api/v1/auth/signup',
-        'POST /servers/{id}/relay',
-        'POST /servers/{id}/subdomain',
+        'POST /api/v1/servers/{id}/relay',
+        'POST /api/v1/servers/{id}/subdomain',
     ];
 
     /**

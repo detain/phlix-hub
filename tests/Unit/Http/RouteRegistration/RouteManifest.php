@@ -410,21 +410,29 @@ final class RouteManifest
                 // The four routes below carry NO route middleware — they
                 // authenticate INSIDE the controller. See
                 // ApplicationRouteCompositionTest::testUngatedRoutesAreExactlyTheKnownSet().
+                //
+                // ⚠ S204: the relay and the two subdomain paths carry `/api/v1`
+                // because that is what phlix-server addresses (SubdomainClient
+                // and config/relay.php) and what phlix-docs publishes. They were
+                // registered BARE from 19d05b7 until S204 and 404'd for every
+                // real caller. `/client/{server_id}` is the exception and is
+                // deliberately bare — it mirrors ClientRelayWorker's `:8803`
+                // path parser.
                 [
-                    'method' => 'POST', 'path' => '/servers/{id}/relay', 'url' => '/servers/srv-1/relay',
-                    'gate' => self::GATE_PUBLIC,
+                    'method' => 'POST', 'path' => '/api/v1/servers/{id}/relay',
+                    'url' => '/api/v1/servers/srv-1/relay', 'gate' => self::GATE_PUBLIC,
                 ],
                 [
                     'method' => 'GET', 'path' => '/client/{server_id}', 'url' => '/client/srv-1',
                     'gate' => self::GATE_PUBLIC,
                 ],
                 [
-                    'method' => 'POST', 'path' => '/servers/{id}/subdomain',
-                    'url' => '/servers/srv-1/subdomain', 'gate' => self::GATE_PUBLIC,
+                    'method' => 'POST', 'path' => '/api/v1/servers/{id}/subdomain',
+                    'url' => '/api/v1/servers/srv-1/subdomain', 'gate' => self::GATE_PUBLIC,
                 ],
                 [
-                    'method' => 'DELETE', 'path' => '/servers/{id}/subdomain',
-                    'url' => '/servers/srv-1/subdomain', 'gate' => self::GATE_PUBLIC,
+                    'method' => 'DELETE', 'path' => '/api/v1/servers/{id}/subdomain',
+                    'url' => '/api/v1/servers/srv-1/subdomain', 'gate' => self::GATE_PUBLIC,
                 ],
             ],
 
