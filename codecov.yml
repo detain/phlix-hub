@@ -24,12 +24,23 @@
 #   * The tiny negative deltas are measurement noise, not regressions. phpunit.xml
 #     sets executionOrder="random", and ~30 lines in src/Relay/Tunnel.php,
 #     src/Relay/ClientRelayWorker.php and src/Relay/RelayProxyManager.php sit on
-#     either side of `try { Timer::add(...) } catch (Throwable) {}`. Whether
-#     Workerman's Timer is usable depends on whether an earlier test left an
-#     event loop alive, so those lines flip run to run. Diffing Codecov's
-#     per-line reports for seven src-identical PR pairs found flips ONLY in
-#     those three files: 1 to 16 lines per run, 30 distinct lines in total
-#     (= 0.237% of the 12,661-line base), net swing observed -0.03%..+0.05%.
+#     either side of `try { Timer::add(...) } catch (Throwable) {}`, so those
+#     lines flipped run to run. Diffing Codecov's per-line reports for seven
+#     src-identical PR pairs found flips ONLY in those three files: 1 to 16 lines
+#     per run, 30 distinct lines in total (= 0.237% of the 12,661-line base), net
+#     swing observed -0.03%..+0.05%.
+#
+#     CORRECTION (2026-08-05, re-measured): an earlier revision of this comment
+#     said the flip depended on "whether an earlier test left an event loop
+#     alive". That is wrong. Under PHPUnit there is NEVER an event loop —
+#     `Timer::$event` is null throughout (see the docblock in
+#     tests/bootstrap.php). The real variable is `Worker::$workers`
+#     (protected static, Worker.php:422), which `Timer::add()` consults at
+#     Timer.php:156: `if (!Worker::getAllWorkers()) throw`. It is a one-way latch
+#     — the Worker constructor registers into it (Worker.php:566) and the only
+#     `unset` (Worker.php:1725) is in the forked-child branch PHPUnit never
+#     reaches — so once any test constructed a Worker, every later `Timer::add()`
+#     in the process SUCCEEDED instead of throwing.
 #
 # So the gate was not illegible — it was more sensitive (0%) than the suite it
 # measures is repeatable (about +/-0.05%, worst case 0.237%). A gate that reds on
@@ -48,6 +59,18 @@
 # Timer try/catch sites (48 `Timer::` call sites exist across 13 files today,
 # only 3 of which the suite currently reaches). If the flake universe ever grows
 # past ~60 lines, make the coverage deterministic instead of raising this number.
+#
+# FOLLOW-UP CLOSED: the src/Relay/ flake above is now FIXED at the source rather
+# than merely tolerated. tests/Unit/Relay/RelayTimerArmDeterminismTest.php pins
+# BOTH arms of every `Timer::add` try/catch in src/Relay/ on every run, forcing
+# `Worker::$workers` to a known state via
+# tests/Support/WorkermanTimerRuntimeControl.php (and restoring it afterwards).
+# Measured over four fixed seeds (`--random-order-seed=1..4`): before, Tunnel.php
+# read 491/493/495 covered statements, ClientRelayWorker.php 135/138 and
+# RelayProxyManager.php 253/254; after, all three are identical on every seed
+# (501, 140, 254) and the whole-project figure is a constant 8885/12061.
+# This threshold is left at 0.5% deliberately — it is the guard for the NEXT
+# source of noise, not for this one.
 #
 # NOT CHANGED, deliberately:
 #   * `codecov/patch` keeps its defaults. It guards NEW code at threshold 0 and
