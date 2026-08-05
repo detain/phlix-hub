@@ -1,0 +1,2 @@
+import{A as e,N as t,_ as n,u as r,xt as i}from"./runtime-core.esm-bundler-BsKpGOEM.js";import{n as a}from"./Icon-CkTBN_k5-D4KLxIn0.js";var o=a(n({__name:`Card`,props:{padding:{type:Boolean,default:!0}},setup(n){return(a,o)=>(e(),r(`div`,{class:i([`phlix-card`,{"phlix-card--no-padding":!n.padding}])},[t(a.$slots,`default`,{},void 0,!0)],2))}}),[[`__scopeId`,`data-v-0e99c3b2`]]);export{o as t};
+//# sourceMappingURL=Card-CwUrlHI3-XWSvmF75.js.map
