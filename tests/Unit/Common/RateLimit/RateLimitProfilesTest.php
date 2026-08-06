@@ -46,11 +46,20 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.client_mount', RateLimitProfiles::CLIENT_MOUNT);
     }
 
-    public function testDefaultsReturnsAllSixProfiles(): void
+    public function testMcpProfileExists(): void
+    {
+        self::assertSame('rate_limiter.mcp', RateLimitProfiles::MCP);
+    }
+
+    public function testDefaultsReturnsAllSevenProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
-        self::assertCount(6, $defaults);
+        // Seven since S62 added `mcp`. This count is the whole reason the test
+        // exists: it turns "a profile was added but never given a config key or
+        // a default" into a red, so bumping the number without adding the
+        // matching `testDefaultsContains…Profile` below defeats it.
+        self::assertCount(7, $defaults);
     }
 
     public function testDefaultsContainsLoginProfile(): void
@@ -111,6 +120,50 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('client_mount', $defaults[RateLimitProfiles::CLIENT_MOUNT]['key']);
         self::assertSame(30, $defaults[RateLimitProfiles::CLIENT_MOUNT]['max']);
         self::assertSame(60, $defaults[RateLimitProfiles::CLIENT_MOUNT]['window']);
+    }
+
+    public function testDefaultsContainsMcpProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::MCP, $defaults);
+        self::assertSame('mcp', $defaults[RateLimitProfiles::MCP]['key']);
+        self::assertSame(10, $defaults[RateLimitProfiles::MCP]['max']);
+        self::assertSame(900, $defaults[RateLimitProfiles::MCP]['window']);
+    }
+
+    /**
+     * S62: the MCP profile must be a LOGIN-GRADE budget, not a proxy-grade one.
+     * Presenting a bearer PAT is a credential guess, and the 600/60 the proxy
+     * uses would let an attacker try ten a second. Pinned as a relationship to
+     * the login profile rather than as a bare number, so re-tuning login without
+     * thinking about MCP goes red.
+     */
+    public function testTheMcpBudgetIsLoginGradeNotProxyGrade(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        $mcp = $defaults[RateLimitProfiles::MCP];
+        $login = $defaults[RateLimitProfiles::LOGIN];
+        $proxy = $defaults[RateLimitProfiles::PROXY];
+
+        self::assertSame(
+            $login['window'],
+            $mcp['window'],
+            'the MCP window drifted from login\'s; both count failed credential presentations.',
+        );
+        self::assertLessThan(
+            $proxy['max'],
+            $mcp['max'],
+            'the MCP budget is as generous as the PROXY budget, which is sized for HLS segment '
+            . 'bursts, not for credential guessing.',
+        );
+        self::assertGreaterThanOrEqual(
+            $login['max'],
+            $mcp['max'],
+            'an agent legitimately retries more than a human, so the MCP budget should not be '
+            . 'tighter than login\'s.',
+        );
     }
 
     public function testDefaultsReturnsCorrectStructure(): void

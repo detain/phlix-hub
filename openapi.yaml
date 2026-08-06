@@ -106,6 +106,11 @@ tags:
     description: "Hub-to-hub peering, federated library offers, and admin delegation."
   - name: "Relay Metrics"
     description: "Relay counters, history, live connections, and per-route HTTP metrics."
+  - name: "MCP"
+    description: >-
+      The Model Context Protocol endpoint an AI client talks to, plus the personal access tokens
+      that authenticate it. Read-only, and gated by the same server-ownership checks as the relay
+      proxy.
 
 paths:
   "/":
@@ -3414,6 +3419,14 @@ components:
       description: >-
         An Ed25519 enrollment JWT issued to a claimed media server. Enforced by
         EnrollmentJwtMiddleware; the verification keys are published at /.well-known/jwks.json.
+    mcpToken:
+      type: http
+      scheme: bearer
+      description: >-
+        An MCP personal access token (S62), minted by POST /api/v1/me/mcp-tokens and accepted ONLY
+        by POST /mcp. It is an opaque `phlix-mcp-`-prefixed CSPRNG string, not a JWT — the hub stores
+        only its SHA-256 hash. Validated by McpController itself rather than by AuthMiddleware, which
+        is why /mcp carries an empty x-phlix-middleware.
   parameters:
     AcceptPhlixProtocol:
       name: Accept-Phlix-Protocol
@@ -3650,6 +3663,131 @@ components:
           $ref: "#/components/schemas/Uuid"
         ws_url:
           type: string
+      additionalProperties: true
+    McpScope:
+      type: string
+      description: "A capability an MCP token may carry. The set is closed; unknown values are dropped."
+      enum:
+        - "mcp:servers:read"
+        - "mcp:library:read"
+        - "mcp:playback:read"
+    McpTokenMintRequest:
+      type: object
+      description: "Body of POST /api/v1/me/mcp-tokens."
+      properties:
+        name:
+          type: string
+          maxLength: 191
+          description: "Operator-supplied label shown in the token list. Optional."
+        scopes:
+          type: array
+          description: >-
+            Scopes to grant. Omit for every read scope. Unknown members are dropped; a list with
+            nothing known left in it is a 400 rather than a token that authorises nothing.
+          items:
+            $ref: "#/components/schemas/McpScope"
+      additionalProperties: false
+    McpTokenMinted:
+      type: object
+      description: "201 body of POST /api/v1/me/mcp-tokens. The only place the plaintext ever appears."
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        token:
+          type: string
+          description: >-
+            The plaintext, prefixed `phlix-mcp-`. Shown ONCE — only its SHA-256 hash is stored, so
+            it cannot be retrieved again. Present it to POST /mcp as `Authorization: Bearer`.
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpScope"
+        expires_at:
+          type: integer
+          description: "Absolute Unix expiry. Always finite; the default lifetime is 90 days."
+      additionalProperties: true
+    McpTokenSummary:
+      type: object
+      description: "One row of GET /api/v1/me/mcp-tokens. Never carries the token or its hash."
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpScope"
+        created_at:
+          type: integer
+        expires_at:
+          type: integer
+        last_used_at:
+          type: [integer, "null"]
+        revoked:
+          type: boolean
+        expired:
+          type: boolean
+      additionalProperties: true
+    McpTokenList:
+      type: object
+      properties:
+        tokens:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpTokenSummary"
+        available_scopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpScope"
+      additionalProperties: true
+    JsonRpcRequest:
+      type: object
+      description: >-
+        A single JSON-RPC 2.0 request. Batches (a top-level array) are refused. A request with no
+        `id` is a notification and is answered with an empty 202.
+      properties:
+        jsonrpc:
+          type: string
+          const: "2.0"
+        id:
+          type: [string, integer]
+        method:
+          type: string
+          description: "One of: initialize, ping, tools/list, tools/call."
+        params:
+          type: object
+          additionalProperties: true
+      required: [method]
+      additionalProperties: true
+    JsonRpcResponse:
+      type: object
+      description: >-
+        A JSON-RPC 2.0 response. Exactly one of `result` / `error` is present. `id` is echoed, or
+        null when it could not be determined (JSON-RPC 2.0 §5).
+      properties:
+        jsonrpc:
+          type: string
+          const: "2.0"
+        id:
+          type: [string, integer, "null"]
+        result:
+          type: object
+          additionalProperties: true
+        error:
+          type: object
+          properties:
+            code:
+              type: integer
+              description: "-32700 parse, -32600 invalid request, -32601 unknown method, -32602 bad params."
+            message:
+              type: string
+            data:
+              type: object
+              additionalProperties: true
+          additionalProperties: true
       additionalProperties: true
     RelaySignpost:
       type: object
