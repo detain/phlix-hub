@@ -8,6 +8,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Relayed browse can render posters and avatars (S238, hub half).** Measured
+  2026-08-05: `GET /api/v1/artwork/{id}` and `GET /api/v1/users/{id}/avatar` were
+  **doubly** unreachable over the relay — 403 `proxy.scope_denied` here (in no
+  scope map) and then 404 at `Hub\RelayRequestDispatcher::dispatch()` even if they
+  had been, because both are **pre-router fast paths** in phlix-server's
+  `HttpHandler` (`serveArtwork()`, `serveUserAvatar()`) and so appear in neither
+  production route table. Relayed inline browse could therefore serve no images at
+  all. This closes the hub half — the 403; the dispatch half is phlix-server's and
+  lands separately, so until then these paths 404 instead of 403.
+  - Both landed as **anchored** `ServerProxyController::BROWSE_SCOPE_PATTERNS['GET']`
+    entries (`#^/api/v1/artwork/[^/]+$#`, `#^/api/v1/users/[^/]+/avatar$#`), each
+    mirroring the server's own matcher exactly — **not** as prefixes in
+    `BROWSE_SCOPE_ALLOWLIST`. A `/api/v1/users` prefix would have admitted the whole
+    `WebPortalRouter` user surface (`me/settings`, `me/favorites`, `me/history`,
+    `me/continue-watching`, `me/next-up`, `me/recently-watched`); a `/api/v1/artwork`
+    prefix would have admitted an arbitrary sub-tree the server does not serve.
+    Every one of those is pinned DENIED as the control beside the allow rows.
+  - Adding no new prefix means the S107 write-route enumeration is **not**
+    re-opened (it is keyed on `BROWSE_SCOPE_ALLOWLIST['GET']` prefixes). It was
+    still run: the only writes at or under either path are
+    `POST`/`DELETE /api/v1/users/me/avatar`, both already refused by the hub's own
+    method gate, so no `SCOPE_DENY_PATTERNS` entry is owed and no peer route-table
+    accident is relied on.
+  - `?size=`, and a signed image URL's `exp`/`sig`, are unaffected: the scope gate
+    and `hasTraversalSegment()` take the **path** only, and `$request->queryString`
+    still reaches the bridge byte-for-byte (S108b) — pinned by a new test, since a
+    dropped or re-encoded query string would make every signed poster 401.
+  - `hasTraversalSegment()` and its `%2f`/`%5c` refusal are **unchanged**.
+
 - **OpenAPI description + WebSocket documentation (S66 / updates.md #45).** The
   hub's HTTP and socket surfaces are now written down, and — more to the point —
   the writing is checked against the code.

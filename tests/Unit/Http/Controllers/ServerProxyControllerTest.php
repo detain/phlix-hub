@@ -3658,17 +3658,22 @@ final class ServerProxyControllerTest extends TestCase
      * `/`-sub-path, because {@see ServerProxyController::isWithinBrowseScope()}
      * matches both shapes, so a re-added entry has two ways to go green).
      *
-     * The trailing rows are the load-bearing half. Two of the six have a real
+     * The trailing rows are the load-bearing half. One of the six has a real
      * upstream family that is still NOT relay surface, and the tempting "fix"
      * for a removed entry is to allowlist the real one:
-     *  - `/api/v1/artwork/{id}` — the poster/image surface, served by
-     *    `HttpHandler::serveArtwork()` as a pre-router fast path that the relay
-     *    dispatcher never even reaches, so allowlisting it would be relay surface
-     *    with no relay handler behind it;
      *  - `/opds/v1.2[/…]` — the real OPDS catalog, mounted at the ROOT per the
      *    OPDS 1.2 spec. It is also an UNAUTHENTICATED-adjacent surface with its
      *    own Basic-auth story, so exposing it over the hub tunnel is a product
      *    decision, not a typo fix.
+     *
+     * ⚠ `/api/v1/artwork/{id}` used to be a row here, pinning it DENIED. S238
+     * removed it: the user decided relayed browse must render images, so artwork
+     * is now in scope via an anchored `BROWSE_SCOPE_PATTERNS['GET']` entry and is
+     * pinned ALLOWED by `s238ImageReadProvider()` instead. Do not re-add it — a
+     * denied row here and an allowed row there cannot both be green, which is the
+     * point: the two providers are each other's control.
+     * The `/api/v1/images` rows stay: that spelling still names no server route
+     * (the real one is `/api/v1/artwork/{id}`), so it is still dead surface.
      * The other two twins need nothing at all, because they are already inside
      * the surviving `/api/v1/media` prefix and are pinned ALLOWED below:
      * `GET /api/v1/media/facets` (the real `/api/v1/genres`) and
@@ -3702,7 +3707,6 @@ final class ServerProxyControllerTest extends TestCase
             yield "removed prefix sub-path {$subPath}" => [$subPath];
         }
 
-        yield 'real artwork route (pre-router fast path, not relay-reachable)' => ['/api/v1/artwork/item-1'];
         yield 'real OPDS root (root-mounted, never under /api/v1)' => ['/opds/v1.2'];
         yield 'real OPDS library feed' => ['/opds/v1.2/libraries/lib-1'];
         yield 'real OPDS book download' => ['/opds/v1.2/books/book-1/download'];
@@ -3837,5 +3841,461 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode, "GET {$path} must still be forwarded");
         $this->assertIsArray($forwarded, "GET {$path} must reach the relay bridge");
         $this->assertSame($path, $forwarded['path'], 'the forward path must be byte-identical');
+    }
+
+    // -----------------------------------------------------------------------
+    // S238 — artwork + avatars over the relay.
+    //
+    // Measured 2026-08-05: `GET /api/v1/artwork/{id}` and
+    // `GET /api/v1/users/{id}/avatar` were DOUBLY unreachable over the relay —
+    // 403 here (in no scope map) and then 404 at
+    // `Hub\RelayRequestDispatcher::dispatch()` even if they had been, because
+    // both are PRE-ROUTER fast paths in `Server\Workerman\HttpHandler`
+    // (`serveArtwork()`, `serveUserAvatar()`) and so appear in neither production
+    // route table. ⇒ relayed inline browse could render NO posters and NO
+    // avatars. The user decided (2026-08-05) that relayed images must work; this
+    // is the HUB half — the 403. The 404 is phlix-server's half and lands
+    // separately, so until it does these paths 404 instead of 403, which is a
+    // strict improvement and not a regression.
+    //
+    // ⚠ Shape choice, and it is the security-relevant part: BOTH landed as
+    // ANCHORED `BROWSE_SCOPE_PATTERNS['GET']` entries, NOT as prefixes in
+    // `BROWSE_SCOPE_ALLOWLIST`. A `/api/v1/users` prefix would have admitted the
+    // whole `WebPortalRouter` user surface (`me/settings`, `me/favorites`,
+    // `me/history`, `me/continue-watching`, `me/next-up`, `me/recently-watched`);
+    // a `/api/v1/artwork` prefix would have admitted an arbitrary sub-tree the
+    // server's single-segment matcher does not serve. Every one of those is
+    // pinned DENIED by `s238MustStayDeniedProvider()` — the control beside the
+    // allow rows.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Anti-vacuity floor for `BROWSE_SCOPE_PATTERNS['GET']`.
+     *
+     * The S238 rows below are only meaningful if the map they read is populated.
+     * Nine is the count at the time of writing (2 HLS audio + 1 chapter thumbnail
+     * + 4 trickplay + the 2 S238 image reads); the assertion is `>=`, so adding an
+     * entry is fine and hollowing the map fails LOUDLY with the count in the
+     * message rather than passing trivially. Proved by emptying the `GET` key.
+     */
+    private const S238_MIN_GET_PATTERNS = 9;
+
+    /**
+     * The two S238 patterns, exactly as production must hold them.
+     *
+     * Exact string equality, never `str_contains`/`assertStringContainsString`:
+     * `'#^/api/v1/artwork/[^/]+$#'` is a substring of a MUTATED
+     * `'#^/api/v1/artwork/[^/]+$#x'`, so a substring assertion would pass the very
+     * mutation this exists to catch (cf. S37/S236).
+     *
+     * @var list<string>
+     */
+    private const S238_EXPECTED_PATTERNS = [
+        '#^/api/v1/artwork/[^/]+$#',
+        '#^/api/v1/users/[^/]+/avatar$#',
+    ];
+
+    /**
+     * Anti-vacuity + presence, read off the REAL constant (not a hand-made copy).
+     *
+     * Order of assertions matters: the map must be found and be above the floor
+     * BEFORE the membership check runs, so a hollowed/renamed constant fails with
+     * an explicit "nothing to check" message instead of a bare "value not in
+     * array".
+     */
+    public function test_s238_image_read_patterns_are_present_in_the_real_constant(): void
+    {
+        $raw = (new ReflectionClass(ServerProxyController::class))
+            ->getConstant('BROWSE_SCOPE_PATTERNS');
+        $this->assertIsArray(
+            $raw,
+            'BROWSE_SCOPE_PATTERNS must still be an array constant — if it was renamed or '
+            . 'removed, every S238 row below is vacuous',
+        );
+        /** @var array<string, list<string>> $patterns */
+        $patterns = $raw;
+
+        $this->assertArrayHasKey(
+            'GET',
+            $patterns,
+            "BROWSE_SCOPE_PATTERNS['GET'] is missing — the S238 image reads have nowhere to live",
+        );
+        $get = $patterns['GET'];
+
+        $this->assertGreaterThanOrEqual(
+            self::S238_MIN_GET_PATTERNS,
+            count($get),
+            sprintf(
+                'ANTI-VACUITY: BROWSE_SCOPE_PATTERNS[GET] holds %d entries, below the floor of %d. '
+                . 'The map has been hollowed, so no membership assertion below proves anything.',
+                count($get),
+                self::S238_MIN_GET_PATTERNS,
+            ),
+        );
+
+        foreach (self::S238_EXPECTED_PATTERNS as $pattern) {
+            // assertContains is strict (===) in PHPUnit 10 — exact literal, so a
+            // one-character mutation of the pattern reds this.
+            $this->assertContains(
+                $pattern,
+                $get,
+                sprintf(
+                    "S238: BROWSE_SCOPE_PATTERNS['GET'] must carry the exact literal %s — "
+                    . 'without it relayed browse renders no posters/avatars (403 proxy.scope_denied)',
+                    $pattern,
+                ),
+            );
+        }
+    }
+
+    /**
+     * The image reads S238 opens, in the shapes the server actually serves.
+     *
+     * `serveArtwork()` matches `#^/api/v1/artwork/([^/]+)$#` and `serveUserAvatar()`
+     * matches `#^/api/v1/users/([^/]+)/avatar$#`, so the id classes below mirror
+     * what really reaches them: a UUID, the literal `me` (what `AvatarStorage`
+     * emits for the current user), and a percent-encoded id.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function s238ImageReadProvider(): iterable
+    {
+        yield 'artwork by uuid' => ['/api/v1/artwork/550e8400-e29b-41d4-a716-446655440000'];
+        yield 'artwork by short id' => ['/api/v1/artwork/item-1'];
+        yield 'artwork id needing percent-encoding' => ['/api/v1/artwork/item%201'];
+        yield 'avatar by uuid' => ['/api/v1/users/550e8400-e29b-41d4-a716-446655440000/avatar'];
+        yield 'avatar for me' => ['/api/v1/users/me/avatar'];
+        yield 'avatar by short id' => ['/api/v1/users/user-1/avatar'];
+    }
+
+    /**
+     * The gate itself: each image read is in browse scope under GET.
+     *
+     * @dataProvider s238ImageReadProvider
+     */
+    public function test_s238_image_reads_are_within_browse_scope(string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertTrue(
+            $reflected->invoke($controller, 'GET', $path),
+            "GET {$path} is an S238 image read and must be forwarded over the relay",
+        );
+    }
+
+    /**
+     * End-to-end through `proxy()`: the request reaches the relay bridge with a
+     * byte-identical path and the reply's BINARY body survives intact.
+     *
+     * The binary assertion is the point of this row rather than a status check:
+     * the buffered reply path is what an image takes (images are NOT in
+     * `STREAMING_BODY_PREFIXES`), and a body that is mangled anywhere between the
+     * bridge and `buildResponse()` would render as a broken image while a status
+     * assertion stayed green. The payload carries a NUL byte and a `\r\n` on
+     * purpose.
+     *
+     * @dataProvider s238ImageReadProvider
+     */
+    public function test_s238_image_reads_forward_and_return_image_bytes(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $png = "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\xff\xfe binary";
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded, $png): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'image/png'],
+                'body' => $png,
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(200, $response->statusCode, "GET {$path} must be forwarded, not 403 scope_denied");
+        $this->assertIsArray($forwarded, "GET {$path} must reach the relay bridge");
+        $this->assertSame($path, $forwarded['path'], 'the forward path must be byte-identical');
+        $this->assertSame($png, $response->body, "GET {$path} must return the image bytes unmangled");
+        $this->assertSame('image/png', $response->headers['Content-Type'] ?? null);
+    }
+
+    /**
+     * Artwork's `?size=` — and a SIGNED artwork URL's `exp`/`sig` — reach the
+     * server byte-for-byte, and the scope gate never sees them.
+     *
+     * This is the row the brief's caution asks for. `serveArtwork()` rebuilds the
+     * signed resource path as `'/api/v1/artwork/'.$id.'?size='.$size` from
+     * `$wr->path()` + `$wr->get('size')`, so if the hub dropped, reordered or
+     * re-encoded the query string the HMAC would not verify and every relayed
+     * poster would 401. The gate takes the PATH only (`$params['path']` carries no
+     * query), which is also why a `sig` full of base64 characters cannot trip
+     * `hasTraversalSegment()`.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s238ImageQueryStringProvider(): iterable
+    {
+        yield 'artwork size only' => ['/api/v1/artwork/item-1', 'size=w342'];
+        yield 'artwork original size' => ['/api/v1/artwork/item-1', 'size=original'];
+        yield 'signed artwork url' => [
+            '/api/v1/artwork/item-1',
+            'size=w342&exp=1893456000&sig=aB3-_9xQz0KkLmNoPqRsTuVwXyZ012345678',
+        ];
+        yield 'signed avatar url' => [
+            '/api/v1/users/me/avatar',
+            'exp=1893456000&sig=aB3-_9xQz0KkLmNoPqRsTuVwXyZ012345678',
+        ];
+    }
+
+    /**
+     * @dataProvider s238ImageQueryStringProvider
+     */
+    public function test_s238_image_query_string_reaches_the_bridge_byte_for_byte(
+        string $path,
+        string $queryString,
+    ): void {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'image/jpeg'],
+                'body' => "\xff\xd8\xff\xe0 jpeg",
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $request = $this->request('GET', 'user-1');
+        $request->queryString = $queryString;
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy($request, ['id' => 'srv-1', 'path' => ltrim($path, '/')]);
+
+        $this->assertSame(200, $response->statusCode, "GET {$path}?{$queryString} must be forwarded");
+        $this->assertIsArray($forwarded, "GET {$path}?{$queryString} must reach the relay bridge");
+        $this->assertSame($path, $forwarded['path'], 'the forward path must be byte-identical');
+        $this->assertSame(
+            $queryString,
+            $forwarded['query'] ?? null,
+            'the query string must reach the server byte-for-byte or a signed image URL will not verify',
+        );
+    }
+
+    /**
+     * THE CONTROL. Everything the two anchored patterns must NOT admit.
+     *
+     * An allowlist widening is only as good as what it still refuses, so each row
+     * is a path a BROADER shape would have admitted:
+     *  - the whole `/api/v1/users` surface a `/api/v1/users` PREFIX would have
+     *    opened (`WebPortalRouter.php:332-373`): settings, continue-watching,
+     *    next-up, recently-watched, favorites, history — plus the bare prefix and
+     *    a bare user resource;
+     *  - anything DEEPER than the server's single-segment matchers: an artwork
+     *    sub-tree, a two-segment user id, a path below `/avatar`;
+     *  - the bare collection paths (`/api/v1/artwork`, `/api/v1/users`), which
+     *    the server serves for nobody;
+     *  - SIBLING bleed (`/api/v1/artworkX/…`, `/api/v1/users-admin/…`,
+     *    `…/avatars`), the classic prefix-match failure;
+     *  - `/api/v1/admin/…` and a plain `/api/v1/users/{id}` — nothing about
+     *    letting an avatar through may let a user record through.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function s238MustStayDeniedProvider(): iterable
+    {
+        // The `/api/v1/users` surface a prefix would have admitted.
+        yield 'user settings' => ['/api/v1/users/me/settings'];
+        yield 'user continue-watching' => ['/api/v1/users/me/continue-watching'];
+        yield 'user next-up' => ['/api/v1/users/me/next-up'];
+        yield 'user recently-watched' => ['/api/v1/users/me/recently-watched'];
+        yield 'user favorites' => ['/api/v1/users/me/favorites'];
+        yield 'user history' => ['/api/v1/users/me/history'];
+        yield 'user history item' => ['/api/v1/users/me/history/item-1'];
+        yield 'bare users collection' => ['/api/v1/users'];
+        yield 'user resource' => ['/api/v1/users/user-1'];
+        yield 'user me resource' => ['/api/v1/users/me'];
+
+        // Deeper than the server's single-segment matchers.
+        yield 'artwork sub-tree' => ['/api/v1/artwork/item-1/original'];
+        yield 'artwork two-segment id' => ['/api/v1/artwork/item-1/w342'];
+        yield 'avatar with a two-segment user id' => ['/api/v1/users/a/b/avatar'];
+        yield 'path below avatar' => ['/api/v1/users/me/avatar/original'];
+
+        // Bare collection paths the server serves for nobody.
+        yield 'bare artwork collection' => ['/api/v1/artwork'];
+
+        // Sibling bleed.
+        yield 'artwork sibling prefix' => ['/api/v1/artworkX/item-1'];
+        yield 'users sibling prefix' => ['/api/v1/users-admin/user-1/avatar'];
+        yield 'avatars plural' => ['/api/v1/users/me/avatars'];
+        yield 'avatar with a suffix' => ['/api/v1/users/me/avatarX'];
+
+        // Unrelated privileged surface, re-asserted so this change cannot be read
+        // as having relaxed anything else.
+        yield 'admin users' => ['/api/v1/admin/users'];
+    }
+
+    /**
+     * @dataProvider s238MustStayDeniedProvider
+     */
+    public function test_s238_widening_admits_nothing_beyond_the_two_image_reads(string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertFalse(
+            $reflected->invoke($controller, 'GET', $path),
+            "GET {$path} must stay out of browse scope: S238 opens the two image reads and nothing else",
+        );
+        $this->assertFalse(
+            $reflected->invoke($controller, 'HEAD', $path),
+            "HEAD {$path} must stay out of browse scope too",
+        );
+    }
+
+    /**
+     * End-to-end control: a denied neighbour 403s `proxy.scope_denied` and never
+     * reaches the bridge — the SUCCEEDING sibling being
+     * `test_s238_image_reads_forward_and_return_image_bytes()` above, so a 403
+     * here is provably "the scope gate refused it" and not "the harness never got
+     * anywhere".
+     *
+     * @dataProvider s238MustStayDeniedProvider
+     */
+    public function test_s238_denied_neighbours_403_and_are_not_forwarded(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(403, $response->statusCode, "GET {$path} must fail closed");
+        $this->assertFalse($forwarded, "GET {$path} must never reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * The image reads are opened for GET ONLY.
+     *
+     * The load-bearing rows are `POST /api/v1/users/me/avatar` (avatar UPLOAD,
+     * `WebPortalRouter.php:372`) and `DELETE /api/v1/users/me/avatar` (avatar
+     * DELETE, `:373`) — two REAL server writes at the exact path S238 now admits
+     * under GET. They stay refused by the hub's OWN method gate (no avatar entry
+     * under any write key), which is why they need no `SCOPE_DENY_PATTERNS`
+     * entry: nothing here depends on the server's route table.
+     *
+     * HEAD is included because it is inert by design (no `Router::head()`
+     * registrar) and must stay that way — S238 does not make HEAD live.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s238NonGetVerbProvider(): iterable
+    {
+        $paths = [
+            'artwork' => '/api/v1/artwork/item-1',
+            'avatar' => '/api/v1/users/me/avatar',
+        ];
+        foreach ($paths as $label => $path) {
+            foreach (['HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+                yield "{$method} {$label}" => [$method, $path];
+            }
+        }
+    }
+
+    /**
+     * @dataProvider s238NonGetVerbProvider
+     */
+    public function test_s238_image_reads_are_get_only(string $method, string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertFalse(
+            $reflected->invoke($controller, $method, $path),
+            "{$method} {$path} must fail closed — S238 opens a READ, never a write "
+            . '(POST/DELETE /api/v1/users/me/avatar are real server writes at this exact path)',
+        );
+    }
+
+    /**
+     * S238 adds no PREFIX, so the S107 enumeration is not re-opened — asserted
+     * rather than argued.
+     *
+     * `SCOPE_DENY_PATTERNS` is derived from `BROWSE_SCOPE_ALLOWLIST['GET']`
+     * prefixes: a path is swept when it lies UNDER one. Neither image read does,
+     * so the sweep is untouched. This test fails if a future change quietly turns
+     * one of the anchored patterns into a prefix — the exact shortcut the
+     * enumeration rule exists to catch.
+     */
+    public function test_s238_added_no_new_browse_scope_prefix(): void
+    {
+        $raw = (new ReflectionClass(ServerProxyController::class))
+            ->getConstant('BROWSE_SCOPE_ALLOWLIST');
+        $this->assertIsArray($raw, 'BROWSE_SCOPE_ALLOWLIST must still be an array constant');
+        /** @var array<string, list<string>> $allowlist */
+        $allowlist = $raw;
+
+        foreach (['GET', 'HEAD'] as $method) {
+            $prefixes = $allowlist[$method] ?? [];
+            $this->assertNotSame([], $prefixes, "ANTI-VACUITY: BROWSE_SCOPE_ALLOWLIST[{$method}] is empty");
+            foreach (['/api/v1/artwork', '/api/v1/users'] as $forbidden) {
+                $this->assertNotContains(
+                    $forbidden,
+                    $prefixes,
+                    sprintf(
+                        '%s must NEVER be a %s PREFIX: it would admit an arbitrary sub-tree '
+                        . '(for /api/v1/users, the whole me/settings|favorites|history surface). '
+                        . 'S238 uses anchored BROWSE_SCOPE_PATTERNS entries instead.',
+                        $forbidden,
+                        $method,
+                    ),
+                );
+            }
+        }
     }
 }

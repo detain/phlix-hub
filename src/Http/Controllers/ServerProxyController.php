@@ -57,7 +57,9 @@ use const JSON_THROW_ON_ERROR;
  *
  * Scope: read-only traffic only — JSON browse (libraries, media lists, detail,
  * search, music library) PLUS playback reads (HLS/DASH playlists + segments, the
- * direct-play byte stream, and transcode-job status polling) — with ONE
+ * direct-play byte stream, and transcode-job status polling) PLUS the image reads
+ * inline browse renders (chapter thumbnails, artwork/posters and user avatars —
+ * S238) — with ONE
  * narrowly-scoped write exception: starting an on-demand transcode
  * (`POST /api/v1/media/{id}/transcode`), which a player needs before it can
  * stream an incompatible title. See {@see self::BROWSE_SCOPE_ALLOWLIST} for the
@@ -167,7 +169,11 @@ final class ServerProxyController
      * path:
      *   - images/posters  → `GET /api/v1/artwork/{id}` (a pre-router fast path in
      *     `Server\Workerman\HttpHandler::serveArtwork()`, which the relay
-     *     dispatcher does not even reach) — deliberately still OUT of scope;
+     *     dispatcher does not even reach). ⚠ **S238 changed this disposition**:
+     *     the user decided relayed browse must render images, so artwork IS in
+     *     scope now — but as an ANCHORED entry in
+     *     {@see self::BROWSE_SCOPE_PATTERNS}`['GET']`, never as the
+     *     `/api/v1/artwork` PREFIX the note below still forbids;
      *   - OPDS catalog    → `GET /opds/v1.2[/…]`, mounted at the ROOT per the OPDS
      *     1.2 spec, never under `/api/v1` (note `Server\Http\Router::opds()` also
      *     registers it, but that registrar has ZERO production callers — only a
@@ -182,8 +188,14 @@ final class ServerProxyController
      *     `SearchPage.vue` calls `/api/v1/media/search` and always has.
      * `/api/v1/studios` and `/api/v1/people` have no upstream twin at all.
      * ⚠ Do NOT re-add any of them, and do not "fix" the omission by allowlisting
-     * the twin: exposing `/api/v1/artwork` or `/opds/v1.2` over the relay is a
-     * deliberate product decision that must run the S107 enumeration first.
+     * the twin as a PREFIX: exposing `/api/v1/artwork` or `/opds/v1.2` over the
+     * relay is a deliberate product decision that must run the S107 enumeration
+     * first. `/opds/v1.2` is still OUT (it has its own Basic-auth story and no
+     * product decision has been taken). Artwork was taken out of that bucket by
+     * S238 — deliberately, by the user, with the enumeration run — and landed as
+     * an ANCHORED single-segment pattern in {@see self::BROWSE_SCOPE_PATTERNS},
+     * NOT as a prefix here. `/api/v1/images` is still dead surface either way:
+     * the real path is `/api/v1/artwork/{id}`.
      * `ServerProxyControllerTest::s107FollowupDeadPrefixProvider()` and
      * `test_browse_scope_allowlist_matches_the_pinned_upstream_backed_set()` pin
      * both halves.
@@ -341,6 +353,24 @@ final class ServerProxyController
      * same reason as the prefix allowlist: {@see self::hasTraversalSegment()}
      * rejects any dot-segment or encoded separator BEFORE this map is consulted.
      *
+     * ### The GET key also carries the reads a PREFIX would over-admit (S238)
+     * A prefix is the right shape only when every path under it is in scope. Three
+     * reads fail that test and live here instead, each anchored to exactly the
+     * server's own matcher: the chapter thumbnail (`{index}` in the middle),
+     * `GET /api/v1/artwork/{itemId}` (single-segment id — a `/api/v1/artwork`
+     * prefix would admit an arbitrary sub-tree) and
+     * `GET /api/v1/users/{userId}/avatar` (id in the MIDDLE — a `/api/v1/users`
+     * prefix would admit the entire user surface: `me/settings`,
+     * `me/continue-watching`, `me/next-up`, `me/recently-watched`, `me/favorites`,
+     * `me/history`). Being anchored GET-only entries they add NO new prefix, so
+     * they do not re-open the {@see self::SCOPE_DENY_PATTERNS} sweep — the
+     * enumeration rule is keyed on `BROWSE_SCOPE_ALLOWLIST['GET']` prefixes, and
+     * nothing new lies under one. The S238 enumeration was still run: the only
+     * write routes at or under either new path are
+     * `POST`/`DELETE /api/v1/users/me/avatar`, and both are refused by the hub's
+     * own method gate (no avatar entry under any write key), so there is no peer
+     * route-table dependency to remove.
+     *
      * Keyed by HTTP method (upper-case); matched by
      * {@see self::isWithinBrowseScope()} AFTER the prefix allowlist.
      *
@@ -359,6 +389,44 @@ final class ServerProxyController
 
             // Chapter thumbnails — served via the server API at GET /api/v1/media/{id}/chapters/{index}/thumbnail
             '#^/api/v1/media/[^/]+/chapters/\d+/thumbnail$#',
+
+            // ---- S238: the two IMAGE fast paths -----------------------------
+            // Posters/backdrops/logos: GET /api/v1/artwork/{itemId}?size={size}.
+            // Served by `Server\Workerman\HttpHandler::serveArtwork()`, a
+            // PRE-ROUTER fast path (it runs before `Router::dispatch()`), so it is
+            // in NEITHER production route table. Until the phlix-server half of
+            // S238 lands it therefore 404s over the relay rather than 403-ing
+            // here; that is the peer's gate, not this one, and the hub entry is
+            // correct on its own.
+            //
+            // ANCHORED, not a `/api/v1/artwork` PREFIX, deliberately: the server
+            // matcher is `#^/api/v1/artwork/([^/]+)$#` — exactly ONE segment — so
+            // a prefix would admit `/api/v1/artwork/a/b/c` and every future
+            // sub-tree under it without re-running the S107 enumeration, while
+            // this pattern admits exactly the shape the server serves and nothing
+            // else. The `?size=` (and the signed-URL `exp`/`sig`) live in the
+            // QUERY STRING, which never reaches this matcher: the scope gate and
+            // `hasTraversalSegment()` both take the PATH only, and
+            // `$request->queryString` is forwarded to the bridge byte-for-byte
+            // (S108b) — so a signed artwork URL verifies server-side unchanged
+            // (`serveArtwork()` rebuilds `'/api/v1/artwork/'.$id.'?size='.$size`
+            // from `$wr->path()` + `$wr->get('size')`).
+            '#^/api/v1/artwork/[^/]+$#',
+            // Avatars: GET /api/v1/users/{userId}/avatar, served by
+            // `HttpHandler::serveUserAvatar()` — the same pre-router fast path
+            // class, matcher `#^/api/v1/users/([^/]+)/avatar$#`.
+            //
+            // ⚠ This is why it is an anchored PATTERN and NOT a prefix: the id is
+            // a MIDDLE segment, and `/api/v1/users` as a prefix would admit the
+            // whole `WebPortalRouter` user surface — `/api/v1/users/me/settings`,
+            // `/continue-watching`, `/next-up`, `/recently-watched`, `/favorites`,
+            // `/history` — none of which S238 asks for. Anchored on the literal
+            // `avatar` tail, the ONLY path this admits is the avatar image itself.
+            // The upload/delete twins (`POST`/`DELETE /api/v1/users/me/avatar`,
+            // WebPortalRouter.php:372-373) stay refused by the hub's own method
+            // gate: this entry is under the GET key and neither write key carries
+            // an avatar entry, so no peer route-table accident is being relied on.
+            '#^/api/v1/users/[^/]+/avatar$#',
 
             // Trickplay sprite sheet and timeline JSON served by TrickplayController.
             // Covers: /trickplay/{jobId}/sprite.jpg|png
