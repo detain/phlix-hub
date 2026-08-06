@@ -1792,6 +1792,120 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
+     * S108 — the hub-side PRECONDITION for making `AC/DC` reachable.
+     *
+     * The traversal guard is applied to the forward PATH only
+     * ({@see ServerProxyController::hasTraversalSegment()} takes `$path`), while
+     * `$request->queryString` is handed to the relay bridge verbatim. That is
+     * what makes S108's chosen upstream design — key music by id / carry the NAME
+     * in a QUERY parameter — implementable at all: a query value may legally
+     * contain the very characters the path guard refuses outright.
+     *
+     * ⚠ **This is not decoration.** S108's fix lands in phlix-server + the
+     * clients, not here, and nothing in this suite currently observes the query
+     * string on a music read. If a later "hardening" pass fed
+     * `$path . '?' . $queryString` (or the raw request URI) to the traversal
+     * guard, every S108-fixed name containing `/`, `\` or `%2F` would start
+     * 403ing again and the SPA would return to the same invisible empty state
+     * S99/S100/S108 exist to eliminate — with every other test in this file still
+     * green. This pins the boundary so that change cannot land silently.
+     *
+     * Each row is what `encodeURIComponent()` emits for a real artist/album name
+     * carried as a query value.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function musicNameInQueryStringProvider(): iterable
+    {
+        yield 'AC/DC as an encoded query value' => ['artist=AC%2FDC'];
+        yield 'AC\\DC as an encoded query value' => ['artist=AC%5CDC'];
+        yield 'N/A as an encoded query value' => ['artist=N%2FA'];
+        yield '+/- as an encoded query value' => ['artist=%2B%2F-'];
+        yield 'a name with a space' => ['artist=Pink%20Floyd'];
+        yield 'a name with an ampersand' => ['artist=Simon%20%26%20Garfunkel'];
+        yield 'album title plus artist filter' => ['album=Back%20In%20Black&artist=AC%2FDC'];
+    }
+
+    /**
+     * A music NAME carried in the query string reaches the relay bridge
+     * byte-for-byte, including separators the PATH guard refuses.
+     *
+     * @dataProvider musicNameInQueryStringProvider
+     */
+    public function test_music_name_in_the_query_string_survives_the_path_traversal_guard(string $queryString): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{"artist":{}}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $request = $this->request('GET', 'user-1');
+        $request->queryString = $queryString;
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $request,
+            ['id' => 'srv-1', 'path' => 'api/v1/music/artists'],
+        );
+
+        $this->assertSame(
+            200,
+            $response->statusCode,
+            "A music name in the query string must not be treated as a path traversal: ?{$queryString}",
+        );
+        $this->assertIsArray($forwarded, "GET ?{$queryString} must reach the relay bridge");
+        $this->assertSame('/api/v1/music/artists', $forwarded['path']);
+        $this->assertSame(
+            $queryString,
+            $forwarded['query'],
+            'The query string must arrive at phlix-server byte-for-byte — S108 keys music by a name carried here',
+        );
+    }
+
+    /**
+     * Control for {@see self::test_music_name_in_the_query_string_survives_the_path_traversal_guard()}:
+     * the SAME name in the SAME request, moved into the PATH, is still refused.
+     *
+     * Without this the test above would pass just as happily against a guard that
+     * had been deleted outright — "the query string forwards" is only meaningful
+     * alongside "the path spelling does not".
+     */
+    public function test_the_same_music_name_in_the_path_is_still_refused(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $request = $this->request('GET', 'user-1');
+        $request->queryString = 'artist=AC%2FDC';
+
+        $response = $controller->proxy(
+            $request,
+            ['id' => 'srv-1', 'path' => 'api/v1/music/artists/AC%2FDC'],
+        );
+
+        $this->assertSame(403, $response->statusCode);
+        $this->assertFalse($forwarded, 'The PATH spelling must still be refused even when the query carries the name too');
+    }
+
+    /**
      * HB-3.1: watched/unwatched via POST and favorite/rating/like_level/poster
      * via PUT are now allowed scope-wise. Only match/apply and admin routes
      * stay 403 `proxy.scope_denied`.
@@ -2474,6 +2588,17 @@ final class ServerProxyControllerTest extends TestCase
      *    hub regression — the real fix is upstream: key music by id and pass the
      *    name as a QUERY parameter. Until then a library containing AC/DC shows an
      *    empty artist page over the hub (the SPA swallows the 403).
+     *
+     *    ⚠ **This provider is a pin on the HUB's behaviour, not a statement of
+     *    S108's scope — do not size the upstream step from it.** Measured by
+     *    execution on 2026-08-05: because phlix-server never decodes a route
+     *    parameter, EVERY name `encodeURIComponent()` touches is unreachable, not
+     *    just the ones with a separator. `Pink%20Floyd` is forwarded by this hub
+     *    and then 404s at the server, where `WHERE a.name = 'Pink%20Floyd'`
+     *    matches 0 production rows against 1 for `'Pink Floyd'`. On production
+     *    `music_artists`: 4,679 names, 296 with `/`, **4,006 with a space**. The
+     *    rows below are the subset THIS gate refuses; the other ~3,700 names fail
+     *    one layer further downstream and no hub change can reach them.
      *  - **LOW-4, a name that IS `.` or `..`.** A dot is unreserved so
      *    `encodeURIComponent()` leaves it literal and the segment arrives as a
      *    genuine dot-segment. Names that merely contain dots are unaffected and
