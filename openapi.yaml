@@ -1679,6 +1679,104 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/mcp-tokens":
+    get:
+      operationId: "get_api_v1_me_mcp_tokens"
+      tags: ["MCP"]
+      summary: "List my MCP personal access tokens"
+      description: |-
+        Metadata only — the plaintext of a token is unrecoverable, because only its SHA-256 hash was
+        stored at mint time. Revoked and expired rows are included so the owner can see the history;
+        each carries `revoked` / `expired` flags.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpTokenList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_mcp_tokens"
+      tags: ["MCP"]
+      summary: "Mint an MCP personal access token"
+      description: |-
+        Mints the long-lived (90-day default) bearer credential an MCP client presents to `POST /mcp`.
+        The plaintext is returned EXACTLY ONCE and cannot be retrieved afterwards.
+
+        The token is scoped to the calling USER, not to a server: `list_servers` has to enumerate
+        every server that user owns. Per-server authorisation happens at USE time — every MCP tool
+        call is routed through the same ownership check `/api/v1/servers/{id}/proxy/…` uses, so a
+        token can only ever reach servers its user still owns at the moment of the call.
+
+        `scopes` narrows the token below its user's own access; it can never widen it. An omitted
+        list grants every read scope. A list containing no recognised scope is a 400 rather than a
+        token that authenticates but authorises nothing.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpTokenMintRequest"
+      responses:
+        "201":
+          description: "Minted. The `token` field is shown here and nowhere else, ever."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpTokenMinted"
+        "400":
+          description: "No recognised scope was requested."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/mcp-tokens/{id}":
+    delete:
+      operationId: "delete_api_v1_me_mcp_tokens_id"
+      tags: ["MCP"]
+      summary: "Revoke one of my MCP tokens"
+      description: |-
+        Revocation is immediate and independent of expiry. An unknown id, an already-revoked token
+        and a token belonging to somebody else are deliberately indistinguishable (all 404), so this
+        endpoint cannot be used as an oracle for other users' token ids.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Revoked."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/me/logs":
     get:
       operationId: "get_api_v1_me_logs"
@@ -2952,6 +3050,84 @@ paths:
               description: "/app/shares when signed in, /app/login when not"
               schema:
                 type: string
+  "/mcp":
+    post:
+      operationId: "post_mcp"
+      tags: ["MCP"]
+      summary: "Model Context Protocol endpoint (JSON-RPC 2.0)"
+      description: |-
+        The hub's MCP server, served by the SAME `:8800` HTTP worker as everything else in this
+        description — not a sidecar and not a separate port.
+
+        ## Authentication
+
+        `x-phlix-middleware` is `[]` because an MCP client does not carry a hub session. It presents
+        a personal access token minted at `POST /api/v1/me/mcp-tokens`, in an
+        `Authorization: Bearer` header, and `McpController` validates it itself. There is no
+        `?token=` query fallback: query strings land in access logs, and Workerman never populates
+        `$_GET` anyway.
+
+        Failed presentations are rate-limited exactly the way login is — the shared, DB-backed
+        limiter keyed `mcp:auth:<ip>`, incremented only on FAILURE and cleared on success, so a busy
+        agent never locks itself out and a guesser gets one budget across every worker. An exhausted
+        window is a 429 with `Retry-After`.
+
+        ## Authorisation
+
+        Every tool call re-derives the token's user and is dispatched through the same controllers
+        that serve `/api/v1/me/servers` and `/api/v1/servers/{id}/proxy/{path}`. A tool therefore
+        inherits, unchanged: the 404/403 server-ownership gate, the relay-tunnel and bandwidth-quota
+        checks, path-traversal rejection, and the proxy's read-only browse-scope allowlist. Nothing
+        was added to that allowlist for MCP — the tools wrap paths it already permits.
+
+        ## Methods
+
+        `initialize`, `ping`, `tools/list`, `tools/call`. Notifications (a request with no `id`)
+        receive an empty `202` and never a body.
+
+        ## Not implemented here
+
+        `GET /mcp` (the SSE transport), protocol-VERSION negotiation, JSON-RPC schema validation and
+        the `playback_control` write tool are all deliberately absent; they are the next step. This
+        build answers `initialize` with a fixed `protocolVersion` and, when the client asked for a
+        different one, says in `result._meta` that no negotiation took place rather than letting the
+        client assume its request was honoured. Batched JSON-RPC requests are refused by name (MCP
+        removed batching in its 2025-06-18 revision).
+      x-phlix-middleware: []
+      security:
+        - mcpToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonRpcRequest"
+      responses:
+        "200":
+          description: |-
+            A JSON-RPC response. A JSON-RPC ERROR also rides a 200: the HTTP status describes the
+            transport, and the transport worked. So does a tool that refused — a refusal is
+            `result.isError: true` with the reason in `structuredContent`, not a transport error,
+            because the model needs to read why.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponse"
+        "202":
+          description: "A notification was accepted. Body is empty, per JSON-RPC 2.0 §4.1."
+        "401":
+          description: "No token, or an unknown / expired / revoked one."
+          headers:
+            WWW-Authenticate:
+              description: 'Bearer realm="phlix-hub-mcp"'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/my-servers":
     get:
       operationId: "get_my_servers"

@@ -43,6 +43,11 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
      *    `/api/v1/servers/{id}/subdomain` — server-facing;
      *    RelayController/ClientMountController/SubdomainController each
      *    validate an Ed25519 enrollment JWT themselves.
+     *  - `POST /mcp` (S62) — an MCP client presents a personal access token,
+     *    which is neither the HS256 session JWT nor the `phlix_hub_token`
+     *    cookie AuthMiddleware understands, so McpController validates the PAT
+     *    itself (and rate-limits it the way login does) before touching the
+     *    JSON-RPC envelope.
      *
      * @var list<string>
      */
@@ -64,6 +69,7 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
         'POST /api/v1/auth/signup',
         'POST /api/v1/servers/{id}/relay',
         'POST /api/v1/servers/{id}/subdomain',
+        'POST /mcp',
     ];
 
     /**

@@ -285,6 +285,26 @@ final class RouteManifest
                 'method' => 'POST', 'path' => '/api/v1/me/servers/{id}/relay-token',
                 'url' => '/api/v1/me/servers/srv-1/relay-token', 'gate' => self::GATE_AUTH_JSON,
             ],
+
+            // MCP (S62). The management surface is auth-gated like the rest of
+            // `/api/v1/me`; `POST /mcp` itself is UNGATED because an MCP client
+            // presents a personal access token, not a hub session, and
+            // McpController authenticates it internally.
+            [
+                'method' => 'GET', 'path' => '/api/v1/me/mcp-tokens',
+                'url' => '/api/v1/me/mcp-tokens', 'gate' => self::GATE_AUTH_JSON,
+            ],
+            [
+                'method' => 'POST', 'path' => '/api/v1/me/mcp-tokens',
+                'url' => '/api/v1/me/mcp-tokens', 'gate' => self::GATE_AUTH_JSON,
+            ],
+            [
+                'method' => 'DELETE', 'path' => '/api/v1/me/mcp-tokens/{id}',
+                'url' => '/api/v1/me/mcp-tokens/tok-1', 'gate' => self::GATE_AUTH_JSON,
+            ],
+            [
+                'method' => 'POST', 'path' => '/mcp', 'url' => '/mcp', 'gate' => self::GATE_PUBLIC,
+            ],
             [
                 'method' => 'GET', 'path' => '/api/v1/servers/{id}/proxy/{path:.*}',
                 'url' => '/api/v1/servers/srv-1/proxy/api/v1/media', 'gate' => self::GATE_AUTH_JSON,

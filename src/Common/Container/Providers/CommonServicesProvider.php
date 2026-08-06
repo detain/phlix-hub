@@ -94,13 +94,18 @@ final class CommonServicesProvider implements ServiceProviderInterface
             $max = self::intOr($surface, 'max', $spec['max']);
             $window = self::intOr($surface, 'window', $spec['window']);
 
-            if ($id === RateLimitProfiles::LOGIN) {
-                // HB-4.6 (Option B): the login bucket is the ONE surface where the
-                // per-worker weakening (~max × HUB_WORKERS) is a real brute-force
-                // concern, so it is backed by the shared, DB-backed limiter
-                // (migration 040 `login_rate_limit`) that unifies the counter
-                // across every HTTP worker. The Connection is the pooled 'mysql'
-                // one (autowired via Connection::class — bound to
+            if ($id === RateLimitProfiles::LOGIN || $id === RateLimitProfiles::MCP) {
+                // HB-4.6 (Option B) + S62: the two bearer-CREDENTIAL-GUESSING
+                // surfaces — password login and MCP personal-access-token auth —
+                // are the ones where per-worker weakening (~max × HUB_WORKERS) is
+                // a real brute-force concern, so both are backed by the shared,
+                // DB-backed limiter (migration 040 `login_rate_limit`, whose
+                // `rate_key` column is an OPAQUE bucket key, not an IP, precisely
+                // so more than one surface can share the store) that unifies the
+                // counter across every HTTP worker. They keep SEPARATE profiles
+                // (`rate_limit.login` vs `rate_limit.mcp`) so an operator can tune
+                // them apart; the mechanism is one, not two. The Connection is the
+                // pooled 'mysql' one (autowired via Connection::class — bound to
                 // ConnectionPool::getConnection('mysql') in CoreServicesProvider),
                 // NOT the dedicated 'txn' connection: these are single-statement
                 // reads/writes, not a multi-statement transaction. The other five

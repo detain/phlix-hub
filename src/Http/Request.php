@@ -47,6 +47,22 @@ class Request
     /** @var array<string, mixed> */
     public array $body = [];
 
+    /**
+     * The undecoded request body exactly as it arrived.
+     *
+     * {@see $body} is a lossy view of it: {@see decodeJsonBody()} returns `[]`
+     * for a payload that is empty, malformed, or a JSON ARRAY rather than an
+     * object, and drops non-string keys. Three very different inputs therefore
+     * collapse to the same `[]`, which is fine for form-shaped controllers and
+     * useless for a JSON-RPC endpoint that must answer "parse error" and
+     * "invalid request" differently
+     * ({@see \Phlix\Hub\Http\Controllers\McpController}).
+     *
+     * Always a string: `''` when no body was sent, and `''` for a request built
+     * by hand (tests, sub-requests) rather than from the wire.
+     */
+    public string $rawBody = '';
+
     /** @var array<string, mixed> */
     public array $files = [];
 
@@ -111,7 +127,8 @@ class Request
         $request->files = $files;
 
         $input = file_get_contents('php://input');
-        $request->body = $input !== false ? self::decodeJsonBody($input) : [];
+        $request->rawBody = $input !== false ? $input : '';
+        $request->body = self::decodeJsonBody($request->rawBody);
 
         $request->remoteIp = self::stringFromServer('REMOTE_ADDR', '0.0.0.0');
         $portValue = $_SERVER['REMOTE_PORT'] ?? 0;
@@ -163,6 +180,7 @@ class Request
         $request->files = self::collectArrayFromWorkerman($wr->file());
 
         $rawBody = $wr->rawBody();
+        $request->rawBody = $rawBody;
         $contentType = $request->getHeader('Content-Type') ?? '';
         if (str_contains($contentType, 'application/json')) {
             $request->body = self::decodeJsonBody($rawBody);
