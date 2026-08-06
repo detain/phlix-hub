@@ -1124,10 +1124,26 @@ final class ServerProxyController
      * because percent-encoding is LEGITIMATE inside the allowlisted prefixes:
      * `/api/v1/music/artists/{mbid}` and `/albums/{mbid}` are keyed by the
      * artist/album NAME (`ApiClient` sends `encodeURIComponent(name)`), so
-     * `GET /api/v1/music/artists/Pink%20Floyd` is a normal browse read that a
-     * blanket `%` rejection would 403. (An encoded SEPARATOR — `%2f`/`%5c` — has
-     * no legitimate use in any allowlisted family and is still rejected
-     * outright, so a name containing `/` remains unreachable, exactly as before.)
+     * `GET /api/v1/music/artists/Pink%20Floyd` is a well-formed browse read that
+     * this hub must forward and a blanket `%` rejection would 403. (An encoded
+     * SEPARATOR — `%2f`/`%5c` — has no legitimate use in any allowlisted family
+     * and is still rejected outright, so a name containing `/` remains
+     * unreachable, exactly as before.)
+     *
+     * ⚠ **"The hub forwards it" is NOT "it works" — do not read that into the
+     * paragraph above.** Measured by execution on 2026-08-05 (S108): phlix-server
+     * never percent-decodes a route parameter (`Router::dispatch()` fills
+     * `$params` straight out of `preg_match()`; `Request::$path` is Workerman's
+     * `path()`, i.e. `parse_url()`, which does not decode), so
+     * `MusicController::getArtist()` receives the literal string `Pink%20Floyd`
+     * and `MusicLibraryService::findArtistByName()` runs `WHERE a.name = ?`
+     * against it. On the live production database that matches **0** rows while
+     * `'Pink Floyd'` matches 1, and the endpoint 404s. The bound documented in
+     * {@see self::hasTraversalSegment()} as "names containing `/`" is therefore
+     * the SMALL half of the real defect: on production `music_artists`, 296 of
+     * 4,679 names contain `/` but **4,006 contain a space** — so the artist-detail
+     * endpoint is dead for ~86% of the library, direct AND over the relay, and
+     * that is a phlix-server defect this gate neither causes nor can fix.
      *
      * Checks applied to every candidate form:
      *  - encoded separators `%2f` / `%5c` (case-insensitive) and literal `\`;
@@ -1146,7 +1162,14 @@ final class ServerProxyController
      *     phlix-server does not decode route params either, so the name is
      *     unreachable direct as well. Tracked as its own step; the correct fix is
      *     upstream (key music by id with the name as a QUERY parameter), never a
-     *     weaker separator check here.
+     *     weaker separator check here. ⚠ And it must be the query parameter, not
+     *     a `rawurldecode()` of the path before routing: the server's route
+     *     pattern is `#^/api/v1/music/artists/(?P<mbid>[^/]+)$#`, so a decoded
+     *     `AC/DC` stops matching the route entirely (measured: 404 with the
+     *     handler never entered). Only decoding the EXTRACTED param, or moving
+     *     the name off the path, can work — and only the latter also gets past
+     *     this guard. The hub-side half of that design is pinned by
+     *     `ServerProxyControllerTest::musicNameInQueryStringProvider`.
      *  2. An artist/album named exactly `.` or `..` is unreachable, because a
      *     dot is unreserved so `encodeURIComponent()` leaves it literal and the
      *     segment arrives as a real dot-segment. Names that merely CONTAIN dots
