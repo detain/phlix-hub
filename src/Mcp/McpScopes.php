@@ -11,9 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Mcp;
 
-use function array_filter;
-use function array_unique;
-use function array_values;
 use function implode;
 use function in_array;
 use function is_string;

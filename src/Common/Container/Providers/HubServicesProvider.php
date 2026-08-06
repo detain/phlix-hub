@@ -478,6 +478,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 HeartbeatHandler $heartbeatHandler,
                 ClientRelayTokenService $clientRelayTokenService,
                 Ed25519KeyManager $keyManager,
+                McpTokenService $mcpTokenService,
             ) use ($appConfig): IdleReaper {
                 /** @var int $interval */
                 $interval = is_int($appConfig['relay_idle_reaper_interval'] ?? null)
@@ -497,12 +498,18 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $heartbeatHandler,
                     $clientRelayTokenService,
                     $keyManager,
+                    $mcpTokenService,
                 );
             })->parameter('tunnelManager', get(TunnelManager::class))
                 ->parameter('sessionManager', get(RelaySessionManager::class))
                 ->parameter('heartbeatHandler', get(HeartbeatHandler::class))
                 ->parameter('clientRelayTokenService', get(ClientRelayTokenService::class))
-                ->parameter('keyManager', get(Ed25519KeyManager::class)),
+                ->parameter('keyManager', get(Ed25519KeyManager::class))
+                // S62: explicit, like every sibling above. PHP-DI's `autowire()`
+                // SKIPS optional constructor parameters, so a nullable dependency
+                // added without a `->parameter()` line here resolves to null and
+                // the pruner silently never runs.
+                ->parameter('mcpTokenService', get(McpTokenService::class)),
 
             ServerReaper::class => factory(static function (
                 Connection $db,

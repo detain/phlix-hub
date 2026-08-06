@@ -9,6 +9,7 @@ use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Mcp\McpTokenService;
 use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\TunnelInterface;
 use Phlix\Hub\Relay\TunnelManagerInterface;
@@ -500,5 +501,103 @@ class IdleReaperTest extends TestCase
         foreach ($tunnels as $serverId => $tunnel) {
             yield $serverId => $tunnel;
         }
+    }
+
+    /**
+     * S62: the MCP personal-access-token pruner runs on the DB-maintenance
+     * sweep, alongside the HB-4.2 client-relay-token pruner it mirrors.
+     *
+     * {@see McpTokenService} is `final`, so — exactly as the sibling
+     * `ClientRelayTokenService` test above does — a REAL instance is driven
+     * against a mock {@see Connection} and the SQL it emits is captured. That
+     * makes the assertion about the statement actually issued rather than about
+     * a mock having been poked.
+     *
+     * Wiring this pruner into the existing 60-second maintenance timer rather
+     * than giving it a `Timer::add(86400, …)` of its own is deliberate: a bare
+     * daily timer never fires on a box that restarts more often than once a day.
+     */
+    public function test_reap_db_maintenance_prunes_expired_mcp_tokens_when_service_wired(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+
+        $db = $this->createMock(Connection::class);
+        /** @var list<string> $statements */
+        $statements = [];
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$statements): int {
+                $statements[] = $sql;
+                return 7;
+            },
+        );
+
+        $reaper = new IdleReaper(
+            $tunnelManager,
+            $this->logger,
+            60,
+            90,
+            null, // sessionManager
+            null, // heartbeatHandler
+            null, // clientRelayTokenService
+            null, // keyManager
+            new McpTokenService($db),
+        );
+
+        $reaper->reapDbMaintenance();
+
+        $this->assertCount(
+            1,
+            $statements,
+            'reapDbMaintenance() with only the MCP token service wired must issue exactly one statement. '
+            . 'Zero means the pruner is not reached at all.',
+        );
+        $this->assertStringContainsString('DELETE FROM mcp_tokens', $statements[0]);
+        $this->assertStringContainsString('expires_at < NOW() - INTERVAL 30 DAY', $statements[0]);
+        $this->assertStringContainsString('revoked_at IS NOT NULL', $statements[0]);
+    }
+
+    /**
+     * The MCP pruner is DB-only work and must NOT ride the relay worker's
+     * in-memory {@see IdleReaper::tick()} — the same HB-2.6 data-locality rule
+     * every other pruner here obeys.
+     */
+    public function test_tick_never_prunes_mcp_tokens(): void
+    {
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('allTunnels')->willReturn($this->createTunnelGenerator([]));
+
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        $reaper = new IdleReaper(
+            $tunnelManager,
+            $this->logger,
+            60,
+            90,
+            null,
+            null,
+            null,
+            null,
+            new McpTokenService($db),
+        );
+
+        $this->assertSame(0, $reaper->tick());
+    }
+
+    /**
+     * An unwired MCP token service must leave the sweep working, exactly as the
+     * other optional collaborators do.
+     */
+    public function test_reap_db_maintenance_is_noop_for_mcp_tokens_when_service_null(): void
+    {
+        $reaper = new IdleReaper(
+            $this->createMock(TunnelManagerInterface::class),
+            $this->logger,
+            60,
+            90,
+        );
+
+        $reaper->reapDbMaintenance();
+        $this->addToAssertionCount(1);
     }
 }
