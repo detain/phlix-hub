@@ -16,10 +16,12 @@ use function implode;
 use function in_array;
 use function is_string;
 use function preg_match;
+use function preg_match_all;
 use function preg_quote;
 use function sort;
 use function sprintf;
 use function str_contains;
+use function str_starts_with;
 use function token_get_all;
 
 use const T_COMMENT;
@@ -67,6 +69,17 @@ final class McpToolIsolationTest extends TestCase
      * shipped count so DELETING a tool is also a deliberate act.
      */
     private const int MINIMUM_TOOLS = 5;
+
+    /**
+     * The proxy's byte-streaming families
+     * ({@see \Phlix\Hub\Http\Controllers\ServerProxyController::STREAMING_BODY_PREFIXES}).
+     * Restated here rather than read from the controller ON PURPOSE: a list
+     * derived from its subject self-adjusts with it, and would stop failing the
+     * day somebody adds a family.
+     *
+     * @var list<string>
+     */
+    private const STREAMING_ROOTS = ['/hls', '/dash', '/media'];
 
     /**
      * Symbols a tool file must not mention in CODE.
@@ -118,6 +131,94 @@ final class McpToolIsolationTest extends TestCase
                 implode(', ', $found),
             ),
         );
+    }
+
+    /**
+     * No tool may target one of the proxy's BYTE-STREAMING families.
+     *
+     * `/hls`, `/dash` and `/media` are answered by
+     * {@see \Phlix\Hub\Http\Controllers\ServerProxyController::buildStreamingResponse()},
+     * which writes the body to a browser socket through a producer callback.
+     * There is no socket behind an MCP tool call, so such a response would
+     * arrive with an EMPTY body and read as an empty success.
+     * {@see \Phlix\Hub\Mcp\McpToolContext::proxyGet()} refuses it explicitly,
+     * but that guard is a backstop; THIS is the invariant that keeps it
+     * unreached — no path literal in a tool opens one of those families.
+     *
+     * A path is often BUILT from more than one literal
+     * (`'/api/v1/media/' . $id . '/playback-info'`), so this cannot demand that
+     * every literal be a whole path. It bans the three streaming roots at the
+     * START of a literal instead, which is the only position that can open one.
+     *
+     * @dataProvider toolFileProvider
+     */
+    public function test_no_tool_targets_a_byte_streaming_prefix(string $file): void
+    {
+        $code = self::strippedSource($file);
+
+        $matched = preg_match_all("/'(\\/[^']*)'/", $code, $matches);
+        self::assertNotFalse($matched);
+
+        /** @var list<string> $literals */
+        $literals = $matches[1];
+
+        if ($literals === []) {
+            // `list_servers` forwards nothing — it does not call proxyGet at
+            // all. Assert that positively rather than passing vacuously.
+            self::assertStringNotContainsString(
+                'proxyGet',
+                $code,
+                basename($file) . ' calls proxyGet but forwards no path literal, so this check '
+                . 'inspected nothing.',
+            );
+
+            return;
+        }
+
+        foreach ($literals as $literal) {
+            foreach (self::STREAMING_ROOTS as $root) {
+                self::assertFalse(
+                    $literal === $root || str_starts_with($literal, $root . '/'),
+                    sprintf(
+                        '%s forwards "%s", which opens the %s byte-streaming family. Those are '
+                        . 'written to a browser socket an MCP tool call does not have, so the result '
+                        . 'would arrive with an empty body and read as an empty success.',
+                        basename($file),
+                        $literal,
+                        $root,
+                    ),
+                );
+            }
+        }
+    }
+
+    /**
+     * Control for the check above: the ban must actually fire on a literal that
+     * DOES open a streaming family, or it is asserting nothing.
+     *
+     * @dataProvider streamingRootProvider
+     */
+    public function test_the_streaming_prefix_ban_actually_fires(string $root): void
+    {
+        $literal = $root . '/job-1/seg-00001.ts';
+
+        self::assertTrue(
+            $literal === $root || str_starts_with($literal, $root . '/'),
+            sprintf('the "%s" streaming-root rule cannot be triggered.', $root),
+        );
+        // ...and does NOT fire on a sibling that merely shares the prefix text.
+        self::assertFalse(
+            $root . 'X' === $root || str_starts_with($root . 'X', $root . '/'),
+            sprintf('the "%s" rule over-matches a bare sibling like "%sX".', $root, $root),
+        );
+    }
+
+    /**
+     * @return list<array{0: string}>
+     */
+    public static function streamingRootProvider(): array
+    {
+        return array_map(static fn (string $r): array => [$r], self::STREAMING_ROOTS);
     }
 
     /**

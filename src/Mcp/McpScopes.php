@@ -90,9 +90,18 @@ final class McpScopes
      * KNOWN scopes.
      *
      * Splits on any run of whitespace (so a comma-free "scope scope" string and
-     * a newline-separated one both work), then drops anything
-     * {@see isKnown()} rejects. Order follows {@see all()} so two equivalent
+     * a newline-separated one both work), then walks {@see all()} and keeps the
+     * ones that appeared. That single loop does all three jobs at once — it
+     * DROPS unknown values (they are never in `all()`), it DE-DUPLICATES (each
+     * scope is emitted at most once), and it fixes the ORDER — so two equivalent
      * lists compare equal.
+     *
+     * ⚠ Do not "tighten" this by also filtering the split pieces through
+     * {@see isKnown()} first. That was the original shape and it was dead code:
+     * mutation testing removed the filter and every test stayed green, because
+     * the loop below is the only thing that decides membership. A redundant
+     * guard is worse than none — it looks like the check, so the next reader
+     * stops looking for the real one.
      *
      * @param string $raw Space-delimited scope list.
      *
@@ -105,15 +114,9 @@ final class McpScopes
             return [];
         }
 
-        $present = array_filter(
-            $pieces,
-            static fn (string $piece): bool => $piece !== '' && self::isKnown($piece),
-        );
-        $present = array_values(array_unique($present));
-
         $ordered = [];
         foreach (self::all() as $scope) {
-            if (in_array($scope, $present, true)) {
+            if (in_array($scope, $pieces, true)) {
                 $ordered[] = $scope;
             }
         }
