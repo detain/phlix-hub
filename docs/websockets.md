@@ -171,7 +171,7 @@ tunnel goes away and `ERROR` (`0x08`).
 ## `:8804` — SyncPlay relay
 
 ```
-ws://hub.phlix.tv:8804/syncplay/{server_id}?token=<relay token>
+ws://hub.phlix.tv:8804/syncplay/{server_id}
 ```
 
 Parsed by `SyncPlayRelayWorker::parseServerId()` with
@@ -184,9 +184,25 @@ client in the room. The room key is scoped to the authenticated
 room name resolve to different internal rooms and can never control each other's
 playback.
 
-> ⚠ This surface still reads its relay token from the **query string**, the form
-> `:8803` deliberately dropped in S2b. Same token type, same
-> `ClientRelayTokenService::validate()`, different transport for the credential.
+### Authentication
+
+Identical to `:8803` — the same relay token, minted the same way, and since
+**S237** carried the same way: `Authorization: Bearer <token>` or
+`Sec-WebSocket-Protocol: bearer, <token>`, extracted by the shared
+`ClientRelayWorker::extractClientToken()`. One credential class, one carrier.
+The token is then validated by `ClientRelayTokenService::validate()`, scoped to
+the `server_id` in the path, and re-checked against server ownership.
+
+A token in the **query string is not accepted** and never was safe to send:
+query strings land in access logs, proxy logs and `Referer` headers, and outlive
+the token's own expiry. This is why S2b dropped the form from `:8803`.
+
+> ⚠ Before S237 this surface read `$_GET['token']`. That was broken twice over:
+> the documented client URL put a live credential in a query string, **and**
+> Workerman 5 never populates `$_GET` at all — so the read was always `null` and
+> **every** `:8804` connect was rejected as unauthorized. Any client still
+> appending `?token=…` here was never authenticating; it must move the token to
+> a header or the `bearer` subprotocol.
 
 ### Message catalog
 

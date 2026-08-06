@@ -16,6 +16,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Relay\ClientRelayWorker;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -34,6 +35,11 @@ use function time;
  * SyncPlay clients connect via WSS to `ws://hub:8804/syncplay/{server_id}` to
  * participate in synchronized playback sessions. This worker maintains room
  * state locally and broadcasts playback messages to all clients in a room.
+ *
+ * The relay token travels in the upgrade request's `Authorization: Bearer`
+ * header or its `Sec-WebSocket-Protocol: bearer, <token>` subprotocol — the
+ * carrier `:8803` adopted in S2b and this surface adopted in S237. It is NEVER
+ * accepted from the query string: see {@see ClientRelayWorker::extractClientToken()}.
  *
  * This is separate from the main relay tunnel (ports 8802/8803) which uses
  * binary frames. SyncPlay uses native WebSocket JSON frames.
@@ -146,10 +152,27 @@ final class SyncPlayRelayWorker
         $connId = spl_object_id($connection);
         $clientId = self::generateClientId();
 
-        // SV-4.7: Authenticate via relay token (same scheme as ClientRelayWorker).
-        $token = $_GET['token'] ?? null;
+        // SV-4.7 / S237: Authenticate via relay token, using the SAME CARRIER as
+        // `:8803` — `ClientRelayWorker::extractClientToken()`, i.e. an
+        // `Authorization: Bearer` header or a `Sec-WebSocket-Protocol: bearer,
+        // <token>` subprotocol. One credential class must have exactly one
+        // carrier; reading the token here a second way would be its own defect.
+        //
+        // ⚠ This REPLACES `$_GET['token']`, which was broken two ways at once:
+        //   (1) security — the documented client URL put a live relay token in a
+        //       query string, where it lands in access logs, proxy logs and
+        //       `Referer` headers and outlives the token's own expiry. This is
+        //       the exact form S2b removed from `:8803`.
+        //   (2) function — Workerman 5 NEVER populates the `$_GET` superglobal
+        //       (it carries no `$_GET` write anywhere in the package; the query
+        //       is reachable only via `$request->get()`). So the read was
+        //       unconditionally `null` and EVERY `:8804` connect fell through to
+        //       `rejectUnauthorized()`. The surface authenticated nobody. The old
+        //       unit tests passed only because they set `$_GET` by hand — a
+        //       superglobal production never sets.
+        $token = ClientRelayWorker::extractClientToken($request);
         $userId = null;
-        if (is_string($token) && $token !== '') {
+        if ($token !== null && $token !== '') {
             $userId = $this->validateClientAuth($token, $serverId);
         }
 
@@ -183,7 +206,9 @@ final class SyncPlayRelayWorker
      *
      * Mirrors the validation in {@see ClientRelayWorker::validateClientAuth()}.
      *
-     * @param string $token    The relay token from query param.
+     * @param string $token    The relay token, from the upgrade request's
+     *                        `Authorization` header or `bearer` subprotocol
+     *                        (S237 — never from the query string).
      * @param string $serverId The server_id the client wants to join.
      *
      * @return string|null The authenticated user id, or null on failure.

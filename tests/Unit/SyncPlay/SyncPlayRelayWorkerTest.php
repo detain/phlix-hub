@@ -33,9 +33,18 @@ use function json_encode;
  *   3. legitimate-flow — two authenticated clients on the SAME server/owner in
  *      the same room DO share it and receive each other's playback control.
  *
- * The worker authenticates from `$_GET['token']` in `onWebSocketConnect`,
- * validating the relay token via {@see ClientRelayTokenService} + re-confirming
- * ownership via {@see ServerInfoHandler}, mirroring {@see ClientRelayWorker}.
+ * The worker authenticates in `onWebSocketConnect` from the relay token carried
+ * on the upgrade request's `Authorization: Bearer` header or its
+ * `Sec-WebSocket-Protocol: bearer, <token>` subprotocol — extracted by the
+ * SHARED {@see ClientRelayWorker::extractClientToken()} — then validates it via
+ * {@see ClientRelayTokenService} and re-confirms ownership via
+ * {@see ServerInfoHandler}, mirroring {@see ClientRelayWorker}.
+ *
+ * ⚠ S237: these tests previously authenticated by writing `$_GET['token']` by
+ * hand. That made them GREEN against production code that could never work —
+ * Workerman 5 never populates `$_GET`, so the real `:8804` connect path read
+ * `null` every time and rejected every client. The upgrade request is now built
+ * from raw request text, so the carrier under test is the carrier in production.
  *
  * @package Phlix\Hub\Tests\Unit\SyncPlay
  *
@@ -64,9 +73,6 @@ final class SyncPlayRelayWorkerTest extends TestCase
      */
     private array $serverOwners = [];
 
-    /** Saved copy of $_GET restored in tearDown. */
-    private array $savedGet = [];
-
     protected function setUp(): void
     {
         parent::setUp();
@@ -74,8 +80,6 @@ final class SyncPlayRelayWorkerTest extends TestCase
         // Process-global static room/client maps: reset so a prior test cannot
         // leak state into this one.
         SyncPlayRelayWorker::reset();
-
-        $this->savedGet = $_GET;
 
         $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-syncplay-test-' . uniqid();
         mkdir($this->tmpDir, 0700, true);
@@ -98,7 +102,6 @@ final class SyncPlayRelayWorkerTest extends TestCase
 
         SyncPlayRelayWorker::reset();
         LoggerFactory::reset();
-        $_GET = $this->savedGet;
 
         $files = glob($this->tmpDir . '/*');
         if ($files !== false) {
@@ -120,7 +123,6 @@ final class SyncPlayRelayWorkerTest extends TestCase
         $this->setServerOwner('server-a', 'user-a');
         $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
 
-        unset($_GET['token']);
         $request = $this->makeUpgradeRequest('/syncplay/server-a');
 
         $connection = $this->createMock(TcpConnection::class);
@@ -137,8 +139,7 @@ final class SyncPlayRelayWorkerTest extends TestCase
         $this->setServerOwner('server-a', 'user-a');
         $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
 
-        $_GET['token'] = 'never-minted';
-        $request = $this->makeUpgradeRequest('/syncplay/server-a');
+        $request = $this->makeUpgradeRequest('/syncplay/server-a', 'never-minted');
 
         $connection = $this->createMock(TcpConnection::class);
         $connection->expects($this->once())->method('close')->with('', true);
@@ -146,6 +147,74 @@ final class SyncPlayRelayWorkerTest extends TestCase
         $worker->onWebSocketConnect($connection, $request);
 
         self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
+    }
+
+    /**
+     * S237 — a token presented in the QUERY STRING must NOT authenticate.
+     *
+     * This is the behavioural half of the S237 pin (the source-level half is
+     * `RelayWorkerQueryStringCredentialTest`, which holds the whole worker set).
+     * The token used here is genuinely VALID: it is minted, bound to this server
+     * and this owner, and the very same string authenticates in
+     * `testTheSanctionedCarriersAuthenticate()` below. The ONLY difference is
+     * where it rides. So a green here means "the query carrier is refused",
+     * not "this token was bad" — the two stories are separated by construction.
+     */
+    public function testATokenInTheQueryStringDoesNotAuthenticate(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $request = $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'query');
+
+        // Control: the query string really does carry the token — otherwise this
+        // test would pass simply because nothing was presented at all.
+        self::assertSame('token-a', $request->get('token'), 'control: token is in the query string');
+
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->expects($this->once())->method('close')->with('', true);
+
+        $worker->onWebSocketConnect($connection, $request);
+
+        self::assertSame(
+            0,
+            SyncPlayRelayWorker::getActiveConnectionCount(),
+            'S237: a relay token in the query string authenticated a SyncPlay client',
+        );
+    }
+
+    /**
+     * S237 — both sanctioned carriers authenticate, using the SAME token the
+     * query-string case above is refused with.
+     *
+     * @dataProvider sanctionedCarriers
+     */
+    public function testTheSanctionedCarriersAuthenticate(string $carrier): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sink = [];
+        $connection = $this->makeRecordingConnection($sink);
+
+        $this->connect($worker, $connection, '/syncplay/server-a', 'token-a', $carrier);
+
+        self::assertSame(
+            1,
+            SyncPlayRelayWorker::getActiveConnectionCount(),
+            "the {$carrier} carrier failed to authenticate a valid relay token",
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function sanctionedCarriers(): iterable
+    {
+        yield 'Authorization: Bearer' => ['header'];
+        yield 'Sec-WebSocket-Protocol: bearer' => ['subprotocol'];
     }
 
     // ---- AC2: ownership scoping (the security guard) ---------------------
@@ -261,9 +330,9 @@ final class SyncPlayRelayWorkerTest extends TestCase
         TcpConnection $connection,
         string $path,
         string $token,
+        string $carrier = 'header',
     ): void {
-        $_GET['token'] = $token;
-        $worker->onWebSocketConnect($connection, $this->makeUpgradeRequest($path));
+        $worker->onWebSocketConnect($connection, $this->makeUpgradeRequest($path, $token, $carrier));
     }
 
     private function joinFrame(string $room, string $displayName): string
@@ -391,8 +460,21 @@ final class SyncPlayRelayWorkerTest extends TestCase
     /**
      * @param string $path Request path (with optional query).
      */
-    private function makeUpgradeRequest(string $path): WorkermanRequest
-    {
+    /**
+     * Build a REAL {@see WorkermanRequest} by parsing a raw upgrade request, so
+     * the token travels through the same header parsing production uses.
+     *
+     * @param string      $path    Request target, query string included.
+     * @param string|null $token   Relay token to present, or null for none.
+     * @param string      $carrier `header` (`Authorization: Bearer`),
+     *                             `subprotocol` (`Sec-WebSocket-Protocol`), or
+     *                             `query` (S237 — must NOT authenticate).
+     */
+    private function makeUpgradeRequest(
+        string $path,
+        ?string $token = null,
+        string $carrier = 'header',
+    ): WorkermanRequest {
         $headers = [
             'Host' => 'hub.example.com',
             'Upgrade' => 'websocket',
@@ -400,6 +482,17 @@ final class SyncPlayRelayWorkerTest extends TestCase
             'Sec-WebSocket-Version' => '13',
             'Sec-WebSocket-Key' => 'dGhlIHNhbXBsZSBub25jZQ==',
         ];
+
+        if ($token !== null) {
+            if ($carrier === 'header') {
+                $headers['Authorization'] = 'Bearer ' . $token;
+            } elseif ($carrier === 'subprotocol') {
+                $headers['Sec-WebSocket-Protocol'] = 'bearer, ' . $token;
+            } else {
+                // 'query' — the S237 defect shape. Deliberately NOT a header.
+                $path .= (str_contains($path, '?') ? '&' : '?') . 'token=' . rawurlencode($token);
+            }
+        }
 
         $lines = ["GET {$path} HTTP/1.1"];
         foreach ($headers as $name => $value) {

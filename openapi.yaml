@@ -3143,15 +3143,20 @@ x-phlix-websockets:
     repo: phlix-hub
     port: 8804
     portSource: "Phlix\\Hub\\SyncPlay\\SyncPlayRelayWorker::DEFAULT_PORT"
-    url: "ws://hub.phlix.tv:8804/syncplay/{server_id}?token=<relay token>"
+    url: "ws://hub.phlix.tv:8804/syncplay/{server_id}"
     path: "/syncplay/{server_id}"
     pathPattern: "~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~"
     worker: "Phlix\\Hub\\SyncPlay\\SyncPlayRelayWorker"
     direction: "client ↔ hub, broadcast to every client in the same room"
     auth: >-
       A client relay token, validated by ClientRelayTokenService and required to be bound to the
-      path-derived server_id. ⚠ Unlike the :8803 mount, this surface still reads the token from the
-      `?token=` QUERY STRING, which is the form :8803 deliberately dropped in S2b.
+      path-derived server_id. Since step S237 the token is carried EXACTLY as on :8803 —
+      `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: bearer, <token>`, extracted by
+      the shared ClientRelayWorker::extractClientToken(). The `?token=` query form is not accepted.
+      ⚠ Before S237 this worker read `$_GET['token']`, which was wrong twice: it documented a live
+      credential in a query string, and Workerman 5 never populates that superglobal, so the read
+      was always null and EVERY :8804 connect was rejected. A client still sending `?token=` here
+      was never authenticating and must move the token to a header or the bearer subprotocol.
     encoding: "JSON text frames"
     messages:
       - "client→hub group_join — join a room; the room key is scoped to (server_id, owner)"
