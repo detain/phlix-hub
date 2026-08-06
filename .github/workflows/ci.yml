@@ -23,6 +23,27 @@ jobs:
       - name: Validate composer.json
         run: composer validate --strict --no-check-publish
 
+  openapi:
+    name: OpenAPI Description
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # S66. This job answers ONE question — is openapi.yaml a structurally
+      # valid OpenAPI 3.1 document — and nothing else. Whether it still MATCHES
+      # the hub's route table is a different question, answered by
+      # tests/Unit/Http/RouteRegistration/OpenApiSpecMatchesRouterTest.php in the
+      # phpunit job; a valid document that describes routes nobody registers is
+      # exactly the S204 defect, and a linter cannot see it.
+      #
+      # The version is pinned, not floating: `recommended` is a moving ruleset,
+      # so `@latest` would let an upstream release turn this red with no change
+      # here. Rule deviations live in redocly.yaml, each with its reason.
+      - name: Lint openapi.yaml
+        run: npx --yes @redocly/cli@2.30.5 lint openapi.yaml
+
   phpcs:
     name: PHP CodeSniffer (PSR-12)
     runs-on: ubuntu-latest

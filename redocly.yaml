@@ -1,0 +1,23 @@
+# Redocly configuration for phlix-hub's OpenAPI description.
+#
+#   npx @redocly/cli lint openapi.yaml
+#
+# Everything stays on Redocly's `recommended` ruleset except the two rules below,
+# which are style opinions that contradict what the hub's router actually does.
+# Nothing here silences a correctness rule.
+extends:
+  - recommended
+
+rules:
+  # The router registers BOTH `/api/v1/me/shares` and `/api/v1/me/shares/` (and
+  # the same pair for `/api/v1/me/invite-links`) as separate, deliberate
+  # registrations onto the same handler — see Application::registerSharingRoutes()
+  # and ::registerInviteLinkRoutes(). Omitting the trailing-slash form would make
+  # the specification disagree with the running service, which is precisely the
+  # drift OpenApiSpecMatchesRouterTest exists to prevent, so the rule is off
+  # rather than the paths being dropped.
+  no-path-trailing-slash: off
+
+  # `servers` deliberately lists http://localhost:8800, the unproxied Workerman
+  # HTTP worker, because that is the address a developer actually calls.
+  no-server-example.com: off

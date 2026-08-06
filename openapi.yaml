@@ -1,0 +1,3598 @@
+# phlix-hub OpenAPI description (S66).
+#
+# ⚠ THIS FILE IS HAND-MAINTAINED AND MACHINE-CHECKED.
+#
+# `paths` must be an EXACT bijection with the route table
+# `Application::registerRoutes()` composes, including each operation's
+# middleware chain. That is enforced by
+# tests/Unit/Http/RouteRegistration/OpenApiSpecMatchesRouterTest.php, which
+# drives the REAL registrars and fails on any route present in one artefact
+# and not the other. Adding, moving or re-gating a route therefore requires
+# editing this file in the same commit.
+#
+# Two extensions carry the machine-checked facts:
+#   x-phlix-middleware  the route's middleware chain, in order, by class
+#                       short name. `[]` means deliberately ungated.
+#   x-phlix-route       present only when the router template differs from
+#                       the OpenAPI path (OpenAPI has no `{name:regex}`
+#                       form). The test compares THIS, not a normalised
+#                       path, so no constraint change is hidden.
+#
+# WebSocket surfaces are NOT `paths`: the server tunnel mounts at the bare
+# root of :8802, whose path key `/` is already taken by the HTTP SPA
+# redirect on :8800. They live under the root `x-phlix-websockets`
+# extension instead, with the full catalog in docs/websockets.md.
+
+openapi: 3.1.0
+info:
+  title: "Phlix Hub API"
+  version: "1.0.0"
+  summary: "Multi-server cloud directory and reverse-tunnel relay for Phlix media servers."
+  description: |-
+    `phlix-hub` is the central directory a Phlix media server enrolls with, and the reverse tunnel
+    through which a client reaches that server when it sits behind NAT. It is NOT the media server:
+    library scanning, transcoding, HLS, DLNA and Live TV all live in `phlix-server` and are
+    described by that repository's own specification.
+
+    ## Surfaces
+
+    - **`:8800` HTTP** — everything in `paths` below. Behind HAProxy in production.
+    - **`:8802` WebSocket** — the media server's outbound relay tunnel.
+    - **`:8803` WebSocket** — a client mounting a server through that tunnel.
+    - **`:8804` WebSocket** — SyncPlay rooms relayed between clients.
+    - **`:8805` WebSocket** — hub-to-hub federation (master side).
+
+    The four WebSocket surfaces are described under the root `x-phlix-websockets` extension; their
+    message and frame catalogs are in `docs/websockets.md`, which also covers `phlix-server`'s own
+    `:8097` SyncPlay/events socket.
+
+    ## Conventions
+
+    Errors are a flat JSON envelope: `{"error": "<human text>", "code": "<machine code>"}`. Ids are
+    8-4-4-4-12 hex UUIDs stored as `CHAR(36)`.
+
+    Three distinct credentials appear here. A **user** bearer token is HS256 and is what the SPA and
+    clients send. An **enrollment JWT** is Ed25519 and is what an enrolled media server sends; its
+    public keys are published at `/.well-known/jwks.json`. A **client relay token** is minted by
+    `POST /api/v1/me/servers/{id}/relay-token` and is presented only on the `:8803` WebSocket.
+
+    Server-facing endpoints additionally require the `Accept-Phlix-Protocol: v1` header where
+    `HubProtocolMiddleware` is in the chain; a missing or wrong value is a 400, not a 401.
+  license:
+    name: "MPL-2.0"
+    identifier: "MPL-2.0"
+  contact:
+    name: "Phlix"
+    url: "https://github.com/detain/phlix-hub"
+
+servers:
+  - url: "https://hub.phlix.tv"
+    description: "Production hub."
+  - url: "http://localhost:8800"
+    description: "Local development (Workerman HTTP worker, unproxied)."
+
+tags:
+  - name: "Health"
+    description: "Unauthenticated liveness surface."
+  - name: "Web UI"
+    description: "The `/app` Vue SPA shell plus the legacy server-rendered page paths, which now only redirect into it."
+  - name: "Authentication"
+    description: "Account creation, login, token refresh, and the current-user endpoints."
+  - name: "My Servers"
+    description: "A signed-in user's view of the media servers they have claimed."
+  - name: "Server Proxy"
+    description: "Authenticated HTTP proxied to a claimed server over its relay tunnel."
+  - name: "Server Enrollment"
+    description: "The claim/enroll/heartbeat lifecycle a media server drives, authenticated with an Ed25519 enrollment JWT."
+  - name: "Relay"
+    description: "HTTP signposts for the WebSocket relay surfaces. The tunnels themselves are not HTTP."
+  - name: "Media Requests"
+    description: "User requests for missing media, and the admin queue that approves them."
+  - name: "Bandwidth and Quota"
+    description: "Per-user relay byte accounting, monthly quota, and throttle."
+  - name: "Library Sharing"
+    description: "Sharing a library from one hub user to another."
+  - name: "Invite Links"
+    description: "Tokenised invitations that grant shares on redemption."
+  - name: "Hub Settings"
+    description: "Instance-wide settings. Admin only."
+  - name: "Logs and Audit"
+    description: "Log channel listing/tailing and the audit trail. Admin only."
+  - name: "Admin Users"
+    description: "User administration."
+  - name: "Hub Administration"
+    description: "Restart, update channel, and the admin dashboard."
+  - name: "Federation"
+    description: "Hub-to-hub peering, federated library offers, and admin delegation."
+  - name: "Relay Metrics"
+    description: "Relay counters, history, live connections, and per-route HTTP metrics."
+
+paths:
+  "/":
+    get:
+      operationId: "get_root"
+      tags: ["Web UI"]
+      summary: "Root redirect"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "302":
+          description: |-
+            Redirect into the SPA at `/app/servers`.
+          headers:
+            Location:
+              description: "/app/servers"
+              schema:
+                type: string
+  "/.well-known/jwks.json":
+    get:
+      operationId: "get_well_known_jwks_json"
+      tags: ["Server Enrollment"]
+      summary: "Hub JWKS"
+      description: |-
+        Public Ed25519 verification keys for the enrollment JWTs the hub mints. Public and
+        cache-frontable.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Jwks"
+  "/admin/requests":
+    get:
+      operationId: "get_admin_requests"
+      tags: ["Web UI"]
+      summary: "Legacy admin media-requests page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/admin/requests`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/admin/requests when signed in, /app/login when not"
+              schema:
+                type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  "/api/v1/admin/dashboard/activity":
+    get:
+      operationId: "get_api_v1_admin_dashboard_activity"
+      tags: ["Hub Administration"]
+      summary: "Admin dashboard activity feed"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/dashboard/summary":
+    get:
+      operationId: "get_api_v1_admin_dashboard_summary"
+      tags: ["Hub Administration"]
+      summary: "Admin dashboard summary"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/logs":
+    get:
+      operationId: "get_api_v1_admin_logs"
+      tags: ["Logs and Audit"]
+      summary: "List log channels (admin path)"
+      description: |-
+        Same LogController as `/api/v1/me/logs`.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/logs/tail":
+    get:
+      operationId: "get_api_v1_admin_logs_tail"
+      tags: ["Logs and Audit"]
+      summary: "Tail one log channel (admin path)"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/logs/tail-all":
+    get:
+      operationId: "get_api_v1_admin_logs_tail_all"
+      tags: ["Logs and Audit"]
+      summary: "Tail every log channel (admin path)"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/metrics/connections":
+    get:
+      operationId: "get_api_v1_admin_metrics_connections"
+      tags: ["Relay Metrics"]
+      summary: "Live relay connections"
+      description: |-
+        Live tunnel/client registry as seen by the relay workers.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/metrics/history":
+    get:
+      operationId: "get_api_v1_admin_metrics_history"
+      tags: ["Relay Metrics"]
+      summary: "Relay metrics history"
+      description: |-
+        Time-bucketed history flushed by `MetricsFlushService`.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/metrics/routes":
+    get:
+      operationId: "get_api_v1_admin_metrics_routes"
+      tags: ["Relay Metrics"]
+      summary: "Per-route HTTP metrics"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/metrics/snapshot":
+    get:
+      operationId: "get_api_v1_admin_metrics_snapshot"
+      tags: ["Relay Metrics"]
+      summary: "Current relay metrics"
+      description: |-
+        Point-in-time counters from `MetricsRegistry`.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/requests":
+    get:
+      operationId: "get_api_v1_admin_requests"
+      tags: ["Media Requests"]
+      summary: "List all media requests"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaRequestList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/requests/{id}/approve":
+    post:
+      operationId: "post_api_v1_admin_requests_id_approve"
+      tags: ["Media Requests"]
+      summary: "Approve a media request"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/requests/{id}/deny":
+    post:
+      operationId: "post_api_v1_admin_requests_id_deny"
+      tags: ["Media Requests"]
+      summary: "Deny a media request"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/restart":
+    post:
+      operationId: "post_api_v1_admin_restart"
+      tags: ["Hub Administration"]
+      summary: "Restart the hub"
+      description: |-
+        Schedules a graceful Workerman reload. The HTTP response is sent before the reload so the caller
+        is not cut off.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/settings":
+    get:
+      operationId: "get_api_v1_admin_settings"
+      tags: ["Hub Settings"]
+      summary: "Read hub settings (admin path)"
+      description: |-
+        Same HubSettingsController as `/api/v1/me/hub-settings`, on the admin path the SPA uses.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HubSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    put:
+      operationId: "put_api_v1_admin_settings"
+      tags: ["Hub Settings"]
+      summary: "Update hub settings (admin path)"
+      description: |-
+        Same HubSettingsController as `/api/v1/me/hub-settings`.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HubSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/updates/settings":
+    put:
+      operationId: "put_api_v1_admin_updates_settings"
+      tags: ["Hub Administration"]
+      summary: "Update-channel settings"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/updates/status":
+    get:
+      operationId: "get_api_v1_admin_updates_status"
+      tags: ["Hub Administration"]
+      summary: "Update-channel status"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/users":
+    get:
+      operationId: "get_api_v1_admin_users"
+      tags: ["Admin Users"]
+      summary: "List users"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_admin_users"
+      tags: ["Admin Users"]
+      summary: "Create a user"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/users/{id}":
+    delete:
+      operationId: "delete_api_v1_admin_users_id"
+      tags: ["Admin Users"]
+      summary: "Delete a user"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    get:
+      operationId: "get_api_v1_admin_users_id"
+      tags: ["Admin Users"]
+      summary: "Get a user"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    put:
+      operationId: "put_api_v1_admin_users_id"
+      tags: ["Admin Users"]
+      summary: "Update a user"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/users/{id}/bandwidth":
+    get:
+      operationId: "get_api_v1_admin_users_id_bandwidth"
+      tags: ["Bandwidth and Quota"]
+      summary: "A user's bandwidth usage"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BandwidthUsage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/users/{id}/profiles":
+    get:
+      operationId: "get_api_v1_admin_users_id_profiles"
+      tags: ["Admin Users"]
+      summary: "List a user's profiles"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/users/{id}/quota":
+    put:
+      operationId: "put_api_v1_admin_users_id_quota"
+      tags: ["Bandwidth and Quota"]
+      summary: "Set a user's monthly quota"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/users/{id}/reset-password":
+    post:
+      operationId: "post_api_v1_admin_users_id_reset_password"
+      tags: ["Admin Users"]
+      summary: "Reset a user password"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/users/{id}/set-admin":
+    post:
+      operationId: "post_api_v1_admin_users_id_set_admin"
+      tags: ["Admin Users"]
+      summary: "Grant or revoke admin"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/admin/users/{id}/throttle":
+    put:
+      operationId: "put_api_v1_admin_users_id_throttle"
+      tags: ["Bandwidth and Quota"]
+      summary: "Set a user's relay throttle"
+      description: |-
+        Sets `throttle_bps`, which `RelaySessionManager` feeds into the per-user `TokenBucket` on the
+        relay data path.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/login":
+    post:
+      operationId: "post_api_v1_auth_login"
+      tags: ["Authentication"]
+      summary: "Log in"
+      description: |-
+        Exchanges credentials for an HS256 access token plus a refresh token. Rate-limited by a shared
+        DB-backed limiter keyed on the resolved client IP.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/logout":
+    post:
+      operationId: "post_api_v1_auth_logout"
+      tags: ["Authentication"]
+      summary: "Log out"
+      description: |-
+        Clears the session cookies and invalidates the refresh token.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/me":
+    get:
+      operationId: "get_api_v1_auth_me"
+      tags: ["Authentication"]
+      summary: "Current user (alias)"
+      description: |-
+        Path the shared `@phlix/ui` SPA calls (it matches phlix-server); aliased to the same
+        MeController as `/api/v1/me`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/refresh":
+    post:
+      operationId: "post_api_v1_auth_refresh"
+      tags: ["Authentication"]
+      summary: "Refresh the access token"
+      description: |-
+        Exchanges a refresh token for a new short-lived access token.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/register":
+    post:
+      operationId: "post_api_v1_auth_register"
+      tags: ["Authentication"]
+      summary: "Register a hub account"
+      description: |-
+        Canonical signup path used by the shared `@phlix/ui` SPA and by phlix-server.
+        `\/api\/v1\/auth\/signup` is an alias for the same handler.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/auth/signup":
+    post:
+      operationId: "post_api_v1_auth_signup"
+      tags: ["Authentication"]
+      summary: "Register a hub account (alias)"
+      description: |-
+        Alias of `POST /api/v1/auth/register`, kept for older clients.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me":
+    get:
+      operationId: "get_api_v1_me"
+      tags: ["Authentication"]
+      summary: "Current user"
+      description: |-
+        Returns the authenticated user, the decoded JWT claims, and the servers they own.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/audit-logs":
+    get:
+      operationId: "get_api_v1_me_audit_logs"
+      tags: ["Logs and Audit"]
+      summary: "Read the audit log"
+      description: |-
+        Admin-only despite the `/me/` prefix.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/bandwidth":
+    get:
+      operationId: "get_api_v1_me_bandwidth"
+      tags: ["Bandwidth and Quota"]
+      summary: "My bandwidth usage"
+      description: |-
+        Bytes relayed in the current quota window plus the effective throttle.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BandwidthUsage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/admin-delegations":
+    get:
+      operationId: "get_api_v1_me_federation_admin_delegations"
+      tags: ["Federation"]
+      summary: "List admin delegations"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_federation_admin_delegations"
+      tags: ["Federation"]
+      summary: "Create an admin delegation"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/admin-delegations/{id}":
+    delete:
+      operationId: "delete_api_v1_me_federation_admin_delegations_id"
+      tags: ["Federation"]
+      summary: "Delete an admin delegation"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/hub-config":
+    get:
+      operationId: "get_api_v1_me_federation_hub_config"
+      tags: ["Federation"]
+      summary: "Read this hub's federation config"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FederationHubConfig"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    put:
+      operationId: "put_api_v1_me_federation_hub_config"
+      tags: ["Federation"]
+      summary: "Update this hub's federation config"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FederationHubConfig"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/library-shares/incoming":
+    get:
+      operationId: "get_api_v1_me_federation_library_shares_incoming"
+      tags: ["Federation"]
+      summary: "List incoming federated offers"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/library-shares/incoming/{id}/accept":
+    post:
+      operationId: "post_api_v1_me_federation_library_shares_incoming_id_accept"
+      tags: ["Federation"]
+      summary: "Accept an incoming offer"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/library-shares/incoming/{id}/reject":
+    post:
+      operationId: "post_api_v1_me_federation_library_shares_incoming_id_reject"
+      tags: ["Federation"]
+      summary: "Reject an incoming offer"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/library-shares/outgoing":
+    get:
+      operationId: "get_api_v1_me_federation_library_shares_outgoing"
+      tags: ["Federation"]
+      summary: "List outgoing federated shares"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_federation_library_shares_outgoing"
+      tags: ["Federation"]
+      summary: "Offer a library to a peer hub"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/library-shares/outgoing/{id}":
+    delete:
+      operationId: "delete_api_v1_me_federation_library_shares_outgoing_id"
+      tags: ["Federation"]
+      summary: "Revoke an outgoing federated share"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/peers":
+    get:
+      operationId: "get_api_v1_me_federation_peers"
+      tags: ["Federation"]
+      summary: "List federation peers"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FederationPeerList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_federation_peers"
+      tags: ["Federation"]
+      summary: "Add a federation peer"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FederationPeer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/peers/{id}":
+    delete:
+      operationId: "delete_api_v1_me_federation_peers_id"
+      tags: ["Federation"]
+      summary: "Remove a federation peer"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/peers/{id}/admin-delegation":
+    put:
+      operationId: "put_api_v1_me_federation_peers_id_admin_delegation"
+      tags: ["Federation"]
+      summary: "Toggle admin delegation for a peer"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FederationPeer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/peers/{id}/relay":
+    put:
+      operationId: "put_api_v1_me_federation_peers_id_relay"
+      tags: ["Federation"]
+      summary: "Toggle relay for a peer"
+      description: |-
+        Enables or disables tunnel relaying for this peer over the `:8805` federation socket.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FederationPeer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/hub-settings":
+    get:
+      operationId: "get_api_v1_me_hub_settings"
+      tags: ["Hub Settings"]
+      summary: "Read hub settings"
+      description: |-
+        Admin-only despite the `/me/` prefix — the chain is [AuthMiddleware, AdminMiddleware].
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HubSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    put:
+      operationId: "put_api_v1_me_hub_settings"
+      tags: ["Hub Settings"]
+      summary: "Update hub settings"
+      description: |-
+        Admin-only despite the `/me/` prefix.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HubSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/invite-links":
+    get:
+      operationId: "get_api_v1_me_invite_links"
+      tags: ["Invite Links"]
+      summary: "List my invite links"
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteLinkList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_invite_links"
+      tags: ["Invite Links"]
+      summary: "Create an invite link"
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteLink"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/invite-links/":
+    get:
+      operationId: "get_api_v1_me_invite_links_slash"
+      tags: ["Invite Links"]
+      summary: "List my invite links (trailing-slash alias)"
+      description: |-
+        The router registers the trailing-slash form explicitly; it is the same handler.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteLinkList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_invite_links_slash"
+      tags: ["Invite Links"]
+      summary: "Create an invite link (trailing-slash alias)"
+      description: |-
+        The router registers the trailing-slash form explicitly; it is the same handler.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteLink"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/invite-links/{id}":
+    delete:
+      operationId: "delete_api_v1_me_invite_links_id"
+      tags: ["Invite Links"]
+      summary: "Delete an invite link"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/invite-links/{token}/redeem":
+    post:
+      operationId: "post_api_v1_me_invite_links_token_redeem"
+      tags: ["Invite Links"]
+      summary: "Redeem an invite link"
+      description: |-
+        The signed-in invitee redeems the token and receives the shares it grants.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "token"
+          in: path
+          required: true
+          description: "Opaque invite token."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/libraries":
+    get:
+      operationId: "get_api_v1_me_libraries"
+      tags: ["My Servers"]
+      summary: "List my libraries"
+      description: |-
+        Libraries across all owned servers, fed by the per-server heartbeat payload.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/logs":
+    get:
+      operationId: "get_api_v1_me_logs"
+      tags: ["Logs and Audit"]
+      summary: "List log channels"
+      description: |-
+        Admin-only despite the `/me/` prefix.
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/logs/tail":
+    get:
+      operationId: "get_api_v1_me_logs_tail"
+      tags: ["Logs and Audit"]
+      summary: "Tail one log channel"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/logs/tail-all":
+    get:
+      operationId: "get_api_v1_me_logs_tail_all"
+      tags: ["Logs and Audit"]
+      summary: "Tail every log channel"
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/requests":
+    get:
+      operationId: "get_api_v1_me_requests"
+      tags: ["Media Requests"]
+      summary: "List my media requests"
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaRequestList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_requests"
+      tags: ["Media Requests"]
+      summary: "Create a media request"
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/requests/{id}":
+    delete:
+      operationId: "delete_api_v1_me_requests_id"
+      tags: ["Media Requests"]
+      summary: "Withdraw a media request"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    get:
+      operationId: "get_api_v1_me_requests_id"
+      tags: ["Media Requests"]
+      summary: "Get one of my media requests"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/servers":
+    get:
+      operationId: "get_api_v1_me_servers"
+      tags: ["My Servers"]
+      summary: "List my servers"
+      description: |-
+        Every media server this user has claimed, with online state derived from the last heartbeat.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/servers/{id}":
+    delete:
+      operationId: "delete_api_v1_me_servers_id"
+      tags: ["My Servers"]
+      summary: "Unclaim a server"
+      description: |-
+        Removes the claim, revokes the enrollment, and tears down any live tunnel.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    get:
+      operationId: "get_api_v1_me_servers_id"
+      tags: ["My Servers"]
+      summary: "Get one of my servers"
+      description: |-
+        Detail view for a single claimed server.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Server"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/servers/{id}/access-info":
+    get:
+      operationId: "get_api_v1_me_servers_id_access_info"
+      tags: ["My Servers"]
+      summary: "Server access info"
+      description: |-
+        How to reach the server: direct LAN/WAN addresses, the allocated subdomain, and whether the
+        relay tunnel is up.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/servers/{id}/relay-token":
+    post:
+      operationId: "post_api_v1_me_servers_id_relay_token"
+      tags: ["My Servers"]
+      summary: "Mint a client relay token"
+      description: |-
+        Mints the short-lived per-user token a client presents when mounting
+        `ws://hub:8803/client/{server_id}`. See the WebSocket section.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelayToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/shares":
+    get:
+      operationId: "get_api_v1_me_shares"
+      tags: ["Library Sharing"]
+      summary: "List my library shares"
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryShareList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_shares"
+      tags: ["Library Sharing"]
+      summary: "Share a library"
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryShare"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/shares/":
+    get:
+      operationId: "get_api_v1_me_shares_slash"
+      tags: ["Library Sharing"]
+      summary: "List my library shares (trailing-slash alias)"
+      description: |-
+        The router registers the trailing-slash form explicitly; it is the same handler.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryShareList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_me_shares_slash"
+      tags: ["Library Sharing"]
+      summary: "Share a library (trailing-slash alias)"
+      description: |-
+        The router registers the trailing-slash form explicitly; it is the same handler.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryShare"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/shares/{id}":
+    delete:
+      operationId: "delete_api_v1_me_shares_id"
+      tags: ["Library Sharing"]
+      summary: "Revoke a library share"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    patch:
+      operationId: "patch_api_v1_me_shares_id"
+      tags: ["Library Sharing"]
+      summary: "Update a library share"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryShare"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/server-claims/claim":
+    post:
+      operationId: "post_api_v1_server_claims_claim"
+      tags: ["Server Enrollment"]
+      summary: "Approve a claim as the owner"
+      description: |-
+        The signed-in user pastes the claim code shown by the server; this binds the server to their
+        account.
+      x-phlix-middleware: [AuthMiddleware, HubProtocolMiddleware]
+      parameters:
+        - $ref: "#/components/parameters/AcceptPhlixProtocol"
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/ProtocolRequired"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/server-claims/new":
+    post:
+      operationId: "post_api_v1_server_claims_new"
+      tags: ["Server Enrollment"]
+      summary: "Begin a server claim"
+      description: |-
+        A freshly installed server calls this with no credentials; the returned claim id is the
+        unguessable bearer secret it polls with, and the claim code is what the operator pastes into the
+        hub UI.
+      x-phlix-middleware: [HubProtocolMiddleware]
+      parameters:
+        - $ref: "#/components/parameters/AcceptPhlixProtocol"
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerClaim"
+        "400":
+          $ref: "#/components/responses/ProtocolRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/server-claims/{claimId}":
+    get:
+      operationId: "get_api_v1_server_claims_claimId"
+      tags: ["Server Enrollment"]
+      summary: "Poll claim status"
+      description: |-
+        The server polls until the claim is approved, at which point the response carries the enrollment
+        JWT.
+      x-phlix-middleware: [HubProtocolMiddleware]
+      parameters:
+        - name: "claimId"
+          in: path
+          required: true
+          description: "Claim id returned by `POST /api/v1/server-claims/new`. It is the bearer secret for polling."
+          schema:
+            type: string
+        - $ref: "#/components/parameters/AcceptPhlixProtocol"
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerClaimStatus"
+        "400":
+          $ref: "#/components/responses/ProtocolRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/servers/{id}":
+    delete:
+      operationId: "delete_api_v1_servers_id"
+      tags: ["Server Enrollment"]
+      summary: "Deregister this server"
+      description: |-
+        Server-initiated deregistration; drops the enrollment and any live tunnel.
+      x-phlix-middleware: [EnrollmentJwtMiddleware, HubProtocolMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - $ref: "#/components/parameters/AcceptPhlixProtocol"
+      security:
+        - enrollmentJwt: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/ProtocolRequired"
+        "401":
+          $ref: "#/components/responses/EnrollmentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/servers/{id}/heartbeat":
+    post:
+      operationId: "post_api_v1_servers_id_heartbeat"
+      tags: ["Server Enrollment"]
+      summary: "Server heartbeat"
+      description: |-
+        Periodic liveness + inventory push from an enrolled server. Also feeds `server_libraries`, which
+        `GET /api/v1/me/libraries` reads.
+      x-phlix-middleware: [EnrollmentJwtMiddleware, HubProtocolMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - $ref: "#/components/parameters/AcceptPhlixProtocol"
+      security:
+        - enrollmentJwt: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/ProtocolRequired"
+        "401":
+          $ref: "#/components/responses/EnrollmentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/servers/{id}/info":
+    get:
+      operationId: "get_api_v1_servers_id_info"
+      tags: ["Server Enrollment"]
+      summary: "Server-side view of its own record"
+      description: |-
+        What the hub knows about the calling server: owner, subdomain, relay policy.
+      x-phlix-middleware: [EnrollmentJwtMiddleware, HubProtocolMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - $ref: "#/components/parameters/AcceptPhlixProtocol"
+      security:
+        - enrollmentJwt: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/ProtocolRequired"
+        "401":
+          $ref: "#/components/responses/EnrollmentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/servers/{id}/proxy/{path}":
+    x-phlix-route: "/api/v1/servers/{id}/proxy/{path:.*}"
+    delete:
+      operationId: "delete_api_v1_servers_id_proxy_path"
+      tags: ["Server Proxy"]
+      summary: "Proxy a DELETE to a server"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - name: "path"
+          in: path
+          required: true
+          description: "Remainder of the URL, forwarded verbatim to the target (may contain `/`)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: |-
+            The target server's own response, streamed back verbatim over the relay tunnel (frame types
+            HTTP_REQUEST / HTTP_RESPONSE). Status, headers and body are the server's, so the shape is
+            whatever that endpoint of the phlix-server API returns.
+          content:
+            '*/*':
+              schema: {}
+        "502":
+          description: "No live tunnel to that server, or the server did not answer in time."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    get:
+      operationId: "get_api_v1_servers_id_proxy_path"
+      tags: ["Server Proxy"]
+      summary: "Proxy a GET to a server"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - name: "path"
+          in: path
+          required: true
+          description: "Remainder of the URL, forwarded verbatim to the target (may contain `/`)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: |-
+            The target server's own response, streamed back verbatim over the relay tunnel (frame types
+            HTTP_REQUEST / HTTP_RESPONSE). Status, headers and body are the server's, so the shape is
+            whatever that endpoint of the phlix-server API returns.
+          content:
+            '*/*':
+              schema: {}
+        "502":
+          description: "No live tunnel to that server, or the server did not answer in time."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    patch:
+      operationId: "patch_api_v1_servers_id_proxy_path"
+      tags: ["Server Proxy"]
+      summary: "Proxy a PATCH to a server"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - name: "path"
+          in: path
+          required: true
+          description: "Remainder of the URL, forwarded verbatim to the target (may contain `/`)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: |-
+            The target server's own response, streamed back verbatim over the relay tunnel (frame types
+            HTTP_REQUEST / HTTP_RESPONSE). Status, headers and body are the server's, so the shape is
+            whatever that endpoint of the phlix-server API returns.
+          content:
+            '*/*':
+              schema: {}
+        "502":
+          description: "No live tunnel to that server, or the server did not answer in time."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_servers_id_proxy_path"
+      tags: ["Server Proxy"]
+      summary: "Proxy a POST to a server"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - name: "path"
+          in: path
+          required: true
+          description: "Remainder of the URL, forwarded verbatim to the target (may contain `/`)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: |-
+            The target server's own response, streamed back verbatim over the relay tunnel (frame types
+            HTTP_REQUEST / HTTP_RESPONSE). Status, headers and body are the server's, so the shape is
+            whatever that endpoint of the phlix-server API returns.
+          content:
+            '*/*':
+              schema: {}
+        "502":
+          description: "No live tunnel to that server, or the server did not answer in time."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    put:
+      operationId: "put_api_v1_servers_id_proxy_path"
+      tags: ["Server Proxy"]
+      summary: "Proxy a PUT to a server"
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - name: "path"
+          in: path
+          required: true
+          description: "Remainder of the URL, forwarded verbatim to the target (may contain `/`)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: |-
+            The target server's own response, streamed back verbatim over the relay tunnel (frame types
+            HTTP_REQUEST / HTTP_RESPONSE). Status, headers and body are the server's, so the shape is
+            whatever that endpoint of the phlix-server API returns.
+          content:
+            '*/*':
+              schema: {}
+        "502":
+          description: "No live tunnel to that server, or the server did not answer in time."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/servers/{id}/relay":
+    post:
+      operationId: "post_api_v1_servers_id_relay"
+      tags: ["Relay"]
+      summary: "Relay tunnel signpost"
+      description: |-
+        HTTP signpost only. The tunnel itself is a WebSocket on `:8802` — this endpoint answers 501
+        with an `X-WS-Endpoint` header naming it. phlix-server addresses this path from
+        `config/relay.php` `hub_wss_url`. Authenticates inside the controller.
+      x-phlix-middleware: []
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security: []
+      responses:
+        "501":
+          description: |-
+            Always. The relay tunnel is not an HTTP endpoint; the response body and the `X-WS-Endpoint`
+            header name the `:8802` WebSocket to connect to instead.
+          headers:
+            X-WS-Endpoint:
+              description: "WebSocket URL of the relay tunnel, e.g. `ws://hub.phlix.tv:8802`."
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelaySignpost"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/servers/{id}/renew":
+    post:
+      operationId: "post_api_v1_servers_id_renew"
+      tags: ["Server Enrollment"]
+      summary: "Renew the enrollment JWT"
+      description: |-
+        Rotates the Ed25519-signed enrollment JWT before it expires.
+      x-phlix-middleware: [EnrollmentJwtMiddleware, HubProtocolMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - $ref: "#/components/parameters/AcceptPhlixProtocol"
+      security:
+        - enrollmentJwt: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/ProtocolRequired"
+        "401":
+          $ref: "#/components/responses/EnrollmentRequired"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/servers/{id}/subdomain":
+    delete:
+      operationId: "delete_api_v1_servers_id_subdomain"
+      tags: ["Server Enrollment"]
+      summary: "Release a subdomain"
+      description: |-
+        Releases the allocated subdomain and removes the DNS alias. Authenticates inside the controller,
+        as above.
+      x-phlix-middleware: []
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      operationId: "post_api_v1_servers_id_subdomain"
+      tags: ["Server Enrollment"]
+      summary: "Allocate a subdomain"
+      description: |-
+        Allocates `<name>.phlix.tv` for the calling server and provisions the DNS alias. Authenticates
+        INSIDE the controller against the Ed25519 enrollment JWT, so it carries no route middleware.
+        phlix-server calls this from `src/Hub/SubdomainClient.php`.
+      x-phlix-middleware: []
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  "/app":
+    get:
+      operationId: "get_app"
+      tags: ["Web UI"]
+      summary: "SPA shell"
+      description: |-
+        Serves the `@phlix/hub-web-ui` Vue SPA shell (index.html) built into `public/assets/app/`.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "The SPA shell document."
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+  "/app/{path}":
+    x-phlix-route: "/app/{path:.*}"
+    get:
+      operationId: "get_app_path"
+      tags: ["Web UI"]
+      summary: "SPA shell (deep link)"
+      description: |-
+        Catch-all for SPA client-side routes; serves the same shell so a deep link reloads correctly.
+      x-phlix-middleware: []
+      parameters:
+        - name: "path"
+          in: path
+          required: true
+          description: "Remainder of the URL, forwarded verbatim to the target (may contain `/`)."
+          schema:
+            type: string
+      security: []
+      responses:
+        "200":
+          description: "The SPA shell document."
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+  "/audit-logs":
+    get:
+      operationId: "get_audit_logs"
+      tags: ["Web UI"]
+      summary: "Legacy audit-logs page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/admin/audit-logs`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/admin/audit-logs when signed in, /app/login when not"
+              schema:
+                type: string
+  "/claim-server":
+    get:
+      operationId: "get_claim_server"
+      tags: ["Web UI"]
+      summary: "Legacy claim-server page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`. There is no dedicated claim page; the claim modal lives in the SPA
+        MyServersPage.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/servers`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/servers when signed in, /app/login when not"
+              schema:
+                type: string
+  "/client/{server_id}":
+    get:
+      operationId: "get_client_server_id"
+      tags: ["Relay"]
+      summary: "Client mount signpost"
+      description: |-
+        HTTP mirror of the client-mount path. The real mount is a WebSocket on
+        `:8803/client/{server_id}`; this route exists so the HTTP surface names the same path the
+        `ClientRelayWorker` regex parses. **This path is deliberately bare (no `/api/v1` prefix)** and
+        must stay that way, or the HTTP mirror would disagree with the WS worker.
+      x-phlix-middleware: []
+      parameters:
+        - name: "server_id"
+          in: path
+          required: true
+          description: "Media server id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          $ref: "#/components/responses/NotFound"
+  "/federation":
+    get:
+      operationId: "get_federation"
+      tags: ["Web UI"]
+      summary: "Legacy federation page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/federation`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/federation when signed in, /app/login when not"
+              schema:
+                type: string
+  "/federation/shares":
+    get:
+      operationId: "get_federation_shares"
+      tags: ["Web UI"]
+      summary: "Legacy federation-shares page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/federation/shares`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/federation/shares when signed in, /app/login when not"
+              schema:
+                type: string
+  "/health":
+    get:
+      operationId: "get_health"
+      tags: ["Health"]
+      summary: "Service health probe"
+      description: |-
+        Unauthenticated liveness probe used by HAProxy and the container health check.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  "/hub-settings":
+    get:
+      operationId: "get_hub_settings"
+      tags: ["Web UI"]
+      summary: "Legacy hub-settings page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/admin/settings`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/admin/settings when signed in, /app/login when not"
+              schema:
+                type: string
+  "/invite-links":
+    get:
+      operationId: "get_invite_links"
+      tags: ["Web UI"]
+      summary: "Legacy invite-links page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/invite-links`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/invite-links when signed in, /app/login when not"
+              schema:
+                type: string
+  "/invite/{token}":
+    get:
+      operationId: "get_invite_token"
+      tags: ["Web UI"]
+      summary: "Invite landing redirect"
+      description: |-
+        Public landing for an invite link; redirects into the SPA so a logged-out browser can open it.
+      x-phlix-middleware: []
+      parameters:
+        - name: "token"
+          in: path
+          required: true
+          description: "Opaque invite token."
+          schema:
+            type: string
+      security: []
+      responses:
+        "302":
+          description: |-
+            Redirect into the SPA at `/app/invite/{token}`.
+          headers:
+            Location:
+              description: "/app/invite/{token}"
+              schema:
+                type: string
+  "/login":
+    get:
+      operationId: "get_login"
+      tags: ["Web UI"]
+      summary: "Login page redirect"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "302":
+          description: |-
+            Redirect into the SPA at `/app/login`.
+          headers:
+            Location:
+              description: "/app/login"
+              schema:
+                type: string
+  "/logs":
+    get:
+      operationId: "get_logs"
+      tags: ["Web UI"]
+      summary: "Legacy logs page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/admin/logs`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/admin/logs when signed in, /app/login when not"
+              schema:
+                type: string
+  "/manage-shares":
+    get:
+      operationId: "get_manage_shares"
+      tags: ["Web UI"]
+      summary: "Legacy manage-shares page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/shares`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/shares when signed in, /app/login when not"
+              schema:
+                type: string
+  "/my-servers":
+    get:
+      operationId: "get_my_servers"
+      tags: ["Web UI"]
+      summary: "Legacy my-servers page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/servers`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/servers when signed in, /app/login when not"
+              schema:
+                type: string
+  "/requests":
+    get:
+      operationId: "get_requests"
+      tags: ["Web UI"]
+      summary: "Legacy media-requests page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/requests`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/requests when signed in, /app/login when not"
+              schema:
+                type: string
+  "/servers/{id}":
+    get:
+      operationId: "get_servers_id"
+      tags: ["Web UI"]
+      summary: "Legacy server-detail page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/servers/{id}`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/servers/{id} when signed in, /app/login when not"
+              schema:
+                type: string
+  "/shared-with-me":
+    get:
+      operationId: "get_shared_with_me"
+      tags: ["Web UI"]
+      summary: "Legacy shared-with-me page"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      responses:
+        "302":
+          description: |-
+            Always a redirect, but to one of two places. Signed in: `/app/shares`. Not signed in:
+            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
+            than a JSON 401, so a browser is bounced to the login page.
+          headers:
+            Location:
+              description: "/app/shares when signed in, /app/login when not"
+              schema:
+                type: string
+  "/signup":
+    get:
+      operationId: "get_signup"
+      tags: ["Web UI"]
+      summary: "Signup page redirect"
+      description: |-
+        Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
+        Vue SPA under `/app`.
+      x-phlix-middleware: []
+      security: []
+      responses:
+        "302":
+          description: |-
+            Redirect into the SPA at `/app/signup`.
+          headers:
+            Location:
+              description: "/app/signup"
+              schema:
+                type: string
+
+# ---------------------------------------------------------------------------
+# WebSocket surfaces.
+#
+# These are NOT OpenAPI `paths`. The server relay tunnel mounts at the bare root
+# of :8802, and its path key `/` is already taken by the HTTP redirect on :8800;
+# OpenAPI path keys are global, so the two cannot coexist without one of them
+# lying about its port. Modelling them as an extension keeps every entry in
+# `paths` an honest :8800 HTTP operation, which is also what makes the exact
+# spec-vs-router bijection possible.
+#
+# `port` on each hub surface is machine-checked against the PHP source in
+# tests/Unit/Http/RouteRegistration/OpenApiSpecMatchesRouterTest.php. The
+# phlix-server surface below is NOT checkable from this repository's CI (it
+# clones one repo); it is marked `repo: phlix-server` and is documentation only.
+#
+# Full message and frame catalogs: docs/websockets.md
+# ---------------------------------------------------------------------------
+x-phlix-websockets:
+  - name: "Server relay tunnel"
+    repo: phlix-hub
+    port: 8802
+    portSource: "config/server.php `relay_port` (default 8802); Application::run()"
+    url: "ws://hub.phlix.tv:8802"
+    path: "/"
+    worker: "Phlix\\Hub\\Relay\\RelayWorker"
+    direction: "media server → hub (outbound, so it traverses NAT)"
+    auth: >-
+      JSON HELLO frame as the first message, carrying the Ed25519 enrollment JWT and the server id.
+      The hub answers HELLO_ACK with a relay session id and a tunnel id, after which the socket is
+      binary. A connect-rate limiter (10/60s per IP) closes with code 1013 before HELLO is read.
+    encoding: "JSON text for HELLO/HELLO_ACK, then binary RelayFrame"
+    wireFormat: >-
+      [4-byte channel or request id (uint32, big-endian)][1-byte frame type][2-byte payload length
+      (uint16)][N payload bytes]. Maximum payload 65535 bytes.
+    messages:
+      - "0x01 HELLO — server→hub, JSON, channel 0"
+      - "0x02 HELLO_ACK — hub→server, JSON, channel 0"
+      - "0x03 CLIENT_CONNECT — hub→server, channel = new client channel id"
+      - "0x04 CLIENT_DISCONNECT — hub→server, channel = that client's channel id"
+      - "0x05 DATA — bidirectional, raw bytes forwarded verbatim, channel = owning client"
+      - "0x06 HEARTBEAT — either direction, keep-alive, channel 0"
+      - "0x07 DISCONNECTED — hub→client, tunnel closed, channel 0"
+      - "0x08 ERROR — any direction, channel 0"
+      - "0x10 HTTP_REQUEST — hub→server, one proxied HTTP request, 4-byte field = request id"
+      - "0x11 HTTP_RESPONSE — server→hub, tagged HEAD/BODY/END chunks for that request id"
+      - "0x12 HTTP_CANCEL — hub→server, the client abandoned that request id, empty payload"
+    closeCodes:
+      - "1013 — connect rate limit exceeded; back off and reconnect"
+  - name: "Client mount"
+    repo: phlix-hub
+    port: 8803
+    portSource: "Phlix\\Hub\\Relay\\ClientRelayWorker::DEFAULT_PORT"
+    url: "ws://hub.phlix.tv:8803/client/{server_id}"
+    path: "/client/{server_id}"
+    pathPattern: "~^/client/([^/?#]+)/?(?:[?#].*)?$~"
+    worker: "Phlix\\Hub\\Relay\\ClientRelayWorker"
+    direction: "client → hub, bridged onto the target server's :8802 tunnel"
+    auth: >-
+      A per-user client relay token from POST /api/v1/me/servers/{id}/relay-token, presented as
+      `Authorization: Bearer <token>` or as `Sec-WebSocket-Protocol: bearer, <token>` (browsers
+      cannot set arbitrary headers on a WebSocket). The `?token=` query form was REMOVED in step
+      S2b so credentials never reach access logs. The token must be scoped to the path-derived
+      server_id, and the resolved user must still own that server.
+    encoding: "binary RelayFrame (same wire format as :8802)"
+    messages:
+      - "0x05 DATA — bidirectional payload, multiplexed onto this client's channel id"
+      - "0x07 DISCONNECTED — hub→client, the server tunnel went away; reconnect"
+      - "0x08 ERROR — hub→client"
+    notes: >-
+      GET /client/{server_id} also exists on the :8800 HTTP surface as a signpost. It is
+      deliberately registered WITHOUT the /api/v1 prefix so the HTTP mirror names exactly the path
+      this worker's regex parses.
+  - name: "SyncPlay relay"
+    repo: phlix-hub
+    port: 8804
+    portSource: "Phlix\\Hub\\SyncPlay\\SyncPlayRelayWorker::DEFAULT_PORT"
+    url: "ws://hub.phlix.tv:8804/syncplay/{server_id}?token=<relay token>"
+    path: "/syncplay/{server_id}"
+    pathPattern: "~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~"
+    worker: "Phlix\\Hub\\SyncPlay\\SyncPlayRelayWorker"
+    direction: "client ↔ hub, broadcast to every client in the same room"
+    auth: >-
+      A client relay token, validated by ClientRelayTokenService and required to be bound to the
+      path-derived server_id. ⚠ Unlike the :8803 mount, this surface still reads the token from the
+      `?token=` QUERY STRING, which is the form :8803 deliberately dropped in S2b.
+    encoding: "JSON text frames"
+    messages:
+      - "client→hub group_join — join a room; the room key is scoped to (server_id, owner)"
+      - "client→hub group_leave — leave the current room"
+      - "client→hub playback_play / playback_pause / playback_seek — broadcast playback control"
+      - "client→hub time_sync — clock probe"
+      - "hub→client room_state — the room's members and current playback state after a join"
+      - "hub→client client_joined / client_left — membership change"
+      - "hub→client time_sync_reply — clock probe answer"
+    notes: >-
+      Any message type not in the list above is relayed verbatim to the rest of the room, so the
+      catalog is a floor, not a closed set.
+  - name: "Hub federation"
+    repo: phlix-hub
+    port: 8805
+    portSource: "Phlix\\Hub\\Relay\\FederationWorker::DEFAULT_PORT"
+    url: "ws://master-hub.example:8805/relay/federation/{hub_id}"
+    path: "/relay/federation/{hub_id}"
+    pathPattern: "~^/relay/federation/([^/?#]+)/?(?:[?#].*)?$~"
+    worker: "Phlix\\Hub\\Relay\\FederationWorker"
+    direction: "leaf hub → master hub"
+    auth: >-
+      The hub_id in the path must already be a known peer in `federation_peers`; an unknown id is
+      closed with reason "Unknown hub". The worker is started pre-fork from
+      HubServicesProvider::boot(), because a Workerman Worker must be constructed before runAll().
+    encoding: "JSON text for HUB_HELLO/HUB_HELLO_ACK, then binary RelayFrame"
+    messages:
+      - "0x09 HUB_HELLO — leaf→master, JSON, channel 0"
+      - "0x0A HUB_HELLO_ACK — master→leaf, JSON, channel 0"
+      - "0x0B HUB_HEARTBEAT — either direction, keep-alive, channel 0"
+      - "0x0C LIBRARY_SHARE_UPDATE — master→leaf, JSON, channel 0"
+      - "0x0D LIBRARY_SHARE_REVOKED — master→leaf, JSON, channel 0"
+      - "0x0E ADMIN_DELEGATION — master→leaf, JSON, channel 0"
+      - "0x0F HUB_DISCONNECTED — either direction, clean close, channel 0"
+  - name: "Media server events and SyncPlay"
+    repo: phlix-server
+    port: 8097
+    portSource: "phlix-server config/server.php websocket.port"
+    url: "ws://media-server:8097/"
+    path: "/"
+    worker: "Phlix\\Server\\WebSocket\\WebSocketServer"
+    direction: "client ↔ media server (direct, or tunnelled through this hub)"
+    auth: >-
+      The socket accepts unauthenticated connections and immediately sends `connected`. Only
+      ping, pong, auth_request and connected may be sent before authenticating; every other type
+      (and every `syncplay_*` type) requires an authenticated connection.
+    encoding: "JSON text frames"
+    envelope: >-
+      {"type": "<event>", "data": {...}, "timestamp": <unix seconds>} for normal events; SyncPlay
+      control messages use the flat form {"type": "<event>", ...payload, "timestamp": <unix>}.
+      Inbound messages are read as {"type": ..., "data": ...}.
+    messages:
+      - "connected / disconnected / client_disconnected"
+      - "auth_request / auth_success / auth_failure"
+      - "session_start / session_end / session_join / session_leave"
+      - "playback_start / playback_pause / playback_stop / playback_progress / playback_seek"
+      - "syncplay_create_group / syncplay_join_group / syncplay_leave_group"
+      - "syncplay_sync_state / syncplay_sync_request"
+      - "subscribe_dashboard / dashboard_now_playing"
+      - "library_updated / notification / error / ping / pong"
+    notes: >-
+      Documented here for completeness because a hub client reaches this socket through the relay.
+      It belongs to phlix-server and is NOT verified by this repository's tests.
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        A hub user access token (HS256), minted by POST /api/v1/auth/login or /refresh. Enforced by
+        AuthMiddleware. On an /api/ path a missing or invalid token is a JSON 401 with code
+        `auth.required`; on a page path it is a 302 to /app/login.
+    enrollmentJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        An Ed25519 enrollment JWT issued to a claimed media server. Enforced by
+        EnrollmentJwtMiddleware; the verification keys are published at /.well-known/jwks.json.
+  parameters:
+    AcceptPhlixProtocol:
+      name: Accept-Phlix-Protocol
+      in: header
+      required: true
+      description: >-
+        Hub wire protocol version. HubProtocolMiddleware rejects a missing or unsupported value with
+        400 before any handler runs, so this is a protocol error and not an auth error.
+      schema:
+        type: string
+        const: v1
+  responses:
+    Unauthorized:
+      description: "No credentials, or credentials the middleware rejected."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Unauthorized
+            code: auth.required
+    EnrollmentRequired:
+      description: "No valid Ed25519 enrollment JWT for the server named in the path."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: "Authenticated, but not an administrator of this hub."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: "No such resource, or it is not visible to the caller."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ProtocolRequired:
+      description: "The Accept-Phlix-Protocol header was absent or named an unsupported version."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyRequests:
+      description: >-
+        A per-surface rate limit was exceeded. Application::rateLimitResponse() adds Retry-After
+        with the seconds remaining in the window.
+      headers:
+        Retry-After:
+          description: "Seconds until the limiter window resets. Never negative."
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Too Many Requests
+            code: rate_limited
+  schemas:
+    Error:
+      type: object
+      description: "The flat error envelope every hub controller returns."
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: "Human-readable summary."
+        code:
+          type: string
+          description: "Stable machine code, e.g. `auth.required`, `user.not_found`, `rate_limited`."
+      additionalProperties: true
+    Uuid:
+      type: string
+      description: "8-4-4-4-12 hex UUID, stored as CHAR(36)."
+      pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    Health:
+      type: object
+      required: [status, service, version]
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: phlix-hub
+        version:
+          type: string
+          description: "Phlix\\Hub\\Version::VERSION."
+        phlixShared:
+          type: string
+          description: "Version of the shared detain/phlix-shared package."
+        timestamp:
+          type: integer
+          description: "Unix seconds."
+    User:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        is_admin:
+          type: boolean
+        created_at:
+          type: string
+      additionalProperties: true
+    UserList:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+      additionalProperties: true
+    AuthSession:
+      type: object
+      description: "A minted session. The refresh token is also set as a cookie."
+      properties:
+        access_token:
+          type: string
+          description: "HS256 bearer token for the /api/v1 surface."
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+          description: "Access-token lifetime in seconds."
+        user:
+          $ref: "#/components/schemas/User"
+      additionalProperties: true
+    MeResponse:
+      type: object
+      description: "MeController: the user, the decoded JWT claims, and the servers they own."
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        claims:
+          type: object
+          additionalProperties: true
+        servers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Server"
+      additionalProperties: true
+    Server:
+      type: object
+      description: "A claimed media server as the hub knows it."
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        name:
+          type: string
+        online:
+          type: boolean
+          description: "Derived from the last heartbeat, not from a live probe."
+        last_seen:
+          type: string
+        subdomain:
+          type: string
+          description: "Allocated <name>.phlix.tv, if any."
+        version:
+          type: string
+      additionalProperties: true
+    ServerList:
+      type: object
+      properties:
+        servers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Server"
+      additionalProperties: true
+    ServerClaim:
+      type: object
+      description: "Issued to a server that is starting a claim."
+      properties:
+        claim_id:
+          type: string
+          description: "Unguessable bearer secret the server polls with."
+        claim_code:
+          type: string
+          description: "Short code the operator pastes into the hub UI."
+        expires_at:
+          type: string
+      additionalProperties: true
+    ServerClaimStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          description: "pending, approved, or expired."
+        enrollment_jwt:
+          type: string
+          description: "Present once approved: the Ed25519 JWT the server authenticates with."
+        server_id:
+          $ref: "#/components/schemas/Uuid"
+      additionalProperties: true
+    Jwks:
+      type: object
+      description: "RFC 7517 JWK Set holding the hub's Ed25519 enrollment verification keys."
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            properties:
+              kty:
+                type: string
+                const: OKP
+              crv:
+                type: string
+                const: Ed25519
+              kid:
+                type: string
+              x:
+                type: string
+                description: "base64url public key."
+            additionalProperties: true
+    RelayToken:
+      type: object
+      description: "Short-lived token for mounting ws://hub:8803/client/{server_id}."
+      properties:
+        token:
+          type: string
+        expires_at:
+          type: string
+        server_id:
+          $ref: "#/components/schemas/Uuid"
+        ws_url:
+          type: string
+      additionalProperties: true
+    RelaySignpost:
+      type: object
+      description: "Body of the 501 answered by POST /api/v1/servers/{id}/relay."
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+          description: "Names the ws:// endpoint to connect to instead."
+        ws_endpoint:
+          type: string
+      additionalProperties: true
+    BandwidthUsage:
+      type: object
+      properties:
+        bytes_used:
+          type: integer
+        quota_bytes:
+          type: integer
+          description: "0 or null means unlimited."
+        throttle_bps:
+          type: integer
+          description: "Per-user relay byte rate enforced by TokenBucket. 0 means unthrottled."
+        window_start:
+          type: string
+      additionalProperties: true
+    MediaRequest:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        title:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+          description: "pending, approved, or denied."
+        requested_by:
+          $ref: "#/components/schemas/Uuid"
+        created_at:
+          type: string
+      additionalProperties: true
+    MediaRequestList:
+      type: object
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaRequest"
+      additionalProperties: true
+    LibraryShare:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        server_id:
+          $ref: "#/components/schemas/Uuid"
+        library_id:
+          type: string
+        shared_with:
+          $ref: "#/components/schemas/Uuid"
+        permissions:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+    LibraryShareList:
+      type: object
+      properties:
+        shares:
+          type: array
+          items:
+            $ref: "#/components/schemas/LibraryShare"
+      additionalProperties: true
+    InviteLink:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        token:
+          type: string
+        expires_at:
+          type: string
+        max_uses:
+          type: integer
+        uses:
+          type: integer
+      additionalProperties: true
+    InviteLinkList:
+      type: object
+      properties:
+        invite_links:
+          type: array
+          items:
+            $ref: "#/components/schemas/InviteLink"
+      additionalProperties: true
+    HubSettings:
+      type: object
+      description: "Instance-wide settings row, exposed on both the /me and /admin paths."
+      additionalProperties: true
+    FederationHubConfig:
+      type: object
+      description: "This hub's own federation identity and role (master or leaf)."
+      additionalProperties: true
+    FederationPeer:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        hub_url:
+          type: string
+        relay_enabled:
+          type: boolean
+        admin_delegation_enabled:
+          type: boolean
+        status:
+          type: string
+      additionalProperties: true
+    FederationPeerList:
+      type: object
+      properties:
+        peers:
+          type: array
+          items:
+            $ref: "#/components/schemas/FederationPeer"
+      additionalProperties: true

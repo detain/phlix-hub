@@ -8,6 +8,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **OpenAPI description + WebSocket documentation (S66 / updates.md #45).** The
+  hub's HTTP and socket surfaces are now written down, and — more to the point —
+  the writing is checked against the code.
+  - New root `openapi.yaml`: OpenAPI 3.1, **117 operations across 95 paths**,
+    covering every route `Application::registerRoutes()` composes. Validates
+    clean under `@redocly/cli` (0 errors), which a new pinned `openapi` CI job
+    now runs on every push. Rule deviations live in the new `redocly.yaml`, each
+    with the reason it exists.
+  - New `tests/Unit/Http/RouteRegistration/OpenApiSpecMatchesRouterTest.php`
+    pins the description to the REAL composed router in **both** directions: a
+    route the hub serves but does not document fails, and a path documented but
+    never registered fails too. Each operation additionally declares its
+    middleware chain (`x-phlix-middleware`), compared against what the router
+    actually holds, so a route that quietly loses its auth or admin gate is red.
+    This is the S204 defect class — a mismatch between two artefacts that
+    neither side's tests compared — closed for the whole surface rather than for
+    two paths.
+  - New `docs/websockets.md`: message and frame catalogs for all five sockets —
+    `:8802` server tunnel, `:8803` client mount, `:8804` SyncPlay relay, `:8805`
+    hub federation, and phlix-server's `:8097` events socket. The four hub
+    surfaces are also declared in `openapi.yaml` under `x-phlix-websockets`,
+    with each declared port pinned against the PHP constant (or source literal)
+    that defines it.
+
+### Fixed
+
+- **`FederationWorker`'s docblock named the wrong port.** It said leaf hubs
+  connect to `ws://master-hub:8804/…` — the SyncPlay relay's port — while
+  `DEFAULT_PORT` has always been `8805`. Documentation-only, but it is the sort
+  of error nothing catches while the constant is the only thing anyone runs.
+
 - **Core update check (S75 / updates.md #48).** The hub now learns when a newer
   hub release exists, instead of an operator having to watch the repository.
   - New root `VERSION` marker file, kept in lockstep with

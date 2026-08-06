@@ -33,9 +33,14 @@ use function trim;
 /**
  * WebSocket worker that handles hub-to-hub federation connections.
  *
- * Leaf hubs connect via WSS to `ws://master-hub:8804/relay/federation/{hub_id}`.
+ * Leaf hubs connect via WSS to `ws://master-hub:8805/relay/federation/{hub_id}`.
  * This worker is the master-side counterpart that accepts inbound WS
  * connections from federated leaf hubs.
+ *
+ * The port above is {@see self::DEFAULT_PORT}. This docblock said `8804` — the
+ * SyncPlay relay's port — from the file's introduction until S66, which is the
+ * kind of mistake nothing catches while the constant is the only thing anyone
+ * runs. See `docs/websockets.md` for the full surface catalog.
  *
  * Connection lifecycle:
  *   1. WS upgrade — parse `hub_id` from the request path.
