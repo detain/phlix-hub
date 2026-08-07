@@ -145,18 +145,22 @@ final class CurlCertChainFetcher implements CertChainFetcherInterface
                 return null;
             }
 
-            // ⚠ The length half of this condition is a PORTABILITY BACKSTOP and
-            // no test in this repo can make it fire. Measured on libcurl 8.5.0:
-            // CURLOPT_MAXFILESIZE aborts an over-cap download even when the peer
-            // declares no Content-Length (chunked), failing with CURLE_FILESIZE_
-            // EXCEEDED "with 3000 bytes" — so control never reaches here with an
-            // oversized body. Deleting the `strlen()` clause was mutation-tested
-            // and SURVIVED for exactly that reason; it is kept deliberately,
-            // because "libcurl aborts mid-transfer for an unknown-length body"
-            // is a property of the linked library version, not of this code, and
-            // the consequence of being wrong about it is unbounded memory growth
-            // in a resident worker. Do not delete it because coverage says it is
-            // unreached.
+            // ⚠ The length half of this condition and {@see CURLOPT_MAXFILESIZE}
+            // above are MUTUALLY REDUNDANT on libcurl 8.5.0, and the mutation
+            // campaign says so precisely: deleting either one alone leaves the
+            // suite green, deleting BOTH reds
+            // `testAnOversizedChunkedBodyIsRefusedByTheLengthCheck`. So the
+            // property "an over-cap body is refused" IS pinned; neither
+            // individual line is.
+            //
+            // Both are kept on purpose. Measured here, CURLOPT_MAXFILESIZE
+            // aborts an over-cap download even when the peer declares no
+            // Content-Length (chunked), failing with CURLE_FILESIZE_EXCEEDED
+            // "with 3000 bytes" — but that mid-transfer abort for an
+            // unknown-length body is a property of the LINKED LIBRARY VERSION,
+            // not of this code, and the cost of being wrong about it is
+            // unbounded memory growth in a resident worker. Do not delete either
+            // line on a coverage argument.
             if ($body === '' || strlen($body) > $this->maxBytes) {
                 return null;
             }
