@@ -106,7 +106,20 @@ final class McpToolRegistry
                 'name' => $tool->name(),
                 'description' => $tool->description(),
                 'inputSchema' => $tool->inputSchema(),
+                // The scope is published TWICE, and that is deliberate (S63).
+                //
+                // `x-phlix-scope` is S62's spelling and is kept because it is
+                // pinned and because a non-SDK client reading the raw JSON finds
+                // it there. But a client built on the official MCP SDK never
+                // sees it: `ListToolsResultSchema` is a Zod object that STRIPS
+                // unrecognised keys, so the field is silently discarded before
+                // the model is shown the catalogue — verified by driving the real
+                // client. `_meta` is part of the `Tool` schema, so it survives.
+                // Without this line the registry's promise that "the descriptor
+                // names the scope it needs" is false for exactly the clients that
+                // matter most.
                 'x-phlix-scope' => $tool->requiredScope(),
+                '_meta' => ['phlix/scope' => $tool->requiredScope()],
             ];
         }
 

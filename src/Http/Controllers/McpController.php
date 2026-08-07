@@ -607,7 +607,12 @@ final class McpController
             'content' => [
                 ['type' => 'text', 'text' => $text],
             ],
-            'structuredContent' => $payload,
+            // Same `{}`-not-`[]` rule as JsonRpc::result() — `structuredContent`
+            // is an OBJECT in the MCP schema, and an upstream server that
+            // answered with an empty body would otherwise put a JSON array here
+            // and fail the client's schema check. `content` above is genuinely a
+            // list and must stay one.
+            'structuredContent' => $payload === [] ? new \stdClass() : $payload,
             'isError' => $status >= 400,
             '_meta' => ['phlix/httpStatus' => $status],
         ];

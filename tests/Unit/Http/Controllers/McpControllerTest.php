@@ -486,6 +486,98 @@ final class McpControllerTest extends TestCase
     }
 
     // ------------------------------------------------------------------
+    // S63: JSON shape — found by driving a REAL MCP client
+    // ------------------------------------------------------------------
+
+    /**
+     * An EMPTY result must encode as `{}`, never `[]`.
+     *
+     * ⚠ Read the assertion: it is on the RAW body STRING, not on the decoded
+     * body. That is the whole point. PHP has one array type, so
+     * `json_encode([])` emits `[]` — a JSON ARRAY — where every MCP result type
+     * is an OBJECT. `ping` shipped that way in S62 and NO decoding test could
+     * see it, because `json_decode('{}', true)` and `json_decode('[]', true)`
+     * are both `[]`. The real SDK client's `JSONRPCMessageSchema.parse()`
+     * rejects it outright ("expected object, received array") and tears the
+     * session down, which is how it was found.
+     *
+     * Do not "simplify" this test to `assertSame([], $body['result'])`. That
+     * assertion passes against the broken code.
+     */
+    public function test_an_empty_result_encodes_as_a_json_object(): void
+    {
+        $response = $this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            self::GOOD_TOKEN,
+        ));
+
+        self::assertStringContainsString(
+            '"result": {}',
+            $response->body,
+            "ping's EmptyResult was encoded as a JSON array. A conformant MCP client rejects the "
+            . 'message and drops the session. Raw body was: ' . $response->body,
+        );
+        self::assertStringNotContainsString('"result": []', $response->body);
+    }
+
+    /**
+     * ...and the control beside it: a NON-empty result is still an object with
+     * its members, and a genuine LIST inside a result stays a JSON array.
+     *
+     * Without this, "wrap everything in an object" would satisfy the test above
+     * while turning `tools` into `{"0":…}` and breaking every client.
+     */
+    public function test_a_list_inside_a_result_is_still_a_json_array(): void
+    {
+        $response = $this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+            self::GOOD_TOKEN,
+        ));
+
+        self::assertStringContainsString('"tools": [', $response->body, 'the tool list stopped being a JSON array.');
+        self::assertStringNotContainsString('"tools": {', $response->body);
+    }
+
+    /**
+     * Every tool descriptor publishes its scope somewhere a real MCP client can
+     * actually READ it.
+     *
+     * S62 published it only as `x-phlix-scope`. The official SDK parses
+     * `tools/list` through a Zod object that STRIPS unrecognised keys, so that
+     * field never reaches the model — verified by driving the real client, which
+     * printed `x-phlix-scope=undefined` for all six tools. `_meta` IS in the
+     * `Tool` schema and survives, so the scope is published there too.
+     *
+     * The assertion is on `_meta` specifically: asserting "the scope appears
+     * somewhere in the JSON" would be satisfied by the stripped field alone.
+     */
+    public function test_every_tool_descriptor_publishes_its_scope_in_meta(): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+            self::GOOD_TOKEN,
+        )));
+
+        /** @var array<string, mixed> $result */
+        $result = $body['result'];
+        /** @var list<array<string, mixed>> $tools */
+        $tools = $result['tools'];
+        self::assertNotSame([], $tools, 'ANTI-VACUITY: no tools were published, so this checks nothing.');
+
+        foreach ($tools as $tool) {
+            /** @var array<string, mixed> $meta */
+            $meta = $tool['_meta'] ?? [];
+            $scope = $meta['phlix/scope'] ?? null;
+            self::assertIsString($scope, ((string) ($tool['name'] ?? '?')) . ' publishes no scope in _meta.');
+            self::assertTrue(
+                McpScopes::isKnown($scope),
+                $scope . ' is not a scope McpScopes knows, so no token could ever hold it.',
+            );
+            self::assertSame($scope, $tool['x-phlix-scope'] ?? null, 'the two spellings disagree.');
+        }
+    }
+
+    // ------------------------------------------------------------------
     // S63: GET /mcp — the SSE transport
     // ------------------------------------------------------------------
 
