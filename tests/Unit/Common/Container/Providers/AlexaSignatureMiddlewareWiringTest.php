@@ -5,14 +5,18 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Hub\Alexa\AlexaRejectionAuditorInterface;
 use Phlix\Hub\Alexa\CurlCertChainFetcher;
+use Phlix\Hub\Common\Container\Providers\CommonServicesProvider;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
+use Workerman\MySQL\Connection;
 
 /**
  * S90 — prove the Alexa gate is actually resolvable, with real collaborators.
@@ -86,6 +90,21 @@ final class AlexaSignatureMiddlewareWiringTest extends TestCase
             'production anchors chains in the SYSTEM trust store; a stray test CA here would '
             . 'let a self-signed chain pass the gate on a live hub',
         );
+
+        // S91's two additions. Both are REQUIRED constructor parameters, so a
+        // null here cannot come from PHP-DI skipping an optional — it would mean
+        // the factory stopped passing them, which is the shape of defect this
+        // whole suite exists for.
+        self::assertInstanceOf(
+            RateLimiterInterface::class,
+            $this->readPrivate($middleware, 'rateLimiter'),
+            'without a limiter the public Alexa endpoint has no flood ceiling at all',
+        );
+        self::assertInstanceOf(
+            AlexaRejectionAuditorInterface::class,
+            $this->readPrivate($middleware, 'auditor'),
+            'without an auditor no Alexa rejection is ever recorded',
+        );
     }
 
     public function testTheGateIsASingletonSoItsChainCacheSurvivesBetweenRequests(): void
@@ -98,10 +117,28 @@ final class AlexaSignatureMiddlewareWiringTest extends TestCase
         );
     }
 
+    /**
+     * The container this suite resolves the gate from.
+     *
+     * S91 gave the gate two more dependencies, and closing the graph needs two
+     * things `HubServicesProvider` does not itself register:
+     *
+     *  - {@see CommonServicesProvider}, which is where every `rate_limiter.*`
+     *    profile is bound. It is registered rather than stubbed on purpose: the
+     *    production `rate_limiter.alexa` binding is exactly what must exist, and
+     *    a hand-written stub here would resolve happily even if
+     *    `RateLimitProfiles::ALEXA` were never added to `defaults()`.
+     *  - a `Connection` double, because the auditor pulls in `AuditLogRepository`.
+     *    That is a real database boundary this suite has no business owning.
+     */
     private function buildContainer(): \DI\Container
     {
         $builder = new ContainerBuilder();
+        (new CommonServicesProvider())->register($builder, []);
         (new HubServicesProvider())->register($builder, []);
+        $builder->addDefinitions([
+            Connection::class => $this->createMock(Connection::class),
+        ]);
 
         return $builder->build();
     }

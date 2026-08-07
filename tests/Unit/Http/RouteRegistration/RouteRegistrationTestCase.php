@@ -8,12 +8,17 @@ use Phlix\Hub\Application;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
+use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
+use Phlix\Hub\Tests\Support\Alexa\RecordingAlexaRejectionAuditor;
+use Phlix\Hub\Tests\Support\Alexa\RecordingCertChainFetcher;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
@@ -72,6 +77,22 @@ abstract class RouteRegistrationTestCase extends TestCase
 
     protected AdminMiddleware $adminMiddleware;
 
+    /**
+     * The REAL S90 signature gate (S91 wires it onto `POST /alexa/skill`).
+     *
+     * ⚠ It must be PRESET into the stub container rather than left to
+     * {@see RouteRegistrationContainer}'s `newInstanceWithoutConstructor()`
+     * fallback. A reflection-built instance leaves the readonly `$logger`
+     * UNINITIALISED, so the first `reject()` throws `Error`, the middleware's own
+     * fail-closed `catch (\Throwable)` re-enters `reject()`, and that throws
+     * again — the suite would see an uncatchable error rather than the 400 the
+     * gate is supposed to answer with.
+     */
+    protected AlexaSignatureMiddleware $alexaSignatureMiddleware;
+
+    /** Records what the signature gate audited, so nothing needs a database. */
+    protected RecordingAlexaRejectionAuditor $alexaAuditor;
+
     protected RouteRegistrationContainer $container;
 
     protected function setUp(): void
@@ -94,9 +115,23 @@ abstract class RouteRegistrationTestCase extends TestCase
         $this->authMiddleware  = new AuthMiddleware($this->jwt, $this->users);
         $this->adminMiddleware = new AdminMiddleware($this->users, $this->audit);
 
+        // A real gate with real collaborators and no I/O: a StructuredLogger with
+        // no handlers, a fetcher that opens no socket, and a limiter whose budget
+        // is far above anything a route suite dispatches — these suites assert
+        // the GATE, not the limit, and a stingy budget here would turn an
+        // unrelated test's route count into a flaky 429.
+        $this->alexaAuditor = new RecordingAlexaRejectionAuditor();
+        $this->alexaSignatureMiddleware = new AlexaSignatureMiddleware(
+            new RecordingCertChainFetcher(null),
+            new StructuredLogger('alexa-route-test', []),
+            new RateLimiter(60, 100000, 1000),
+            $this->alexaAuditor,
+        );
+
         $this->container = new RouteRegistrationContainer([
-            AuthMiddleware::class  => $this->authMiddleware,
-            AdminMiddleware::class => $this->adminMiddleware,
+            AuthMiddleware::class            => $this->authMiddleware,
+            AdminMiddleware::class           => $this->adminMiddleware,
+            AlexaSignatureMiddleware::class  => $this->alexaSignatureMiddleware,
         ]);
     }
 

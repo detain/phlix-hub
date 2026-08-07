@@ -111,6 +111,11 @@ tags:
       The Model Context Protocol endpoint an AI client talks to, plus the personal access tokens
       that authenticate it. Read-only, and gated by the same server-ownership checks as the relay
       proxy.
+  - name: "Alexa"
+    description: >-
+      The self-hosted Amazon Alexa custom skill endpoint. Answers questions about a linked user's
+      library and returns a LINK when asked to play something; it cannot start, stop or route
+      playback on any device, and it cannot cast.
 
 paths:
   "/":
@@ -173,6 +178,112 @@ paths:
                 type: string
         "403":
           $ref: "#/components/responses/Forbidden"
+  "/alexa/skill":
+    post:
+      operationId: "post_alexa_skill"
+      tags: ["Alexa"]
+      summary: "Amazon Alexa custom skill endpoint"
+      description: |-
+        The Phlix Alexa skill, served by the SAME `:8800` HTTP worker as everything else in this
+        description — a self-hosted HTTPS endpoint, not a Lambda and not a Smart Home skill.
+
+        ## Authentication
+
+        `x-phlix-middleware` is `[AlexaSignatureMiddleware]`, and that gate is the only thing between
+        this public path and the internet. Amazon's proof of origin is a detached RSA signature over
+        the RAW request bytes, sent in `Signature-256`, made with a certificate published under
+        `https://s3.amazonaws.com/echo.api/` and named in `SignatureCertChainUrl`. The middleware
+        validates that URL BEFORE fetching it, verifies the chain anchors to a trusted root, checks
+        the leaf's `echo-api.amazon.com` SAN, verifies the signature over the raw bytes, and only
+        then enforces Amazon's 150-second replay window. The legacy SHA-1 `Signature` header is
+        deliberately NOT accepted: honouring it would let a caller downgrade the gate to a broken
+        hash by choosing which header to send.
+
+        There is no `AuthMiddleware` here, on purpose. An Alexa request carries no hub session.
+
+        ## Authorisation
+
+        The caller's identity is the linked-account bearer token inside the JSON body
+        (`session.user.accessToken` / `context.System.user.accessToken`), resolved to a hub user by
+        `AlexaAccountLink`. An absent or unresolvable token is answered with a `LinkAccount` card and
+        spoken prompt — never a 401, which an Alexa device cannot present to a user.
+
+        Every library read is dispatched through the same controllers that serve
+        `/api/v1/me/servers` and `/api/v1/servers/{id}/proxy/{path}`, so the skill inherits the
+        404/403 server-ownership gate, the relay-tunnel and bandwidth-quota checks, path-traversal
+        rejection, and the proxy's read-only browse-scope allowlist. Nothing was added to that
+        allowlist for the skill: it reaches exactly `GET /api/v1/media/search` and
+        `GET /api/v1/media/{id}`.
+
+        ## What the skill can and cannot do
+
+        Supported intents are `PhlixTitleRuntimeIntent` (runtime/year/rating/summary for one title),
+        `PhlixPlayLinkIntent` (returns a `<hub>/app/search?q=` link plus a `Simple` card),
+        `AMAZON.HelpIntent`, `AMAZON.StopIntent`, `AMAZON.CancelIntent` and
+        `AMAZON.FallbackIntent`. `LaunchRequest` speaks the capability statement;
+        `SessionEndedRequest` is answered with an empty envelope and no speech, as Amazon requires.
+
+        The response envelope can never contain `directives`, `AudioPlayer` or `VideoApp`: the
+        builder has no parameter, field or code path capable of emitting them. The skill does not
+        start playback on a device and does not cast, and no response string is permitted to imply
+        that it does.
+
+        ## Rate limiting
+
+        60 requests / 60 seconds per caller, keyed on the TRUSTED client IP (`X-Forwarded-For`
+        resolved through `TRUSTED_PROXIES`, so the HAProxy front is not the bucket). Enforced BEFORE
+        verification, so a flood cannot amplify into one audit row per malicious request. Per-worker,
+        so the effective bound is roughly `60 × HUB_WORKERS`.
+      x-phlix-middleware: [AlexaSignatureMiddleware]
+      security: []
+      parameters:
+        - name: Signature-256
+          in: header
+          required: true
+          description: >-
+            Base64 RSA-SHA256 signature over the raw request body. The legacy SHA-1 `Signature`
+            header is rejected.
+          schema:
+            type: string
+        - name: SignatureCertChainUrl
+          in: header
+          required: true
+          description: >-
+            HTTPS URL of Amazon's signing certificate chain. Must be on s3.amazonaws.com, port 443,
+            path already canonical and under /echo.api/.
+          schema:
+            type: string
+            format: uri
+      requestBody:
+        required: true
+        description: "An Alexa request envelope. The signature is verified over these exact bytes."
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: >-
+            An Alexa response envelope. `SessionEndedRequest` yields `{version, response:
+            {shouldEndSession: true}}` with no speech; every other request type carries a
+            PlainText outputSpeech and, for the play-link intent, a Simple card.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: >-
+            The signature gate refused the request (the body carries the machine-readable code and
+            never the detail), or the body was not a usable Alexa envelope
+            (`alexa.malformed_envelope`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/admin/dashboard/activity":
     get:
       operationId: "get_api_v1_admin_dashboard_activity"

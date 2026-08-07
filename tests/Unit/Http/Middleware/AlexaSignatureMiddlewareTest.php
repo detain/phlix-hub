@@ -6,10 +6,12 @@ namespace Phlix\Hub\Tests\Unit\Http\Middleware;
 
 use Phlix\Hub\Alexa\CertChainFetcherInterface;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Tests\Support\Alexa\AlexaCertificateFixture;
+use Phlix\Hub\Tests\Support\Alexa\RecordingAlexaRejectionAuditor;
 use Phlix\Hub\Tests\Support\Alexa\RecordingCertChainFetcher;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -543,6 +545,8 @@ final class AlexaSignatureMiddlewareTest extends TestCase
         $middleware = new AlexaSignatureMiddleware(
             $exploding,
             new StructuredLogger('alexa-test', []),
+            self::generousLimiter(),
+            new RecordingAlexaRejectionAuditor(),
             $fixture->trustedCaBundle(),
         );
 
@@ -767,6 +771,8 @@ final class AlexaSignatureMiddlewareTest extends TestCase
         $middleware = new AlexaSignatureMiddleware(
             $fetcher,
             new StructuredLogger('alexa-test', []),
+            self::generousLimiter(),
+            new RecordingAlexaRejectionAuditor(),
             $fixture->trustedCaBundle(),
             0,
         );
@@ -830,8 +836,25 @@ final class AlexaSignatureMiddlewareTest extends TestCase
             // A StructuredLogger with no handlers configured: real class, real
             // calls, no file I/O and no LoggerFactory global state.
             new StructuredLogger('alexa-test', []),
+            self::generousLimiter(),
+            new RecordingAlexaRejectionAuditor(),
             AlexaCertificateFixture::shared()->trustedCaBundle(),
         );
+    }
+
+    /**
+     * A REAL {@see RateLimiter} with a budget nothing in this suite can reach.
+     *
+     * S91 put an IP-keyed limiter in front of the verification pipeline, and
+     * every request this suite builds shares the default `0.0.0.0` peer address,
+     * so they all land in one bucket. The shipped 60/60 budget would start
+     * answering 429 partway through the cache-eviction test and the verification
+     * assertions would quietly stop being reached. The limiter's OWN behaviour is
+     * asserted separately, against the shipped thresholds.
+     */
+    private static function generousLimiter(): RateLimiter
+    {
+        return new RateLimiter(60, 100000, 1000);
     }
 
     private static function request(string $body, string $signature, string $url = self::VALID_URL): Request

@@ -150,6 +150,18 @@ final class RegistrarAuthGateTest extends RouteRegistrationTestCase
                 self::assertStringContainsString('HUB_PROTOCOL_UNSUPPORTED', $response->body);
                 break;
 
+            case RouteManifest::GATE_ALEXA:
+                // The CODE, not just the 400: the protocol gate also answers 400,
+                // so a status-only assertion would pass on a route that had lost
+                // its signature gate and picked up some other 400-answering one.
+                self::assertSame(
+                    400,
+                    $response->statusCode,
+                    RouteManifest::key($route) . ' must require an Amazon request signature',
+                );
+                self::assertStringContainsString('ALEXA_MISSING_CERT_CHAIN_URL', $response->body);
+                break;
+
             default:
                 self::fail('unhandled gate: ' . $route['gate']);
         }

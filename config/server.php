@@ -199,6 +199,17 @@ return [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_MCP_MAX', 10),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_MCP_WINDOW', 900),
             ],
+            // Alexa skill endpoint (S91): 60 requests / 60s, keyed
+            // `alexa:<trusted client ip>` in AlexaSignatureMiddleware. PER-WORKER
+            // (soft-global, ~max × HUB_WORKERS) like the other IP-keyed surfaces
+            // — this is not a credential-guessing surface (Amazon's RSA signature
+            // is the credential), so the limiter only exists to cap the cost of an
+            // unauthenticated flood against a public endpoint: a cert-chain fetch
+            // on a cache miss, plus one audit_logs row per rejection.
+            'alexa'         => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_ALEXA_MAX', 60),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_ALEXA_WINDOW', 60),
+            ],
         ];
     })(),
 ];
