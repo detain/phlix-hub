@@ -16,18 +16,18 @@ namespace Phlix\Hub\Common\RateLimit;
  * per-worker default thresholds.
  *
  * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount /
- * mcp) gets its OWN limiter instance registered under the matching
+ * mcp / alexa) gets its OWN limiter instance registered under the matching
  * `rate_limiter.<surface>` container id — a single shared login-grade limiter
  * is wrong for everything but login (HB-4.6). {@see defaults()} maps each
  * container id to the `config/server.php` `rate_limit.<key>` override key plus
  * the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER for five of the seven surfaces. `proxy`, `heartbeat`
- * and `jwks` are enforced on the `HUB_WORKERS` HTTP workers, so each keeps an
- * INDEPENDENT per-worker counter and the effective soft-global limit is roughly
- * `max × HUB_WORKERS` (mirrors HB-3.4); `relay_connect` (the :8802 `RelayWorker`)
- * and `client_mount` (the :8803 `ClientRelayWorker`) run on count=1 surfaces
- * where per-worker == global.
+ * Thresholds are PER-WORKER for six of the eight surfaces. `proxy`, `heartbeat`,
+ * `jwks` and `alexa` are enforced on the `HUB_WORKERS` HTTP workers, so each
+ * keeps an INDEPENDENT per-worker counter and the effective soft-global limit is
+ * roughly `max × HUB_WORKERS` (mirrors HB-3.4); `relay_connect` (the :8802
+ * `RelayWorker`) and `client_mount` (the :8803 `ClientRelayWorker`) run on
+ * count=1 surfaces where per-worker == global.
  *
  * ✅ `login` and `mcp` are the EXCEPTIONS — both are genuinely global; both are
  * bound to the shared DB-backed {@see DbRateLimiter}. The `login` reasoning
@@ -88,6 +88,26 @@ final class RateLimitProfiles
     public const string MCP = 'rate_limiter.mcp';
 
     /**
+     * Container id for the Alexa skill endpoint limiter (S91).
+     *
+     * PER-WORKER (soft-global), like the other IP-keyed surfaces above:
+     * `POST /alexa/skill` is served by the `HUB_WORKERS` HTTP workers, each of
+     * which keeps an INDEPENDENT counter, so the effective limit is roughly
+     * `max × HUB_WORKERS` per window. That is deliberate and is NOT the
+     * `login`/`mcp` situation: nothing about this surface is a bearer-credential
+     * guess — Amazon's RSA signature is the credential, and it cannot be brute
+     * forced by repetition. The limiter exists to cap the cost of an unauthenticated
+     * flood against a public endpoint (a cert-chain fetch on a cache miss, and one
+     * `audit_logs` row per rejection), for which a soft-global bound is enough.
+     *
+     * Keyed `alexa:<trusted client ip>` inside
+     * {@see \Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware}, which resolves
+     * the caller through `TRUSTED_PROXIES` — an IP-keyed limiter reading
+     * `remoteIp` directly would bucket the HAProxy front, not the caller.
+     */
+    public const string ALEXA = 'rate_limiter.alexa';
+
+    /**
      * Map of `container id => {config key, default max, default window}`.
      *
      * `key` is the sub-key under `config/server.php`'s `rate_limit` section;
@@ -106,6 +126,7 @@ final class RateLimitProfiles
             self::RELAY_CONNECT => ['key' => 'relay_connect', 'max' => 10,  'window' => 60],
             self::CLIENT_MOUNT  => ['key' => 'client_mount',  'max' => 30,  'window' => 60],
             self::MCP           => ['key' => 'mcp',           'max' => 10,  'window' => 900],
+            self::ALEXA         => ['key' => 'alexa',         'max' => 60,  'window' => 60],
         ];
     }
 }

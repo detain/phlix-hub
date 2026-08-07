@@ -27,6 +27,7 @@ use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AdminUpdatesController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
+use Phlix\Hub\Http\Controllers\AlexaSkillController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\LogController;
 use Phlix\Hub\Http\Controllers\AuthController;
@@ -54,6 +55,7 @@ use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Controllers\UserQuotaController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
+use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
@@ -615,6 +617,66 @@ final class Application
 
         // Metrics routes (admin-only API, S4).
         $this->registerMetricsRoutes();
+
+        // Alexa custom skill endpoint (S91), gated by S90's signature middleware.
+        $this->registerAlexaRoutes();
+    }
+
+    /**
+     * Register the Alexa custom skill endpoint (S91) — exactly one route.
+     *
+     * `POST /alexa/skill`, gated by {@see AlexaSignatureMiddleware} and by
+     * NOTHING else. That is deliberate on both counts:
+     *
+     *  - There is no {@see AuthMiddleware}. An Alexa request carries no hub
+     *    session: it carries Amazon's detached RSA signature over the raw body,
+     *    and a linked-account bearer token inside the JSON. The signature is the
+     *    authenticity proof and it is checked by the middleware; the linked
+     *    account is resolved inside {@see AlexaSkillController} by
+     *    `AlexaAccountLink`, which answers "please link your account" rather than
+     *    a 401 when it cannot. Fronting the path with `AuthMiddleware` would
+     *    bounce every real Alexa request with a 401 before the signature was
+     *    ever examined.
+     *  - The signature middleware is NOT optional and is not something the
+     *    controller re-checks. It is the only thing standing between this public
+     *    path and anyone on the internet, so the route's middleware chain is
+     *    pinned by class name in the route suite: a wrapper that replaced it —
+     *    even one that called through — would fail that assertion, which is why
+     *    S91's rate limiter and rejection auditor live INSIDE the middleware
+     *    rather than beside it (the router has no "after" hook).
+     */
+    private function registerAlexaRoutes(): void
+    {
+        $alexaSignature = $this->resolveAlexaSignatureMiddleware();
+        $skill          = $this->resolveAlexaSkillController();
+
+        // `Router::post()` takes no middleware argument — a group is the only way
+        // to attach one, exactly as every other gated route here does it.
+        $this->router->group('/alexa/skill', static function (Router $r) use ($skill): void {
+            $r->post('', static function (Request $req, array $params) use ($skill): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $skill->handle($req, $typedParams);
+            });
+        }, [$alexaSignature]);
+    }
+
+    private function resolveAlexaSignatureMiddleware(): AlexaSignatureMiddleware
+    {
+        $middleware = $this->container->get(AlexaSignatureMiddleware::class);
+        if (!$middleware instanceof AlexaSignatureMiddleware) {
+            throw new \RuntimeException('Container returned an unexpected AlexaSignatureMiddleware instance');
+        }
+        return $middleware;
+    }
+
+    private function resolveAlexaSkillController(): AlexaSkillController
+    {
+        $controller = $this->container->get(AlexaSkillController::class);
+        if (!$controller instanceof AlexaSkillController) {
+            throw new \RuntimeException('Container returned an unexpected AlexaSkillController instance');
+        }
+        return $controller;
     }
 
     /**

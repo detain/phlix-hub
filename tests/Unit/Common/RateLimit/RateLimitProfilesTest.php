@@ -51,15 +51,21 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.mcp', RateLimitProfiles::MCP);
     }
 
-    public function testDefaultsReturnsAllSevenProfiles(): void
+    public function testAlexaProfileExists(): void
+    {
+        self::assertSame('rate_limiter.alexa', RateLimitProfiles::ALEXA);
+    }
+
+    public function testDefaultsReturnsAllEightProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
-        // Seven since S62 added `mcp`. This count is the whole reason the test
-        // exists: it turns "a profile was added but never given a config key or
-        // a default" into a red, so bumping the number without adding the
-        // matching `testDefaultsContains…Profile` below defeats it.
-        self::assertCount(7, $defaults);
+        // Eight since S91 added `alexa` (seven since S62 added `mcp`). This count
+        // is the whole reason the test exists: it turns "a profile was added but
+        // never given a config key or a default" into a red, so bumping the
+        // number without adding the matching `testDefaultsContains…Profile` below
+        // defeats it.
+        self::assertCount(8, $defaults);
     }
 
     public function testDefaultsContainsLoginProfile(): void
@@ -130,6 +136,16 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('mcp', $defaults[RateLimitProfiles::MCP]['key']);
         self::assertSame(10, $defaults[RateLimitProfiles::MCP]['max']);
         self::assertSame(900, $defaults[RateLimitProfiles::MCP]['window']);
+    }
+
+    public function testDefaultsContainsAlexaProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::ALEXA, $defaults);
+        self::assertSame('alexa', $defaults[RateLimitProfiles::ALEXA]['key']);
+        self::assertSame(60, $defaults[RateLimitProfiles::ALEXA]['max']);
+        self::assertSame(60, $defaults[RateLimitProfiles::ALEXA]['window']);
     }
 
     /**

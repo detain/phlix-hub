@@ -12,6 +12,9 @@ declare(strict_types=1);
 namespace Phlix\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Hub\Alexa\AlexaAccountLink;
+use Phlix\Hub\Alexa\AlexaRejectionAuditorInterface;
+use Phlix\Hub\Alexa\AuditLogAlexaRejectionAuditor;
 use Phlix\Hub\Alexa\CurlCertChainFetcher;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
@@ -23,6 +26,7 @@ use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
+use Phlix\Hub\Http\Controllers\AlexaSkillController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
 use Phlix\Hub\Http\Controllers\AuditLogController;
 use Phlix\Hub\Http\Controllers\FederationController;
@@ -128,7 +132,11 @@ use function DI\get;
  *  - {@see DeregisterHandler}        → autowired with Connection + JwtService + Logger
  *  - {@see EnrollmentJwtMiddleware} → singleton
  *  - {@see HubProtocolMiddleware}   → singleton
- *  - {@see AlexaSignatureMiddleware} → singleton (holds the per-worker chain cache)
+ *  - {@see AlexaSignatureMiddleware} → singleton (holds the per-worker chain cache
+ *    and, since S91, the per-worker rate-limit buckets)
+ *  - {@see AlexaRejectionAuditorInterface} → {@see AuditLogAlexaRejectionAuditor}
+ *  - {@see AlexaAccountLink}         → singleton
+ *  - {@see AlexaSkillController}     → singleton
  *  - {@see HubJwksController}        → singleton
  *  - {@see ServerClaimController}    → singleton
  *  - {@see ServerController}         → singleton
@@ -371,26 +379,82 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new HubProtocolMiddleware();
             }),
 
+            // --- Alexa (S90 gate + S91 skill) --------------------------------
+            // The rejection auditor. Bound to its INTERFACE so the DB write is
+            // substitutable in a unit test that has no database, and given the
+            // AuditLogRepository DIRECTLY rather than the shared AuditLogger:
+            // 🐛 AuditLogger is constructed in AuthServicesProvider without its
+            // optional ?AuditLogRepository, so no AuditLogger event has ever
+            // reached the audit_logs table (see AuditLogAlexaRejectionAuditor's
+            // docblock). That is a pre-existing, out-of-scope finding; S91 does
+            // not inherit the no-op.
+            AlexaRejectionAuditorInterface::class => factory(static function (
+                AuditLogRepository $auditLogs,
+            ): AlexaRejectionAuditorInterface {
+                return new AuditLogAlexaRejectionAuditor(
+                    $auditLogs,
+                    LoggerFactory::get(LogChannels::AUTH),
+                );
+            })->parameter('auditLogs', get(AuditLogRepository::class)),
+
             // S90. Registered as a singleton on purpose: the middleware holds
             // the per-worker cache of VERIFIED certificate chains, so a
             // per-request instance would silently turn every Alexa request back
-            // into a blocking https fetch inside the worker. No route resolves
-            // it yet — the Alexa endpoint is S91's — so this binding exists so
-            // that S91 wires an already-built, already-tested gate rather than
-            // reinventing one.
+            // into a blocking https fetch inside the worker — AND, since S91, the
+            // per-worker rate-limit buckets, which a per-request instance would
+            // reset on every call and thereby delete the limit entirely.
             //
             // ⚠ Do NOT let PHP-DI autowire this. `autowire()` SKIPS optional
             // constructor parameters, which would leave $caBundlePaths at its
             // default silently; here the default IS the production value ([] =
             // the system trust store) and it is passed explicitly so that a
             // future non-empty value cannot be lost the same way.
-            AlexaSignatureMiddleware::class => factory(static function (): AlexaSignatureMiddleware {
+            AlexaSignatureMiddleware::class => factory(static function (
+                RateLimiterInterface $rateLimiter,
+                AlexaRejectionAuditorInterface $auditor,
+            ): AlexaSignatureMiddleware {
                 return new AlexaSignatureMiddleware(
                     new CurlCertChainFetcher(),
                     LoggerFactory::get(LogChannels::AUTH),
+                    $rateLimiter,
+                    $auditor,
                     [],
                 );
-            }),
+            })->parameter('rateLimiter', get(RateLimitProfiles::ALEXA))
+                ->parameter('auditor', get(AlexaRejectionAuditorInterface::class)),
+
+            // S91. The seam a later step replaces when the hub issues its own
+            // OAuth tokens: everything downstream depends on the resolved hub
+            // user id, not on how the token was validated.
+            AlexaAccountLink::class => factory(static function (
+                JwtHandler $jwtHandler,
+                UserRepository $users,
+            ): AlexaAccountLink {
+                return new AlexaAccountLink($jwtHandler, $users);
+            })->parameter('jwtHandler', get(JwtHandler::class))
+                ->parameter('users', get(UserRepository::class)),
+
+            // S91. Handed the PRODUCTION ServerProxyController and
+            // ServerListController — not copies, not repositories — for the same
+            // reason McpController is: their ownership and browse-scope gates are
+            // what stop an Alexa slot value reaching another user's server, and
+            // anything narrower here would be a second implementation of that
+            // check. Nothing was added to the proxy's allowlist for this skill.
+            AlexaSkillController::class => factory(static function (
+                AlexaAccountLink $accountLink,
+                ServerProxyController $proxy,
+                ServerListController $serverList,
+            ) use ($hubBaseUrl): AlexaSkillController {
+                return new AlexaSkillController(
+                    $accountLink,
+                    $proxy,
+                    $serverList,
+                    LoggerFactory::get(LogChannels::AUTH),
+                    $hubBaseUrl,
+                );
+            })->parameter('accountLink', get(AlexaAccountLink::class))
+                ->parameter('proxy', get(ServerProxyController::class))
+                ->parameter('serverList', get(ServerListController::class)),
 
             HubJwksController::class => factory(static function (
                 Ed25519KeyManager $keyManager,

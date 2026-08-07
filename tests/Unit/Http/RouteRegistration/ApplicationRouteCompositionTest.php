@@ -188,7 +188,10 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
             $expected = match ($route['gate']) {
                 RouteManifest::GATE_AUTH_JSON, RouteManifest::GATE_ADMIN, RouteManifest::GATE_ENROLLMENT => 401,
                 RouteManifest::GATE_AUTH_HTML, RouteManifest::GATE_ADMIN_HTML => 302,
-                RouteManifest::GATE_HUB_PROTOCOL => 400,
+                // Two different 400s from two different middleware. The CODE is
+                // what distinguishes them, and RegistrarAuthGateTest asserts it;
+                // here only the status is available, so both arms share it.
+                RouteManifest::GATE_HUB_PROTOCOL, RouteManifest::GATE_ALEXA => 400,
                 default => self::fail('unhandled gate: ' . $route['gate']),
             };
 

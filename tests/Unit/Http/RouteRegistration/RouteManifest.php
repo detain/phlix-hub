@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http\RouteRegistration;
 
 /**
- * Hand-written golden manifest of every route the hub's SEVENTEEN
+ * Hand-written golden manifest of every route the hub's EIGHTEEN
  * `Application::register*Routes()` methods are expected to register.
  *
  * WHY A HAND-WRITTEN LIST — the whole point of S174 is that a test must fail
@@ -63,6 +63,19 @@ final class RouteManifest
 
     /** `Accept-Phlix-Protocol: v1` required: header absent ⇒ 400. */
     public const GATE_HUB_PROTOCOL = 'hub-protocol';
+
+    /**
+     * Amazon request-signature required (S91): no `SignatureCertChainUrl` ⇒ 400
+     * `ALEXA_MISSING_CERT_CHAIN_URL`.
+     *
+     * A gate of its own rather than a reuse of {@see self::GATE_HUB_PROTOCOL},
+     * even though both answer 400: the two 400s come from different middleware
+     * for different reasons, and a route that lost its signature gate but kept a
+     * protocol gate (or vice versa) would still be a 400 and would pass a shared
+     * arm. The suites assert the CODE as well as the status for exactly that
+     * reason.
+     */
+    public const GATE_ALEXA = 'alexa';
 
     /** Deliberately public (or authenticated inside the controller). */
     public const GATE_PUBLIC = 'public';
@@ -168,11 +181,17 @@ final class RouteManifest
             \Phlix\Hub\Http\Middleware\AdminMiddleware::class,
             \Phlix\Hub\Http\Controllers\Stats\MetricsController::class,
         ],
+        // S91. Neither AuthMiddleware nor AdminMiddleware: an Alexa request
+        // carries no hub session, so the ONLY gate is Amazon's signature.
+        'registerAlexaRoutes' => [
+            \Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware::class,
+            \Phlix\Hub\Http\Controllers\AlexaSkillController::class,
+        ],
     ];
 
     /**
      * The routes `Application::registerRoutes()` registers DIRECTLY (i.e. not
-     * via one of the sixteen sub-registrars it also calls).
+     * via one of the seventeen sub-registrars it also calls).
      *
      * @return list<array<string, string>>
      */
@@ -335,7 +354,7 @@ final class RouteManifest
     }
 
     /**
-     * Golden route table for each of the sixteen sub-registrars.
+     * Golden route table for each of the seventeen sub-registrars.
      *
      * @return array<string, list<array<string, string>>>
      */
@@ -736,11 +755,21 @@ final class RouteManifest
                     'url' => '/api/v1/admin/metrics/routes', 'gate' => self::GATE_ADMIN,
                 ],
             ],
+
+            // S91. Exactly one route, and its gate is Amazon's signature — not
+            // the hub session. A second route appearing here (or this one losing
+            // its middleware) is the change this entry exists to surface.
+            'registerAlexaRoutes' => [
+                [
+                    'method' => 'POST', 'path' => '/alexa/skill', 'url' => '/alexa/skill',
+                    'gate' => self::GATE_ALEXA,
+                ],
+            ],
         ];
     }
 
     /**
-     * Every route in the manifest — the sixteen sub-registrars plus the routes
+     * Every route in the manifest — the seventeen sub-registrars plus the routes
      * `registerRoutes()` registers directly.
      *
      * @return list<array<string, string>>

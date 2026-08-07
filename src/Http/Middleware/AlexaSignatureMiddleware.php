@@ -11,8 +11,10 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Middleware;
 
+use Phlix\Hub\Alexa\AlexaRejectionAuditorInterface;
 use Phlix\Hub\Alexa\CertChainFetcherInterface;
 use Phlix\Hub\Alexa\ChainVerification;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Common\Logger\StructuredLogger;
@@ -82,6 +84,29 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
  * memory without bound. Only SUCCESSFUL verifications are cached — a failure is
  * never cached, so a transient S3 outage cannot pin a rejection.
  *
+ * ## The rate limiter and the auditor live INSIDE the gate (S91)
+ *
+ * `Phlix\Hub\Http\Router` middleware is BEFORE-only — a middleware returns
+ * `?Response` and there is no "after" hook — so an observer of THIS middleware's
+ * rejection cannot be a second middleware. A wrapper would have to REPLACE this
+ * class on the route's middleware list, and the route suite pins that list by
+ * exact class name precisely so the signature gate cannot be swapped out
+ * unnoticed. Both S90 deferrals therefore land here:
+ *
+ *  - **The limiter runs FIRST**, before the `try` and before any verification, so
+ *    a flood cannot amplify into one `audit_logs` INSERT per malicious request.
+ *    It is keyed `alexa:<trusted client ip>` via
+ *    {@see Request::getTrustedClientIp()}, which walks `X-Forwarded-For`
+ *    right-to-left past `TRUSTED_PROXIES` hops. Keying on `remoteIp` instead
+ *    would bucket the HAProxy front and collapse every caller on earth into one
+ *    window.
+ *  - **A spent window returns a 429 {@see Response} directly and MUST NOT
+ *    throw.** A `RateLimitException` here would be caught by the fail-closed
+ *    `catch (\Throwable)` below and silently relabelled as a 400
+ *    `ALEXA_VERIFICATION_ERROR` — the caller would never learn to back off.
+ *  - **Every rejection is audited** by {@see reject()} through the injected
+ *    {@see AlexaRejectionAuditorInterface}.
+ *
  * ## Fails closed, everywhere
  *
  * {@see __invoke()} has exactly one `return null` (the allow), reached only by
@@ -136,6 +161,25 @@ final class AlexaSignatureMiddleware
     public const CACHE_TTL_SECONDS = 3600;
 
     /**
+     * Prefix of the rate-limit bucket key (S91). The remainder is the TRUSTED
+     * client IP, so the surface has its own namespace inside a limiter store that
+     * other surfaces may share.
+     */
+    public const RATE_LIMIT_KEY_PREFIX = 'alexa:';
+
+    /**
+     * Ceiling on the number of characters of an UNVERIFIED `request.requestId`
+     * that reaches the audit row.
+     *
+     * The id is read out of a body whose signature has just been REJECTED, so it
+     * is attacker-controlled. It is parameterised into the INSERT and never
+     * concatenated, so it is not an injection sink; the cap exists because an
+     * unbounded field would let a caller write a megabyte per rejection into
+     * `audit_logs.context_json`.
+     */
+    public const MAX_AUDITED_REQUEST_ID_CHARS = 128;
+
+    /**
      * Verified chains, keyed by the validated cert URL, in insertion order so
      * `array_key_first()` names the eviction victim.
      *
@@ -144,13 +188,23 @@ final class AlexaSignatureMiddleware
     private array $verifiedChains = [];
 
     /**
-     * @param CertChainFetcherInterface $fetcher  Bounded chain fetcher.
-     * @param StructuredLogger          $logger   Rejections are logged here.
-     * @param list<string>              $caBundlePaths CA files/dirs trusted as
+     * ⚠ The two S91 parameters are inserted BEFORE the optional ones. Appending
+     * them after `$caBundlePaths` would make a REQUIRED parameter follow an
+     * OPTIONAL one, which PHP 8.3 deprecates.
+     *
+     * @param CertChainFetcherInterface     $fetcher     Bounded chain fetcher.
+     * @param StructuredLogger              $logger      Rejections are logged here.
+     * @param RateLimiterInterface          $rateLimiter Per-worker IP-keyed limiter
+     *        for this surface ({@see \Phlix\Hub\Common\RateLimit\RateLimitProfiles::ALEXA}).
+     *        Hit on EVERY request, before verification.
+     * @param AlexaRejectionAuditorInterface $auditor    Records each rejection to
+     *        `audit_logs` + the log channel. Runs AFTER the limiter, so a flood is
+     *        not a write amplifier.
+     * @param list<string>                  $caBundlePaths CA files/dirs trusted as
      *        chain anchors. Production passes `[]`, which means "the system
      *        trust store"; tests pass their own generated root so the chain
      *        verification can be exercised without Amazon's private key.
-     * @param int                       $cacheTtlSeconds How long a verified
+     * @param int                           $cacheTtlSeconds How long a verified
      *        chain may be reused. Lowering it only costs fetches; it can never
      *        weaken a verdict, because every cache hit is re-checked against the
      *        leaf's own `notAfter` as well.
@@ -158,22 +212,37 @@ final class AlexaSignatureMiddleware
     public function __construct(
         private readonly CertChainFetcherInterface $fetcher,
         private readonly StructuredLogger $logger,
+        private readonly RateLimiterInterface $rateLimiter,
+        private readonly AlexaRejectionAuditorInterface $auditor,
         private readonly array $caBundlePaths = [],
         private readonly int $cacheTtlSeconds = self::CACHE_TTL_SECONDS,
     ) {
     }
 
     /**
-     * Run the gate. Returns null to continue routing, or a 400 {@see Response}
-     * to short-circuit.
+     * Run the gate. Returns null to continue routing, a 429 when the caller's
+     * window is spent, or a 400 {@see Response} to short-circuit.
+     *
+     * The limiter is deliberately OUTSIDE the `try`: see the class docblock —
+     * a throw here would be caught below and demoted to a 400.
      */
     public function __invoke(Request $request): ?Response
     {
+        $state = $this->rateLimiter->hit(
+            self::RATE_LIMIT_KEY_PREFIX . $request->getTrustedClientIp(),
+        );
+        if ($state->limited) {
+            return (new Response())
+                ->status(429)
+                ->header('Retry-After', (string) $state->retryAfter(time()))
+                ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
+        }
+
         try {
             return $this->verify($request);
         } catch (\Throwable $e) {
             // Fail closed. An unexpected throw is a rejection, never an allow.
-            return $this->reject('ALEXA_VERIFICATION_ERROR', $e->getMessage());
+            return $this->reject($request, 'ALEXA_VERIFICATION_ERROR', $e->getMessage());
         }
     }
 
@@ -186,48 +255,48 @@ final class AlexaSignatureMiddleware
     {
         $certChainUrl = $request->getHeader(self::CERT_CHAIN_URL_HEADER);
         if ($certChainUrl === null || $certChainUrl === '') {
-            return $this->reject('ALEXA_MISSING_CERT_CHAIN_URL');
+            return $this->reject($request, 'ALEXA_MISSING_CERT_CHAIN_URL');
         }
 
         $signatureHeader = $request->getHeader(self::SIGNATURE_HEADER);
         if ($signatureHeader === null || $signatureHeader === '') {
-            return $this->reject('ALEXA_MISSING_SIGNATURE_HEADER');
+            return $this->reject($request, 'ALEXA_MISSING_SIGNATURE_HEADER');
         }
 
         $rawBody = $request->rawBody;
         if ($rawBody === '') {
-            return $this->reject('ALEXA_EMPTY_BODY');
+            return $this->reject($request, 'ALEXA_EMPTY_BODY');
         }
 
         // (2) SSRF gate — runs BEFORE the fetcher is ever touched.
         $urlProblem = $this->rejectCertChainUrl($certChainUrl);
         if ($urlProblem !== null) {
-            return $this->reject('ALEXA_CERT_URL_REJECTED', $urlProblem);
+            return $this->reject($request, 'ALEXA_CERT_URL_REJECTED', $urlProblem);
         }
 
         // (3)+(4) Cached, verified leaf public key.
         $verification = $this->cachedVerification($certChainUrl);
         if (!$verification->isVerified()) {
-            return $this->reject($verification->errorCode(), $verification->detail());
+            return $this->reject($request, $verification->errorCode(), $verification->detail());
         }
 
         // (5) Signature over the RAW bytes.
         $signature = base64_decode($signatureHeader, true);
         if ($signature === false || $signature === '') {
-            return $this->reject('ALEXA_SIGNATURE_INVALID', 'signature is not base64');
+            return $this->reject($request, 'ALEXA_SIGNATURE_INVALID', 'signature is not base64');
         }
 
         $publicKey = openssl_pkey_get_public($verification->publicKeyPem());
         if ($publicKey === false) {
-            return $this->reject('ALEXA_CERT_CHAIN_MALFORMED', 'leaf public key unreadable');
+            return $this->reject($request, 'ALEXA_CERT_CHAIN_MALFORMED', 'leaf public key unreadable');
         }
 
         if (openssl_verify($rawBody, $signature, $publicKey, OPENSSL_ALGO_SHA256) !== 1) {
-            return $this->reject('ALEXA_SIGNATURE_INVALID', 'body signature did not verify');
+            return $this->reject($request, 'ALEXA_SIGNATURE_INVALID', 'body signature did not verify');
         }
 
         // (6) Replay window, read from the bytes just verified.
-        return $this->rejectTimestamp($rawBody);
+        return $this->rejectTimestamp($request, $rawBody);
     }
 
     /**
@@ -570,36 +639,40 @@ final class AlexaSignatureMiddleware
      *
      * @return Response|null A 400 to reject, or null to allow the request through.
      */
-    private function rejectTimestamp(string $verifiedRawBody): ?Response
+    private function rejectTimestamp(Request $request, string $verifiedRawBody): ?Response
     {
         $decoded = json_decode($verifiedRawBody, true);
         if (!is_array($decoded)) {
-            return $this->reject('ALEXA_TIMESTAMP_MALFORMED', 'body is not a JSON object');
+            return $this->reject($request, 'ALEXA_TIMESTAMP_MALFORMED', 'body is not a JSON object');
         }
 
         $envelope = $decoded['request'] ?? null;
         if (!is_array($envelope)) {
-            return $this->reject('ALEXA_TIMESTAMP_MISSING', 'body has no request object');
+            return $this->reject($request, 'ALEXA_TIMESTAMP_MISSING', 'body has no request object');
         }
 
         $timestamp = $envelope['timestamp'] ?? null;
         if (!is_string($timestamp) || $timestamp === '') {
-            return $this->reject('ALEXA_TIMESTAMP_MISSING', 'request.timestamp is absent');
+            return $this->reject($request, 'ALEXA_TIMESTAMP_MISSING', 'request.timestamp is absent');
         }
 
         $iso8601 = '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/';
         if (preg_match($iso8601, $timestamp) !== 1) {
-            return $this->reject('ALEXA_TIMESTAMP_MALFORMED', 'request.timestamp is not ISO-8601');
+            return $this->reject($request, 'ALEXA_TIMESTAMP_MALFORMED', 'request.timestamp is not ISO-8601');
         }
 
         try {
             $when = new \DateTimeImmutable($timestamp);
         } catch (\Throwable) {
-            return $this->reject('ALEXA_TIMESTAMP_MALFORMED', 'request.timestamp is not a real instant');
+            return $this->reject($request, 'ALEXA_TIMESTAMP_MALFORMED', 'request.timestamp is not a real instant');
         }
 
         if (abs(time() - $when->getTimestamp()) > self::MAX_TIMESTAMP_SKEW_SECONDS) {
-            return $this->reject('ALEXA_TIMESTAMP_STALE', 'request.timestamp is outside the replay window');
+            return $this->reject(
+                $request,
+                'ALEXA_TIMESTAMP_STALE',
+                'request.timestamp is outside the replay window',
+            );
         }
 
         // The single allow. Everything above this line returns a Response.
@@ -610,19 +683,72 @@ final class AlexaSignatureMiddleware
      * Build the 400 rejection and record why.
      *
      * The response body carries the machine-readable code but NOT the detail:
-     * the detail goes to the log only, so probing this endpoint does not hand an
-     * attacker a description of which specific rule they tripped.
+     * the detail goes to the log and the audit row only, so probing this endpoint
+     * does not hand an attacker a description of which specific rule they
+     * tripped.
+     *
+     * The audited client IP is re-derived from the request rather than threaded
+     * down from {@see __invoke()}. {@see Request::getTrustedClientIp()} is a pure
+     * function of the request's peer address and headers, so the audited address
+     * is provably the same one the limiter bucketed — and the recomputation only
+     * happens on a path that is itself rate-limited.
+     *
+     * The auditor is contractually non-throwing; if a future implementation
+     * breaks that, the throw is caught by {@see __invoke()}'s fail-closed
+     * `catch`, which still refuses the request.
      */
-    private function reject(string $code, string $detail = ''): Response
+    private function reject(Request $request, string $code, string $detail = ''): Response
     {
         $this->logger->warning('Alexa request signature rejected', [
             'code' => $code,
             'detail' => $detail,
         ]);
 
+        $this->auditor->record(
+            $code,
+            $detail,
+            $request->getTrustedClientIp(),
+            $request->getHeader('User-Agent'),
+            self::auditableRequestId($request->rawBody),
+        );
+
         return (new Response())->status(400)->json([
             'error' => 'Bad Request',
             'code' => $code,
         ]);
+    }
+
+    /**
+     * `request.requestId` out of an UNVERIFIED body, for correlation only.
+     *
+     * Parsed here rather than through {@see \Phlix\Hub\Alexa\AlexaEnvelope}
+     * on purpose: that class documents itself as a reader of bytes whose
+     * signature has ALREADY been proven, and this is the opposite situation. The
+     * value is treated as hostile — string-checked and clamped to
+     * {@see MAX_AUDITED_REQUEST_ID_CHARS} — and is only ever used as a bound
+     * parameter in the audit INSERT.
+     */
+    private static function auditableRequestId(string $rawBody): ?string
+    {
+        if ($rawBody === '') {
+            return null;
+        }
+
+        $decoded = json_decode($rawBody, true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $envelope = $decoded['request'] ?? null;
+        if (!is_array($envelope)) {
+            return null;
+        }
+
+        $requestId = $envelope['requestId'] ?? null;
+        if (!is_string($requestId) || $requestId === '') {
+            return null;
+        }
+
+        return mb_substr($requestId, 0, self::MAX_AUDITED_REQUEST_ID_CHARS);
     }
 }
