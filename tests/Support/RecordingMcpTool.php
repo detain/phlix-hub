@@ -48,6 +48,19 @@ final class RecordingMcpTool implements McpToolInterface
     /** How many times {@see call()} ran. */
     public int $calls = 0;
 
+    /**
+     * The payload {@see call()} answers with.
+     *
+     * Settable so a test can drive the EMPTY case. That is not a curiosity: an
+     * empty payload is what `McpController::toolResult()` must render as
+     * `"structuredContent": {}` rather than `[]`, and PHP's single array type
+     * means no decoding assertion can tell those two apart — see
+     * `McpControllerTest::test_an_empty_tool_payload_encodes_as_a_json_object()`.
+     *
+     * @var array<string, mixed>
+     */
+    public array $payload = ['recorded' => true];
+
     public function name(): string
     {
         return 'recording_probe';
@@ -81,6 +94,6 @@ final class RecordingMcpTool implements McpToolInterface
         ++$this->calls;
         $this->received = $arguments;
 
-        return ['status' => 200, 'payload' => ['recorded' => true]];
+        return ['status' => 200, 'payload' => $this->payload];
     }
 }

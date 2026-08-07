@@ -3092,12 +3092,41 @@ paths:
 
         ## Not implemented here
 
-        `GET /mcp` (the SSE transport), protocol-VERSION negotiation, JSON-RPC schema validation and
-        the `playback_control` write tool are all deliberately absent; they are the next step. This
-        build answers `initialize` with a fixed `protocolVersion` and, when the client asked for a
-        different one, says in `result._meta` that no negotiation took place rather than letting the
-        client assume its request was honoured. Batched JSON-RPC requests are refused by name (MCP
-        removed batching in its 2025-06-18 revision).
+        ## Protocol version (S63)
+
+        Two DIFFERENT checks, deliberately.
+
+        `initialize.params.protocolVersion` is **negotiated**: the hub echoes the requested revision
+        when it is one of `2025-06-18`, `2025-03-26` or `2024-11-05`, and otherwise answers with
+        `2025-06-18` and reports the substitution in `result._meta`
+        (`phlix/protocolVersionNegotiated: false` plus the supported list). A mismatch is a downgrade,
+        not an error.
+
+        The `MCP-Protocol-Version` **header** on later requests is **verified, not negotiated**: it
+        asserts a revision already agreed, so an unsupported value is a `400` with
+        `code: mcp.unsupported_protocol_version`. Silently downgrading it would be re-negotiating
+        behind the client's back mid-session. An ABSENT header is fine — the header postdates
+        `2025-03-26`, so its absence is assumed to mean that revision.
+
+        ## Schema validation (S63)
+
+        The envelope is checked against JSON-RPC 2.0 before anything reads it: `jsonrpc` must be
+        exactly `"2.0"`, `id` (when present) must be a string, an integer or null and never a
+        structured value, and `method` must be a non-empty string. `params` must be a by-name object —
+        MCP defines no positional call — and the fields this endpoint READS are type-checked
+        (`initialize.protocolVersion`, `tools/call.name`, `tools/call.arguments`). Fields the hub never
+        reads are type-checked when present but not required. Every validation error carries
+        `error.data.field`.
+
+        A NOTIFICATION (no `id`) is never answered, not even to say it was malformed — JSON-RPC 2.0
+        §4.1 — so a malformed notification is still an empty `202`.
+
+        ## Not implemented here
+
+        MCP sessions (`Mcp-Session-Id`: the hub keeps no per-session state, so minting an id would
+        promise resumability it does not have), resumable streams (`Last-Event-ID`), batched JSON-RPC
+        requests (refused by name — MCP removed batching in its 2025-06-18 revision), and the full
+        OAuth authorization server (S92 builds it; PAT auth is adopted onto it later).
       x-phlix-middleware: []
       security:
         - mcpToken: []
@@ -3127,6 +3156,114 @@ paths:
               description: 'Bearer realm="phlix-hub-mcp"'
               schema:
                 type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "400":
+          description: |-
+            The `MCP-Protocol-Version` header named a revision this hub does not implement
+            (`code: mcp.unsupported_protocol_version`). The body carries the supported list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    get:
+      operationId: "get_mcp"
+      tags: ["MCP"]
+      summary: "Model Context Protocol server-to-client SSE stream"
+      description: |-
+        The server-to-client half of the same MCP Streamable HTTP endpoint (S63). One path, two verbs:
+        `POST` carries client-to-server JSON-RPC, `GET` opens the stream the server may push JSON-RPC
+        requests and notifications down.
+
+        ## Authentication
+
+        Identical to the `POST`: a personal access token in `Authorization: Bearer`, validated by
+        `McpController` itself (hence the empty `x-phlix-middleware`), rate-limited on the SAME
+        `mcp:auth:<ip>` bucket — so opening streams is not a second, fresh budget for a token guesser.
+
+        ## The stream is deliberately quiet
+
+        The hub's tool set is fixed at container-build time (`initialize` advertises
+        `tools.listChanged: false` for that reason) and it exposes no resources, prompts,
+        subscriptions or progress. There is therefore nothing it can legitimately push, and the stream
+        carries only SSE **comments** (`: ...` lines, which every conformant parser discards) plus a
+        `retry:` hint. It never fabricates a `data:` frame, because a non-JSON-RPC message on this
+        channel would be a protocol violation the client may disconnect over.
+
+        It is served rather than answered `405` because the connection is the session's liveness
+        signal, some clients treat a missing stream as a degraded server, and the framing is then
+        already in place for the first real notification.
+
+        ## Framing and lifetime
+
+        `Transfer-Encoding: chunked`, one HTTP chunk per SSE frame; a keep-alive comment every 15 s
+        (`HUB_MCP_SSE_KEEPALIVE`); a hard close at 900 s (`HUB_MCP_SSE_MAX_SECONDS`) so an abandoned
+        stream is reclaimed inside a resident-memory worker. A conformant client reconnects on the
+        `retry:` hint, so the ceiling is invisible to it.
+      x-phlix-middleware: []
+      security:
+        - mcpToken: []
+      parameters:
+        - name: Accept
+          in: header
+          required: true
+          description: |-
+            Must list `text/event-stream`. A wildcard `Accept` is deliberately NOT treated as
+            acceptance: it is what every generic HTTP client sends by default, so honouring it would
+            open a never-ending stream to callers with no SSE parser — a hung client rather than an
+            error.
+          schema:
+            type: string
+            example: "text/event-stream"
+        - name: MCP-Protocol-Version
+          in: header
+          required: false
+          description: "The revision agreed at `initialize`. Absent is fine; unsupported is a 400."
+          schema:
+            type: string
+            example: "2025-06-18"
+      responses:
+        "200":
+          description: "An open `text/event-stream`."
+          headers:
+            Cache-Control:
+              description: "no-cache, no-store, must-revalidate"
+              schema:
+                type: string
+            X-Accel-Buffering:
+              description: "`no` — stops an intermediary buffering the stream into a batch at close."
+              schema:
+                type: string
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: |-
+            The `MCP-Protocol-Version` header named a revision this hub does not implement
+            (`code: mcp.unsupported_protocol_version`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: "No token, or an unknown / expired / revoked one."
+          headers:
+            WWW-Authenticate:
+              description: 'Bearer realm="phlix-hub-mcp"'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "406":
+          description: |-
+            `Accept` did not list `text/event-stream` (`code: mcp.sse_not_acceptable`).
           content:
             application/json:
               schema:
@@ -3424,7 +3561,7 @@ components:
       scheme: bearer
       description: >-
         An MCP personal access token (S62), minted by POST /api/v1/me/mcp-tokens and accepted ONLY
-        by POST /mcp. It is an opaque `phlix-mcp-`-prefixed CSPRNG string, not a JWT — the hub stores
+        by POST and GET /mcp. It is an opaque `phlix-mcp-`-prefixed CSPRNG string, not a JWT — the hub stores
         only its SHA-256 hash. Validated by McpController itself rather than by AuthMiddleware, which
         is why /mcp carries an empty x-phlix-middleware.
   parameters:

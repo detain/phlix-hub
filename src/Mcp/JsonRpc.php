@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Mcp;
 
+use stdClass;
+
 /**
  * JSON-RPC 2.0 envelope construction for the MCP endpoint (S62).
  *
@@ -59,6 +61,22 @@ final class JsonRpc
     /**
      * A successful response.
      *
+     * ## ⚠ An EMPTY result must encode as `{}`, never `[]` (S63)
+     *
+     * PHP has one array type and `json_encode([])` emits `[]`. Every MCP result
+     * type is an OBJECT, so an empty one — `ping`'s `EmptyResult`, most
+     * obviously — was going out as a JSON ARRAY. That is a schema violation the
+     * real SDK client rejects outright: its `JSONRPCMessageSchema.parse()`
+     * throws `expected object, received array` and the transport tears down the
+     * session.
+     *
+     * It shipped in S62 and no test could see it, because
+     * `json_decode('{}', true)` and `json_decode('[]', true)` are BOTH `[]` in
+     * PHP — a test that decodes the body cannot tell the two apart. It was found
+     * by driving an actual MCP client, and it is pinned by
+     * `McpControllerTest::test_an_empty_result_encodes_as_a_json_object()`,
+     * which asserts the RAW body string rather than the decoded one.
+     *
      * @param string|int|null      $id     The request id, echoed verbatim.
      * @param array<string, mixed> $result The method result.
      *
@@ -69,7 +87,7 @@ final class JsonRpc
         return [
             'jsonrpc' => self::VERSION,
             'id' => $id,
-            'result' => $result,
+            'result' => $result === [] ? new stdClass() : $result,
         ];
     }
 

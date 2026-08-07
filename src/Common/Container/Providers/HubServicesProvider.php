@@ -88,13 +88,18 @@ use Phlix\Hub\Http\Controllers\McpController;
 use Phlix\Hub\Http\Controllers\McpTokenController;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
+use Phlix\Hub\Mcp\McpSseStream;
+use Phlix\Hub\Mcp\McpStreamTimers;
 use Phlix\Hub\Mcp\McpTokenService;
+use Phlix\Hub\Mcp\McpToolInterface;
 use Phlix\Hub\Mcp\McpToolRegistry;
 use Phlix\Hub\Mcp\Tools\GetMediaTool;
 use Phlix\Hub\Mcp\Tools\GetPlaybackInfoTool;
 use Phlix\Hub\Mcp\Tools\ListLibrariesTool;
 use Phlix\Hub\Mcp\Tools\ListServersTool;
+use Phlix\Hub\Mcp\Tools\PlaybackControlTool;
 use Phlix\Hub\Mcp\Tools\SearchMediaTool;
+use Phlix\Hub\Mcp\WorkermanStreamTimers;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
@@ -261,15 +266,52 @@ final class HubServicesProvider implements ServiceProviderInterface
             // capabilities a PAT can reach is not something that should widen by
             // accident. McpToolRegistry throws on a duplicate name or an unknown
             // required scope, so a mis-wired tool fails at container build.
-            McpToolRegistry::class => factory(static function (): McpToolRegistry {
-                return new McpToolRegistry([
+            //
+            // S63: `playback_control` is the ONE conditional entry, and the flag
+            // gates REGISTRATION rather than invocation. That is the stronger of
+            // the two shapes: an unregistered tool is absent from `tools/list`,
+            // so a model never sees a capability it cannot use and never spends a
+            // turn discovering that. A registered-but-refusing tool would
+            // advertise a write the operator has switched off.
+            //
+            // Default OFF. `mcp.playback_control_enabled` must be `true` — a
+            // truthy string, a `1`, or an absent key all leave it off, because
+            // `=== true` is the comparison and `config/server.php` resolves the
+            // env var to a real bool before it gets here.
+            McpToolRegistry::class => factory(static function () use ($appConfig): McpToolRegistry {
+                /** @var list<McpToolInterface> $tools */
+                $tools = [
                     new ListServersTool(),
                     new ListLibrariesTool(),
                     new SearchMediaTool(),
                     new GetMediaTool(),
                     new GetPlaybackInfoTool(),
-                ]);
+                ];
+
+                if (self::mcpPlaybackControlEnabled($appConfig)) {
+                    $tools[] = new PlaybackControlTool();
+                }
+
+                return new McpToolRegistry($tools);
             }),
+
+            // The SSE transport behind `GET /mcp` (S63). ONE shared instance:
+            // it holds no per-stream state (every stream's timers and closed
+            // flag live in closures created per connection), so a singleton is
+            // correct and a per-request instance would only add allocations in a
+            // resident-memory worker.
+            McpStreamTimers::class => factory(static fn (): McpStreamTimers => new WorkermanStreamTimers()),
+
+            McpSseStream::class => factory(static function (McpStreamTimers $timers) use ($appConfig): McpSseStream {
+                $keepalive = is_int($appConfig['mcp_sse_keepalive_seconds'] ?? null)
+                    ? (int) $appConfig['mcp_sse_keepalive_seconds']
+                    : McpSseStream::DEFAULT_KEEPALIVE_SECONDS;
+                $maxSeconds = is_int($appConfig['mcp_sse_max_seconds'] ?? null)
+                    ? (int) $appConfig['mcp_sse_max_seconds']
+                    : McpSseStream::DEFAULT_MAX_SECONDS;
+
+                return new McpSseStream($timers, $keepalive, $maxSeconds);
+            })->parameter('timers', get(McpStreamTimers::class)),
 
             // The MCP endpoint itself. It is handed the PRODUCTION
             // ServerProxyController and ServerListController — not copies, not
@@ -282,6 +324,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ServerProxyController $proxy,
                 ServerListController $serverList,
                 RateLimiterInterface $rateLimiter,
+                McpSseStream $sse,
             ): McpController {
                 return new McpController(
                     $tokens,
@@ -290,12 +333,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $serverList,
                     $rateLimiter,
                     LoggerFactory::get(LogChannels::AUTH),
+                    $sse,
                 );
             })->parameter('tokens', get(McpTokenService::class))
                 ->parameter('registry', get(McpToolRegistry::class))
                 ->parameter('proxy', get(ServerProxyController::class))
                 ->parameter('serverList', get(ServerListController::class))
-                ->parameter('rateLimiter', get(RateLimitProfiles::MCP)),
+                ->parameter('rateLimiter', get(RateLimitProfiles::MCP))
+                ->parameter('sse', get(McpSseStream::class)),
 
             DeregisterHandler::class => factory(static function (
                 Connection $db,
@@ -939,6 +984,32 @@ final class HubServicesProvider implements ServiceProviderInterface
         /** @var mixed $value */
         $value = $config[$key] ?? null;
         return is_string($value) && $value !== '' ? $value : $default;
+    }
+
+    /**
+     * The `playback_control` operator flag (S63) — DEFAULT OFF.
+     *
+     * The one MCP tool that can change server-side state is off unless an
+     * operator has deliberately turned it on. `=== true` is the comparison, not
+     * a truthiness test: `config/server.php` resolves
+     * `HUB_MCP_PLAYBACK_CONTROL` through `FILTER_VALIDATE_BOOLEAN` before it
+     * reaches here, so anything that is not a real `true` — a missing key, the
+     * string `"maybe"`, a stray `0` — leaves the write tool unregistered. A
+     * loose check would let a mistyped env value publish it.
+     *
+     * ⚠ This is the whole gate. There is no second check inside the tool, on
+     * purpose: two places to switch a feature off is two places for one of them
+     * to be wrong, and this one is upstream of everything (the tool is never
+     * constructed, never registered, never listed, never callable).
+     *
+     * @param array<string, mixed> $config The `server` config array.
+     */
+    private static function mcpPlaybackControlEnabled(array $config): bool
+    {
+        /** @var mixed $value */
+        $value = $config['mcp_playback_control_enabled'] ?? null;
+
+        return $value === true;
     }
 
     /**

@@ -18,14 +18,19 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Mcp\JsonRpc;
 use Phlix\Hub\Mcp\McpInvalidArgumentsException;
+use Phlix\Hub\Mcp\McpProtocol;
+use Phlix\Hub\Mcp\McpRequestValidator;
+use Phlix\Hub\Mcp\McpSseStream;
 use Phlix\Hub\Mcp\McpToken;
 use Phlix\Hub\Mcp\McpTokenService;
 use Phlix\Hub\Mcp\McpToolContext;
 use Phlix\Hub\Mcp\McpToolRegistry;
 use Phlix\Hub\Version;
+use Workerman\Connection\TcpConnection;
 
 use function array_is_list;
 use function array_key_exists;
+use function explode;
 use function is_array;
 use function is_int;
 use function is_string;
@@ -33,6 +38,7 @@ use function json_decode;
 use function json_encode;
 use function json_last_error;
 use function strlen;
+use function strtolower;
 use function trim;
 
 use const JSON_ERROR_NONE;
@@ -41,11 +47,12 @@ use const JSON_THROW_ON_ERROR;
 use const JSON_UNESCAPED_SLASHES;
 
 /**
- * `POST /mcp` — the hub's Model Context Protocol endpoint (S62).
+ * `POST /mcp` + `GET /mcp` — the hub's Model Context Protocol endpoint (S62/S63).
  *
- * A JSON-RPC 2.0 endpoint served by the EXISTING `:8800` HTTP worker (not a
- * sidecar, not a new port), authenticated with a personal access token minted by
- * {@see McpTokenController}.
+ * An MCP Streamable HTTP endpoint served by the EXISTING `:8800` HTTP worker
+ * (not a sidecar, not a new port), authenticated with a personal access token
+ * minted by {@see McpTokenController}. `POST` carries client→server JSON-RPC;
+ * `GET` opens the server→client SSE channel ({@see McpSseStream}, S63).
  *
  * ## Why this route is registered with NO middleware
  *
@@ -83,13 +90,24 @@ use const JSON_UNESCAPED_SLASHES;
  * caller-controlled JSON is looked at, so nothing in the envelope can influence
  * it. The context exposes no way to change it afterwards.
  *
- * ## What is deliberately NOT here (S63 owns it)
+ * ## Protocol version: two checks that are not the same check (S63)
  *
- * `GET /mcp` SSE transport; protocol-VERSION negotiation (this build answers
- * with {@see PROTOCOL_VERSION} regardless of what the client asked for, and says
- * so in the response); JSON-RPC/MCP schema validation; batch requests (rejected
- * with a named error rather than silently mishandled — MCP removed batching in
- * the 2025-06-18 revision); and the `playback_control` write tool.
+ *  - `initialize.params.protocolVersion` is NEGOTIATED
+ *    ({@see McpProtocol::negotiate()}): the revision is echoed when supported
+ *    and otherwise downgraded to {@see McpProtocol::LATEST}, which is what the
+ *    lifecycle spec asks for. A mismatch here is not an error.
+ *  - the `MCP-Protocol-Version` HTTP HEADER on later requests is VERIFIED, not
+ *    negotiated ({@see protocolVersionRefusal()}): it asserts a revision already
+ *    agreed, so an unsupported value is a `400`. Downgrading it silently would
+ *    be re-negotiating behind the client's back mid-session.
+ *
+ * ## What is still deliberately NOT here
+ *
+ * Batch requests (rejected by name — MCP removed batching in its 2025-06-18
+ * revision), MCP SESSIONS (`Mcp-Session-Id`: the hub keeps no per-session state,
+ * so minting an id would promise resumability it does not have), resumable
+ * streams (`Last-Event-ID`), and the full OAuth authorization server (S92 builds
+ * it; PAT auth is adopted onto it later).
  *
  * @package Phlix\Hub\Http\Controllers
  * @since   S62 (MCP core route/dispatcher/tools + PAT auth)
@@ -97,14 +115,20 @@ use const JSON_UNESCAPED_SLASHES;
 final class McpController
 {
     /**
-     * The MCP protocol revision this build implements.
+     * The newest MCP protocol revision this build implements.
      *
-     * S62 ANSWERS with this constant unconditionally; it does not negotiate.
-     * A client asking for a different revision is told which one it got rather
-     * than being failed, so an older client still works for the tool calls that
-     * did not change. Real negotiation is S63.
+     * Kept as an alias of {@see McpProtocol::LATEST} rather than a second
+     * literal: S63 moved the revision set into {@see McpProtocol} and two
+     * copies of a version string is how a negotiator ends up disagreeing with
+     * the thing it negotiates for.
      */
-    public const string PROTOCOL_VERSION = '2025-06-18';
+    public const string PROTOCOL_VERSION = McpProtocol::LATEST;
+
+    /**
+     * The HTTP header carrying the already-negotiated revision on every request
+     * after `initialize` (MCP 2025-06-18 transport section).
+     */
+    private const string PROTOCOL_VERSION_HEADER = 'MCP-Protocol-Version';
 
     /** Limiter bucket key prefix. Mirrors `auth:login:<ip>`. */
     private const string RATE_LIMIT_KEY_PREFIX = 'mcp:auth:';
@@ -128,6 +152,8 @@ final class McpController
      * @param RateLimiterInterface  $rateLimiter The `rate_limiter.mcp` profile
      *        (shared DB-backed, like login).
      * @param StructuredLogger      $logger      Auth channel logger.
+     * @param McpSseStream          $sse         The `GET /mcp` SSE transport
+     *        (S63). One shared instance: it holds no per-stream state.
      */
     public function __construct(
         private readonly McpTokenService $tokens,
@@ -136,6 +162,7 @@ final class McpController
         private readonly ServerListController $serverList,
         private readonly RateLimiterInterface $rateLimiter,
         private readonly StructuredLogger $logger,
+        private readonly McpSseStream $sse,
     ) {
     }
 
@@ -145,7 +172,7 @@ final class McpController
      * @param Request               $request The inbound HTTP request.
      * @param array<string, string> $params  Unused; the route has no parameters.
      *
-     * @return Response A JSON-RPC response, a 401, or a 202 for a notification.
+     * @return Response A JSON-RPC response, a 400/401, or a 202 for a notification.
      *
      * @throws RateLimitException When the client IP has spent its PAT-auth budget.
      */
@@ -156,6 +183,11 @@ final class McpController
             return $token;
         }
 
+        $refusal = $this->protocolVersionRefusal($request);
+        if ($refusal !== null) {
+            return $refusal;
+        }
+
         $context = new McpToolContext(
             $token,
             $this->proxy,
@@ -164,6 +196,117 @@ final class McpController
         );
 
         return $this->dispatchJsonRpc($request, $context);
+    }
+
+    /**
+     * `GET /mcp` — open the server→client SSE stream (S63).
+     *
+     * Authenticated and rate-limited by exactly the same {@see authenticate()}
+     * as `POST`, so a PAT is as necessary to open a stream as it is to call a
+     * tool, and a token guesser gets one shared budget across both verbs rather
+     * than a second, fresh one on the verb nobody thought about.
+     *
+     * `Accept: text/event-stream` is REQUIRED: the MCP transport says the client
+     * must send it, and answering `text/event-stream` to a client that asked for
+     * JSON would hand a browser or a curl script an unterminated response it
+     * will sit on until it times out. A `406` names the problem in one round
+     * trip. (This is why a bare `curl http://…/mcp` — which sends a wildcard
+     * `Accept` — is refused: pass `-H 'Accept: text/event-stream'`.)
+     *
+     * @param Request               $request The inbound HTTP request.
+     * @param array<string, string> $params  Unused; the route has no parameters.
+     *
+     * @return Response A streaming response, or a 400/401/406.
+     *
+     * @throws RateLimitException When the client IP has spent its PAT-auth budget.
+     */
+    public function stream(Request $request, array $params = []): Response
+    {
+        $token = $this->authenticate($request);
+        if ($token instanceof Response) {
+            return $token;
+        }
+
+        $refusal = $this->protocolVersionRefusal($request);
+        if ($refusal !== null) {
+            return $refusal;
+        }
+
+        if (!self::acceptsEventStream($request->getHeader('Accept'))) {
+            return (new Response())->status(406)->json([
+                'error' => 'Not Acceptable',
+                'code' => 'mcp.sse_not_acceptable',
+                'message' => 'GET /mcp opens a Server-Sent Events stream. Send '
+                    . 'Accept: text/event-stream, or use POST /mcp for JSON-RPC.',
+            ]);
+        }
+
+        $sse = $this->sse;
+
+        return (new Response())->status(200)->stream(static function (TcpConnection $connection) use ($sse): void {
+            $sse->open($connection);
+        });
+    }
+
+    /**
+     * Whether an `Accept` header asks for an event stream.
+     *
+     * Two rules, both deliberate:
+     *
+     *  - A wildcard is NOT acceptance. `*` + `/` + `*` is what every generic
+     *    HTTP client sends by default, so honouring it would open a never-ending
+     *    stream to callers that have no SSE parser — a hung client rather than
+     *    an error, which is far harder to diagnose.
+     *  - The comparison is on the parsed MEDIA TYPE, never `str_contains` over
+     *    the raw header. `text/event-streamX` contains `text/event-stream` as a
+     *    substring, so a substring test accepts a media type nobody defined —
+     *    the same over-match that has bitten pattern assertions elsewhere in
+     *    this repository. Parameters (`;q=0.9`) are stripped, the list is split
+     *    on commas, and each entry is compared for equality.
+     */
+    private static function acceptsEventStream(?string $accept): bool
+    {
+        if ($accept === null) {
+            return false;
+        }
+
+        foreach (explode(',', strtolower($accept)) as $entry) {
+            $mediaType = trim(explode(';', $entry, 2)[0]);
+            if ($mediaType === 'text/event-stream') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Refuse a request whose `MCP-Protocol-Version` header names a revision this
+     * build does not speak (S63).
+     *
+     * Absence is NOT a refusal: the header did not exist before revision
+     * `2025-03-26`, so a request without it is assumed to be using
+     * {@see McpProtocol::ASSUMED_WHEN_HEADER_ABSENT} — the value the spec names
+     * for exactly this case.
+     *
+     * The refusal is a plain HTTP `400`, not a JSON-RPC error, because the
+     * disagreement is about the TRANSPORT: there is no agreed wire revision in
+     * which to frame a JSON-RPC reply the client is guaranteed to understand.
+     */
+    private function protocolVersionRefusal(Request $request): ?Response
+    {
+        $presented = trim($request->getHeader(self::PROTOCOL_VERSION_HEADER) ?? '');
+        if ($presented === '' || McpProtocol::isSupported($presented)) {
+            return null;
+        }
+
+        return (new Response())->status(400)->json([
+            'error' => 'Bad Request',
+            'code' => 'mcp.unsupported_protocol_version',
+            'message' => 'This hub does not implement MCP protocol revision "' . $presented
+                . '". Re-run initialize and use the revision it returns.',
+            'supported' => McpProtocol::SUPPORTED,
+        ]);
     }
 
     // ------------------------------------------------------------------
@@ -287,19 +430,27 @@ final class McpController
         $id = is_string($rawId) || is_int($rawId) ? $rawId : null;
         $isNotification = !array_key_exists('id', $decoded);
 
-        /** @var mixed $rawMethod */
-        $rawMethod = $decoded['method'] ?? null;
-        if (!is_string($rawMethod) || $rawMethod === '') {
+        // S63: the envelope is schema-checked before anything reads it. The
+        // notification question is settled FIRST, because §4.1 forbids answering
+        // a notification even to say it was malformed — and `id`-absence is
+        // knowable however wrong the rest of the object is.
+        $envelopeError = McpRequestValidator::envelopeError($decoded);
+        if ($envelopeError !== null) {
             if ($isNotification) {
                 return $this->accepted();
             }
 
-            return $this->rpc(JsonRpc::error($id, JsonRpc::INVALID_REQUEST, 'Missing "method".'));
+            return $this->rpc(JsonRpc::error(
+                $id,
+                $envelopeError['code'],
+                $envelopeError['message'],
+                $envelopeError['data'],
+            ));
         }
 
-        /** @var mixed $rawParams */
-        $rawParams = $decoded['params'] ?? [];
-        $params = self::stringKeyed($rawParams);
+        // envelopeError() has established this is a non-empty string.
+        /** @var string $rawMethod */
+        $rawMethod = $decoded['method'];
 
         // A notification expects no response body at all, ever — not even an
         // error. `notifications/initialized` is the one an MCP client actually
@@ -308,6 +459,29 @@ final class McpController
         if ($isNotification) {
             return $this->accepted();
         }
+
+        /** @var mixed $rawParams */
+        $rawParams = $decoded['params'] ?? null;
+
+        // Params are validated only for methods this endpoint implements, so
+        // `Method not found` still wins over `Invalid params` for an unknown one
+        // (JSON-RPC §5.1) — see McpRequestValidator::KNOWN_METHODS.
+        $paramsError = McpRequestValidator::paramsError($rawMethod, $rawParams);
+        if ($paramsError !== null) {
+            return $this->rpc(JsonRpc::error(
+                $id,
+                $paramsError['code'],
+                $paramsError['message'],
+                $paramsError['data'],
+            ));
+        }
+
+        // NOTE the absent `?? []`: an omitted `params` reaches stringKeyed() as
+        // `null` and is collapsed there. Defaulting to `[]` here instead would
+        // leave stringKeyed()'s `!is_array()` branch unreachable from
+        // production — a live guard that nothing runs, which is the shape this
+        // codebase keeps mistaking for coverage.
+        $params = self::stringKeyed($rawParams);
 
         try {
             return match ($rawMethod) {
@@ -327,7 +501,11 @@ final class McpController
     }
 
     /**
-     * The `initialize` result.
+     * The `initialize` result, with the revision NEGOTIATED (S63).
+     *
+     * `params.protocolVersion` is guaranteed to be a non-empty string here:
+     * {@see McpRequestValidator::paramsError()} refused the call otherwise, so
+     * this method never has to invent a version for a client that sent none.
      *
      * @param array<string, mixed> $params Client-supplied initialize params.
      *
@@ -337,11 +515,12 @@ final class McpController
     {
         /** @var mixed $requested */
         $requested = $params['protocolVersion'] ?? null;
-        $requestedVersion = is_string($requested) ? $requested : null;
+        $requestedVersion = is_string($requested) ? $requested : self::PROTOCOL_VERSION;
+        $negotiated = McpProtocol::negotiate($requestedVersion);
 
         /** @var array<string, mixed> $result */
         $result = [
-            'protocolVersion' => self::PROTOCOL_VERSION,
+            'protocolVersion' => $negotiated,
             'capabilities' => [
                 // `listChanged: false` is the honest answer: the tool set is
                 // fixed at container-build time, so the hub will never send a
@@ -358,12 +537,16 @@ final class McpController
                 . 'token and can only reach servers that account has claimed.',
         ];
 
-        if ($requestedVersion !== null && $requestedVersion !== self::PROTOCOL_VERSION) {
-            // S62 does not negotiate (S63 does). Saying so beats letting a
-            // client assume its requested revision was accepted.
+        if ($negotiated !== $requestedVersion) {
+            // The client asked for a revision this build does not implement, so
+            // it was offered the latest one instead. The spec allows exactly
+            // this, and the client decides whether to proceed — but it can only
+            // decide if it is TOLD, and `protocolVersion` alone does not say
+            // whether the value is an echo or a substitute.
             $result['_meta'] = [
                 'phlix/protocolVersionRequested' => $requestedVersion,
                 'phlix/protocolVersionNegotiated' => false,
+                'phlix/protocolVersionsSupported' => McpProtocol::SUPPORTED,
             ];
         }
 
@@ -384,13 +567,21 @@ final class McpController
     {
         /** @var mixed $rawName */
         $rawName = $params['name'] ?? null;
-        if (!is_string($rawName) || $rawName === '') {
-            throw new McpInvalidArgumentsException('"name" is required and must name a tool.');
-        }
+        // S63: `name` is already guaranteed a non-empty string —
+        // {@see McpRequestValidator::paramsError()} refused the call otherwise,
+        // with a stricter rule than the one that used to live here (it also
+        // rejects an all-whitespace name). This is a type narrowing for the
+        // analysers, not a second validation; the `''` fallback cannot be
+        // reached, and if it somehow were, the registry answers
+        // `mcp.unknown_tool` rather than dispatching anything.
+        $name = is_string($rawName) ? $rawName : '';
 
-        $arguments = self::stringKeyed($params['arguments'] ?? []);
+        // Also deliberately without `?? []` — see dispatchJsonRpc(). An absent
+        // `arguments`, and an explicit `"arguments": null`, both arrive here as
+        // `null` and collapse in stringKeyed().
+        $arguments = self::stringKeyed($params['arguments'] ?? null);
 
-        $outcome = $this->registry->call($rawName, $arguments, $context);
+        $outcome = $this->registry->call($name, $arguments, $context);
 
         return self::toolResult($outcome['status'], $outcome['payload']);
     }
@@ -416,7 +607,12 @@ final class McpController
             'content' => [
                 ['type' => 'text', 'text' => $text],
             ],
-            'structuredContent' => $payload,
+            // Same `{}`-not-`[]` rule as JsonRpc::result() — `structuredContent`
+            // is an OBJECT in the MCP schema, and an upstream server that
+            // answered with an empty body would otherwise put a JSON array here
+            // and fail the client's schema check. `content` above is genuinely a
+            // list and must stay one.
+            'structuredContent' => $payload === [] ? new \stdClass() : $payload,
             'isError' => $status >= 400,
             '_meta' => ['phlix/httpStatus' => $status],
         ];

@@ -305,6 +305,12 @@ final class RouteManifest
             [
                 'method' => 'POST', 'path' => '/mcp', 'url' => '/mcp', 'gate' => self::GATE_PUBLIC,
             ],
+            // S63: the SSE half of the same Streamable HTTP endpoint. Ungated
+            // for the same reason as the POST — McpController authenticates the
+            // PAT itself on BOTH verbs.
+            [
+                'method' => 'GET', 'path' => '/mcp', 'url' => '/mcp', 'gate' => self::GATE_PUBLIC,
+            ],
             [
                 'method' => 'GET', 'path' => '/api/v1/servers/{id}/proxy/{path:.*}',
                 'url' => '/api/v1/servers/srv-1/proxy/api/v1/media', 'gate' => self::GATE_AUTH_JSON,

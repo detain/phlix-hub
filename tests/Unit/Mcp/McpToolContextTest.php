@@ -18,6 +18,8 @@ use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
+use function sprintf;
+
 /**
  * Execution coverage for {@see McpToolContext}'s byte-streaming backstop (S62).
  *
@@ -215,6 +217,137 @@ final class McpToolContextTest extends TestCase
             $isStreaming->invoke($controller, 'GET', '/api/v1/libraries'),
             'the control path is ALSO streaming, so it is not a control.',
         );
+    }
+
+    // ------------------------------------------------------------------
+    // S63: proxyPost() — the write verb
+    // ------------------------------------------------------------------
+
+    /**
+     * A POST to a path outside `BROWSE_SCOPE_PATTERNS['POST']` is refused, on an
+     * OWNED server with a LIVE relay.
+     *
+     * Same reasoning as the GET test above, and it matters more here: there is
+     * NO POST key in `BROWSE_SCOPE_ALLOWLIST` at all, so every writable path is
+     * a fully-anchored per-action pattern. If a write could reach the tunnel by
+     * any other route, that whole design would be decoration.
+     *
+     * @dataProvider deniedWritePathProvider
+     */
+    public function test_a_post_outside_the_write_allowlist_is_refused(string $path): void
+    {
+        $outcome = $this->context()->proxyPost(self::SERVER_OF_A, $path, ['position_ms' => 1]);
+
+        self::assertSame(403, $outcome['status'], "POST {$path} reached the relay");
+        self::assertSame('proxy.scope_denied', $outcome['payload']['code'] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function deniedWritePathProvider(): array
+    {
+        return [
+            // A path that is a legitimate READ — proving the GET allowlist does
+            // not leak into the write map.
+            'a GET-allowlisted browse path' => ['/api/v1/libraries'],
+            'a GET-allowlisted media path' => ['/api/v1/media/media-1'],
+            // The two cast/DLNA session STARTs S63 deliberately does not open.
+            'the chromecast session start' => ['/api/v1/cast/devices/dev-1/cast'],
+            'the dlna playTo session start' => ['/api/v1/dlna/renderers/dev-1/play'],
+            // Privileged surface.
+            'an admin path' => ['/api/v1/admin/users'],
+            'a library scan trigger' => ['/api/v1/libraries/lib-1/scan'],
+        ];
+    }
+
+    /**
+     * The discriminating half: the paths `playback_control` forwards DO get
+     * past the write allowlist and reach the tunnel boundary.
+     *
+     * Without this, the refusals above would be satisfied by a write map that
+     * refused everything, and the tool would be dead while its tests stayed
+     * green.
+     *
+     * @dataProvider playbackControlWritePathProvider
+     */
+    public function test_the_paths_playback_control_writes_are_inside_the_write_allowlist(string $path): void
+    {
+        try {
+            $outcome = $this->context()->proxyPost(self::SERVER_OF_A, $path, []);
+        } catch (\Error) {
+            // Reached the uninitialised bridge => the allowlist admitted it.
+            $this->addToAssertionCount(1);
+
+            return;
+        }
+
+        self::assertNotSame(
+            'proxy.scope_denied',
+            $outcome['payload']['code'] ?? null,
+            sprintf('"%s" is forwarded by playback_control but the write allowlist refuses it.', $path),
+        );
+    }
+
+    /**
+     * Restated here rather than read out of {@see \Phlix\Hub\Mcp\Tools\PlaybackControlTool},
+     * because a check derived from its subject self-adjusts with it.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function playbackControlWritePathProvider(): array
+    {
+        return [
+            'chromecast play' => ['/api/v1/cast/devices/dev-1/play'],
+            'chromecast pause' => ['/api/v1/cast/devices/dev-1/pause'],
+            'chromecast stop' => ['/api/v1/cast/devices/dev-1/stop'],
+            'chromecast seek' => ['/api/v1/cast/devices/dev-1/seek'],
+            'dlna pause' => ['/api/v1/dlna/renderers/dev-1/pause'],
+            'dlna stop' => ['/api/v1/dlna/renderers/dev-1/stop'],
+            'dlna seek' => ['/api/v1/dlna/renderers/dev-1/seek'],
+        ];
+    }
+
+    /**
+     * `proxyPost()` runs as the TOKEN's user, exactly as `proxyGet()` does — a
+     * write cannot be aimed at somebody else's server.
+     *
+     * The refusal asserted is 403 `server.not_owned`, which is a DIFFERENT gate
+     * from the 404 for an unknown server, so this is a decision and not a
+     * blanket no.
+     */
+    public function test_a_post_to_another_users_server_is_refused_by_ownership(): void
+    {
+        $outcome = $this->context()->proxyPost(
+            'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            '/api/v1/cast/devices/dev-1/pause',
+            [],
+        );
+
+        self::assertSame(404, $outcome['status'], 'an unknown server must not be reachable by a write.');
+        self::assertSame('server.not_found', $outcome['payload']['code'] ?? null);
+    }
+
+    /**
+     * The streaming backstop covers the write verb too.
+     *
+     * `proxyGet()` and `proxyPost()` share one private `relay()`, deliberately,
+     * so the guard cannot apply to one verb and not the other. Asserted rather
+     * than argued: `/media/{id}/stream` is GET-only in the scope maps, so a
+     * POST to it is refused by the SCOPE gate first — which is itself the
+     * stronger answer, and is what this pins.
+     */
+    public function test_a_post_to_a_streaming_family_never_reaches_the_producer_path(): void
+    {
+        $outcome = $this->context()->proxyPost(self::SERVER_OF_A, '/media/media-1/stream', []);
+
+        self::assertContains(
+            $outcome['payload']['code'] ?? null,
+            ['proxy.scope_denied', 'mcp.streaming_unsupported'],
+            'a POST to a byte-streaming family produced neither a scope refusal nor the streaming '
+            . 'backstop, which means it was answered with an empty success.',
+        );
+        self::assertGreaterThanOrEqual(400, $outcome['status']);
     }
 
     // ------------------------------------------------------------------

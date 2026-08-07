@@ -17,7 +17,9 @@ use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Mcp\JsonRpc;
+use Phlix\Hub\Mcp\McpProtocol;
 use Phlix\Hub\Mcp\McpScopes;
+use Phlix\Hub\Mcp\McpSseStream;
 use Phlix\Hub\Mcp\McpToken;
 use Phlix\Hub\Mcp\McpTokenService;
 use Phlix\Hub\Mcp\McpToolInterface;
@@ -29,10 +31,12 @@ use Phlix\Hub\Mcp\Tools\ListServersTool;
 use Phlix\Hub\Mcp\Tools\SearchMediaTool;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Tests\Support\RecordingMcpTool;
+use Phlix\Hub\Tests\Support\RecordingStreamTimers;
 use Phlix\Hub\Version;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use Workerman\Connection\TcpConnection;
 
 use Workerman\MySQL\Connection;
 
@@ -59,6 +63,8 @@ use function str_repeat;
  *
  * @covers \Phlix\Hub\Http\Controllers\McpController
  * @covers \Phlix\Hub\Mcp\JsonRpc
+ * @covers \Phlix\Hub\Mcp\McpProtocol
+ * @covers \Phlix\Hub\Mcp\McpRequestValidator
  */
 final class McpControllerTest extends TestCase
 {
@@ -292,6 +298,502 @@ final class McpControllerTest extends TestCase
     }
 
     // ------------------------------------------------------------------
+    // S63: JSON-RPC envelope schema validation
+    // ------------------------------------------------------------------
+
+    /**
+     * THE FAILING INPUT: an envelope without a correct `jsonrpc` member is
+     * `INVALID_REQUEST`.
+     *
+     * S62 never looked at `jsonrpc` at all — a body could claim version 1.0, or
+     * omit the member entirely, and still be dispatched. That is not a
+     * cosmetic omission: JSON-RPC 2.0 §4 makes the member mandatory precisely so
+     * a 1.0 client cannot be silently served 2.0 semantics.
+     *
+     * @dataProvider badJsonRpcMemberProvider
+     */
+    public function test_a_bad_jsonrpc_member_is_an_invalid_request(string $body): void
+    {
+        $decoded = self::body($this->controller()->handle($this->request($body, self::GOOD_TOKEN)));
+
+        self::assertSame(JsonRpc::INVALID_REQUEST, self::errorCode($decoded));
+        /** @var array<string, mixed> $error */
+        $error = $decoded['error'];
+        /** @var array<string, mixed> $data */
+        $data = $error['data'];
+        self::assertSame('jsonrpc', $data['field'] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function badJsonRpcMemberProvider(): array
+    {
+        return [
+            'the member is absent' => ['{"id":1,"method":"ping"}'],
+            'JSON-RPC 1.0' => ['{"jsonrpc":"1.0","id":1,"method":"ping"}'],
+            'a number, not the string' => ['{"jsonrpc":2.0,"id":1,"method":"ping"}'],
+            'the string "2"' => ['{"jsonrpc":"2","id":1,"method":"ping"}'],
+            'null' => ['{"jsonrpc":null,"id":1,"method":"ping"}'],
+        ];
+    }
+
+    /**
+     * THE FAILING INPUT: a structured `id` is `INVALID_REQUEST`, answered with
+     * `id: null` as §5 requires.
+     *
+     * This is the one that mattered. S62 coerced any non-string/non-int `id` to
+     * `null` and answered ANYWAY, so a client sending `id: {...}` or a
+     * fractional id got a well-formed reply it could not correlate with
+     * anything it had outstanding — and waited for a response that had already
+     * been sent.
+     *
+     * @dataProvider badIdProvider
+     */
+    public function test_an_id_that_is_not_a_string_or_integer_is_an_invalid_request(string $idJson): void
+    {
+        $decoded = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":' . $idJson . ',"method":"ping"}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertSame(JsonRpc::INVALID_REQUEST, self::errorCode($decoded));
+        self::assertNull($decoded['id'], 'JSON-RPC 2.0 §5: an undeterminable id is echoed as null.');
+        /** @var array<string, mixed> $error */
+        $error = $decoded['error'];
+        /** @var array<string, mixed> $data */
+        $data = $error['data'];
+        self::assertSame('id', $data['field'] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function badIdProvider(): array
+    {
+        return [
+            'an object' => ['{"a":1}'],
+            'an array' => ['[1,2]'],
+            'a boolean' => ['true'],
+            'a fractional number' => ['1.5'],
+        ];
+    }
+
+    /**
+     * The SUCCEEDING controls beside the two providers above: the id types
+     * JSON-RPC DOES allow are echoed verbatim.
+     *
+     * Without these a validator that refused every id would satisfy the failing
+     * rows perfectly.
+     *
+     * @dataProvider usableIdProvider
+     */
+    public function test_a_usable_id_is_echoed_verbatim(string $idJson, string|int|null $expected): void
+    {
+        $decoded = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":' . $idJson . ',"method":"ping"}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertArrayHasKey('result', $decoded, 'a legal id must not be refused.');
+        self::assertSame($expected, $decoded['id']);
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string|int|null}>
+     */
+    public static function usableIdProvider(): array
+    {
+        return [
+            'an integer' => ['7', 7],
+            'a negative integer' => ['-7', -7],
+            'zero' => ['0', 0],
+            'a string' => ['"req-1"', 'req-1'],
+            'an explicit null' => ['null', null],
+        ];
+    }
+
+    /**
+     * A malformed envelope WITHOUT an `id` is still silent.
+     *
+     * JSON-RPC §4.1 forbids answering a notification at all — including to
+     * report that it was malformed. The validator must therefore never be able
+     * to turn a notification into a response, however wrong its members are.
+     * `id`-absence is knowable even when everything else is broken, which is why
+     * the controller settles that question first.
+     *
+     * @dataProvider malformedNotificationProvider
+     */
+    public function test_a_malformed_notification_is_still_answered_with_silence(string $body): void
+    {
+        $response = $this->controller()->handle($this->request($body, self::GOOD_TOKEN));
+
+        self::assertSame(202, $response->statusCode);
+        self::assertSame('', $response->body);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function malformedNotificationProvider(): array
+    {
+        return [
+            'no jsonrpc member' => ['{"method":"notifications/initialized"}'],
+            'wrong jsonrpc version' => ['{"jsonrpc":"1.0","method":"notifications/initialized"}'],
+            'no method' => ['{"jsonrpc":"2.0"}'],
+            'method is a number' => ['{"jsonrpc":"2.0","method":42}'],
+        ];
+    }
+
+    /**
+     * A POSITIONAL `params` is refused for its own sake, on a method that has no
+     * required member to fall back on.
+     *
+     * ⚠ `test_positional_params_cannot_name_a_tool()` looks like it covers this
+     * and does NOT: `tools/call` also requires `name`, so removing the
+     * positional check entirely still yields `INVALID_PARAMS` from the missing
+     * `name`, by a different branch. Mutation M26 survived on exactly that.
+     * `tools/list` has no required member, so it is the only method where the
+     * positional refusal is the sole thing that can say no — which is why the
+     * error `data.field` is asserted too.
+     */
+    public function test_positional_params_are_refused_even_when_nothing_else_would_object(): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":31,"method":"tools/list","params":["cursor-1"]}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertSame(JsonRpc::INVALID_PARAMS, self::errorCode($body));
+        /** @var array<string, mixed> $error */
+        $error = $body['error'];
+        /** @var array<string, mixed> $data */
+        $data = $error['data'];
+        self::assertSame('params', $data['field'] ?? null);
+    }
+
+    /**
+     * The SUCCEEDING control: an EMPTY `params` — indistinguishable from `{}` in
+     * PHP — is NOT refused. Without this, refusing every array would satisfy the
+     * test above while breaking `tools/list` for every client that sends `{}`.
+     */
+    public function test_an_empty_params_object_is_not_mistaken_for_a_positional_array(): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":32,"method":"tools/list","params":{}}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertArrayHasKey('result', $body, 'an empty params object was refused.');
+    }
+
+    /**
+     * `Method not found` beats `Invalid params` (JSON-RPC §5.1) — an unknown
+     * method with unusable params is reported as the unknown method.
+     *
+     * This is the discriminating control for
+     * {@see \Phlix\Hub\Mcp\McpRequestValidator::isKnownMethod()}: a validator
+     * that checked params first would answer `INVALID_PARAMS` here and send the
+     * client hunting through a params object when its real mistake is the method
+     * name. Two DIFFERENT refusals for two different mistakes, not one refusal
+     * spelled twice.
+     */
+    public function test_an_unknown_method_with_unusable_params_reports_the_method(): void
+    {
+        $decoded = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":9,"method":"resources/list","params":"not-an-object"}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertSame(JsonRpc::METHOD_NOT_FOUND, self::errorCode($decoded));
+    }
+
+    /**
+     * ...while a KNOWN method with the same unusable params IS `INVALID_PARAMS`.
+     * The pair proves the method-known check is what decides.
+     */
+    public function test_a_known_method_with_unusable_params_is_invalid_params(): void
+    {
+        $decoded = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":9,"method":"tools/list","params":"not-an-object"}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertSame(JsonRpc::INVALID_PARAMS, self::errorCode($decoded));
+        /** @var array<string, mixed> $error */
+        $error = $decoded['error'];
+        /** @var array<string, mixed> $data */
+        $data = $error['data'];
+        self::assertSame('params', $data['field'] ?? null);
+    }
+
+    // ------------------------------------------------------------------
+    // S63: JSON shape — found by driving a REAL MCP client
+    // ------------------------------------------------------------------
+
+    /**
+     * An EMPTY result must encode as `{}`, never `[]`.
+     *
+     * ⚠ Read the assertion: it is on the RAW body STRING, not on the decoded
+     * body. That is the whole point. PHP has one array type, so
+     * `json_encode([])` emits `[]` — a JSON ARRAY — where every MCP result type
+     * is an OBJECT. `ping` shipped that way in S62 and NO decoding test could
+     * see it, because `json_decode('{}', true)` and `json_decode('[]', true)`
+     * are both `[]`. The real SDK client's `JSONRPCMessageSchema.parse()`
+     * rejects it outright ("expected object, received array") and tears the
+     * session down, which is how it was found.
+     *
+     * Do not "simplify" this test to `assertSame([], $body['result'])`. That
+     * assertion passes against the broken code.
+     */
+    public function test_an_empty_result_encodes_as_a_json_object(): void
+    {
+        $response = $this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            self::GOOD_TOKEN,
+        ));
+
+        self::assertStringContainsString(
+            '"result": {}',
+            $response->body,
+            "ping's EmptyResult was encoded as a JSON array. A conformant MCP client rejects the "
+            . 'message and drops the session. Raw body was: ' . $response->body,
+        );
+        self::assertStringNotContainsString('"result": []', $response->body);
+    }
+
+    /**
+     * The same `{}`-not-`[]` rule applies one level down, to
+     * `result.structuredContent`.
+     *
+     * A tool whose upstream answered with an empty body produces an empty
+     * payload, and `structuredContent` is an OBJECT in the MCP schema. Same
+     * blind spot as the result above: decoding cannot see it, so the assertion
+     * is on the raw body.
+     */
+    public function test_an_empty_tool_payload_encodes_as_a_json_object(): void
+    {
+        $probe = new RecordingMcpTool();
+        $probe->payload = [];
+
+        $response = $this->controller(extraTool: $probe)->handle($this->request(
+            '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"recording_probe"}}',
+            self::GOOD_TOKEN,
+        ));
+
+        self::assertSame(1, $probe->calls, 'the probe never ran, so nothing was rendered.');
+        self::assertStringContainsString(
+            '"structuredContent": {}',
+            $response->body,
+            'an empty tool payload was encoded as a JSON array. Raw body was: ' . $response->body,
+        );
+        self::assertStringNotContainsString('"structuredContent": []', $response->body);
+    }
+
+    /**
+     * ...and the control beside it: a NON-empty result is still an object with
+     * its members, and a genuine LIST inside a result stays a JSON array.
+     *
+     * Without this, "wrap everything in an object" would satisfy the test above
+     * while turning `tools` into `{"0":…}` and breaking every client.
+     */
+    public function test_a_list_inside_a_result_is_still_a_json_array(): void
+    {
+        $response = $this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+            self::GOOD_TOKEN,
+        ));
+
+        self::assertStringContainsString('"tools": [', $response->body, 'the tool list stopped being a JSON array.');
+        self::assertStringNotContainsString('"tools": {', $response->body);
+    }
+
+    /**
+     * Every tool descriptor publishes its scope somewhere a real MCP client can
+     * actually READ it.
+     *
+     * S62 published it only as `x-phlix-scope`. The official SDK parses
+     * `tools/list` through a Zod object that STRIPS unrecognised keys, so that
+     * field never reaches the model — verified by driving the real client, which
+     * printed `x-phlix-scope=undefined` for all six tools. `_meta` IS in the
+     * `Tool` schema and survives, so the scope is published there too.
+     *
+     * The assertion is on `_meta` specifically: asserting "the scope appears
+     * somewhere in the JSON" would be satisfied by the stripped field alone.
+     */
+    public function test_every_tool_descriptor_publishes_its_scope_in_meta(): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+            self::GOOD_TOKEN,
+        )));
+
+        /** @var array<string, mixed> $result */
+        $result = $body['result'];
+        /** @var list<array<string, mixed>> $tools */
+        $tools = $result['tools'];
+        self::assertNotSame([], $tools, 'ANTI-VACUITY: no tools were published, so this checks nothing.');
+
+        foreach ($tools as $tool) {
+            /** @var array<string, mixed> $meta */
+            $meta = $tool['_meta'] ?? [];
+            $scope = $meta['phlix/scope'] ?? null;
+            self::assertIsString($scope, ((string) ($tool['name'] ?? '?')) . ' publishes no scope in _meta.');
+            self::assertTrue(
+                McpScopes::isKnown($scope),
+                $scope . ' is not a scope McpScopes knows, so no token could ever hold it.',
+            );
+            self::assertSame($scope, $tool['x-phlix-scope'] ?? null, 'the two spellings disagree.');
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // S63: GET /mcp — the SSE transport
+    // ------------------------------------------------------------------
+
+    public function test_the_sse_stream_requires_a_token(): void
+    {
+        $response = $this->controller()->stream(
+            $this->getRequest(null, ['ACCEPT' => 'text/event-stream']),
+        );
+
+        self::assertSame(401, $response->statusCode);
+        self::assertNull($response->streamProducer, 'an unauthenticated GET must not open a stream.');
+        self::assertSame('auth.required', self::body($response)['code'] ?? null);
+    }
+
+    /**
+     * A stream costs the SAME limiter budget as a POST — it is not a second,
+     * fresh bucket a token guesser could work through.
+     */
+    public function test_an_invalid_token_on_the_sse_stream_counts_against_the_same_bucket(): void
+    {
+        $limiter = $this->createMock(RateLimiterInterface::class);
+        $limiter->method('peek')->willReturn(new RateLimitState(0, 10, 0, false, 10));
+        $limiter->expects(self::once())->method('hit')
+            ->with('mcp:auth:198.51.100.4')
+            ->willReturn(new RateLimitState(1, 9, 0, false, 10));
+
+        $response = $this->controller(limiter: $limiter, validToken: null)->stream(
+            $this->getRequest(self::GOOD_TOKEN, ['ACCEPT' => 'text/event-stream']),
+        );
+
+        self::assertSame(401, $response->statusCode);
+    }
+
+    /**
+     * THE FAILING INPUT for the transport: `Accept` must list
+     * `text/event-stream`.
+     *
+     * A wildcard is deliberately NOT acceptance — see
+     * `McpController::acceptsEventStream()`. Honouring it would open an
+     * unterminated stream to every generic HTTP client, whose failure mode is a
+     * hang rather than an error.
+     *
+     * @dataProvider unacceptableAcceptProvider
+     */
+    public function test_a_get_without_an_event_stream_accept_is_406(?string $accept): void
+    {
+        $headers = $accept === null ? [] : ['ACCEPT' => $accept];
+
+        $response = $this->controller()->stream($this->getRequest(self::GOOD_TOKEN, $headers));
+
+        self::assertSame(406, $response->statusCode);
+        self::assertNull($response->streamProducer, 'a refused GET must not open a stream.');
+        self::assertSame('mcp.sse_not_acceptable', self::body($response)['code'] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: string|null}>
+     */
+    public static function unacceptableAcceptProvider(): array
+    {
+        return [
+            'no Accept header at all' => [null],
+            'the wildcard curl sends by default' => ['*/*'],
+            'JSON only' => ['application/json'],
+            'a near miss' => ['text/event-streamX'],
+            'an empty header' => [''],
+        ];
+    }
+
+    /**
+     * The SUCCEEDING control: an `Accept` that DOES list `text/event-stream`
+     * opens the stream — including the shapes a real client sends it in.
+     *
+     * @dataProvider acceptableAcceptProvider
+     */
+    public function test_a_get_with_an_event_stream_accept_opens_a_stream(string $accept): void
+    {
+        $response = $this->controller()->stream(
+            $this->getRequest(self::GOOD_TOKEN, ['ACCEPT' => $accept]),
+        );
+
+        self::assertSame(200, $response->statusCode);
+        self::assertNotNull($response->streamProducer, "Accept: {$accept} must open a stream.");
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function acceptableAcceptProvider(): array
+    {
+        return [
+            'exactly the media type' => ['text/event-stream'],
+            'the MCP SDK spelling' => ['application/json, text/event-stream'],
+            'with a q-value' => ['text/event-stream;q=0.9'],
+            'upper case' => ['TEXT/EVENT-STREAM'],
+        ];
+    }
+
+    /**
+     * The producer really drives the SSE machinery — asserted by running it
+     * against a connection and reading the bytes, not by checking a callable is
+     * non-null.
+     */
+    public function test_the_stream_producer_writes_a_real_sse_head(): void
+    {
+        $timers = new RecordingStreamTimers();
+        $response = $this->controller(timers: $timers)->stream(
+            $this->getRequest(self::GOOD_TOKEN, ['ACCEPT' => 'text/event-stream']),
+        );
+
+        $written = '';
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->method('send')->willReturnCallback(
+            static function (mixed $payload) use (&$written): bool {
+                $written .= (string) $payload;
+                return true;
+            },
+        );
+
+        self::assertNotNull($response->streamProducer);
+        ($response->streamProducer)($connection);
+
+        self::assertStringContainsString('HTTP/1.1 200 OK', $written);
+        self::assertStringContainsString('Content-Type: text/event-stream', $written);
+        self::assertStringContainsString('retry: ', $written);
+        self::assertNotSame([], $timers->scheduled, 'the producer scheduled no timers at all.');
+    }
+
+    /**
+     * A GET carrying an unsupported `MCP-Protocol-Version` header is refused
+     * before the transport is considered — the same 400 the POST gives, so the
+     * two verbs cannot disagree about which revisions the hub speaks.
+     */
+    public function test_the_sse_stream_honours_the_protocol_version_header(): void
+    {
+        $response = $this->controller()->stream($this->getRequest(self::GOOD_TOKEN, [
+            'ACCEPT' => 'text/event-stream',
+            'MCP-PROTOCOL-VERSION' => '1999-01-01',
+        ]));
+
+        self::assertSame(400, $response->statusCode);
+        self::assertNull($response->streamProducer);
+        self::assertSame('mcp.unsupported_protocol_version', self::body($response)['code'] ?? null);
+    }
+
+    // ------------------------------------------------------------------
     // MCP methods
     // ------------------------------------------------------------------
 
@@ -313,25 +815,232 @@ final class McpControllerTest extends TestCase
         );
     }
 
+    // ------------------------------------------------------------------
+    // S63: protocol-version negotiation
+    // ------------------------------------------------------------------
+
     /**
-     * S62 does not negotiate. When the client asks for a different revision the
-     * response says so rather than letting the client assume it was honoured —
-     * negotiation itself is S63.
+     * An OLDER but supported revision is honoured — the hub speaks it back.
+     *
+     * ⚠ This replaces S62's
+     * `test_initialize_discloses_that_a_different_requested_version_was_not_negotiated`,
+     * which asserted the OPPOSITE for this very input: `2024-11-05` used to be
+     * answered with `2025-06-18` plus a `_meta` disclosure that no negotiation
+     * had happened. S63 negotiates, so `2024-11-05` is now echoed and there is
+     * nothing to disclose. The old assertion did not become wrong — the
+     * behaviour it described was deliberately replaced, which is what this step
+     * is for.
+     *
+     * @dataProvider supportedRevisionProvider
      */
-    public function test_initialize_discloses_that_a_different_requested_version_was_not_negotiated(): void
+    public function test_a_supported_revision_is_echoed_back(string $revision): void
     {
         $body = self::body($this->controller()->handle($this->request(
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}',
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'
+            . $revision . '"}}',
             self::GOOD_TOKEN,
         )));
 
         /** @var array<string, mixed> $result */
         $result = $body['result'];
-        self::assertSame(McpController::PROTOCOL_VERSION, $result['protocolVersion']);
+        self::assertSame($revision, $result['protocolVersion']);
+        self::assertArrayNotHasKey(
+            '_meta',
+            $result,
+            'the client got the revision it asked for, so there is nothing to disclose.',
+        );
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function supportedRevisionProvider(): iterable
+    {
+        foreach (McpProtocol::SUPPORTED as $revision) {
+            yield $revision => [$revision];
+        }
+    }
+
+    /**
+     * THE FAILING INPUT. An UNSUPPORTED revision is downgraded to the latest,
+     * and the substitution is declared.
+     *
+     * A downgrade is not an error (the lifecycle spec asks for exactly this),
+     * but `protocolVersion` alone cannot tell a client whether the value it got
+     * is an echo or a substitute — so `_meta` says which, and lists what the hub
+     * can speak, so the client can retry without a second round trip.
+     *
+     * @dataProvider unsupportedRevisionProvider
+     */
+    public function test_an_unsupported_revision_is_downgraded_and_declared(string $revision): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'
+            . $revision . '"}}',
+            self::GOOD_TOKEN,
+        )));
+
+        /** @var array<string, mixed> $result */
+        $result = $body['result'];
+        self::assertSame(McpProtocol::LATEST, $result['protocolVersion']);
         /** @var array<string, mixed> $meta */
         $meta = $result['_meta'];
-        self::assertSame('2024-11-05', $meta['phlix/protocolVersionRequested']);
+        self::assertSame($revision, $meta['phlix/protocolVersionRequested']);
         self::assertFalse($meta['phlix/protocolVersionNegotiated']);
+        self::assertSame(McpProtocol::SUPPORTED, $meta['phlix/protocolVersionsSupported']);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function unsupportedRevisionProvider(): array
+    {
+        return [
+            'a revision from the future' => ['2099-01-01'],
+            'a revision that never existed' => ['1999-01-01'],
+            // Near-misses: a substring/superstring of a real revision must NOT
+            // match, or the check is a `str_contains` in disguise.
+            'a supported revision with a suffix' => ['2025-06-18-beta'],
+            'a supported revision truncated' => ['2025-06'],
+            'a supported revision with trailing space' => ['2025-06-18 '],
+        ];
+    }
+
+    /**
+     * THE FAILING INPUT for the schema half of negotiation: `protocolVersion`
+     * of the wrong TYPE is `INVALID_PARAMS`, not a silent fallback.
+     *
+     * S62 read it with `is_string($requested) ? … : null` and carried on, so a
+     * client sending `"protocolVersion": 20250618` was told it had negotiated
+     * successfully. It had not — nothing had been compared.
+     *
+     * @dataProvider unusableProtocolVersionProvider
+     */
+    public function test_a_protocol_version_of_the_wrong_type_is_invalid_params(string $json): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":' . $json . '}}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertSame(JsonRpc::INVALID_PARAMS, self::errorCode($body));
+        /** @var array<string, mixed> $error */
+        $error = $body['error'];
+        /** @var array<string, mixed> $data */
+        $data = $error['data'];
+        self::assertSame('protocolVersion', $data['field'] ?? null);
+        self::assertSame(McpProtocol::SUPPORTED, $data['supported'] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function unusableProtocolVersionProvider(): array
+    {
+        return [
+            'a number' => ['20250618'],
+            'a boolean' => ['true'],
+            'null' => ['null'],
+            'an object' => ['{"version":"2025-06-18"}'],
+            'an empty string' => ['""'],
+            'whitespace only' => ['"   "'],
+        ];
+    }
+
+    /**
+     * ...and an `initialize` with NO `protocolVersion` at all is refused too.
+     * It is the one field the handshake cannot proceed without.
+     */
+    public function test_initialize_without_a_protocol_version_is_invalid_params(): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertSame(JsonRpc::INVALID_PARAMS, self::errorCode($body));
+    }
+
+    // ------------------------------------------------------------------
+    // S63: the MCP-Protocol-Version HTTP header (verified, not negotiated)
+    // ------------------------------------------------------------------
+
+    /**
+     * THE FAILING INPUT: an unsupported header revision is a plain HTTP 400.
+     *
+     * Not a downgrade, unlike `initialize`. The header asserts a revision
+     * already agreed, so quietly answering in a different one would be
+     * re-negotiating mid-session behind the client's back.
+     */
+    public function test_an_unsupported_protocol_version_header_is_a_400(): void
+    {
+        $response = $this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            self::GOOD_TOKEN,
+            ['MCP-PROTOCOL-VERSION' => '1999-01-01'],
+        ));
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::body($response);
+        self::assertSame('mcp.unsupported_protocol_version', $body['code'] ?? null);
+        self::assertSame(McpProtocol::SUPPORTED, $body['supported'] ?? null);
+    }
+
+    /**
+     * The SUCCEEDING control beside it: the same request with a SUPPORTED header
+     * value is answered normally.
+     *
+     * Without this row a controller that 400-ed every request carrying the
+     * header would satisfy the test above perfectly.
+     *
+     * @dataProvider supportedRevisionProvider
+     */
+    public function test_a_supported_protocol_version_header_is_accepted(string $revision): void
+    {
+        $response = $this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            self::GOOD_TOKEN,
+            ['MCP-PROTOCOL-VERSION' => $revision],
+        ));
+
+        self::assertSame(200, $response->statusCode);
+        self::assertArrayHasKey('result', self::body($response));
+    }
+
+    /**
+     * An ABSENT header is not a refusal either. The header postdates revision
+     * `2025-03-26`, so its absence cannot mean "unsupported" — it means the
+     * client predates the header, and the spec names the revision to assume.
+     */
+    public function test_an_absent_protocol_version_header_is_accepted(): void
+    {
+        $response = $this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            self::GOOD_TOKEN,
+        ));
+
+        self::assertSame(200, $response->statusCode);
+        self::assertTrue(
+            McpProtocol::isSupported(McpProtocol::ASSUMED_WHEN_HEADER_ABSENT),
+            'the revision assumed for a header-less request must itself be one the hub speaks, '
+            . 'or the assumption is incoherent.',
+        );
+    }
+
+    /**
+     * The header gate runs AFTER authentication, so an unauthenticated caller
+     * learns nothing from it — including whether the hub exists as an MCP server
+     * at all.
+     */
+    public function test_the_protocol_version_gate_does_not_pre_empt_the_401(): void
+    {
+        $response = $this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":1,"method":"ping"}',
+            null,
+            ['MCP-PROTOCOL-VERSION' => '1999-01-01'],
+        ));
+
+        self::assertSame(401, $response->statusCode);
     }
 
     public function test_tools_list_names_every_registered_tool(): void
@@ -576,30 +1285,84 @@ final class McpControllerTest extends TestCase
     }
 
     /**
-     * `arguments` that is not a map at all — a JSON array, or a scalar — reaches
-     * the tool as `[]`, not as a half-read positional list.
+     * An explicit `"arguments": null` reaches the tool as `[]`.
      *
-     * This is the `!is_array($raw)` / positional-list half of the same helper:
-     * a JSON-RPC caller sending `"arguments": ["srv-1"]` is using positional
-     * params, which MCP's by-name tool arguments cannot express. Collapsing to
-     * an empty map makes the tool answer "argument missing"; passing the list
-     * through would give a tool an argument at key `0` that its schema never
-     * declared.
+     * ⚠ THIS TEST CHANGED SHAPE IN S63, and the change is the point.
      *
-     * @dataProvider unusableArgumentsProvider
+     * In S62 this was a four-row provider: a positional array, a string, a
+     * number and `null` all reached the tool as `[]`, and the tool then reported
+     * a missing argument. S63's schema validation refuses the first three at the
+     * envelope, with `INVALID_PARAMS` naming `arguments` — see
+     * {@see test_arguments_that_are_not_an_object_are_invalid_params()}, which
+     * is where those three rows went. That is a better answer: the client's
+     * mistake is the SHAPE of `arguments`, and "server_id is required" sends it
+     * looking at the wrong field.
+     *
+     * `null` deliberately did NOT move. `arguments` is optional in the MCP
+     * schema and clients serialise "none" both ways, so an explicit null is
+     * treated as absent — and it is the row that keeps
+     * `McpController::stringKeyed()`'s `!is_array($raw)` branch REACHED from
+     * production. Without it that branch would still be live code that nothing
+     * runs.
      */
-    public function test_arguments_that_are_not_a_by_name_map_arrive_empty(string $argumentsJson): void
+    public function test_explicit_null_arguments_arrive_at_the_tool_as_an_empty_map(): void
     {
         $probe = new RecordingMcpTool();
 
         $this->controller(extraTool: $probe)->handle($this->request(
             '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"recording_probe",'
-            . '"arguments":' . $argumentsJson . '}}',
+            . '"arguments":null}}',
+            self::GOOD_TOKEN,
+        ));
+
+        self::assertSame(1, $probe->calls, 'an explicit null "arguments" must not refuse the call.');
+        self::assertSame([], $probe->received);
+    }
+
+    /**
+     * ...and the same for an OMITTED `arguments`, which is the spelling a real
+     * client uses for a no-argument tool. Same branch, different spelling; both
+     * are pinned so a future `?? []` default cannot quietly orphan it.
+     */
+    public function test_omitted_arguments_arrive_at_the_tool_as_an_empty_map(): void
+    {
+        $probe = new RecordingMcpTool();
+
+        $this->controller(extraTool: $probe)->handle($this->request(
+            '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"recording_probe"}}',
             self::GOOD_TOKEN,
         ));
 
         self::assertSame(1, $probe->calls);
         self::assertSame([], $probe->received);
+    }
+
+    /**
+     * `arguments` that is neither an object nor null is `INVALID_PARAMS`, and
+     * the tool is never invoked.
+     *
+     * The `calls === 0` assertion is load-bearing: without it a controller that
+     * ran the tool with an empty map AND returned an error would pass.
+     *
+     * @dataProvider unusableArgumentsProvider
+     */
+    public function test_arguments_that_are_not_an_object_are_invalid_params(string $argumentsJson): void
+    {
+        $probe = new RecordingMcpTool();
+
+        $body = self::body($this->controller(extraTool: $probe)->handle($this->request(
+            '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"recording_probe",'
+            . '"arguments":' . $argumentsJson . '}}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertSame(JsonRpc::INVALID_PARAMS, self::errorCode($body));
+        self::assertSame(0, $probe->calls, 'a tool was invoked with unusable arguments.');
+        /** @var array<string, mixed> $error */
+        $error = $body['error'];
+        /** @var array<string, mixed> $data */
+        $data = $error['data'];
+        self::assertSame('arguments', $data['field'] ?? null, 'the error must name the offending field.');
     }
 
     /**
@@ -611,7 +1374,7 @@ final class McpControllerTest extends TestCase
             'a positional JSON array' => ['["srv-1","dune"]'],
             'a JSON string' => ['"srv-1"'],
             'a JSON number' => ['7'],
-            'JSON null' => ['null'],
+            'a JSON boolean' => ['true'],
         ];
     }
 
@@ -657,6 +1420,7 @@ final class McpControllerTest extends TestCase
         ?RateLimiterInterface $limiter = null,
         McpToken|false|null $validToken = false,
         ?RecordingMcpTool $extraTool = null,
+        ?RecordingStreamTimers $timers = null,
     ): McpController {
         $resolved = $validToken === false
             ? new McpToken('row-1', self::USER_A, McpScopes::all())
@@ -728,10 +1492,15 @@ final class McpControllerTest extends TestCase
             new ServerListController($serverInfo),
             $limiter ?? new RateLimiter(900, 10, 1000),
             $this->createMock(StructuredLogger::class),
+            new McpSseStream($timers ?? new RecordingStreamTimers()),
         );
     }
 
-    private function request(string $rawBody, ?string $bearer = null): Request
+    /**
+     * @param array<string, string> $headers Extra request headers, as the
+     *        Workerman-shaped upper-case keys `Request` stores.
+     */
+    private function request(string $rawBody, ?string $bearer = null, array $headers = []): Request
     {
         $request = new Request();
         $request->method = 'POST';
@@ -742,6 +1511,22 @@ final class McpControllerTest extends TestCase
             $request->headers['AUTHORIZATION'] = 'Bearer ' . $bearer;
             $request->bearerToken = $bearer;
         }
+        foreach ($headers as $name => $value) {
+            $request->headers[$name] = $value;
+        }
+
+        return $request;
+    }
+
+    /**
+     * A `GET /mcp` request, which is what the SSE transport is opened with.
+     *
+     * @param array<string, string> $headers Extra request headers.
+     */
+    private function getRequest(?string $bearer = null, array $headers = []): Request
+    {
+        $request = $this->request('', $bearer, $headers);
+        $request->method = 'GET';
 
         return $request;
     }

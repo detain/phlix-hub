@@ -371,6 +371,23 @@ final class ServerProxyController
      * own method gate (no avatar entry under any write key), so there is no peer
      * route-table dependency to remove.
      *
+     * ### S63: cast/DLNA transport control, same shape and same reasoning
+     * `playback_control` (the flagged MCP write tool) needs four Chromecast and
+     * three DLNA session endpoints. Every one of them landed here as an anchored
+     * per-action PCRE, for the identical reason S238 refused a
+     * `/api/v1/users` prefix: `/api/v1/cast` as a prefix would admit the session
+     * START `POST /api/v1/cast/devices/{id}/cast`, and `/api/v1/dlna` as a
+     * prefix sits beside the entire UPnP surface (`/dlna/description.xml`,
+     * `/cds/control`, `/scpd/…`) that `dlnaStillDeniedProvider()` pins DENIED —
+     * a prefix would be the one change that could make those two providers
+     * contradict each other. Because they add NO prefix, the
+     * {@see self::SCOPE_DENY_PATTERNS} enumeration is not re-opened: that sweep
+     * is keyed on `BROWSE_SCOPE_ALLOWLIST['GET']` prefixes, and nothing new lies
+     * under one. The enumeration was still RUN — the only write routes at or
+     * under the new paths are the two session STARTs named in the POST block
+     * below, and both are refused by this map's own omission rather than by any
+     * peer route-table accident, so there is no dependency to remove.
+     *
      * Keyed by HTTP method (upper-case); matched by
      * {@see self::isWithinBrowseScope()} AFTER the prefix allowlist.
      *
@@ -438,6 +455,30 @@ final class ServerProxyController
             // Covers: /trickplay/{jobId}/index.xml (BIF index)
             '#^/trickplay/[^/]+/index\.xml$#',
 
+            // ---- S63: the cast/DLNA session READS ---------------------------
+            // The two device catalogues and the two per-device status reads
+            // that `playback_control` needs before it can control anything.
+            // Server (`Server\Core\Application::loadChromecastRoutes()` /
+            // `loadDlnaRendererRoutes()`):
+            //   GET /api/v1/cast/devices               (static route)
+            //   GET /api/v1/cast/devices/{id}/status
+            //   GET /api/v1/dlna/renderers             (static route)
+            //   GET /api/v1/dlna/renderers/{id}/status
+            //
+            // ⚠ ANCHORED, never `/api/v1/cast` or `/api/v1/dlna` as a PREFIX.
+            // That is the S238 lesson applied: a `/api/v1/cast` prefix would
+            // admit `POST /api/v1/cast/devices/{id}/cast` — session START, which
+            // takes a caller-chosen media item — under any future read verb, and
+            // a `/api/v1/dlna` prefix would sit next to the WHOLE UPnP surface
+            // (`/dlna/description.xml`, `/cds/control`, `/scpd/…`) that
+            // `dlnaStillDeniedProvider()` pins denied. Each pattern below mirrors
+            // the server's own matcher byte-for-byte: `Server\Http\Router` turns
+            // `{id}` into `(?P<id>[^/]+)` and wraps the whole thing in `#^…$#`,
+            // and a static path is matched exactly out of its O(1) map.
+            '#^/api/v1/cast/devices$#',
+            '#^/api/v1/cast/devices/[^/]+/status$#',
+            '#^/api/v1/dlna/renderers$#',
+            '#^/api/v1/dlna/renderers/[^/]+/status$#',
         ],
         'POST' => [
             // Transcode-START ONLY. Anchored (`^…$`) + single-segment `[^/]+` id
@@ -455,6 +496,42 @@ final class ServerProxyController
             // creates a collection). Anchored EXACT — no sub-path — so admin/scan
             // and any future `/api/v1/playlists/…` route stays denied.
             '#^/api/v1/playlists$#',
+
+            // ---- S63: cast/DLNA TRANSPORT CONTROL ---------------------------
+            // The four Chromecast transport actions and the three DLNA ones,
+            // each anchored to exactly one real server route with a
+            // single-segment `[^/]+` device id:
+            //   POST /api/v1/cast/devices/{id}/play|pause|stop|seek
+            //        (`ChromecastController`, Application.php:3327-3330)
+            //   POST /api/v1/dlna/renderers/{id}/pause|stop|seek
+            //        (`Dlna\RendererListController`, Application.php:3267-3273)
+            //
+            // ⚠ TWO real server routes at these paths are DELIBERATELY ABSENT,
+            // and their absence is the point of anchoring rather than prefixing:
+            //   - `POST /api/v1/cast/devices/{id}/cast` (Application.php:3324) —
+            //     session START. It takes the media item to cast, so it is a
+            //     "begin playing X" action, not transport control.
+            //   - `POST /api/v1/dlna/renderers/{id}/play` (Application.php:3264)
+            //     — despite the name this is `playTo()`, also a session START,
+            //     and its body carries a caller-supplied `uri` the renderer is
+            //     told to fetch. Handing a model a field that makes a device on
+            //     the operator's LAN dereference an arbitrary URL is not
+            //     something this step is opening.
+            // Neither is reachable: no prefix covers them and no pattern names
+            // them, so both stay 403 `proxy.scope_denied`. Pinned by
+            // `s63MustStayDeniedProvider()`.
+            //
+            // The Roku (`/api/v1/roku/devices/{id}/send|launch|key`) and AirPlay
+            // (`/api/v1/airplay/devices/{id}/stream|pause|resume|stop`) surfaces
+            // are likewise absent: they are different shapes (a keypress relay, a
+            // stream START) and no tool wraps them.
+            '#^/api/v1/cast/devices/[^/]+/play$#',
+            '#^/api/v1/cast/devices/[^/]+/pause$#',
+            '#^/api/v1/cast/devices/[^/]+/stop$#',
+            '#^/api/v1/cast/devices/[^/]+/seek$#',
+            '#^/api/v1/dlna/renderers/[^/]+/pause$#',
+            '#^/api/v1/dlna/renderers/[^/]+/stop$#',
+            '#^/api/v1/dlna/renderers/[^/]+/seek$#',
         ],
         // HB-3.1: PUT write actions, each anchored to a REAL server route with a
         // single-segment `[^/]+` id. Server (MediaUserDataController /
