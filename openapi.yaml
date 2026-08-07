@@ -3914,11 +3914,16 @@ components:
       additionalProperties: true
     McpScope:
       type: string
-      description: "A capability an MCP token may carry. The set is closed; unknown values are dropped."
+      description: >-
+        A capability an MCP token may carry. The set is closed; unknown values are dropped rather
+        than stored, so a typo becomes "no scope" (fail closed) instead of a scope that silently
+        matches nothing later. The order below is the order the hub emits scopes in — it is part of
+        the stored representation, so appending is safe and reordering is not.
       enum:
         - "mcp:servers:read"
         - "mcp:library:read"
         - "mcp:playback:read"
+        - "mcp:playback:control"
     McpTokenMintRequest:
       type: object
       description: "Body of POST /api/v1/me/mcp-tokens."
@@ -3930,8 +3935,10 @@ components:
         scopes:
           type: array
           description: >-
-            Scopes to grant. Omit for every read scope. Unknown members are dropped; a list with
-            nothing known left in it is a 400 rather than a token that authorises nothing.
+            Scopes to grant. **Omitting this field grants EVERY scope in `McpScope`, including the
+            write scope `mcp:playback:control`** — not only the read scopes. Send an explicit list
+            to mint a narrower token. Unknown members are dropped; a list with nothing known left in
+            it is a 400 rather than a token that authorises nothing.
           items:
             $ref: "#/components/schemas/McpScope"
       additionalProperties: false

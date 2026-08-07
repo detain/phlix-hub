@@ -100,7 +100,114 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     with each declared port pinned against the PHP constant (or source literal)
     that defines it.
 
+- **Model Context Protocol server: `POST /mcp` with personal-access-token auth
+  (S62, updates.md #42).** The hub speaks MCP, so an AI assistant can enumerate
+  and query the media servers a user owns, over the existing relay, without any
+  new trust boundary.
+  - **Transport and dispatch.** `POST /mcp` answers JSON-RPC 2.0 for
+    `initialize`, `ping`, `tools/list` and `tools/call`. Batches (a top-level
+    array) are refused by name — MCP removed batching in its `2025-06-18`
+    revision.
+  - **Tools.** `list_servers`, `list_libraries`, `search_media`, `get_media`,
+    `get_playback_info`. Every call runs through `McpToolContext`, which
+    re-derives the presenting token's `user_id` and hands the request to the
+    production controllers, so the hub's ownership and relay browse-scope checks
+    apply unchanged. **A token can only ever narrow what its user could already
+    do; it can never widen it.**
+  - ⚠ **`start_playback` / `get_stream_url` were deliberately NOT built.**
+    `/media/{id}/stream` is a phlix-server pre-router fast path that is not
+    dispatched over the relay, and HLS/DASH need a transcode WRITE.
+    `get_playback_info` shipped in their place.
+  - **Auth.** `phlix-mcp-`-prefixed personal access tokens, stored as SHA-256
+    hashes only — the plaintext is returned exactly once, at mint, and cannot be
+    retrieved again. Managed through `GET`/`POST /api/v1/me/mcp-tokens` and
+    `DELETE /api/v1/me/mcp-tokens/{id}` (migration `044_mcp_tokens`).
+  - **Expiry sweeping** is wired into `IdleReaper::reapDbMaintenance()`, which is
+    armed at 60s, rather than a bare `Timer::add(86400)` — the latter never fires
+    on a restarted box, which is the normal state of a home server.
+  - **Scopes.** A closed four-member vocabulary (`McpScopes`) —
+    `mcp:servers:read`, `mcp:library:read`, `mcp:playback:read` and, from S63,
+    `mcp:playback:control`. Unknown values are dropped rather than stored, so a
+    typo becomes "no scope" (fail closed) instead of a scope that silently
+    matches nothing later.
+
+- **MCP SSE transport, protocol-version negotiation, and the flagged
+  `playback_control` tool (S63, updates.md #42).** `GET /mcp` opens the
+  server-sent-events stream the MCP specification expects for server-initiated
+  messages.
+  - **Protocol version, two different checks on purpose.**
+    `initialize.params.protocolVersion` is *negotiated*: the hub echoes
+    `2025-06-18`, `2025-03-26` or `2024-11-05` when asked for one of them, and
+    otherwise answers `2025-06-18` and reports the substitution in
+    `result._meta`. The `MCP-Protocol-Version` header on later requests is
+    *verified*, not negotiated.
+  - **Four JSON-RPC correctness defects closed**, each invisible to the suite
+    that shipped them: `jsonrpc` was never inspected at all; a non-string/int/null
+    `id` was coerced to `null` and the request answered anyway, leaving the client
+    waiting on an id it would never see echoed; `JsonRpc::error()`'s `data`
+    parameter had **zero** production callers; and the empty-result encoding was
+    a schema violation the real SDK client rejects outright
+    (`expected object, received array`, transport tears down) because
+    `json_encode([])` emits `[]` while every MCP result type is an OBJECT.
+    ⚠ **No decoding test could ever have seen the last one** —
+    `json_decode('{}', true)` and `json_decode('[]', true)` are BOTH `[]` in PHP.
+    It is pinned by asserting the raw body string.
+  - **`playback_control` is default-off** (`config/server.php`, compared
+    `=== true`) and is not even appended to the tool registry when disabled.
+
+- **MCP token management in the hub UI (S243 carry-out).** `/app/mcp-tokens` is
+  linked from the hub navigation and `@phlix/ui` is repinned to the release
+  carrying the page, so the mint/list/revoke API shipped by S62 finally has a
+  surface a user can reach. Until this, the API existed and nothing rendered it.
+
+- **The hub's MCP scope vocabulary is pinned to `@phlix/contracts` (S249).**
+  `McpScopesContractTest` compares `McpScopes::all()` and
+  `McpTokenService::TOKEN_PREFIX` against a byte-for-byte vendored copy of
+  `dist/mcp-scopes.json` from the tag named in `tests/fixtures/contracts/PIN`.
+  - The check it replaces lived in phlix-ui behind
+    `it.runIf(existsSync(<sibling phlix-hub path>))`. CI has no such sibling, so
+    it **never executed and reported as PASSING**. It closed the direction that
+    mattered least: a hub writer adding a fifth scope got green CI in every
+    repo, with phlix-ui and contracts agreeing perfectly while both were wrong
+    about the server.
+  - The floor on the member count is asserted on **both** sides **before** the
+    comparison, so a truncated or wrong-keyed fixture cannot reduce the gate to
+    `assertSame([], [])` — a gate that inspects nothing wearing the costume of
+    one that inspects everything.
+
 ### Fixed
+
+- **`openapi.yaml` told clients the hub's most privileged MCP scope did not
+  exist (S260).** Measured 2026-08-07: `McpScopes::all()` returns **four**
+  scopes; `components.schemas.McpScope` enumerated **three**, omitting
+  `mcp:playback:control`.
+  - 🚨 **Worse than an omission.** The schema's own description says the set is
+    *closed* and unknown values are *dropped* — so the spec affirmatively told a
+    reader that the fourth scope would be **rejected**, while
+    `McpTokenController::create()` grants it **by default** whenever `scopes` is
+    omitted. `McpScope` is referenced by `McpTokenMintRequest`,
+    `McpTokenMinted`, `McpTokenSummary` and `McpTokenList.available_scopes`, so a
+    spec-generated client got a request type that could not express, and a
+    response type that could not parse, the scope the server issues by default.
+  - **Why it drifted, and the actual lesson.** There are three published
+    statements of the vocabulary and only two had a gate: S249 pins
+    `McpScopes` against `@phlix/contracts`, and `OpenApiSpecMatchesRouterTest`
+    pins `paths` — **paths only**. Nothing pinned any schema `enum` to a PHP
+    constant. The two sources with a gate agreed and the one without a gate was
+    the one that was wrong; that is the gate map predicting the defect's
+    location, not a coincidence.
+  - New `McpScopeOpenApiEnumContractTest` is the missing pin. It reads the enum
+    out of the committed YAML and compares it, exactly and in order, against
+    `McpScopes::all()` — two genuinely independent sources, because an equality
+    assertion between two lists built from the same source self-adjusts and can
+    never red. Verified by mutating **each side separately**, by renaming a
+    member without changing the count, and by shrinking **both** sides equally
+    (which the anti-vacuity floor catches and `assertSame` would not).
+  - Also corrects `McpTokenMintRequest.scopes`, which claimed omitting the field
+    grants "every read scope". It grants every scope, including the write one.
+    **Whether that default is right is a separate question and is not settled
+    here** — this change makes the document describe the shipped behaviour, it
+    does not change the behaviour.
 
 - **`FederationWorker`'s docblock named the wrong port.** It said leaf hubs
   connect to `ws://master-hub:8804/…` — the SyncPlay relay's port — while
