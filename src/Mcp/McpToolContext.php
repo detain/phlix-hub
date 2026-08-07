@@ -216,11 +216,14 @@ final class McpToolContext
             return ['status' => $response->statusCode, 'payload' => ['raw' => $response->body]];
         }
 
-        $payload = [];
-        /** @var mixed $value */
-        foreach ($decoded as $key => $value) {
-            $payload[(string) $key] = $value;
-        }
+        // Built via array_combine rather than a `$payload[(string) $key] = $value`
+        // loop so the string key type is *derived* (from the mapper's `: string`
+        // return) instead of merely asserted. A loop would also bind each decoded
+        // value to a `mixed` variable, which is the one thing errorLevel 1 forbids.
+        $payload = array_combine(
+            array_map(static fn (int|string $key): string => (string) $key, array_keys($decoded)),
+            $decoded,
+        );
 
         return ['status' => $response->statusCode, 'payload' => $payload];
     }

@@ -439,13 +439,13 @@ final class McpController
             return [];
         }
 
-        $out = [];
-        /** @var mixed $value */
-        foreach ($raw as $key => $value) {
-            if (is_string($key)) {
-                $out[$key] = $value;
-            }
-        }
+        // `ARRAY_FILTER_USE_KEY` guarantees every surviving key is a string, but
+        // Psalm cannot derive that: its array_filter provider only applies the
+        // callback's assertions when no third argument is present, so with a
+        // flag it hands back the *original* key type. The `@var` states the
+        // fact the filter already enforces. Same idiom as `Http\Router`.
+        /** @var array<string, mixed> $out */
+        $out = array_filter($raw, 'is_string', ARRAY_FILTER_USE_KEY);
 
         return $out;
     }
