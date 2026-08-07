@@ -4512,6 +4512,49 @@ final class ServerProxyControllerTest extends TestCase
 
         // Unrelated privileged surface.
         yield 'admin users' => ['GET', '/api/v1/admin/users'];
+
+        // ---- Systematic over-match rows, one set PER opened action ---------
+        // The hand-written rows above are a sample; these are the rule. Each
+        // anchored pattern can be broken in exactly three ways, and a control
+        // that covers only SOME actions lets the other actions' mutations
+        // survive — which is precisely what happened when this provider was
+        // first written: widening `.../seek$` to `.../[^/]*.+/seek$` and
+        // de-anchoring `.../stop$` were killed only by the literal-presence
+        // test, because the sampled rows happened to name `pause` and `seek`.
+        //
+        //  (a) the id class stops being single-segment  -> a two-segment id;
+        //  (b) the trailing `$` anchor is lost           -> a sub-path below it;
+        //  (c) the leading `^` anchor is lost            -> a prefixed path.
+        $opened = [
+            'GET' => [
+                '/api/v1/cast/devices/%s/status',
+                '/api/v1/dlna/renderers/%s/status',
+            ],
+            'POST' => [
+                '/api/v1/cast/devices/%s/play',
+                '/api/v1/cast/devices/%s/pause',
+                '/api/v1/cast/devices/%s/stop',
+                '/api/v1/cast/devices/%s/seek',
+                '/api/v1/dlna/renderers/%s/pause',
+                '/api/v1/dlna/renderers/%s/stop',
+                '/api/v1/dlna/renderers/%s/seek',
+            ],
+        ];
+        foreach ($opened as $method => $templates) {
+            foreach ($templates as $template) {
+                $single = sprintf($template, 'dev-1');
+                yield "two-segment id: {$method} {$template}" => [$method, sprintf($template, 'a/b')];
+                yield "sub-path below: {$method} {$single}" => [$method, $single . '/extra'];
+                yield "prefixed path: {$method} {$single}" => [$method, '/xyz' . $single];
+                yield "action suffix: {$method} {$single}" => [$method, $single . 'X'];
+            }
+        }
+        // ...and the same three shapes for the two static collection reads.
+        foreach (['/api/v1/cast/devices', '/api/v1/dlna/renderers'] as $collection) {
+            yield "sub-path below: GET {$collection}" => ['GET', $collection . '/dev-1'];
+            yield "prefixed path: GET {$collection}" => ['GET', '/xyz' . $collection];
+            yield "collection suffix: GET {$collection}" => ['GET', $collection . 'X'];
+        }
     }
 
     /**

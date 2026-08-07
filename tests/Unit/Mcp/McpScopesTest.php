@@ -99,8 +99,15 @@ final class McpScopesTest extends TestCase
             }
         }
 
+        // ⚠ The expectation is a LITERAL, not `McpScopes::PLAYBACK_CONTROL`.
+        // Writing the constant here makes the check derive from its own subject:
+        // renaming the constant renames the expectation too, and mutation M51
+        // (`'mcp:playback:control'` -> `'mcp:playback:read2'`) survived exactly
+        // that way. The literal is also the value stored in `mcp_tokens.scopes`
+        // and pasted into an operator's client config, so changing it silently
+        // invalidates every minted token.
         self::assertSame(
-            [McpScopes::PLAYBACK_CONTROL],
+            ['mcp:playback:control'],
             $writes,
             'The set of MCP scopes that authorise a WRITE changed. Every entry here lets a personal '
             . 'access token change state on a media server, so a new one needs its own review — and '
@@ -114,10 +121,17 @@ final class McpScopesTest extends TestCase
      */
     public function test_the_read_scopes_are_still_present(): void
     {
+        // Literals for the same reason as above: these strings are stored in the
+        // database and pasted into client configs, so they are an interface, not
+        // an implementation detail.
         self::assertSame(
-            [McpScopes::SERVERS_READ, McpScopes::LIBRARY_READ, McpScopes::PLAYBACK_READ],
+            ['mcp:servers:read', 'mcp:library:read', 'mcp:playback:read'],
             array_values(array_filter(McpScopes::all(), static fn (string $s): bool => str_ends_with($s, ':read'))),
         );
+        self::assertSame('mcp:servers:read', McpScopes::SERVERS_READ);
+        self::assertSame('mcp:library:read', McpScopes::LIBRARY_READ);
+        self::assertSame('mcp:playback:read', McpScopes::PLAYBACK_READ);
+        self::assertSame('mcp:playback:control', McpScopes::PLAYBACK_CONTROL);
     }
 
     /**

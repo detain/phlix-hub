@@ -446,6 +446,48 @@ final class McpControllerTest extends TestCase
     }
 
     /**
+     * A POSITIONAL `params` is refused for its own sake, on a method that has no
+     * required member to fall back on.
+     *
+     * ⚠ `test_positional_params_cannot_name_a_tool()` looks like it covers this
+     * and does NOT: `tools/call` also requires `name`, so removing the
+     * positional check entirely still yields `INVALID_PARAMS` from the missing
+     * `name`, by a different branch. Mutation M26 survived on exactly that.
+     * `tools/list` has no required member, so it is the only method where the
+     * positional refusal is the sole thing that can say no — which is why the
+     * error `data.field` is asserted too.
+     */
+    public function test_positional_params_are_refused_even_when_nothing_else_would_object(): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":31,"method":"tools/list","params":["cursor-1"]}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertSame(JsonRpc::INVALID_PARAMS, self::errorCode($body));
+        /** @var array<string, mixed> $error */
+        $error = $body['error'];
+        /** @var array<string, mixed> $data */
+        $data = $error['data'];
+        self::assertSame('params', $data['field'] ?? null);
+    }
+
+    /**
+     * The SUCCEEDING control: an EMPTY `params` — indistinguishable from `{}` in
+     * PHP — is NOT refused. Without this, refusing every array would satisfy the
+     * test above while breaking `tools/list` for every client that sends `{}`.
+     */
+    public function test_an_empty_params_object_is_not_mistaken_for_a_positional_array(): void
+    {
+        $body = self::body($this->controller()->handle($this->request(
+            '{"jsonrpc":"2.0","id":32,"method":"tools/list","params":{}}',
+            self::GOOD_TOKEN,
+        )));
+
+        self::assertArrayHasKey('result', $body, 'an empty params object was refused.');
+    }
+
+    /**
      * `Method not found` beats `Invalid params` (JSON-RPC §5.1) — an unknown
      * method with unusable params is reported as the unknown method.
      *
@@ -518,6 +560,34 @@ final class McpControllerTest extends TestCase
             . 'message and drops the session. Raw body was: ' . $response->body,
         );
         self::assertStringNotContainsString('"result": []', $response->body);
+    }
+
+    /**
+     * The same `{}`-not-`[]` rule applies one level down, to
+     * `result.structuredContent`.
+     *
+     * A tool whose upstream answered with an empty body produces an empty
+     * payload, and `structuredContent` is an OBJECT in the MCP schema. Same
+     * blind spot as the result above: decoding cannot see it, so the assertion
+     * is on the raw body.
+     */
+    public function test_an_empty_tool_payload_encodes_as_a_json_object(): void
+    {
+        $probe = new RecordingMcpTool();
+        $probe->payload = [];
+
+        $response = $this->controller(extraTool: $probe)->handle($this->request(
+            '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"recording_probe"}}',
+            self::GOOD_TOKEN,
+        ));
+
+        self::assertSame(1, $probe->calls, 'the probe never ran, so nothing was rendered.');
+        self::assertStringContainsString(
+            '"structuredContent": {}',
+            $response->body,
+            'an empty tool payload was encoded as a JSON array. Raw body was: ' . $response->body,
+        );
+        self::assertStringNotContainsString('"structuredContent": []', $response->body);
     }
 
     /**
