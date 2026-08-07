@@ -1,4 +1,4 @@
-import { createPhlixApp, MyServersPage, ServerDetailPage, FederationPage, FederationSharesPage, ManageSharesPage, SharedWithMePage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, SecuritySettingsPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes } from '@phlix/ui';
+import { createPhlixApp, MyServersPage, ServerDetailPage, FederationPage, FederationSharesPage, ManageSharesPage, SharedWithMePage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, SecuritySettingsPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem } from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
 
@@ -25,6 +25,15 @@ const app = createPhlixApp({
         { id: 'shared-with-me', label: 'Shared With Me', to: '/app/shared-with-me' },
         { id: 'invite-links', label: 'Invite Links', to: '/app/invite-links' },
         { id: 'requests', label: 'Requests', to: '/app/requests' },
+        // MCP personal-access tokens (S62 API / S243 UI). `createPhlixApp` mounts
+        // the ROUTE for every `app: 'hub'` consumer, but menus are consumer-owned —
+        // supplying `menu` above replaces the shell default — so without this line
+        // /app/mcp-tokens is reachable only by typing the URL. The builder keeps the
+        // label/icon/path in @phlix/ui (one source of truth, like `adminMenu()`).
+        // Deliberately NOT `requiresAdmin`: the endpoints gate on `$request->userId`
+        // and every hub user manages their own credentials, so it sits with the
+        // ordinary entries, before the admin-only "Admin" link.
+        mcpTokensMenuItem(),
         { id: 'admin', label: 'Admin', to: '/app/admin/dashboard', requiresAdmin: true },
     ],
     // Routes carry the full /app prefix: the router's history base is '/', so the
