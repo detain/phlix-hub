@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Hub\Alexa\CurlCertChainFetcher;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Federation\FederationAdminDelegationRepository;
@@ -101,6 +102,7 @@ use Phlix\Hub\Mcp\Tools\PlaybackControlTool;
 use Phlix\Hub\Mcp\Tools\SearchMediaTool;
 use Phlix\Hub\Mcp\WorkermanStreamTimers;
 use Phlix\Hub\Http\Controllers\SubdomainController;
+use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Requests\RequestManager;
@@ -126,6 +128,7 @@ use function DI\get;
  *  - {@see DeregisterHandler}        → autowired with Connection + JwtService + Logger
  *  - {@see EnrollmentJwtMiddleware} → singleton
  *  - {@see HubProtocolMiddleware}   → singleton
+ *  - {@see AlexaSignatureMiddleware} → singleton (holds the per-worker chain cache)
  *  - {@see HubJwksController}        → singleton
  *  - {@see ServerClaimController}    → singleton
  *  - {@see ServerController}         → singleton
@@ -366,6 +369,27 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             HubProtocolMiddleware::class => factory(static function (): HubProtocolMiddleware {
                 return new HubProtocolMiddleware();
+            }),
+
+            // S90. Registered as a singleton on purpose: the middleware holds
+            // the per-worker cache of VERIFIED certificate chains, so a
+            // per-request instance would silently turn every Alexa request back
+            // into a blocking https fetch inside the worker. No route resolves
+            // it yet — the Alexa endpoint is S91's — so this binding exists so
+            // that S91 wires an already-built, already-tested gate rather than
+            // reinventing one.
+            //
+            // ⚠ Do NOT let PHP-DI autowire this. `autowire()` SKIPS optional
+            // constructor parameters, which would leave $caBundlePaths at its
+            // default silently; here the default IS the production value ([] =
+            // the system trust store) and it is passed explicitly so that a
+            // future non-empty value cannot be lost the same way.
+            AlexaSignatureMiddleware::class => factory(static function (): AlexaSignatureMiddleware {
+                return new AlexaSignatureMiddleware(
+                    new CurlCertChainFetcher(),
+                    LoggerFactory::get(LogChannels::AUTH),
+                    [],
+                );
             }),
 
             HubJwksController::class => factory(static function (
