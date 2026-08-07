@@ -80,14 +80,54 @@ final class McpScopesTest extends TestCase
     }
 
     /**
-     * No WRITE scope may exist in S62. `playback_control` and every other
-     * mutating tool is S63's, and a scope shipped early would authorise it
-     * before the tool is reviewed.
+     * The write scopes are an EXACT, named set.
+     *
+     * S62 shipped this as `test_no_write_scope_ships_in_this_step` — every scope
+     * had to end `:read`. S63 legitimately adds the first write
+     * (`mcp:playback:control`), so a blanket "no writes" assertion would have to
+     * be deleted, and a deleted assertion protects nothing. It is replaced by
+     * the stricter thing it was standing in for: the write set is enumerated
+     * here, so adding a SECOND write scope reds this test and has to be argued
+     * for, exactly as this one was.
      */
-    public function test_no_write_scope_ships_in_this_step(): void
+    public function test_the_write_scopes_are_exactly_the_named_set(): void
     {
+        $writes = [];
         foreach (McpScopes::all() as $scope) {
-            self::assertStringEndsWith(':read', $scope, $scope . ' is not a read-only scope.');
+            if (!str_ends_with($scope, ':read')) {
+                $writes[] = $scope;
+            }
         }
+
+        self::assertSame(
+            [McpScopes::PLAYBACK_CONTROL],
+            $writes,
+            'The set of MCP scopes that authorise a WRITE changed. Every entry here lets a personal '
+            . 'access token change state on a media server, so a new one needs its own review — and '
+            . 'a tool behind it needs its own operator flag, as playback_control has.',
+        );
+    }
+
+    /**
+     * ...with the reads re-asserted beside it, so the test above cannot pass by
+     * the list having been emptied.
+     */
+    public function test_the_read_scopes_are_still_present(): void
+    {
+        self::assertSame(
+            [McpScopes::SERVERS_READ, McpScopes::LIBRARY_READ, McpScopes::PLAYBACK_READ],
+            array_values(array_filter(McpScopes::all(), static fn (string $s): bool => str_ends_with($s, ':read'))),
+        );
+    }
+
+    /**
+     * The write scope is NOT granted by asking for the read one. They are
+     * separate strings and `parse()` never promotes between them — a token
+     * minted to READ playback information must not be able to stop a film.
+     */
+    public function test_the_read_scope_does_not_imply_the_control_scope(): void
+    {
+        self::assertSame([McpScopes::PLAYBACK_READ], McpScopes::parse(McpScopes::PLAYBACK_READ));
+        self::assertNotContains(McpScopes::PLAYBACK_CONTROL, McpScopes::parse(McpScopes::PLAYBACK_READ));
     }
 }

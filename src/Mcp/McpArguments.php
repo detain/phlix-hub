@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Mcp;
 
+use function implode;
+use function in_array;
 use function is_int;
 use function is_numeric;
 use function is_string;
@@ -126,5 +128,75 @@ final class McpArguments
         }
 
         return $candidate > $max ? $max : $candidate;
+    }
+
+    /**
+     * Read a required argument that must be one of a closed set of literals
+     * (S63).
+     *
+     * Rejected rather than defaulted: an unrecognised `action` silently falling
+     * back to a default action is how a model asking to `pause` ends up doing
+     * something else. The allowed values are listed in the message so the model
+     * can correct itself in one round trip instead of guessing.
+     *
+     * @param array<string, mixed> $arguments Caller-supplied arguments.
+     * @param string               $key       Argument name.
+     * @param list<string>         $allowed   Permitted values.
+     *
+     * @throws McpInvalidArgumentsException When absent or outside the set.
+     */
+    public static function oneOf(array $arguments, string $key, array $allowed): string
+    {
+        $value = self::requiredString($arguments, $key);
+        if (!in_array($value, $allowed, true)) {
+            throw new McpInvalidArgumentsException(sprintf(
+                '"%s" must be one of: %s.',
+                $key,
+                implode(', ', $allowed),
+            ));
+        }
+
+        return $value;
+    }
+
+    /**
+     * Read a required integer argument that must be zero or greater (S63).
+     *
+     * Distinct from {@see boundedInt()}, which CLAMPS. Clamping is right for a
+     * result-count hint ("as many as you'll give me"); it is wrong for a seek
+     * position, where silently moving the request to a different timestamp is a
+     * worse answer than refusing it. A numeric string is accepted because JSON
+     * from some clients quotes numbers, but a fractional value is not — a
+     * half-second is not expressible in either unit the two upstream seek
+     * endpoints take.
+     *
+     * @param array<string, mixed> $arguments Caller-supplied arguments.
+     * @param string               $key       Argument name.
+     * @param int                  $max       Inclusive upper bound.
+     *
+     * @throws McpInvalidArgumentsException When absent, non-integral, negative
+     *         or above `$max`.
+     */
+    public static function nonNegativeInt(array $arguments, string $key, int $max): int
+    {
+        /** @var mixed $value */
+        $value = $arguments[$key] ?? null;
+        if (is_int($value)) {
+            $candidate = $value;
+        } elseif (is_string($value) && preg_match('/^[0-9]+$/', trim($value)) === 1) {
+            $candidate = (int) trim($value);
+        } else {
+            throw new McpInvalidArgumentsException(
+                sprintf('"%s" is required and must be a whole number of seconds, zero or greater.', $key),
+            );
+        }
+
+        if ($candidate < 0 || $candidate > $max) {
+            throw new McpInvalidArgumentsException(
+                sprintf('"%s" must be between 0 and %d.', $key, $max),
+            );
+        }
+
+        return $candidate;
     }
 }

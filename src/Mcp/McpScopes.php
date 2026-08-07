@@ -59,7 +59,24 @@ final class McpScopes
     public const string PLAYBACK_READ = 'mcp:playback:read';
 
     /**
+     * Control an ALREADY-RUNNING cast/DLNA playback session on an owned server
+     * (S63): pause, resume, stop, seek.
+     *
+     * The only WRITE scope in the set, and the reason it is separate from
+     * {@see PLAYBACK_READ} rather than folded into it: a token minted so an
+     * agent can answer "what would this play as?" must not thereby be able to
+     * stop somebody's film. Granting it is a second, explicit decision at mint
+     * time. It is also inert unless the operator has switched
+     * {@see \Phlix\Hub\Mcp\Tools\PlaybackControlTool} on — see that class.
+     */
+    public const string PLAYBACK_CONTROL = 'mcp:playback:control';
+
+    /**
      * Every scope this build understands, in a stable order.
+     *
+     * ⚠ Read-only scopes first, then writes. {@see parse()} emits scopes in
+     * THIS order, so the order is part of the stored representation — appending
+     * is safe, reordering rewrites what every existing row compares equal to.
      *
      * @return list<string>
      */
@@ -69,6 +86,7 @@ final class McpScopes
             self::SERVERS_READ,
             self::LIBRARY_READ,
             self::PLAYBACK_READ,
+            self::PLAYBACK_CONTROL,
         ];
     }
 

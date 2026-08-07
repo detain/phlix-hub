@@ -76,10 +76,18 @@ use const T_DOC_COMMENT;
 final class McpToolIsolationTest extends TestCase
 {
     /**
-     * Floor on the tool corpus. Five tools ship in S62; the floor is set at the
-     * shipped count so DELETING a tool is also a deliberate act.
+     * Floor on the tool corpus. Five tools shipped in S62 and S63 added
+     * `playback_control`, so the floor is six; it is set at the shipped count so
+     * DELETING a tool is also a deliberate act.
+     *
+     * ⚠ The floor counts FILES, not registered tools. `playback_control` is
+     * behind a default-off operator flag, so it is usually absent from the live
+     * registry while always present on disk — and it is the file this suite
+     * inspects. A floor derived from the registry would drop to five whenever
+     * the flag is off, i.e. always, which is how a structural detector quietly
+     * stops covering the one tool that can write.
      */
-    private const int MINIMUM_TOOLS = 5;
+    private const int MINIMUM_TOOLS = 6;
 
     /**
      * The proxy's byte-streaming families

@@ -54,6 +54,31 @@ return [
     // restart. Exposed as the `server.enrollment_ttl` hub setting.
     'enrollment_ttl' => $envInt('HUB_ENROLLMENT_TTL', 604800),
 
+    // ---- MCP (Model Context Protocol) -----------------------------------
+    // The `playback_control` MCP tool (S63). DEFAULT OFF, and it must stay that
+    // way unless an operator opts in: it is the only MCP tool that changes
+    // server-side state, and the casting backends it drives (Chromecast / Roku /
+    // AirPlay) are NOT production-functional, so a call can be accepted and have
+    // no effect on any device. When this is false the tool is not registered at
+    // all — it appears in no `tools/list` and a `tools/call` naming it is
+    // `mcp.unknown_tool`. Read by
+    // `Common\Container\Providers\HubServicesProvider::mcpPlaybackControlEnabled()`,
+    // which compares with `=== true`, which is why this is resolved to a real
+    // bool here rather than left as the raw env string.
+    // A token ALSO needs the `mcp:playback:control` scope; the flag and the
+    // scope are independent gates and neither substitutes for the other.
+    'mcp_playback_control_enabled' => filter_var(
+        ($v = getenv('HUB_MCP_PLAYBACK_CONTROL')) !== false && $v !== '' ? $v : 'false',
+        FILTER_VALIDATE_BOOLEAN,
+    ),
+
+    // `GET /mcp` SSE stream tuning (S63). The keep-alive comment interval and
+    // the hard lifetime ceiling, both in seconds. The ceiling exists so an
+    // abandoned stream is reclaimed inside a resident-memory worker; a
+    // conformant client reconnects on the `retry:` hint, so it is invisible.
+    'mcp_sse_keepalive_seconds' => $envInt('HUB_MCP_SSE_KEEPALIVE', 15),
+    'mcp_sse_max_seconds'       => $envInt('HUB_MCP_SSE_MAX_SECONDS', 900),
+
     // Reverse-tunnel relay tuning.
     'relay' => [
         // Grace window (seconds) an incumbent tunnel keeps draining in-flight

@@ -416,21 +416,29 @@ final class Application
         $relayToken = $this->resolveClientRelayTokenController();
         $mcpToken = $this->resolveMcpTokenController();
 
-        // MCP (S62) — JSON-RPC 2.0 inside THIS `:8800` worker, not a sidecar and
-        // not a new port. Registered with NO route middleware on purpose: an MCP
-        // client presents a personal access token, not the hub session JWT/cookie
-        // AuthMiddleware understands, so McpController authenticates itself —
-        // the same arrangement RelayController / ClientMountController /
+        // MCP (S62/S63) — the Streamable HTTP transport, inside THIS `:8800`
+        // worker, not a sidecar and not a new port. BOTH verbs live on the ONE
+        // path the transport defines: `POST` carries client→server JSON-RPC,
+        // `GET` opens the server→client SSE stream (S63).
+        //
+        // Registered with NO route middleware on purpose: an MCP client presents
+        // a personal access token, not the hub session JWT/cookie AuthMiddleware
+        // understands, so McpController authenticates BOTH verbs itself — the
+        // same arrangement RelayController / ClientMountController /
         // SubdomainController already use for the enrollment JWT. The ungated set
         // is pinned by ApplicationRouteCompositionTest, so this is declared
-        // rather than accidental. `GET /mcp` (the SSE transport) is S63 and is
-        // deliberately NOT registered here — an unregistered verb 404s, which is
-        // an honest answer, whereas a registered-but-empty one would not be.
+        // rather than accidental, and `GET` is listed there beside `POST`
+        // precisely so a reviewer sees that the new verb is ungated too.
         $mcp = $this->resolveMcpController();
         $this->router->post('/mcp', static function (Request $req, array $params) use ($mcp): Response {
             /** @var array<string, string> $typedParams */
             $typedParams = $params;
             return $mcp->handle($req, $typedParams);
+        });
+        $this->router->get('/mcp', static function (Request $req, array $params) use ($mcp): Response {
+            /** @var array<string, string> $typedParams */
+            $typedParams = $params;
+            return $mcp->stream($req, $typedParams);
         });
 
         $this->router->group('/api/v1', function (Router $r) use (

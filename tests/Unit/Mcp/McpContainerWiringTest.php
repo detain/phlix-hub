@@ -18,6 +18,8 @@ use Phlix\Hub\Http\Controllers\McpController;
 use Phlix\Hub\Http\Controllers\McpTokenController;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
+use Phlix\Hub\Mcp\McpScopes;
+use Phlix\Hub\Mcp\McpSseStream;
 use Phlix\Hub\Mcp\McpTokenService;
 use Phlix\Hub\Mcp\McpToolRegistry;
 use Phlix\Hub\Relay\RelayProxyBridge;
@@ -28,6 +30,7 @@ use ReflectionClass;
 use ReflectionProperty;
 use Workerman\MySQL\Connection;
 
+use function dirname;
 use function file_put_contents;
 use function mkdir;
 use function sys_get_temp_dir;
@@ -105,10 +108,18 @@ final class McpContainerWiringTest extends TestCase
     }
 
     /**
-     * The catalogue a real PAT holder sees is exactly the five S62 read-only
-     * tools — no more (a sixth would widen what a token can reach) and no fewer.
+     * ⚠ THE FLAG GATE. With no `mcp_playback_control_enabled` in the config, the
+     * catalogue a real PAT holder sees is exactly the five READ-ONLY tools.
+     *
+     * `playback_control` is absent — not present-and-refusing. That is the
+     * stronger shape: an unregistered tool appears in no `tools/list`, so a model
+     * never sees a capability it cannot use, and `tools/call` for it is
+     * `mcp.unknown_tool`.
+     *
+     * This is the DEFAULT-OFF assertion, and it is written against an
+     * unconfigured container on purpose — the state a fresh deployment is in.
      */
-    public function test_the_container_publishes_exactly_the_five_shipped_tools(): void
+    public function test_the_container_publishes_only_read_tools_when_the_flag_is_absent(): void
     {
         $registry = $this->container()->get(McpToolRegistry::class);
         self::assertInstanceOf(McpToolRegistry::class, $registry);
@@ -119,7 +130,151 @@ final class McpContainerWiringTest extends TestCase
             'the tool catalogue the CONTAINER publishes has changed. Every other MCP suite builds its '
             . 'own registry, so this is the only place a tool added to (or removed from) '
             . 'HubServicesProvider is visible. Widening what a personal access token can reach must be '
-            . 'a deliberate edit here too.',
+            . 'a deliberate edit here too. In particular playback_control — the only tool that WRITES '
+            . 'to a media server — must not appear here without the operator flag.',
+        );
+    }
+
+    /**
+     * ...and the config value must be a real `true`.
+     *
+     * These are the values an operator mistypes, or that an env var arrives as
+     * when the resolution in `config/server.php` is bypassed. `=== true` is the
+     * comparison, so every one of them leaves the write tool unregistered. A
+     * truthiness test would publish it for the first four.
+     *
+     * @dataProvider notTrueProvider
+     */
+    public function test_a_flag_value_that_is_not_exactly_true_leaves_the_tool_unregistered(mixed $value): void
+    {
+        $registry = $this->container(playbackControl: $value)->get(McpToolRegistry::class);
+        self::assertInstanceOf(McpToolRegistry::class, $registry);
+
+        self::assertNotContains(
+            'playback_control',
+            $registry->names(),
+            'a non-boolean-true flag value published the write tool.',
+        );
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function notTrueProvider(): array
+    {
+        return [
+            'the string "true"' => ['true'],
+            'the string "1"' => ['1'],
+            'the integer 1' => [1],
+            'a non-empty string' => ['yes please'],
+            'the string "false"' => ['false'],
+            'boolean false' => [false],
+            'null' => [null],
+            'the integer 0' => [0],
+        ];
+    }
+
+    /**
+     * THE SUCCEEDING CONTROL. With the flag explicitly `true` the tool IS
+     * registered, with its own scope.
+     *
+     * Without this row, a provider that had simply DELETED the
+     * `playback_control` registration would satisfy every assertion above
+     * perfectly — the "off by default" tests would all be green and the feature
+     * would not exist. This is what makes them mean "gated" rather than "absent".
+     */
+    public function test_the_flag_publishes_the_playback_control_tool(): void
+    {
+        $registry = $this->container(playbackControl: true)->get(McpToolRegistry::class);
+        self::assertInstanceOf(McpToolRegistry::class, $registry);
+
+        self::assertSame(
+            [
+                'get_media',
+                'get_playback_info',
+                'list_libraries',
+                'list_servers',
+                'playback_control',
+                'search_media',
+            ],
+            $registry->names(),
+        );
+    }
+
+    /**
+     * ...and the published tool declares the WRITE scope, not a read one.
+     *
+     * A registration that published `playback_control` under, say,
+     * `mcp:playback:read` would let every existing read-scoped token drive a
+     * device. The flag and the scope are independent gates and neither
+     * substitutes for the other.
+     */
+    public function test_the_published_playback_tool_requires_the_control_scope(): void
+    {
+        $registry = $this->container(playbackControl: true)->get(McpToolRegistry::class);
+        self::assertInstanceOf(McpToolRegistry::class, $registry);
+
+        $scopes = [];
+        foreach ($registry->describe() as $descriptor) {
+            if (($descriptor['name'] ?? null) === 'playback_control') {
+                $scopes[] = $descriptor['x-phlix-scope'] ?? null;
+            }
+        }
+
+        self::assertSame([McpScopes::PLAYBACK_CONTROL], $scopes);
+    }
+
+    /**
+     * The SSE transport resolves from the container and carries the configured
+     * timings — the same silent-default trap `mcp_token_ttl` has.
+     */
+    public function test_the_sse_stream_resolves_with_its_configured_timings(): void
+    {
+        $stream = $this->container(sseKeepalive: 7, sseMax: 77)->get(McpSseStream::class);
+        self::assertInstanceOf(McpSseStream::class, $stream);
+
+        self::assertSame(7, self::privateValue($stream, 'keepaliveSeconds'));
+        self::assertSame(77, self::privateValue($stream, 'maxSeconds'));
+    }
+
+    /**
+     * Control for the test above: unconfigured, the documented defaults arrive.
+     */
+    public function test_an_unconfigured_sse_stream_uses_the_documented_defaults(): void
+    {
+        $stream = $this->container()->get(McpSseStream::class);
+        self::assertInstanceOf(McpSseStream::class, $stream);
+
+        self::assertSame(McpSseStream::DEFAULT_KEEPALIVE_SECONDS, self::privateValue($stream, 'keepaliveSeconds'));
+        self::assertSame(McpSseStream::DEFAULT_MAX_SECONDS, self::privateValue($stream, 'maxSeconds'));
+        self::assertNotSame(
+            7,
+            McpSseStream::DEFAULT_KEEPALIVE_SECONDS,
+            'the fixture value equals the default, so the test above proves nothing.',
+        );
+    }
+
+    /**
+     * `config/server.php` really does resolve the flag to a bool, and really
+     * does default it OFF.
+     *
+     * The provider compares with `=== true`, so the whole gate rests on that
+     * resolution happening. Asserting the provider alone would leave a config
+     * file that handed it the string `"false"` (which `=== true` rejects, so the
+     * tool would be off) or the string `"true"` (which `=== true` ALSO rejects,
+     * so the tool would be off even when the operator asked for it) equally
+     * invisible. This reads the real file.
+     */
+    public function test_the_shipped_config_defaults_the_flag_to_boolean_false(): void
+    {
+        /** @var array<string, mixed> $config */
+        $config = require dirname(__DIR__, 3) . '/config/server.php';
+
+        self::assertArrayHasKey('mcp_playback_control_enabled', $config);
+        self::assertFalse(
+            $config['mcp_playback_control_enabled'],
+            'the shipped default must be boolean false: playback_control writes to a media server '
+            . 'through casting backends that are not production-functional.',
         );
     }
 
@@ -205,14 +360,36 @@ final class McpContainerWiringTest extends TestCase
      * A container holding the REAL {@see HubServicesProvider} definitions, with
      * only the leaves the MCP graph does not own replaced.
      *
-     * @param int|null $ttl `mcp_token_ttl`, or `null` to leave it unconfigured.
+     * @param int|null $ttl             `mcp_token_ttl`, or `null` to leave it
+     *        unconfigured.
+     * @param mixed    $playbackControl `mcp_playback_control_enabled`. `null`
+     *        leaves the key ABSENT (the fresh-deployment state), which is not the
+     *        same as setting it to `false` — both must leave the tool off, and
+     *        both are covered.
+     * @param int|null $sseKeepalive    `mcp_sse_keepalive_seconds`, or null.
+     * @param int|null $sseMax          `mcp_sse_max_seconds`, or null.
      */
-    private function container(int|null $ttl = self::CONFIGURED_TTL): Container
-    {
+    private function container(
+        int|null $ttl = self::CONFIGURED_TTL,
+        mixed $playbackControl = null,
+        ?int $sseKeepalive = null,
+        ?int $sseMax = null,
+    ): Container {
         /** @var array<string, mixed> $appConfig */
         $appConfig = ['hub_base_url' => 'http://localhost:8800'];
         if ($ttl !== null) {
             $appConfig['mcp_token_ttl'] = $ttl;
+        }
+        // Absent by default — the state of a fresh deployment, and the state the
+        // default-off assertions must be made against.
+        if ($playbackControl !== null) {
+            $appConfig['mcp_playback_control_enabled'] = $playbackControl;
+        }
+        if ($sseKeepalive !== null) {
+            $appConfig['mcp_sse_keepalive_seconds'] = $sseKeepalive;
+        }
+        if ($sseMax !== null) {
+            $appConfig['mcp_sse_max_seconds'] = $sseMax;
         }
 
         $builder = new ContainerBuilder();

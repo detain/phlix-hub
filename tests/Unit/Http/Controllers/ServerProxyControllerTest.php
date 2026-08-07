@@ -4262,6 +4262,404 @@ final class ServerProxyControllerTest extends TestCase
         );
     }
 
+    // -----------------------------------------------------------------------
+    // S63 — cast/DLNA transport control for the flagged `playback_control` MCP
+    // tool. Same SHAPE as S238 and for the same reason: anchored
+    // `BROWSE_SCOPE_PATTERNS` entries, never a `/api/v1/cast` or `/api/v1/dlna`
+    // PREFIX. A prefix would admit the two session-START routes the tool
+    // deliberately does not expose, and (for dlna) would sit beside the whole
+    // UPnP surface `dlnaStillDeniedProvider()` pins DENIED — the one change
+    // that could make two providers in this file contradict each other.
+    // -----------------------------------------------------------------------
+
+    /**
+     * The eleven S63 patterns, exactly as production must hold them.
+     *
+     * Exact string equality, never `str_contains`: `'#^/api/v1/cast/devices$#'`
+     * is a substring of a MUTATED `'#^/api/v1/cast/devices$#x'`, so a substring
+     * assertion would pass the very mutation this exists to catch.
+     *
+     * @var array<string, list<string>>
+     */
+    private const S63_EXPECTED_PATTERNS = [
+        'GET' => [
+            '#^/api/v1/cast/devices$#',
+            '#^/api/v1/cast/devices/[^/]+/status$#',
+            '#^/api/v1/dlna/renderers$#',
+            '#^/api/v1/dlna/renderers/[^/]+/status$#',
+        ],
+        'POST' => [
+            '#^/api/v1/cast/devices/[^/]+/play$#',
+            '#^/api/v1/cast/devices/[^/]+/pause$#',
+            '#^/api/v1/cast/devices/[^/]+/stop$#',
+            '#^/api/v1/cast/devices/[^/]+/seek$#',
+            '#^/api/v1/dlna/renderers/[^/]+/pause$#',
+            '#^/api/v1/dlna/renderers/[^/]+/stop$#',
+            '#^/api/v1/dlna/renderers/[^/]+/seek$#',
+        ],
+    ];
+
+    /**
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s63ExpectedPatternProvider(): iterable
+    {
+        foreach (self::S63_EXPECTED_PATTERNS as $method => $patterns) {
+            foreach ($patterns as $pattern) {
+                yield "{$method} {$pattern}" => [$method, $pattern];
+            }
+        }
+    }
+
+    /**
+     * Each pattern is present in the REAL constant, byte for byte.
+     *
+     * One test per pattern (a data provider), so DELETING any single entry reds
+     * a NAMED test that says which one — rather than one aggregate assertion
+     * whose message has to be read to find out.
+     *
+     * @dataProvider s63ExpectedPatternProvider
+     */
+    public function test_s63_cast_patterns_are_present_in_the_real_constant(string $method, string $pattern): void
+    {
+        $raw = (new ReflectionClass(ServerProxyController::class))
+            ->getConstant('BROWSE_SCOPE_PATTERNS');
+        $this->assertIsArray($raw, 'BROWSE_SCOPE_PATTERNS must still be an array constant');
+        /** @var array<string, list<string>> $patterns */
+        $patterns = $raw;
+
+        $this->assertArrayHasKey($method, $patterns, "BROWSE_SCOPE_PATTERNS['{$method}'] is missing");
+        $this->assertGreaterThanOrEqual(
+            count(self::S63_EXPECTED_PATTERNS[$method]),
+            count($patterns[$method]),
+            sprintf(
+                'ANTI-VACUITY: BROWSE_SCOPE_PATTERNS[%s] holds %d entries, fewer than the %d S63 alone '
+                . 'requires. The map has been hollowed.',
+                $method,
+                count($patterns[$method]),
+                count(self::S63_EXPECTED_PATTERNS[$method]),
+            ),
+        );
+
+        // assertContains is strict (===) in PHPUnit 10 — a one-character
+        // mutation of the pattern reds this.
+        $this->assertContains(
+            $pattern,
+            $patterns[$method],
+            sprintf(
+                "S63: BROWSE_SCOPE_PATTERNS['%s'] must carry the exact literal %s — without it the "
+                . 'playback_control tool gets 403 proxy.scope_denied for that action.',
+                $method,
+                $pattern,
+            ),
+        );
+    }
+
+    /**
+     * The paths `playback_control` actually forwards, in the shapes the server
+     * serves them.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s63AllowedPathProvider(): iterable
+    {
+        yield 'chromecast device list' => ['GET', '/api/v1/cast/devices'];
+        yield 'chromecast status by uuid'
+            => ['GET', '/api/v1/cast/devices/550e8400-e29b-41d4-a716-446655440000/status'];
+        yield 'chromecast status by friendly id' => ['GET', '/api/v1/cast/devices/living-room/status'];
+        yield 'dlna renderer list' => ['GET', '/api/v1/dlna/renderers'];
+        // A DLNA renderer id is a UPnP UDN, which really does look like this.
+        yield 'dlna status by udn' => ['GET', '/api/v1/dlna/renderers/uuid:5f9ec1b3-ed59-79bb/status'];
+
+        yield 'chromecast play' => ['POST', '/api/v1/cast/devices/living-room/play'];
+        yield 'chromecast pause' => ['POST', '/api/v1/cast/devices/living-room/pause'];
+        yield 'chromecast stop' => ['POST', '/api/v1/cast/devices/living-room/stop'];
+        yield 'chromecast seek' => ['POST', '/api/v1/cast/devices/living-room/seek'];
+        yield 'dlna pause' => ['POST', '/api/v1/dlna/renderers/uuid:5f9ec1b3-ed59-79bb/pause'];
+        yield 'dlna stop' => ['POST', '/api/v1/dlna/renderers/uuid:5f9ec1b3-ed59-79bb/stop'];
+        yield 'dlna seek' => ['POST', '/api/v1/dlna/renderers/uuid:5f9ec1b3-ed59-79bb/seek'];
+    }
+
+    /**
+     * @dataProvider s63AllowedPathProvider
+     */
+    public function test_s63_cast_paths_are_within_browse_scope(string $method, string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertTrue(
+            $reflected->invoke($controller, $method, $path),
+            "{$method} {$path} is an S63 playback-control path and must be forwarded over the relay",
+        );
+    }
+
+    /**
+     * End-to-end through `proxy()`: the POST reaches the bridge with the path
+     * AND the JSON body intact.
+     *
+     * The body assertion is the load-bearing half. A seek that arrives without
+     * its `position_ms` is a seek to zero — a silent, wrong action rather than a
+     * visible failure — so "it was forwarded" is not enough to assert.
+     */
+    public function test_s63_a_seek_post_forwards_its_body_to_the_bridge(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(
+            ['userId' => 'user-1', 'status' => 'online', 'relayActive' => true],
+        );
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply([
+                'request_id' => $data['request_id'],
+                'status' => 200,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => '{"success":true,"position_ms":42000}',
+            ]);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $request = $this->request('POST', 'user-1');
+        $request->body = ['position_ms' => 42000];
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy($request, [
+            'id' => 'srv-1',
+            'path' => 'api/v1/cast/devices/living-room/seek',
+        ]);
+
+        $this->assertSame(200, $response->statusCode, 'the seek POST must be forwarded, not 403 scope_denied');
+        $this->assertIsArray($forwarded, 'the seek POST must reach the relay bridge');
+        $this->assertSame('/api/v1/cast/devices/living-room/seek', $forwarded['path']);
+        $this->assertSame('POST', $forwarded['method'] ?? null);
+        // The bridge base64s the body onto the wire; decode rather than assert
+        // the encoded form, so this row keeps meaning if the encoding changes.
+        $this->assertIsString($forwarded['body_b64'] ?? null);
+        /** @var string $encoded */
+        $encoded = $forwarded['body_b64'];
+        $this->assertSame('{"position_ms":42000}', base64_decode($encoded, true));
+    }
+
+    /**
+     * THE CONTROL. Everything the eleven anchored patterns must NOT admit.
+     *
+     * Each row is a path a BROADER shape would have let through:
+     *  - the two session-START routes the tool deliberately does not expose
+     *    (`.../cast` and DLNA's `.../play`, whose body carries a caller-supplied
+     *    URI the renderer is told to fetch);
+     *  - the Roku and AirPlay surfaces, which no tool wraps;
+     *  - anything DEEPER than the server's single-segment device id, and any
+     *    path below an allowed action;
+     *  - SIBLING bleed (`/api/v1/castX/...`, `.../pauses`, `.../seekX`);
+     *  - the ROOT DLNA/UPnP surface `dlnaStillDeniedProvider()` already pins,
+     *    re-asserted HERE so a future `/api/v1/dlna` prefix cannot pass one
+     *    provider while breaking the other silently;
+     *  - `/api/v1/admin/users`, re-asserted so this change cannot be read as
+     *    having relaxed anything else.
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s63MustStayDeniedProvider(): iterable
+    {
+        // The two session STARTs — real server routes at these exact paths.
+        yield 'chromecast session start' => ['POST', '/api/v1/cast/devices/living-room/cast'];
+        yield 'dlna playTo session start' => ['POST', '/api/v1/dlna/renderers/uuid:5f9ec1b3/play'];
+
+        // Roku / AirPlay: real server surfaces, no tool wraps them.
+        yield 'roku device list' => ['GET', '/api/v1/roku/devices'];
+        yield 'roku send media' => ['POST', '/api/v1/roku/devices/dev-1/send'];
+        yield 'roku keypress' => ['POST', '/api/v1/roku/devices/dev-1/key/Home'];
+        yield 'roku launch channel' => ['POST', '/api/v1/roku/devices/dev-1/launch/12345'];
+        yield 'airplay device list' => ['GET', '/api/v1/airplay/devices'];
+        yield 'airplay stream' => ['POST', '/api/v1/airplay/devices/dev-1/stream'];
+        yield 'airplay resume' => ['POST', '/api/v1/airplay/devices/dev-1/resume'];
+
+        // Deeper than the server's single-segment id, or below an action.
+        yield 'cast two-segment device id' => ['POST', '/api/v1/cast/devices/a/b/pause'];
+        yield 'path below a cast action' => ['POST', '/api/v1/cast/devices/dev-1/seek/0'];
+        yield 'path below a cast status' => ['GET', '/api/v1/cast/devices/dev-1/status/detail'];
+        yield 'dlna two-segment renderer id' => ['POST', '/api/v1/dlna/renderers/a/b/stop'];
+
+        // Bare device resources the server serves for nobody.
+        yield 'bare cast device' => ['GET', '/api/v1/cast/devices/dev-1'];
+        yield 'bare dlna renderer' => ['GET', '/api/v1/dlna/renderers/dev-1'];
+        yield 'bare cast root' => ['GET', '/api/v1/cast'];
+        yield 'bare dlna root' => ['GET', '/api/v1/dlna'];
+
+        // Sibling bleed.
+        yield 'cast sibling prefix' => ['GET', '/api/v1/castX/devices'];
+        yield 'devices sibling' => ['GET', '/api/v1/cast/devicesX'];
+        yield 'renderers sibling' => ['GET', '/api/v1/dlna/renderersX'];
+        yield 'pause plural' => ['POST', '/api/v1/cast/devices/dev-1/pauses'];
+        yield 'seek with a suffix' => ['POST', '/api/v1/cast/devices/dev-1/seekX'];
+        yield 'status with a suffix' => ['GET', '/api/v1/cast/devices/dev-1/statusX'];
+
+        // The ROOT UPnP surface must stay out, whatever /api/v1/dlna does.
+        yield 'upnp description' => ['GET', '/dlna/description.xml'];
+        yield 'upnp content directory' => ['GET', '/dlna/content_directory'];
+        yield 'upnp cds control' => ['POST', '/cds/control'];
+        yield 'upnp scpd' => ['GET', '/scpd/ContentDirectory.xml'];
+
+        // Unrelated privileged surface.
+        yield 'admin users' => ['GET', '/api/v1/admin/users'];
+    }
+
+    /**
+     * @dataProvider s63MustStayDeniedProvider
+     */
+    public function test_s63_widening_admits_nothing_beyond_the_named_actions(string $method, string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertFalse(
+            $reflected->invoke($controller, $method, $path),
+            "{$method} {$path} must stay out of browse scope: S63 opens the named cast/DLNA transport "
+            . 'actions and nothing else',
+        );
+    }
+
+    /**
+     * End-to-end control: a denied neighbour 403s `proxy.scope_denied` and never
+     * reaches the bridge — the SUCCEEDING sibling being
+     * `test_s63_a_seek_post_forwards_its_body_to_the_bridge()` above, so a 403
+     * here is provably "the scope gate refused it" and not "the harness never
+     * got anywhere".
+     *
+     * @dataProvider s63MustStayDeniedProvider
+     */
+    public function test_s63_denied_neighbours_403_and_are_not_forwarded(string $method, string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(
+            ['userId' => 'user-1', 'status' => 'online', 'relayActive' => true],
+        );
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function () use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request($method, 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(403, $response->statusCode, "{$method} {$path} must fail closed");
+        $this->assertFalse($forwarded, "{$method} {$path} must never reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * Each S63 action is opened for exactly ONE verb.
+     *
+     * The reads must not be writable and the writes must not be readable: a
+     * `GET /api/v1/cast/devices/{id}/pause` that the hub forwarded would 404
+     * server-side today only because that route happens to be POST-only, and
+     * this gate must not depend on the peer's route table (the S100/S107
+     * lesson).
+     *
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function s63WrongVerbProvider(): iterable
+    {
+        $reads = ['/api/v1/cast/devices', '/api/v1/cast/devices/dev-1/status', '/api/v1/dlna/renderers'];
+        $writes = ['/api/v1/cast/devices/dev-1/pause', '/api/v1/dlna/renderers/dev-1/seek'];
+
+        foreach ($reads as $path) {
+            foreach (['HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+                yield "{$method} {$path}" => [$method, $path];
+            }
+        }
+        foreach ($writes as $path) {
+            foreach (['GET', 'HEAD', 'PUT', 'PATCH', 'DELETE'] as $method) {
+                yield "{$method} {$path}" => [$method, $path];
+            }
+        }
+    }
+
+    /**
+     * @dataProvider s63WrongVerbProvider
+     */
+    public function test_s63_each_action_is_opened_for_exactly_one_verb(string $method, string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertFalse(
+            $reflected->invoke($controller, $method, $path),
+            "{$method} {$path} must fail closed — S63 opens each action under one verb only",
+        );
+    }
+
+    /**
+     * S63 adds no PREFIX, so the S107 enumeration is not re-opened — asserted
+     * rather than argued, exactly as `test_s238_added_no_new_browse_scope_prefix()`
+     * does for its own change.
+     *
+     * This test fails if a future change quietly turns one of the eleven
+     * anchored patterns into a prefix, which is the shortcut the enumeration
+     * rule exists to catch — and, for `/api/v1/dlna`, the shortcut that would
+     * make this file's own `dlnaStillDeniedProvider()` and
+     * `s63AllowedPathProvider()` start disagreeing.
+     */
+    public function test_s63_added_no_new_browse_scope_prefix(): void
+    {
+        $raw = (new ReflectionClass(ServerProxyController::class))
+            ->getConstant('BROWSE_SCOPE_ALLOWLIST');
+        $this->assertIsArray($raw, 'BROWSE_SCOPE_ALLOWLIST must still be an array constant');
+        /** @var array<string, list<string>> $allowlist */
+        $allowlist = $raw;
+
+        $this->assertSame(
+            ['GET', 'HEAD'],
+            array_keys($allowlist),
+            'S63 forwards WRITES, and they must ride anchored BROWSE_SCOPE_PATTERNS entries — never a '
+            . 'write key here, which would re-open the S107 sweep for a whole prefix.',
+        );
+
+        foreach (['GET', 'HEAD'] as $method) {
+            $prefixes = $allowlist[$method] ?? [];
+            $this->assertNotSame([], $prefixes, "ANTI-VACUITY: BROWSE_SCOPE_ALLOWLIST[{$method}] is empty");
+            foreach (['/api/v1/cast', '/api/v1/dlna', '/api/v1/roku', '/api/v1/airplay', '/dlna'] as $forbidden) {
+                $this->assertNotContains(
+                    $forbidden,
+                    $prefixes,
+                    sprintf(
+                        '%s must NEVER be a %s PREFIX. For /api/v1/cast it would admit the session-START '
+                        . 'route; for /api/v1/dlna and /dlna it would collide with the UPnP surface '
+                        . 'dlnaStillDeniedProvider() pins denied. S63 uses anchored '
+                        . 'BROWSE_SCOPE_PATTERNS entries instead.',
+                        $forbidden,
+                        $method,
+                    ),
+                );
+            }
+        }
+    }
+
     /**
      * S238 adds no PREFIX, so the S107 enumeration is not re-opened — asserted
      * rather than argued.
