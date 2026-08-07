@@ -233,15 +233,60 @@ final class CurlCertChainFetcherTimeoutTest extends TestCase
         }
     }
 
-    public function testANonHttpsUrlIsRefusedWithoutABlockingAttempt(): void
+    public function testAPlainHttpUrlIsRefusedEvenThoughAServerIsAnswering(): void
+    {
+        $body = "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n";
+        $server = TlsProbeServer::servingRawWithoutTls(
+            "HTTP/1.1 200 OK\r\nContent-Length: " . strlen($body) . "\r\nConnection: close\r\n\r\n" . $body,
+        );
+
+        try {
+            // A cheerful 200 on plain http. `CURLOPT_PROTOCOLS_STR => 'https'` is
+            // the only thing refusing it — every other guard in the fetcher is
+            // satisfied. Deleting that option makes this test return the body.
+            self::assertNull(
+                $this->fetcher($server->caFile())->fetch($server->plainUrl()),
+                'the fetch must be pinned to https even when http would succeed',
+            );
+        } finally {
+            $server->stop();
+        }
+    }
+
+    public function testARedirectIsNotFollowedEvenWhenItWouldSucceed(): void
+    {
+        // The 302 points back at the SAME https host, and the server answers
+        // that second request with a real 200. So nothing except
+        // CURLOPT_FOLLOWLOCATION => false stops the redirect being followed —
+        // the protocol pin allows it and the name resolves. Flipping that option
+        // to true makes this test receive the body instead of null.
+        //
+        // Why it matters: the middleware validates the cert URL against Amazon's
+        // host BEFORE handing it here. A followed redirect moves the fetch to a
+        // host that never passed that check, which turns the allowlist into
+        // decoration — the textbook SSRF bypass.
+        $body = "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n";
+        $server = TlsProbeServer::redirectingTo($body);
+
+        try {
+            self::assertNull(
+                $this->fetcher($server->caFile())->fetch($server->url()),
+                'a 3xx must end the fetch, not relocate it',
+            );
+        } finally {
+            $server->stop();
+        }
+    }
+
+    public function testANonHttpsSchemeIsRefusedWithoutABlockingAttempt(): void
     {
         $fetcher = new CurlCertChainFetcher(
             connectTimeoutSeconds: self::CONNECT_TIMEOUT,
             timeoutSeconds: self::TRANSFER_TIMEOUT,
         );
 
-        // CURLOPT_PROTOCOLS_STR pins the fetch to https. file:// would otherwise
-        // read a local file and hand it back as a "certificate chain".
+        // file:// would otherwise read a local file and hand it back as a
+        // "certificate chain".
         self::assertNull($fetcher->fetch('file://' . __FILE__));
     }
 

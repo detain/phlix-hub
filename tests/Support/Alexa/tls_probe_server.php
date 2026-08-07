@@ -39,8 +39,12 @@ $context = stream_context_create([
     ],
 ]);
 
+// `plain-raw` drops TLS entirely so a test can prove the fetcher refuses a
+// plain-http URL even when a perfectly willing server is answering on it.
+$transport = $mode === 'plain-raw' ? 'tcp://127.0.0.1:0' : 'tls://127.0.0.1:0';
+
 $server = @stream_socket_server(
-    'tls://127.0.0.1:0',
+    $transport,
     $errno,
     $errstr,
     STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
@@ -58,31 +62,53 @@ if (!is_string($name) || !str_contains($name, ':')) {
     exit(1);
 }
 
-file_put_contents($portFile, substr($name, (int) strrpos($name, ':') + 1));
+$port = substr($name, (int) strrpos($name, ':') + 1);
+file_put_contents($portFile, $port);
 
-// stream_socket_accept() on a tls:// listener performs the handshake, so a
-// connection that reaches the line after it has demonstrably finished
-// connecting — which is the entire premise of the stall mode.
-$client = @stream_socket_accept($server, 30);
-if ($client === false) {
-    fwrite(STDERR, "accept timed out\n");
-    exit(1);
+// `redirect` must survive TWO connections: curl closes the first one after the
+// 302 (Connection: close) and dials again for the target. Every other mode only
+// ever sees one.
+$connections = $mode === 'redirect' ? 2 : 1;
+
+for ($served = 0; $served < $connections; $served++) {
+    // stream_socket_accept() on a tls:// listener performs the handshake, so a
+    // connection that reaches the line after it has demonstrably finished
+    // connecting — which is the entire premise of the stall mode.
+    $client = @stream_socket_accept($server, 30);
+    if ($client === false) {
+        fwrite(STDERR, "accept timed out\n");
+        exit(1);
+    }
+
+    fwrite(STDERR, "handshake-complete\n");
+    @fgets($client, 8192);
+
+    if ($mode === 'serve') {
+        $body = $bodyFile !== '' ? (string) file_get_contents($bodyFile) : '';
+        fwrite($client, "HTTP/1.1 200 OK\r\nContent-Type: application/x-pem-file\r\n"
+            . 'Content-Length: ' . strlen($body) . "\r\nConnection: close\r\n\r\n" . $body);
+        fflush($client);
+    } elseif ($mode === 'raw' || $mode === 'plain-raw') {
+        fwrite($client, $bodyFile !== '' ? (string) file_get_contents($bodyFile) : '');
+        fflush($client);
+    } elseif ($mode === 'redirect') {
+        if ($served === 0) {
+            // Same host, https, so neither CURLOPT_REDIR_PROTOCOLS_STR nor any
+            // name-resolution failure can stand in for the thing under test:
+            // if CURLOPT_FOLLOWLOCATION were true, this WOULD be followed.
+            fwrite($client, "HTTP/1.1 302 Found\r\nLocation: https://localhost:{$port}/echo.api/final.pem\r\n"
+                . "Content-Length: 0\r\nConnection: close\r\n\r\n");
+        } else {
+            $body = $bodyFile !== '' ? (string) file_get_contents($bodyFile) : '';
+            fwrite($client, "HTTP/1.1 200 OK\r\nContent-Length: " . strlen($body)
+                . "\r\nConnection: close\r\n\r\n" . $body);
+        }
+        fflush($client);
+    } else {
+        sleep($stallSeconds);
+    }
+
+    fclose($client);
 }
 
-fwrite(STDERR, "handshake-complete\n");
-@fgets($client, 8192);
-
-if ($mode === 'serve') {
-    $body = $bodyFile !== '' ? (string) file_get_contents($bodyFile) : '';
-    fwrite($client, "HTTP/1.1 200 OK\r\nContent-Type: application/x-pem-file\r\n"
-        . 'Content-Length: ' . strlen($body) . "\r\nConnection: close\r\n\r\n" . $body);
-    fflush($client);
-} elseif ($mode === 'raw') {
-    fwrite($client, $bodyFile !== '' ? (string) file_get_contents($bodyFile) : '');
-    fflush($client);
-} else {
-    sleep($stallSeconds);
-}
-
-fclose($client);
 fclose($server);

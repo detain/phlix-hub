@@ -103,6 +103,37 @@ final class TlsProbeServer
     }
 
     /**
+     * The same, but over plain TCP with no TLS at all — reachable only via an
+     * `http://` URL. Used to show the fetcher's protocol pin refuses plain http
+     * even when a server is sitting there ready to answer 200.
+     */
+    public static function servingRawWithoutTls(string $rawResponse): self
+    {
+        return new self('plain-raw', 0, $rawResponse);
+    }
+
+    /**
+     * A server that answers the first connection with a 302 pointing at itself
+     * (same host, same scheme) and the second with 200 + `$body`. Following the
+     * redirect therefore SUCCEEDS, which is what makes
+     * `CURLOPT_FOLLOWLOCATION => false` observable: with it, the fetch sees a
+     * 302 and returns null; without it, the fetch returns `$body`.
+     */
+    public static function redirectingTo(string $body): self
+    {
+        return new self('redirect', 0, $body);
+    }
+
+    /**
+     * The plain-http URL for a server started with
+     * {@see servingRawWithoutTls()}.
+     */
+    public function plainUrl(): string
+    {
+        return 'http://127.0.0.1:' . $this->port . '/echo.api/probe.pem';
+    }
+
+    /**
      * The URL to point a fetcher at. Uses `localhost` (not `127.0.0.1`) so the
      * fetcher's `CURLOPT_SSL_VERIFYHOST => 2` is genuinely exercised against the
      * certificate's `DNS:localhost` SAN.

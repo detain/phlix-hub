@@ -121,8 +121,23 @@ final class AlexaSignatureMiddlewareTest extends TestCase
         $fixture = AlexaCertificateFixture::shared();
         $timestamp = gmdate('Y-m-d\TH:i:s\Z');
 
-        $signedBytes = '{"version":"1.0","request":{"type":"IntentRequest","timestamp":"' . $timestamp . '"}}';
-        $reordered = '{"request":{"timestamp":"' . $timestamp . '","type":"IntentRequest"},"version":"1.0"}';
+        // Deliberately NOT in json_encode()'s canonical spelling: there are
+        // spaces after the colons and an unescaped "/" (json_encode writes
+        // "\/"). That is what makes the CONTROL half of this test load-bearing —
+        // a middleware that verified json_encode(json_decode($raw)) rather than
+        // $raw would reject these bytes, which is exactly the substitution being
+        // guarded against. Without it, mutating the verify call to re-encode the
+        // body leaves this test green (measured: it did).
+        $tail = '"type": "IntentRequest", "locale": "en-US", "url": "https://example.test/a/b"';
+        $signedBytes = '{"version": "1.0", "request": {' . $tail . ', "timestamp": "' . $timestamp . '"}}';
+        $reordered = '{"request": {"timestamp": "' . $timestamp . '", ' . $tail . '}, "version": "1.0"}';
+
+        self::assertNotSame(
+            (string) json_encode(json_decode($signedBytes, true)),
+            $signedBytes,
+            'the signed bytes must not already be json_encode\'s canonical spelling, '
+            . 'or this test cannot tell raw-byte verification from re-encoded verification',
+        );
 
         // assertEquals, not assertSame: array key ORDER is exactly the thing
         // that differs, and it is exactly the thing JSON semantics ignore.
