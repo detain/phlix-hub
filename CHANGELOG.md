@@ -8,6 +8,80 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Security
 
+- **An MCP token minted without a `scopes` field received the WRITE scope
+  (S261).** Measured 2026-08-07: `McpTokenController::create()` fell back to
+  `McpScopes::all()` whenever the request body omitted `scopes`, so an API caller
+  who expressed no opinion about capabilities was granted all four — including
+  `mcp:playback:control`, the only scope in the vocabulary that authorises a
+  change of state on a media server. **Omitting `scopes` now grants
+  `McpScopes::readOnly()`** — `mcp:servers:read`, `mcp:library:read`,
+  `mcp:playback:read`.
+  - **That is a default, not a ban.** Sending `mcp:playback:control` explicitly
+    still mints it, with or without the operator flag, and that control request
+    is asserted succeeding beside the omitting one. Without the succeeding
+    control the tests would only show the scope is absent, which is equally
+    consistent with the capability having been deleted.
+  - 🚨 **The mitigating factor was a bug, not a design.** It is tempting to call
+    the old default harmless because `playback_control` is default-off
+    (`config/server.php`, compared `=== true`) and the tool is not registered
+    when the flag is off — so the scope named a tool that does not exist. Read
+    that the other way round: the grant was safe only for as long as the feature
+    stayed broken. **The day an operator sets `HUB_MCP_PLAYBACK_CONTROL=true`,
+    every token minted before that moment silently gains write capability,
+    retroactively, with no re-mint and no audit event.** That, not today's
+    behaviour, is the risk this closes.
+  - **`readOnly()` is enumerated, not derived from a `:read` suffix.** Filtering
+    `all()` on a suffix is shorter and fails OPEN: a future
+    `mcp:library:sync`-style scope would join the default grant the moment it was
+    added to `all()`. A literal list means a new scope is outside the default
+    until somebody puts it inside. The omission risk that swaps in — a genuinely
+    read-only scope added to `all()` and forgotten — is caught by
+    `McpScopesTest::test_every_read_scope_in_all_is_also_in_read_only()`, which
+    uses the suffix rule as a cross-check rather than as the implementation.
+  - **Decision on already-minted all-scope tokens: they are LEFT AS THEY ARE, and
+    that is a decision, not an oversight.** The `mcp_tokens.scopes` column cannot
+    distinguish a scope the owner chose from one the old default handed them, so
+    a blanket `UPDATE` stripping `mcp:playback:control` would silently revoke a
+    capability some owners did choose — trading one silent change for another —
+    and the benefit today is hypothetical, because the tool is unregistered and
+    no token has ever been able to use the scope. Instead the review is placed at
+    the moment it matters: `config/server.php` now carries a
+    read-before-you-enable block beside `mcp_playback_control_enabled`, with the
+    audit query an operator should run first (`FIND_IN_SET` over the
+    space-delimited column, because `LIKE '%mcp:playback%'` would also match
+    `mcp:playback:read`), and `HubServicesProvider::mcpPlaybackControlEnabled()`
+    says the same thing in its docblock.
+  - Note the population is not small: the `/app/mcp-tokens` create form seeds its
+    checkboxes from `available_scopes` and pre-ticks every one, so tokens minted
+    through the UI carry all four as well.
+
+- **The hub advertised an MCP scope it would not honour (S261).**
+  `available_scopes` — returned by `GET /api/v1/me/mcp-tokens` and by the 400
+  `mcp_token.no_valid_scopes` envelope — was `McpScopes::all()` unconditionally,
+  regardless of the `playback_control` flag. With the flag off, that told every
+  client (the create form included) to offer `mcp:playback:control`, a scope
+  naming a tool that appears in no `tools/list` and answers `mcp.unknown_tool`.
+  - `available_scopes` is now filtered by the flag, read through the SAME
+    `HubServicesProvider::mcpPlaybackControlEnabled()` the tool registration uses,
+    so the create form and the tool catalogue cannot disagree. Because the SPA
+    builds its checkboxes from this list, the hub half alone stops the UI
+    offering — and pre-ticking — the write scope on a default deployment.
+  - It remains an ADVERTISEMENT, not a validation set: mint still accepts the
+    scope explicitly, because the flag is a runtime switch and gating mint on it
+    would force every agent to re-mint after a flip.
+  - ⚠ The exclusion is an exact `!==` against the whole constant. `mcp:playback`
+    is a prefix of `mcp:playback:control`, so a `str_contains`/`str_starts_with`
+    filter would also drop the read scope `mcp:playback:read` — proven by
+    mutation, which reds three tests.
+  - `openapi.yaml` moves with the behaviour: `McpTokenMintRequest.scopes` (the
+    line S260 deliberately left describing the old default), the `POST` operation
+    description — which already claimed "an omitted list grants every read
+    scope", false when it was written and true only now — and a new description
+    on `McpTokenList.available_scopes` stating it is a SUBSET of `McpScope`. The
+    `McpScope` enum itself is unchanged, so S260's
+    `McpScopeOpenApiEnumContractTest` pin and its count floor still hold, and no
+    path changed, so `OpenApiSpecMatchesRouterTest` needed no exclusion.
+
 - **The `Security Audit` CI job could not fail on a development dependency
   (S246, hub half).** Measured 2026-08-06: the job ran `composer install …
   --no-dev` followed by `composer audit --no-dev`, which excludes every

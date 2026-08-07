@@ -278,11 +278,17 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new McpTokenService($db, $ttl);
             })->parameter('db', get(Connection::class)),
 
+            // S261: the SAME `playback_control` flag that gates registration
+            // below also decides what `GET /api/v1/me/mcp-tokens` advertises in
+            // `available_scopes`. One reader, one comparison — the token
+            // controller must not grow a second interpretation of the flag, or
+            // the create form and the tool catalogue can disagree about whether
+            // the write capability exists.
             McpTokenController::class => factory(static function (
                 McpTokenService $tokens,
                 AuditLogger $audit,
-            ): McpTokenController {
-                return new McpTokenController($tokens, $audit);
+            ) use ($appConfig): McpTokenController {
+                return new McpTokenController($tokens, $audit, self::mcpPlaybackControlEnabled($appConfig));
             })->parameter('tokens', get(McpTokenService::class))
                 ->parameter('audit', get(AuditLogger::class)),
 
@@ -1112,6 +1118,15 @@ final class HubServicesProvider implements ServiceProviderInterface
      * purpose: two places to switch a feature off is two places for one of them
      * to be wrong, and this one is upstream of everything (the tool is never
      * constructed, never registered, never listed, never callable).
+     *
+     * 🚨 **Flipping this to `true` is a retroactive grant** (S261). Every MCP
+     * token minted before S261 that carries `mcp:playback:control` — which,
+     * because the scope used to be the DEFAULT, is most of them — becomes able
+     * to drive playback the instant this returns `true`, with no re-mint and no
+     * audit event. S261 chose not to strip those rows; the reasoning and the
+     * review query an operator should run first are written out in
+     * `config/server.php` beside the setting itself, which is where somebody
+     * turning it on is actually looking.
      *
      * @param array<string, mixed> $config The `server` config array.
      */

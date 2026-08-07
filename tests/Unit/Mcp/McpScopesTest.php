@@ -144,4 +144,106 @@ final class McpScopesTest extends TestCase
         self::assertSame([McpScopes::PLAYBACK_READ], McpScopes::parse(McpScopes::PLAYBACK_READ));
         self::assertNotContains(McpScopes::PLAYBACK_CONTROL, McpScopes::parse(McpScopes::PLAYBACK_READ));
     }
+
+    // ------------------------------------------------------------------
+    // S261 — readOnly(), the set an omitted `scopes` field grants
+    // ------------------------------------------------------------------
+
+    /**
+     * `readOnly()` is an exact, ordered, named list.
+     *
+     * Literals for the same reason the tests above use them: this is the set a
+     * caller receives for saying nothing, so it is an interface. Writing
+     * `McpScopes::SERVERS_READ` here would let a constant rename move the
+     * expectation along with the subject and assert nothing.
+     */
+    public function test_read_only_is_exactly_the_three_read_scopes(): void
+    {
+        self::assertSame(
+            ['mcp:servers:read', 'mcp:library:read', 'mcp:playback:read'],
+            McpScopes::readOnly(),
+            'The DEFAULT GRANT for an MCP token changed. Every entry here is handed to an API '
+            . 'caller who omitted `scopes` entirely, i.e. who expressed no opinion — so adding one '
+            . 'widens what "no opinion" means and needs its own review.',
+        );
+    }
+
+    /**
+     * The write scope is absent, asserted by EXACT comparison per member.
+     *
+     * ⚠ Not `assertNotContains` alone and never a substring test: `mcp:playback`
+     * is a prefix of `mcp:playback:control`, so a `str_contains` check would
+     * also flag `mcp:playback:read` and would go on "passing" after a rename it
+     * cannot see. `assertNotSame` against the whole literal is the only
+     * comparison that means what this test says.
+     */
+    public function test_read_only_excludes_the_write_scope_by_exact_comparison(): void
+    {
+        foreach (McpScopes::readOnly() as $scope) {
+            self::assertNotSame('mcp:playback:control', $scope);
+        }
+
+        // ...and the write scope is a real member of the vocabulary, so the
+        // loop above is excluding something that exists rather than something
+        // that was deleted.
+        self::assertContains('mcp:playback:control', McpScopes::all());
+    }
+
+    /**
+     * `readOnly()` is a SUBSET of `all()`, in `all()`'s order.
+     *
+     * Order is not cosmetic: `parse()` emits in `all()` order into
+     * `mcp_tokens.scopes`, so a `readOnly()` that listed its members in a
+     * different order would be silently re-ordered on the way to the column and
+     * the minted response would not match what a caller could predict.
+     */
+    public function test_read_only_is_an_ordered_subset_of_all(): void
+    {
+        $all = McpScopes::all();
+        $readOnly = McpScopes::readOnly();
+
+        foreach ($readOnly as $scope) {
+            self::assertContains($scope, $all, $scope . ' is granted by default but is not a known scope.');
+        }
+
+        // Round-tripping through parse() must be the identity. If it is not,
+        // readOnly() is either mis-ordered or carries something all() dropped.
+        self::assertSame($readOnly, McpScopes::parse(implode(' ', $readOnly)));
+        self::assertLessThan(count($all), count($readOnly), 'readOnly() must be strictly narrower than all().');
+    }
+
+    /**
+     * The omission guard, and the reason `readOnly()` may safely be enumerated
+     * by hand.
+     *
+     * `readOnly()` is a literal list so that a NEW scope stays outside the
+     * default grant until somebody puts it inside — fail closed. The risk that
+     * swaps in is the opposite one: a genuinely read-only scope added to
+     * `all()` and forgotten here, so the default silently narrows. This catches
+     * that, using the `:read` suffix convention as an INDEPENDENT cross-check
+     * rather than as the implementation.
+     *
+     * ⚠ Deliberately one-directional. It does not assert the converse
+     * (`readOnly()` ⊆ the `:read`-suffixed scopes), because that would make the
+     * suffix rule authoritative again and re-open the fail-open hole the
+     * enumeration exists to close.
+     */
+    public function test_every_read_scope_in_all_is_also_in_read_only(): void
+    {
+        $readOnly = McpScopes::readOnly();
+        $missed = [];
+        foreach (McpScopes::all() as $scope) {
+            if (str_ends_with($scope, ':read') && !in_array($scope, $readOnly, true)) {
+                $missed[] = $scope;
+            }
+        }
+
+        self::assertSame(
+            [],
+            $missed,
+            'a read scope was added to McpScopes::all() but not to readOnly(), so the default grant '
+            . 'silently narrowed. Add it to readOnly() if it belongs in the default, or say in the '
+            . 'docblock why it does not.',
+        );
+    }
 }

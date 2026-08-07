@@ -1832,8 +1832,11 @@ paths:
         token can only ever reach servers its user still owns at the moment of the call.
 
         `scopes` narrows the token below its user's own access; it can never widen it. An omitted
-        list grants every read scope. A list containing no recognised scope is a 400 rather than a
-        token that authenticates but authorises nothing.
+        list grants exactly the read-only set — `mcp:servers:read`, `mcp:library:read`,
+        `mcp:playback:read` — and never `mcp:playback:control`; a caller who has expressed no
+        opinion does not receive the write capability. Asking for `mcp:playback:control` explicitly
+        still grants it. A list containing no recognised scope is a 400 rather than a token that
+        authenticates but authorises nothing.
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
@@ -3935,10 +3938,14 @@ components:
         scopes:
           type: array
           description: >-
-            Scopes to grant. **Omitting this field grants EVERY scope in `McpScope`, including the
-            write scope `mcp:playback:control`** — not only the read scopes. Send an explicit list
-            to mint a narrower token. Unknown members are dropped; a list with nothing known left in
-            it is a 400 rather than a token that authorises nothing.
+            Scopes to grant. **Omitting this field grants the READ-ONLY set** — `mcp:servers:read`,
+            `mcp:library:read`, `mcp:playback:read` — and never the write scope
+            `mcp:playback:control`. That is a default, not a ban: send
+            `mcp:playback:control` explicitly and it is granted, whether or not the operator has
+            enabled the `playback_control` tool. Unknown members are dropped; a list with nothing
+            known left in it is a 400 rather than a token that authorises nothing.
+            (Before 2026-08-07 omitting this field granted EVERY scope including the write one, so
+            tokens minted before then may carry `mcp:playback:control` unintentionally.)
           items:
             $ref: "#/components/schemas/McpScope"
       additionalProperties: false
@@ -3995,6 +4002,13 @@ components:
             $ref: "#/components/schemas/McpTokenSummary"
         available_scopes:
           type: array
+          description: >-
+            The scopes this deployment advertises as useful right now — a SUBSET of `McpScope`, not
+            the whole vocabulary. `mcp:playback:control` is omitted unless the operator has enabled
+            the `playback_control` tool, because with the flag off that tool is not registered and
+            the scope names something the server answers `mcp.unknown_tool` for. This list is an
+            advertisement, not a validation set: `POST /api/v1/me/mcp-tokens` still grants
+            `mcp:playback:control` when it is asked for explicitly.
           items:
             $ref: "#/components/schemas/McpScope"
       additionalProperties: true
