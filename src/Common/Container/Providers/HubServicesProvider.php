@@ -84,7 +84,17 @@ use Phlix\Hub\Stats\Metrics\MetricsRepositoryInterface;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
 use Phlix\Hub\Http\Controllers\ServerDetailController;
+use Phlix\Hub\Http\Controllers\McpController;
+use Phlix\Hub\Http\Controllers\McpTokenController;
+use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
+use Phlix\Hub\Mcp\McpTokenService;
+use Phlix\Hub\Mcp\McpToolRegistry;
+use Phlix\Hub\Mcp\Tools\GetMediaTool;
+use Phlix\Hub\Mcp\Tools\GetPlaybackInfoTool;
+use Phlix\Hub\Mcp\Tools\ListLibrariesTool;
+use Phlix\Hub\Mcp\Tools\ListServersTool;
+use Phlix\Hub\Mcp\Tools\SearchMediaTool;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
@@ -223,6 +233,69 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('tokens', get(ClientRelayTokenService::class))
                 ->parameter('serverInfo', get(ServerInfoHandler::class))
                 ->parameter('audit', get(AuditLogger::class)),
+
+            // --- MCP (S62) --------------------------------------------------
+            // Personal access tokens for `POST /mcp`. TTL configurable via
+            // `mcp_token_ttl` (seconds); defaults to 90 days. Only the SHA-256
+            // hash is persisted, exactly as for the relay token above.
+            McpTokenService::class => factory(static function (
+                Connection $db,
+            ) use ($appConfig): McpTokenService {
+                $ttl = is_int($appConfig['mcp_token_ttl'] ?? null)
+                    ? (int) $appConfig['mcp_token_ttl']
+                    : McpTokenService::DEFAULT_TTL_SECONDS;
+                return new McpTokenService($db, $ttl);
+            })->parameter('db', get(Connection::class)),
+
+            McpTokenController::class => factory(static function (
+                McpTokenService $tokens,
+                AuditLogger $audit,
+            ): McpTokenController {
+                return new McpTokenController($tokens, $audit);
+            })->parameter('tokens', get(McpTokenService::class))
+                ->parameter('audit', get(AuditLogger::class)),
+
+            // The tool catalogue. Listed EXPLICITLY rather than discovered by
+            // scanning the Tools/ directory: a scanner would silently publish
+            // whatever a future commit happens to drop in there, and the set of
+            // capabilities a PAT can reach is not something that should widen by
+            // accident. McpToolRegistry throws on a duplicate name or an unknown
+            // required scope, so a mis-wired tool fails at container build.
+            McpToolRegistry::class => factory(static function (): McpToolRegistry {
+                return new McpToolRegistry([
+                    new ListServersTool(),
+                    new ListLibrariesTool(),
+                    new SearchMediaTool(),
+                    new GetMediaTool(),
+                    new GetPlaybackInfoTool(),
+                ]);
+            }),
+
+            // The MCP endpoint itself. It is handed the PRODUCTION
+            // ServerProxyController and ServerListController — not copies, not
+            // repositories — because their ownership and browse-scope gates are
+            // what make a PAT unable to see another user's servers. Anything
+            // narrower here would be a second implementation of that check.
+            McpController::class => factory(static function (
+                McpTokenService $tokens,
+                McpToolRegistry $registry,
+                ServerProxyController $proxy,
+                ServerListController $serverList,
+                RateLimiterInterface $rateLimiter,
+            ): McpController {
+                return new McpController(
+                    $tokens,
+                    $registry,
+                    $proxy,
+                    $serverList,
+                    $rateLimiter,
+                    LoggerFactory::get(LogChannels::AUTH),
+                );
+            })->parameter('tokens', get(McpTokenService::class))
+                ->parameter('registry', get(McpToolRegistry::class))
+                ->parameter('proxy', get(ServerProxyController::class))
+                ->parameter('serverList', get(ServerListController::class))
+                ->parameter('rateLimiter', get(RateLimitProfiles::MCP)),
 
             DeregisterHandler::class => factory(static function (
                 Connection $db,
@@ -405,6 +478,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 HeartbeatHandler $heartbeatHandler,
                 ClientRelayTokenService $clientRelayTokenService,
                 Ed25519KeyManager $keyManager,
+                McpTokenService $mcpTokenService,
             ) use ($appConfig): IdleReaper {
                 /** @var int $interval */
                 $interval = is_int($appConfig['relay_idle_reaper_interval'] ?? null)
@@ -424,12 +498,18 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $heartbeatHandler,
                     $clientRelayTokenService,
                     $keyManager,
+                    $mcpTokenService,
                 );
             })->parameter('tunnelManager', get(TunnelManager::class))
                 ->parameter('sessionManager', get(RelaySessionManager::class))
                 ->parameter('heartbeatHandler', get(HeartbeatHandler::class))
                 ->parameter('clientRelayTokenService', get(ClientRelayTokenService::class))
-                ->parameter('keyManager', get(Ed25519KeyManager::class)),
+                ->parameter('keyManager', get(Ed25519KeyManager::class))
+                // S62: explicit, like every sibling above. PHP-DI's `autowire()`
+                // SKIPS optional constructor parameters, so a nullable dependency
+                // added without a `->parameter()` line here resolves to null and
+                // the pruner silently never runs.
+                ->parameter('mcpTokenService', get(McpTokenService::class)),
 
             ServerReaper::class => factory(static function (
                 Connection $db,

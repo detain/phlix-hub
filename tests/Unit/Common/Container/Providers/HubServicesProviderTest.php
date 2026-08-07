@@ -232,4 +232,112 @@ final class HubServicesProviderTest extends TestCase
         self::assertNotContains(ServerReaper::class, $container->seen);
         self::assertNotContains(FederationSessionManager::class, $container->seen);
     }
+
+    /**
+     * S62 regression gate: EVERY nullable service dependency of
+     * {@see IdleReaper} must be named in the provider's `->parameter()` chain.
+     *
+     * This is the PHP-DI optional-parameter trap, and it fails SILENTLY. PHP-DI
+     * skips a constructor parameter that has a default value, so a nullable
+     * dependency added to {@see IdleReaper} without a matching `->parameter()`
+     * line resolves to `null`, the `?->` call in
+     * {@see IdleReaper::reapDbMaintenance()} short-circuits, and the pruner
+     * simply never runs. Nothing goes red: the class still constructs, the timer
+     * still arms, and every unit test that passes the dependency in by hand
+     * still passes. Only a check at the DEFINITION is capable of seeing it.
+     *
+     * The assertion is on the constructor rather than on a hard-coded list, so a
+     * dependency added in a future step is covered without anybody remembering
+     * to extend this test.
+     */
+    public function testEveryNullableIdleReaperDependencyIsExplicitlyWiredInTheDefinition(): void
+    {
+        $wired = self::factoryParameterNamesFor(IdleReaper::class);
+
+        // Non-vacuity: if the definition could not be located, or PHP-DI's
+        // internals changed shape, `$wired` would be empty and every assertion
+        // below would be trivially true. Assert the corpus first.
+        self::assertNotEmpty(
+            $wired,
+            'No PHP-DI factory parameters were extracted for IdleReaper, so this test is measuring '
+            . 'nothing. The definition lookup below has broken — fix it rather than deleting the test.',
+        );
+
+        $nullableServiceParameters = [];
+        foreach ((new \ReflectionClass(IdleReaper::class))->getConstructor()?->getParameters() ?? [] as $parameter) {
+            $type = $parameter->getType();
+            if (!$type instanceof \ReflectionNamedType || $type->isBuiltin() || !$type->allowsNull()) {
+                continue;
+            }
+            $nullableServiceParameters[] = $parameter->getName();
+        }
+
+        self::assertGreaterThanOrEqual(
+            5,
+            count($nullableServiceParameters),
+            'IdleReaper was expected to carry at least the five optional collaborators it had when this '
+            . 'gate was written (sessionManager, heartbeatHandler, clientRelayTokenService, keyManager, '
+            . 'mcpTokenService). Finding fewer means the reflection is not seeing the constructor.',
+        );
+
+        foreach ($nullableServiceParameters as $name) {
+            self::assertContains(
+                $name,
+                $wired,
+                sprintf(
+                    'IdleReaper::$%s is an optional service dependency that the container definition never '
+                    . 'supplies. PHP-DI SKIPS optional parameters, so it resolves to null at runtime and the '
+                    . '`?->` call in reapDbMaintenance() silently does nothing. Add '
+                    . '`->parameter(\'%s\', get(...))` to the IdleReaper definition in HubServicesProvider.',
+                    $name,
+                    $name,
+                ),
+            );
+        }
+    }
+
+    /**
+     * Pull the `->parameter()` names PHP-DI holds for a factory definition
+     * registered by {@see HubServicesProvider}.
+     *
+     * Reads the builder's `definitionSources` because `ContainerBuilder` exposes
+     * no getter. Deliberately does NOT build the container: resolving these
+     * services would need a live database.
+     *
+     * @param class-string $id Entry to look up.
+     *
+     * @return list<string> Parameter names, or `[]` when not found.
+     */
+    private static function factoryParameterNamesFor(string $id): array
+    {
+        $builder = new \DI\ContainerBuilder();
+        (new HubServicesProvider())->register($builder, []);
+
+        $sources = new \ReflectionProperty(\DI\ContainerBuilder::class, 'definitionSources');
+        /** @var mixed $rawSources */
+        $rawSources = $sources->getValue($builder);
+        if (!is_array($rawSources)) {
+            return [];
+        }
+
+        /** @var mixed $source */
+        foreach ($rawSources as $source) {
+            if (!is_array($source) || !isset($source[$id])) {
+                continue;
+            }
+            /** @var mixed $helper */
+            $helper = $source[$id];
+            if (!$helper instanceof \DI\Definition\Helper\FactoryDefinitionHelper) {
+                continue;
+            }
+            $definition = $helper->getDefinition($id);
+            if (!$definition instanceof \DI\Definition\FactoryDefinition) {
+                continue;
+            }
+
+            return array_values(array_map(strval(...), array_keys($definition->getParameters())));
+        }
+
+        return [];
+    }
 }

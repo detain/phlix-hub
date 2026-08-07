@@ -163,6 +163,17 @@ return [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX', 30),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_WINDOW', 60),
             ],
+            // MCP personal-access-token auth (S62): 10 FAILED presentations /
+            // 15 min, keyed `mcp:auth:<ip>`. Shared DB-backed (DbRateLimiter, the
+            // same store login uses) so the budget is global across HTTP workers
+            // — guessing a PAT is a password guess by another name. Slightly
+            // more generous than login's 5 because an agent retries on its own
+            // schedule; a SUCCESSFUL call consumes nothing, so a working client
+            // never approaches it.
+            'mcp'           => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_MCP_MAX', 10),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_MCP_WINDOW', 900),
+            ],
         ];
     })(),
 ];

@@ -39,6 +39,8 @@ use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Controllers\LibraryController;
 use Phlix\Hub\Http\Controllers\ClientRelayTokenController;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
+use Phlix\Hub\Http\Controllers\McpController;
+use Phlix\Hub\Http\Controllers\McpTokenController;
 use Phlix\Hub\Http\Controllers\MeController;
 use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\RequestController;
@@ -412,6 +414,25 @@ final class Application
         $libraryController = $this->resolveLibraryController();
         $serverProxy = $this->resolveServerProxyController();
         $relayToken = $this->resolveClientRelayTokenController();
+        $mcpToken = $this->resolveMcpTokenController();
+
+        // MCP (S62) — JSON-RPC 2.0 inside THIS `:8800` worker, not a sidecar and
+        // not a new port. Registered with NO route middleware on purpose: an MCP
+        // client presents a personal access token, not the hub session JWT/cookie
+        // AuthMiddleware understands, so McpController authenticates itself —
+        // the same arrangement RelayController / ClientMountController /
+        // SubdomainController already use for the enrollment JWT. The ungated set
+        // is pinned by ApplicationRouteCompositionTest, so this is declared
+        // rather than accidental. `GET /mcp` (the SSE transport) is S63 and is
+        // deliberately NOT registered here — an unregistered verb 404s, which is
+        // an honest answer, whereas a registered-but-empty one would not be.
+        $mcp = $this->resolveMcpController();
+        $this->router->post('/mcp', static function (Request $req, array $params) use ($mcp): Response {
+            /** @var array<string, string> $typedParams */
+            $typedParams = $params;
+            return $mcp->handle($req, $typedParams);
+        });
+
         $this->router->group('/api/v1', function (Router $r) use (
             $me,
             $serverList,
@@ -420,6 +441,7 @@ final class Application
             $libraryController,
             $serverProxy,
             $relayToken,
+            $mcpToken,
         ): void {
             $r->get('/me', static fn (Request $req): Response => $me($req));
             // `/auth/me` is the path the shared @phlix/ui SPA calls (matches
@@ -466,6 +488,34 @@ final class Application
                     /** @var array<string, string> $typedParams */
                     $typedParams = $params;
                     return $relayToken->mint($req, $typedParams);
+                },
+            );
+            // MCP personal access tokens (S62). Auth-gated by THIS group's
+            // AuthMiddleware — a hub session mints and revokes MCP tokens; the
+            // MCP tokens themselves are only ever presented to `POST /mcp`, and
+            // are useless on this surface (they are not hub session JWTs).
+            $r->get(
+                '/me/mcp-tokens',
+                static function (Request $req, array $params) use ($mcpToken): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $mcpToken->index($req, $typedParams);
+                },
+            );
+            $r->post(
+                '/me/mcp-tokens',
+                static function (Request $req, array $params) use ($mcpToken): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $mcpToken->create($req, $typedParams);
+                },
+            );
+            $r->delete(
+                '/me/mcp-tokens/{id}',
+                static function (Request $req, array $params) use ($mcpToken): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $mcpToken->revoke($req, $typedParams);
                 },
             );
             // HTTP-over-relay proxy: forward a browser request to a paired
@@ -754,6 +804,26 @@ final class Application
         $controller = $this->container->get(ClientRelayTokenController::class);
         if (!$controller instanceof ClientRelayTokenController) {
             throw new \RuntimeException('Container returned an unexpected ClientRelayTokenController instance');
+        }
+
+        return $controller;
+    }
+
+    private function resolveMcpController(): McpController
+    {
+        $controller = $this->container->get(McpController::class);
+        if (!$controller instanceof McpController) {
+            throw new \RuntimeException('Container returned an unexpected McpController instance');
+        }
+
+        return $controller;
+    }
+
+    private function resolveMcpTokenController(): McpTokenController
+    {
+        $controller = $this->container->get(McpTokenController::class);
+        if (!$controller instanceof McpTokenController) {
+            throw new \RuntimeException('Container returned an unexpected McpTokenController instance');
         }
 
         return $controller;

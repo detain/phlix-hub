@@ -15,21 +15,27 @@ namespace Phlix\Hub\Common\RateLimit;
  * Type-safe catalogue of the per-surface rate-limiter container ids and their
  * per-worker default thresholds.
  *
- * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount)
- * gets its OWN {@see RateLimiter} instance registered under the matching
+ * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount /
+ * mcp) gets its OWN limiter instance registered under the matching
  * `rate_limiter.<surface>` container id — a single shared login-grade limiter
  * is wrong for everything but login (HB-4.6). {@see defaults()} maps each
  * container id to the `config/server.php` `rate_limit.<key>` override key plus
  * the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER for five of the six surfaces. `proxy`, `heartbeat`
+ * Thresholds are PER-WORKER for five of the seven surfaces. `proxy`, `heartbeat`
  * and `jwks` are enforced on the `HUB_WORKERS` HTTP workers, so each keeps an
  * INDEPENDENT per-worker counter and the effective soft-global limit is roughly
  * `max × HUB_WORKERS` (mirrors HB-3.4); `relay_connect` (the :8802 `RelayWorker`)
  * and `client_mount` (the :8803 `ClientRelayWorker`) run on count=1 surfaces
  * where per-worker == global.
  *
- * ✅ `login` is the EXCEPTION — it is genuinely global. It is enforced in
+ * ✅ `login` and `mcp` are the EXCEPTIONS — both are genuinely global; both are
+ * bound to the shared DB-backed {@see DbRateLimiter}. The `login` reasoning
+ * follows; `mcp` (S62) is the same threat (guessing a bearer credential) reached
+ * through {@see \Phlix\Hub\Http\Controllers\McpController} and keyed
+ * `mcp:auth:<ip>`.
+ *
+ * `login` is enforced in
  * {@see \Phlix\Hub\Auth\AuthManager} (keyed `auth:login:<ip>`) on the HTTP
  * workers, but its {@see LOGIN} binding is repointed (in
  * {@see \Phlix\Hub\Common\Container\Providers\CommonServicesProvider}) to the
@@ -64,6 +70,24 @@ final class RateLimitProfiles
     public const string CLIENT_MOUNT = 'rate_limiter.client_mount';
 
     /**
+     * Container id for the MCP personal-access-token auth limiter (S62).
+     *
+     * ✅ The SECOND genuinely global surface, and it is bound to the same shared
+     * {@see DbRateLimiter} as {@see LOGIN} for the same reason: presenting a
+     * bearer PAT to `POST /mcp` is a password guess by another name, and a
+     * per-worker counter would hand an attacker ~`max × HUB_WORKERS` tries per
+     * window. It is a separate PROFILE rather than a reuse of the login bucket
+     * so an operator can tune the two independently (an MCP agent legitimately
+     * retries more than a human logging in), but it is the same MECHANISM — no
+     * second limiter was invented for this surface.
+     *
+     * Keyed `mcp:auth:<ip>` and, exactly like login, incremented only on a
+     * FAILED validation: a working agent making thousands of tool calls never
+     * consumes budget.
+     */
+    public const string MCP = 'rate_limiter.mcp';
+
+    /**
      * Map of `container id => {config key, default max, default window}`.
      *
      * `key` is the sub-key under `config/server.php`'s `rate_limit` section;
@@ -81,6 +105,7 @@ final class RateLimitProfiles
             self::JWKS          => ['key' => 'jwks',          'max' => 120, 'window' => 60],
             self::RELAY_CONNECT => ['key' => 'relay_connect', 'max' => 10,  'window' => 60],
             self::CLIENT_MOUNT  => ['key' => 'client_mount',  'max' => 30,  'window' => 60],
+            self::MCP           => ['key' => 'mcp',           'max' => 10,  'window' => 900],
         ];
     }
 }

@@ -16,6 +16,7 @@ use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Mcp\McpTokenService;
 use Workerman\Timer;
 
 /**
@@ -75,6 +76,10 @@ final class IdleReaper
      *                                                            {@see reapDbMaintenance()} (HB-4.7 /
      *                                                            H-A1) — the low-frequency filesystem
      *                                                            unlink kept off the JWT-verify path.
+     * @param McpTokenService|null         $mcpTokenService      Optional MCP personal-access-token
+     *                                                            service whose expired-or-revoked
+     *                                                            rows are pruned on each
+     *                                                            {@see reapDbMaintenance()} (S62).
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
@@ -85,6 +90,7 @@ final class IdleReaper
         private readonly ?HeartbeatHandler $heartbeatHandler = null,
         private readonly ?ClientRelayTokenService $clientRelayTokenService = null,
         private readonly ?Ed25519KeyManager $keyManager = null,
+        private readonly ?McpTokenService $mcpTokenService = null,
     ) {
     }
 
@@ -242,6 +248,15 @@ final class IdleReaper
      *    expiry (no filesystem I/O on the hot JWT-verify path); this periodic
      *    maintenance pass is where the stale sidecar is actually reclaimed
      *    instead of lingering until the next {@see Ed25519KeyManager::rotate()}.
+     *  - S62 {@see McpTokenService::pruneExpiredTokens()}: prune MCP personal
+     *    access tokens that expired more than 30 days ago OR were revoked. This
+     *    pruner lives HERE rather than on a timer of its own deliberately: a
+     *    bare `Timer::add(86400, …)` never fires on a box that restarts more
+     *    often than once a day, so a daily self-armed timer would silently never
+     *    run. This reaper's timer is already armed at
+     *    {@see self::DEFAULT_INTERVAL_SECONDS} (60s) on the maintenance worker,
+     *    so the first sweep happens within a minute of every boot — no separate
+     *    boot catch-up is needed.
      *
      * This method is public so it can be called directly by tests or manually
      * triggered. Normally it is called automatically by the timer armed in
@@ -270,6 +285,12 @@ final class IdleReaper
         // (loadPreviousKey does not unlink on expiry); this low-frequency
         // maintenance-worker filesystem unlink is where it is reclaimed.
         $this->keyManager?->purgeExpiredPreviousKey();
+
+        // S62: Prune MCP personal access tokens that expired more than 30 days
+        // ago OR were revoked. Same OR-not-AND reasoning as HB-4.2 above; the
+        // grace window is wider because MCP PATs are long-lived and an operator
+        // debugging "why did my agent stop working" wants to still see the row.
+        $this->mcpTokenService?->pruneExpiredTokens();
     }
 
     /**
