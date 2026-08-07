@@ -248,8 +248,18 @@ jobs:
         with:
           php-version: '8.3'
 
-      - name: Install Composer dependencies (no-dev)
-        run: composer install --no-interaction --prefer-dist --no-dev
-
-      - name: Run Composer Audit
-        run: composer audit --no-dev
+      # S246 — this job used to run `composer install ... --no-dev` followed by a
+      # bare `composer audit ... --no-dev`, which excluded every development
+      # dependency from the audited set. It therefore reported SUCCESS on
+      # 2026-08-06 against a lock pinning squizlabs/php_codesniffer 3.13.5, which
+      # CVE-2026-67434 (HIGH, OS command injection) had just made vulnerable.
+      #
+      # The replacement audits the WHOLE lock and prints the corpus it examined.
+      # Read scripts/security-audit-check.php for the policy and its reasoning.
+      #
+      # Do NOT re-introduce the development-dependency exclusion, do NOT add
+      # continue-on-error to the step below, and do NOT wrap it in a conditional:
+      # tests/Unit/Support/SecurityAuditCheckTest.php parses this file and fails
+      # on each of those edits.
+      - name: Run Security Audit (runtime AND development dependencies)
+        run: php scripts/security-audit-check.php
