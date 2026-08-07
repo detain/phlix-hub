@@ -11,7 +11,8 @@ php bin/phlix migrate          # apply migrations/*.sql via MigrationRunner
 ./vendor/bin/phpstan analyze --no-progress   # level 9, no baseline
 ./vendor/bin/psalm --no-progress             # errorLevel 1
 ./vendor/bin/phpcs --standard=PSR12 src/     # PSR-12
-composer validate --strict && composer audit --no-dev
+composer validate --strict
+php scripts/security-audit-check.php          # S246: audits runtime AND require-dev, prints the corpus
 cd web-ui && npm install && npm run build     # Vite SPA -> public/assets/app/
 ```
 
@@ -47,7 +48,9 @@ ls .github/workflows/              # CI pipelines: phpunit + phpstan + psalm + p
 
 ## Before committing
 
-`composer install` clean → `phpunit` green → `phpstan` green → `phpcs` clean → `psalm` clean → `composer validate --strict` → `composer audit --no-dev`. Fix code, never add a baseline.
+`composer install` clean → `phpunit` green → `phpstan` green → `phpcs` clean → `psalm` clean → `composer validate --strict` → `php scripts/security-audit-check.php` green. Fix code, never add a baseline.
+
+⚠ **Never audit with a development-dependency exclusion.** That flag hid CVE-2026-67434 (HIGH) in `squizlabs/php_codesniffer` from CI for as long as the advisory existed — the job reported SUCCESS against a vulnerable lock. `scripts/security-audit-check.php` audits the whole lock, labels each finding `[require]`/`[require-dev]`, and prints the number of packages it examined. An advisory that genuinely cannot be actioned goes under `config.audit.ignore` in `composer.json` with a written reason, where the gate reports it as IGNORED — there is no baseline file.
 
 ## Versioning
 

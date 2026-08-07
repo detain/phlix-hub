@@ -6,6 +6,45 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- **The `Security Audit` CI job could not fail on a development dependency
+  (S246, hub half).** Measured 2026-08-06: the job ran `composer install …
+  --no-dev` followed by `composer audit --no-dev`, which excludes every
+  `require-dev` package from the audited set. When CVE-2026-67434 (HIGH, OS
+  command injection, GHSA-hmqg-cxww-wqhq) landed against
+  `squizlabs/php_codesniffer` `<3.13.6` — and this repo's lock pinned **3.13.5** —
+  the job reported **SUCCESS**. Only phlix-server, which audits everything, went
+  red. Proven directly on the planted lock: `composer audit --locked --no-dev`
+  exits **0** with *"No security vulnerability advisories found"* while the same
+  lock without the flag exits **1** on the HIGH advisory. The lock has since been
+  bumped (68c0e5c8); this closes the blind spot itself.
+  - `scripts/security-audit-check.php` replaces both steps. It audits the whole
+    lock with `composer audit --locked --format=json` (no `vendor/` needed, and
+    no dependence on Composer's advisory-blocking installer), and computes the
+    verdict from the payload rather than inheriting a single exit code that
+    conflates advisories with abandonment.
+  - **Policy: audit everything, block on everything** — with each finding
+    labelled `[require]` or `[require-dev]` so release exposure stays readable.
+    A dev advisory is not harmless: the advisory that exposed this hole is command
+    injection in a linter CI runs against pull-request content, on the machines
+    holding the deploy credentials. Abandoned packages and `config.audit.ignore`
+    acknowledgements remain **advisory only** and loud, because a gate that reds
+    for a reason nobody can act on gets switched off.
+  - **The gate states its corpus**: `Audit corpus: 97 locked package(s) — 33
+    require, 64 require-dev`, and refuses to pass below a floor on the total
+    (`MIN_AUDITED_PACKAGES`) *and* on the dev half (`MIN_AUDITED_DEV_PACKAGES`).
+    The second floor is the direct anti-regression: `--no-dev` returning, or
+    `packages-dev` being emptied, now reads as a failure rather than as a clean
+    audit of a third of the lock.
+  - **No baseline file and no ignore list.** An unactionable advisory is
+    acknowledged under `config.audit.ignore` in `composer.json`, in the repo,
+    where the gate reports it as IGNORED.
+  - `tests/Unit/Support/SecurityAuditCheckTest.php` drives every verdict by
+    executing the script — including the exact CVE-2026-67434 shape against a
+    `require-dev` package — and parses `ci.yml` **with its comments stripped**, so
+    the detector cannot match the comment that explains the defect.
+
 ### Added
 
 - **Relayed browse can render posters and avatars (S238, hub half).** Measured

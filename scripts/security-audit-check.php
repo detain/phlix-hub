@@ -278,17 +278,83 @@ function collectPackages(mixed $section): array
 
     $packages = [];
 
-    foreach ($section as $package) {
-        if (!is_array($package) || !is_string($package['name'] ?? null)) {
+    foreach (array_filter($section, 'is_array') as $package) {
+        $name = stringField($package, 'name');
+
+        if ($name === '') {
             continue;
         }
 
-        $packages[$package['name']] = is_string($package['version'] ?? null)
-            ? $package['version']
-            : 'unknown';
+        $packages[$name] = stringField($package, 'version', 'unknown');
     }
 
     return $packages;
+}
+
+/**
+ * Read a string field out of a decoded JSON structure, or fall back.
+ *
+ * Every payload this script reads is `mixed` all the way down, so the narrowing
+ * is centralised here rather than repeated as `is_string($x['k'] ?? null)`
+ * ternaries that re-read the offset.
+ *
+ * @param array<array-key, mixed> $data
+ */
+function stringField(array $data, string $key, string $default = ''): string
+{
+    return is_string($data[$key] ?? null) ? (string) $data[$key] : $default;
+}
+
+/**
+ * Render an arbitrary decoded value as something printable.
+ */
+function stringify(mixed $value): string
+{
+    if (is_string($value)) {
+        return $value;
+    }
+
+    if (is_scalar($value)) {
+        return (string) $value;
+    }
+
+    $encoded = json_encode($value);
+
+    return is_string($encoded) ? $encoded : '<unprintable>';
+}
+
+/**
+ * Coerce a decoded JSON value to a list of printable strings.
+ *
+ * @return list<string>
+ */
+function toStringList(mixed $value): array
+{
+    if (!is_array($value)) {
+        return [];
+    }
+
+    return array_values(array_map(stringify(...), $value));
+}
+
+/**
+ * Coerce a decoded JSON object to a string => string map.
+ *
+ * @return array<string, string>
+ */
+function toStringMap(mixed $value): array
+{
+    if (!is_array($value)) {
+        return [];
+    }
+
+    $map = [];
+
+    foreach (array_keys($value) as $key) {
+        $map[(string) $key] = stringify($value[$key]);
+    }
+
+    return $map;
 }
 
 /**
@@ -446,7 +512,7 @@ function decodePayload(string $raw, string $origin): array
  * `composer audit --format=json` emits `[]` for an empty advisory set and a
  * package-keyed object when populated. Normalise both to a map.
  *
- * @return array<string, list<array<string, mixed>>>
+ * @return array<string, list<array<array-key, mixed>>>
  */
 function normaliseAdvisoryMap(mixed $value): array
 {
@@ -463,11 +529,8 @@ function normaliseAdvisoryMap(mixed $value): array
 
         $list = [];
 
-        foreach ($entries as $entry) {
-            if (is_array($entry)) {
-                /** @var array<string, mixed> $entry */
-                $list[] = $entry;
-            }
+        foreach (array_filter($entries, 'is_array') as $entry) {
+            $list[] = $entry;
         }
 
         $map[(string) $package] = $list;
@@ -499,21 +562,24 @@ function scopeOf(string $package, array $corpus): string
 }
 
 /**
- * @param array<string, mixed> $advisory
+ * @param array<array-key, mixed> $advisory
  */
 function describeAdvisory(array $advisory): string
 {
-    $severity = is_string($advisory['severity'] ?? null) ? strtoupper($advisory['severity']) : 'UNKNOWN';
-    $cve      = is_string($advisory['cve'] ?? null) && $advisory['cve'] !== ''
-        ? $advisory['cve']
-        : (is_string($advisory['advisoryId'] ?? null) ? $advisory['advisoryId'] : 'unidentified');
-    $title    = is_string($advisory['title'] ?? null) ? $advisory['title'] : '(no title)';
+    $severity = stringField($advisory, 'severity');
+    $cve      = stringField($advisory, 'cve');
+    $id       = stringField($advisory, 'advisoryId');
 
-    return sprintf('[%s] %s — %s', $severity, $cve, $title);
+    return sprintf(
+        '[%s] %s — %s',
+        $severity !== '' ? strtoupper($severity) : 'UNKNOWN',
+        $cve !== '' ? $cve : ($id !== '' ? $id : 'unidentified'),
+        stringField($advisory, 'title', '(no title)'),
+    );
 }
 
 /**
- * @param array<string, list<array<string, mixed>>>                         $advisories
+ * @param array<string, list<array<array-key, mixed>>>                         $advisories
  * @param array{runtime: array<string, string>, dev: array<string, string>} $corpus
  *
  * @return list<string>
@@ -526,28 +592,30 @@ function renderAdvisoryLines(array $advisories, array $corpus): array
         $affected = '';
 
         foreach ($entries as $entry) {
-            if (is_string($entry['affectedVersions'] ?? null)) {
-                $affected = $entry['affectedVersions'];
+            $candidate = stringField($entry, 'affectedVersions');
+
+            if ($candidate !== '') {
+                $affected = $candidate;
 
                 break;
             }
         }
 
-        $scope   = scopeOf($package, $corpus);
-        $locked  = $corpus['runtime'][$package] ?? $corpus['dev'][$package] ?? null;
+        $locked  = $corpus['runtime'][$package] ?? $corpus['dev'][$package] ?? '';
         $lines[] = sprintf(
             '%s [%s]%s%s',
             $package,
-            $scope,
-            is_string($locked) ? ' locked at ' . $locked : '',
+            scopeOf($package, $corpus),
+            $locked !== '' ? ' locked at ' . $locked : '',
             $affected !== '' ? ' (affected: ' . $affected . ')' : '',
         );
 
         foreach ($entries as $entry) {
             $lines[] = '  ' . describeAdvisory($entry);
+            $link    = stringField($entry, 'link');
 
-            if (is_string($entry['link'] ?? null) && $entry['link'] !== '') {
-                $lines[] = '    ' . $entry['link'];
+            if ($link !== '') {
+                $lines[] = '    ' . $link;
             }
         }
     }
@@ -556,7 +624,7 @@ function renderAdvisoryLines(array $advisories, array $corpus): array
 }
 
 /**
- * @param array<string, list<array<string, mixed>>> $advisories
+ * @param array<string, list<array<array-key, mixed>>> $advisories
  */
 function countAdvisories(array $advisories): int
 {
@@ -570,20 +638,30 @@ function countAdvisories(array $advisories): int
 }
 
 /**
- * @param array<string, list<array<string, mixed>>>                         $advisories
+ * @param array<string, list<array<array-key, mixed>>>                         $advisories
  * @param array{runtime: array<string, string>, dev: array<string, string>} $corpus
  *
  * @return array{require: int, 'require-dev': int, 'not in lock': int}
  */
 function countByScope(array $advisories, array $corpus): array
 {
-    $tally = ['require' => 0, 'require-dev' => 0, 'not in lock' => 0];
+    $require = 0;
+    $dev     = 0;
+    $unknown = 0;
 
     foreach (array_keys($advisories) as $package) {
-        ++$tally[scopeOf((string) $package, $corpus)];
+        $scope = scopeOf($package, $corpus);
+
+        if ($scope === 'require') {
+            ++$require;
+        } elseif ($scope === 'require-dev') {
+            ++$dev;
+        } else {
+            ++$unknown;
+        }
     }
 
-    return $tally;
+    return ['require' => $require, 'require-dev' => $dev, 'not in lock' => $unknown];
 }
 
 // ---------------------------------------------------------------------------
@@ -632,21 +710,13 @@ $payload = decodePayload($raw, $origin);
 // Same rule as the corpus floor: cannot-measure must fail, never pass.
 // ---------------------------------------------------------------------------
 
-$unreachable = $payload['unreachable-repositories'] ?? [];
+$unreachable = toStringList($payload['unreachable-repositories'] ?? []);
 
-if (is_array($unreachable) && $unreachable !== []) {
+if ($unreachable !== []) {
     $names = [];
 
     foreach ($unreachable as $repo) {
-        if (is_string($repo)) {
-            $names[] = '  ' . $repo;
-
-            continue;
-        }
-
-        $encoded = json_encode($repo);
-
-        $names[] = '  ' . (is_string($encoded) ? $encoded : '<unprintable>');
+        $names[] = '  ' . $repo;
     }
 
     fail(
@@ -673,17 +743,17 @@ if ($ignored !== []) {
     );
 }
 
-$abandoned = $payload['abandoned'] ?? [];
+$abandoned = toStringMap($payload['abandoned'] ?? []);
 
-if (is_array($abandoned) && $abandoned !== []) {
+if ($abandoned !== []) {
     $lines = [];
 
     foreach ($abandoned as $package => $replacement) {
         $lines[] = sprintf(
             '%s [%s] — %s',
-            (string) $package,
-            scopeOf((string) $package, $corpus),
-            is_string($replacement) && $replacement !== ''
+            $package,
+            scopeOf($package, $corpus),
+            $replacement !== ''
                 ? 'replaced by ' . $replacement
                 : 'no replacement suggested',
         );
