@@ -155,6 +155,13 @@ $extract = static function (
         exit(1);
     }
 
+    if ($pattern === '') {
+        $fail(sprintf('an empty extraction pattern was supplied for %s.', $path));
+        // Unreachable — $fail() exits. Present so static analysis can see the
+        // branch terminate and narrow $pattern, rather than widening a type.
+        exit(1);
+    }
+
     if (preg_match_all($pattern, $source, $matches) === false) {
         $fail(sprintf('the extraction pattern %s failed against %s.', $pattern, $path));
     }

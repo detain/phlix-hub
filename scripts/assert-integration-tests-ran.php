@@ -151,6 +151,22 @@ $unjustified = array_values(array_filter(
     static fn (string $case): bool => !array_key_exists($case, ALLOWED_SKIPS),
 ));
 
+/**
+ * The skips this run actually consumed an allowance for.
+ *
+ * This is what "an allowance is in effect" means: an entry of
+ * {@see ALLOWED_SKIPS} that a real skip in THIS report matched. Reporting the
+ * declared constant instead would say the same thing on every run — including
+ * runs where nothing skipped at all — which is why it is derived from
+ * `$skipped` here.
+ *
+ * @var list<string> $justified
+ */
+$justified = array_values(array_filter(
+    $skipped,
+    static fn (string $case): bool => array_key_exists($case, ALLOWED_SKIPS),
+));
+
 $integrationCases = $xpath->query(
     sprintf('//testcase[starts-with(@class, "%s")]', INTEGRATION_CLASS_PREFIX),
 );
@@ -203,8 +219,12 @@ printf(
     MIN_INTEGRATION_TESTS,
 );
 
-if (ALLOWED_SKIPS !== []) {
-    printf("Justified skip allowances in effect: %s\n", implode(', ', array_keys(ALLOWED_SKIPS)));
+if ($justified !== []) {
+    printf(
+        "Justified skip allowances applied to this run (%d): %s\n",
+        count($justified),
+        implode(', ', $justified),
+    );
 }
 
 exit(0);

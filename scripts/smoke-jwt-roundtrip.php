@@ -53,6 +53,22 @@ $actual = [
     'serverId' => $claims->serverId,
 ];
 
+/**
+ * Render a claim value for the failure message.
+ *
+ * `json_encode()` returns `false` for an unencodable value (a resource, an
+ * invalid UTF-8 byte sequence, recursion). Passing that straight to `sprintf()`
+ * would print an empty string, i.e. the smoke test would report a mismatch and
+ * then show nothing at all for the side that caused it.
+ */
+$render = static function (mixed $value): string {
+    $encoded = json_encode($value);
+
+    return $encoded === false
+        ? '<unencodable: ' . json_last_error_msg() . '>'
+        : $encoded;
+};
+
 foreach ($expected as $key => $value) {
     if ($actual[$key] !== $value) {
         fwrite(
@@ -60,8 +76,8 @@ foreach ($expected as $key => $value) {
             sprintf(
                 "FAIL: %s mismatch: expected %s, got %s\n",
                 $key,
-                json_encode($value),
-                json_encode($actual[$key])
+                $render($value),
+                $render($actual[$key])
             )
         );
         exit(1);
