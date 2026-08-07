@@ -2,6 +2,7 @@ parameters:
     level: 9
     paths:
         - src
+        - scripts
     bootstrapFiles:
         - vendor/autoload.php
     stubFiles:
