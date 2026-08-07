@@ -157,8 +157,23 @@ final class HubServicesProvider implements ServiceProviderInterface
         );
         $hubBaseUrl = self::stringOr($appConfig, 'hub_base_url', 'http://localhost:8800');
 
-        // AuditLogRepository must be registered before AuditLogger so PHP-DI
-        // can auto-inject it as the optional nullable constructor param.
+        // 🐛 S269 — the comment that used to sit here claimed "AuditLogRepository
+        // must be registered before AuditLogger so PHP-DI can auto-inject it as
+        // the optional nullable constructor param". That was wrong on both
+        // counts and it is deleted rather than reworded, because it is what kept
+        // the defect invisible:
+        //
+        //  1. PHP-DI does not auto-inject anything into an explicit `factory()`
+        //     closure — the closure IS the construction, autowiring is bypassed.
+        //     AuthServicesProvider's AuditLogger binding is such a closure, so
+        //     for as long as it passed one argument the repository was `null`.
+        //  2. Registration ORDER is irrelevant here anyway: PHP-DI merges every
+        //     provider's definitions before it resolves any of them, so a
+        //     `get(AuditLogRepository::class)` from AuthServicesProvider (which
+        //     registers first) resolves this entry perfectly well.
+        //
+        // AuthServicesProvider now passes the repository explicitly. This entry
+        // stays where it is; it just no longer carries a false explanation.
         $builder->addDefinitions([
             AuditLogRepository::class => factory(static function (
                 Connection $db,
@@ -382,12 +397,20 @@ final class HubServicesProvider implements ServiceProviderInterface
             // --- Alexa (S90 gate + S91 skill) --------------------------------
             // The rejection auditor. Bound to its INTERFACE so the DB write is
             // substitutable in a unit test that has no database, and given the
-            // AuditLogRepository DIRECTLY rather than the shared AuditLogger:
-            // 🐛 AuditLogger is constructed in AuthServicesProvider without its
-            // optional ?AuditLogRepository, so no AuditLogger event has ever
-            // reached the audit_logs table (see AuditLogAlexaRejectionAuditor's
-            // docblock). That is a pre-existing, out-of-scope finding; S91 does
-            // not inherit the no-op.
+            // AuditLogRepository DIRECTLY rather than the shared AuditLogger.
+            //
+            // S269 reconciliation: when S91 wrote this binding, the direct
+            // injection was a WORKAROUND — AuditLogger's own repository argument
+            // was never supplied, so routing through it would have written
+            // nothing. That is fixed; AuditLogger now persists. The direct
+            // injection nevertheless STAYS, for a different and now-accurate
+            // reason: AuditLogger exposes one method per fixed event slug and
+            // none of them accepts `ipAddress`/`userAgent`, which an Alexa
+            // signature rejection must record, nor can any of them emit the
+            // `alexa_rejected` slug the dashboard filters on. Giving AuditLogger
+            // such a method would be "adding a new audit event", explicitly out
+            // of S269's scope. These are two writers to one table, not two
+            // mechanisms for one job.
             AlexaRejectionAuditorInterface::class => factory(static function (
                 AuditLogRepository $auditLogs,
             ): AlexaRejectionAuditorInterface {

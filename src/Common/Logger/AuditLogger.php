@@ -24,9 +24,17 @@ use Phlix\Hub\Hub\AuditLogRepository;
  * {@see \Phlix\Hub\Common\Logger\LogChannels::AUDIT}. The channel writes
  * to `.logs/audit.log` by default (config/logger.php).
  *
- * When an {@see AuditLogRepository} is available (injected by the container
- * via the optional ctor param), each event is also persisted to the
- * `audit_logs` database table.
+ * When an {@see AuditLogRepository} is available, each event is ALSO persisted
+ * to the `audit_logs` database table, which is what makes it queryable through
+ * `GET /api/v1/me/audit-logs` and the admin dashboard activity feed.
+ *
+ * ⚠ `$auditRepo` is nullable for the benefit of unit tests and of
+ * `phlix-server`'s mirror of this class — **not** because production may omit
+ * it. It stayed `null` in production from H.5b until S269 because
+ * `AuthServicesProvider` bound this class with an explicit `factory()` closure
+ * that passed one argument, and an explicit closure bypasses PHP-DI autowiring,
+ * so nothing ever filled the gap. Every `$this->auditRepo?->log(...)` below then
+ * short-circuited silently. If you add a construction site, pass the repository.
  *
  * @package Phlix\Hub\Common\Logger
  */
