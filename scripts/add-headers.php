@@ -33,6 +33,12 @@ foreach (getPHPFiles($repoRoot) as $file) {
 
     // Skip files that already carry the copyright line.
     $content = file_get_contents($file);
+    if ($content === false) {
+        // Never silently continue past an unreadable file: this script rewrites
+        // what it reads, so "could not read" must not become "wrote nothing".
+        fwrite(STDERR, "ERROR {$relativePath}  (could not be read)\n");
+        exit(1);
+    }
     if (str_contains($content, $copyrightLine)) {
         echo "SKIP  {$relativePath}  (already has copyright)\n";
         $skipped++;
@@ -82,22 +88,41 @@ function getPHPFiles(string $repoRoot): array
     return $files;
 }
 
+/**
+ * Append every `.php` file under `$dir` to `$files`, pruning excluded subtrees.
+ *
+ * The exclusion is applied by a {@see RecursiveCallbackFilterIterator}, which is
+ * what actually stops the traversal descending. The previous implementation
+ * `continue`d on the directory node instead — that skips the directory entry
+ * itself, never its children, and directory entries were discarded anyway by the
+ * `isFile()` test below. Measured on a fixture tree: it rewrote headers inside
+ * `src/generated/` and `src/node_modules/`, the directories this script's own
+ * docblock says it excludes. It then called
+ * `setFlags(RecursiveIteratorIterator::CATCH_GET_CHILD)` on the inner
+ * `FilesystemIterator`, where the value 16 means `CURRENT_AS_SELF`, not
+ * "catch get child" — PHPStan level 9 reports that as `argument.invalidConstant`.
+ *
+ * @param list<string> $files    Accumulator, appended to in place.
+ * @param list<string> $excludes Directory basenames whose subtrees are skipped.
+ */
 function collect(string $dir, array &$files, array $excludes): void
 {
-    $iterator = new RecursiveIteratorIterator(
+    $pruned = new RecursiveCallbackFilterIterator(
         new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::SELF_FIRST
+        static function (mixed $node) use ($excludes): bool {
+            if (!$node instanceof SplFileInfo) {
+                return false;
+            }
+
+            return !$node->isDir() || !in_array($node->getBasename(), $excludes, true);
+        }
     );
 
+    $iterator = new RecursiveIteratorIterator($pruned, RecursiveIteratorIterator::SELF_FIRST);
+
     foreach ($iterator as $node) {
-        if ($node->isDir()) {
-            $basename = $node->getBasename();
-            if (in_array($basename, $excludes, true)) {
-                $iterator->setFlags(RecursiveIteratorIterator::CATCH_GET_CHILD);
-            }
-            if (in_array($basename, $excludes, true)) {
-                continue;
-            }
+        if (!$node instanceof SplFileInfo) {
+            continue;
         }
 
         if ($node->isFile() && $node->getExtension() === 'php') {
@@ -112,6 +137,9 @@ function collect(string $dir, array &$files, array $excludes): void
 function inferDescription(string $file, string $relativePath): string
 {
     $content = file_get_contents($file);
+    if ($content === false) {
+        return 'Phlix hub source file.';
+    }
 
     // Try to extract namespace or class name.
     if (preg_match('/^namespace\s+([^;]+);/m', $content, $nsMatch)) {
