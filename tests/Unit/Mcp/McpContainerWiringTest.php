@@ -18,6 +18,7 @@ use Phlix\Hub\Http\Controllers\McpController;
 use Phlix\Hub\Http\Controllers\McpTokenController;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
+use Phlix\Hub\Http\Request;
 use Phlix\Hub\Mcp\McpScopes;
 use Phlix\Hub\Mcp\McpSseStream;
 use Phlix\Hub\Mcp\McpTokenService;
@@ -32,6 +33,7 @@ use Workerman\MySQL\Connection;
 
 use function dirname;
 use function file_put_contents;
+use function json_decode;
 use function mkdir;
 use function sys_get_temp_dir;
 use function uniqid;
@@ -352,9 +354,84 @@ final class McpContainerWiringTest extends TestCase
         );
     }
 
+    /**
+     * S261 — the `playback_control` flag reaches {@see McpTokenController}, so
+     * `available_scopes` narrows with an UNCONFIGURED container.
+     *
+     * This is the `mcp_token_ttl` trap pointed at a security-visible value: the
+     * flag is read inside the factory closure, and if that plumbing broke the
+     * controller would fall back to whatever its constructor said and the hub
+     * would go on advertising a scope it cannot honour. Resolving the REAL
+     * definition is the only thing that can see it — `McpTokenControllerTest`
+     * hands the flag in by hand, so it proves the controller obeys the flag and
+     * says nothing about the flag arriving.
+     */
+    public function test_the_token_controller_hides_the_write_scope_when_the_flag_is_absent(): void
+    {
+        $controller = $this->container()->get(McpTokenController::class);
+        self::assertInstanceOf(McpTokenController::class, $controller);
+
+        self::assertSame(
+            ['mcp:servers:read', 'mcp:library:read', 'mcp:playback:read'],
+            self::advertisedScopes($controller),
+            'the container advertised a scope set that does not match its own tool catalogue.',
+        );
+    }
+
+    /**
+     * THE SUCCEEDING CONTROL: with the flag `true` the container's controller
+     * advertises the whole vocabulary, exactly as it registers the tool.
+     *
+     * The two assertions below are the pair that matters — the SAME container
+     * both publishes `playback_control` and advertises `mcp:playback:control`.
+     * One reader of the flag, one answer.
+     */
+    public function test_the_token_controller_advertises_the_write_scope_when_the_flag_is_true(): void
+    {
+        $container = $this->container(playbackControl: true);
+
+        $controller = $container->get(McpTokenController::class);
+        self::assertInstanceOf(McpTokenController::class, $controller);
+
+        self::assertSame(
+            ['mcp:servers:read', 'mcp:library:read', 'mcp:playback:read', 'mcp:playback:control'],
+            self::advertisedScopes($controller),
+        );
+
+        $registry = $container->get(McpToolRegistry::class);
+        self::assertInstanceOf(McpToolRegistry::class, $registry);
+        self::assertContains('playback_control', $registry->names());
+    }
+
     // ------------------------------------------------------------------
     // Fixtures
     // ------------------------------------------------------------------
+
+    /**
+     * `available_scopes` as the resolved controller actually renders it, read
+     * off a real `GET /api/v1/me/mcp-tokens` response rather than off a private
+     * property — the property is a bool, and a bool being present says nothing
+     * about it being consulted.
+     *
+     * @return mixed The decoded `available_scopes` value (asserted to be a list
+     *         of strings by the callers' `assertSame`).
+     */
+    private static function advertisedScopes(McpTokenController $controller): mixed
+    {
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/me/mcp-tokens';
+        $request->userId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+        $response = $controller->index($request);
+        self::assertSame(200, $response->statusCode);
+
+        /** @var mixed $decoded */
+        $decoded = json_decode($response->body, true);
+        self::assertIsArray($decoded);
+
+        return $decoded['available_scopes'] ?? null;
+    }
 
     /**
      * A container holding the REAL {@see HubServicesProvider} definitions, with

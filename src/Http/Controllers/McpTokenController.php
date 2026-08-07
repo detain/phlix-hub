@@ -17,6 +17,8 @@ use Phlix\Hub\Http\Response;
 use Phlix\Hub\Mcp\McpScopes;
 use Phlix\Hub\Mcp\McpTokenService;
 
+use function array_filter;
+use function array_values;
 use function is_array;
 use function is_string;
 use function mb_substr;
@@ -55,12 +57,21 @@ final class McpTokenController
     private const int MAX_NAME_LENGTH = 191;
 
     /**
-     * @param McpTokenService $tokens Mints / lists / revokes MCP tokens.
-     * @param AuditLogger     $audit  Records mint and revoke as audit events.
+     * @param McpTokenService $tokens                  Mints / lists / revokes
+     *        MCP tokens.
+     * @param AuditLogger     $audit                   Records mint and revoke as
+     *        audit events.
+     * @param bool            $playbackControlEnabled  The operator flag
+     *        `server.mcp_playback_control_enabled` (S63). Decides only what
+     *        {@see availableScopes()} ADVERTISES; it does not gate minting. The
+     *        parameter has no default on purpose — PHP-DI's `autowire()` skips
+     *        optional constructor parameters, so a defaulted flag is the shape
+     *        that silently stops arriving from the container.
      */
     public function __construct(
         private readonly McpTokenService $tokens,
         private readonly AuditLogger $audit,
+        private readonly bool $playbackControlEnabled,
     ) {
     }
 
@@ -79,7 +90,7 @@ final class McpTokenController
 
         return (new Response())->json([
             'tokens' => $this->tokens->listForUser($userId),
-            'available_scopes' => McpScopes::all(),
+            'available_scopes' => $this->availableScopes(),
         ]);
     }
 
@@ -90,6 +101,19 @@ final class McpTokenController
      * An empty or unrecognised scope list is refused rather than silently
      * minting a token that can call nothing — a credential that authenticates
      * but authorises nothing is the shape of a bug report, not a feature.
+     *
+     * ⚠ **Omitting `scopes` grants {@see McpScopes::readOnly()}, not
+     * {@see McpScopes::all()}** (S261). Until S261 it granted `all()`, so an API
+     * caller who said nothing about scopes was handed `mcp:playback:control` —
+     * the only WRITE capability in the vocabulary — as a side effect of not
+     * mentioning the field. A default is what a caller gets when they have
+     * expressed no opinion, and "no opinion" cannot mean "the most privileged
+     * thing available".
+     *
+     * The write scope is still MINTABLE: send it explicitly and it is granted.
+     * Excluding it from the default is a default, not a ban, and the difference
+     * is asserted in `McpTokenControllerTest` by a succeeding control request
+     * beside the omitting one.
      *
      * @param Request               $request The inbound HTTP request.
      * @param array<string, string> $params  Unused.
@@ -107,14 +131,14 @@ final class McpTokenController
 
         /** @var mixed $rawScopes */
         $rawScopes = $request->body['scopes'] ?? null;
-        $scopes = is_array($rawScopes) ? McpScopes::fromArray($rawScopes) : McpScopes::all();
+        $scopes = is_array($rawScopes) ? McpScopes::fromArray($rawScopes) : McpScopes::readOnly();
 
         if ($scopes === []) {
             return (new Response())->status(400)->json([
                 'error' => 'Bad Request',
                 'code' => 'mcp_token.no_valid_scopes',
                 'message' => 'At least one known scope is required.',
-                'available_scopes' => McpScopes::all(),
+                'available_scopes' => $this->availableScopes(),
             ]);
         }
 
@@ -163,6 +187,46 @@ final class McpTokenController
         $this->audit->logAdminAction($userId, 'mcp_token.revoke', $tokenId, []);
 
         return (new Response())->json(['revoked' => true, 'id' => $tokenId]);
+    }
+
+    /**
+     * The scopes this deployment advertises as USEFUL right now (S261).
+     *
+     * `McpScopes::all()` is the vocabulary. This is the subset the server can
+     * currently act on, and the two differ by exactly one member: when the
+     * operator flag `server.mcp_playback_control_enabled` is off,
+     * `Common\Container\Providers\HubServicesProvider` does not register
+     * `PlaybackControlTool` at all, so `mcp:playback:control` names a tool that
+     * appears in no `tools/list` and answers `mcp.unknown_tool`. Advertising it
+     * anyway told every client — including the `/app/mcp-tokens` create form,
+     * which builds its checkboxes from this list and pre-ticks all of them —
+     * to offer a capability the server will not honour.
+     *
+     * ⚠ **Advertisement, not validation.** An explicit request for
+     * `mcp:playback:control` is still granted with the flag off, and that is
+     * deliberate: the flag is a runtime switch an operator can flip without
+     * restarting anybody's agent, and refusing at MINT time would mean every
+     * token had to be re-minted after the flip. The flag is the gate;
+     * this list is what a client is told to expect.
+     *
+     * ⚠ The exclusion is an exact `!==` against the whole constant.
+     * `mcp:playback` is a PREFIX of `mcp:playback:control`, so any
+     * `str_contains`/`str_starts_with` filter here would also drop
+     * `mcp:playback:read` — a read scope — and would keep dropping it after a
+     * rename that a substring test cannot see.
+     *
+     * @return list<string>
+     */
+    private function availableScopes(): array
+    {
+        if ($this->playbackControlEnabled) {
+            return McpScopes::all();
+        }
+
+        return array_values(array_filter(
+            McpScopes::all(),
+            static fn (string $scope): bool => $scope !== McpScopes::PLAYBACK_CONTROL,
+        ));
     }
 
     /**

@@ -91,6 +91,44 @@ final class McpScopes
     }
 
     /**
+     * The scopes that cannot change anything, in {@see all()} order (S261).
+     *
+     * This is what {@see \Phlix\Hub\Http\Controllers\McpTokenController::create()}
+     * grants when a caller omits `scopes` entirely. Until S261 that default was
+     * {@see all()} — so an API client that said nothing about scopes received
+     * `mcp:playback:control`, the one WRITE capability, without ever having
+     * asked for it.
+     *
+     * ⚠ **Enumerated, not derived.** It would be shorter to filter {@see all()}
+     * on a `:read` suffix, and that is exactly the shape that fails open: a
+     * future scope whose name does not happen to end `:read` — `mcp:library:sync`,
+     * `mcp:servers:manage` — would land in the DEFAULT GRANT the moment it was
+     * added to `all()`, with nothing to notice. Listing the members here means a
+     * new scope is outside the default until somebody deliberately puts it
+     * inside, which is the direction a default grant must fail in.
+     *
+     * The omission risk that swaps in — adding a genuinely read-only scope to
+     * `all()` and forgetting it here — is caught by
+     * `McpScopesTest::test_every_read_scope_in_all_is_also_in_read_only()`, which
+     * checks the suffix rule as a cross-check rather than as the implementation.
+     *
+     * ⚠ Not the same question as "what will the server honour". A scope can be
+     * read-only and still unavailable, and a write scope stays MINTABLE when an
+     * operator asks for it explicitly — see
+     * {@see \Phlix\Hub\Http\Controllers\McpTokenController::availableScopes()}.
+     *
+     * @return list<string>
+     */
+    public static function readOnly(): array
+    {
+        return [
+            self::SERVERS_READ,
+            self::LIBRARY_READ,
+            self::PLAYBACK_READ,
+        ];
+    }
+
+    /**
      * Whether `$scope` is one this build understands.
      *
      * @param string $scope Candidate scope string.

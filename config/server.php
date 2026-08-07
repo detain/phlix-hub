@@ -67,6 +67,33 @@ return [
     // bool here rather than left as the raw env string.
     // A token ALSO needs the `mcp:playback:control` scope; the flag and the
     // scope are independent gates and neither substitutes for the other.
+    //
+    // 🚨 BEFORE YOU SET THIS TO true, READ THIS (S261).
+    // Turning this on does not only publish a tool. It ALSO makes the
+    // `mcp:playback:control` scope meaningful on every token that already holds
+    // it — retroactively, with no mint, no notification and no audit event.
+    // Until S261 that scope was granted BY DEFAULT: `McpTokenController::create()`
+    // fell back to `McpScopes::all()` whenever the request omitted `scopes`, and
+    // the `/app/mcp-tokens` create form pre-ticked every advertised scope. So a
+    // token minted before 2026-08-07 very likely carries the write scope
+    // whether or not its owner ever wanted it.
+    // S261 DELIBERATELY DID NOT STRIP THOSE ROWS — the stored `scopes` column
+    // cannot tell an explicit grant from a defaulted one, so a blanket UPDATE
+    // would silently revoke a capability some owners did choose, trading one
+    // silent change for another. The decision was to leave the data alone and
+    // put the review here, at the moment the flag is flipped. Review first:
+    //
+    //   SELECT id, user_id, name, created_at, last_used_at
+    //     FROM mcp_tokens
+    //    WHERE revoked_at IS NULL
+    //      AND expires_at > NOW()
+    //      AND FIND_IN_SET('mcp:playback:control', REPLACE(scopes, ' ', ','));
+    //
+    // (`FIND_IN_SET` over the space-delimited column matches WHOLE scopes;
+    // a `LIKE '%mcp:playback%'` would also match `mcp:playback:read`.)
+    // Revoke anything on that list you did not intend to grant — the owner can
+    // re-mint, and with this flag on the create form will offer the scope
+    // explicitly.
     'mcp_playback_control_enabled' => filter_var(
         ($v = getenv('HUB_MCP_PLAYBACK_CONTROL')) !== false && $v !== '' ? $v : 'false',
         FILTER_VALIDATE_BOOLEAN,
