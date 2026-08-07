@@ -53,10 +53,35 @@ use function sprintf;
  * asserted here are therefore proven to happen BEFORE the bridge, which is the
  * only place they are worth anything.
  *
+ * ## Why the five tool classes are named in `@covers`
+ *
+ * `@covers` DISCARDS every line executed outside the classes it names. This
+ * suite runs the REAL {@see ListServersTool}, {@see ListLibrariesTool},
+ * {@see SearchMediaTool}, {@see GetMediaTool} and {@see GetPlaybackInfoTool}
+ * through {@see McpToolRegistry::call()} and asserts, per tool:
+ *
+ *  - the four server-scoped tools forward the caller's `server_id` into the
+ *    production ownership gate — 403 `server.not_owned` for another user's
+ *    server, 404 `server.not_found` for one that does not exist (so the 403 is a
+ *    real ownership decision, not a blanket refusal);
+ *  - `ListServersTool::call()` asks the handler for the TOKEN's user id and no
+ *    other, which is the acceptance criterion of this step.
+ *
+ * Those are assertions about each tool's `call()`, so the credit is earned.
+ * Listing them without this suite actually driving them would be the dishonest
+ * version of the same edit. The descriptor half of each class (`description()`,
+ * `inputSchema()`) is exercised and asserted by {@see McpToolRegistryTest},
+ * which names the same five for that reason.
+ *
  * @package Phlix\Hub\Tests\Unit\Mcp
  *
  * @covers \Phlix\Hub\Mcp\McpToolContext
  * @covers \Phlix\Hub\Mcp\McpToolRegistry
+ * @covers \Phlix\Hub\Mcp\Tools\GetMediaTool
+ * @covers \Phlix\Hub\Mcp\Tools\GetPlaybackInfoTool
+ * @covers \Phlix\Hub\Mcp\Tools\ListLibrariesTool
+ * @covers \Phlix\Hub\Mcp\Tools\ListServersTool
+ * @covers \Phlix\Hub\Mcp\Tools\SearchMediaTool
  */
 final class McpCrossUserIsolationTest extends TestCase
 {

@@ -23,9 +23,31 @@ use function count;
 /**
  * Unit tests for {@see McpToolRegistry} and the shipped tool descriptors.
  *
+ * ## Why the five tool classes are `@covers`ed here
+ *
+ * `@covers` does not merely ANNOTATE — it DISCARDS every executed line outside
+ * the named classes. This suite drives the five shipped tools directly: the
+ * registry's constructor calls `name()` and `requiredScope()` on each,
+ * {@see test_describe_lists_every_tool_with_a_schema_and_a_scope()} calls
+ * `describe()` (which calls `description()` and `inputSchema()` on each), and
+ * {@see test_every_shipped_tool_declares_a_usable_schema()} asserts, per tool,
+ * that the schema is an object, that it refuses unknown properties, that the
+ * description is non-empty and that the required scope is one {@see McpScopes}
+ * knows. Those are assertions ABOUT each tool class, not incidental traffic, so
+ * naming them is truthful attribution rather than a way to move a number.
+ *
+ * What this suite does NOT exercise is `call()`; that is
+ * {@see McpCrossUserIsolationTest}, which names the same five classes for the
+ * same reason.
+ *
  * @package Phlix\Hub\Tests\Unit\Mcp
  *
  * @covers \Phlix\Hub\Mcp\McpToolRegistry
+ * @covers \Phlix\Hub\Mcp\Tools\GetMediaTool
+ * @covers \Phlix\Hub\Mcp\Tools\GetPlaybackInfoTool
+ * @covers \Phlix\Hub\Mcp\Tools\ListLibrariesTool
+ * @covers \Phlix\Hub\Mcp\Tools\ListServersTool
+ * @covers \Phlix\Hub\Mcp\Tools\SearchMediaTool
  */
 final class McpToolRegistryTest extends TestCase
 {
