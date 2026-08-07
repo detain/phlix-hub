@@ -23,6 +23,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\HubSettingsRepository;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
@@ -37,7 +38,9 @@ use function DI\get;
  *  - {@see JwtHandler} → singleton built from `HUB_JWT_SECRET` (env) or
  *    `config('auth.secret')` (file).
  *  - {@see UserRepository} → autowired from {@see Connection}.
- *  - {@see AuditLogger} → singleton bound to {@see LogChannels::AUDIT}.
+ *  - {@see AuditLogger} → singleton bound to {@see LogChannels::AUDIT} AND to
+ *    the {@see AuditLogRepository} registered by {@see HubServicesProvider},
+ *    so every event reaches both the log channel and the `audit_logs` table.
  *  - {@see AuthManager} → autowired with the {@see RateLimiterInterface}
  *    (login attempt limiter, registered by {@see CommonServicesProvider})
  *    injected and the dispatcher optional.
@@ -114,9 +117,39 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 return new UserRepository($db);
             }),
 
-            AuditLogger::class => factory(static function (): AuditLogger {
-                return new AuditLogger(LoggerFactory::get(LogChannels::AUDIT));
-            }),
+            // 🐛 S269. The second argument is NOT optional in practice.
+            //
+            // {@see AuditLogger::__construct()} declares
+            // `?AuditLogRepository $auditRepo = null`, and this binding used to
+            // pass only the logger. PHP-DI does NOT fill the gap: an explicit
+            // `factory()` closure bypasses autowiring entirely, so `$auditRepo`
+            // was `null` in every single resolution and each
+            // `$this->auditRepo?->log(...)` inside AuditLogger short-circuited.
+            // The `audit_logs` table, `GET /api/v1/me/audit-logs` and the admin
+            // dashboard activity feed had therefore never seen an AuditLogger
+            // event — an audit log that is empty because nothing was recorded
+            // is indistinguishable from one that is empty because nothing
+            // happened, which is why this was a security defect rather than a
+            // missing feature.
+            //
+            // Do NOT drop the second constructor argument. tests/Integration/
+            // Container/AuditLoggerContainerBindingTest.php resolves this very
+            // binding out of a real container, and removing that argument reds
+            // BOTH of its cases (measured: `Failed asserting that null is not
+            // null`, and the endpoint answering `total: 0` after an event was
+            // logged — which is exactly the pre-S269 production behaviour).
+            //
+            // ⚠ The `->parameter('auditRepo', …)` line below is NOT what makes
+            // that work, and the test does NOT pin it — measured: deleting the
+            // line on its own leaves both cases green, because PHP-DI resolves a
+            // TYPE-HINTED factory-closure parameter by autowiring even though it
+            // will not autowire an argument the closure never declares. It is
+            // kept for explicitness and to match the sibling AuthManager binding
+            // (whose `logger`/`dispatcher` parameters genuinely cannot be
+            // inferred). Do not read it as the load-bearing part.
+            AuditLogger::class => factory(static function (AuditLogRepository $auditRepo): AuditLogger {
+                return new AuditLogger(LoggerFactory::get(LogChannels::AUDIT), $auditRepo);
+            })->parameter('auditRepo', get(AuditLogRepository::class)),
 
             AuthManager::class => factory(static function (
                 UserRepository $repo,

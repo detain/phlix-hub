@@ -20,18 +20,26 @@ use Throwable;
  *
  * ## Why it takes the repository and not `AuditLogger`
  *
- * 🐛 `AuditLogger` is bound in `AuthServicesProvider` as
- * `new AuditLogger(LoggerFactory::get(LogChannels::AUDIT))` — its optional
- * `?AuditLogRepository` argument is never passed. There is exactly ONE
- * `AuditLogger::class` definition in the container and it is an explicit
- * `factory()`, so nothing autowires the repository in either. The consequence is
- * that **no `AuditLogger` event has ever reached the `audit_logs` table on the
- * hub**; the comment in `HubServicesProvider` claiming PHP-DI auto-injects it is
- * wrong. That is a pre-existing, estate-wide finding reported by S91 and NOT
- * fixed here — repointing the shared logger is a change with its own blast
- * radius. This auditor injects {@see AuditLogRepository} directly so the one
- * thing this step promises to persist actually is persisted, rather than
- * inheriting a silent no-op.
+ * ⚠ The reason recorded here by S91 is **obsolete and has been replaced** — read
+ * the new one, not the old one. S91 wrote that `AuditLogger` was bound in
+ * `AuthServicesProvider` as `new AuditLogger(LoggerFactory::get(LogChannels::AUDIT))`
+ * with its optional `?AuditLogRepository` never passed, so no `AuditLogger` event
+ * had ever reached the `audit_logs` table and routing through it would have
+ * persisted nothing. That was true and is the defect S269 fixed: the binding now
+ * passes the repository, and `AuditLogger` writes rows like everything else.
+ *
+ * The direct injection stays anyway, on its own merits:
+ *
+ *  - `AuditLogger` exposes one method per FIXED event slug, and none of them can
+ *    emit {@see self::EVENT} (`alexa_rejected`), which is what the admin console
+ *    filters this surface on.
+ *  - None of them accepts `ipAddress` or `userAgent`. A signature rejection is
+ *    only useful with the caller's address attached, and
+ *    {@see AuditLogRepository::log()} is the only writer that takes it.
+ *
+ * Adding such a method to `AuditLogger` would be introducing a new audit event,
+ * which S269 held out of scope deliberately. So this is a second WRITER to one
+ * table, not a second MECHANISM competing with `AuditLogger`.
  *
  * ## Both sinks, deliberately
  *
