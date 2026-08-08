@@ -82,7 +82,10 @@ use function implode;
  *
  * ## Order of the checks, and why
  *
- *  1. **Is a bearer token present?** No → 401 `invalid_token`.
+ *  1. **Is a bearer token present?** No → 401 `invalid_request`, with a BARE
+ *     `WWW-Authenticate: Bearer realm="…"` challenge that names no error code
+ *     (RFC 6750 §3 — nothing has been tried and rejected yet). Distinct from
+ *     step 2 on purpose; see {@see bareChallenge()}.
  *  2. **Does it validate as an ACCESS token?** {@see OAuthTokenService::validateAccess()}
  *     filters on `kind = 'access'`, `revoked_at IS NULL` and `expires_at > NOW()`,
  *     so a refresh token, a revoked token and an expired token all fail here.
@@ -107,6 +110,13 @@ use function implode;
  */
 final class OAuthResourceMiddleware
 {
+    /**
+     * Protection realm named in every `WWW-Authenticate` challenge (RFC 6750
+     * §3). One value for the whole hub: a per-route realm would let a client
+     * cache one credential per route, which is not how these tokens work.
+     */
+    public const string REALM = 'phlix-hub';
+
     /**
      * Scopes a request must carry, normalised and guaranteed non-empty.
      *
@@ -166,11 +176,21 @@ final class OAuthResourceMiddleware
     {
         $token = $request->bearerToken;
         if ($token === null || $token === '') {
-            return $this->challenge(
-                401,
-                OAuthError::INVALID_TOKEN,
-                'An OAuth 2.0 Bearer access token is required',
-            );
+            // ⚠ NOT `invalid_token`, and the challenge carries no `error=` at
+            // all. RFC 6750 §3: "If the request lacks any authentication
+            // information … the resource server SHOULD NOT include an error
+            // code". Nothing has been tried and rejected yet.
+            //
+            // 🔴 It is also what makes this branch OBSERVABLE. Mutation testing
+            // found that deleting this guard changed no outcome: an empty token
+            // falls through to `OAuthTokenService::validateAccess()`, which has
+            // its own `$token === ''` guard and answers null, so the request was
+            // still refused 401 — by a different line, one layer down. The
+            // refusal was real and the attribution was wrong, which is the S92
+            // M5/M8 shape exactly. Giving "no credential" its own code and its
+            // own challenge means this line, and only this line, produces that
+            // outcome.
+            return $this->bareChallenge();
         }
 
         $grant = $this->tokens->validateAccess($token);
@@ -216,9 +236,33 @@ final class OAuthResourceMiddleware
     }
 
     /**
-     * Build an RFC 6750 §3 refusal: the JSON error body the OAuth surface uses
-     * everywhere else, plus the `WWW-Authenticate` challenge a compliant client
-     * reads to decide whether to re-authorise or to ask for more scope.
+     * The refusal for a request that carried NO credential at all.
+     *
+     * A bare `WWW-Authenticate: Bearer realm="…"` with no `error=` (RFC 6750
+     * §3), and `invalid_request` in the body — "you did not send one" rather
+     * than "the one you sent is bad". Kept separate from {@see challenge()}
+     * rather than expressed as a flag on it, so the two cannot converge by
+     * accident: the day they produce the same bytes is the day this branch stops
+     * being testable.
+     */
+    private function bareChallenge(): Response
+    {
+        $description = 'An OAuth 2.0 Bearer access token is required';
+
+        return (new Response())
+            ->status(401)
+            ->header('WWW-Authenticate', 'Bearer realm="' . self::REALM . '"')
+            ->json([
+                'error'             => OAuthError::INVALID_REQUEST,
+                'error_description' => $description,
+            ]);
+    }
+
+    /**
+     * Build an RFC 6750 §3 refusal for a credential that WAS presented: the JSON
+     * error body the OAuth surface uses everywhere else, plus the
+     * `WWW-Authenticate` challenge a compliant client reads to decide whether to
+     * re-authorise or to ask for more scope.
      *
      * @param int    $status      401 or 403.
      * @param string $error       {@see OAuthError} code.
@@ -226,7 +270,8 @@ final class OAuthResourceMiddleware
      */
     private function challenge(int $status, string $error, string $description): Response
     {
-        $challenge = 'Bearer error="' . $error . '", error_description="' . $description . '"';
+        $challenge = 'Bearer realm="' . self::REALM . '", error="' . $error . '"'
+            . ', error_description="' . $description . '"';
         if ($error === OAuthError::INSUFFICIENT_SCOPE) {
             $challenge .= ', scope="' . implode(' ', $this->requiredScopes) . '"';
         }

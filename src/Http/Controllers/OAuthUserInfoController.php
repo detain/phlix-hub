@@ -96,8 +96,10 @@ final class OAuthUserInfoController
 
         $grant = $request->oauthGrant;
         if (!$grant instanceof OAuthGrant) {
+            // Same code and wording the middleware uses for "you sent no
+            // credential", because that is what an unpopulated grant means here.
             return (new Response())->status(401)->json([
-                'error'             => OAuthError::INVALID_TOKEN,
+                'error'             => OAuthError::INVALID_REQUEST,
                 'error_description' => 'An OAuth 2.0 Bearer access token is required',
             ]);
         }

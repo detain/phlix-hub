@@ -236,13 +236,15 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
 
         self::assertSame(401, $anonymous->statusCode, 'an uncredentialed caller must be refused');
         self::assertSame(
-            OAuthError::INVALID_TOKEN,
+            OAuthError::INVALID_REQUEST,
             self::json($anonymous)['error'] ?? null,
             'the refusal must come from the OAuth resource gate, not from some other 401',
         );
-        self::assertStringContainsString(
-            'Bearer error="invalid_token"',
-            $anonymous->headers['WWW-Authenticate'] ?? '',
+        // RFC 6750 §3: a request that carried NO credential gets a BARE
+        // challenge — no `error=`, because nothing was tried and rejected.
+        self::assertSame(
+            'Bearer realm="' . OAuthResourceMiddleware::REALM . '"',
+            $anonymous->headers['WWW-Authenticate'] ?? null,
         );
 
         // --- the WITH half ----------------------------------------------
@@ -267,6 +269,48 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
         // The 200 must NOT carry a challenge header — otherwise "the header is
         // present" below would be satisfied by every response.
         self::assertArrayNotHasKey('WWW-Authenticate', $authorised->headers);
+    }
+
+    /**
+     * 🔴 Written because a mutation survived.
+     *
+     * Deleting the middleware's "no bearer token" guard changed no outcome: an
+     * empty token fell through to `OAuthTokenService::validateAccess()`, which
+     * has its own `$token === ''` guard and answers null, so the request was
+     * still refused 401 — by a different line, one layer down. The refusal was
+     * real; the ATTRIBUTION was wrong. That is the S92 M5/M8 shape, where a
+     * MySQL affected-row detail refused a replay and the tests read it as the
+     * `consumed_at` predicate doing it.
+     *
+     * The two 401s now differ, per RFC 6750 §3 — "no credential" gets
+     * `invalid_request` and a challenge naming NO error code; "bad credential"
+     * gets `invalid_token` and a challenge naming it. Asserting BOTH in one
+     * method is what makes each branch attributable: with the guard deleted the
+     * absent-token case produces the presented-token response, and this reds.
+     */
+    public function testTheAbsentCredentialRefusalIsDistinguishableFromTheRejectedOne(): void
+    {
+        $absent   = $this->dispatch(null);
+        $rejected = $this->dispatch('phlix-oat-' . bin2hex(random_bytes(32)));
+
+        // Same status — which is exactly why the status alone attributes nothing.
+        self::assertSame(401, $absent->statusCode);
+        self::assertSame(401, $rejected->statusCode);
+
+        self::assertSame(OAuthError::INVALID_REQUEST, self::json($absent)['error'] ?? null);
+        self::assertSame(OAuthError::INVALID_TOKEN, self::json($rejected)['error'] ?? null);
+
+        $absentChallenge   = $absent->headers['WWW-Authenticate'] ?? '';
+        $rejectedChallenge = $rejected->headers['WWW-Authenticate'] ?? '';
+
+        self::assertSame('Bearer realm="' . OAuthResourceMiddleware::REALM . '"', $absentChallenge);
+        self::assertStringContainsString('error="' . OAuthError::INVALID_TOKEN . '"', $rejectedChallenge);
+
+        // Anti-vacuity: the two responses must not be the same bytes. If they
+        // ever converge, every assertion above still passes individually while
+        // the branches stop being distinguishable — which is the whole defect.
+        self::assertNotSame($absentChallenge, $rejectedChallenge);
+        self::assertNotSame($absent->body, $rejected->body);
     }
 
     /**

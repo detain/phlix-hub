@@ -3678,12 +3678,17 @@ paths:
                 $ref: "#/components/schemas/OAuthUserInfo"
         "401":
           description: >-
-            `invalid_token` — no token, a token that is unknown/expired/revoked, a REFRESH token
-            presented as a bearer credential, or a token whose user no longer exists. One code for
-            all of them. Carries `WWW-Authenticate: Bearer error="invalid_token"`.
+            Two cases, deliberately distinguishable (RFC 6750 §3). **No credential at all** →
+            `invalid_request`, with a BARE `WWW-Authenticate: Bearer realm="phlix-hub"` that names no
+            error code, because nothing has been tried and rejected yet. **A credential that was
+            presented and refused** → `invalid_token`, covering unknown / expired / revoked / a
+            REFRESH token presented as a bearer credential / a token whose user no longer exists —
+            one code for all of them, so a holder cannot learn which one applies.
           headers:
             WWW-Authenticate:
-              description: 'Bearer error="invalid_token", error_description="…"'
+              description: >-
+                'Bearer realm="phlix-hub"' when no credential was sent; 'Bearer realm="phlix-hub",
+                error="invalid_token", error_description="…"' when one was sent and refused.
               schema:
                 type: string
           content:
@@ -3697,7 +3702,9 @@ paths:
             to a client and to a log reader.
           headers:
             WWW-Authenticate:
-              description: 'Bearer error="insufficient_scope", …, scope="phlix:profile:read"'
+              description: >-
+                'Bearer realm="phlix-hub", error="insufficient_scope", error_description="…",
+                scope="phlix:profile:read"'
               schema:
                 type: string
           content:
@@ -3996,10 +4003,11 @@ components:
         OAuthResourceMiddleware (S286). An opaque `phlix-oat-`-prefixed CSPRNG string, not a JWT — the
         hub stores only its SHA-256 hash — carrying the scopes the USER approved on the consent
         screen. Distinct from `bearerAuth`: that is a hub user's own session JWT and carries no
-        scopes at all, so the two are never interchangeable and never accepted on the same route. A
-        missing, expired, revoked or wrong-kind token is 401 `invalid_token`; a valid token lacking
-        the route's scope is 403 `insufficient_scope`. Both carry a `WWW-Authenticate: Bearer`
-        challenge (RFC 6750 §3).
+        scopes at all, so the two are never interchangeable and never accepted on the same route.
+        Sending NO credential is 401 `invalid_request` with a bare `WWW-Authenticate: Bearer
+        realm="phlix-hub"`; an expired, revoked or wrong-kind token is 401 `invalid_token`; a valid
+        token lacking the route's scope is 403 `insufficient_scope`. All three carry a
+        `WWW-Authenticate: Bearer` challenge (RFC 6750 §3).
   parameters:
     AcceptPhlixProtocol:
       name: Accept-Phlix-Protocol
