@@ -23,6 +23,8 @@ use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
+use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
+use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AdminUpdatesController;
@@ -1890,7 +1892,24 @@ final class Application
                     /** @psalm-suppress InvalidArgument */
                     ChannelClient::on($bridge->replyEvent(), $bridge->onReply(...));
                 }
+
+                // S93: the same broker also carries Alexa's "start this title in
+                // an app you already have open" push to the :8804 SyncPlay
+                // worker. Subscribe the SINGLETON pusher's unique reply event so
+                // the delivered COUNT gets back to the waiting coroutine — a
+                // second instance here would subscribe to an event nobody
+                // publishes on and every push would time out to 0 delivered.
+                /** @var mixed $pendingCommands */
+                $pendingCommands = $proxyContainer->get(PendingCommandPusherInterface::class);
+                if ($pendingCommands instanceof ChannelPendingCommandPusher) {
+                    /** @psalm-suppress InvalidArgument */
+                    ChannelClient::on($pendingCommands->replyEvent(), $pendingCommands->onReply(...));
+                }
             } catch (Throwable $e) {
+                // Never let a container-resolution or broker failure kill a
+                // resident HTTP worker: log and carry on. The degraded state is
+                // "no pending command can be delivered", which the skill already
+                // speaks honestly as "you have no Phlix app open".
                 LoggerFactory::get(LogChannels::RELAY)->error('Relay proxy: HTTP worker channel init failed', [
                     'error' => $e->getMessage(),
                 ]);
@@ -2256,10 +2275,16 @@ final class Application
         $syncplayPort = is_int($syncplayPortRaw)
             ? $syncplayPortRaw
             : (int) (is_numeric($syncplayPortRaw) ? $syncplayPortRaw : SyncPlayRelayWorker::DEFAULT_PORT);
+        // S93: this worker now ALSO joins the channel broker started above and
+        // subscribes to PendingCommandProtocol::PUSH_EVENT, so an Alexa utterance
+        // handled on an HTTP worker can reach the client sockets that only exist
+        // in THIS process. Hence the channel host/port.
         $syncplayWorker = new SyncPlayRelayWorker(
             $syncplayPort,
             1,
             $this->container,
+            $channelHost,
+            $channelPort,
         );
         $syncplayWorker->start();
 

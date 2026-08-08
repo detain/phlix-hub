@@ -11,12 +11,14 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\SyncPlay;
 
+use Channel\Client as ChannelClient;
 use Psr\Container\ContainerInterface;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\ClientRelayWorker;
+use Phlix\Hub\Relay\RelayProxyProtocol;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -73,14 +75,25 @@ final class SyncPlayRelayWorker
     private static array $rooms = [];
 
     /**
-     * @param int               $port    SyncPlay WS port (default 8804).
-     * @param int               $count   Number of worker processes.
-     * @param ContainerInterface $container PSR-11 container for lazy service access.
+     * @param int                $port        SyncPlay WS port (default 8804).
+     * @param int                $count       Number of worker processes.
+     * @param ContainerInterface $container   PSR-11 container for lazy service access.
+     * @param string             $channelHost `workerman/channel` broker host (S93).
+     * @param int                $channelPort `workerman/channel` broker port (S93).
+     *        Defaults to the SAME broker the relay proxy uses
+     *        ({@see RelayProxyProtocol::DEFAULT_CHANNEL_PORT}) — there is one
+     *        broker per hub process tree, not one per feature.
+     *
+     * Both channel parameters are TRAILING and DEFAULTED on purpose: every
+     * existing call site (`Application::run()`, the unit suite) constructs this
+     * worker with three arguments and must keep compiling unchanged.
      */
     public function __construct(
         private readonly int $port,
         private readonly int $count,
         private readonly ContainerInterface $container,
+        private readonly string $channelHost = '127.0.0.1',
+        private readonly int $channelPort = RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
     ) {
     }
 
@@ -108,7 +121,19 @@ final class SyncPlayRelayWorker
     }
 
     /**
-     * Worker start hook - set up room cleanup timer.
+     * Worker start hook — set up the room cleanup timer and join the channel
+     * broker so HTTP workers can push pending commands into this process.
+     *
+     * The channel join is the S93 half: this worker is the ONLY process holding
+     * the live client sockets ({@see self::$clients} is a per-process static), so
+     * a pending command minted on an HTTP worker can only reach a socket by
+     * crossing the `workerman/channel` broker. Mirrors
+     * {@see \Phlix\Hub\Relay\RelayWorker::onWorkerStart()}.
+     *
+     * The join is wrapped so a broker failure logs and CONTINUES: the room
+     * cleanup timer and the whole SyncPlay surface must keep working even if no
+     * pending command can be delivered, and a throw here would take down a
+     * resident worker at boot.
      *
      * @return void
      */
@@ -122,6 +147,85 @@ final class SyncPlayRelayWorker
                 }
             }
         });
+
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+
+        try {
+            ChannelClient::connect($this->channelHost, $this->channelPort);
+
+            $dispatcher = new PendingCommandDispatcher($logger);
+            // The vendor Channel\Client::on() callback is typed with the legacy
+            // `callback` pseudo-type, which Psalm resolves to an (undefined)
+            // Channel\callback class that neither an array nor a Closure can
+            // satisfy. The runtime only does is_callable(), so a first-class
+            // callable is correct here.
+            /** @psalm-suppress InvalidArgument */
+            ChannelClient::on(PendingCommandProtocol::PUSH_EVENT, $dispatcher->onPush(...));
+
+            $logger->info('SyncPlay pending command: relay worker joined channel broker', [
+                'channel_host' => $this->channelHost,
+                'channel_port' => $this->channelPort,
+            ]);
+        } catch (Throwable $e) {
+            $logger->error('SyncPlay pending command: channel init failed', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Write `$frame` to every live client of `$userId` bound to `$serverId`.
+     *
+     * ## Why the match is on BOTH identities
+     *
+     * The `serverId` half is not decoration. A user may own two servers, and a
+     * client bound to server B cannot play a media id that only exists on server
+     * A — delivering there would be a command that silently fails on arrival,
+     * which is exactly the class of dishonesty the delivered count exists to
+     * prevent. Matching on the user alone would inflate the count with sockets
+     * that could never have acted on the frame.
+     *
+     * ## Why room membership is irrelevant
+     *
+     * Delivery happens regardless of whether the client has joined a SyncPlay
+     * room. A pending command is addressed to a **user's open app**, not to a
+     * room: a user who has just opened Phlix and asked Alexa to start something
+     * has no room, and requiring one would make the feature unreachable in its
+     * primary case. This is why it does NOT go through
+     * {@see self::broadcastToRoom()}.
+     *
+     * An empty `$userId` or `$serverId` returns 0 immediately. An empty identity
+     * must never fan out: `SyncPlayClient::$userId` is nullable, and a loose
+     * comparison against an unauthenticated client would turn one blank field
+     * into a broadcast to every socket on the hub.
+     *
+     * @param string $userId   Hub user id the command is addressed to.
+     * @param string $serverId Server the media id belongs to.
+     * @param string $frame    The JSON frame to write.
+     *
+     * @return int Number of sockets actually written to.
+     *
+     * @since S93
+     */
+    public static function deliverToUser(string $userId, string $serverId, string $frame): int
+    {
+        if ($userId === '' || $serverId === '') {
+            return 0;
+        }
+
+        $delivered = 0;
+        foreach (self::$clients as $client) {
+            if ($client->userId === null || $client->userId === '') {
+                continue;
+            }
+            if ($client->userId !== $userId || $client->serverId !== $serverId) {
+                continue;
+            }
+            $client->connection->send($frame);
+            $delivered++;
+        }
+
+        return $delivered;
     }
 
     /**

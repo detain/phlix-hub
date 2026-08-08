@@ -19,6 +19,7 @@ use Phlix\Hub\Alexa\AlexaSpeech;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
+use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 
 use function array_combine;
 use function array_keys;
@@ -44,9 +45,15 @@ use function trim;
  *
  * It is a self-hosted HTTPS custom skill (not a Lambda, not a Smart Home skill).
  * It answers questions about the titles in a linked user's library — "how long is
- * Inception" — and it hands back a LINK when asked to play something. It cannot
- * start, stop or route playback on any device, and it cannot cast; that is a
- * later step, and casting is not built at all.
+ * Inception" — it hands back a LINK when asked for one, and (S93) it can ask a
+ * Phlix app the user ALREADY HAS OPEN to start a title, via
+ * {@see PendingCommandPusherInterface}.
+ *
+ * What it still cannot do, and says so: it cannot switch a screen on, cannot route
+ * or cast media to a device (Chromecast/Roku/AirPlay are not built at all), and
+ * cannot reach a screen that is not already running Phlix. The one ability it has
+ * is narrow and is spoken with its limit attached — see
+ * {@see AlexaPhrases::PLAY_IN_APP_SENT}.
  *
  * The honesty criterion is enforced in three independent places, because a rule
  * stated only in prose is a rule that lapses:
@@ -96,11 +103,20 @@ final class AlexaSkillController
      * fallback refusal, a change no status-code assertion would notice — fails
      * the build.
      *
+     * ⚠ Since S93 this list is pinned EXACTLY, not merely by a floor. Each entry
+     * is one capability the skill claims out loud in {@see AlexaPhrases::CAPABILITY}
+     * and {@see AlexaPhrases::UNSUPPORTED_REQUEST}, so ADDING an intent is a
+     * decision about what the skill says it can do — and an intent added here
+     * without that decision would leave the capability statement describing a
+     * skill that no longer exists. A future intent must change this list
+     * deliberately and re-check the two capability sentences with it.
+     *
      * @var list<string>
      */
     public const SUPPORTED_INTENTS = [
         'PhlixTitleRuntimeIntent',
         'PhlixPlayLinkIntent',
+        'PhlixPlayInAppIntent',
         'AMAZON.HelpIntent',
         'AMAZON.StopIntent',
         'AMAZON.CancelIntent',
@@ -156,6 +172,11 @@ final class AlexaSkillController
      * @param ServerProxyController $proxy       Production relay proxy controller,
      *        handed to {@see AlexaMediaGateway} so its gates are inherited.
      * @param ServerListController  $serverList  Production server-list controller.
+     * @param PendingCommandPusherInterface $pendingCommands S93. Pushes a
+     *        "start this title" frame to the user's already-open apps via the
+     *        `:8804` SyncPlay relay process, and reports how many sockets it
+     *        actually reached. The count — not the fact that a push was made — is
+     *        what {@see playInApp()} gates its confirmation on.
      * @param StructuredLogger      $logger      Malformed envelopes and failed
      *        lookups are recorded here; nothing is ever spoken about them.
      * @param string                $hubBaseUrl  Public hub origin the play link is
@@ -165,6 +186,7 @@ final class AlexaSkillController
         private readonly AlexaAccountLink $accountLink,
         private readonly ServerProxyController $proxy,
         private readonly ServerListController $serverList,
+        private readonly PendingCommandPusherInterface $pendingCommands,
         private readonly StructuredLogger $logger,
         private readonly string $hubBaseUrl,
     ) {
@@ -217,6 +239,7 @@ final class AlexaSkillController
         return match ($envelope->intentName()) {
             'PhlixTitleRuntimeIntent' => $this->titleFacts($request, $envelope),
             'PhlixPlayLinkIntent' => $this->playLink($request, $envelope),
+            'PhlixPlayInAppIntent' => $this->playInApp($request, $envelope),
             'AMAZON.HelpIntent' => $this->capability(),
             'AMAZON.StopIntent', 'AMAZON.CancelIntent' => AlexaSpeech::tell(
                 AlexaSpeech::render(AlexaPhrases::GOODBYE),
@@ -293,14 +316,76 @@ final class AlexaSkillController
     }
 
     /**
-     * The shared front half of both library intents: identity, a reachable
+     * `PhlixPlayInAppIntent` — start a title in a Phlix app the user ALREADY has
+     * open (S93).
+     *
+     * 🚨 This is a DIFFERENT feature from {@see playLink()}, not an extension of
+     * it. `PhlixPlayLinkIntent` hands back a link and says plainly that it is a
+     * link; that intent's behaviour, return shape and name are untouched here.
+     *
+     * ## The confirmation is gated on a REAL delivered count
+     *
+     * {@see PendingCommandPusherInterface::pushPlayMedia()} returns the number of
+     * live, authenticated sockets the frame was actually WRITTEN to. The
+     * confirmation ({@see AlexaPhrases::PLAY_IN_APP_SENT}) is spoken only when that
+     * number is at least 1; on 0 the skill says, plainly, that it started nothing
+     * ({@see AlexaPhrases::PLAY_IN_APP_NO_OPEN_APP}).
+     *
+     * That gate is the entire point of the design. A confirmation for a command
+     * nobody received is precisely the defect this whole skill's honesty rules
+     * exist to prevent: the user is told a thing happened, and their only way to
+     * discover otherwise is to watch a screen that never changes. Speaking on
+     * "the push was published" rather than "a socket was written to" would be
+     * that defect with extra steps.
+     *
+     * ## Today, this arm ALWAYS takes the `< 1` branch — and that is correct
+     *
+     * Verified 2026-08-08: **no client anywhere connects to the hub's `:8804`
+     * SyncPlay surface.** Every live client socket points at phlix-server's own
+     * `:8097`, speaks a `syncplay_`-prefixed vocabulary this worker does not
+     * share, and carries its token in the query string, which `:8804` refuses by
+     * design (S237). No client has handling for an unknown frame type, and none
+     * can navigate-and-play from a media id. So the delivered count is 0 and every
+     * user hears the "you do not have the Phlix app open" answer.
+     *
+     * That is intended degradation, not a bug. The hub half is built so the
+     * failure is honest by construction, and the feature turns itself on the
+     * moment a client implements the consumer — with no change here.
+     *
+     * @return array{version: string, response: array<string, mixed>}
+     *
+     * @since S93
+     */
+    private function playInApp(Request $request, AlexaEnvelope $envelope): array
+    {
+        $match = $this->resolveTitle($request, $envelope);
+        if ($match['refusal'] !== null) {
+            return $match['refusal'];
+        }
+
+        $delivered = $this->pendingCommands->pushPlayMedia(
+            $match['userId'],
+            $match['serverId'],
+            $match['mediaId'],
+            $match['title'],
+        );
+
+        if ($delivered < 1) {
+            return $this->say(AlexaPhrases::PLAY_IN_APP_NO_OPEN_APP, ['title' => $match['title']]);
+        }
+
+        return $this->say(AlexaPhrases::PLAY_IN_APP_SENT, ['title' => $match['title']]);
+    }
+
+    /**
+     * The shared front half of every library intent: identity, a reachable
      * server, and one search hit.
      *
      * `refusal` non-null means "speak this instead"; the remaining fields are
-     * then empty and must not be read. A discriminated struct rather than two
+     * then empty and must not be read. A discriminated struct rather than three
      * copies of the same six refusals, because every one of them must be
-     * IDENTICAL between the two intents — a user who is not linked must not learn
-     * that they are linked from one intent and not the other.
+     * IDENTICAL across the intents — a user who is not linked must not learn that
+     * they are linked from one intent and not another.
      *
      * @return array{
      *     refusal: array{version: string, response: array<string, mixed>}|null,

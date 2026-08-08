@@ -19,6 +19,7 @@ use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
+use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\Tests\Support\Alexa\AlexaCertificateFixture;
 use Phlix\Hub\Tests\Support\Alexa\RecordingAlexaRejectionAuditor;
 use Phlix\Hub\Tests\Support\Alexa\RecordingCertChainFetcher;
@@ -531,6 +532,19 @@ final class AlexaSignatureRateLimitAndAuditTest extends RouteRegistrationTestCas
             new AlexaAccountLink($this->jwt, $this->users),
             (new ReflectionClass(ServerProxyController::class))->newInstanceWithoutConstructor(),
             (new ReflectionClass(ServerListController::class))->newInstanceWithoutConstructor(),
+            // S93. A `LaunchRequest` never reaches the pusher, so this stand-in
+            // only has to satisfy the type; it reports 0 delivered, which is also
+            // what production reports while no client consumes :8804.
+            new class implements PendingCommandPusherInterface {
+                public function pushPlayMedia(
+                    string $userId,
+                    string $serverId,
+                    string $mediaId,
+                    string $title,
+                ): int {
+                    return 0;
+                }
+            },
             new StructuredLogger('alexa-e2e-test', []),
             'https://hub.e2e.test',
         );

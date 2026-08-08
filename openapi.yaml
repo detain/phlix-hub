@@ -3903,9 +3903,34 @@ x-phlix-websockets:
       - "hub→client room_state — the room's members and current playback state after a join"
       - "hub→client client_joined / client_left — membership change"
       - "hub→client time_sync_reply — clock probe answer"
+      - >-
+        hub→client pending_command — SERVER-ORIGINATED (S93). Not a room broadcast and not a
+        reply to anything the client sent: it is addressed to a USER'S OPEN APP. Fields:
+        `type` ("pending_command"), `command` ("play_media", the only command today),
+        `server_id`, `media_id`, `title`, `issued_at` (unix seconds), `source` ("alexa").
+        Delivered to every live, authenticated socket whose (user_id, server_id) both match —
+        room membership is irrelevant, since a user who has just opened Phlix has no room. A
+        socket bound to a DIFFERENT server never receives it, because a media id from server A
+        cannot be played by an app talking to server B.
     notes: >-
       Any message type not in the list above is relayed verbatim to the rest of the room, so the
       catalog is a floor, not a closed set.
+
+
+      pending_command (S93) is produced by Phlix\Hub\SyncPlay\PendingCommandDispatcher, which
+      this worker subscribes to the workerman/channel broker in onWorkerStart: an Alexa
+      utterance is handled on an HTTP worker, but the client sockets live only in this process.
+      The dispatcher publishes the REAL number of sockets written back to the HTTP worker, and
+      the Alexa skill speaks its confirmation only on a count >= 1 — a confirmation for a
+      command nobody received is exactly the dishonesty that gate exists to prevent.
+
+
+      ⚠ As of 2026-08-08 NO client consumes this frame, and no client connects to :8804 at all
+      (every live client SyncPlay socket points at phlix-server's own :8097, speaks a
+      `syncplay_`-prefixed vocabulary, and carries its token in the query string, which this
+      worker refuses since S237). So the delivered count is 0 today and the skill answers "you
+      do not have the Phlix app open". That is the intended degradation: the feature turns on by
+      itself once a client implements the consumer.
   - name: "Hub federation"
     repo: phlix-hub
     port: 8805

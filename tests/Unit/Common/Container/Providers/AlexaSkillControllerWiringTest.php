@@ -22,6 +22,8 @@ use Phlix\Hub\Http\Controllers\AlexaSkillController;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
+use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
+use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
 use ReflectionNamedType;
@@ -201,6 +203,86 @@ final class AlexaSkillControllerWiringTest extends TestCase
         // instance with a different secret would silently reject every linked
         // account.
         self::assertSame($container->get(JwtHandler::class), self::readPrivate($link, 'jwt'));
+    }
+
+    /**
+     * S93 — the pending-command pusher, by CONCRETE type.
+     *
+     * "Not null" would be satisfied by any stand-in. The controller's confirmation
+     * is gated on a real delivered count, and only the channel implementation can
+     * produce one: anything else would report a number nobody measured, or 0
+     * forever.
+     */
+    public function testThePendingCommandPusherResolvesToTheChannelImplementation(): void
+    {
+        $container = $this->buildContainer();
+
+        $pusher = $container->get(PendingCommandPusherInterface::class);
+        self::assertInstanceOf(
+            ChannelPendingCommandPusher::class,
+            $pusher,
+            'PendingCommandPusherInterface must resolve to the channel-backed pusher — it is the only '
+            . 'implementation that can cross into the :8804 process where the client sockets live',
+        );
+
+        self::assertSame(
+            $pusher,
+            self::readPrivate($container->get(AlexaSkillController::class), 'pendingCommands'),
+            'the skill controller must be handed the SAME pusher instance the container binds, not a '
+            . 'second one whose reply event nobody subscribes to',
+        );
+    }
+
+    /**
+     * S93 — ⚠ THE PER-WORKER-SINGLETON HAZARD, pinned.
+     *
+     * {@see ChannelPendingCommandPusher} owns a UNIQUE reply event and the map of
+     * in-flight pushes keyed against it, and `Application::run()`'s HTTP
+     * `onWorkerStart` subscribes exactly ONE instance's `replyEvent()` to the
+     * channel broker. If a second resolve produced a different object, the request
+     * path would publish a push carrying a reply event nobody is subscribed to,
+     * wait out the timeout, and report 0 delivered — **for every user, every
+     * time, permanently and silently**. The skill would speak "you do not have the
+     * Phlix app open" forever and no log line would say why.
+     *
+     * `HubServicesProvider` states that hazard in a comment. A comment is not a
+     * check, and this is the check.
+     */
+    public function testThePendingCommandPusherIsOnePerWorkerAndItsReplyEventIsStable(): void
+    {
+        $container = $this->buildContainer();
+
+        $first = $container->get(PendingCommandPusherInterface::class);
+        $second = $container->get(PendingCommandPusherInterface::class);
+
+        self::assertSame(
+            $first,
+            $second,
+            'PendingCommandPusherInterface resolved to TWO different instances. Application::run() '
+            . 'subscribes one instance\'s replyEvent() to the broker, so the other one\'s pushes are '
+            . 'answered to an event nobody listens on: every push times out and reports 0 delivered, '
+            . 'and every user is told they have no app open, forever, with nothing in the logs.',
+        );
+
+        self::assertInstanceOf(ChannelPendingCommandPusher::class, $first);
+        self::assertInstanceOf(ChannelPendingCommandPusher::class, $second);
+        self::assertSame(
+            $first->replyEvent(),
+            $second->replyEvent(),
+            'the reply event differs between resolves — the subscription made at worker start would '
+            . 'not be the event the request path publishes against',
+        );
+
+        // Control: the identity above is a property of the BINDING, not of the
+        // class. Two separately constructed pushers must NOT share a reply event,
+        // otherwise "the events match" would be true however the container behaved.
+        $independent = new ChannelPendingCommandPusher(new StructuredLogger('alexa-wiring-test', []));
+        self::assertNotSame(
+            $first->replyEvent(),
+            $independent->replyEvent(),
+            'control: two independently constructed pushers share a reply event, so the equality '
+            . 'asserted above says nothing about the container binding',
+        );
     }
 
     /**

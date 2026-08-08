@@ -68,8 +68,20 @@ final class AlexaHonestyTest extends TestCase
         'on your television' => 'It is showing on your television.',
     ];
 
-    /** The floor from the step spec: `AlexaPhrases` shipped with 19 templates. */
-    private const MINIMUM_PHRASES = 15;
+    /**
+     * The floor on the emittable-phrase list. `AlexaPhrases` carries 21 templates
+     * after S93 added `PLAY_IN_APP_SENT` and `PLAY_IN_APP_NO_OPEN_APP`.
+     *
+     * ⚠ Re-baselined in S93. It had been left at 15 while the comment claimed 19
+     * and reality was 21 — a floor six below the truth, which would have let five
+     * phrases be deleted before the build noticed. It stays a FLOOR rather than
+     * an exact pin on purpose: this number exists to catch an `all()` that
+     * returned nothing (in which case the cleanliness sweep below measures
+     * nothing), not to make adding a phrase a two-file edit. The exact-count
+     * relationship is asserted separately, against reflection, in
+     * {@see testAllEnumeratesTheDeclaredConstants()}.
+     */
+    private const MINIMUM_PHRASES = 21;
 
     // ------------------------------------------------------------------
     // One control per banned term
