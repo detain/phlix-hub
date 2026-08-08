@@ -42,6 +42,19 @@ class Response
     public string $body = '';
 
     /**
+     * True when this response answers a `HEAD` and must therefore be rendered
+     * with NO body while keeping the `Content-Length` a `GET` would have
+     * returned (RFC 9110 §9.3.2).
+     *
+     * Selects {@see BodylessResponse} in {@see self::toWorkermanResponse()}.
+     * Deliberately NOT inferred from `$body === ''`: a GET with an empty body
+     * and a stale non-zero `Content-Length` is a keep-alive framing desync, not
+     * a HEAD — see {@see BodylessResponse} for why the selector has to be
+     * explicit.
+     */
+    public bool $headOnly = false;
+
+    /**
      * Optional incremental-streaming producer.
      *
      * When set, the HTTP worker invokes it with the live browser
@@ -223,13 +236,36 @@ class Response
     }
 
     /**
+     * Mark this response as a `HEAD` reply: no body on the wire, and the
+     * `Content-Length` already on `$headers` is authoritative.
+     *
+     * @param bool $headOnly Whether the response answers a HEAD.
+     *
+     * @return self
+     */
+    public function headOnly(bool $headOnly = true): self
+    {
+        $this->headOnly = $headOnly;
+        return $this;
+    }
+
+    /**
      * Convert this builder into a Workerman response object.
+     *
+     * A `HEAD` reply ({@see self::$headOnly}) is rendered by
+     * {@see BodylessResponse} so the relayed server's real `Content-Length`
+     * survives instead of being overwritten by Workerman's generated
+     * `Content-Length: 0`. The selector is narrowed twice — here on the explicit
+     * flag, and again inside that class on the exact response shape — so no
+     * ordinary response changes encoder.
      *
      * @return WorkermanResponse
      */
     public function toWorkermanResponse(): WorkermanResponse
     {
-        $response = new WorkermanResponse($this->statusCode, $this->headers, $this->body);
+        $response = $this->headOnly
+            ? new BodylessResponse($this->statusCode, $this->headers, $this->body)
+            : new WorkermanResponse($this->statusCode, $this->headers, $this->body);
         foreach ($this->cookies as $cookie) {
             $response->cookie(
                 $cookie['name'],

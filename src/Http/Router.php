@@ -104,6 +104,29 @@ class Router
     }
 
     /**
+     * Register a HEAD route.
+     *
+     * ⚠ There is deliberately NO implicit HEAD→GET fallback in
+     * {@see self::dispatch()}: a HEAD is only served where a handler was
+     * registered for it explicitly, because the hub's buffered reply path would
+     * otherwise return a BODY on a HEAD and desync a keep-alive client. A
+     * handler registered here is responsible for suppressing the body — see
+     * {@see Response::$headOnly} / {@see BodylessResponse}.
+     *
+     * S247: the relay proxy is the first (and so far only) caller — a media
+     * player probes the direct-play byte stream with HEAD before it opens it.
+     *
+     * @param string                                            $path    Route path.
+     * @param callable|array{0: class-string|object, 1: string} $handler Handler.
+     *
+     * @return self
+     */
+    public function head(string $path, callable|array $handler): self
+    {
+        return $this->addRoute('HEAD', $path, $handler);
+    }
+
+    /**
      * Internal helper to register a route under a single method.
      *
      * @param string                                                   $method  HTTP method.

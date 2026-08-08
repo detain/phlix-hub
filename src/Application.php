@@ -542,6 +542,17 @@ final class Application
                 return $serverProxy->proxy($req, $typedParams);
             };
             $r->get('/servers/{id}/proxy/{path:.*}', $proxyHandler);
+            // S247: HEAD is registered so a player can PROBE the direct-play
+            // byte stream (`HEAD /media/{id}/stream`) before it opens it — a
+            // HEAD that 404s, or that returns a body/a wrong Content-Length,
+            // breaks the player rather than erroring. Scope is NOT the GET
+            // scope: `ServerProxyController::BROWSE_SCOPE_PATTERNS['HEAD']`
+            // carries exactly one anchored entry (the byte stream) and there is
+            // no HEAD prefix allowlist at all, so every other HEAD reaches the
+            // controller and gets a deliberate 403 `proxy.scope_denied`. The
+            // body is suppressed on the buffered reply path via
+            // `Response::$headOnly` → `BodylessResponse`.
+            $r->head('/servers/{id}/proxy/{path:.*}', $proxyHandler);
             $r->put('/servers/{id}/proxy/{path:.*}', $proxyHandler);
             $r->delete('/servers/{id}/proxy/{path:.*}', $proxyHandler);
             // PATCH is registered but has NO allowlist/pattern entry in

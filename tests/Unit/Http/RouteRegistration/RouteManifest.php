@@ -367,6 +367,14 @@ final class RouteManifest
                 'method' => 'GET', 'path' => '/api/v1/servers/{id}/proxy/{path:.*}',
                 'url' => '/api/v1/servers/srv-1/proxy/api/v1/media', 'gate' => self::GATE_AUTH_JSON,
             ],
+            // S247: HEAD is registered so a media player can PROBE the
+            // direct-play byte stream. Same AuthMiddleware gate as every other
+            // proxy verb; the SCOPE is far narrower (one anchored pattern), and
+            // that is asserted in ServerProxyControllerTest, not here.
+            [
+                'method' => 'HEAD', 'path' => '/api/v1/servers/{id}/proxy/{path:.*}',
+                'url' => '/api/v1/servers/srv-1/proxy/media/item-123/stream', 'gate' => self::GATE_AUTH_JSON,
+            ],
             [
                 'method' => 'PUT', 'path' => '/api/v1/servers/{id}/proxy/{path:.*}',
                 'url' => '/api/v1/servers/srv-1/proxy/api/v1/media', 'gate' => self::GATE_AUTH_JSON,

@@ -2615,6 +2615,48 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+    head:
+      operationId: "head_api_v1_servers_id_proxy_path"
+      tags: ["Server Proxy"]
+      summary: "Probe the direct-play byte stream on a server"
+      description: |-
+        S247. HEAD is routed for exactly ONE target path — the direct-play byte stream
+        `/media/{id}/stream` — because a media player probes it for size and range support
+        before it opens it. Every other HEAD reaches the proxy controller and is refused
+        403 `proxy.scope_denied`: there is no HEAD path-prefix allowlist, deliberately, so a
+        HEAD can never make the paired server render a whole JSON browse body for the hub to
+        discard. The reply carries the server's own `Content-Length` and no body.
+      x-phlix-middleware: [AuthMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+        - name: "path"
+          in: path
+          required: true
+          description: "Remainder of the URL, forwarded verbatim to the target (may contain `/`)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: |-
+            The target server's own head, relayed verbatim: no body, and the `Content-Length`
+            the equivalent GET would have returned.
+        "403":
+          description: "The method/path is not exposed through the relay proxy (`proxy.scope_denied`)."
+        "502":
+          description: "No live tunnel to that server, or the server did not answer in time."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
     patch:
       operationId: "patch_api_v1_servers_id_proxy_path"
       tags: ["Server Proxy"]

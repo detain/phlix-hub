@@ -63,8 +63,9 @@ use const JSON_THROW_ON_ERROR;
  * narrowly-scoped write exception: starting an on-demand transcode
  * (`POST /api/v1/media/{id}/transcode`), which a player needs before it can
  * stream an incompatible title. See {@see self::BROWSE_SCOPE_ALLOWLIST} for the
- * GET/HEAD path prefixes and {@see self::BROWSE_SCOPE_PATTERNS} for the exact,
- * anchored POST pattern; every other mutating method/path fails closed.
+ * GET path prefixes and {@see self::BROWSE_SCOPE_PATTERNS} for the exact,
+ * anchored patterns (the direct-play byte stream, the HEAD probe, and the write
+ * actions); every other mutating method/path fails closed.
  *
  * @package Phlix\Hub\Http\Controllers
  * @since 0.10.0
@@ -200,31 +201,45 @@ final class ServerProxyController
      * `test_browse_scope_allowlist_matches_the_pinned_upstream_backed_set()` pin
      * both halves.
      *
-     * ### HEAD is not exposed through the proxy (deliberate, and inert by design)
-     * {@see \Phlix\Hub\Http\Router} has no `head()` registrar and
+     * ### HEAD is live (S247) but carries NO prefix — there is no HEAD key here
+     * Until S247 a HEAD could not reach this controller at all:
+     * {@see \Phlix\Hub\Http\Router} had no `head()` registrar and
      * {@see \Phlix\Hub\Http\Router::dispatch()} 404s an unregistered method with
-     * NO HEAD→GET fallback (unlike phlix-server's router), and
-     * {@see \Phlix\Hub\Application} registers the proxy for GET/POST/PUT/PATCH/
-     * DELETE only — so a HEAD can never reach this controller. The `HEAD` key
-     * below therefore documents INTENT for the playback families that already
-     * have SOME HEAD-aware machinery (HB-0.3). Be precise about what that
-     * machinery is, because it is less than it sounds: the buffered bridge path
-     * completes a HEAD on END without waiting for body frames,
-     * {@see self::replyTimeoutForPath()} branches on `GET`/`HEAD`, and
-     * {@see ConnectionResponseSink::forceCloseIfShort()} EXEMPTS a HEAD from the
-     * short-body force-close safeguard. That is all of it. There is NO body
-     * suppression anywhere in the hub, and the sink is only reached on the
-     * STREAMING path — which {@see self::isStreamingPath()} restricts to GET —
-     * so that exemption is doubly inert. The key grants nothing today. Do NOT
-     * read it as working behaviour, and do not add a family to it expecting HEAD
-     * to work. Making HEAD live needs three things landed TOGETHER: (1) a
-     * `Router::head()` registrar + a HEAD proxy route, (2) body suppression
-     * ADDED to the BUFFERED reply path
-     * ({@see self::buildResponse()} would otherwise return a body on a HEAD,
-     * desyncing keep-alive clients), and (3) an accepted cost for buffered
-     * families — a HEAD to a JSON browse prefix makes the server produce the
-     * WHOLE body (and, for music, mint an HMAC URL per row) only for the hub to
-     * throw it away. That cost is why the S100 music prefix is GET-only.
+     * NO HEAD→GET fallback (unlike phlix-server's router). The `HEAD` key that
+     * used to sit in this map — mirroring the browse prefixes plus `/hls`,
+     * `/dash`, `/media`, `/api/v1/transcode` — was therefore dead configuration
+     * that read as working behaviour.
+     *
+     * S247 made HEAD routable for ONE reason: a media player probes the
+     * direct-play byte stream with HEAD before it opens it, and a HEAD that
+     * 404s, or that returns a body or a wrong `Content-Length`, breaks the
+     * player rather than erroring. The three things that had to land together
+     * all did: (1) `Router::head()` + a HEAD proxy route in
+     * {@see \Phlix\Hub\Application}, (2) body suppression on the BUFFERED reply
+     * path ({@see self::buildResponse()} now emits no body and preserves the
+     * server's `Content-Length` via {@see \Phlix\Hub\Http\Response::$headOnly} →
+     * {@see \Phlix\Hub\Http\BodylessResponse}), and (3) the third — an accepted
+     * cost for buffered families, where a HEAD to a JSON browse prefix makes the
+     * server produce the WHOLE body (and, for music, mint an HMAC URL per row)
+     * only for the hub to throw it away — was NOT accepted. It was avoided
+     * instead: **the whole HEAD prefix key was deleted.** HEAD scope is a SINGLE
+     * anchored entry in {@see self::BROWSE_SCOPE_PATTERNS}`['HEAD']`, the byte
+     * stream itself, so no buffered browse family is reachable by HEAD and the
+     * cost is never paid. Every other HEAD — including `HEAD /api/v1/media/{id}`
+     * and `HEAD /hls/…`, which used to be listed here — now reaches this
+     * controller and takes a deliberate 403 `proxy.scope_denied`. Adding a
+     * family back means accepting that cost explicitly, in writing, in the same
+     * commit.
+     *
+     * The HEAD-aware machinery this key used to gesture at is real and is now
+     * actually reached: the buffered bridge path completes a HEAD on END without
+     * waiting for body frames, {@see self::replyTimeoutForPath()} branches on
+     * `GET`/`HEAD`, and {@see ConnectionResponseSink::forceCloseIfShort()}
+     * exempts a HEAD from the short-body force-close safeguard. That last one is
+     * still inert by construction, because {@see self::isStreamingPath()}
+     * restricts streaming to GET, so a HEAD always takes the buffered path — a
+     * server `withFile()` HEAD emits a head frame and a zero-body END, which the
+     * buffered path completes on promptly.
      *
      * NOTE: only GET read families are reachable HERE. Every WRITE action
      * (HB-3.1 write-over-relay) is an ANCHORED per-action PCRE in
@@ -276,44 +291,26 @@ final class ServerProxyController
             // because that route happens to be registered POST-only — the hub
             // must not depend on that accident).
             '/api/v1/music',
-            // Playback reads (bytes). The server exposes HLS/DASH and the direct
-            // byte stream at the ROOT (not under /api/v1), so the forward tail is
-            // bare. `/hls` + `/dash` cover every per-variant playlist
-            // (`media_v{V}.m3u8`), init/segment (`seg-*.ts`, `*.m4s`), subtitle
-            // sidecar and the master manifest under a per-job directory. `/media`
-            // covers ONLY the direct-play byte stream `/media/{id}/stream` — the
-            // ONLY route registered under bare `/media/` at all (mutating or not).
-            // The admin merge endpoint lives at `/api/v1/admin/media/merge` (a
-            // different prefix, and denied by the method gate regardless).
+            // Playback reads (bytes). The server exposes HLS/DASH at the ROOT
+            // (not under /api/v1), so the forward tail is bare. `/hls` + `/dash`
+            // cover every per-variant playlist (`media_v{V}.m3u8`),
+            // init/segment (`seg-*.ts`, `*.m4s`), subtitle sidecar and the
+            // master manifest under a per-job directory.
             // `/api/v1/transcode` covers only `/api/v1/transcode/{jobId}/status`.
-            '/hls',
-            '/dash',
-            '/media',
-            '/api/v1/transcode',
-        ],
-        'HEAD' => [
-            // Browse / metadata (JSON). Mirror of the GET block's browse family —
-            // all six upstream-less prefixes were removed from BOTH keys, since
-            // a dead entry under an inert method key is dead twice over.
-            '/api/v1/libraries',
-            '/api/v1/media',
-            '/api/v1/collections',
-            // S100 fix round 1: `/api/v1/music` is deliberately NOT mirrored
-            // here. HEAD cannot reach this controller at all (see the HEAD
-            // section of this docblock), no Phlix client issues HEAD through the
-            // proxy, and a HEAD to this BUFFERED family would cost the server a
-            // whole music payload (plus one HMAC signed URL per track row) for a
-            // body the hub then discards. Music browse is GET-only.
             //
-            // Playback reads — mirror of the GET block. These are the families a
-            // player WOULD probe with HEAD for size/range support before a ranged
-            // GET, and their HEAD machinery exists (HB-0.3), but no HEAD is
-            // routed to this controller today, so these grant nothing yet.
+            // ⚠ `/media` used to be a PREFIX here. S247 replaced it with the
+            // anchored `#^/media/[^/]+/stream$#` in
+            // {@see self::BROWSE_SCOPE_PATTERNS}`['GET']` — a strict NARROWING,
+            // never a widening. See that entry for why.
             '/hls',
             '/dash',
-            '/media',
             '/api/v1/transcode',
         ],
+        // S247: there is deliberately NO `HEAD` key. HEAD is routable now, but
+        // its entire scope is ONE anchored pattern (the direct-play byte
+        // stream) in BROWSE_SCOPE_PATTERNS['HEAD'] — see the HEAD section of
+        // this docblock for why no browse family was given a HEAD prefix.
+        //
         // Write methods (HB-3.1 write-over-relay) are deliberately NOT listed
         // here as broad prefixes. Each write action is an ANCHORED per-action
         // PCRE in {@see self::BROWSE_SCOPE_PATTERNS} (POST/PUT/DELETE keys), so a
@@ -353,10 +350,13 @@ final class ServerProxyController
      * same reason as the prefix allowlist: {@see self::hasTraversalSegment()}
      * rejects any dot-segment or encoded separator BEFORE this map is consulted.
      *
-     * ### The GET key also carries the reads a PREFIX would over-admit (S238)
-     * A prefix is the right shape only when every path under it is in scope. Three
+     * ### The GET key also carries the reads a PREFIX would over-admit (S238/S247)
+     * A prefix is the right shape only when every path under it is in scope. Four
      * reads fail that test and live here instead, each anchored to exactly the
-     * server's own matcher: the chapter thumbnail (`{index}` in the middle),
+     * server's own matcher: the direct-play byte stream `GET /media/{id}/stream`
+     * (S247 — the id is a MIDDLE segment, and the `/media` PREFIX it replaced
+     * admitted every `/media/…` path the server might ever register),
+     * the chapter thumbnail (`{index}` in the middle),
      * `GET /api/v1/artwork/{itemId}` (single-segment id — a `/api/v1/artwork`
      * prefix would admit an arbitrary sub-tree) and
      * `GET /api/v1/users/{userId}/avatar` (id in the MIDDLE — a `/api/v1/users`
@@ -406,6 +406,36 @@ final class ServerProxyController
 
             // Chapter thumbnails — served via the server API at GET /api/v1/media/{id}/chapters/{index}/thumbnail
             '#^/api/v1/media/[^/]+/chapters/\d+/thumbnail$#',
+
+            // ---- S247: the DIRECT-PLAY BYTE STREAM ---------------------------
+            // `GET /media/{id}/stream` — the whole video file, served by
+            // `Server\Workerman\HttpHandler::serveMediaStream()` with native
+            // `Range`/206 support.
+            //
+            // ⚠ ANCHORED, and it REPLACED a `/media` PREFIX — this is a
+            // narrowing, not a widening, so the {@see self::SCOPE_DENY_PATTERNS}
+            // S107 enumeration is not re-opened (that sweep is keyed on
+            // `BROWSE_SCOPE_ALLOWLIST['GET']` prefixes, and this change REMOVES
+            // one; nothing new lies under any remaining prefix). The pattern
+            // mirrors the server's own matcher byte-for-byte —
+            // `#^/media/(?P<id>[^/]+)/stream$#` in `serveMediaStream()` — with
+            // the id as a single `[^/]+` segment, so it admits EXACTLY the shape
+            // the server serves. `/media`, `/media/{id}`, `/media/{id}/stream/x`
+            // and `/media/{id}/streamX` all now 403 where the prefix forwarded
+            // them; `/media-secret/...` was already a sibling and still is.
+            //
+            // The `?exp=&sig=` of a signed direct-play URL lives in the QUERY
+            // STRING, which never reaches this matcher: the scope gate and
+            // `hasTraversalSegment()` both take the PATH only, and
+            // `$request->queryString` is forwarded to the bridge byte-for-byte
+            // (S108b), so a signed stream URL verifies server-side unchanged.
+            //
+            // ⚠ The RESPONSE side of this route is what makes it work: `Range`
+            // is NOT in {@see self::STRIPPED_REQUEST_HEADERS} so it is forwarded
+            // verbatim, and {@see ConnectionResponseSink} keeps `Content-Length`
+            // and `Content-Range` and re-emits the server's status (206/416)
+            // verbatim. Both directions are pinned by tests.
+            '#^/media/[^/]+/stream$#',
 
             // ---- S238: the two IMAGE fast paths -----------------------------
             // Posters/backdrops/logos: GET /api/v1/artwork/{itemId}?size={size}.
@@ -479,6 +509,19 @@ final class ServerProxyController
             '#^/api/v1/cast/devices/[^/]+/status$#',
             '#^/api/v1/dlna/renderers$#',
             '#^/api/v1/dlna/renderers/[^/]+/status$#',
+        ],
+        // ---- S247: the ONLY HEAD the relay serves ---------------------------
+        // A media player probes the direct-play byte stream with HEAD before it
+        // opens it (size + `Accept-Ranges`). Exactly one anchored entry, the
+        // same matcher as the GET twin: there is no HEAD PREFIX anywhere in this
+        // controller, deliberately, so no buffered JSON browse family can be
+        // reached by HEAD (the server would produce a whole body — and, for
+        // music, an HMAC URL per row — for the hub to discard). Everything else
+        // reaches the controller and takes a deliberate 403 `proxy.scope_denied`.
+        // The reply's body is suppressed and its `Content-Length` preserved by
+        // {@see self::buildResponse()}.
+        'HEAD' => [
+            '#^/media/[^/]+/stream$#',
         ],
         'POST' => [
             // Transcode-START ONLY. Anchored (`^…$`) + single-segment `[^/]+` id
@@ -766,8 +809,16 @@ final class ServerProxyController
     private const MAX_TRAVERSAL_DECODE_PASSES = 5;
 
     /**
-     * Response headers stripped before relaying back to the browser (the hub's
-     * HTTP layer sets framing headers itself).
+     * Response headers stripped before relaying back to the browser on the
+     * BUFFERED reply path (the hub's HTTP layer sets framing headers itself).
+     *
+     * ⚠ Two deliberate exceptions, both about framing being computable:
+     *  - a HEAD reply KEEPS `content-length` ({@see self::buildResponse()}):
+     *    there is no body for Workerman to recompute it from, so the server's
+     *    field is the only truthful one (S247);
+     *  - the STREAMING path does not use this list at all — see
+     *    {@see ConnectionResponseSink}, which keeps `content-length` AND
+     *    `content-range` so a `Range` seek's 206 survives the pass-through.
      *
      * @var list<string>
      */
@@ -796,8 +847,10 @@ final class ServerProxyController
      * disk via the server's `withFile()` — fast first byte, no encode — and is
      * range-requested, so it keeps the tighter default and its buffering window
      * is not widened) and `/api/v1/transcode` (status polling is a quick JSON
-     * read). Matched with the same exact-or-`/`-subpath rule as
-     * {@see self::BROWSE_SCOPE_ALLOWLIST} — never a bare sibling like `/hlsX`.
+     * read). Matched with an exact-or-`/`-subpath rule — never a bare sibling
+     * like `/hlsX`. (S247 note: `/media` is no longer a
+     * {@see self::BROWSE_SCOPE_ALLOWLIST} prefix either — it is an anchored
+     * pattern now — so this exclusion is doubly true and stays for clarity.)
      *
      * @var list<string>
      */
@@ -823,8 +876,14 @@ final class ServerProxyController
      *
      * Deliberately EXCLUDED: JSON browse, `/api/v1/transcode/{jobId}/status`
      * polling, and the transcode-START POST — all small and simplest kept on the
-     * buffered path. Matched with the same exact-or-`/`-subpath rule as
-     * {@see self::BROWSE_SCOPE_ALLOWLIST}.
+     * buffered path. Matched with an exact-or-`/`-subpath rule.
+     *
+     * ⚠ This is a CLASSIFICATION, not a gate: {@see self::isWithinBrowseScope()}
+     * has already run, so the only `/media/…` path that can reach
+     * {@see self::isStreamingPath()} is the anchored `/media/{id}/stream`. The
+     * `/media` entry stays a prefix here because narrowing it would change
+     * nothing reachable and would duplicate the anchored matcher in a second
+     * place, where the two could drift apart.
      *
      * @var list<string>
      */
@@ -1078,7 +1137,7 @@ final class ServerProxyController
             $this->sessionManager->recordUserBandwidth($userId, strlen($reply['body']) + 512, 0);
         }
 
-        return $this->buildResponse($reply);
+        return $this->buildResponse($reply, strtoupper($request->method) === 'HEAD');
     }
 
     /**
@@ -1086,16 +1145,16 @@ final class ServerProxyController
      * fragment-by-fragment rather than buffered whole.
      *
      * Only **GET** under a {@see self::STREAMING_BODY_PREFIXES} family qualifies.
-     * HEAD is deliberately EXCLUDED so that IF it ever becomes routable it flows
-     * through the buffered {@see RelayProxyBridge::request()} path (HB-0.3): a
-     * server `withFile()` HEAD emits a head frame + zero-body END with no body
-     * frames, and the buffered path completes promptly on that END — streaming a
-     * body-less response would add no value. (No HEAD reaches this controller
-     * today — {@see self::BROWSE_SCOPE_ALLOWLIST} explains why.) These paths
-     * already passed the browse-scope
-     * gate (so a mutating method never reaches here). The match uses the same
-     * exact-or-`/`-subpath rule as the allowlist — never a bare sibling like
-     * `/hlsX`.
+     * HEAD is deliberately EXCLUDED so it flows through the buffered
+     * {@see RelayProxyBridge::request()} path (HB-0.3): a server `withFile()`
+     * HEAD emits a head frame + zero-body END with no body frames, and the
+     * buffered path completes promptly on that END — streaming a body-less
+     * response would add no value, and the buffered path is where the body
+     * suppression lives ({@see self::buildResponse()}). S247 made HEAD routable,
+     * so this exclusion is now load-bearing rather than hypothetical. These
+     * paths already passed the browse-scope gate (so a mutating method never
+     * reaches here). The match uses an exact-or-`/`-subpath rule — never a bare
+     * sibling like `/hlsX`.
      *
      * @param string $method The inbound HTTP method.
      * @param string $path   The resolved `/`-prefixed forward path.
@@ -1657,6 +1716,31 @@ final class ServerProxyController
         // server applies this user's parental-control profile to relayed
         // requests. The hub-side gate (authenticated user → server ownership →
         // traversal → browse scope) is what actually protects this surface.
+        //
+        // ⚠ S247 makes that caveat LOAD-BEARING rather than academic, because
+        // the direct-play byte stream is relayable now. Name the gates exactly:
+        //  - CONCURRENT STREAMS are gated HUB-SIDE, by
+        //    RelaySessionManager::activeUserStreams() against the operator's
+        //    `max_concurrent_streams`, in proxy() → 503 `stream.limit`. That
+        //    gate DOES fire on this path (pinned by a test, with a succeeding
+        //    control beside it).
+        //  - BANDWIDTH is gated hub-side too: RelaySessionManager::checkUserQuota()
+        //    → 503 `quota.exceeded`, plus the per-user TokenBucket rate cap the
+        //    ConnectionResponseSink paces the body against.
+        //  - The PARENTAL RATING GATE does NOT fire. `Phlix\Media\RatingGate`
+        //    lives in phlix-server and resolves a filter from that server's own
+        //    user/profile rows; a hub UUID matches none of them, so
+        //    resolveFilterForUser() returns null and the gate is a strict no-op
+        //    for EVERY relayed request. The hub cannot substitute for it — it
+        //    holds no parental-control profile and no per-item rating. Closing
+        //    that needs a hub→server identity mapping in phlix-server. It is
+        //    OWED, not shipped. Do not write anywhere that the relayed byte
+        //    stream is parentally gated.
+        //
+        // `Range` is deliberately NOT in STRIPPED_REQUEST_HEADERS, so a
+        // `<video>` seek's range request reaches the server verbatim and its
+        // 206 + `Content-Range` come back verbatim through
+        // ConnectionResponseSink. Both directions are pinned by tests.
         $headers['X-Phlix-Relay-User'] = $userId;
         if ($request->remoteIp !== '') {
             $headers['X-Forwarded-For'] = $request->remoteIp;
@@ -1715,11 +1799,35 @@ final class ServerProxyController
     /**
      * Build the browser-facing response from a relay reply payload.
      *
-     * @param array<string, mixed> $reply Relay reply (status/headers/body).
+     * ### HEAD (S247)
+     * A HEAD reply must carry NO body and the `Content-Length` the equivalent
+     * GET would have returned (RFC 9110 §9.3.2). Two things therefore change for
+     * `$isHead`:
+     *  - the server's `Content-Length` is KEPT rather than stripped. On a normal
+     *    buffered reply it is stripped because Workerman recomputes it from the
+     *    buffered body, which is the correct value; on a HEAD there IS no body
+     *    to measure, so the recomputed value would be a wrong `0` and the
+     *    server's field is the only truthful one;
+     *  - the body is dropped and the response is flagged
+     *    {@see Response::$headOnly}, which selects
+     *    {@see \Phlix\Hub\Http\BodylessResponse} so Workerman does not append its
+     *    own `Content-Length: 0` AFTER the server's real one — two conflicting
+     *    `Content-Length` fields make the message invalid per RFC 9110 §8.6, and
+     *    that is the "breaks the player rather than erroring" shape.
+     * A HEAD whose upstream declared no length at all is left exactly as the
+     * framework would render it (`Content-Length: 0`), because
+     * `BodylessResponse` delegates to the parent unless a caller length is
+     * present.
+     *
+     * ⚠ A HEAD always arrives here rather than on the streaming path:
+     * {@see self::isStreamingPath()} restricts streaming to GET.
+     *
+     * @param array<string, mixed> $reply  Relay reply (status/headers/body).
+     * @param bool                 $isHead Whether the inbound request was a HEAD.
      *
      * @return Response
      */
-    private function buildResponse(array $reply): Response
+    private function buildResponse(array $reply, bool $isHead = false): Response
     {
         /** @var mixed $rawStatus */
         $rawStatus = $reply['status'] ?? null;
@@ -1732,11 +1840,26 @@ final class ServerProxyController
                 if (!is_string($name) || !is_string($value)) {
                     continue;
                 }
-                if (in_array(strtolower($name), self::STRIPPED_RESPONSE_HEADERS, true)) {
+                $lower = strtolower($name);
+                // Content-Length is authoritative on a HEAD (there is no body to
+                // recompute it from) and stripped on every other reply (there
+                // is, and Workerman recomputes it).
+                if ($isHead && $lower === 'content-length') {
+                    $response->header($name, $value);
+                    continue;
+                }
+                if (in_array($lower, self::STRIPPED_RESPONSE_HEADERS, true)) {
                     continue;
                 }
                 $response->header($name, $value);
             }
+        }
+
+        if ($isHead) {
+            // No body on a HEAD, whatever the server sent (a correctly-behaved
+            // server sends none, but the hub must not depend on that).
+            $response->body = '';
+            return $response->headOnly();
         }
 
         /** @var mixed $rawBody */

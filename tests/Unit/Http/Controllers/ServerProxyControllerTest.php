@@ -35,6 +35,28 @@ use Workerman\Connection\TcpConnection;
 
 use function array_keys;
 use function array_pop;
+use function array_slice;
+use function chr;
+use function fclose;
+use function file_get_contents;
+use function file_put_contents;
+use function filesize;
+use function fopen;
+use function fread;
+use function fseek;
+use function is_array;
+use function is_file;
+use function max;
+use function md5;
+use function md5_file;
+use function min;
+use function preg_match;
+use function preg_match_all;
+use function str_ends_with;
+use function strtolower;
+use function sys_get_temp_dir;
+use function tempnam;
+use function unlink;
 use function base64_encode;
 use function count;
 use function dechex;
@@ -623,9 +645,12 @@ final class ServerProxyControllerTest extends TestCase
      * PATCH; (c) bare textual siblings (`/api/v1/musicXYZ`,
      * `/api/v1/music-admin`) which share the prefix string but are not sub-paths;
      * (d) an unlisted sibling API family (`/api/v1/musicbrainz`); (e) **HEAD on
-     * every music path** — S100 fix round 1 removed the inert HEAD mirror (the hub
-     * router registers no HEAD route at all, see
-     * {@see self::test_head_is_never_routed_to_the_relay_proxy()}); (f) **every
+     * every music path** — S100 fix round 1 removed the inert HEAD mirror, and
+     * S247 deleted the HEAD prefix key entirely: HEAD is ROUTABLE now (see
+     * {@see self::test_head_is_routed_only_for_the_direct_play_byte_stream()}),
+     * so a music HEAD entry would be LIVE surface making the server render a
+     * whole payload — plus one HMAC signed URL per track row — for the hub to
+     * discard; (f) **every
      * alternative SPELLING of the scan path** (S100 fix r2, MED-1) — see below.
      *
      * @return iterable<string, array{0: string, 1: string, 2: bool}>
@@ -645,8 +670,9 @@ final class ServerProxyControllerTest extends TestCase
 
         foreach ($allowedPaths as $label => $path) {
             yield "GET {$label} allowed" => ['GET', $path, true];
-            // (e) HEAD grants nothing: the hub registers no HEAD proxy route, so
-            // mirroring the prefix under HEAD would be dead configuration.
+            // (e) HEAD is REFUSED, and since S247 that refusal is live rather
+            // than incidental: HEAD reaches the controller now, and its entire
+            // scope is the one anchored byte-stream pattern.
             yield "HEAD {$label} denied" => ['HEAD', $path, false];
         }
 
@@ -939,33 +965,40 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * S100 fix round 1 (MED-2), END-TO-END THROUGH THE REAL ROUTER — the whole
-     * point of this test is that it does NOT use reflection on a private constant.
+     * S247, END-TO-END THROUGH THE REAL ROUTER — the whole point of this test is
+     * that it does NOT use reflection on a private constant.
      *
-     * `ServerProxyController::BROWSE_SCOPE_ALLOWLIST` used to carry a `HEAD` key
-     * (music included), and the docblock + CHANGELOG advertised HEAD as working.
-     * It never was: {@see Router} has no `head()` registrar,
-     * {@see Router::dispatch()} 404s an unregistered method with no HEAD→GET
-     * fallback, and {@see \Phlix\Hub\Application} registers the proxy catch-all for
-     * GET/PUT/DELETE/PATCH/POST only. Reflection-only assertions over the constant
-     * could never catch that class of dead configuration; a dispatch-level test
-     * can.
+     * ## What this replaced
      *
-     * Registers exactly the five methods `Application::registerRoutes()` registers,
-     * then proves:
-     *  - the router has NO `HEAD` bucket at all;
-     *  - `HEAD` on an allowlisted music path 404s in the ROUTER (not 403 from the
-     *    controller) and never reaches the relay bridge;
-     *  - the same for a playback path, whose HEAD machinery does exist (HB-0.3);
-     *  - the identical `GET` is forwarded and answered 200, so the 404 is about the
-     *    METHOD and nothing else.
+     * Until S247 this test was `test_head_is_never_routed_to_the_relay_proxy()`,
+     * and it pinned the OPPOSITE behaviour: {@see Router} had no `head()`
+     * registrar, {@see Router::dispatch()} 404s an unregistered method with no
+     * HEAD→GET fallback, and {@see \Phlix\Hub\Application} registered the proxy
+     * catch-all for GET/PUT/DELETE/PATCH/POST only — so a HEAD died in the
+     * router while `BROWSE_SCOPE_ALLOWLIST` carried a `HEAD` key that read as
+     * working behaviour. That test named itself the tripwire for this change and
+     * listed the four things that had to land together; all four did, and this
+     * is the same test rewritten to the new contract.
      *
-     * ⚠ If HEAD is ever made routable, this test is the tripwire: it must be
-     * updated TOGETHER with a `Router::head()` registrar, a HEAD proxy route, a
-     * HEAD allowlist key, and body suppression on the buffered reply path. That
-     * coupling is exactly what this asserts.
+     * ## What it now pins
+     *
+     * A media player probes the direct-play byte stream with HEAD before it
+     * opens it, so HEAD is routable — but for that ONE path and no other:
+     *  - the router now HAS a `HEAD` bucket;
+     *  - `HEAD /media/{id}/stream` is routed, cleared and FORWARDED, and the
+     *    reply carries no body while keeping the server's `Content-Length`;
+     *  - `HEAD` on a JSON browse path, a music path and an HLS segment — all
+     *    three of which the deleted HEAD prefix key used to list — reach the
+     *    controller and take a deliberate 403 `proxy.scope_denied`, never a
+     *    router 404 and never a forward;
+     *  - the identical `GET` on every one of those paths is forwarded and
+     *    answered 200, so the 403 is about the METHOD and nothing else.
+     *
+     * ⚠ The GET control is not decoration. Without it a blanket failure (a
+     * mis-registered route, a broken bridge double) would produce the same
+     * refusals and read as a pass.
      */
-    public function test_head_is_never_routed_to_the_relay_proxy(): void
+    public function test_head_is_routed_only_for_the_direct_play_byte_stream(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
@@ -979,16 +1012,19 @@ final class ServerProxyControllerTest extends TestCase
             $bridge->onReply([
                 'request_id' => $data['request_id'],
                 'status' => 200,
-                'headers' => ['Content-Type' => 'application/json'],
-                'body' => '{"artists":[]}',
+                'headers' => [
+                    'Content-Type' => 'video/x-matroska',
+                    'Content-Length' => '362807',
+                    'Accept-Ranges' => 'bytes',
+                ],
+                'body' => '',
             ]);
         };
         $bridge = $this->bridge($publisher);
         $controller = $this->controller($info, $bridge);
 
-        // Mirror Application::registerRoutes(): the proxy catch-all lives under the
-        // `/api/v1` group and is registered for GET/PUT/DELETE/PATCH/POST — and
-        // NOTHING else.
+        // Mirror Application::registerRoutes(): the proxy catch-all lives under
+        // the `/api/v1` group and is registered for GET/HEAD/PUT/DELETE/PATCH/POST.
         $handler = static function (Request $req, array $params) use ($controller): Response {
             /** @var array<string, string> $typedParams */
             $typedParams = $params;
@@ -997,16 +1033,18 @@ final class ServerProxyControllerTest extends TestCase
         $router = new Router();
         $router->group('/api/v1', static function (Router $r) use ($handler): void {
             $r->get('/servers/{id}/proxy/{path:.*}', $handler);
+            $r->head('/servers/{id}/proxy/{path:.*}', $handler);
             $r->put('/servers/{id}/proxy/{path:.*}', $handler);
             $r->delete('/servers/{id}/proxy/{path:.*}', $handler);
             $r->patch('/servers/{id}/proxy/{path:.*}', $handler);
             $r->post('/servers/{id}/proxy/{path:.*}', $handler);
         });
 
-        $this->assertArrayNotHasKey(
+        $this->assertArrayHasKey(
             'HEAD',
             $router->getRoutes(),
-            'The hub router has no HEAD bucket: a HEAD allowlist entry would be dead configuration',
+            'S247: the hub router must have a HEAD bucket — a HEAD allowlist entry would otherwise '
+            . 'be dead configuration again',
         );
 
         $dispatch = static function (string $method, string $tail) use ($router): Response {
@@ -1018,29 +1056,56 @@ final class ServerProxyControllerTest extends TestCase
             return $router->dispatch($req);
         };
 
-        // GET is routed, cleared and forwarded — the control case.
-        $getResponse = $dispatch('GET', 'api/v1/music/artists');
-        $this->assertSame(200, $getResponse->statusCode);
-        $this->assertCount(1, $forwarded, 'GET must reach the relay bridge');
-        $this->assertSame('/api/v1/music/artists', $forwarded[0]['path']);
+        // ---- the one HEAD that IS served ---------------------------------
+        $headStream = $dispatch('HEAD', 'media/item-123/stream');
+        $this->assertSame(200, $headStream->statusCode, 'HEAD on the byte stream must be routed and forwarded');
+        $this->assertCount(1, $forwarded, 'HEAD on the byte stream must reach the relay bridge');
+        $this->assertSame('/media/item-123/stream', $forwarded[0]['path']);
+        $this->assertSame('HEAD', $forwarded[0]['method']);
+        // RFC 9110 §9.3.2: no body, and the Content-Length a GET would return.
+        $this->assertSame('', $headStream->body, 'a HEAD reply must carry no body');
+        $this->assertSame(
+            '362807',
+            $headStream->headers['Content-Length'] ?? null,
+            'a HEAD reply must keep the paired server\'s real Content-Length, not a recomputed 0',
+        );
+        $this->assertTrue($headStream->headOnly, 'the HEAD reply must select the BodylessResponse encoder');
+        $this->assertNull($headStream->streamProducer, 'HEAD must take the buffered path, not the producer');
 
-        // HEAD dies in the router with a 404 — not a 403 from the scope gate, and
-        // never a forward.
-        foreach (['api/v1/music/artists', 'media/item-123/stream', 'hls/job-abc/seg-00007.ts'] as $tail) {
+        // ---- every other HEAD: 403 from the SCOPE gate, with a GET control --
+        $denied = [
+            'api/v1/media' => 'JSON browse collection',
+            'api/v1/media/item-123' => 'JSON browse detail',
+            'api/v1/music/artists' => 'music browse (would mint an HMAC URL per row)',
+            'hls/job-abc/seg-00007.ts' => 'HLS segment',
+            'api/v1/transcode/job-abc/status' => 'transcode status poll',
+        ];
+        $seen = 1;
+        foreach ($denied as $tail => $why) {
+            // CONTROL first: the same path IS served for GET, and IS forwarded.
+            // A byte-serving GET (`/hls`) is STREAMED, so its forward happens
+            // when the HTTP worker drives the producer — drive it here so the
+            // control counts the same way a buffered read does.
+            $getResponse = $dispatch('GET', $tail);
+            $this->drive($getResponse);
+            $this->assertSame(200, $getResponse->statusCode, "control: GET /{$tail} ({$why}) must be served");
+            $seen++;
+            $this->assertCount($seen, $forwarded, "control: GET /{$tail} must reach the relay bridge");
+
             $headResponse = $dispatch('HEAD', $tail);
             $this->assertSame(
-                404,
+                403,
                 $headResponse->statusCode,
-                "HEAD /{$tail} must 404 in the router (no HEAD route is registered)",
+                "HEAD /{$tail} ({$why}) must be refused by the SCOPE gate, not routed",
             );
             /** @var array<string, mixed> $body */
             $body = json_decode($headResponse->body, true, 8, JSON_THROW_ON_ERROR);
             $this->assertSame(
-                'Not Found',
-                $body['error'] ?? null,
-                "HEAD /{$tail} must be refused by the ROUTER, not reach the controller's scope gate",
+                'proxy.scope_denied',
+                $body['code'] ?? null,
+                "HEAD /{$tail} must be refused by ServerProxyController's scope gate (not a router 404)",
             );
-            $this->assertCount(1, $forwarded, "HEAD /{$tail} must never reach the relay bridge");
+            $this->assertCount($seen, $forwarded, "HEAD /{$tail} must never reach the relay bridge");
         }
     }
 
@@ -1162,10 +1227,15 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * D1 accept matrix: GET and HEAD to representative playback-read paths under
-     * the newly-allowed `/hls`, `/dash`, `/media`, `/api/v1/transcode` prefixes
-     * must pass the scope gate and be forwarded verbatim over the relay bridge.
-     * (The HEAD rows are controller-level intent only — see the test's docblock.)
+     * D1 accept matrix: reads to representative playback paths must pass the
+     * scope gate and be forwarded verbatim over the relay bridge.
+     *
+     * GET covers the `/hls`, `/dash` and `/api/v1/transcode` prefixes plus the
+     * anchored `/media/{id}/stream`. HEAD covers ONLY the byte stream (S247 gave
+     * it exactly that one anchored entry and no prefix) — the HEAD rows for the
+     * other families were removed, and their refusal is now asserted positively,
+     * with a GET control beside it, by
+     * {@see self::test_s247_head_scope_is_only_the_byte_stream()}.
      *
      * @return iterable<string, array{0: string, 1: string}>
      */
@@ -1180,23 +1250,20 @@ final class ServerProxyControllerTest extends TestCase
             'transcode job status' => 'api/v1/transcode/job-abc/status',
         ];
 
-        foreach (['GET', 'HEAD'] as $method) {
-            foreach ($paths as $label => $path) {
-                yield "{$method} {$label}" => [$method, $path];
-            }
+        foreach ($paths as $label => $path) {
+            yield "GET {$label}" => ['GET', $path];
         }
+
+        yield 'HEAD media direct-play stream' => ['HEAD', 'media/item-123/stream'];
     }
 
     /**
      * A GET/HEAD to a real streaming path must clear the scope gate and reach the
      * relay bridge with the path + method intact.
      *
-     * ⚠ The HEAD rows here are CONTROLLER-level only: no HEAD ever arrives via
-     * {@see \Phlix\Hub\Http\Router} (no `head()` registrar, no HEAD proxy route —
-     * pinned by {@see self::test_head_is_never_routed_to_the_relay_proxy()}), so
-     * they assert what the playback families WOULD do for a player probing
-     * segment size / range support if HEAD were ever registered, not what is
-     * reachable today. Do not cite them as evidence that HEAD works.
+     * S247: the HEAD row is no longer controller-level intent — HEAD is routed
+     * for the byte stream, pinned end-to-end through the real router by
+     * {@see self::test_head_is_routed_only_for_the_direct_play_byte_stream()}.
      *
      * @dataProvider acceptedStreamingScopeProvider
      */
@@ -2771,16 +2838,21 @@ final class ServerProxyControllerTest extends TestCase
      */
     public static function forwardedTimeoutProvider(): iterable
     {
-        foreach (['GET', 'HEAD'] as $method) {
-            // Playback-read segments AND playlists ride the wider ceiling.
-            yield "{$method} hls variant playlist -> 60" => [$method, 'hls/job-abc/media_v3.m3u8', 60.0];
-            yield "{$method} hls segment -> 60" => [$method, 'hls/job-abc/seg-00007.ts', 60.0];
-            yield "{$method} dash manifest -> 60" => [$method, 'dash/job-abc/manifest.mpd', 60.0];
-            // Direct-play stream, status polling and JSON browse keep the default.
-            yield "{$method} media direct-play stream -> 30" => [$method, 'media/item-123/stream', 30.0];
-            yield "{$method} transcode job status -> 30" => [$method, 'api/v1/transcode/job-abc/status', 30.0];
-            yield "{$method} json browse -> 30" => [$method, 'api/v1/media', 30.0];
-        }
+        // Playback-read segments AND playlists ride the wider ceiling.
+        yield 'GET hls variant playlist -> 60' => ['GET', 'hls/job-abc/media_v3.m3u8', 60.0];
+        yield 'GET hls segment -> 60' => ['GET', 'hls/job-abc/seg-00007.ts', 60.0];
+        yield 'GET dash manifest -> 60' => ['GET', 'dash/job-abc/manifest.mpd', 60.0];
+        // Direct-play stream, status polling and JSON browse keep the default.
+        yield 'GET media direct-play stream -> 30' => ['GET', 'media/item-123/stream', 30.0];
+        yield 'GET transcode job status -> 30' => ['GET', 'api/v1/transcode/job-abc/status', 30.0];
+        yield 'GET json browse -> 30' => ['GET', 'api/v1/media', 30.0];
+
+        // S247: HEAD is in scope for the byte stream ONLY, so it is the only
+        // HEAD row that can be FORWARDED at all. The other families' HEAD rows
+        // were removed with the HEAD prefix key; `replyTimeoutForPath()` still
+        // branches on HEAD, and that classifier is exercised directly (without
+        // the scope gate in the way) by `test_reply_timeout_for_path_classifier`.
+        yield 'HEAD media direct-play stream -> 30' => ['HEAD', 'media/item-123/stream', 30.0];
 
         // The single permitted write (transcode START) keeps the default — only
         // GET/HEAD to a streaming prefix are widened.
@@ -3611,10 +3683,12 @@ final class ServerProxyControllerTest extends TestCase
         $allowlist = $raw;
 
         $this->assertSame(
-            ['GET', 'HEAD'],
+            ['GET'],
             array_keys($allowlist),
-            'Only read verbs may carry a broad PREFIX; every write is an anchored '
-            . 'BROWSE_SCOPE_PATTERNS entry (adding a write key here re-opens the S107 sweep)',
+            'Only GET may carry a broad PREFIX; every write is an anchored '
+            . 'BROWSE_SCOPE_PATTERNS entry (adding a write key here re-opens the S107 sweep), and '
+            . 'S247 deleted the HEAD key outright — HEAD scope is ONE anchored pattern, so no '
+            . 'buffered browse family can be reached by a HEAD',
         );
 
         $this->assertSame(
@@ -3625,28 +3699,135 @@ final class ServerProxyControllerTest extends TestCase
                 '/api/v1/music',
                 '/hls',
                 '/dash',
-                '/media',
                 '/api/v1/transcode',
             ],
             $allowlist['GET'],
             'GET browse scope changed: every prefix must name a REAL phlix-server family, '
-            . 'and adding one requires re-running the S107 write-route enumeration in the same commit',
+            . 'and adding one requires re-running the S107 write-route enumeration in the same commit. '
+            . 'S247 REMOVED `/media` from this list — the direct-play byte stream is now the anchored '
+            . '`#^/media/[^/]+/stream$#` in BROWSE_SCOPE_PATTERNS[GET]. Re-adding the prefix here is a '
+            . 'widening that would re-open the S107 sweep.',
         );
 
+        $this->assertArrayNotHasKey(
+            'HEAD',
+            $allowlist,
+            'S247: there must be NO HEAD prefix key. HEAD is routable now, so an entry here would be '
+            . 'LIVE surface, not documentation — and a HEAD to a buffered JSON browse prefix makes the '
+            . 'paired server render a whole body (and, for music, mint an HMAC URL per row) purely for '
+            . 'the hub to discard. That cost was avoided, not accepted.',
+        );
+    }
+
+    /**
+     * S247 — the direct-play byte stream is admitted by an ANCHORED pattern that
+     * mirrors phlix-server's own matcher, never by the `/media` PREFIX it
+     * replaced.
+     *
+     * This is the "compare exactly, never by substring" rule made executable.
+     * `HttpHandler::serveMediaStream()` matches `#^/media/(?P<id>[^/]+)/stream$#`
+     * and nothing else; the prefix admitted every `/media/…` path the server
+     * might ever register, present or future. The accept row is the control that
+     * stops the deny rows reading as "the request failed for an unrelated
+     * reason": all seven go through the SAME reflected gate, and exactly one is
+     * true.
+     *
+     * @return iterable<string, array{0: string, 1: bool}>
+     */
+    public static function s247ByteStreamMatcherProvider(): iterable
+    {
+        // The one shape the server serves — the SUCCEEDING control.
+        yield 'the byte stream itself' => ['/media/item-123/stream', true];
+        yield 'byte stream, uuid id' => ['/media/550e8400-e29b-41d4-a716-446655440000/stream', true];
+
+        // Everything the `/media` PREFIX used to forward and the anchor does not.
+        yield 'bare collection path' => ['/media', false];
+        yield 'item without the stream tail' => ['/media/item-123', false];
+        yield 'sub-path under the stream tail' => ['/media/item-123/stream/extra', false];
+        yield 'tail that merely starts with stream' => ['/media/item-123/streamX', false];
+        yield 'two-segment id' => ['/media/a/b/stream', false];
+        yield 'hypothetical future server route' => ['/media/item-123/delete', false];
+        // Siblings — already denied before S247, still denied after.
+        yield 'sibling prefix' => ['/media-secret/item-123/stream', false];
+    }
+
+    /**
+     * @dataProvider s247ByteStreamMatcherProvider
+     */
+    public function test_s247_byte_stream_is_matched_exactly_not_by_prefix(string $path, bool $expected): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
         $this->assertSame(
-            [
-                '/api/v1/libraries',
-                '/api/v1/media',
-                '/api/v1/collections',
-                '/hls',
-                '/dash',
-                '/media',
-                '/api/v1/transcode',
-            ],
-            $allowlist['HEAD'],
-            'HEAD browse scope changed. HEAD is inert (no Router::head() registrar), so a new '
-            . 'entry here grants nothing and only documents intent — and a DEAD entry here is '
-            . 'dead twice over. `/api/v1/music` stays deliberately absent (S100 fix round 1).',
+            $expected,
+            $reflected->invoke($controller, 'GET', $path),
+            "GET {$path}: the byte stream is admitted by an ANCHORED matcher mirroring "
+            . 'phlix-server\'s `#^/media/(?P<id>[^/]+)/stream$#`, never by a `/media` prefix',
+        );
+        // HEAD carries the SAME anchored matcher and nothing else, so the two
+        // verbs must agree exactly — a divergence here means a player's probe
+        // and its fetch disagree about what is reachable.
+        $this->assertSame(
+            $expected,
+            $reflected->invoke($controller, 'HEAD', $path),
+            "HEAD {$path} must agree with GET: the probe and the fetch address the same route",
+        );
+    }
+
+    /**
+     * S247 — HEAD grants nothing beyond the byte stream.
+     *
+     * Every one of these is a GET-allowed read (so the refusal cannot be blamed
+     * on the path being out of scope generally) that a HEAD must NOT reach,
+     * because reaching it would make the paired server render a whole buffered
+     * body for the hub to discard. The GET control on the same path is asserted
+     * in the same test, so a blanket failure cannot read as a pass.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function s247HeadDeniedProvider(): iterable
+    {
+        yield 'json browse collection' => ['/api/v1/media'];
+        yield 'json browse detail' => ['/api/v1/media/item-123'];
+        yield 'libraries' => ['/api/v1/libraries'];
+        yield 'collections' => ['/api/v1/collections'];
+        yield 'music browse' => ['/api/v1/music/artists'];
+        yield 'hls segment' => ['/hls/job-abc/seg-00007.ts'];
+        yield 'hls master playlist' => ['/hls/job-abc/master.m3u8'];
+        yield 'dash manifest' => ['/dash/job-abc/manifest.mpd'];
+        yield 'transcode status' => ['/api/v1/transcode/job-abc/status'];
+        yield 'artwork' => ['/api/v1/artwork/item-123'];
+    }
+
+    /**
+     * @dataProvider s247HeadDeniedProvider
+     */
+    public function test_s247_head_scope_is_only_the_byte_stream(string $path): void
+    {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        // The SUCCEEDING control: the identical path IS in GET scope, so the
+        // HEAD refusal below is about the METHOD and nothing else.
+        $this->assertTrue(
+            $reflected->invoke($controller, 'GET', $path),
+            "GET {$path} must stay in scope — otherwise the HEAD assertion proves nothing",
+        );
+        $this->assertFalse(
+            $reflected->invoke($controller, 'HEAD', $path),
+            "HEAD {$path} must be out of scope: S247 gave HEAD exactly one anchored entry "
+            . '(the direct-play byte stream) and no prefix at all',
         );
     }
 
@@ -4677,13 +4858,14 @@ final class ServerProxyControllerTest extends TestCase
         $allowlist = $raw;
 
         $this->assertSame(
-            ['GET', 'HEAD'],
+            ['GET'],
             array_keys($allowlist),
             'S63 forwards WRITES, and they must ride anchored BROWSE_SCOPE_PATTERNS entries — never a '
-            . 'write key here, which would re-open the S107 sweep for a whole prefix.',
+            . 'write key here, which would re-open the S107 sweep for a whole prefix. (S247 removed the '
+            . 'HEAD key: HEAD scope is one anchored pattern, so GET is the only prefix-carrying verb.)',
         );
 
-        foreach (['GET', 'HEAD'] as $method) {
+        foreach (['GET'] as $method) {
             $prefixes = $allowlist[$method] ?? [];
             $this->assertNotSame([], $prefixes, "ANTI-VACUITY: BROWSE_SCOPE_ALLOWLIST[{$method}] is empty");
             foreach (['/api/v1/cast', '/api/v1/dlna', '/api/v1/roku', '/api/v1/airplay', '/dlna'] as $forbidden) {
@@ -4721,10 +4903,13 @@ final class ServerProxyControllerTest extends TestCase
         /** @var array<string, list<string>> $allowlist */
         $allowlist = $raw;
 
-        foreach (['GET', 'HEAD'] as $method) {
+        foreach (['GET'] as $method) {
             $prefixes = $allowlist[$method] ?? [];
             $this->assertNotSame([], $prefixes, "ANTI-VACUITY: BROWSE_SCOPE_ALLOWLIST[{$method}] is empty");
-            foreach (['/api/v1/artwork', '/api/v1/users'] as $forbidden) {
+            // S247 adds `/media` to the forbidden-prefix list for the same
+            // reason S238 kept artwork/users out: the id is a MIDDLE segment, so
+            // a prefix admits every present and future `/media/…` route.
+            foreach (['/api/v1/artwork', '/api/v1/users', '/media'] as $forbidden) {
                 $this->assertNotContains(
                     $forbidden,
                     $prefixes,
@@ -4738,5 +4923,671 @@ final class ServerProxyControllerTest extends TestCase
                 );
             }
         }
+    }
+
+    // =====================================================================
+    // S247 — the direct-play byte stream over the relay: Range/206, HEAD, and
+    // WHICH gate actually fires.
+    // =====================================================================
+
+    /**
+     * Build a real file on disk with deterministic, non-repeating content, so a
+     * range slice of it cannot accidentally equal a different slice.
+     *
+     * Real bytes matter here: the whole point of the range assertions is that
+     * the bytes the browser receives are the bytes on the server's disk, and a
+     * fixture of `str_repeat('a', N)` would make every wrong offset produce the
+     * right md5.
+     *
+     * @param int $size Bytes to write.
+     *
+     * @return string Absolute path to the fixture (removed in tearDown).
+     */
+    private function byteStreamFixture(int $size): string
+    {
+        $path = tempnam(sys_get_temp_dir(), 's247-');
+        self::assertIsString($path, 'the fixture file could not be created');
+        // Deterministic but position-dependent: byte i is a function of i.
+        $buffer = '';
+        for ($i = 0; $i < $size; $i++) {
+            $buffer .= chr(($i * 31 + ($i >> 8) * 7 + 11) % 256);
+        }
+        file_put_contents($path, $buffer);
+        self::assertSame($size, filesize($path), 'the fixture is not the size it claims');
+        $this->fixtures[] = $path;
+
+        return $path;
+    }
+
+    /** @var list<string> Fixture files to remove after each test. */
+    private array $fixtures = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->fixtures as $path) {
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+        $this->fixtures = [];
+        parent::tearDown();
+    }
+
+    /**
+     * A publisher that behaves like phlix-server's `serveMediaStream()`: it
+     * parses the forwarded `Range` request header against a REAL file on disk
+     * and replies with either 200 (whole file), 206 + `Content-Range` (the
+     * requested slice, read from disk with `fseek`/`fread`), or 416.
+     *
+     * It is written against `$data['headers']` — the headers the controller
+     * actually forwarded — so a controller that STRIPPED `Range` would silently
+     * fall back to the 200 branch and the 206 assertions would fail. That is
+     * deliberate: it makes "the Range header survived the hub" an observable
+     * consequence rather than a separate claim.
+     *
+     * @param string                 $path   Fixture file on disk.
+     * @param RelayProxyBridge|null  $bridge By-reference bridge handle.
+     *
+     * @return callable(string, array<string, mixed>): void
+     */
+    private function diskRangePublisher(string $path, &$bridge): callable
+    {
+        return function (string $event, array $data) use ($path, &$bridge): void {
+            /** @var RelayProxyBridge $bridge */
+            $id = $data['request_id'];
+            $size = (int) filesize($path);
+
+            /** @var array<string, string> $headers */
+            $headers = is_array($data['headers'] ?? null) ? $data['headers'] : [];
+            $range = null;
+            foreach ($headers as $name => $value) {
+                if (strtolower((string) $name) === 'range' && is_string($value)) {
+                    $range = $value;
+                }
+            }
+
+            $start = 0;
+            $end = $size - 1;
+            $partial = false;
+            if ($range !== null && preg_match('/^bytes=(\d*)-(\d*)$/', $range, $m) === 1) {
+                $partial = true;
+                if ($m[1] === '' && $m[2] !== '') {
+                    // Suffix range: the LAST N bytes.
+                    $start = max(0, $size - (int) $m[2]);
+                    $end = $size - 1;
+                } else {
+                    $start = (int) $m[1];
+                    $end = $m[2] === '' ? $size - 1 : (int) $m[2];
+                }
+                if ($start >= $size || $start > $end) {
+                    $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 416, 'headers' => [
+                        'Content-Type' => 'video/x-matroska',
+                        'Content-Range' => "bytes */{$size}",
+                        'Content-Length' => '0',
+                    ]]);
+                    $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
+                    return;
+                }
+            }
+
+            $length = $end - $start + 1;
+            $replyHeaders = [
+                'Content-Type' => 'video/x-matroska',
+                'Content-Length' => (string) $length,
+                'Accept-Ranges' => 'bytes',
+            ];
+            if ($partial) {
+                $replyHeaders['Content-Range'] = "bytes {$start}-{$end}/{$size}";
+            }
+            $bridge->onReply([
+                'request_id' => $id,
+                'phase' => 'head',
+                'status' => $partial ? 206 : 200,
+                'headers' => $replyHeaders,
+            ]);
+
+            // Stream the slice off disk in fragments, exactly as the tunnel
+            // delivers it — never one buffered blob.
+            $fh = fopen($path, 'rb');
+            self::assertIsResource($fh);
+            fseek($fh, $start);
+            $remaining = $length;
+            while ($remaining > 0) {
+                $chunk = fread($fh, min(65536, $remaining));
+                if ($chunk === false || $chunk === '') {
+                    break;
+                }
+                $remaining -= strlen($chunk);
+                $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => $chunk]);
+            }
+            fclose($fh);
+            $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
+        };
+    }
+
+    /**
+     * S247 — the `Range` REQUEST header must reach the paired server verbatim.
+     *
+     * `<video>` seeks by byte range. If the hub stripped `Range` the server
+     * would answer 200 with the whole file and playback would appear to "work"
+     * while every seek silently restarted the download — the failure this item
+     * exists to prevent.
+     *
+     * The assertion is on the forwarded envelope captured OUTSIDE the closure
+     * (recorded into a variable, asserted after the call returns) so an upstream
+     * `catch (Throwable)` cannot swallow it. The stripped-header controls are in
+     * the same test so "everything was forwarded" cannot pass as "Range was
+     * forwarded".
+     */
+    public function test_s247_range_request_header_reaches_the_paired_server_verbatim(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+            $forwarded = $data;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply(['request_id' => $data['request_id'], 'phase' => 'head', 'status' => 206, 'headers' => [
+                'Content-Length' => '1000',
+                'Content-Range' => 'bytes 1000-1999/362807',
+            ]]);
+            $bridge->onReply(['request_id' => $data['request_id'], 'phase' => 'end']);
+        };
+        $bridge = $this->bridge($publisher);
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->requestWith('GET', 'user-1', [
+                'Range' => 'bytes=1000-1999',
+                'Accept' => '*/*',
+                // Controls: these MUST be stripped, so a test that passes only
+                // because "every header is forwarded" cannot exist.
+                'Authorization' => 'Bearer hub-session-token',
+                'Cookie' => 'phlix_hub_token=abc',
+                'X-Phlix-Relay-User' => 'forged-user',
+            ]),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+        $this->drive($response);
+
+        $this->assertIsArray($forwarded, 'the ranged byte-stream GET must reach the relay bridge');
+        /** @var array<string, string> $sent */
+        $sent = $forwarded['headers'];
+        $this->assertSame(
+            'bytes=1000-1999',
+            $sent['Range'] ?? null,
+            'Range must be forwarded verbatim: without it every <video> seek silently '
+            . 'restarts the whole download while playback still appears to work',
+        );
+        // Succeeding controls beside the claim.
+        $this->assertArrayNotHasKey('Authorization', $sent, 'the hub credential is not the server\'s');
+        $this->assertArrayNotHasKey('Cookie', $sent, 'the hub cookie is not the server\'s');
+        $this->assertSame('user-1', $sent['X-Phlix-Relay-User'] ?? null, 'the forged trust marker must be overwritten');
+    }
+
+    /**
+     * S247 range matrix. Each row is a `Range` header (or null for an
+     * un-ranged GET) plus the expected status.
+     *
+     * @return iterable<string, array{0: string|null, 1: int}>
+     */
+    public static function s247RangeProvider(): iterable
+    {
+        yield 'no range -> 200 whole file' => [null, 200];
+        yield 'leading slice' => ['bytes=0-1023', 206];
+        yield 'mid slice' => ['bytes=100000-200000', 206];
+        yield 'open-ended tail' => ['bytes=300000-', 206];
+        yield 'suffix range' => ['bytes=-4096', 206];
+        yield 'single byte' => ['bytes=42-42', 206];
+        yield 'final byte' => ['bytes=362806-362806', 206];
+        yield 'unsatisfiable' => ['bytes=999999-1000000', 416];
+    }
+
+    /**
+     * S247 AC — a real range request over the relay returns the right status,
+     * the right `Content-Range`, and BYTES THAT MATCH DISK.
+     *
+     * This drives the whole hub pass-through: `proxy()` → the streaming
+     * producer → {@see \Phlix\Hub\Relay\RelayProxyBridge::stream()} →
+     * {@see \Phlix\Hub\Http\ConnectionResponseSink} → the browser socket, with a
+     * 362 807-byte file physically on disk at the far end and the slice read
+     * back with `fseek`/`fread`.
+     *
+     * ⚠ The `Content-Range` VALUE is asserted, not just the status. A 206 with
+     * the wrong range is exactly the bug this item exists to prevent: the player
+     * would seek to the wrong offset and the failure would look like corrupt
+     * media rather than a proxy defect. The body is md5'd against the file on
+     * disk for the same reason.
+     *
+     * @dataProvider s247RangeProvider
+     */
+    public function test_s247_ranged_direct_play_matches_disk_byte_for_byte(?string $range, int $expectedStatus): void
+    {
+        $size = 362807;
+        $path = $this->byteStreamFixture($size);
+
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $bridge = null;
+        $bridge = $this->bridge($this->diskRangePublisher($path, $bridge));
+
+        $controller = $this->controller($info, $bridge);
+        $headers = ['Accept' => '*/*'];
+        if ($range !== null) {
+            $headers['Range'] = $range;
+        }
+        $response = $controller->proxy(
+            $this->requestWith('GET', 'user-1', $headers),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+
+        $this->assertNotNull($response->streamProducer, 'the byte stream must take the STREAMING path');
+        $connection = $this->drive($response);
+
+        $written = $connection->written;
+        $this->assertNotSame([], $written, 'nothing was written to the browser connection');
+        $head = $written[0];
+        $body = implode('', array_slice($written, 1));
+
+        // ---- status ----------------------------------------------------
+        $this->assertStringStartsWith(
+            "HTTP/1.1 {$expectedStatus} ",
+            $head,
+            "the server's status must survive the pass-through verbatim (expected {$expectedStatus})",
+        );
+
+        if ($expectedStatus === 416) {
+            $this->assertStringContainsString("Content-Range: bytes */{$size}", $head);
+            $this->assertSame('', $body, 'a 416 carries no entity');
+            return;
+        }
+
+        // ---- expected slice, computed from the file on DISK -------------
+        [$start, $end] = self::expectedSlice($range, $size);
+        $expectedBytes = (string) file_get_contents($path, false, null, $start, $end - $start + 1);
+        $this->assertSame($end - $start + 1, strlen($expectedBytes), 'the fixture slice is the wrong size');
+
+        // ---- Content-Range, by VALUE ------------------------------------
+        if ($expectedStatus === 206) {
+            $this->assertStringContainsString(
+                "Content-Range: bytes {$start}-{$end}/{$size}",
+                $head,
+                'a 206 with the wrong Content-Range makes the player seek to the wrong offset',
+            );
+        } else {
+            $this->assertStringNotContainsString(
+                'Content-Range:',
+                $head,
+                'an un-ranged 200 must not claim to be partial',
+            );
+        }
+        $this->assertStringContainsString('Content-Length: ' . ($end - $start + 1), $head);
+
+        // ---- the bytes themselves ---------------------------------------
+        $this->assertSame(
+            md5($expectedBytes),
+            md5($body),
+            sprintf(
+                'the relayed body must be byte-identical to disk (range=%s, %d bytes)',
+                $range ?? '<none>',
+                strlen($expectedBytes),
+            ),
+        );
+        $this->assertSame($expectedBytes, $body, 'md5 agreement is necessary but the bytes are asserted directly too');
+    }
+
+    /**
+     * Resolve `[start, end]` for a `Range` header against a known file size.
+     * Independent of the production matcher on purpose — a helper derived from
+     * its subject would self-adjust with it.
+     *
+     * @return array{0: int, 1: int}
+     */
+    private static function expectedSlice(?string $range, int $size): array
+    {
+        if ($range === null) {
+            return [0, $size - 1];
+        }
+        if (preg_match('/^bytes=(\d*)-(\d*)$/', $range, $m) !== 1) {
+            return [0, $size - 1];
+        }
+        if ($m[1] === '' && $m[2] !== '') {
+            return [$size - (int) $m[2], $size - 1];
+        }
+        $start = (int) $m[1];
+        $end = $m[2] === '' ? $size - 1 : (int) $m[2];
+
+        return [$start, $end];
+    }
+
+    /**
+     * S247 — the un-ranged whole-file case, proven to be the WHOLE file.
+     *
+     * The provider row above asserts the same thing, but only through the
+     * md5. This one states the size explicitly so an off-by-one that happened to
+     * hash the same (it cannot, but the assertion should not depend on that)
+     * would still be visible, and it pins the 362 807-byte figure S238 measured
+     * across the real frame encoder.
+     */
+    public function test_s247_unranged_direct_play_streams_the_whole_file(): void
+    {
+        $size = 362807;
+        $path = $this->byteStreamFixture($size);
+
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $bridge = null;
+        $bridge = $this->bridge($this->diskRangePublisher($path, $bridge));
+
+        $controller = $this->controller($info, $bridge);
+        $response = $controller->proxy(
+            $this->requestWith('GET', 'user-1', ['Accept' => '*/*']),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+        $connection = $this->drive($response);
+
+        $body = implode('', array_slice($connection->written, 1));
+        $this->assertSame($size, strlen($body), 'every byte of the file must reach the browser');
+        $this->assertSame(md5_file($path), md5($body), 'the relayed file must be md5-identical to disk');
+    }
+
+    // ---------------------------------------------------------------------
+    // S247 item 4 — WHICH gate fires on the relayed byte-stream path.
+    // ---------------------------------------------------------------------
+
+    /**
+     * S247 AC — name the gate that refuses a relayed direct-play stream, with a
+     * SUCCEEDING control beside it.
+     *
+     * The gate is `RelaySessionManager::activeUserStreams()` measured against
+     * the operator's `max_concurrent_streams`, enforced HUB-SIDE in
+     * {@see ServerProxyController::proxy()} → 503 `stream.limit`. It has to be
+     * hub-side: `project_relay_auth_is_hub_side_only` records that phlix-server's
+     * `AuthMiddleware` is a no-op for relayed requests, and the server's own
+     * inline direct-play stream limit resolves a PROFILE from the server's user
+     * rows — which a hub UUID never matches — so a server-side gate is not
+     * protecting this path.
+     *
+     * Three things are asserted together, because any one alone is ambiguous:
+     *  1. the refusal, with its code;
+     *  2. that it is a DECISION and not a timeout — the bridge publisher is
+     *     never invoked at all, and the call returns in well under the 30 s
+     *     reply timeout (asserted on a real clock);
+     *  3. the CONTROL: the identical request, differing ONLY in the active
+     *     stream count, is admitted, occupies a slot and is forwarded.
+     */
+    public function test_s247_stream_limit_gate_fires_on_the_relayed_byte_stream(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        // ---- the REFUSAL ------------------------------------------------
+        $denySessions = $this->createMock(RelaySessionManager::class);
+        $denySessions->method('checkUserQuota')->willReturn(
+            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 2],
+        );
+        $denySessions->method('activeUserStreams')->willReturn(2);
+        $denySessions->expects(self::never())->method('beginUserStream');
+
+        $denyForwarded = 0;
+        $denyBridge = $this->bridge(static function (string $e, array $d) use (&$denyForwarded): void {
+            $denyForwarded++;
+        });
+
+        $startedAt = hrtime(true);
+        $denied = $this->controller($info, $denyBridge, $denySessions)->proxy(
+            $this->requestWith('GET', 'user-1', ['Range' => 'bytes=0-1023']),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+        $elapsedSeconds = (hrtime(true) - $startedAt) / 1e9;
+
+        $this->assertSame(503, $denied->statusCode);
+        /** @var array{error?: array{code?: string}} $body */
+        $body = json_decode($denied->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame(
+            'stream.limit',
+            $body['error']['code'] ?? null,
+            'the gate that refuses a relayed direct-play stream is the HUB-side concurrent-stream cap '
+            . '(RelaySessionManager::activeUserStreams vs max_concurrent_streams), NOT anything in phlix-server',
+        );
+        $this->assertNull($denied->streamProducer, 'a refused stream must not return a producer');
+        // (2) a DECISION, not a timeout: the bridge is never touched, and the
+        // refusal is orders of magnitude faster than the 30 s reply timeout.
+        $this->assertSame(0, $denyForwarded, 'the refusal must happen BEFORE anything is forwarded');
+        $this->assertLessThan(
+            1.0,
+            $elapsedSeconds,
+            'the refusal must be a decision — a cost bounded by the reply timeout would mean this test '
+            . 'measures the timeout constant rather than the gate',
+        );
+
+        // ---- the CONTROL: same request, one fewer active stream ---------
+        $allowSessions = $this->createMock(RelaySessionManager::class);
+        $allowSessions->method('checkUserQuota')->willReturn(
+            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 2],
+        );
+        $allowSessions->method('activeUserStreams')->willReturn(1);
+        $allowSessions->expects(self::once())->method('beginUserStream')->with('user-1');
+        $allowSessions->expects(self::once())->method('endUserStream')->with('user-1');
+
+        $allowForwarded = 0;
+        $allowBridge = null;
+        $allowBridge = $this->bridge(function (string $e, array $d) use (&$allowBridge, &$allowForwarded): void {
+            $allowForwarded++;
+            /** @var RelayProxyBridge $allowBridge */
+            $allowBridge->onReply(['request_id' => $d['request_id'], 'phase' => 'head', 'status' => 206, 'headers' => [
+                'Content-Length' => '1024',
+                'Content-Range' => 'bytes 0-1023/362807',
+            ]]);
+            $allowBridge->onReply(['request_id' => $d['request_id'], 'phase' => 'body', 'body' => str_repeat('x', 1024)]);
+            $allowBridge->onReply(['request_id' => $d['request_id'], 'phase' => 'end']);
+        });
+
+        $allowed = $this->controller($info, $allowBridge, $allowSessions)->proxy(
+            $this->requestWith('GET', 'user-1', ['Range' => 'bytes=0-1023']),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+        $connection = $this->drive($allowed);
+
+        $this->assertNotNull($allowed->streamProducer, 'the control must be admitted as a stream');
+        $this->assertSame(1, $allowForwarded, 'the control must reach the relay bridge');
+        $this->assertStringStartsWith('HTTP/1.1 206 ', $connection->written[0]);
+    }
+
+    /**
+     * S247 AC — the bandwidth quota gate, likewise hub-side, likewise with a
+     * succeeding control. `RelaySessionManager::checkUserQuota()` → 503
+     * `quota.exceeded`, refused before the stream is admitted.
+     */
+    public function test_s247_quota_gate_fires_on_the_relayed_byte_stream(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $overQuota = $this->createMock(RelaySessionManager::class);
+        $overQuota->method('checkUserQuota')->willReturn([
+            'allowed' => false,
+            'reason' => 'User has reached their monthly download bandwidth quota.',
+            'maxConcurrentStreams' => 0,
+        ]);
+        $overQuota->expects(self::never())->method('beginUserStream');
+
+        $forwarded = 0;
+        $bridge = $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+            $forwarded++;
+        });
+
+        $denied = $this->controller($info, $bridge, $overQuota)->proxy(
+            $this->requestWith('GET', 'user-1', ['Range' => 'bytes=0-1023']),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+
+        $this->assertSame(503, $denied->statusCode);
+        /** @var array{error?: array{code?: string}} $body */
+        $body = json_decode($denied->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('quota.exceeded', $body['error']['code'] ?? null);
+        $this->assertSame(0, $forwarded, 'an over-quota byte stream must never reach the relay bridge');
+
+        // CONTROL: identical request, quota allowed → admitted and forwarded.
+        $inQuota = $this->createMock(RelaySessionManager::class);
+        $inQuota->method('checkUserQuota')->willReturn(
+            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0],
+        );
+        $okForwarded = 0;
+        $okBridge = null;
+        $okBridge = $this->bridge(function (string $e, array $d) use (&$okBridge, &$okForwarded): void {
+            $okForwarded++;
+            /** @var RelayProxyBridge $okBridge */
+            $okBridge->onReply(['request_id' => $d['request_id'], 'phase' => 'head', 'status' => 206, 'headers' => [
+                'Content-Length' => '1024',
+                'Content-Range' => 'bytes 0-1023/362807',
+            ]]);
+            $okBridge->onReply(['request_id' => $d['request_id'], 'phase' => 'end']);
+        });
+
+        $allowed = $this->controller($info, $okBridge, $inQuota)->proxy(
+            $this->requestWith('GET', 'user-1', ['Range' => 'bytes=0-1023']),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+        $this->drive($allowed);
+        $this->assertSame(1, $okForwarded, 'the control must reach the relay bridge');
+    }
+
+    /**
+     * S247 — the PARENTAL RATING GATE is documented as INERT on this path, and
+     * that claim is pinned rather than left in a comment.
+     *
+     * `Phlix\Media\RatingGate` lives in phlix-server and resolves a filter from
+     * that server's own user/profile rows. The only identity the hub can supply
+     * is `X-Phlix-Relay-User`, the HUB user's UUID, which matches no row there —
+     * so the gate is a strict no-op for every relayed request, byte stream
+     * included. The hub cannot substitute for it (it holds no parental-control
+     * profile and no per-item rating).
+     *
+     * What this test can assert, and does, is the hub-side half of that
+     * statement: the ONLY user identity crossing the tunnel is the hub UUID, and
+     * no parental/rating marker is added alongside it. If a future change starts
+     * mapping the hub identity to a server identity, this test goes red and the
+     * caveat in `buildForwardHeaders()` has to be revisited in the same commit.
+     */
+    public function test_s247_only_the_hub_uuid_crosses_the_tunnel_so_the_server_rating_gate_stays_inert(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        /** @var array<string, mixed>|null $forwarded */
+        $forwarded = null;
+        $bridge = null;
+        $bridge = $this->bridge(function (string $e, array $d) use (&$bridge, &$forwarded): void {
+            $forwarded = $d;
+            /** @var RelayProxyBridge $bridge */
+            $bridge->onReply(['request_id' => $d['request_id'], 'phase' => 'head', 'status' => 200, 'headers' => [
+                'Content-Length' => '0',
+            ]]);
+            $bridge->onReply(['request_id' => $d['request_id'], 'phase' => 'end']);
+        });
+
+        $response = $this->controller($info, $bridge)->proxy(
+            $this->requestWith('GET', 'user-1', ['Accept' => '*/*']),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+        $this->drive($response);
+
+        $this->assertIsArray($forwarded);
+        /** @var array<string, string> $sent */
+        $sent = $forwarded['headers'];
+        $this->assertSame('user-1', $sent['X-Phlix-Relay-User'] ?? null);
+        $this->assertSame('1', $sent['X-Phlix-Relay'] ?? null);
+        foreach (array_keys($sent) as $name) {
+            $this->assertStringNotContainsStringIgnoringCase(
+                'profile',
+                (string) $name,
+                'no server-side PROFILE identity crosses the tunnel — which is exactly why phlix-server\'s '
+                . 'RatingGate cannot fire for a relayed request. Closing that needs a hub->server identity '
+                . 'mapping in phlix-server; it is OWED, not shipped.',
+            );
+        }
+    }
+
+    /**
+     * S247 item 3, end-to-end and ON THE WIRE — a relayed HEAD probe renders
+     * exactly ONE `Content-Length`, and it is the paired server's.
+     *
+     * The previous test asserts the builder's state; this one renders the reply
+     * the way the HTTP worker does (`toWorkermanResponse()` then string cast)
+     * and counts the field, because the defect this closes lived entirely in the
+     * encoder. The GET control immediately below it renders through the stock
+     * encoder and is unaffected.
+     */
+    public function test_s247_relayed_head_renders_exactly_one_content_length_on_the_wire(): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+
+        $reply = static function (RelayProxyBridge $bridge, string $id, string $body): void {
+            $bridge->onReply([
+                'request_id' => $id,
+                'status' => 200,
+                'headers' => [
+                    'Content-Type' => 'video/x-matroska',
+                    'Content-Length' => '362807',
+                    'Accept-Ranges' => 'bytes',
+                ],
+                'body' => $body,
+            ]);
+        };
+
+        // ---- the HEAD probe ---------------------------------------------
+        $headBridge = null;
+        $headBridge = $this->bridge(function (string $e, array $d) use (&$headBridge, $reply): void {
+            /** @var RelayProxyBridge $headBridge */
+            $reply($headBridge, $d['request_id'], '');
+        });
+        $head = $this->controller($info, $headBridge)->proxy(
+            $this->requestWith('HEAD', 'user-1', ['Accept' => '*/*']),
+            ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+        );
+        $wire = (string) $head->toWorkermanResponse();
+
+        $this->assertSame(
+            1,
+            preg_match_all('/^Content-Length:/mi', $wire),
+            'a relayed HEAD must put exactly ONE Content-Length on the wire — two conflicting values '
+            . 'make the message invalid (RFC 9110 §8.6) and break the player rather than erroring',
+        );
+        $this->assertStringContainsString('Content-Length: 362807', $wire);
+        $this->assertStringNotContainsString('Content-Length: 0', $wire);
+        $this->assertStringContainsString('Accept-Ranges: bytes', $wire);
+        $this->assertTrue(str_ends_with($wire, "\r\n\r\n"), 'a HEAD reply must end at the head terminator');
+
+        // ---- the GET control, same upstream reply ------------------------
+        // Buffered GET is not a byte stream (that streams), so use a JSON browse
+        // path: it renders through the STOCK encoder and Workerman recomputes
+        // Content-Length from the real body. Unchanged by S247.
+        $getBridge = null;
+        $getBridge = $this->bridge(function (string $e, array $d) use (&$getBridge, $reply): void {
+            /** @var RelayProxyBridge $getBridge */
+            $reply($getBridge, $d['request_id'], '{"ok":true}');
+        });
+        $get = $this->controller($info, $getBridge)->proxy(
+            $this->requestWith('GET', 'user-1', ['Accept' => 'application/json']),
+            ['id' => 'srv-1', 'path' => 'api/v1/media/item-123'],
+        );
+        $getWire = (string) $get->toWorkermanResponse();
+
+        $this->assertFalse($get->headOnly, 'CONTROL: a GET must not select the bodyless encoder');
+        $this->assertSame(1, preg_match_all('/^Content-Length:/mi', $getWire));
+        $this->assertStringContainsString('Content-Length: 11', $getWire);
+        $this->assertStringContainsString('{"ok":true}', $getWire);
+        $this->assertStringNotContainsString(
+            'Content-Length: 362807',
+            $getWire,
+            'CONTROL: on a GET the server\'s stale Content-Length is stripped and recomputed from the body',
+        );
     }
 }
