@@ -150,6 +150,28 @@ final class RegistrarAuthGateTest extends RouteRegistrationTestCase
                 self::assertStringContainsString('HUB_PROTOCOL_UNSUPPORTED', $response->body);
                 break;
 
+            case RouteManifest::GATE_OAUTH_RESOURCE:
+                // The CODE as well as the status. AuthMiddleware also answers a
+                // credential-less `/api/`-style request with 401, so a
+                // status-only assertion would pass on a route that had silently
+                // been re-gated with it — which in production would serve a hub
+                // session JWT (no scopes at all) on a scope-gated surface. Only
+                // OAuthResourceMiddleware emits `invalid_token`, and only it
+                // sends the RFC 6750 challenge header.
+                self::assertSame(
+                    401,
+                    $response->statusCode,
+                    RouteManifest::key($route) . ' must require an OAuth 2.0 access token',
+                );
+                self::assertStringContainsString('invalid_token', $response->body);
+                self::assertStringContainsString(
+                    'Bearer error="invalid_token"',
+                    $response->headers['WWW-Authenticate'] ?? '',
+                    RouteManifest::key($route)
+                    . ' must answer an uncredentialed caller with an RFC 6750 Bearer challenge',
+                );
+                break;
+
             case RouteManifest::GATE_ALEXA:
                 // The CODE, not just the 400: the protocol gate also answers 400,
                 // so a status-only assertion would pass on a route that had lost

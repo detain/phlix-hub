@@ -81,6 +81,22 @@ final class RouteManifest
     public const GATE_PUBLIC = 'public';
 
     /**
+     * S286 — the OAuth 2.0 RESOURCE-SERVER gate
+     * ({@see \Phlix\Hub\Http\Middleware\OAuthResourceMiddleware}): no
+     * `phlix-oat-…` access token ⇒ 401 `invalid_token`, with an RFC 6750
+     * `WWW-Authenticate: Bearer` challenge.
+     *
+     * A gate of its own rather than a reuse of {@see self::GATE_AUTH_JSON},
+     * even though both answer 401: they are different middleware accepting
+     * different credentials, and a route that lost the OAuth gate but picked up
+     * `AuthMiddleware` would still 401 an anonymous caller and would sail
+     * through a status-only assertion — while in production serving a hub
+     * session JWT, which carries no scopes at all, on a scope-gated surface. The
+     * suite therefore asserts the error CODE too.
+     */
+    public const GATE_OAUTH_RESOURCE = 'oauth-resource';
+
+    /**
      * The registrars that take an {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}
      * as their only argument. Everything else is invoked with no arguments.
      *
@@ -192,9 +208,17 @@ final class RouteManifest
         // and attaching it are two different facts; this list pins the first and
         // `subRegistrarRoutes()` + `ApplicationRouteCompositionTest` pin the
         // second.
+        //
+        // S286 adds two more: the userinfo controller and the RESOURCE-SERVER
+        // middleware. The latter being a DIFFERENT class from AuthMiddleware is
+        // the point — a change that re-gated `/oauth/userinfo` with
+        // AuthMiddleware (serving a scope-less session JWT on a scoped surface)
+        // would drop `OAuthResourceMiddleware` from this list.
         'registerOAuthRoutes' => [
             \Phlix\Hub\Http\Controllers\OAuthController::class,
             \Phlix\Hub\Http\Middleware\AuthMiddleware::class,
+            \Phlix\Hub\Http\Controllers\OAuthUserInfoController::class,
+            \Phlix\Hub\Http\Middleware\OAuthResourceMiddleware::class,
         ],
     ];
 
@@ -800,6 +824,14 @@ final class RouteManifest
                 [
                     'method' => 'POST', 'path' => '/oauth/token', 'url' => '/oauth/token',
                     'gate' => self::GATE_PUBLIC,
+                ],
+                // S286 — the resource server. Its gate is deliberately NOT
+                // GATE_AUTH_HTML like its two `/oauth/authorize` siblings: a
+                // third-party client cannot follow a 302 to `/app/login`, and
+                // the session JWT AuthMiddleware accepts carries no scopes.
+                [
+                    'method' => 'GET', 'path' => '/oauth/userinfo', 'url' => '/oauth/userinfo',
+                    'gate' => self::GATE_OAUTH_RESOURCE,
                 ],
             ],
         ];

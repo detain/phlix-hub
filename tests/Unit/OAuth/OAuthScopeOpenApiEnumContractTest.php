@@ -78,8 +78,12 @@ final class OAuthScopeOpenApiEnumContractTest extends TestCase
      */
     private const int SCOPE_FLOOR = 5;
 
-    /** Anti-vacuity floor for the RFC 6749 error vocabulary. */
-    private const int ERROR_FLOOR = 9;
+    /**
+     * Anti-vacuity floor for the error vocabulary: the nine RFC 6749 §5.2
+     * Authorization-Server codes plus the two RFC 6750 §3.1 Bearer-token codes
+     * the S286 resource server emits (`invalid_token`, `insufficient_scope`).
+     */
+    private const int ERROR_FLOOR = 11;
 
     private const string SPEC = __DIR__ . '/../../../openapi.yaml';
 

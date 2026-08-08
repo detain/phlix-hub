@@ -67,4 +67,30 @@ final class OAuthError
 
     /** An unexpected condition prevented the request from being fulfilled. */
     public const string SERVER_ERROR = 'server_error';
+
+    /**
+     * RFC **6750** §3.1 — the access token presented to a PROTECTED RESOURCE is
+     * malformed, expired, revoked, or of the wrong kind. HTTP 401 (S286).
+     *
+     * ⚠ A different registry from the constants above. Everything before this
+     * point is RFC 6749 §5.2, emitted by the Authorization Server's own
+     * endpoints; this and {@see INSUFFICIENT_SCOPE} are Bearer-token errors
+     * emitted by a RESOURCE server ({@see \Phlix\Hub\Http\Middleware\OAuthResourceMiddleware})
+     * and appear in the `WWW-Authenticate` header as well as the body. They live
+     * in the same class because a client parses both off the same wire, and a
+     * second constants file would be one more place for a typo to hide.
+     */
+    public const string INVALID_TOKEN = 'invalid_token';
+
+    /**
+     * RFC 6750 §3.1 — the access token is VALID but does not carry the scope the
+     * resource requires. HTTP **403**, never 401 (S286).
+     *
+     * The distinction is deliberate and is asserted by the suite: a 403 here
+     * proves the credential authenticated and that the SCOPE check is what
+     * refused it. Collapsing both onto 401 would make "the scope gate works"
+     * indistinguishable from "the token was rejected for some other reason" —
+     * and a refusal that cannot be attributed is not evidence of a gate.
+     */
+    public const string INSUFFICIENT_SCOPE = 'insufficient_scope';
 }

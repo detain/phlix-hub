@@ -198,6 +198,12 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
 
             $expected = match ($route['gate']) {
                 RouteManifest::GATE_AUTH_JSON, RouteManifest::GATE_ADMIN, RouteManifest::GATE_ENROLLMENT => 401,
+                // S286. Also a 401, and also from a middleware rather than a
+                // handler — but a DIFFERENT middleware accepting a DIFFERENT
+                // credential. RegistrarAuthGateTest asserts the `invalid_token`
+                // code and the RFC 6750 challenge header that tell the two
+                // apart; only the status is available here.
+                RouteManifest::GATE_OAUTH_RESOURCE => 401,
                 RouteManifest::GATE_AUTH_HTML, RouteManifest::GATE_ADMIN_HTML => 302,
                 // Two different 400s from two different middleware. The CODE is
                 // what distinguishes them, and RegistrarAuthGateTest asserts it;

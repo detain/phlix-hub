@@ -92,6 +92,19 @@ class Request
      */
     public ?\Phlix\Shared\Auth\JwtClaims $claims = null;
 
+    /**
+     * The OAuth 2.0 grant a `phlix-oat-…` access token resolved to, populated by
+     * {@see \Phlix\Hub\Http\Middleware\OAuthResourceMiddleware} (S286). Null on
+     * every request that did not authenticate with an OAuth access token —
+     * including every session-JWT request, which carries no scopes at all.
+     *
+     * ⚠ A controller behind that middleware must read its capabilities from
+     * HERE and never from {@see $claims}: the two credentials mean different
+     * things, and a controller that fell back to the session claims when the
+     * grant was null would serve an unscoped credential on a scoped surface.
+     */
+    public ?\Phlix\Hub\OAuth\OAuthGrant $oauthGrant = null;
+
     /** @var array<string, string> */
     public array $pathParams = [];
 

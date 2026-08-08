@@ -22,7 +22,12 @@ declare(strict_types=1);
 use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Console\Commands\MigrateCommand;
+use Phlix\Hub\Console\Commands\OAuthClientDisableCommand;
+use Phlix\Hub\Console\Commands\OAuthClientListCommand;
+use Phlix\Hub\Console\Commands\OAuthClientRegisterCommand;
 use Phlix\Hub\Console\Commands\SmokeJwtCommand;
+use Phlix\Hub\OAuth\OAuthClientRegistry;
+use Phlix\Hub\OAuth\OAuthTokenService;
 use Webman\Console\Command;
 
 define('BASE_PATH', dirname(__DIR__));
@@ -50,5 +55,26 @@ $cli->add(new MigrateCommand(
 // `smoke:jwt` — needs no constructor deps; builds its own JwtHandler with a
 // throwaway test secret inside execute(). No DB, no config.
 $cli->add(new SmokeJwtCommand());
+
+// S286 — the admin surface for S92's OAuth client registry. Without these,
+// registering the Alexa skill meant hand-writing an INSERT, which bypasses
+// OAuthClient::create() and can persist a client the lookup then refuses
+// forever.
+//
+// Same lazy-factory shape as `migrate`: the closure is invoked inside
+// execute(), so `php bin/phlix list` still opens no socket. No StructuredLogger
+// is passed to the registry — its only use there is a warning about a
+// half-provisioned row, and on a CLI that surfaces as `oauth:client:list`
+// reporting the row UNUSABLE, which an operator will actually see.
+$registryFactory = static fn(): OAuthClientRegistry => new OAuthClientRegistry(
+    ConnectionPool::getConnection('mysql'),
+);
+
+$cli->add(new OAuthClientRegisterCommand($registryFactory));
+$cli->add(new OAuthClientListCommand($registryFactory));
+$cli->add(new OAuthClientDisableCommand(
+    $registryFactory,
+    static fn(): OAuthTokenService => new OAuthTokenService(ConnectionPool::getConnection('mysql')),
+));
 
 exit($cli->run());
