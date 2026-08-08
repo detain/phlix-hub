@@ -15,6 +15,7 @@ use Phlix\Hub\Http\Controllers\OAuthController;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\OAuthResourceMiddleware;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\RequestContext;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
 use Phlix\Hub\Mcp\McpScopes;
@@ -23,6 +24,7 @@ use Phlix\Hub\OAuth\ConsentScreen;
 use Phlix\Hub\OAuth\ConsentTicketService;
 use Phlix\Hub\OAuth\OAuthClientRegistry;
 use Phlix\Hub\OAuth\OAuthError;
+use Phlix\Hub\OAuth\OAuthGrant;
 use Phlix\Hub\OAuth\OAuthScopes;
 use Phlix\Hub\OAuth\OAuthTokenService;
 use Phlix\Hub\OAuth\Pkce;
@@ -478,6 +480,92 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
             self::assertSame(401, $refused->statusCode, 'refused: ' . $garbage);
             self::assertSame(OAuthError::INVALID_TOKEN, self::json($refused)['error'] ?? null);
         }
+    }
+
+    // =====================================================================
+    // 3b. The MIDDLEWARE's own contract, measured at the handler
+    // =====================================================================
+
+    /**
+     * 🔴 Written because a mutation survived.
+     *
+     * Deleting the middleware's `userExists()` probe changed no outcome at
+     * `/oauth/userinfo`: that controller re-reads the user row and answers 401
+     * itself when it is gone, so the route-level test could not tell the two
+     * apart. The middleware's contract is stronger than that one controller's
+     * behaviour, and it is the contract every FUTURE resource behind this gate
+     * will rely on: **a request that fails any check must never reach the
+     * handler at all.**
+     *
+     * So this dispatches through the container's real middleware onto a sentinel
+     * handler that records what it saw. A refusal is proved by the sentinel NOT
+     * having run, which no downstream controller can fake.
+     *
+     * The same sentinel pins the two facts a controller behind this gate depends
+     * on and that `/oauth/userinfo` happens not to use: `Request::$userId` and
+     * the coroutine-local {@see RequestContext} are both populated with the
+     * grant's user.
+     */
+    public function testNothingThatFailsAGateEverReachesTheHandler(): void
+    {
+        $grant = $this->issueTokensFor(self::CLIENT_ID, self::SECRET, OAuthScopes::PROFILE_READ);
+
+        /** @var list<array{userId: ?string, contextUserId: ?string, clientId: string}> $seen */
+        $seen = [];
+
+        $sentinel = new Router();
+        $sentinel->group('/oauth', static function (Router $r) use (&$seen): void {
+            $r->get('/userinfo', static function (Request $req) use (&$seen): Response {
+                $grant = $req->oauthGrant;
+                $seen[] = [
+                    'userId'        => $req->userId,
+                    'contextUserId' => RequestContext::getUserId(),
+                    'clientId'      => $grant instanceof OAuthGrant ? $grant->clientId : '',
+                ];
+
+                return (new Response())->json(['reached' => true]);
+            });
+        }, [$this->container->get(OAuthResourceMiddleware::class)]);
+
+        // --- CONTROL: a good token reaches the handler, fully hydrated -------
+        RequestContext::setUserId(null);
+        self::assertSame(200, $sentinel->dispatch($this->request($grant['access_token']))->statusCode);
+        self::assertCount(1, $seen, 'the sentinel handler was never reached by a VALID token');
+        self::assertSame($this->userId, $seen[0]['userId'], 'Request::$userId was not populated');
+        self::assertSame(
+            $this->userId,
+            $seen[0]['contextUserId'],
+            'RequestContext::setUserId() was not called, so a downstream service reading the '
+            . 'coroutine-local context sees nobody',
+        );
+        self::assertSame(self::CLIENT_ID, $seen[0]['clientId']);
+
+        // --- the user is deleted; the handler must NOT run ------------------
+        $this->db->query('DELETE FROM users WHERE id = :id', ['id' => $this->userId]);
+        RequestContext::setUserId(null);
+
+        $refused = $sentinel->dispatch($this->request($grant['access_token']));
+
+        self::assertSame(401, $refused->statusCode);
+        self::assertCount(
+            1,
+            $seen,
+            'the handler RAN for a token whose user no longer exists. The middleware must refuse '
+            . 'before dispatch — a controller that happens to re-check the user is not the gate, '
+            . 'and the next resource behind this middleware may not re-check anything.',
+        );
+
+        // --- and neither may a token that lacks the scope -------------------
+        $this->db->query('DELETE FROM oauth_tokens');
+        $this->userId = $this->insertUser('s286-scopeless', 'Scopeless');
+        $narrow = $this->issueTokensFor(
+            self::LIBRARY_CLIENT_ID,
+            self::LIBRARY_SECRET,
+            McpScopes::LIBRARY_READ,
+        );
+
+        self::assertSame(403, $sentinel->dispatch($this->request($narrow['access_token']))->statusCode);
+        self::assertCount(1, $seen, 'the handler RAN for a token without the required scope');
     }
 
     // =====================================================================
