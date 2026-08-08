@@ -56,6 +56,8 @@ use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
+use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
+use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Hub\Updates\AsyncVersionMarkerFetcher;
@@ -144,6 +146,9 @@ use function DI\get;
  *    and, since S91, the per-worker rate-limit buckets)
  *  - {@see AlexaRejectionAuditorInterface} → {@see AuditLogAlexaRejectionAuditor}
  *  - {@see AlexaAccountLink}         → singleton
+ *  - {@see PendingCommandPusherInterface} → {@see ChannelPendingCommandPusher},
+ *    singleton per worker (S93 — its reply-event subscription is bound to ONE
+ *    instance in `Application::run()`'s HTTP `onWorkerStart`)
  *  - {@see AlexaSkillController}     → singleton
  *  - {@see HubJwksController}        → singleton
  *  - {@see ServerClaimController}    → singleton
@@ -585,21 +590,44 @@ final class HubServicesProvider implements ServiceProviderInterface
             // what stop an Alexa slot value reaching another user's server, and
             // anything narrower here would be a second implementation of that
             // check. Nothing was added to the proxy's allowlist for this skill.
+            // S93. The HTTP-worker half of the pending-command push.
+            //
+            // ⚠ MUST be a singleton per worker, for the same class of reason
+            // AlexaSignatureMiddleware above is (see its comment): this object
+            // owns a UNIQUE reply event and the `$pending` map of in-flight
+            // pushes keyed against it, and `Application::run()`'s HTTP
+            // `onWorkerStart` subscribes ONE instance's `replyEvent()` to the
+            // channel broker. A per-request instance would mint a fresh event
+            // nobody publishes on and keep a `$pending` entry nobody can ever
+            // resolve, so every push would time out and report 0 delivered —
+            // a silent, permanent "you have no app open" for every user.
+            // PHP-DI caches a `factory()` definition's result per container, and
+            // the container is per worker process, so this binding IS that
+            // singleton.
+            PendingCommandPusherInterface::class => factory(
+                static function (): PendingCommandPusherInterface {
+                    return new ChannelPendingCommandPusher(LoggerFactory::get(LogChannels::RELAY));
+                },
+            ),
+
             AlexaSkillController::class => factory(static function (
                 AlexaAccountLink $accountLink,
                 ServerProxyController $proxy,
                 ServerListController $serverList,
+                PendingCommandPusherInterface $pendingCommands,
             ) use ($hubBaseUrl): AlexaSkillController {
                 return new AlexaSkillController(
                     $accountLink,
                     $proxy,
                     $serverList,
+                    $pendingCommands,
                     LoggerFactory::get(LogChannels::AUTH),
                     $hubBaseUrl,
                 );
             })->parameter('accountLink', get(AlexaAccountLink::class))
                 ->parameter('proxy', get(ServerProxyController::class))
-                ->parameter('serverList', get(ServerListController::class)),
+                ->parameter('serverList', get(ServerListController::class))
+                ->parameter('pendingCommands', get(PendingCommandPusherInterface::class)),
 
             HubJwksController::class => factory(static function (
                 Ed25519KeyManager $keyManager,

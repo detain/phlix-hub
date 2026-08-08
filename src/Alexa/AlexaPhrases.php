@@ -40,10 +40,18 @@ use function is_string;
  * ## What the wording is careful about
  *
  * Several phrases state a NEGATIVE capability out loud ("Phlix cannot start
- * playback on a device for you"). That is deliberate and is the honest half of
- * the feature: a user who asks for a title to be played gets a link plus a plain
- * statement of what the skill will not do, rather than a cheerful acknowledgement
- * followed by silence from the television.
+ * playback on a device that does not already have Phlix open"). That is
+ * deliberate and is the honest half of the feature: a user who asks for a title
+ * to be played gets a link plus a plain statement of what the skill will not do,
+ * rather than a cheerful acknowledgement followed by silence from the television.
+ *
+ * S93 tightened those negatives rather than loosening them. `PhlixPlayInAppIntent`
+ * genuinely CAN start a title — but only in an app that is already open, and only
+ * when the relay reports the frame was written to a real socket. So the capability
+ * sentences now name that one ability AND its limit, and every phrase that used to
+ * say "cannot start playback on a device" carries the qualifier. An understatement
+ * is not a safe default here: a phrase that denies an ability the skill has is as
+ * wrong about the product as one that claims an ability it lacks.
  *
  * @package Phlix\Hub\Alexa
  * @since   S91 (Alexa skill controller + Q&A intent tier)
@@ -55,9 +63,10 @@ final class AlexaPhrases
      * `AMAZON.HelpIntent` — the two moments a user is asking "what is this?" —
      * and it answers with both halves, the can and the cannot.
      */
-    public const CAPABILITY = 'Phlix can answer questions about the titles in your library, and it can '
-        . 'send you a link to open one. It cannot start or control playback on any device, and it cannot '
-        . 'send video to a screen for you. Try asking, how long is Inception.';
+    public const CAPABILITY = 'Phlix can answer questions about the titles in your library, send you a '
+        . 'link to open one, and start one in a Phlix app you already have open. It cannot switch a '
+        . 'screen on, and it cannot send video to a screen that is not already running Phlix. '
+        . 'Try asking, how long is Inception.';
 
     /** Follow-up prompt after the capability statement. */
     public const CAPABILITY_REPROMPT = 'What would you like to know about your library?';
@@ -71,7 +80,8 @@ final class AlexaPhrases
      * to ask instead of retrying the same unsupported phrasing.
      */
     public const UNSUPPORTED_REQUEST = 'I cannot do that. Phlix can answer questions about the titles in '
-        . 'your library and send you a link to open one. Say help to hear an example.';
+        . 'your library, send you a link to open one, and start one in a Phlix app you already have '
+        . 'open. Say help to hear an example.';
 
     /** No linked account, or a linked account whose token no longer resolves. */
     public const LINK_ACCOUNT = 'Your Phlix account is not linked yet. Open the Alexa app and link your '
@@ -114,18 +124,56 @@ final class AlexaPhrases
 
     /**
      * The "get me a link" answer. Says where the link is AND, in the same breath,
-     * that the skill will not start anything — the sentence a user needs in order
-     * not to stand waiting for a screen to light up.
+     * that the skill will not start anything on a screen that is not already
+     * running Phlix — the sentence a user needs in order not to stand waiting for
+     * a screen to light up.
+     *
+     * ⚠ The qualifier ("that does not already have Phlix open") is load-bearing
+     * since S93. The unqualified original — "Phlix cannot start playback on a
+     * device for you" — became FALSE about the skill itself the moment
+     * `PhlixPlayInAppIntent` shipped, and a skill that understates its own
+     * abilities is the same class of defect as one that overstates them: both
+     * describe a product the user is not holding. The behaviour of this intent is
+     * unchanged; it is still a link-only answer.
      */
     public const PLAY_LINK_SPEECH = 'I have put a link to {title} in the Alexa app. Phlix cannot start '
-        . 'playback on a device for you, so open the link where you want to watch.';
+        . 'playback on a device that does not already have Phlix open, so open the link where you '
+        . 'want to watch.';
 
     /** Title of the `Simple` card carrying the link. */
     public const PLAY_LINK_CARD_TITLE = 'Phlix link for {title}';
 
     /** Body of the `Simple` card carrying the link. */
     public const PLAY_LINK_CARD_TEXT = "Open this link to find {title} in Phlix and start it yourself. "
-        . "This skill cannot start playback for you.\n\n{link}";
+        . "This skill cannot start playback on a device that does not already have Phlix open.\n\n{link}";
+
+    /**
+     * `PhlixPlayInAppIntent` — the confirmation, spoken ONLY when the relay
+     * reported that the frame was written to at least one live socket (S93).
+     *
+     * It states the constraint IN THE SPOKEN TEXT rather than leaving it to the
+     * documentation, because the user hearing this sentence is the only person who
+     * can act on it: they need to know that what just happened was "a screen you
+     * already had open was told to start something", not "Phlix turned a
+     * television on". Without that half, a user whose app is open on a laptop in
+     * another room hears a confirmation and looks at the wrong screen.
+     */
+    public const PLAY_IN_APP_SENT = 'I sent {title} to the Phlix app you have open. Phlix can only start '
+        . 'something in an app that is already open on a screen in front of you; it cannot switch a '
+        . 'screen on or send video to one by itself.';
+
+    /**
+     * `PhlixPlayInAppIntent` — spoken when the delivered count was 0 (S93).
+     *
+     * Says plainly that NOTHING was started. This is the sentence the whole
+     * delivered-count design exists to make possible: the alternative — speaking
+     * {@see PLAY_IN_APP_SENT} regardless — would confirm a command that reached no
+     * socket, and the user's only way to find out would be to watch a screen that
+     * never changes.
+     */
+    public const PLAY_IN_APP_NO_OPEN_APP = 'I did not start {title}, because you do not have the Phlix '
+        . 'app open anywhere right now. Phlix can only start something in an app that is already open, '
+        . 'so open Phlix on the screen you want to watch and ask me again.';
 
     /**
      * Every template this class declares.

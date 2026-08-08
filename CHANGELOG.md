@@ -121,6 +121,58 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The Alexa skill can start a title in a Phlix app you already have open
+  (S93).** New `PhlixPlayInAppIntent` — a NEW intent, not a repurposing of
+  `PhlixPlayLinkIntent`, whose link-only behaviour, return shape and name are
+  untouched. It resolves the title exactly as the other library intents do, then
+  pushes a `pending_command` / `play_media` frame to the user's open apps through
+  the `:8804` SyncPlay relay process.
+  - **The confirmation is gated on a REAL delivered count, and that gate is the
+    feature.** `PendingCommandPusherInterface::pushPlayMedia()` returns the number
+    of live, authenticated sockets the frame was actually *written to*.
+    `AlexaPhrases::PLAY_IN_APP_SENT` is spoken only on `>= 1`; on `0` the skill
+    says plainly that it started nothing (`PLAY_IN_APP_NO_OPEN_APP`). A `void` or
+    `bool` return would have blurred "published" into "delivered" — and a
+    confirmation for a command nobody received is exactly the dishonesty the whole
+    skill's honesty rules exist to prevent.
+  - 🚨 **Today the delivered count is ALWAYS 0, and that is correct behaviour, not
+    a bug.** Verified 2026-08-08 across every client repo: no client anywhere
+    connects to hub `:8804`. Every live client SyncPlay socket points at
+    phlix-server's own `:8097`, speaks a `syncplay_`-prefixed vocabulary this
+    worker does not share, and carries its token in the query string, which
+    `:8804` has refused since S237. No client has handling for an unknown frame
+    type and none can navigate-and-play from a media id. So every user hears the
+    honest "you do not have the Phlix app open" answer. The hub half is built so
+    the failure is honest by construction; the feature turns itself on the moment
+    a client implements the consumer, with no change here.
+  - **Transport:** new `SyncPlay\PendingCommandProtocol` / `ChannelPendingCommandPusher`
+    (HTTP-worker side) / `PendingCommandDispatcher` (`:8804` side), over the same
+    `workerman/channel` broker the relay proxy uses — the client sockets are a
+    per-process static in the SyncPlay worker and are unreachable from an HTTP
+    worker any other way. The reply timeout is a deliberately short **2.0 s**:
+    Alexa's own skill-response budget is ~8 s, and a missing reply must degrade to
+    "0 delivered" rather than to a timeout the user hears as a 500.
+  - **`SyncPlayRelayWorker::deliverToUser()` matches on BOTH `user_id` and
+    `server_id`.** The `server_id` half is not decoration: a client bound to
+    server B cannot play a media id that only exists on server A, so delivering
+    there would inflate the count with a command that silently fails on arrival.
+    An empty identity returns 0 immediately rather than fanning out to every
+    socket. Room membership is deliberately irrelevant — a pending command is
+    addressed to a user's *open app*, and a user who has just opened Phlix has no
+    room.
+  - **Three existing phrases were CORRECTED, not softened.** `CAPABILITY`,
+    `UNSUPPORTED_REQUEST`, `PLAY_LINK_SPEECH` and `PLAY_LINK_CARD_TEXT` said the
+    skill "cannot start or control playback on any device" / "cannot start
+    playback on a device for you". That became false about the skill itself the
+    moment this intent shipped. They now name the new ability *and* its limit
+    ("cannot switch a screen on", "a device that does not already have Phlix
+    open"). A phrase that denies an ability the skill has is as wrong about the
+    product as one that claims an ability it lacks. All 21 templates re-swept
+    clean against `AlexaHonesty::BANNED_TERMS`.
+  - `AlexaSkillController::SUPPORTED_INTENTS` is now pinned EXACTLY rather than by
+    a floor: each entry is one capability the skill claims out loud, so adding an
+    intent is a decision about what the capability sentences say.
+
 - **Relayed browse can render posters and avatars (S238, hub half).** Measured
   2026-08-05: `GET /api/v1/artwork/{id}` and `GET /api/v1/users/{id}/avatar` were
   **doubly** unreachable over the relay — 403 `proxy.scope_denied` here (in no

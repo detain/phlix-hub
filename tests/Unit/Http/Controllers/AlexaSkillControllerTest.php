@@ -19,6 +19,8 @@ use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Relay\RelayProxyBridge;
+use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
+use Phlix\Hub\Tests\Support\Alexa\AlexaEnvelopeHonesty;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 
@@ -26,14 +28,11 @@ use function array_keys;
 use function array_unique;
 use function count;
 use function implode;
-use function is_array;
-use function is_string;
 use function json_decode;
 use function json_encode;
 use function mb_strlen;
 use function sprintf;
 use function str_repeat;
-use function strtolower;
 
 /**
  * S91 — the HONESTY PIN for the Alexa skill, plus the intent dispatch table.
@@ -75,7 +74,7 @@ use function strtolower;
  *
  * ## The floor
  *
- * {@see AlexaSkillController::SUPPORTED_INTENTS} is pinned at >= 6 entries, and
+ * {@see AlexaSkillController::SUPPORTED_INTENTS} is pinned at >= 7 entries, and
  * every entry is driven for real. Deleting an arm of the dispatch match would
  * silently route that intent to the fallback refusal — still a 200, still honest,
  * and invisible to everything except an assertion that each intent produces a
@@ -93,9 +92,6 @@ final class AlexaSkillControllerTest extends TestCase
     private const SERVER_ID = 'srv-alexa-1';
 
     private const HUB_BASE_URL = 'https://hub.phlix.test/';
-
-    /** Keys Amazon uses to actually drive a device. None may ever appear. */
-    private const DEVICE_CONTROL_KEYS = ['directives', 'audioplayer', 'videoapp'];
 
     /**
      * A placeholder the request builder swaps for a freshly minted token.
@@ -191,8 +187,9 @@ final class AlexaSkillControllerTest extends TestCase
             }
         }
 
-        // Non-vacuity on the sweep itself: 2 states x (6 intents + 4 others).
-        self::assertSame(20, $swept, 'the honesty sweep examined fewer envelopes than it was given');
+        // Non-vacuity on the sweep itself: 2 states x (7 intents + 4 others).
+        // 7 since S93 added PhlixPlayInAppIntent.
+        self::assertSame(22, $swept, 'the honesty sweep examined fewer envelopes than it was given');
     }
 
     /**
@@ -203,7 +200,7 @@ final class AlexaSkillControllerTest extends TestCase
         $intents = AlexaSkillController::SUPPORTED_INTENTS;
 
         self::assertGreaterThanOrEqual(
-            6,
+            7,
             count($intents),
             'SUPPORTED_INTENTS has shrunk below the set S91 shipped; an intent was dropped from the '
             . 'dispatch table and now falls through to the fallback refusal',
@@ -237,6 +234,7 @@ final class AlexaSkillControllerTest extends TestCase
         $mustBeTheirOwnAnswer = [
             'PhlixTitleRuntimeIntent',
             'PhlixPlayLinkIntent',
+            'PhlixPlayInAppIntent',
             'AMAZON.HelpIntent',
             'AMAZON.StopIntent',
         ];
@@ -250,9 +248,50 @@ final class AlexaSkillControllerTest extends TestCase
         }
 
         self::assertCount(
-            5,
+            6,
             array_unique(array_values($speech)),
-            'the six supported intents must produce five distinct answers (Stop == Cancel)',
+            'the seven supported intents must produce six distinct answers (Stop == Cancel)',
+        );
+    }
+
+    /**
+     * S93 — the EXACT pin, beside (not instead of) the floor above.
+     *
+     * ## Why a floor is not enough for this particular list
+     *
+     * A `>=` floor catches deletion. It cannot catch ADDITION, and addition is
+     * the change that matters here: every entry in this table is a capability the
+     * skill claims OUT LOUD, in {@see AlexaPhrases::CAPABILITY} ("Phlix can
+     * answer questions…, send you a link…, and start one in a Phlix app you
+     * already have open") and again in {@see AlexaPhrases::UNSUPPORTED_REQUEST}.
+     * An intent added here without that decision leaves the capability statement
+     * describing a skill that no longer exists — an understatement, which is the
+     * same class of defect as an overstatement: both describe a product the user
+     * is not holding.
+     *
+     * The list is hard-coded here rather than derived, precisely so that changing
+     * production requires changing this literal — the moment a reader has to
+     * decide what the skill now claims it can do.
+     */
+    public function testTheSupportedIntentTableIsPinnedExactly(): void
+    {
+        self::assertSame(
+            [
+                'PhlixTitleRuntimeIntent',
+                'PhlixPlayLinkIntent',
+                'PhlixPlayInAppIntent',
+                'AMAZON.HelpIntent',
+                'AMAZON.StopIntent',
+                'AMAZON.CancelIntent',
+                'AMAZON.FallbackIntent',
+            ],
+            AlexaSkillController::SUPPORTED_INTENTS,
+            'SUPPORTED_INTENTS no longer matches the pinned list, in order. Adding or removing an '
+            . 'intent is a decision about WHAT THE SKILL CLAIMS IT CAN DO, not a routing detail, and '
+            . 'it must be made deliberately: update this literal AND re-check both capability '
+            . 'sentences (AlexaPhrases::CAPABILITY and AlexaPhrases::UNSUPPORTED_REQUEST) so the '
+            . 'skill still describes itself accurately. A removal additionally routes that intent to '
+            . 'the fallback refusal, which is still a valid 200 and invisible to every status check.',
         );
     }
 
@@ -723,9 +762,13 @@ final class AlexaSkillControllerTest extends TestCase
             $this->request(self::intentBody('PhlixPlayLinkIntent', ['Title' => 'Inception'])),
         ));
 
+        // S93 qualified the wording ("on a device that does not already have
+        // Phlix open") because PhlixPlayInAppIntent now genuinely can start a
+        // title in an already-open app. The BEHAVIOUR of this intent is
+        // unchanged — still a link, still no playback started from here.
         self::assertSame(
             'I have put a link to Inception in the Alexa app. Phlix cannot start playback on a '
-            . 'device for you, so open the link where you want to watch.',
+            . 'device that does not already have Phlix open, so open the link where you want to watch.',
             self::speechOf($envelope),
         );
 
@@ -734,7 +777,8 @@ final class AlexaSkillControllerTest extends TestCase
                 'type' => 'Simple',
                 'title' => 'Phlix link for Inception',
                 'content' => "Open this link to find Inception in Phlix and start it yourself. "
-                    . "This skill cannot start playback for you.\n\n"
+                    . "This skill cannot start playback on a device that does not already have "
+                    . "Phlix open.\n\n"
                     . 'https://hub.phlix.test/app/search?q=Inception',
             ],
             $envelope['response']['card'],
@@ -765,6 +809,13 @@ final class AlexaSkillControllerTest extends TestCase
     /**
      * Every honesty problem in `$value`, as human-readable strings.
      *
+     * ⚠ S93 moved the walker itself to {@see AlexaEnvelopeHonesty} so the
+     * `PhlixPlayInAppIntent` suite applies the IDENTICAL rule rather than a
+     * second copy of it that could be narrowed on its own. The logic is
+     * unchanged, this method is the same seam it always was, and
+     * {@see testTheHonestyDetectorFiresOnEnvelopesThatClaimDeviceControl()}
+     * still proves — through this method — that the walker can fail.
+     *
      * @param array<array-key, mixed> $value
      * @param string                  $path  Dotted path, for the failure message.
      *
@@ -772,31 +823,7 @@ final class AlexaSkillControllerTest extends TestCase
      */
     private static function honestyViolations(array $value, string $path = '$'): array
     {
-        $found = [];
-
-        /** @var mixed $child */
-        foreach ($value as $key => $child) {
-            $here = $path . '.' . (string) $key;
-
-            if (is_string($key) && in_array(strtolower($key), self::DEVICE_CONTROL_KEYS, true)) {
-                $found[] = 'device-control key "' . strtolower($key) . '" at ' . $here;
-            }
-
-            if (is_array($child)) {
-                foreach (self::honestyViolations($child, $here) as $nested) {
-                    $found[] = $nested;
-                }
-                continue;
-            }
-
-            if (is_string($child)) {
-                foreach (AlexaHonesty::violations($child) as $term) {
-                    $found[] = 'banned term "' . $term . '" in the string at ' . $here;
-                }
-            }
-        }
-
-        return $found;
+        return AlexaEnvelopeHonesty::violations($value, $path);
     }
 
     // ==================================================================
@@ -804,7 +831,7 @@ final class AlexaSkillControllerTest extends TestCase
     // ==================================================================
 
     /**
-     * Every request shape the controller dispatches: the six supported intents,
+     * Every request shape the controller dispatches: the seven supported intents,
      * a launch, a session end, an unknown intent and an unknown type.
      *
      * @return array<string, string>
@@ -986,6 +1013,20 @@ final class AlexaSkillControllerTest extends TestCase
             new AlexaAccountLink($this->jwt, $users),
             $proxy,
             new ServerListController($info),
+            // S93: a pusher that reports NOTHING was delivered — which is also
+            // what production reports today, since no client consumes :8804. It
+            // keeps every pre-S93 expectation in this suite unchanged; the real
+            // delivered-count coverage lands with the S93 tests.
+            new class implements PendingCommandPusherInterface {
+                public function pushPlayMedia(
+                    string $userId,
+                    string $serverId,
+                    string $mediaId,
+                    string $title,
+                ): int {
+                    return 0;
+                }
+            },
             new StructuredLogger('alexa-skill-test', []),
             self::HUB_BASE_URL,
         );
