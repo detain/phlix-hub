@@ -44,6 +44,7 @@ use Phlix\Hub\Http\Controllers\McpController;
 use Phlix\Hub\Http\Controllers\McpTokenController;
 use Phlix\Hub\Http\Controllers\MeController;
 use Phlix\Hub\Http\Controllers\OAuthController;
+use Phlix\Hub\Http\Controllers\OAuthUserInfoController;
 use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
@@ -60,6 +61,7 @@ use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\Middleware\OAuthResourceMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
@@ -627,13 +629,20 @@ final class Application
     }
 
     /**
-     * Register the OAuth 2.0 Authorization Server (S92) — exactly three routes.
+     * Register the OAuth 2.0 Authorization Server (S92) and its first protected
+     * resource (S286) — exactly four routes.
      *
      * ```
-     * GET  /oauth/authorize   AuthMiddleware   renders the consent screen; mints NOTHING
-     * POST /oauth/authorize   AuthMiddleware   records the decision; mints the code
-     * POST /oauth/token       (no middleware)  exchanges the code / rotates a refresh token
+     * GET  /oauth/authorize   AuthMiddleware            renders the consent screen; mints NOTHING
+     * POST /oauth/authorize   AuthMiddleware            records the decision; mints the code
+     * POST /oauth/token       (no middleware)           exchanges the code / rotates a refresh token
+     * GET  /oauth/userinfo    OAuthResourceMiddleware   the linked account's identity
      * ```
+     *
+     * The first three lines are the Authorization Server; the fourth is the
+     * RESOURCE server, and it is the only route in the hub on which an OAuth
+     * access token grants anything. Note the fourth gate is a DIFFERENT
+     * middleware from the first two — see the block that registers it.
      *
      * Three deliberate decisions are encoded in that table, and each is pinned
      * by the route suites rather than left to this comment:
@@ -684,6 +693,28 @@ final class Application
             $typedParams = $params;
             return $oauth->token($req, $typedParams);
         });
+
+        // S286 — the RESOURCE-SERVER surface, and the ONLY route on which an
+        // OAuth access token grants anything at all.
+        //
+        // Its gate is {@see OAuthResourceMiddleware}, NOT AuthMiddleware, and the
+        // two are not interchangeable: AuthMiddleware authenticates a hub user
+        // holding a session JWT that carries no scopes, so putting it here would
+        // serve an unscoped credential on a scoped surface (and would 302 a
+        // third-party client to `/app/login`, which no client can follow).
+        //
+        // The required scope is passed to the middleware at construction and is
+        // rejected there if it normalises to nothing, so this route cannot end
+        // up gated on an empty allow-list — see that class.
+        $userInfo = $this->resolveOAuthUserInfoController();
+
+        $this->router->group('/oauth', static function (Router $r) use ($userInfo): void {
+            $r->get('/userinfo', static function (Request $req, array $params) use ($userInfo): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $userInfo->userInfo($req, $typedParams);
+            });
+        }, [$this->resolveOAuthResourceMiddleware()]);
     }
 
     private function resolveOAuthController(): OAuthController
@@ -693,6 +724,24 @@ final class Application
             throw new \RuntimeException('Container returned an unexpected OAuthController instance');
         }
         return $controller;
+    }
+
+    private function resolveOAuthUserInfoController(): OAuthUserInfoController
+    {
+        $controller = $this->container->get(OAuthUserInfoController::class);
+        if (!$controller instanceof OAuthUserInfoController) {
+            throw new \RuntimeException('Container returned an unexpected OAuthUserInfoController instance');
+        }
+        return $controller;
+    }
+
+    private function resolveOAuthResourceMiddleware(): OAuthResourceMiddleware
+    {
+        $middleware = $this->container->get(OAuthResourceMiddleware::class);
+        if (!$middleware instanceof OAuthResourceMiddleware) {
+            throw new \RuntimeException('Container returned an unexpected OAuthResourceMiddleware instance');
+        }
+        return $middleware;
     }
 
     /**

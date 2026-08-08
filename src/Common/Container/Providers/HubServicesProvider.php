@@ -106,14 +106,17 @@ use Phlix\Hub\Mcp\Tools\PlaybackControlTool;
 use Phlix\Hub\Mcp\Tools\SearchMediaTool;
 use Phlix\Hub\Mcp\WorkermanStreamTimers;
 use Phlix\Hub\Http\Controllers\OAuthController;
+use Phlix\Hub\Http\Controllers\OAuthUserInfoController;
 use Phlix\Hub\OAuth\AuthorizationCodeService;
 use Phlix\Hub\OAuth\ConsentTicketService;
 use Phlix\Hub\OAuth\OAuthClientRegistry;
+use Phlix\Hub\OAuth\OAuthScopes;
 use Phlix\Hub\OAuth\OAuthTokenService;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\Middleware\OAuthResourceMiddleware;
 use Phlix\Hub\Requests\RequestManager;
 use Phlix\Hub\Requests\RequestNotification;
 use Phlix\Shared\Arr\ArrClientFactory;
@@ -343,6 +346,40 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->parameter('codes', get(AuthorizationCodeService::class))
                 ->parameter('tokens', get(OAuthTokenService::class))
                 ->parameter('audit', get(AuditLogger::class)),
+
+            // --- OAuth resource server (S286) -------------------------------
+            // The consumer S92 never had. Until this binding existed an OAuth
+            // access token could be minted, rotated and revoked and authorised
+            // NOTHING, because no middleware anywhere read one.
+            //
+            // ⚠ The required-scope list is a CONSTRUCTOR argument, not a route
+            // annotation, and `OAuthResourceMiddleware` throws when it
+            // normalises to nothing. So a typo here — or an empty array — stops
+            // the hub from booting instead of registering `/oauth/userinfo`
+            // behind a gate that demands no scope at all. That is the S261 /
+            // empty-allow-list failure shape, and this is where it is closed.
+            //
+            // ⚠ Explicit `->parameter()` lines for BOTH services. PHP-DI's
+            // autowiring does not reach into an explicit `factory()` closure at
+            // all, which is precisely how S269 shipped an `AuditLogger` with a
+            // null repository for months.
+            OAuthResourceMiddleware::class => factory(static function (
+                OAuthTokenService $tokens,
+                UserRepository $users,
+            ): OAuthResourceMiddleware {
+                return new OAuthResourceMiddleware(
+                    $tokens,
+                    $users,
+                    [OAuthScopes::PROFILE_READ],
+                );
+            })->parameter('tokens', get(OAuthTokenService::class))
+                ->parameter('users', get(UserRepository::class)),
+
+            OAuthUserInfoController::class => factory(static function (
+                UserRepository $users,
+            ): OAuthUserInfoController {
+                return new OAuthUserInfoController($users);
+            })->parameter('users', get(UserRepository::class)),
 
             // --- MCP (S62) --------------------------------------------------
             // Personal access tokens for `POST /mcp`. TTL configurable via
@@ -720,6 +757,9 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ClientRelayTokenService $clientRelayTokenService,
                 Ed25519KeyManager $keyManager,
                 McpTokenService $mcpTokenService,
+                OAuthTokenService $oauthTokenService,
+                AuthorizationCodeService $oauthCodeService,
+                ConsentTicketService $oauthTicketService,
             ) use ($appConfig): IdleReaper {
                 /** @var int $interval */
                 $interval = is_int($appConfig['relay_idle_reaper_interval'] ?? null)
@@ -740,6 +780,9 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $clientRelayTokenService,
                     $keyManager,
                     $mcpTokenService,
+                    $oauthTokenService,
+                    $oauthCodeService,
+                    $oauthTicketService,
                 );
             })->parameter('tunnelManager', get(TunnelManager::class))
                 ->parameter('sessionManager', get(RelaySessionManager::class))
@@ -750,7 +793,15 @@ final class HubServicesProvider implements ServiceProviderInterface
                 // SKIPS optional constructor parameters, so a nullable dependency
                 // added without a `->parameter()` line here resolves to null and
                 // the pruner silently never runs.
-                ->parameter('mcpTokenService', get(McpTokenService::class)),
+                ->parameter('mcpTokenService', get(McpTokenService::class))
+                // S286: the same rule, three more nullable dependencies. Without
+                // these lines the OAuth pruners resolve to null and
+                // `reapDbMaintenance()` null-safe-chains straight past all three
+                // — a wiring omission that reads exactly like working code, and
+                // that only a CONTAINER-RESOLUTION test can see (S269).
+                ->parameter('oauthTokenService', get(OAuthTokenService::class))
+                ->parameter('oauthCodeService', get(AuthorizationCodeService::class))
+                ->parameter('oauthTicketService', get(ConsentTicketService::class)),
 
             ServerReaper::class => factory(static function (
                 Connection $db,

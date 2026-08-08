@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Http\RouteRegistration;
 
+use Phlix\Hub\Http\Middleware\OAuthResourceMiddleware;
 use Phlix\Hub\Http\Router;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -148,6 +149,33 @@ final class RegistrarAuthGateTest extends RouteRegistrationTestCase
                     RouteManifest::key($route) . ' must require Accept-Phlix-Protocol: v1',
                 );
                 self::assertStringContainsString('HUB_PROTOCOL_UNSUPPORTED', $response->body);
+                break;
+
+            case RouteManifest::GATE_OAUTH_RESOURCE:
+                // The CODE and the CHALLENGE as well as the status. AuthMiddleware
+                // also answers a credential-less request with 401, so a
+                // status-only assertion would pass on a route that had silently
+                // been re-gated with it — which in production would serve a hub
+                // session JWT (no scopes at all) on a scope-gated surface. Only
+                // OAuthResourceMiddleware sends a `WWW-Authenticate` header at all.
+                self::assertSame(
+                    401,
+                    $response->statusCode,
+                    RouteManifest::key($route) . ' must require an OAuth 2.0 access token',
+                );
+                // `invalid_request`, not `invalid_token`: nothing was presented,
+                // so nothing was rejected (RFC 6750 §3). The challenge for this
+                // case names NO error code, which is what distinguishes "you sent
+                // none" from "the one you sent is bad" — and what makes the
+                // absent-token branch attributable at all.
+                self::assertStringContainsString('invalid_request', $response->body);
+                self::assertStringNotContainsString('invalid_token', $response->body);
+                self::assertSame(
+                    'Bearer realm="' . OAuthResourceMiddleware::REALM . '"',
+                    $response->headers['WWW-Authenticate'] ?? null,
+                    RouteManifest::key($route)
+                    . ' must answer an uncredentialed caller with a BARE RFC 6750 Bearer challenge',
+                );
                 break;
 
             case RouteManifest::GATE_ALEXA:

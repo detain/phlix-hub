@@ -17,6 +17,9 @@ use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Mcp\McpTokenService;
+use Phlix\Hub\OAuth\AuthorizationCodeService;
+use Phlix\Hub\OAuth\ConsentTicketService;
+use Phlix\Hub\OAuth\OAuthTokenService;
 use Workerman\Timer;
 
 /**
@@ -80,6 +83,16 @@ final class IdleReaper
      *                                                            service whose expired-or-revoked
      *                                                            rows are pruned on each
      *                                                            {@see reapDbMaintenance()} (S62).
+     * @param OAuthTokenService|null       $oauthTokenService    Optional OAuth 2.0 access/refresh
+     *                                                            token store, pruned on each
+     *                                                            {@see reapDbMaintenance()} (S286).
+     * @param AuthorizationCodeService|null $oauthCodeService    Optional OAuth authorization-code
+     *                                                            store, pruned on each
+     *                                                            {@see reapDbMaintenance()} (S286).
+     * @param ConsentTicketService|null    $oauthTicketService   Optional OAuth consent-ticket /
+     *                                                            pending-authorization store, pruned
+     *                                                            on each {@see reapDbMaintenance()}
+     *                                                            (S286).
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
@@ -91,6 +104,9 @@ final class IdleReaper
         private readonly ?ClientRelayTokenService $clientRelayTokenService = null,
         private readonly ?Ed25519KeyManager $keyManager = null,
         private readonly ?McpTokenService $mcpTokenService = null,
+        private readonly ?OAuthTokenService $oauthTokenService = null,
+        private readonly ?AuthorizationCodeService $oauthCodeService = null,
+        private readonly ?ConsentTicketService $oauthTicketService = null,
     ) {
     }
 
@@ -257,6 +273,21 @@ final class IdleReaper
      *    {@see self::DEFAULT_INTERVAL_SECONDS} (60s) on the maintenance worker,
      *    so the first sweep happens within a minute of every boot — no separate
      *    boot catch-up is needed.
+     *  - S286 {@see OAuthTokenService::pruneExpired()},
+     *    {@see AuthorizationCodeService::pruneExpired()} and
+     *    {@see ConsentTicketService::pruneExpired()}: prune the three OAuth 2.0
+     *    stores S92 left growing forever. Same placement, for the same reason
+     *    written out one line above — and this time the reason is the ONLY
+     *    reason, because these three are the exact case
+     *    [[project_backup_timer_needs_boot_catchup_2026_07_21]] describes. A
+     *    `Timer::add(86400, …)` armed at boot fires its first tick a day later,
+     *    so on a hub that is restarted (deploy, update, reboot) more often than
+     *    once a day it fires NEVER, and the tables it was supposed to bound grow
+     *    exactly as if the timer had not been written. Attaching them to this
+     *    already-armed 60-second sweep means the boot catch-up is structural:
+     *    there is no first-tick gap to miss, because the first tick is a minute
+     *    after every start. Nothing prunes `oauth_clients` — a disabled client is
+     *    operator state an audit needs to keep, not garbage.
      *
      * This method is public so it can be called directly by tests or manually
      * triggered. Normally it is called automatically by the timer armed in
@@ -291,6 +322,17 @@ final class IdleReaper
         // grace window is wider because MCP PATs are long-lived and an operator
         // debugging "why did my agent stop working" wants to still see the row.
         $this->mcpTokenService?->pruneExpiredTokens();
+
+        // S286: prune the three OAuth 2.0 stores. Each owns one table and one
+        // lifetime rule, so each prunes itself — the alternative, one DELETE
+        // reaching across four tables from here, would put the retention policy
+        // of `oauth_authorization_codes` (60-second codes, purge after an hour)
+        // in the same statement as that of `oauth_tokens` (30-day refresh
+        // tokens, purge a day after expiry), where changing one would silently
+        // change the other.
+        $this->oauthTokenService?->pruneExpired();
+        $this->oauthCodeService?->pruneExpired();
+        $this->oauthTicketService?->pruneExpired();
     }
 
     /**

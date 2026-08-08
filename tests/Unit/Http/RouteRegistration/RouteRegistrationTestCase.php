@@ -14,9 +14,12 @@ use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\Middleware\OAuthResourceMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
+use Phlix\Hub\OAuth\OAuthScopes;
+use Phlix\Hub\OAuth\OAuthTokenService;
 use Phlix\Hub\Tests\Support\Alexa\RecordingAlexaRejectionAuditor;
 use Phlix\Hub\Tests\Support\Alexa\RecordingCertChainFetcher;
 use PHPUnit\Framework\TestCase;
@@ -93,6 +96,28 @@ abstract class RouteRegistrationTestCase extends TestCase
     /** Records what the signature gate audited, so nothing needs a database. */
     protected RecordingAlexaRejectionAuditor $alexaAuditor;
 
+    /**
+     * The REAL S286 resource-server gate (it fronts `GET /oauth/userinfo`).
+     *
+     * ⚠ PRESET rather than left to {@see RouteRegistrationContainer}'s
+     * `newInstanceWithoutConstructor()` fallback, for a reason specific to this
+     * class: its constructor is where the fail-closed scope check lives, and a
+     * reflection-built instance skips it — leaving `$requiredScopes`
+     * UNINITIALISED, so the suite would be asserting the behaviour of an object
+     * production can never produce.
+     *
+     * Its {@see OAuthTokenService} IS reflection-built, because these suites
+     * dispatch WITHOUT credentials and the middleware short-circuits on the
+     * absent bearer token before it ever reaches the token store. That is
+     * deliberate rather than merely convenient: if a future case here did
+     * present a credential, the uninitialised connection would raise an `Error`
+     * rather than quietly answering out of a stub — a loud failure instead of a
+     * test that believes a fake. The credentialed paths (200 / 401 / 403) are
+     * exercised against REAL MySQL in
+     * {@see \Phlix\Hub\Tests\Integration\OAuth\OAuthResourceServerTest}.
+     */
+    protected OAuthResourceMiddleware $oauthResourceMiddleware;
+
     protected RouteRegistrationContainer $container;
 
     protected function setUp(): void
@@ -128,10 +153,17 @@ abstract class RouteRegistrationTestCase extends TestCase
             $this->alexaAuditor,
         );
 
+        $this->oauthResourceMiddleware = new OAuthResourceMiddleware(
+            (new ReflectionClass(OAuthTokenService::class))->newInstanceWithoutConstructor(),
+            $this->users,
+            [OAuthScopes::PROFILE_READ],
+        );
+
         $this->container = new RouteRegistrationContainer([
             AuthMiddleware::class            => $this->authMiddleware,
             AdminMiddleware::class           => $this->adminMiddleware,
             AlexaSignatureMiddleware::class  => $this->alexaSignatureMiddleware,
+            OAuthResourceMiddleware::class   => $this->oauthResourceMiddleware,
         ]);
     }
 

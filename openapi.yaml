@@ -3641,6 +3641,76 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthErrorResponse"
+  "/oauth/userinfo":
+    get:
+      operationId: "get_oauth_userinfo"
+      tags: ["OAuth"]
+      summary: "The linked hub account's identity"
+      description: |-
+        The FIRST — and, as of S286, the ONLY — protected resource an OAuth access token issued by
+        this hub can reach. Everything S92 built could mint, rotate and revoke tokens that authorised
+        nothing; this is the route that gives one of them meaning.
+
+        Gated by `OAuthResourceMiddleware`, **not** `AuthMiddleware`. The two are not
+        interchangeable: `bearerAuth` is a hub user's own HS256 session JWT and carries no scopes at
+        all, so accepting it here would serve an unscoped credential on a scoped surface. A hub user
+        reading their own profile uses `GET /api/v1/me`.
+
+        Requires the `phlix:profile:read` scope — the one scope in the vocabulary with no MCP
+        counterpart, which exists because a third-party client starts out knowing nothing about the
+        user. Everything else in the vocabulary is an `mcp:*` scope already served by `POST /mcp`
+        under an MCP personal access token; pointing an OAuth token at those surfaces is the deferred
+        S62 migration and is deliberately NOT done here.
+
+        Returns strictly less than `/api/v1/me`: the hub user id, a display name, and the scopes the
+        token actually carries. Nothing about the user's servers, libraries, email or admin status.
+        The fields are enumerated in the controller rather than spread from the row, so a column
+        added to `users` by a future migration cannot leak here by default.
+      x-phlix-middleware: [OAuthResourceMiddleware]
+      security:
+        - oauthAccessToken: []
+      responses:
+        "200":
+          description: "The linked account."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthUserInfo"
+        "401":
+          description: >-
+            Two cases, deliberately distinguishable (RFC 6750 §3). **No credential at all** →
+            `invalid_request`, with a BARE `WWW-Authenticate: Bearer realm="phlix-hub"` that names no
+            error code, because nothing has been tried and rejected yet. **A credential that was
+            presented and refused** → `invalid_token`, covering unknown / expired / revoked / a
+            REFRESH token presented as a bearer credential / a token whose user no longer exists —
+            one code for all of them, so a holder cannot learn which one applies.
+          headers:
+            WWW-Authenticate:
+              description: >-
+                'Bearer realm="phlix-hub"' when no credential was sent; 'Bearer realm="phlix-hub",
+                error="invalid_token", error_description="…"' when one was sent and refused.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthErrorResponse"
+        "403":
+          description: >-
+            `insufficient_scope` — the token is VALID but does not carry `phlix:profile:read`. 403 and
+            not 401, deliberately: the distinction is what makes "the scope check refused this" legible
+            to a client and to a log reader.
+          headers:
+            WWW-Authenticate:
+              description: >-
+                'Bearer realm="phlix-hub", error="insufficient_scope", error_description="…",
+                scope="phlix:profile:read"'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthErrorResponse"
   "/requests":
     get:
       operationId: "get_requests"
@@ -3925,6 +3995,19 @@ components:
         why the operation also lists `{}` as an alternative. Note this authenticates the CLIENT, not
         the user: the user's identity comes from the authorization code, and no hub session,
         `bearerAuth` token or `phlix_hub_token` cookie is read here.
+    oauthAccessToken:
+      type: http
+      scheme: bearer
+      description: >-
+        An OAuth 2.0 access token issued by POST /oauth/token (S92) and consumed by
+        OAuthResourceMiddleware (S286). An opaque `phlix-oat-`-prefixed CSPRNG string, not a JWT — the
+        hub stores only its SHA-256 hash — carrying the scopes the USER approved on the consent
+        screen. Distinct from `bearerAuth`: that is a hub user's own session JWT and carries no
+        scopes at all, so the two are never interchangeable and never accepted on the same route.
+        Sending NO credential is 401 `invalid_request` with a bare `WWW-Authenticate: Bearer
+        realm="phlix-hub"`; an expired, revoked or wrong-kind token is 401 `invalid_token`; a valid
+        token lacking the route's scope is 403 `insufficient_scope`. All three carry a
+        `WWW-Authenticate: Bearer` challenge (RFC 6750 §3).
   parameters:
     AcceptPhlixProtocol:
       name: Accept-Phlix-Protocol
@@ -4272,10 +4355,14 @@ components:
     OAuthErrorResponse:
       type: object
       description: >-
-        RFC 6749 §5.2 error body. `error` is deliberately coarse — `invalid_grant` covers six distinct
-        failures so that a holder of a stolen code cannot learn which binding still defeats them — and
-        `error_description` is non-diagnostic for the same reason. The specific cause goes to the
-        server's auth log, where only an operator can read it.
+        RFC 6749 §5.2 error body, plus the two RFC 6750 §3.1 Bearer-token codes the resource server
+        emits. `error` is deliberately coarse — `invalid_grant` covers six distinct failures so that a
+        holder of a stolen code cannot learn which binding still defeats them, and `invalid_token`
+        covers unknown/expired/revoked/wrong-kind for the same reason — and `error_description` is
+        non-diagnostic. The specific cause goes to the server's auth log, where only an operator can
+        read it. Note `insufficient_scope` is the one member that is NOT coarse: it is 403 rather than
+        401 precisely so that a caller (and a reader of the logs) can tell "authenticated but not
+        authorised" from "not authenticated".
       properties:
         error:
           type: string
@@ -4289,8 +4376,33 @@ components:
             - "unsupported_grant_type"
             - "invalid_scope"
             - "server_error"
+            - "invalid_token"
+            - "insufficient_scope"
         error_description:
           type: string
+      additionalProperties: false
+    OAuthUserInfo:
+      type: object
+      description: >-
+        Body of GET /oauth/userinfo. Deliberately minimal — the least a third-party client needs to
+        know which hub account it is linked to. `sub` rather than `user_id` because that is the claim
+        name every OAuth/OIDC client library already looks for.
+      required: ["sub", "name", "scope"]
+      properties:
+        sub:
+          type: string
+          description: "Hub user id (8-4-4-4-12 hex UUID) the access token acts as."
+        name:
+          type: string
+          description: >-
+            The user's display name, falling back to their username when no display name is set.
+            May be an empty string only if the row carries neither.
+        scope:
+          type: string
+          description: >-
+            Space-delimited list of the scopes this token actually carries, in OAuthScope order. Read
+            from the TOKEN, never from the request, so a client can discover what it was really
+            granted rather than what it asked for.
       additionalProperties: false
     McpTokenMintRequest:
       type: object

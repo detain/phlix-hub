@@ -251,6 +251,88 @@ final class OAuthClientRegistry
     }
 
     /**
+     * Every row in `oauth_clients`, including DISABLED ones, as flat summaries
+     * for an operator (S286).
+     *
+     * ⚠ Deliberately NOT built on {@see find()} and deliberately NOT returning
+     * {@see OAuthClient} objects. `find()` fails closed — it answers `null` for a
+     * disabled client and for a half-provisioned one — which is exactly right at
+     * an endpoint and exactly wrong for an admin listing: the rows an operator
+     * most needs to see are the ones the lookup refuses. A listing built on the
+     * fail-closed path would show a mis-provisioned client as simply absent, and
+     * "the client I registered is not in the list" would look like the
+     * registration failing rather than the row being unusable.
+     *
+     * `client_secret_hash` is never selected. A hash is still a credential
+     * verifier, and an operator listing has no use for one.
+     *
+     * @return list<array{
+     *     client_id: string,
+     *     name: string,
+     *     redirect_uris: list<string>,
+     *     allowed_scopes: list<string>,
+     *     is_confidential: bool,
+     *     disabled: bool,
+     *     usable: bool
+     * }> Ordered by `client_id`, so two runs compare equal.
+     */
+    public function listAll(): array
+    {
+        /** @var mixed $rows */
+        $rows = $this->db->query(
+            'SELECT id, client_id, name, redirect_uris, allowed_scopes, is_confidential,'
+                . ' client_secret_hash, disabled_at'
+                . ' FROM oauth_clients ORDER BY client_id ASC',
+        );
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $clientId = $row['client_id'] ?? null;
+            if (!is_string($clientId)) {
+                continue;
+            }
+
+            /** @var mixed $name */
+            $name   = $row['name'] ?? null;
+            $uris   = is_string($row['redirect_uris'] ?? null) ? (string) $row['redirect_uris'] : '';
+            $scopes = is_string($row['allowed_scopes'] ?? null) ? (string) $row['allowed_scopes'] : '';
+
+            $uriList = [];
+            foreach (explode(self::URI_DELIMITER, $uris) as $candidate) {
+                $candidate = trim($candidate);
+                if ($candidate !== '') {
+                    $uriList[] = $candidate;
+                }
+            }
+
+            $disabled = ($row['disabled_at'] ?? null) !== null;
+
+            $out[] = [
+                'client_id'       => $clientId,
+                'name'            => is_string($name) ? $name : $clientId,
+                'redirect_uris'   => $uriList,
+                'allowed_scopes'  => OAuthScopes::parse($scopes),
+                'is_confidential' => self::truthy($row['is_confidential'] ?? null),
+                'disabled'        => $disabled,
+                // `usable` is re-derived through the PRODUCTION lookup rather
+                // than inferred from the columns above, so the listing cannot
+                // disagree with what the token flow will actually accept.
+                'usable'          => !$disabled && $this->find($clientId) !== null,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Coerce a MySQL boolean-ish column to bool without treating the string
      * `"0"` as true (which a naked cast of a `TINYINT` returned as a string
      * would not do, but a `(bool)` on `"false"` would).
