@@ -297,6 +297,7 @@ final class OAuthTokenService
             return null;
         }
 
+        /** @var mixed $codeId */
         $codeId = $rows[0]['code_id'] ?? null;
 
         return is_string($codeId) && $codeId !== '' ? $codeId : null;
@@ -358,6 +359,7 @@ final class OAuthTokenService
             return null;
         }
 
+        /** @var mixed $codeId */
         $codeId = $row['code_id'] ?? null;
 
         return new OAuthGrant(

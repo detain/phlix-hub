@@ -178,6 +178,7 @@ final class ConsentTicketService
             return null;
         }
 
+        /** @var mixed $state */
         $state = $row['state'] ?? null;
 
         return new PendingAuthorization(

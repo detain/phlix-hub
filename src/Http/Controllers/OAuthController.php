@@ -606,22 +606,32 @@ final class OAuthController
      */
     private static function basicCredentials(Request $request): array
     {
+        // Each guard is its own `if` rather than one `||` chain: Psalm does not
+        // narrow `?string` / `string|false` through a short-circuited `||`, so
+        // the combined form leaves `substr()` and `explode()` reading a value
+        // the analyser still believes may be null or false.
         $header = $request->getHeader('Authorization');
-        if ($header === null || !str_starts_with($header, 'Basic ')) {
+        if ($header === null) {
+            return [];
+        }
+        if (!str_starts_with($header, 'Basic ')) {
             return [];
         }
 
         $decoded = base64_decode(substr($header, 6), true);
-        if ($decoded === false || !str_contains($decoded, ':')) {
+        if ($decoded === false) {
+            return [];
+        }
+        if (!str_contains($decoded, ':')) {
             return [];
         }
 
-        [$id, $secret] = explode(':', $decoded, 2);
-        if ($id === '') {
+        $parts = explode(':', $decoded, 2);
+        if (!isset($parts[0], $parts[1]) || $parts[0] === '') {
             return [];
         }
 
-        return ['id' => $id, 'secret' => $secret];
+        return ['id' => $parts[0], 'secret' => $parts[1]];
     }
 
     /**
@@ -758,6 +768,7 @@ final class OAuthController
      */
     private static function str(array $source, string $key): string
     {
+        /** @var mixed $value */
         $value = $source[$key] ?? null;
 
         return is_string($value) ? $value : '';
@@ -774,6 +785,7 @@ final class OAuthController
      */
     private static function strOrNull(array $source, string $key): ?string
     {
+        /** @var mixed $value */
         $value = $source[$key] ?? null;
 
         return is_string($value) && $value !== '' ? $value : null;

@@ -216,6 +216,7 @@ final class AuthorizationCodeService
             return null;
         }
 
+        /** @var mixed $id */
         $id = $rows[0]['id'] ?? null;
 
         return is_string($id) ? $id : null;

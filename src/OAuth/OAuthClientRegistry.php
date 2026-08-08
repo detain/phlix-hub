@@ -117,6 +117,7 @@ final class OAuthClientRegistry
     {
         $id       = $row['id'] ?? null;
         $clientId = $row['client_id'] ?? null;
+        /** @var mixed $name */
         $name     = $row['name'] ?? null;
         $uris     = $row['redirect_uris'] ?? null;
         $scopes   = $row['allowed_scopes'] ?? null;

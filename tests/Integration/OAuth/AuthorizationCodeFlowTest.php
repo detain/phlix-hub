@@ -326,6 +326,50 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         self::assertSame(hash('sha256', (string) $payload['refresh_token']), $rows[1]['token_hash']);
     }
 
+    /**
+     * A `scope` on the TOKEN request must be ignored entirely for the
+     * authorization-code grant.
+     *
+     * ⚠ Added after a mutation SURVIVED. `testFullAuthorizationCodePkceFlow…`
+     * asserts the issued scope equals the consented one, but its token request
+     * sends no `scope` at all — so a controller that read scopes out of the
+     * token body and only fell back to the code's would have passed it. That is
+     * the fixture-in-canonical-form trap: the input the mutation needed to
+     * discriminate on was never present.
+     *
+     * Both directions are exercised, because they fail differently. Asking for
+     * MORE is privilege escalation; asking for LESS would be a silent, un-audited
+     * change to what the user approved.
+     */
+    public function testAScopeOnTheTokenRequestIsIgnoredForTheAuthorizationCodeGrant(): void
+    {
+        $consented = OAuthScopes::PROFILE_READ . ' ' . McpScopes::LIBRARY_READ;
+
+        // Ask for MORE. PLAYBACK_READ is inside the CLIENT's registered ceiling
+        // but was never on the consent screen, so a controller that trusted this
+        // field would issue a capability the user never saw.
+        $escalate = self::json($this->controller->token($this->tokenRequest($this->obtainCode(), [
+            'scope' => OAuthScopes::PROFILE_READ . ' ' . McpScopes::PLAYBACK_READ,
+        ])));
+        self::assertSame($consented, $escalate['scope'], 'the token request widened the grant');
+
+        $grant = $this->tokens->validateAccess((string) $escalate['access_token']);
+        self::assertNotNull($grant);
+        self::assertFalse($grant->hasScope(McpScopes::PLAYBACK_READ), 'an unconsented scope reached the token');
+
+        // Ask for LESS.
+        $narrow = self::json($this->controller->token($this->tokenRequest($this->obtainCode(), [
+            'scope' => OAuthScopes::PROFILE_READ,
+        ])));
+        self::assertSame($consented, $narrow['scope'], 'the token request narrowed the grant');
+
+        // Ask for NONSENSE — must not empty the grant either.
+        $garbage = self::json($this->controller->token($this->tokenRequest($this->obtainCode(), [
+            'scope' => 'admin:* nonsense',
+        ])));
+        self::assertSame($consented, $garbage['scope']);
+    }
+
     public function testTheResponseIsNotCacheableAndTheConsentScreenCannotBeFramed(): void
     {
         $screen = $this->controller->authorize($this->authorizeRequest());
@@ -478,6 +522,54 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
             $this->tokens->consumeRefresh($refreshToken),
             'the replay did not revoke the refresh token issued by the first redemption',
         );
+    }
+
+    /**
+     * The same replay, but with the two redemptions separated in TIME.
+     *
+     * ⚠ Read this before simplifying either replay test away. The immediate
+     * replay above passes even with `AND consumed_at IS NULL` DELETED from the
+     * claiming `UPDATE` — mutation-tested, it SURVIVED. The reason is a MySQL
+     * detail rather than anything about this code: `UPDATE … SET consumed_at =
+     * NOW()` against a row whose `consumed_at` is already this same second
+     * changes no bytes, so MySQL reports **0 affected rows**, and
+     * `AuthorizationCodeService::consume()` refuses on the affected-row count.
+     * The refusal was real; the REASON was a timing coincidence, not the
+     * predicate the test was supposed to be pinning.
+     *
+     * Ageing `consumed_at` backwards makes the second `UPDATE` a genuine change,
+     * so the affected-row count no longer masks a missing predicate — which is
+     * what makes THIS test the one that actually kills that mutation. It is also
+     * the more honest model of the attack: a stolen code is replayed when the
+     * attacker gets to it, not inside the same second.
+     */
+    public function testAReplayedCodeIsRefusedEvenWhenTheRedemptionsAreSecondsApart(): void
+    {
+        $code = $this->obtainCode();
+
+        $first = $this->controller->token($this->tokenRequest($code));
+        self::assertSame(200, $first->statusCode);
+        $accessToken = (string) self::json($first)['access_token'];
+
+        // Move the redemption into the past so re-stamping it would be a real
+        // write. Nothing else about the row changes.
+        $this->db->query(
+            'UPDATE oauth_authorization_codes SET consumed_at = NOW() - INTERVAL 30 SECOND'
+                . ' WHERE consumed_at IS NOT NULL',
+        );
+
+        $second = $this->controller->token($this->tokenRequest($code));
+        self::assertSame(400, $second->statusCode);
+        self::assertSame(OAuthError::INVALID_GRANT, self::json($second)['error']);
+        self::assertNull(
+            $this->tokens->validateAccess($accessToken),
+            'the delayed replay did not revoke the lineage',
+        );
+
+        // Control: a FRESH code, unaged, still redeems normally — so the 400
+        // above is the single-use guard firing and not a service that has
+        // stopped issuing anything.
+        self::assertSame(200, $this->controller->token($this->tokenRequest($this->obtainCode()))->statusCode);
     }
 
     public function testAnExpiredAuthorizationCodeIsRefused(): void
@@ -700,6 +792,52 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         self::assertSame(400, $second->statusCode);
         self::assertArrayNotHasKey('Location', $second->headers);
         self::assertSame(1, $this->countRows('oauth_authorization_codes'), 'a replayed ticket minted a second code');
+    }
+
+    /**
+     * The consent ticket's single-use guard, with the two submissions separated
+     * in TIME.
+     *
+     * ⚠ Exactly the same trap as
+     * {@see testAReplayedCodeIsRefusedEvenWhenTheRedemptionsAreSecondsApart}:
+     * {@see testAConsentTicketIsSingleUse} SURVIVED deletion of
+     * `AND consumed_at IS NULL` from `ConsentTicketService::consume()`, because
+     * re-stamping `consumed_at` within the same second is a zero-affected-row
+     * `UPDATE` in MySQL. Ageing the row is what makes the predicate — rather
+     * than the clock — the thing being tested.
+     */
+    public function testAConsentTicketIsStillSingleUseWhenTheSubmissionsAreSecondsApart(): void
+    {
+        $ticket = $this->consentTicketFor();
+        $body   = [
+            ConsentScreen::FIELD_TICKET   => $ticket,
+            ConsentScreen::FIELD_DECISION => ConsentScreen::DECISION_ALLOW,
+        ];
+
+        self::assertSame(302, $this->controller->consent($this->postRequest('/oauth/authorize', $body))->statusCode);
+
+        $this->db->query(
+            'UPDATE oauth_consent_requests SET consumed_at = NOW() - INTERVAL 30 SECOND'
+                . ' WHERE consumed_at IS NOT NULL',
+        );
+
+        $second = $this->controller->consent($this->postRequest('/oauth/authorize', $body));
+        self::assertSame(400, $second->statusCode);
+        self::assertArrayNotHasKey('Location', $second->headers);
+        self::assertSame(
+            1,
+            $this->countRows('oauth_authorization_codes'),
+            'a ticket replayed after a delay minted a second code',
+        );
+
+        // Control: a fresh ticket still works, so the 400 is the single-use
+        // guard and not a broken endpoint.
+        $control = $this->controller->consent($this->postRequest('/oauth/authorize', [
+            ConsentScreen::FIELD_TICKET   => $this->consentTicketFor(),
+            ConsentScreen::FIELD_DECISION => ConsentScreen::DECISION_ALLOW,
+        ]));
+        self::assertSame(302, $control->statusCode);
+        self::assertSame(2, $this->countRows('oauth_authorization_codes'));
     }
 
     public function testAnExpiredConsentTicketMintsNothing(): void
