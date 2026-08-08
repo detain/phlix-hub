@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Http\RouteRegistration;
 
 /**
- * Hand-written golden manifest of every route the hub's EIGHTEEN
+ * Hand-written golden manifest of every route the hub's NINETEEN
  * `Application::register*Routes()` methods are expected to register.
  *
  * WHY A HAND-WRITTEN LIST — the whole point of S174 is that a test must fail
@@ -187,11 +187,20 @@ final class RouteManifest
             \Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware::class,
             \Phlix\Hub\Http\Controllers\AlexaSkillController::class,
         ],
+        // S92. AuthMiddleware IS resolved here — but it is attached to the two
+        // `/oauth/authorize` verbs only, never to `/oauth/token`. Resolving it
+        // and attaching it are two different facts; this list pins the first and
+        // `subRegistrarRoutes()` + `ApplicationRouteCompositionTest` pin the
+        // second.
+        'registerOAuthRoutes' => [
+            \Phlix\Hub\Http\Controllers\OAuthController::class,
+            \Phlix\Hub\Http\Middleware\AuthMiddleware::class,
+        ],
     ];
 
     /**
      * The routes `Application::registerRoutes()` registers DIRECTLY (i.e. not
-     * via one of the seventeen sub-registrars it also calls).
+     * via one of the eighteen sub-registrars it also calls).
      *
      * @return list<array<string, string>>
      */
@@ -354,7 +363,7 @@ final class RouteManifest
     }
 
     /**
-     * Golden route table for each of the seventeen sub-registrars.
+     * Golden route table for each of the eighteen sub-registrars.
      *
      * @return array<string, list<array<string, string>>>
      */
@@ -765,11 +774,39 @@ final class RouteManifest
                     'gate' => self::GATE_ALEXA,
                 ],
             ],
+
+            // S92 — the OAuth 2.0 Authorization Server. Three routes, and the
+            // SPLIT between them is the security property, not an implementation
+            // detail: the GET renders consent and mints nothing, the POST is the
+            // only path to an authorization code, and the token endpoint is
+            // ungated because its caller is a client rather than a hub user.
+            //
+            // The two `/oauth/authorize` verbs are GATE_AUTH_HTML, not
+            // GATE_AUTH_JSON: the path is not under `/api/`, so an
+            // unauthenticated caller short-circuits inside AuthMiddleware with a
+            // 302 to `/app/login`. That is the correct outcome for a surface a
+            // human arrives at from a third-party app — and it is asserted, so a
+            // change that made the consent screen answer 200 to an anonymous
+            // visitor would surface here.
+            'registerOAuthRoutes' => [
+                [
+                    'method' => 'GET', 'path' => '/oauth/authorize', 'url' => '/oauth/authorize',
+                    'gate' => self::GATE_AUTH_HTML,
+                ],
+                [
+                    'method' => 'POST', 'path' => '/oauth/authorize', 'url' => '/oauth/authorize',
+                    'gate' => self::GATE_AUTH_HTML,
+                ],
+                [
+                    'method' => 'POST', 'path' => '/oauth/token', 'url' => '/oauth/token',
+                    'gate' => self::GATE_PUBLIC,
+                ],
+            ],
         ];
     }
 
     /**
-     * Every route in the manifest — the seventeen sub-registrars plus the routes
+     * Every route in the manifest — the eighteen sub-registrars plus the routes
      * `registerRoutes()` registers directly.
      *
      * @return list<array<string, string>>

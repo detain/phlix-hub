@@ -116,6 +116,13 @@ tags:
       The self-hosted Amazon Alexa custom skill endpoint. Answers questions about a linked user's
       library and returns a LINK when asked to play something; it cannot start, stop or route
       playback on any device, and it cannot cast.
+  - name: "OAuth"
+    description: >-
+      The hub's OAuth 2.0 Authorization Server — Authorization Code with mandatory PKCE `S256`, a
+      client registry, and a server-enforced consent screen. Built ONCE as a shared primitive rather
+      than per-integration: Alexa account linking is its first consumer, and MCP's future spec-correct
+      mode is meant to adopt it without a rebuild, which is why every `mcp:*` scope is already
+      grantable here.
 
 paths:
   "/":
@@ -3406,6 +3413,234 @@ paths:
               description: "/app/servers when signed in, /app/login when not"
               schema:
                 type: string
+  "/oauth/authorize":
+    get:
+      operationId: "get_oauth_authorize"
+      tags: ["OAuth"]
+      summary: "Start an authorization-code flow and render the consent screen"
+      description: |-
+        The authorization endpoint of the hub's shared OAuth 2.0 Authorization Server (S92). Built once
+        and reusable: nothing about it is Alexa-specific, and every `mcp:*` scope is already grantable
+        here, so MCP's future spec-correct mode can adopt it without re-issuing anything.
+
+        **This operation mints nothing.** It validates the request, stores it, and renders a consent
+        screen. The only path to an authorization code is `POST /oauth/authorize`, which requires the
+        single-use ticket that this screen carries. A client that scripts the redirect and never shows
+        the screen to a human receives no code, because there is no code-minting path it can reach.
+
+        Stricter than RFC 6749 in three deliberate ways:
+
+        * `code_challenge_method` **must** be present and **must** be `S256`. RFC 7636 §4.4 defaults an
+          absent method to `plain`; this server refuses both `plain` and omission.
+        * `redirect_uri` is **required** and matched as a whole string against the client's registered
+          values — never by prefix, origin, or trailing-slash tolerance.
+        * `scope` is **required**. There is no default grant.
+
+        An unknown `client_id` and an unregistered `redirect_uri` answer with an HTML error page and do
+        **not** redirect — redirecting either would make this an open redirect. Every later failure
+        redirects to the (already-validated) `redirect_uri` with `error` and the client's `state`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: "response_type"
+          in: "query"
+          required: true
+          description: "Must be `code`. This server implements no other response type."
+          schema:
+            type: string
+            enum: ["code"]
+        - name: "client_id"
+          in: "query"
+          required: true
+          description: "A `client_id` registered in `oauth_clients` and not disabled."
+          schema:
+            type: string
+        - name: "redirect_uri"
+          in: "query"
+          required: true
+          description: >-
+            Must equal one of the client's registered redirect URIs exactly, byte for byte.
+          schema:
+            type: string
+            format: uri
+        - name: "scope"
+          in: "query"
+          required: true
+          description: >-
+            Space-delimited list of scopes, every one of which must be inside the client's registered
+            ceiling. Unknown values are dropped; if nothing recognised remains the request is refused
+            with `invalid_scope` rather than defaulted.
+          style: spaceDelimited
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            items:
+              $ref: "#/components/schemas/OAuthScope"
+        - name: "code_challenge"
+          in: "query"
+          required: true
+          description: "43-character unpadded base64url SHA-256 digest of the `code_verifier`."
+          schema:
+            type: string
+        - name: "code_challenge_method"
+          in: "query"
+          required: true
+          description: "Must be `S256`. `plain` is refused, and so is omitting this parameter."
+          schema:
+            type: string
+            enum: ["S256"]
+        - name: "state"
+          in: "query"
+          required: false
+          description: "Opaque client value, echoed back verbatim on both success and error redirects."
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "The consent screen, server-rendered. No code has been minted."
+          content:
+            text/html:
+              schema:
+                type: string
+        "302":
+          description: >-
+            A validation failure that is safe to report to the client, because the `redirect_uri` had
+            already been proven registered. Carries `error`, `error_description` and `state`.
+          headers:
+            Location:
+              description: "The registered redirect URI with `error` appended."
+              schema:
+                type: string
+        "400":
+          description: >-
+            Unknown or disabled `client_id`, or a `redirect_uri` the client has not registered. Rendered
+            as HTML and deliberately NOT redirected.
+          content:
+            text/html:
+              schema:
+                type: string
+    post:
+      operationId: "post_oauth_authorize"
+      tags: ["OAuth"]
+      summary: "Submit the consent decision and mint the authorization code"
+      description: |-
+        The consent decision. This is the **only** operation in the hub that mints an OAuth
+        authorization code, which is what makes consent enforceable rather than decorative.
+
+        The body carries `consent_ticket` — an opaque, single-use, user-bound value that exists only
+        because `GET /oauth/authorize` rendered a consent screen containing it. It is claimed with an
+        atomic conditional `UPDATE`, so it cannot be replayed even in a race, and it is compared against
+        the session user, so a ticket lifted from one user's screen is inert in another's session. It is
+        therefore also the form's CSRF token, which is why no separate one is required.
+
+        Every security-relevant parameter — client, redirect URI, scopes, PKCE challenge — is read back
+        out of the stored request rather than resubmitted by the browser, so what the user read on the
+        consent screen is structurally the same thing the code gets bound to. The client registration is
+        then re-validated, because it may have been disabled or narrowed while the screen was open.
+
+        Any `decision` other than exactly `allow` is a refusal and redirects with `access_denied`.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/OAuthConsentDecision"
+      responses:
+        "302":
+          description: >-
+            The decision was recorded. On approval the `Location` carries `code` and `state`; on refusal
+            it carries `error=access_denied` and `state`.
+          headers:
+            Location:
+              description: "The registered redirect URI with `code` (or `error`) appended."
+              schema:
+                type: string
+        "400":
+          description: >-
+            The consent ticket was absent, expired, or already used, or the client can no longer be
+            authorised. Rendered as HTML; no code was minted.
+          content:
+            text/html:
+              schema:
+                type: string
+        "403":
+          description: >-
+            The ticket belongs to a different Phlix account than the one now signed in. Rendered as
+            HTML; no code was minted.
+          content:
+            text/html:
+              schema:
+                type: string
+  "/oauth/token":
+    post:
+      operationId: "post_oauth_token"
+      tags: ["OAuth"]
+      summary: "Exchange an authorization code, or rotate a refresh token, for tokens"
+      description: |-
+        The token endpoint. **Ungated by route middleware, on purpose**: the caller is a third-party
+        client rather than a hub user, so it has no session and must not be bounced to a login page. It
+        authenticates itself here with `client_id` — plus `client_secret`, by HTTP Basic or in the body,
+        when the client is confidential — and, for the code grant, with a PKCE `code_verifier`.
+
+        `grant_type=authorization_code` requires `code`, `redirect_uri` and `code_verifier`. A missing
+        `code_verifier` is refused outright; it is never read as "this client is not using PKCE". The
+        code is consumed before its bindings are checked, so a failed exchange still burns it, and a
+        code presented a second time revokes every token descended from the first redemption
+        (RFC 6749 §4.1.2).
+
+        `grant_type=refresh_token` rotates: the presented token is revoked in the same atomic statement
+        that authorises it, and a fresh pair is issued. A refresh token that comes back after rotation
+        revokes the whole lineage. An explicit `scope` may narrow the grant but never widen it.
+
+        The scopes on an issued token always come from the authorization code — i.e. from what the user
+        was shown and approved — and never from this request.
+
+        Error codes are deliberately coarse: `invalid_grant` covers an unknown code, an expired code, a
+        replayed code, a code belonging to another client, a redirect-URI mismatch and a failed PKCE
+        check, so a holder of a stolen code cannot learn which binding still defeats them.
+      x-phlix-middleware: []
+      security:
+        # A confidential client authenticates with HTTP Basic (or the equivalent
+        # body fields). A PUBLIC client presents no secret at all — its assurance
+        # is the mandatory PKCE `code_verifier` — which is what the empty
+        # alternative below expresses. Neither form is a hub USER session: the
+        # user's identity comes out of the authorization code.
+        - oauthClientBasic: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/OAuthTokenRequest"
+      responses:
+        "200":
+          description: "Tokens issued. Both plaintexts are returned here and nowhere else, ever."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthTokenResponse"
+        "400":
+          description: >-
+            `invalid_grant`, `invalid_scope` or `unsupported_grant_type` — see the description for why
+            `invalid_grant` is not subdivided.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthErrorResponse"
+        "401":
+          description: >-
+            `invalid_client` — unknown, disabled, or the wrong secret. One code for all three, so the
+            endpoint cannot be used to enumerate registered clients.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthErrorResponse"
   "/requests":
     get:
       operationId: "get_requests"
@@ -3678,6 +3913,18 @@ components:
         by POST and GET /mcp. It is an opaque `phlix-mcp-`-prefixed CSPRNG string, not a JWT — the hub stores
         only its SHA-256 hash. Validated by McpController itself rather than by AuthMiddleware, which
         is why /mcp carries an empty x-phlix-middleware.
+    oauthClientBasic:
+      type: http
+      scheme: basic
+      description: >-
+        OAuth 2.0 client credentials at POST /oauth/token (RFC 6749 §2.3.1): the `client_id` as the
+        username and the `client_secret` as the password. Accepted ONLY on that endpoint, and only
+        for a CONFIDENTIAL client — the hub stores just the secret's SHA-256 hash. The same
+        credentials may instead be sent as `client_id`/`client_secret` form fields; a PUBLIC client
+        sends no secret at all and is assured by the mandatory PKCE `code_verifier` instead, which is
+        why the operation also lists `{}` as an alternative. Note this authenticates the CLIENT, not
+        the user: the user's identity comes from the authorization code, and no hub session,
+        `bearerAuth` token or `phlix_hub_token` cookie is read here.
   parameters:
     AcceptPhlixProtocol:
       name: Accept-Phlix-Protocol
@@ -3927,6 +4174,124 @@ components:
         - "mcp:library:read"
         - "mcp:playback:read"
         - "mcp:playback:control"
+    OAuthScope:
+      type: string
+      description: >-
+        A capability an OAuth 2.0 access token issued by this hub may carry (S92). The set is closed and
+        is deliberately the UNION of `phlix:profile:read` and every `McpScope` — the OAuth server was
+        built once to be shared, and re-exporting MCP's vocabulary verbatim is what makes that true: an
+        MCP client migrating from a personal access token to an authorization-code grant asks for the
+        same scope strings it asks for today, and the tool registry keeps working unchanged. Pinned
+        against `Phlix\Hub\OAuth\OAuthScopes::all()` by `OAuthScopeOpenApiEnumContractTest`. The order
+        below is the order the hub emits scopes in — part of the stored representation, so appending is
+        safe and reordering is not.
+      enum:
+        - "phlix:profile:read"
+        - "mcp:servers:read"
+        - "mcp:library:read"
+        - "mcp:playback:read"
+        - "mcp:playback:control"
+    OAuthConsentDecision:
+      type: object
+      description: "Form body of POST /oauth/authorize — the consent decision."
+      properties:
+        consent_ticket:
+          type: string
+          description: >-
+            The single-use, user-bound ticket carried by the consent screen. Obtainable only by
+            rendering that screen, so it is the CSRF token as well as the request handle.
+        decision:
+          type: string
+          description: >-
+            `allow` — and only exactly `allow` — authorises. Anything else, including `deny`, an empty
+            value and a value a client invented, redirects with `error=access_denied`.
+          enum: ["allow", "deny"]
+      required: ["consent_ticket", "decision"]
+      additionalProperties: false
+    OAuthTokenRequest:
+      type: object
+      description: "Form body of POST /oauth/token."
+      properties:
+        grant_type:
+          type: string
+          enum: ["authorization_code", "refresh_token"]
+        client_id:
+          type: string
+          description: "May instead be supplied as the HTTP Basic username."
+        client_secret:
+          type: string
+          description: >-
+            Required for a confidential client, absent for a public one. May instead be supplied as the
+            HTTP Basic password. Only its SHA-256 hash is ever stored.
+        code:
+          type: string
+          description: "`authorization_code` grant only. Single-use; a replay revokes the whole lineage."
+        redirect_uri:
+          type: string
+          description: >-
+            `authorization_code` grant only. Must equal the URI the code was issued against, exactly.
+        code_verifier:
+          type: string
+          description: >-
+            `authorization_code` grant only, and **mandatory** — a missing verifier is refused rather
+            than read as "not using PKCE". 43-128 characters from `[A-Za-z0-9-._~]`.
+        refresh_token:
+          type: string
+          description: "`refresh_token` grant only. Rotated: presenting it revokes it."
+        scope:
+          type: string
+          description: >-
+            `refresh_token` grant only, optional. May narrow the granted scopes; a value that is not a
+            subset is refused rather than silently clamped.
+      required: ["grant_type"]
+      additionalProperties: false
+    OAuthTokenResponse:
+      type: object
+      description: >-
+        RFC 6749 §5.1 token response. The only place either plaintext ever appears — only SHA-256
+        hashes are stored, so neither can be retrieved again.
+      properties:
+        access_token:
+          type: string
+          description: "Prefixed `phlix-oat-`."
+        refresh_token:
+          type: string
+          description: "Prefixed `phlix-ort-`. Single-use: the next refresh rotates it."
+        token_type:
+          type: string
+          enum: ["Bearer"]
+        expires_in:
+          type: integer
+          description: "Access-token lifetime in seconds. Always finite; the default is 3600."
+        scope:
+          type: string
+          description: >-
+            Space-delimited granted scopes. Always what the user consented to, never what the token
+            request asked for.
+      additionalProperties: false
+    OAuthErrorResponse:
+      type: object
+      description: >-
+        RFC 6749 §5.2 error body. `error` is deliberately coarse — `invalid_grant` covers six distinct
+        failures so that a holder of a stolen code cannot learn which binding still defeats them — and
+        `error_description` is non-diagnostic for the same reason. The specific cause goes to the
+        server's auth log, where only an operator can read it.
+      properties:
+        error:
+          type: string
+          enum:
+            - "invalid_request"
+            - "invalid_client"
+            - "invalid_grant"
+            - "unauthorized_client"
+            - "access_denied"
+            - "unsupported_response_type"
+            - "unsupported_grant_type"
+            - "invalid_scope"
+            - "server_error"
+        error_description:
+          type: string
+      additionalProperties: false
     McpTokenMintRequest:
       type: object
       description: "Body of POST /api/v1/me/mcp-tokens."

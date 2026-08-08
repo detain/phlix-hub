@@ -66,6 +66,7 @@ final class MigrationFileTest extends TestCase
             '042_relay_user_throttle.sql',
             '043_relay_user_settings.sql',
             '044_mcp_tokens.sql',
+            '045_oauth_authorization_server.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);

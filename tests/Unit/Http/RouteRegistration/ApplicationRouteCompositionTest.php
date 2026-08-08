@@ -51,6 +51,16 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
      *    verbs are listed, deliberately: S63 added a second entry point to the
      *    same endpoint, and an ungated verb that nobody had to write down here
      *    is exactly the change this list exists to surface.
+     *  - `POST /oauth/token` (S92) — the OAuth token endpoint. Its caller is a
+     *    third-party CLIENT, not a hub user: it has no session and no cookie,
+     *    so `AuthMiddleware` would 302 it to `/app/login`. `OAuthController`
+     *    authenticates it with `client_id` (+ `client_secret` when the client is
+     *    confidential) and, for the code grant, a mandatory PKCE `code_verifier`.
+     *    ⚠ Note what is NOT on this list: `GET`/`POST /oauth/authorize` ARE
+     *    gated by `AuthMiddleware`, because those two are the surface a HUMAN
+     *    reaches, and a code may only be minted for an authenticated user. If
+     *    either of them ever appears here, the consent screen has become
+     *    reachable — and the code mintable — without a session.
      *
      * @var list<string>
      */
@@ -74,6 +84,7 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
         'POST /api/v1/servers/{id}/relay',
         'POST /api/v1/servers/{id}/subdomain',
         'POST /mcp',
+        'POST /oauth/token',
     ];
 
     /**
