@@ -43,6 +43,7 @@ use Phlix\Hub\Http\Controllers\LibraryShareController;
 use Phlix\Hub\Http\Controllers\McpController;
 use Phlix\Hub\Http\Controllers\McpTokenController;
 use Phlix\Hub\Http\Controllers\MeController;
+use Phlix\Hub\Http\Controllers\OAuthController;
 use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
@@ -620,6 +621,78 @@ final class Application
 
         // Alexa custom skill endpoint (S91), gated by S90's signature middleware.
         $this->registerAlexaRoutes();
+
+        // OAuth 2.0 Authorization Server (S92) — shared, not Alexa-specific.
+        $this->registerOAuthRoutes();
+    }
+
+    /**
+     * Register the OAuth 2.0 Authorization Server (S92) — exactly three routes.
+     *
+     * ```
+     * GET  /oauth/authorize   AuthMiddleware   renders the consent screen; mints NOTHING
+     * POST /oauth/authorize   AuthMiddleware   records the decision; mints the code
+     * POST /oauth/token       (no middleware)  exchanges the code / rotates a refresh token
+     * ```
+     *
+     * Three deliberate decisions are encoded in that table, and each is pinned
+     * by the route suites rather than left to this comment:
+     *
+     *  - **The two `/oauth/authorize` verbs share a gate and split the work.**
+     *    Consent is enforced because the GET has no code-minting path at all,
+     *    not because it renders a page. Moving the mint into the GET, or
+     *    dropping the POST, would leave a route table that still looks correct.
+     *  - **`AuthMiddleware`, not `AuthMiddleware` + something.** The path is not
+     *    under `/api/`, so an unauthenticated visitor is bounced to
+     *    `/app/login` (a 302) rather than handed a JSON 401 — which is what a
+     *    human arriving from a third-party app should get. The POST is also
+     *    cookie-authenticable for the same reason: `AuthMiddleware` only forces
+     *    bearer-only on mutating `/api/` paths. The consent form's CSRF defence
+     *    is the single-use, user-bound consent ticket, which a cross-origin page
+     *    cannot read (see {@see \Phlix\Hub\OAuth\ConsentTicketService}).
+     *  - **`/oauth/token` carries NO route middleware, on purpose.** Its caller
+     *    is a client, not a hub user; it has no session and must not be bounced
+     *    to a login page. It authenticates itself inside the controller with
+     *    `client_id` (+ `client_secret` when confidential) and mandatory PKCE.
+     *    It is listed in `ApplicationRouteCompositionTest::UNGATED_ROUTES`, so
+     *    it is ungated by an explicit decision that a reviewer signed off, not
+     *    by an omission.
+     */
+    private function registerOAuthRoutes(): void
+    {
+        $oauth          = $this->resolveOAuthController();
+        $authMiddleware = $this->resolveAuthMiddleware();
+
+        $this->router->group('/oauth', static function (Router $r) use ($oauth): void {
+            $r->get('/authorize', static function (Request $req, array $params) use ($oauth): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $oauth->authorize($req, $typedParams);
+            });
+            $r->post('/authorize', static function (Request $req, array $params) use ($oauth): Response {
+                /** @var array<string, string> $typedParams */
+                $typedParams = $params;
+                return $oauth->consent($req, $typedParams);
+            });
+        }, [$authMiddleware]);
+
+        // Registered OUTSIDE the group above: the token endpoint must not
+        // inherit its AuthMiddleware. A client exchanging a code has no hub
+        // session and would be 302'd to /app/login.
+        $this->router->post('/oauth/token', static function (Request $req, array $params) use ($oauth): Response {
+            /** @var array<string, string> $typedParams */
+            $typedParams = $params;
+            return $oauth->token($req, $typedParams);
+        });
+    }
+
+    private function resolveOAuthController(): OAuthController
+    {
+        $controller = $this->container->get(OAuthController::class);
+        if (!$controller instanceof OAuthController) {
+            throw new \RuntimeException('Container returned an unexpected OAuthController instance');
+        }
+        return $controller;
     }
 
     /**

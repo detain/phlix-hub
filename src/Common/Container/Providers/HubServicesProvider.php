@@ -105,6 +105,11 @@ use Phlix\Hub\Mcp\Tools\ListServersTool;
 use Phlix\Hub\Mcp\Tools\PlaybackControlTool;
 use Phlix\Hub\Mcp\Tools\SearchMediaTool;
 use Phlix\Hub\Mcp\WorkermanStreamTimers;
+use Phlix\Hub\Http\Controllers\OAuthController;
+use Phlix\Hub\OAuth\AuthorizationCodeService;
+use Phlix\Hub\OAuth\ConsentTicketService;
+use Phlix\Hub\OAuth\OAuthClientRegistry;
+use Phlix\Hub\OAuth\OAuthTokenService;
 use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
@@ -263,6 +268,80 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new ClientRelayTokenController($tokens, $serverInfo, $audit);
             })->parameter('tokens', get(ClientRelayTokenService::class))
                 ->parameter('serverInfo', get(ServerInfoHandler::class))
+                ->parameter('audit', get(AuditLogger::class)),
+
+            // --- OAuth 2.0 Authorization Server (S92) -----------------------
+            // Built once and shared: nothing wired here is Alexa-specific. The
+            // Alexa skill is one row in `oauth_clients`; MCP's future
+            // spec-correct mode (S63) is another, and `OAuthScopes` already
+            // re-exports every `mcp:*` scope so that adoption needs no new
+            // vocabulary and no re-issued tokens.
+            //
+            // The four services are separate bindings rather than one god-object
+            // because each owns exactly one table and one lifetime rule, and the
+            // token endpoint must be able to consume a code WITHOUT being able to
+            // mint one — a single service would put both on the same object.
+            OAuthClientRegistry::class => factory(static function (
+                Connection $db,
+            ): OAuthClientRegistry {
+                return new OAuthClientRegistry($db, LoggerFactory::get(LogChannels::AUTH));
+            })->parameter('db', get(Connection::class)),
+
+            // TTL configurable via `oauth_consent_ttl` (seconds); defaults to 10
+            // minutes. Only the SHA-256 hash of the ticket is persisted.
+            ConsentTicketService::class => factory(static function (
+                Connection $db,
+            ) use ($appConfig): ConsentTicketService {
+                $ttl = is_int($appConfig['oauth_consent_ttl'] ?? null)
+                    ? (int) $appConfig['oauth_consent_ttl']
+                    : ConsentTicketService::DEFAULT_TTL_SECONDS;
+                return new ConsentTicketService($db, $ttl);
+            })->parameter('db', get(Connection::class)),
+
+            // TTL configurable via `oauth_code_ttl` (seconds); defaults to 60.
+            // ⚠ Raising this widens the window in which a leaked code is still
+            // redeemable. RFC 6749 §4.1.2 permits up to 10 minutes; the exchange
+            // is a server-to-server call that happens within a second.
+            AuthorizationCodeService::class => factory(static function (
+                Connection $db,
+            ) use ($appConfig): AuthorizationCodeService {
+                $ttl = is_int($appConfig['oauth_code_ttl'] ?? null)
+                    ? (int) $appConfig['oauth_code_ttl']
+                    : AuthorizationCodeService::DEFAULT_TTL_SECONDS;
+                return new AuthorizationCodeService($db, $ttl);
+            })->parameter('db', get(Connection::class)),
+
+            OAuthTokenService::class => factory(static function (
+                Connection $db,
+            ) use ($appConfig): OAuthTokenService {
+                $accessTtl = is_int($appConfig['oauth_access_token_ttl'] ?? null)
+                    ? (int) $appConfig['oauth_access_token_ttl']
+                    : OAuthTokenService::ACCESS_TTL_SECONDS;
+                $refreshTtl = is_int($appConfig['oauth_refresh_token_ttl'] ?? null)
+                    ? (int) $appConfig['oauth_refresh_token_ttl']
+                    : OAuthTokenService::REFRESH_TTL_SECONDS;
+                return new OAuthTokenService($db, $accessTtl, $refreshTtl);
+            })->parameter('db', get(Connection::class)),
+
+            OAuthController::class => factory(static function (
+                OAuthClientRegistry $clients,
+                ConsentTicketService $tickets,
+                AuthorizationCodeService $codes,
+                OAuthTokenService $tokens,
+                AuditLogger $audit,
+            ): OAuthController {
+                return new OAuthController(
+                    $clients,
+                    $tickets,
+                    $codes,
+                    $tokens,
+                    $audit,
+                    LoggerFactory::get(LogChannels::AUTH),
+                );
+            })->parameter('clients', get(OAuthClientRegistry::class))
+                ->parameter('tickets', get(ConsentTicketService::class))
+                ->parameter('codes', get(AuthorizationCodeService::class))
+                ->parameter('tokens', get(OAuthTokenService::class))
                 ->parameter('audit', get(AuditLogger::class)),
 
             // --- MCP (S62) --------------------------------------------------
