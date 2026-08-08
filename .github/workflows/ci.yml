@@ -56,7 +56,12 @@ jobs:
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
         with:
           php-version: '8.3'
-          extensions: json, pcntl, posix
+          extensions: json, pcntl, posix, openssl, curl, sodium, mbstring, hash, filter, ctype
+
+      # S258. See the identical step in the phpunit job for why naming an
+      # extension above is not, by itself, a gate.
+      - name: Assert every security-path extension is loaded (S258)
+        run: php scripts/assert-required-extensions.php
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
@@ -79,7 +84,12 @@ jobs:
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
         with:
           php-version: '8.3'
-          extensions: json, pcntl, posix
+          extensions: json, pcntl, posix, openssl, curl, sodium, mbstring, hash, filter, ctype
+
+      # S258. See the identical step in the phpunit job for why naming an
+      # extension above is not, by itself, a gate.
+      - name: Assert every security-path extension is loaded (S258)
+        run: php scripts/assert-required-extensions.php
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
@@ -102,7 +112,12 @@ jobs:
           # swoole is required so Psalm can reflect \Swoole\Coroutine\Channel
           # used by PhlixMySQLConnection's per-connection coroutine mutex;
           # without it Psalm reports UndefinedClass at errorLevel 1.
-          extensions: json, pcntl, posix, swoole
+          extensions: json, pcntl, posix, swoole, openssl, curl, sodium, mbstring, hash, filter, ctype
+
+      # S258. See the identical step in the phpunit job for why naming an
+      # extension above is not, by itself, a gate.
+      - name: Assert every security-path extension is loaded (S258)
+        run: php scripts/assert-required-extensions.php
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
@@ -151,8 +166,31 @@ jobs:
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
         with:
           php-version: '8.3'
-          extensions: json, pcntl, posix, swoole
+          # S258: openssl and curl were relied on via setup-php's base build and
+          # named NOWHERE, while AlexaSignatureMiddleware (S90) — the only
+          # authentication the whole Alexa surface has — cannot verify a single
+          # request without them. sodium (the Ed25519 enrollment JWT), mbstring,
+          # hash, filter and ctype were in the same position. Naming them makes
+          # the dependency a contract instead of an accident of the base image.
+          #
+          # ⚠ Naming is NOT a gate on its own: in the pinned setup-php,
+          # src/scripts/unix.sh reads `fail_fast="${fail_fast:-${FAIL_FAST:-false}}"`
+          # and only exits 1 when it is "true", so an extension it could not
+          # install is a red cross in the log and a GREEN step. The
+          # "Assert every security-path extension is loaded" step below is what
+          # turns an absence into a failure.
+          extensions: json, pcntl, posix, swoole, openssl, curl, sodium, mbstring, hash, filter, ctype
           coverage: xdebug
+
+      # S258. Runs before `composer install` so a base image that lost an
+      # extension fails in seconds, naming it, instead of surfacing later as a
+      # confusing "undefined function openssl_verify()" inside a fail-closed
+      # catch. Do NOT add continue-on-error and do NOT delete this step:
+      # tests/Unit/Support/RequiredPhpExtensionsTest.php parses this file and
+      # fails on either edit, and on any required extension dropped from the
+      # `extensions:` list above.
+      - name: Assert every security-path extension is loaded (S258)
+        run: php scripts/assert-required-extensions.php
 
       - name: Build and enable php-uv
         run: |
