@@ -368,6 +368,58 @@ final class DockerImageContractTest extends TestCase
         );
     }
 
+    /**
+     * The boot gate must be the one job nothing else can take away.
+     *
+     * Run 1 of this workflow (PR #233) resolved the base digest in a SEPARATE
+     * job that the gate depended on. That job died on a `… | head -20` under
+     * `pipefail`, GitHub skipped its dependents, and both "Boot gate (hub
+     * image)" and "Build and Push phlix-hub" reported `skipping` — which the
+     * checks API counts as SUCCESS. With no branch protection in this estate,
+     * "nothing failed" would have merged a PR whose boot gate never ran: the
+     * S300 defect reintroduced by the gate's own plumbing.
+     *
+     * So the gate has no `needs:` and resolves the base itself. A publish job
+     * that skips is harmless — nothing is published. A GATE that skips is the
+     * whole problem.
+     */
+    public function testTheBootGateCannotBeSkippedByAnUpstreamJob(): void
+    {
+        $lines = preg_split(
+            '/\R/',
+            $this->withoutCommentLines($this->contents(self::WORKFLOW, 'the docker workflow must exist')),
+        ) ?: [];
+
+        $inGate = false;
+        $gateKeys = [];
+        foreach ($lines as $line) {
+            if (preg_match('/^  docker-boot-gate:\s*$/', $line) === 1) {
+                $inGate = true;
+                continue;
+            }
+            if ($inGate && preg_match('/^  \S/', $line) === 1) {
+                break;
+            }
+            if ($inGate && preg_match('/^    (\w[\w-]*):/', $line, $m) === 1) {
+                $gateKeys[] = $m[1];
+            }
+        }
+
+        self::assertNotSame([], $gateKeys, 'the workflow must still define a `docker-boot-gate` job');
+        self::assertNotContains(
+            'needs',
+            $gateKeys,
+            'The boot gate must NOT depend on another job. A failed dependency does not redden a '
+            . 'dependent — it SKIPS it, and a skipped job reports as SUCCESS to GitHub. That is how '
+            . 'run 1 of this workflow produced a green-looking PR with no boot gate at all.',
+        );
+        self::assertNotContains(
+            'if',
+            $gateKeys,
+            'a conditional gate is a gate that can be turned off from outside itself',
+        );
+    }
+
     public function testThePublishJobCannotShipAnImageThatWasNeverBooted(): void
     {
         $workflow = $this->withoutCommentLines(
@@ -375,10 +427,18 @@ final class DockerImageContractTest extends TestCase
         );
 
         self::assertMatchesRegularExpression(
-            '/needs:\s*\[base-digest,\s*docker-boot-gate\]/',
+            '/needs:\s*\[docker-boot-gate\]/',
             $workflow,
             'The publish job must depend on the boot gate. Publishing an image that has never been '
             . 'started is exactly what the upstream job did for the life of this image.',
+        );
+
+        self::assertStringContainsString(
+            'PHLIX_BASE_IMAGE=${{ needs.docker-boot-gate.outputs.base_ref }}',
+            $workflow,
+            'The publish job must build FROM the digest the gate actually BOOTED, not from a second '
+            . 'resolution of `:latest` — phlix-server moves that tag on every master merge, so one '
+            . 'run can resolve it twice and get two different images.',
         );
 
         self::assertStringContainsString(

@@ -49,60 +49,6 @@ env:
 
 jobs:
   # --------------------------------------------------------------------------
-  # Resolve the base image ONCE, to a DIGEST, and hand that to both jobs below.
-  #
-  # A tag is mutable. `:latest` can move between the boot gate's build and the
-  # publish build — phlix-server pushes it on every master merge — and then the
-  # artefact that was booted is not the artefact that was published. The digest
-  # is immutable, so pinning it here makes both jobs measure the same base and
-  # makes the run SAY which base that was.
-  #
-  # This repository cannot rebuild the base from this commit (Dockerfile.base
-  # lives in phlix-server), so "the base for this commit" is by definition the
-  # currently published one. Stating the digest is the honest version of that.
-  # --------------------------------------------------------------------------
-  base-digest:
-    name: Resolve base image digest
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      packages: read
-
-    outputs:
-      base_ref: ${{ steps.resolve.outputs.base_ref }}
-
-    steps:
-      - name: Log in to Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Resolve ${{ env.BASE_IMAGE }}:latest to an immutable digest
-        id: resolve
-        run: |
-          set -euo pipefail
-          DIGEST="$(docker buildx imagetools inspect "${BASE_IMAGE}:latest" \
-                      --format '{{.Manifest.Digest}}' | head -1 | tr -d ' \r\n')"
-          # An unresolvable digest is a hard error, never a fallback to the
-          # mutable `:latest` — that fallback is what made phlix-server's
-          # stale-base defect invisible for the life of its images.
-          case "$DIGEST" in
-            sha256:*) ;;
-            *)
-              echo "::error::could not resolve ${BASE_IMAGE}:latest to a digest (got '${DIGEST}')."
-              exit 1 ;;
-          esac
-          echo "base_ref=${BASE_IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "Base image for this run: ${BASE_IMAGE}@${DIGEST}"
-          docker buildx imagetools inspect "${BASE_IMAGE}@${DIGEST}" | head -20
-
-  # --------------------------------------------------------------------------
   # THE GATE. Builds the image from THIS ref into the local daemon, boots it
   # against a throwaway MySQL, and asserts 16 things about the running
   # container — /health returning `"service":"phlix-hub"`, the migration
@@ -115,6 +61,23 @@ jobs:
   # It runs on `pull_request` — that is the entire point. It is amd64 only; the
   # publish job below is the one that produces arm64, and no runner boots that.
   #
+  # ⚠ THIS JOB HAS NO `needs:`, DELIBERATELY, AND MUST NOT ACQUIRE ONE.
+  # (Learned on run 1 of this workflow, PR #233.) The base-digest resolution
+  # used to be a separate job that this one depended on. That job failed on a
+  # log-printing line, and GitHub's response to a failed dependency is to SKIP
+  # the dependents — so both "Boot gate (hub image)" and "Build and Push
+  # phlix-hub" reported `skipping`, and **a skipped job counts as SUCCESS to
+  # the checks API**. With no branch protection anywhere in this estate, a merge
+  # decision taken on "nothing failed" would have shipped a PR whose boot gate
+  # never ran: the exact failure mode S300 exists to remove, reintroduced by the
+  # gate's own plumbing. A gate that an unrelated job can silently delete is not
+  # a gate. It now resolves the base itself and goes RED if it cannot.
+  #
+  # Also do NOT add `docker/setup-buildx-action` here: it installs a
+  # docker-container driver builder and makes it the default, after which a
+  # plain `docker build` no longer loads the image into the local daemon — and
+  # the smoke script boots the image it built out of that daemon.
+  #
   # Do NOT add `continue-on-error`, do NOT gate it behind an `if:`, and do NOT
   # delete it: tests/Unit/Docker/DockerImageContractTest.php parses this file
   # and fails on each of those edits.
@@ -122,12 +85,18 @@ jobs:
   docker-boot-gate:
     name: Boot gate (hub image)
     runs-on: ubuntu-latest
-    needs: base-digest
     timeout-minutes: 30
 
     permissions:
       contents: read
       packages: read
+
+    outputs:
+      # The base the gate ACTUALLY BOOTED. The publish job builds from this
+      # exact digest, so the published image can never rest on a base that was
+      # never started — `:latest` moves on every phlix-server master merge, and
+      # a tag resolved twice in one run can resolve to two different images.
+      base_ref: ${{ steps.resolve.outputs.base_ref }}
 
     steps:
       - name: Checkout code
@@ -140,11 +109,91 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Report what is about to be measured
-        env:
-          BASE_REF: ${{ needs.base-digest.outputs.base_ref }}
+      # ----------------------------------------------------------------------
+      # Resolve the base to an IMMUTABLE digest.
+      #
+      # This repository cannot rebuild the base from this commit
+      # (docker/Dockerfile.base lives in phlix-server), so "the base for this
+      # commit" is by definition the currently published one. Naming its digest
+      # is the honest version of that, and it makes the run SAY what it
+      # measured.
+      #
+      # ⚠ NO PIPELINES WHOSE CONSUMER CAN EXIT EARLY. Run 1 of this workflow
+      # died here with exit 255 AFTER resolving the digest correctly, on
+      #
+      #     docker buildx imagetools inspect "${BASE_IMAGE}@${DIGEST}" | head -20
+      #
+      # `head` closes the pipe at line 20 of 26, the producer dies writing to
+      # it, and `pipefail` turns a purely informational print into a failed
+      # step — which then SKIPPED the boot gate and the publish job. Reproduced
+      # verbatim on the dev box (exit 255, last line
+      # `vnd.docker.reference.digest:`, identical to the CI log).
+      #
+      # So: capture first, slice second. The value-producing command is a bare
+      # command substitution (it must still be able to fail, and it does), and
+      # the informational print uses `mapfile` + a counted loop — there is no
+      # pipeline for a consumer to close.
+      # ----------------------------------------------------------------------
+      - name: Resolve the base image to an immutable digest
+        id: resolve
         run: |
           set -euo pipefail
+
+          RESOLVED_BY=''
+          RAW=''
+          # Primary: ask the REGISTRY, without pulling anything.
+          if RAW="$(docker buildx imagetools inspect "${BASE_IMAGE}:latest" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            RESOLVED_BY='buildx imagetools'
+          # Fallback: pull and read the digest the pull resolved. Both paths end
+          # at the same 64-hex digest (verified: they agree), and BOTH are
+          # validated below. This is NOT a fallback to the mutable tag — that
+          # fallback is what made phlix-server's stale-base defect invisible for
+          # the life of its images. It is a second way to obtain the same
+          # immutable identifier when buildx is unavailable.
+          elif docker pull -q "${BASE_IMAGE}:latest" >/dev/null 2>&1 \
+            && RAW="$(docker image inspect --format '{{index .RepoDigests 0}}' "${BASE_IMAGE}:latest" 2>/dev/null)"; then
+            RESOLVED_BY='docker pull + RepoDigests'
+            RAW="${RAW##*@}"
+          else
+            echo "::error::could not reach ${BASE_IMAGE}:latest to resolve a digest (both buildx imagetools and docker pull failed)."
+            exit 1
+          fi
+
+          DIGEST="${RAW//[[:space:]]/}"
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::${BASE_IMAGE}:latest did not resolve to a sha256 digest (got '${DIGEST}' via ${RESOLVED_BY})."
+            exit 1
+          fi
+
+          echo "base_ref=${BASE_IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Base image for this run: ${BASE_IMAGE}@${DIGEST}  (resolved by ${RESOLVED_BY})"
+
+      # Purely informational, and STRUCTURALLY unable to fail the job:
+      #   * the command's failure is absorbed (`|| true`) — a manifest listing
+      #     is not evidence about anything, so it must never be a verdict;
+      #   * there is no pipeline at all, so nothing can SIGPIPE the producer;
+      #   * the slice is bounded by a counter and the TOTAL is printed, so a
+      #     truncated listing cannot read as a short one.
+      - name: Print the base manifest (informational only)
+        env:
+          BASE_REF: ${{ steps.resolve.outputs.base_ref }}
+        run: |
+          set -euo pipefail
+          INFO="$(docker buildx imagetools inspect "${BASE_REF}" 2>&1 || true)"
+          mapfile -t INFO_LINES <<< "$INFO"
+          printf 'manifest for %s — %s line(s), showing up to 20:\n' "${BASE_REF}" "${#INFO_LINES[@]}"
+          for i in "${!INFO_LINES[@]}"; do
+            [ "$i" -ge 20 ] && break
+            printf '  %s\n' "${INFO_LINES[$i]}"
+          done
+
+      - name: Report what is about to be measured
+        env:
+          BASE_REF: ${{ steps.resolve.outputs.base_ref }}
+        run: |
+          set -euo pipefail
+          # Every substitution here ends in wc/ls, which consume ALL of their
+          # input — no consumer exits early, so none of these can SIGPIPE.
           echo "ref        : ${GITHUB_REF} @ ${GITHUB_SHA}"
           echo "event      : ${GITHUB_EVENT_NAME}"
           echo "base image : ${BASE_REF}"
@@ -156,7 +205,7 @@ jobs:
       # the local daemon — so the image it boots is exactly the image it built.
       - name: Build and BOOT the hub image
         env:
-          PHLIX_BASE_IMAGE: ${{ needs.base-digest.outputs.base_ref }}
+          PHLIX_BASE_IMAGE: ${{ steps.resolve.outputs.base_ref }}
         run: |
           chmod +x scripts/docker-boot-smoke.sh
           ./scripts/docker-boot-smoke.sh phlix-hub-boot:${{ github.sha }}
@@ -166,13 +215,22 @@ jobs:
   # must never reach the registry, which is exactly what happened for the whole
   # life of the upstream job.
   #
+  # It also builds FROM `needs.docker-boot-gate.outputs.base_ref` — the digest
+  # the gate ACTUALLY BOOTED, not a second resolution of `:latest`, which
+  # phlix-server moves on every master merge and which can therefore answer
+  # differently twice in one run.
+  #
+  # A skip here is SAFE, which is why this is the job that is allowed to have a
+  # `needs:`: if the gate fails, nothing is published and the run is red. The
+  # gate itself must never be skippable — see the ⚠ note on that job.
+  #
   # `push:` is false on a pull request — a PR must not move a tag anyone
   # deploys — so on a PR this job is a multi-arch BUILD check and nothing more.
   # --------------------------------------------------------------------------
   docker-build:
     name: Build and Push phlix-hub
     runs-on: ubuntu-latest
-    needs: [base-digest, docker-boot-gate]
+    needs: [docker-boot-gate]
 
     permissions:
       contents: read
@@ -236,4 +294,4 @@ jobs:
             type=gha,mode=max
             type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
           build-args: |
-            PHLIX_BASE_IMAGE=${{ needs.base-digest.outputs.base_ref }}
+            PHLIX_BASE_IMAGE=${{ needs.docker-boot-gate.outputs.base_ref }}

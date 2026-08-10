@@ -152,7 +152,11 @@ RECORDED_CHECKS=''
 # a warning at the start AND in the summary at the end, and CI never sets it.
 BOOT_PUBLISH="${BOOT_PUBLISH:-1}"
 if [ "$BOOT_PUBLISH" != "1" ]; then
-    EXPECTED_CHECKS="$(printf '%s\n' "$EXPECTED_CHECKS" | grep -v '^health-published$')"
+    # `|| true`: grep -v exits 1 when it emits NOTHING, and this is an
+    # ASSIGNMENT — under `set -e` that would abort the gate before it started.
+    # (It cannot happen with today's registry, which is exactly why it would go
+    # unnoticed the day the registry shrinks.)
+    EXPECTED_CHECKS="$(printf '%s\n' "$EXPECTED_CHECKS" | grep -v '^health-published$' || true)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -204,6 +208,55 @@ probe_curl() {
     fi
 }
 
+# ===========================================================================
+# NO PIPELINE IN THIS SCRIPT MAY HAVE AN EARLY-EXITING CONSUMER.
+# ===========================================================================
+# `set -euo pipefail` is on. `producer | head -N`, `producer | grep -q` and
+# `producer | grep -m1` all stop reading before the producer stops writing; the
+# producer then dies on SIGPIPE (or, like `docker buildx`, exits non-zero on
+# EPIPE), and `pipefail` hands that status to the whole pipeline. Two distinct
+# harms, both of which this script had:
+#
+#   * in a CONDITION (`if printf … | grep -q X`) the pipeline reports FAILURE
+#     even though grep matched, so the assertion silently takes the WRONG
+#     BRANCH. It only bites once the payload outgrows the 64 KiB pipe buffer —
+#     i.e. exactly when a container log is long, i.e. exactly when something is
+#     already wrong;
+#   * in a plain statement it ABORTS the script mid-diagnostic, skipping the
+#     remaining assertions and the check registry.
+#
+# This is not hypothetical: run 1 of .github/workflows/docker.yml died with
+# exit 255 on `docker buildx imagetools inspect … | head -20` (26 lines of
+# output), which SKIPPED this gate — and a skipped job reads as SUCCESS.
+#
+# So: matching is done in bash (`[[ … == *x* ]]` / `=~`), and truncation is done
+# by the two helpers below. Both are pipeline-free. Keep it that way; the audit
+# is one grep:
+#
+#   grep -nE '\|[[:space:]]*(head|grep[^|]*-q|grep[^|]*-m)' scripts/docker-boot-smoke.sh
+#
+# `| wc -l`, `| grep -c`, `| tr`, `| sort`, `| tail` and `| awk` (with no
+# `exit`) all consume their whole input and are therefore safe.
+# ---------------------------------------------------------------------------
+
+# Print at most $1 lines of $2, prefixed, and SAY how many there were — a
+# truncated dump must not read as a short one. `mapfile` consumes the entire
+# here-string before the loop runs, so the bound cannot close anything.
+print_lines() {
+    local max="$1" text="$2" i
+    local -a lines=()
+    mapfile -t lines <<< "$text"
+    printf '   (%s line(s), showing up to %s)\n' "${#lines[@]}" "$max"
+    for i in "${!lines[@]}"; do
+        [ "$i" -ge "$max" ] && break
+        printf '   | %s\n' "${lines[$i]}"
+    done
+}
+
+# The first $1 characters of $2, for one-line summaries. Pure parameter
+# expansion — the `head -c` it replaces was a pipeline.
+clip() { printf '%s' "${2:0:$1}"; }
+
 dump_diagnostics() {
     say "DIAGNOSTICS — ${APP_NAME}"
     echo "--- docker ps ---"
@@ -213,7 +266,7 @@ dump_diagnostics() {
     echo "--- container logs (last 200) ---"
     $DOCKER logs --tail 200 "$APP_NAME" 2>&1 || true
     echo "--- process table ---"
-    $DOCKER exec "$APP_NAME" ps -eo pid,user,args 2>&1 | head -40 || true
+    print_lines 40 "$($DOCKER exec "$APP_NAME" ps -eo pid,user,args 2>&1 || true)"
     echo "--- /var/phlix/logs + .logs ---"
     $DOCKER exec "$APP_NAME" sh -c \
         'ls -la /var/phlix/logs /var/www/html/.logs 2>&1; tail -n 60 /var/www/html/.logs/*.log 2>&1' || true
@@ -334,7 +387,7 @@ for attempt in $(seq 1 80); do
     PINGOUT="$($DOCKER exec "$MYSQL_NAME" mysqladmin --no-defaults \
         --protocol=TCP -h 127.0.0.1 -P 3306 \
         -uroot -p"root_${MYSQL_PASSWORD}" ping 2>&1 || true)"
-    if printf '%s' "$PINGOUT" | grep -q 'mysqld is alive'; then
+    if [[ "$PINGOUT" == *'mysqld is alive'* ]]; then
         # Second gate: the application's OWN user must reach the application's
         # OWN database over TCP. root-alive != app-can-connect.
         if $DOCKER exec "$MYSQL_NAME" mysql --no-defaults --protocol=TCP \
@@ -350,7 +403,7 @@ done
 if [ "$MYSQL_READY" != "1" ]; then
     # The gate's own fixture failing before any assertion could run.
     printf '   \033[31mFAIL\033[0m throwaway MySQL never became TCP-ready: %s\n' \
-        "$(printf '%s' "$PINGOUT" | tail -1)"
+        "${PINGOUT##*$'\n'}"
     $DOCKER logs --tail 20 "$MYSQL_NAME" 2>&1 || true
     exit 1
 fi
@@ -391,7 +444,14 @@ fi
 
 CONTAINER_IP="$($DOCKER inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$APP_NAME" 2>/dev/null || true)"
 if [ "$BOOT_PUBLISH" = "1" ]; then
-    HTTP_PORT="$($DOCKER port "$APP_NAME" "${HTTP_IN_CONTAINER}/tcp" 2>/dev/null | head -1 | sed 's/.*://' | tr -d ' \r' || true)"
+    # `docker port` prints e.g. `127.0.0.1:49153`, one line per binding.
+    # Captured whole, then sliced in bash: the old `| head -1 | sed | tr` chain
+    # was three chances to lose a race with pipefail for a value the gate then
+    # depends on.
+    PORT_RAW="$($DOCKER port "$APP_NAME" "${HTTP_IN_CONTAINER}/tcp" 2>/dev/null || true)"
+    PORT_FIRST="${PORT_RAW%%$'\n'*}"
+    HTTP_PORT="${PORT_FIRST##*:}"
+    HTTP_PORT="${HTTP_PORT//[[:space:]]/}"
     if ! is_uint "${HTTP_PORT:-}"; then
         printf '   \033[31mFAIL\033[0m could not read the published port (got %s)\n' "${HTTP_PORT:-<empty>}"
         $DOCKER port "$APP_NAME" 2>&1 || true
@@ -457,13 +517,13 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 done
 
 HEALTH_FLAT="$(printf '%s' "$HEALTH_BODY" | tr -d '\n')"
-if printf '%s' "$HEALTH_FLAT" | grep -qE '"status"[[:space:]]*:[[:space:]]*"ok"' \
-   && printf '%s' "$HEALTH_FLAT" | grep -qE '"service"[[:space:]]*:[[:space:]]*"phlix-hub"'; then
-    pass health "/health -> $(printf '%s' "$HEALTH_FLAT" | head -c 200)"
+if [[ "$HEALTH_FLAT" =~ \"status\"[[:space:]]*:[[:space:]]*\"ok\" ]] \
+   && [[ "$HEALTH_FLAT" =~ \"service\"[[:space:]]*:[[:space:]]*\"phlix-hub\" ]]; then
+    pass health "/health -> $(clip 200 "$HEALTH_FLAT")"
 else
     fail health "/health never returned the hub's healthy body within ${BOOT_TIMEOUT}s (last curl rc=${CURL_RC}; 7=no mapping, 56=nothing behind it, 52=alive but empty)"
     echo "--- verbose curl ---"
-    probe_curl -sS -i --max-time 5 "${PROBE_URL}/health" 2>&1 | head -20 || true
+    print_lines 20 "$(probe_curl -sS -i --max-time 5 "${PROBE_URL}/health" 2>&1 || true)"
     dump_diagnostics
     exit 1
 fi
@@ -475,7 +535,8 @@ if [ "$BOOT_PUBLISH" = "1" ]; then
     # an empty one.
     PUB_RC=0
     PUB_BODY="$(curl -fsS --max-time 5 "${PUBLISHED_URL}/health" 2>/dev/null)" || PUB_RC=$?  # host-side ON PURPOSE: this check IS the host mapping
-    if [ "$PUB_RC" -eq 0 ] && printf '%s' "$PUB_BODY" | tr -d '\n' | grep -q '"service"[[:space:]]*:[[:space:]]*"phlix-hub"'; then
+    PUB_FLAT="${PUB_BODY//$'\n'/}"
+    if [ "$PUB_RC" -eq 0 ] && [[ "$PUB_FLAT" =~ \"service\"[[:space:]]*:[[:space:]]*\"phlix-hub\" ]]; then
         pass health-published "the published mapping ${PUBLISHED_URL} reaches the daemon"
     else
         fail health-published "curl exited ${PUB_RC} against ${PUBLISHED_URL}/health — the port mapping does not reach the daemon"
@@ -491,18 +552,29 @@ fi
 # ---------------------------------------------------------------------------
 say "ASSERT — the migration step reported success"
 BOOT_LOG="$($DOCKER logs "$APP_NAME" 2>&1 || true)"
-if printf '%s' "$BOOT_LOG" | grep -q 'PHLIX-HUB-MIGRATION-FAILURE'; then
+# ⚠ These matches are pure bash, NOT `printf … | grep -q`. $BOOT_LOG is a whole
+# container log: past the 64 KiB pipe buffer an early grep match SIGPIPEs the
+# printf, pipefail fails the pipeline, and the `if` reports "no match" for a
+# marker that IS there — so a long, i.e. already-unhealthy, boot log would be
+# mis-verdicted. See the rule near print_lines().
+if [[ "$BOOT_LOG" == *'PHLIX-HUB-MIGRATION-FAILURE'* ]]; then
     fail migrations "the entrypoint printed PHLIX-HUB-MIGRATION-FAILURE — the schema is absent or half-applied"
-    printf '%s\n' "$BOOT_LOG" | grep -aE 'PHLIX-HUB-MIGRATION-FAILURE|SQLSTATE|exited [0-9]+' | head -10 || true
-elif printf '%s' "$BOOT_LOG" | grep -q 'PHLIX-HUB-MIGRATIONS-NOT-RUN'; then
+    print_lines 10 "$(printf '%s\n' "$BOOT_LOG" | grep -aE 'PHLIX-HUB-MIGRATION-FAILURE|SQLSTATE|exited [0-9]+' || true)"
+elif [[ "$BOOT_LOG" == *'PHLIX-HUB-MIGRATIONS-NOT-RUN'* ]]; then
     fail migrations "migrations were skipped entirely (PHLIX-HUB-MIGRATIONS-NOT-RUN)"
-elif printf '%s' "$BOOT_LOG" | grep -q 'Skipping database migrations'; then
+elif [[ "$BOOT_LOG" == *'Skipping database migrations'* ]]; then
     fail migrations "migrations were skipped — this gate always configures HUB_DB_HOST, so that is a defect in the entrypoint's env handling (it read PHLIX_DATABASE_HOST for years, a name no php here reads)"
-elif printf '%s' "$BOOT_LOG" | grep -q 'PHLIX-HUB-MIGRATIONS-OK'; then
-    pass migrations "migrations ran to completion ($(printf '%s' "$BOOT_LOG" | grep -aoE 'Migrations complete \([0-9]+ applied\)|All migrations already applied[^\"]*' | head -1))"
+elif [[ "$BOOT_LOG" == *'PHLIX-HUB-MIGRATIONS-OK'* ]]; then
+    MIGRATION_DETAIL='(count not found in the log)'
+    if [[ "$BOOT_LOG" =~ Migrations\ complete\ \([0-9]+\ applied\) ]]; then
+        MIGRATION_DETAIL="${BASH_REMATCH[0]}"
+    elif [[ "$BOOT_LOG" == *'All migrations already applied'* ]]; then
+        MIGRATION_DETAIL='All migrations already applied'
+    fi
+    pass migrations "migrations ran to completion (${MIGRATION_DETAIL})"
 else
     fail migrations "no migration outcome found in the boot log at all"
-    printf '%s\n' "$BOOT_LOG" | head -20 || true
+    print_lines 20 "$BOOT_LOG"
 fi
 
 # ---------------------------------------------------------------------------
@@ -530,12 +602,12 @@ try {
 PHP_PROBE
 )
 DB_PROBE_OUT="$($DOCKER exec "$APP_NAME" php -r "$DB_PROBE_PHP" 2>&1 || true)"
-info "probe: $(printf '%s' "$DB_PROBE_OUT" | tr -d '\n' | head -c 300)"
+info "probe: $(clip 300 "${DB_PROBE_OUT//$'\n'/}")"
 DB_MIGRATIONS="$(printf '%s' "$DB_PROBE_OUT" | sed -n 's/.*migrations=\([0-9]*\).*/\1/p')"
 DB_TABLES="$(printf '%s' "$DB_PROBE_OUT" | sed -n 's/.*tables=\([0-9]*\).*/\1/p')"
 MIGRATION_FILES="$(find "${REPO_ROOT}/migrations" -maxdepth 1 -name '*.sql' | grep -c . || true)"
 is_uint "$MIGRATION_FILES" || MIGRATION_FILES=0
-if ! printf '%s' "$DB_PROBE_OUT" | grep -q 'DBPROBE_OK'; then
+if [[ "$DB_PROBE_OUT" != *'DBPROBE_OK'* ]]; then
     fail schema "the application cannot reach its database, or core tables are missing"
 elif ! is_uint "${DB_MIGRATIONS:-}" || ! is_uint "${DB_TABLES:-}"; then
     # DBPROBE_OK without parseable counters means the probe changed shape. Do
@@ -565,17 +637,17 @@ if [ "$PS_RC" -ne 0 ] || [ -z "$PSOUT" ]; then
     fail daemon-process "could not read the process table (docker exec rc=${PS_RC})"
     fail no-cgi "could not read the process table (docker exec rc=${PS_RC}) — this check would pass vacuously"
 else
-    printf '%s\n' "$PSOUT" | grep -E 'php|start\.php' | head -20 || true
+    print_lines 20 "$(printf '%s\n' "$PSOUT" | grep -E 'php|start\.php' || true)"
     WORKER_COUNT="$(printf '%s\n' "$PSOUT" | grep -c 'WorkerMan: worker process' || true)"
     is_uint "$WORKER_COUNT" || WORKER_COUNT=0
-    if ! printf '%s' "$PSOUT" | grep -q 'start.php'; then
+    if [[ "$PSOUT" != *'start.php'* ]]; then
         fail daemon-process "no start.php process — the daemon is not what is running"
     elif [ "$WORKER_COUNT" -lt 1 ]; then
         fail daemon-process "start.php is present but forked NO worker processes"
     else
         pass daemon-process "start.php running with ${WORKER_COUNT} Workerman worker process(es)"
     fi
-    if printf '%s' "$PSOUT" | grep -qE 'public/index\.php|php-fpm|nginx|supervisord'; then
+    if [[ "$PSOUT" =~ public/index\.php|php-fpm|nginx|supervisord ]]; then
         fail no-cgi "a CGI/FPM/nginx/supervisord process is running — the image ships more than one serving model"
     else
         pass no-cgi "no public/index.php, php-fpm, nginx or supervisord process"
@@ -598,8 +670,8 @@ for port in $RELAY_PORTS; do
     RELAY_CHECKED=$(( RELAY_CHECKED + 1 ))
     PROBE="$($DOCKER exec "$APP_NAME" php -r \
         "\$f=@fsockopen('127.0.0.1',${port},\$e,\$s,5); echo \$f?'OPEN':'CLOSED:'.\$s;" 2>&1 || true)"
-    RELAY_REPORT="${RELAY_REPORT}${port}=$(printf '%s' "$PROBE" | tr -d '\n' | head -c 40) "
-    printf '%s' "$PROBE" | grep -q 'OPEN' || RELAY_OK=0
+    RELAY_REPORT="${RELAY_REPORT}${port}=$(clip 40 "${PROBE//$'\n'/}") "
+    [[ "$PROBE" == *OPEN* ]] || RELAY_OK=0
 done
 info "probes: ${RELAY_REPORT}"
 if [ "$RELAY_CHECKED" -lt 3 ]; then
@@ -622,11 +694,14 @@ SPA_BYTES="$(printf '%s' "$SPA_BODY" | wc -c | tr -d ' ')"
 is_uint "$SPA_BYTES" || SPA_BYTES=0
 if [ "$SPA_RC" -ne 0 ]; then
     fail spa-shell "curl exited ${SPA_RC} for /app"
-elif printf '%s' "$SPA_BODY" | grep -qiE '<div id="app"|/assets/app/'; then
+elif [[ "${SPA_BODY,,}" == *'<div id="app"'* || "$SPA_BODY" == *'/assets/app/'* ]]; then
     pass spa-shell "/app served ${SPA_BYTES} bytes of SPA shell referencing the built bundle"
 else
     fail spa-shell "/app returned ${SPA_BYTES} bytes that do not look like the SPA shell"
-    printf '%s' "$SPA_BODY" | head -c 300
+    # NOT `| head -c 300`: SPA_BODY is kilobytes, head would close the pipe and
+    # pipefail would ABORT the script here — inside a FAIL diagnostic, before
+    # the remaining assertions and the check registry ever ran.
+    printf '   | %s\n' "$(clip 300 "$SPA_BODY")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -720,7 +795,7 @@ else
         pass healthcheck-healthy "docker reports the container healthy"
     else
         fail healthcheck-healthy "container health is '${HC_STATUS:-<unreadable>}' after ${HEALTHY_TIMEOUT}s"
-        $DOCKER inspect -f '{{json .State.Health}}' "$APP_NAME" 2>&1 | head -c 800 || true
+        printf '   | %s\n' "$(clip 800 "$($DOCKER inspect -f '{{json .State.Health}}' "$APP_NAME" 2>&1 || true)")"
     fi
 
     # `{{.Config.Healthcheck.StartPeriod}}` renders a Go time.Duration through
@@ -755,7 +830,7 @@ if [ "$PLAT_RC" -eq 0 ] && [ "$PLAT_LINES" -gt 0 ]; then
     pass platform-reqs "all platform requirements satisfied (${PLAT_LINES} lines of report)"
 else
     fail platform-reqs "composer check-platform-reqs exited ${PLAT_RC} (${PLAT_LINES} lines)"
-    printf '%s\n' "$PLAT_OUT" | head -20
+    print_lines 20 "$PLAT_OUT"
 fi
 
 # ---------------------------------------------------------------------------
@@ -796,17 +871,17 @@ CTRL_LOG="$($DOCKER logs --tail 20 "$CONTROL_NAME" 2>&1 || true)"
 info "control exit=${CTRL_EXIT} running=${CTRL_RUNNING}"
 if [ "$CTRL_RUNNING" = "true" ]; then
     fail failure-exit-nonzero "the misconfigured container was STILL RUNNING after ${CONTROL_TIMEOUT}s — a failed boot that keeps the container alive is exactly the 'Up while serving nothing' state this gate exists to catch"
-    printf '%s\n' "$CTRL_LOG" | head -10
+    print_lines 10 "$CTRL_LOG"
 elif ! is_uint "${CTRL_EXIT:-}"; then
     fail failure-exit-nonzero "could not read the control container's exit code ('${CTRL_EXIT}')"
 elif [ "$CTRL_EXIT" -eq 0 ]; then
     fail failure-exit-nonzero "the misconfigured container exited 0 — a total failure is indistinguishable from a clean stop, and every restart policy and exit-code alert reads it as success"
-    printf '%s\n' "$CTRL_LOG" | head -10
-elif printf '%s' "$CTRL_LOG" | grep -q 'PHLIX-HUB-MIGRATION'; then
+    print_lines 10 "$CTRL_LOG"
+elif [[ "$CTRL_LOG" == *'PHLIX-HUB-MIGRATION'* ]]; then
     pass failure-exit-nonzero "the misconfigured container died with exit ${CTRL_EXIT} and printed its refusal banner — this gate's green above is therefore discriminating"
 else
     fail failure-exit-nonzero "the container exited ${CTRL_EXIT} but printed no PHLIX-HUB-MIGRATION banner — it may have died for an unrelated reason, which is not the control this check needs"
-    printf '%s\n' "$CTRL_LOG" | head -10
+    print_lines 10 "$CTRL_LOG"
 fi
 
 # ---------------------------------------------------------------------------
