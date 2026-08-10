@@ -141,6 +141,20 @@ final class CoreUpdateCheckService
     /** Timer id of the in-flight fetch's deadline, or null when none is armed. */
     private ?int $deadlineTimerId = null;
 
+    /** Monotonic id of the most recently ISSUED check. */
+    private int $generation = 0;
+
+    /**
+     * Generation of the most recently RECORDED check.
+     *
+     * A transport that missed its deadline still calls back eventually — the
+     * measured case is a DNS resolution that reports 100 seconds later, long
+     * after {@see expireInFlightCheck()} recorded the timeout. Without this the
+     * one logical check would write `last_checked_at` twice and log twice, which
+     * is the "logged repeatedly" S308 set out to remove.
+     */
+    private int $recordedGeneration = 0;
+
     /**
      * Error text of the last failure ESCALATED to `warning`, so an identical
      * repeat can be demoted to `debug` (S308 "logged once"). One nullable
@@ -243,18 +257,22 @@ final class CoreUpdateCheckService
         // slot afterwards would silently drop the callback.
         $this->pendingCompletion = $onComplete;
         $this->inFlight          = true;
+        $generation              = ++$this->generation;
         $this->armDeadline();
 
         try {
-            $this->fetcher->fetch($this->markerUrl, function (?string $body, ?string $error): void {
-                $this->record($body, $error);
-            });
+            $this->fetcher->fetch(
+                $this->markerUrl,
+                function (?string $body, ?string $error) use ($generation): void {
+                    $this->record($body, $error, $generation);
+                },
+            );
         } catch (Throwable $e) {
             // A synchronous throw must NOT escape while `inFlight` is set: the
             // guard above would then refuse every future sweep and the check
             // would be dead until the next restart. Record it as the failed
             // check it is; the caller gets its completion as usual.
-            $this->record(null, $e->getMessage());
+            $this->record(null, $e->getMessage(), $generation);
         }
     }
 
@@ -325,7 +343,11 @@ final class CoreUpdateCheckService
         // The one-shot has fired; there is nothing left to cancel.
         $this->deadlineTimerId = null;
 
-        $this->record(null, 'update check: no response within ' . $this->deadlineSeconds . ' seconds');
+        $this->record(
+            null,
+            'update check: no response within ' . $this->deadlineSeconds . ' seconds',
+            $this->generation,
+        );
     }
 
     /**
@@ -400,13 +422,28 @@ final class CoreUpdateCheckService
      * Persist the outcome of one completed fetch and fire the pending
      * completion callback.
      *
-     * @param string|null $body  Marker body when the fetch succeeded.
-     * @param string|null $error Error text when it did not.
+     * @param string|null $body       Marker body when the fetch succeeded.
+     * @param string|null $error      Error text when it did not.
+     * @param int         $generation Id of the check this outcome belongs to.
      *
      * @return void
      */
-    private function record(?string $body, ?string $error): void
+    private function record(?string $body, ?string $error, int $generation): void
     {
+        // ONE outcome per check. A transport that missed its deadline still
+        // reports later; that late answer belongs to a check already recorded,
+        // and accepting it would re-stamp `last_checked_at` and log a second
+        // time for a single logical poll. It is also stale by construction — we
+        // already gave up on it — so a success arriving here is not adopted
+        // either; the next due poll will fetch a fresh one.
+        if ($generation <= $this->recordedGeneration) {
+            $this->logger->debug('Updates: ignoring a late answer for an update check already recorded', [
+                'generation' => $generation,
+            ]);
+            return;
+        }
+        $this->recordedGeneration = $generation;
+
         $now = time();
 
         // Release the single-flight guard FIRST, and unconditionally: every

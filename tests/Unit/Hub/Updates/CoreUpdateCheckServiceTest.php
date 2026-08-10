@@ -485,6 +485,65 @@ final class CoreUpdateCheckServiceTest extends TestCase
     }
 
     /**
+     * ONE outcome per check. MEASURED in a container: after the deadline
+     * records a timeout, the transport still reports ~100 seconds later — and
+     * before this guard that late answer wrote `last_checked_at` a second time
+     * and logged a SECOND warning for one logical poll.
+     */
+    public function testALateAnswerAfterTheDeadlineIsIgnored(): void
+    {
+        $logFile = $this->tmpDir . '/late.log';
+
+        // Hands the completion callback back to the test instead of calling it,
+        // so "later" is something the test controls.
+        $deferred = new class implements VersionMarkerFetcherInterface {
+            /** @var list<callable(string|null, string|null):void> */
+            public array $pending = [];
+
+            public function fetch(string $url, callable $onDone): void
+            {
+                $this->pending[] = $onDone;
+            }
+        };
+
+        $service = new CoreUpdateCheckService(
+            new HubSettingsRepository($this->db, $this->tmpDir),
+            $deferred,
+            $this->fileLogger($logFile),
+            self::MARKER_URL,
+            self::UPDATE_COMMAND,
+            '0.5.0',
+            20,
+        );
+
+        $service->check();
+        foreach ($this->pendingTimerTasks() as $task) {
+            ($task[0])(...$task[1]);
+        }
+
+        $afterTimeout = $service->status();
+        self::assertIsString($afterTimeout->lastError);
+        self::assertStringContainsString('no response within', $afterTimeout->lastError);
+        self::assertIsInt($afterTimeout->lastCheckedAt);
+
+        // The transport finally answers — with a SUCCESS, the case that would
+        // otherwise look like a harmless improvement.
+        self::assertCount(1, $deferred->pending);
+        ($deferred->pending[0])("9.9.9\n", null);
+
+        $afterLate = $service->status();
+        self::assertNull($afterLate->latestVersion, 'a late answer must not be adopted');
+        self::assertSame($afterTimeout->lastError, $afterLate->lastError);
+        self::assertSame($afterTimeout->lastCheckedAt, $afterLate->lastCheckedAt);
+
+        self::assertSame(
+            ['WARNING'],
+            $this->loggedLevelsFor($logFile, 'core update check failed'),
+            'one logical poll must produce exactly one failure log line',
+        );
+    }
+
+    /**
      * A completed fetch must CANCEL its deadline: a stray one-shot left in the
      * table would later record a bogus timeout over a good result.
      */
