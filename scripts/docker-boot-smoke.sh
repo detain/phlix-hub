@@ -404,11 +404,22 @@ else
     HTTP_PORT=''
     PUBLISHED_URL=''
 fi
-if [ -z "$CONTAINER_IP" ]; then
-    printf '   \033[31mFAIL\033[0m the container has no address on %s\n' "$NET"
-    dump_diagnostics
-    exit 1
-fi
+# A container that has ALREADY exited reports "invalid IP" from this template
+# (not an empty string), which would otherwise flow into a malformed URL and
+# make curl say `rc=3` about a container that is simply dead — a bad diagnosis
+# of the commonest failure this gate exists to catch. Name it here instead.
+case "$CONTAINER_IP" in
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;;
+    *)
+        printf '   \033[31mFAIL\033[0m [health] the container has no usable address (%s): state=%s exit=%s\n' \
+            "${CONTAINER_IP:-<empty>}" \
+            "$($DOCKER inspect -f '{{.State.Status}}' "$APP_NAME" 2>/dev/null || echo '?')" \
+            "$($DOCKER inspect -f '{{.State.ExitCode}}' "$APP_NAME" 2>/dev/null || echo '?')"
+        echo "--- container logs ---"
+        $DOCKER logs --tail 40 "$APP_NAME" 2>&1 || true
+        dump_diagnostics
+        exit 1 ;;
+esac
 DIRECT_URL="http://${CONTAINER_IP}:${HTTP_IN_CONTAINER}"
 info "bridge     : ${DIRECT_URL}"
 
