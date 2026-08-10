@@ -65,6 +65,7 @@ use Phlix\Hub\Hub\Updates\CoreUpdateCheckService;
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
 use Phlix\Hub\Http\Controllers\AdminUpdatesController;
+use Phlix\Hub\Version;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
@@ -1047,6 +1048,15 @@ final class HubServicesProvider implements ServiceProviderInterface
                         'curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh'
                         . ' | sudo bash -s -- --update -y',
                     ),
+                    Version::VERSION,
+                    // S308 backstop deadline. NOT the same value as
+                    // `timeout_seconds`: that one is the vendor client's socket
+                    // timeout, which cannot bound a hooked DNS resolution that
+                    // never returns.
+                    self::updatesInt(
+                        'deadline_seconds',
+                        CoreUpdateCheckService::DEFAULT_DEADLINE_SECONDS,
+                    ),
                 );
             })->parameter('settings', get(HubSettingsRepository::class))
                 ->parameter('fetcher', get(VersionMarkerFetcherInterface::class)),
@@ -1058,6 +1068,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $service,
                     LoggerFactory::get(LogChannels::HUB),
                     self::updatesInt('poll_seconds', CoreUpdateCheckWorker::DEFAULT_INTERVAL_SECONDS),
+                    self::updatesInt('sweep_seconds', CoreUpdateCheckWorker::DEFAULT_SWEEP_SECONDS),
                 );
             })->parameter('service', get(CoreUpdateCheckService::class)),
 
@@ -1590,8 +1601,19 @@ final class HubServicesProvider implements ServiceProviderInterface
             );
         }
 
-        // Core update check (S75): daily poll of the remote VERSION marker,
-        // preceded by a boot catch-up inside CoreUpdateCheckWorker::start().
+        // Core update check (S75, reshaped by S308): a 60-second DUE-GATED
+        // sweep of the remote VERSION marker. `start()` performs NO fetch — it
+        // arms a timer and returns.
+        //
+        // ⚠ S308: it used to run one check synchronously here, on the boot
+        // path. Measured in a container with no route out, the Swoole-hooked
+        // DNS resolution never returned, so this method BLOCKED at this line:
+        // `Updates: core update check worker started` was never logged, the
+        // poll timer was never armed, and an onWorkerStart coroutine was parked
+        // for the life of the process. Nothing armed after this point would
+        // have run at all. Do not reintroduce network I/O into a timer-arming
+        // path.
+        //
         // It belongs on THIS worker (count=1, its own DB connection, its own
         // event loop) rather than the HTTP workers: the poll is once-hub-wide,
         // it writes hub_settings rows, and it must never share a tick with a

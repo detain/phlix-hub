@@ -303,6 +303,61 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The hub fetched a version marker from `raw.githubusercontent.com` on the
+  BOOT path, and on an egress-filtered box that hung the maintenance worker
+  (S308).** `CoreUpdateCheckWorker::start()` ran one check synchronously from
+  `HubServicesProvider::startDbMaintenanceTimers()`, i.e. inside
+  `MaintenanceWorker::onWorkerStart()`. Measured in a container on 2026-08-10,
+  against `s308-hub:master` built from `Dockerfile`:
+  - **DNS answers, the connect fails** (`--add-host raw.githubusercontent.com:127.0.0.1`):
+    **two** `stream_socket_client(): Unable to connect to
+    tcp://raw.githubusercontent.com:443 (Connection refused)` warnings on stdout
+    for **one** logical check — vendor `ConnectionPool::fetch()` dials, the
+    connection goes `CLOSING`, and vendor `Client::process()` then calls
+    `reconnect()` and dials again. That is the repeated warning this step was
+    raised on.
+  - **DNS blackholed** (the ordinary shape of an air-gapped or egress-filtered
+    install): the Swoole-hooked resolver never returned. `start()` never
+    returned either, its `Updates: core update check worker started` line was
+    never written, and **the daily poll timer was never armed** — the update
+    check was dead exactly where an operator most needs to hear that a release
+    shipped, with an `onWorkerStart` coroutine parked for the life of the
+    process. Nothing armed after that line would have run at all.
+  - 🚨 **A hung boot fetch and a clean boot look IDENTICAL in a log.** Both
+    produce zero warnings. The container reached `healthy` in both arms, so the
+    only tell was the ABSENCE of a debug line. The attribution was made by
+    changing one variable at a time: `HUB_UPDATES_MARKER_URL` moved the
+    warning's host and port to `s308-marker.invalid:80`, and
+    `HUB_UPDATES_CHECK_ENABLED=0` removed both warnings while still logging
+    `core update check is disabled, skipping fetch` — a positive control proving
+    the code path ran and chose not to fetch.
+  - **The fetch is now off the boot path entirely.** `start()` arms one
+    persistent 60-second sweep and performs no I/O; each sweep calls
+    `CoreUpdateCheckService::checkIfDue()`, which touches the network only when
+    `poll_seconds` has genuinely elapsed since the persisted
+    `updates.last_checked_at`. That keeps what the boot catch-up existed for — a
+    bare `Timer::add(86400, …)` never fires on a box that restarts more often
+    than the interval — and is strictly better on a box that restarts often: the
+    old shape fetched once per PROCESS START, this one fetches once per
+    INTERVAL. Same cadence and same argument as
+    `IdleReaper::reapDbMaintenance()`'s S62/S286 pruners; kept out of that class
+    because every task in it is a pure DB prune and it would have been the
+    thirteenth constructor argument and the ninth nullable dependency there.
+  - **Single flight and a real deadline.** A second check while one is
+    outstanding is refused (a 60-second sweep against a transport that never
+    answers would otherwise park a coroutine a minute, forever), and a one-shot
+    `Timer` records a timeout after `deadline_seconds` so the guard cannot wedge
+    the feature until the next restart. ⚠ `deadline_seconds` is **not** a
+    duplicate of `timeout_seconds`: the vendor client's timeout is enforced by a
+    timer that inspects connections it has already created, and the measured
+    hang is in `stream_socket_client()` before there is one.
+  - **Logged once.** An identical repeated error warns the first time and drops
+    to `debug` after that; a success re-arms the warning. An air-gapped install
+    answers the same way every day, forever.
+  - New: `HUB_UPDATES_SWEEP_SECONDS` (60) and `HUB_UPDATES_DEADLINE_SECONDS`
+    (20). `HUB_UPDATES_CHECK_ENABLED=0` remains the supported way to make an
+    install perform no outbound request at all.
+
 - **`tests/` had never been under phpcs, and the linter check was green the
   whole time (S299).** Measured 2026-08-10 at `f4ab19f`: `phpcs.xml.dist` named
   only `src` and `scripts`, and the CI step ran phpcs with an explicit PSR12
