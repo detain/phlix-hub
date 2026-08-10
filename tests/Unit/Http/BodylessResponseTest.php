@@ -28,7 +28,21 @@ use function substr_count;
  * socket — never on the builder's header array, because the defect lived
  * entirely in the encoder.
  *
+ * S302 — the second entry in the class-level annotation below, naming
+ * `Phlix\Hub\Http\Response`, is deliberate. Two of the cases here drive the
+ * builder (`Response::headOnly()` → `toWorkermanResponse()`), and that annotation
+ * DISCARDS every executed line outside the units it names: with only the
+ * `BodylessResponse` entry, those lines ran on every single run and were still
+ * reported as `0.00%` covered, which is how codecov came to name six "missing"
+ * lines that the suite in fact executes. Naming both classes credits what the
+ * file really exercises.
+ *
+ * ⚠ Never write that annotation's name in prose, even in backticks — PHPUnit
+ * reads it wherever it appears, the surrounding punctuation lands in the value,
+ * and an invalid entry discards this file's coverage completely.
+ *
  * @covers \Phlix\Hub\Http\BodylessResponse
+ * @covers \Phlix\Hub\Http\Response
  */
 final class BodylessResponseTest extends TestCase
 {
@@ -191,5 +205,180 @@ final class BodylessResponseTest extends TestCase
 
         $this->assertFalse($response->headOnly);
         $this->assertNotInstanceOf(BodylessResponse::class, $response->toWorkermanResponse());
+    }
+
+    // -----------------------------------------------------------------------
+    // S302 — the header-rendering branches the S247 suite never entered.
+    //
+    // Each row below closes a specific line of the re-implemented emission loop.
+    // They matter because that loop is a HAND COPY of the parent's: any branch of
+    // it that no test enters is a place the copy can drift from the original
+    // without the drift being visible, and header emission is where a drift
+    // becomes a header-injection hole rather than a wrong byte count.
+    // -----------------------------------------------------------------------
+
+    /**
+     * A caller-set reason phrase is emitted instead of the standard one.
+     *
+     * The parent uses `?:`, which cannot distinguish an unset reason from `''`;
+     * this class uses a strict test so that `''` still falls back to the standard
+     * phrase. Only the "reason is present and non-empty" leg was unentered.
+     */
+    public function testACustomReasonPhraseIsEmittedInsteadOfTheStandardOne(): void
+    {
+        $rendered = (string) (new BodylessResponse(200, ['Content-Length' => '10'], ''))
+            ->withStatus(200, 'Totally Fine');
+
+        $this->assertSame(
+            "HTTP/1.1 200 Totally Fine\r\n"
+            . "Content-Length: 10\r\n"
+            . "Connection: keep-alive\r\n"
+            . "Content-Type: text/html;charset=utf-8\r\n"
+            . "\r\n",
+            $rendered,
+        );
+    }
+
+    /**
+     * An empty reason phrase falls back to the standard one, as an unset one
+     * does — the reason the strict test exists at all.
+     */
+    public function testAnEmptyReasonPhraseFallsBackToTheStandardPhrase(): void
+    {
+        $rendered = (string) (new BodylessResponse(200, ['Content-Length' => '10'], ''))
+            ->withStatus(200, '');
+
+        $this->assertStringStartsWith("HTTP/1.1 200 OK\r\n", $rendered);
+    }
+
+    /**
+     * A header NAME carrying a colon or CRLF is skipped, exactly as the parent
+     * skips it. This is the field-name half of the injection guard; the value
+     * half is covered above.
+     */
+    public function testAnUnsafeHeaderFieldNameIsSkippedExactlyAsTheParentSkipsIt(): void
+    {
+        $headers = ['Content-Length' => '10', 'X-Bad: name' => 'v', 'Content-Type' => 'video/mp4'];
+
+        $rendered = (string) new BodylessResponse(200, $headers, '');
+        $parent = (string) new WorkermanResponse(200, $headers, '');
+
+        $this->assertSame(
+            "HTTP/1.1 200 OK\r\n"
+            . "Content-Length: 10\r\n"
+            . "Content-Type: video/mp4\r\n"
+            . "Connection: keep-alive\r\n"
+            . "\r\n",
+            $rendered,
+        );
+        $this->assertStringNotContainsString(
+            'X-Bad',
+            $parent,
+            'CONTROL: the parent drops this field name too — the subclass is matching it, not '
+            . 'inventing a stricter rule of its own',
+        );
+    }
+
+    /**
+     * An array-valued header emits one field line per entry, in order — the
+     * shape `WorkermanResponse::cookie()` produces for a second cookie.
+     */
+    public function testAnArrayValuedHeaderEmitsOneFieldLinePerEntry(): void
+    {
+        $rendered = (string) new BodylessResponse(
+            200,
+            ['Content-Length' => '10', 'Content-Type' => 'video/mp4', 'X-Multi' => ['one', 'two']],
+            '',
+        );
+
+        $this->assertSame(
+            "HTTP/1.1 200 OK\r\n"
+            . "Content-Length: 10\r\n"
+            . "Content-Type: video/mp4\r\n"
+            . "X-Multi: one\r\n"
+            . "X-Multi: two\r\n"
+            . "Connection: keep-alive\r\n"
+            . "\r\n",
+            $rendered,
+        );
+    }
+
+    /**
+     * Inside an array-valued header, an unsafe entry is dropped INDIVIDUALLY —
+     * the safe siblings still go out. Dropping the whole field, or emitting the
+     * unsafe entry, would both be wrong; only a per-entry test tells them apart.
+     *
+     * The `stdClass` entry additionally proves the subclass is SAFER than the
+     * parent here: the parent casts each entry with `(string)`, which raises an
+     * `Error` on an object with no `__toString()`, whereas this renderer returns
+     * null and skips it.
+     */
+    public function testAnUnsafeEntryInsideAnArrayValuedHeaderIsDroppedIndividually(): void
+    {
+        $rendered = (string) new BodylessResponse(
+            200,
+            [
+                'Content-Length' => '10',
+                'Content-Type'   => 'video/mp4',
+                'X-Multi'        => ['ok', "bad\r\nX-Injected: yes", new \stdClass()],
+            ],
+            '',
+        );
+
+        $this->assertSame(
+            "HTTP/1.1 200 OK\r\n"
+            . "Content-Length: 10\r\n"
+            . "Content-Type: video/mp4\r\n"
+            . "X-Multi: ok\r\n"
+            . "Connection: keep-alive\r\n"
+            . "\r\n",
+            $rendered,
+        );
+        $this->assertStringNotContainsString('X-Injected', $rendered);
+    }
+
+    /**
+     * Non-string header values render: ints, floats, bools and `Stringable`.
+     *
+     * `Response::header()` only accepts strings, but the parent's header map is
+     * untyped `array` and Workerman itself writes an int into it, so the renderer
+     * has to handle the shapes the framework can produce, not only the ones the
+     * hub's own builder produces.
+     */
+    public function testNonStringScalarAndStringableHeaderValuesAreRendered(): void
+    {
+        $stringable = new class implements \Stringable {
+            public function __toString(): string
+            {
+                return 'sv';
+            }
+        };
+
+        $rendered = (string) new BodylessResponse(
+            200,
+            [
+                'Content-Length' => 10,
+                'Content-Type'   => 'video/mp4',
+                'X-Int'          => 7,
+                'X-Bool'         => true,
+                'X-Float'        => 1.5,
+                'X-Str'          => $stringable,
+            ],
+            '',
+        );
+
+        $this->assertSame(
+            "HTTP/1.1 200 OK\r\n"
+            . "Content-Length: 10\r\n"
+            . "Content-Type: video/mp4\r\n"
+            . "X-Int: 7\r\n"
+            . "X-Bool: 1\r\n"
+            . "X-Float: 1.5\r\n"
+            . "X-Str: sv\r\n"
+            . "Connection: keep-alive\r\n"
+            . "\r\n",
+            $rendered,
+            'an integer Content-Length must still be treated as authoritative and rendered once',
+        );
     }
 }
