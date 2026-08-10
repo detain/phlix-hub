@@ -37,7 +37,6 @@ use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\Connection\TcpConnection;
-
 use Workerman\MySQL\Connection;
 
 use function array_keys;
@@ -75,7 +74,7 @@ final class McpControllerTest extends TestCase
     // Authentication
     // ------------------------------------------------------------------
 
-    public function test_a_request_without_a_bearer_token_is_401(): void
+    public function testARequestWithoutABearerTokenIs401(): void
     {
         $response = $this->controller()->handle($this->request('{"jsonrpc":"2.0","id":1,"method":"ping"}'));
 
@@ -88,7 +87,7 @@ final class McpControllerTest extends TestCase
      * A credential-less flood must not mint limiter buckets — the 401 above has
      * to be cheaper than a limiter write, or the limiter becomes the amplifier.
      */
-    public function test_a_missing_credential_does_not_touch_the_rate_limiter(): void
+    public function testAMissingCredentialDoesNotTouchTheRateLimiter(): void
     {
         $limiter = $this->createMock(RateLimiterInterface::class);
         $limiter->expects(self::never())->method('peek');
@@ -99,7 +98,7 @@ final class McpControllerTest extends TestCase
         self::assertSame(401, $response->statusCode);
     }
 
-    public function test_an_unknown_token_is_401_and_counts_against_the_limiter(): void
+    public function testAnUnknownTokenIs401AndCountsAgainstTheLimiter(): void
     {
         $limiter = $this->createMock(RateLimiterInterface::class);
         $limiter->method('peek')->willReturn(new RateLimitState(0, 10, 0, false, 10));
@@ -118,7 +117,7 @@ final class McpControllerTest extends TestCase
      * ...and a SUCCESSFUL call resets the bucket instead of consuming it, which
      * is login's behaviour and the reason a busy agent never locks itself out.
      */
-    public function test_a_valid_token_resets_the_limiter_and_never_hits_it(): void
+    public function testAValidTokenResetsTheLimiterAndNeverHitsIt(): void
     {
         $limiter = $this->createMock(RateLimiterInterface::class);
         $limiter->method('peek')->willReturn(new RateLimitState(0, 10, 0, false, 10));
@@ -131,7 +130,7 @@ final class McpControllerTest extends TestCase
         self::assertSame(200, $response->statusCode);
     }
 
-    public function test_an_exhausted_window_throws_the_shared_rate_limit_exception(): void
+    public function testAnExhaustedWindowThrowsTheSharedRateLimitException(): void
     {
         $limiter = $this->createMock(RateLimiterInterface::class);
         $limiter->method('peek')->willReturn(
@@ -148,7 +147,7 @@ final class McpControllerTest extends TestCase
      * JWT presented here is a configuration mistake, not an attack, and the
      * 401 should be actionable.
      */
-    public function test_a_non_mcp_credential_is_told_which_credential_it_needs(): void
+    public function testANonMcpCredentialIsToldWhichCredentialItNeeds(): void
     {
         $response = $this->controller(validToken: null)
             ->handle($this->request('{}', 'eyJhbGciOiJIUzI1NiJ9.not-an-mcp-token'));
@@ -163,7 +162,7 @@ final class McpControllerTest extends TestCase
     // JSON-RPC envelope
     // ------------------------------------------------------------------
 
-    public function test_malformed_json_is_a_parse_error(): void
+    public function testMalformedJsonIsAParseError(): void
     {
         $response = $this->controller()->handle($this->request('{not json', self::GOOD_TOKEN));
 
@@ -182,7 +181,7 @@ final class McpControllerTest extends TestCase
      * branch this would be reported as malformed JSON, which sends the client
      * looking for a syntax mistake in a body it never sent.
      */
-    public function test_an_empty_body_is_a_named_invalid_request(): void
+    public function testAnEmptyBodyIsANamedInvalidRequest(): void
     {
         $body = self::body($this->controller()->handle($this->request('', self::GOOD_TOKEN)));
 
@@ -197,7 +196,7 @@ final class McpControllerTest extends TestCase
      * A request that HAS an `id` but no `method` is answered with an error that
      * echoes that id — the client is waiting on it.
      */
-    public function test_a_request_without_a_method_is_an_invalid_request_that_echoes_its_id(): void
+    public function testARequestWithoutAMethodIsAnInvalidRequestThatEchoesItsId(): void
     {
         $body = self::body($this->controller()->handle(
             $this->request('{"jsonrpc":"2.0","id":11}', self::GOOD_TOKEN),
@@ -220,7 +219,7 @@ final class McpControllerTest extends TestCase
      * `id`-presence branch is what decides, rather than "everything without a
      * method is silently accepted".
      */
-    public function test_a_methodless_notification_is_silently_accepted(): void
+    public function testAMethodlessNotificationIsSilentlyAccepted(): void
     {
         $response = $this->controller()->handle(
             $this->request('{"jsonrpc":"2.0"}', self::GOOD_TOKEN),
@@ -230,14 +229,14 @@ final class McpControllerTest extends TestCase
         self::assertSame('', $response->body);
     }
 
-    public function test_a_json_scalar_body_is_an_invalid_request(): void
+    public function testAJsonScalarBodyIsAnInvalidRequest(): void
     {
         $response = $this->controller()->handle($this->request('"hello"', self::GOOD_TOKEN));
 
         self::assertSame(JsonRpc::INVALID_REQUEST, self::errorCode(self::body($response)));
     }
 
-    public function test_a_batch_is_refused_by_name(): void
+    public function testABatchIsRefusedByName(): void
     {
         $batch = '[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","id":2,"method":"ping"}]';
 
@@ -250,7 +249,7 @@ final class McpControllerTest extends TestCase
         self::assertStringContainsString('Batched', $error['message']);
     }
 
-    public function test_an_oversized_body_is_refused_before_being_parsed(): void
+    public function testAnOversizedBodyIsRefusedBeforeBeingParsed(): void
     {
         $huge = '{"jsonrpc":"2.0","id":1,"method":"ping","padding":"' . str_repeat('x', 300000) . '"}';
 
@@ -259,7 +258,7 @@ final class McpControllerTest extends TestCase
         self::assertSame(JsonRpc::INVALID_REQUEST, self::errorCode($body));
     }
 
-    public function test_an_unknown_method_is_method_not_found(): void
+    public function testAnUnknownMethodIsMethodNotFound(): void
     {
         $body = self::body($this->controller()->handle(
             $this->request('{"jsonrpc":"2.0","id":7,"method":"resources/list"}', self::GOOD_TOKEN),
@@ -273,7 +272,7 @@ final class McpControllerTest extends TestCase
      * A notification (no `id`) gets an empty 202 and NEVER a body — a client
      * that gets one would wait for a reply that JSON-RPC forbids.
      */
-    public function test_a_notification_gets_an_empty_202(): void
+    public function testANotificationGetsAnEmpty202(): void
     {
         $response = $this->controller()->handle(
             $this->request('{"jsonrpc":"2.0","method":"notifications/initialized"}', self::GOOD_TOKEN),
@@ -287,7 +286,7 @@ final class McpControllerTest extends TestCase
      * ...including a notification naming a method that does not exist: still no
      * body, because §4.1 says a notification is never answered.
      */
-    public function test_a_notification_for_an_unknown_method_is_still_silent(): void
+    public function testANotificationForAnUnknownMethodIsStillSilent(): void
     {
         $response = $this->controller()->handle(
             $this->request('{"jsonrpc":"2.0","method":"nonsense/does-not-exist"}', self::GOOD_TOKEN),
@@ -312,7 +311,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider badJsonRpcMemberProvider
      */
-    public function test_a_bad_jsonrpc_member_is_an_invalid_request(string $body): void
+    public function testABadJsonrpcMemberIsAnInvalidRequest(string $body): void
     {
         $decoded = self::body($this->controller()->handle($this->request($body, self::GOOD_TOKEN)));
 
@@ -350,7 +349,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider badIdProvider
      */
-    public function test_an_id_that_is_not_a_string_or_integer_is_an_invalid_request(string $idJson): void
+    public function testAnIdThatIsNotAStringOrIntegerIsAnInvalidRequest(string $idJson): void
     {
         $decoded = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":' . $idJson . ',"method":"ping"}',
@@ -388,7 +387,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider usableIdProvider
      */
-    public function test_a_usable_id_is_echoed_verbatim(string $idJson, string|int|null $expected): void
+    public function testAUsableIdIsEchoedVerbatim(string $idJson, string|int|null $expected): void
     {
         $decoded = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":' . $idJson . ',"method":"ping"}',
@@ -424,7 +423,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider malformedNotificationProvider
      */
-    public function test_a_malformed_notification_is_still_answered_with_silence(string $body): void
+    public function testAMalformedNotificationIsStillAnsweredWithSilence(string $body): void
     {
         $response = $this->controller()->handle($this->request($body, self::GOOD_TOKEN));
 
@@ -449,7 +448,7 @@ final class McpControllerTest extends TestCase
      * A POSITIONAL `params` is refused for its own sake, on a method that has no
      * required member to fall back on.
      *
-     * ⚠ `test_positional_params_cannot_name_a_tool()` looks like it covers this
+     * ⚠ `testPositionalParamsCannotNameATool()` looks like it covers this
      * and does NOT: `tools/call` also requires `name`, so removing the
      * positional check entirely still yields `INVALID_PARAMS` from the missing
      * `name`, by a different branch. Mutation M26 survived on exactly that.
@@ -457,7 +456,7 @@ final class McpControllerTest extends TestCase
      * positional refusal is the sole thing that can say no — which is why the
      * error `data.field` is asserted too.
      */
-    public function test_positional_params_are_refused_even_when_nothing_else_would_object(): void
+    public function testPositionalParamsAreRefusedEvenWhenNothingElseWouldObject(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":31,"method":"tools/list","params":["cursor-1"]}',
@@ -477,7 +476,7 @@ final class McpControllerTest extends TestCase
      * PHP — is NOT refused. Without this, refusing every array would satisfy the
      * test above while breaking `tools/list` for every client that sends `{}`.
      */
-    public function test_an_empty_params_object_is_not_mistaken_for_a_positional_array(): void
+    public function testAnEmptyParamsObjectIsNotMistakenForAPositionalArray(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":32,"method":"tools/list","params":{}}',
@@ -498,7 +497,7 @@ final class McpControllerTest extends TestCase
      * name. Two DIFFERENT refusals for two different mistakes, not one refusal
      * spelled twice.
      */
-    public function test_an_unknown_method_with_unusable_params_reports_the_method(): void
+    public function testAnUnknownMethodWithUnusableParamsReportsTheMethod(): void
     {
         $decoded = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":9,"method":"resources/list","params":"not-an-object"}',
@@ -512,7 +511,7 @@ final class McpControllerTest extends TestCase
      * ...while a KNOWN method with the same unusable params IS `INVALID_PARAMS`.
      * The pair proves the method-known check is what decides.
      */
-    public function test_a_known_method_with_unusable_params_is_invalid_params(): void
+    public function testAKnownMethodWithUnusableParamsIsInvalidParams(): void
     {
         $decoded = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":9,"method":"tools/list","params":"not-an-object"}',
@@ -546,7 +545,7 @@ final class McpControllerTest extends TestCase
      * Do not "simplify" this test to `assertSame([], $body['result'])`. That
      * assertion passes against the broken code.
      */
-    public function test_an_empty_result_encodes_as_a_json_object(): void
+    public function testAnEmptyResultEncodesAsAJsonObject(): void
     {
         $response = $this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"ping"}',
@@ -571,7 +570,7 @@ final class McpControllerTest extends TestCase
      * blind spot as the result above: decoding cannot see it, so the assertion
      * is on the raw body.
      */
-    public function test_an_empty_tool_payload_encodes_as_a_json_object(): void
+    public function testAnEmptyToolPayloadEncodesAsAJsonObject(): void
     {
         $probe = new RecordingMcpTool();
         $probe->payload = [];
@@ -597,7 +596,7 @@ final class McpControllerTest extends TestCase
      * Without this, "wrap everything in an object" would satisfy the test above
      * while turning `tools` into `{"0":…}` and breaking every client.
      */
-    public function test_a_list_inside_a_result_is_still_a_json_array(): void
+    public function testAListInsideAResultIsStillAJsonArray(): void
     {
         $response = $this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
@@ -621,7 +620,7 @@ final class McpControllerTest extends TestCase
      * The assertion is on `_meta` specifically: asserting "the scope appears
      * somewhere in the JSON" would be satisfied by the stripped field alone.
      */
-    public function test_every_tool_descriptor_publishes_its_scope_in_meta(): void
+    public function testEveryToolDescriptorPublishesItsScopeInMeta(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
@@ -651,7 +650,7 @@ final class McpControllerTest extends TestCase
     // S63: GET /mcp — the SSE transport
     // ------------------------------------------------------------------
 
-    public function test_the_sse_stream_requires_a_token(): void
+    public function testTheSseStreamRequiresAToken(): void
     {
         $response = $this->controller()->stream(
             $this->getRequest(null, ['ACCEPT' => 'text/event-stream']),
@@ -666,7 +665,7 @@ final class McpControllerTest extends TestCase
      * A stream costs the SAME limiter budget as a POST — it is not a second,
      * fresh bucket a token guesser could work through.
      */
-    public function test_an_invalid_token_on_the_sse_stream_counts_against_the_same_bucket(): void
+    public function testAnInvalidTokenOnTheSseStreamCountsAgainstTheSameBucket(): void
     {
         $limiter = $this->createMock(RateLimiterInterface::class);
         $limiter->method('peek')->willReturn(new RateLimitState(0, 10, 0, false, 10));
@@ -692,7 +691,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider unacceptableAcceptProvider
      */
-    public function test_a_get_without_an_event_stream_accept_is_406(?string $accept): void
+    public function testAGetWithoutAnEventStreamAcceptIs406(?string $accept): void
     {
         $headers = $accept === null ? [] : ['ACCEPT' => $accept];
 
@@ -723,7 +722,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider acceptableAcceptProvider
      */
-    public function test_a_get_with_an_event_stream_accept_opens_a_stream(string $accept): void
+    public function testAGetWithAnEventStreamAcceptOpensAStream(string $accept): void
     {
         $response = $this->controller()->stream(
             $this->getRequest(self::GOOD_TOKEN, ['ACCEPT' => $accept]),
@@ -751,7 +750,7 @@ final class McpControllerTest extends TestCase
      * against a connection and reading the bytes, not by checking a callable is
      * non-null.
      */
-    public function test_the_stream_producer_writes_a_real_sse_head(): void
+    public function testTheStreamProducerWritesARealSseHead(): void
     {
         $timers = new RecordingStreamTimers();
         $response = $this->controller(timers: $timers)->stream(
@@ -781,7 +780,7 @@ final class McpControllerTest extends TestCase
      * before the transport is considered — the same 400 the POST gives, so the
      * two verbs cannot disagree about which revisions the hub speaks.
      */
-    public function test_the_sse_stream_honours_the_protocol_version_header(): void
+    public function testTheSseStreamHonoursTheProtocolVersionHeader(): void
     {
         $response = $this->controller()->stream($this->getRequest(self::GOOD_TOKEN, [
             'ACCEPT' => 'text/event-stream',
@@ -797,7 +796,7 @@ final class McpControllerTest extends TestCase
     // MCP methods
     // ------------------------------------------------------------------
 
-    public function test_initialize_reports_the_protocol_version_and_server_info(): void
+    public function testInitializeReportsTheProtocolVersionAndServerInfo(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}',
@@ -833,7 +832,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider supportedRevisionProvider
      */
-    public function test_a_supported_revision_is_echoed_back(string $revision): void
+    public function testASupportedRevisionIsEchoedBack(string $revision): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'
@@ -872,7 +871,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider unsupportedRevisionProvider
      */
-    public function test_an_unsupported_revision_is_downgraded_and_declared(string $revision): void
+    public function testAnUnsupportedRevisionIsDowngradedAndDeclared(string $revision): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'
@@ -916,7 +915,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider unusableProtocolVersionProvider
      */
-    public function test_a_protocol_version_of_the_wrong_type_is_invalid_params(string $json): void
+    public function testAProtocolVersionOfTheWrongTypeIsInvalidParams(string $json): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":' . $json . '}}',
@@ -951,7 +950,7 @@ final class McpControllerTest extends TestCase
      * ...and an `initialize` with NO `protocolVersion` at all is refused too.
      * It is the one field the handshake cannot proceed without.
      */
-    public function test_initialize_without_a_protocol_version_is_invalid_params(): void
+    public function testInitializeWithoutAProtocolVersionIsInvalidParams(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
@@ -972,7 +971,7 @@ final class McpControllerTest extends TestCase
      * already agreed, so quietly answering in a different one would be
      * re-negotiating mid-session behind the client's back.
      */
-    public function test_an_unsupported_protocol_version_header_is_a_400(): void
+    public function testAnUnsupportedProtocolVersionHeaderIsA400(): void
     {
         $response = $this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"ping"}',
@@ -995,7 +994,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider supportedRevisionProvider
      */
-    public function test_a_supported_protocol_version_header_is_accepted(string $revision): void
+    public function testASupportedProtocolVersionHeaderIsAccepted(string $revision): void
     {
         $response = $this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"ping"}',
@@ -1012,7 +1011,7 @@ final class McpControllerTest extends TestCase
      * `2025-03-26`, so its absence cannot mean "unsupported" — it means the
      * client predates the header, and the spec names the revision to assume.
      */
-    public function test_an_absent_protocol_version_header_is_accepted(): void
+    public function testAnAbsentProtocolVersionHeaderIsAccepted(): void
     {
         $response = $this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"ping"}',
@@ -1032,7 +1031,7 @@ final class McpControllerTest extends TestCase
      * learns nothing from it — including whether the hub exists as an MCP server
      * at all.
      */
-    public function test_the_protocol_version_gate_does_not_pre_empt_the_401(): void
+    public function testTheProtocolVersionGateDoesNotPreEmptThe401(): void
     {
         $response = $this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":1,"method":"ping"}',
@@ -1043,7 +1042,7 @@ final class McpControllerTest extends TestCase
         self::assertSame(401, $response->statusCode);
     }
 
-    public function test_tools_list_names_every_registered_tool(): void
+    public function testToolsListNamesEveryRegisteredTool(): void
     {
         $body = self::body($this->controller()->handle(
             $this->request('{"jsonrpc":"2.0","id":2,"method":"tools/list"}', self::GOOD_TOKEN),
@@ -1068,7 +1067,7 @@ final class McpControllerTest extends TestCase
         );
     }
 
-    public function test_tools_call_runs_the_tool_and_returns_an_mcp_result(): void
+    public function testToolsCallRunsTheToolAndReturnsAnMcpResult(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_servers","arguments":{}}}',
@@ -1091,7 +1090,7 @@ final class McpControllerTest extends TestCase
      * error: the call worked, the answer was "no", and the model needs to read
      * the reason.
      */
-    public function test_a_refused_tool_call_is_an_error_result_not_a_transport_error(): void
+    public function testARefusedToolCallIsAnErrorResultNotATransportError(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":'
@@ -1108,7 +1107,7 @@ final class McpControllerTest extends TestCase
         self::assertSame('server.not_found', $structured['code'] ?? null);
     }
 
-    public function test_an_unknown_tool_name_is_reported_as_an_error_result(): void
+    public function testAnUnknownToolNameIsReportedAsAnErrorResult(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"drop_database","arguments":{}}}',
@@ -1123,7 +1122,7 @@ final class McpControllerTest extends TestCase
         self::assertSame('mcp.unknown_tool', $structured['code'] ?? null);
     }
 
-    public function test_missing_tool_arguments_are_invalid_params(): void
+    public function testMissingToolArgumentsAreInvalidParams(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_libraries","arguments":{}}}',
@@ -1133,7 +1132,7 @@ final class McpControllerTest extends TestCase
         self::assertSame(JsonRpc::INVALID_PARAMS, self::errorCode($body));
     }
 
-    public function test_tools_call_without_a_name_is_invalid_params(): void
+    public function testToolsCallWithoutANameIsInvalidParams(): void
     {
         $body = self::body($this->controller()->handle($this->request(
             '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}',
@@ -1146,7 +1145,7 @@ final class McpControllerTest extends TestCase
     /**
      * The token's scopes gate the call, and a narrow token stays narrow.
      */
-    public function test_a_narrow_token_cannot_call_a_tool_outside_its_scopes(): void
+    public function testANarrowTokenCannotCallAToolOutsideItsScopes(): void
     {
         $narrow = new McpToken('row-1', self::USER_A, [McpScopes::SERVERS_READ]);
 
@@ -1169,7 +1168,7 @@ final class McpControllerTest extends TestCase
      * one scope covers. Without this, a blanket "everything is denied" bug would
      * look identical to working scope enforcement.
      */
-    public function test_the_same_narrow_token_can_still_call_the_tool_it_is_scoped_for(): void
+    public function testTheSameNarrowTokenCanStillCallTheToolItIsScopedFor(): void
     {
         $narrow = new McpToken('row-1', self::USER_A, [McpScopes::SERVERS_READ]);
 
@@ -1198,7 +1197,7 @@ final class McpControllerTest extends TestCase
      * because the filter works — the classic vacuous green — so the vector is
      * asserted here rather than assumed.
      */
-    public function test_a_json_object_really_can_produce_an_integer_key(): void
+    public function testAJsonObjectReallyCanProduceAnIntegerKey(): void
     {
         /** @var mixed $decoded */
         $decoded = json_decode('{"0":"positional","server_id":"srv-1"}', true);
@@ -1227,7 +1226,7 @@ final class McpControllerTest extends TestCase
      *
      * Removing the filter (or its `ARRAY_FILTER_USE_KEY` flag) reds this test.
      */
-    public function test_a_positional_key_in_the_arguments_map_never_reaches_a_tool(): void
+    public function testAPositionalKeyInTheArgumentsMapNeverReachesATool(): void
     {
         $probe = new RecordingMcpTool();
 
@@ -1266,7 +1265,7 @@ final class McpControllerTest extends TestCase
      * production. The pin asserts what must be dropped; this asserts what must
      * not be.
      */
-    public function test_a_string_keyed_arguments_map_reaches_the_tool_intact(): void
+    public function testAStringKeyedArgumentsMapReachesTheToolIntact(): void
     {
         $probe = new RecordingMcpTool();
 
@@ -1293,7 +1292,7 @@ final class McpControllerTest extends TestCase
      * number and `null` all reached the tool as `[]`, and the tool then reported
      * a missing argument. S63's schema validation refuses the first three at the
      * envelope, with `INVALID_PARAMS` naming `arguments` — see
-     * {@see test_arguments_that_are_not_an_object_are_invalid_params()}, which
+     * {@see testArgumentsThatAreNotAnObjectAreInvalidParams()}, which
      * is where those three rows went. That is a better answer: the client's
      * mistake is the SHAPE of `arguments`, and "server_id is required" sends it
      * looking at the wrong field.
@@ -1305,7 +1304,7 @@ final class McpControllerTest extends TestCase
      * production. Without it that branch would still be live code that nothing
      * runs.
      */
-    public function test_explicit_null_arguments_arrive_at_the_tool_as_an_empty_map(): void
+    public function testExplicitNullArgumentsArriveAtTheToolAsAnEmptyMap(): void
     {
         $probe = new RecordingMcpTool();
 
@@ -1324,7 +1323,7 @@ final class McpControllerTest extends TestCase
      * client uses for a no-argument tool. Same branch, different spelling; both
      * are pinned so a future `?? []` default cannot quietly orphan it.
      */
-    public function test_omitted_arguments_arrive_at_the_tool_as_an_empty_map(): void
+    public function testOmittedArgumentsArriveAtTheToolAsAnEmptyMap(): void
     {
         $probe = new RecordingMcpTool();
 
@@ -1346,7 +1345,7 @@ final class McpControllerTest extends TestCase
      *
      * @dataProvider unusableArgumentsProvider
      */
-    public function test_arguments_that_are_not_an_object_are_invalid_params(string $argumentsJson): void
+    public function testArgumentsThatAreNotAnObjectAreInvalidParams(string $argumentsJson): void
     {
         $probe = new RecordingMcpTool();
 
@@ -1393,7 +1392,7 @@ final class McpControllerTest extends TestCase
      * lookups. The `arguments` call site is the one that hands its map onward,
      * and that is where the pin sits.
      */
-    public function test_positional_params_cannot_name_a_tool(): void
+    public function testPositionalParamsCannotNameATool(): void
     {
         $probe = new RecordingMcpTool();
 

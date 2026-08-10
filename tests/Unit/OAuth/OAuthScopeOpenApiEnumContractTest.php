@@ -131,7 +131,11 @@ final class OAuthScopeOpenApiEnumContractTest extends TestCase
         self::assertGreaterThanOrEqual(
             self::ERROR_FLOOR,
             count($enum),
-            sprintf('FLOOR: OAuthErrorResponse.error must carry at least %d members; read %d.', self::ERROR_FLOOR, count($enum)),
+            sprintf(
+                'FLOOR: OAuthErrorResponse.error must carry at least %d members; read %d.',
+                self::ERROR_FLOOR,
+                count($enum)
+            ),
         );
         self::assertGreaterThanOrEqual(
             self::ERROR_FLOOR,

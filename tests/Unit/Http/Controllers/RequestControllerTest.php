@@ -73,7 +73,12 @@ final class RequestControllerTest extends TestCase
             ->willReturn($this->row(['id' => 'r1', 'user_id' => 'u1', 'title' => 'The Movie', 'tmdb_id' => 42]));
         $this->notification->expects(self::once())->method('notifySubmitted');
 
-        $req = $this->request('POST', '/api/v1/me/requests', userId: 'u1', body: ['type' => 'movie', 'tmdb_id' => 42, 'title' => 'The Movie']);
+        $req = $this->request(
+            'POST',
+            '/api/v1/me/requests',
+            userId: 'u1',
+            body: ['type' => 'movie', 'tmdb_id' => 42, 'title' => 'The Movie']
+        );
         $response = $this->controller->createRequest($req, []);
 
         self::assertSame(201, $response->statusCode);
@@ -133,7 +138,11 @@ final class RequestControllerTest extends TestCase
     public function testApproveRequestReturns200OnSuccess(): void
     {
         $this->users->method('findAdminById')->willReturn(['id' => 'u1', 'is_admin' => 1]);
-        $this->manager->method('getRequestById')->willReturn($this->row(['id' => 'r1', 'user_id' => 'u2', 'title' => 'X']));
+        $this->manager->method('getRequestById')->willReturn($this->row([
+            'id' => 'r1',
+            'user_id' => 'u2',
+            'title' => 'X'
+        ]));
         $this->manager->method('approveRequest')->willReturn(true);
         $this->notification->expects(self::once())->method('notifyApproved')->with('u2', 'X');
         $req = $this->request('POST', '/api/v1/admin/requests/r1/approve', userId: 'u1');
@@ -152,7 +161,11 @@ final class RequestControllerTest extends TestCase
     public function testDenyRequestReturns200OnSuccess(): void
     {
         $this->users->method('findAdminById')->willReturn(['id' => 'u1', 'is_admin' => 1]);
-        $this->manager->method('getRequestById')->willReturn($this->row(['id' => 'r1', 'user_id' => 'u2', 'title' => 'X']));
+        $this->manager->method('getRequestById')->willReturn($this->row([
+            'id' => 'r1',
+            'user_id' => 'u2',
+            'title' => 'X'
+        ]));
         $this->manager->method('rejectRequest')->willReturn(true);
         $this->notification->expects(self::once())->method('notifyRejected')->with('u2', 'X', 'nope');
         $req = $this->request('POST', '/api/v1/admin/requests/r1/deny', userId: 'u1', body: ['reason' => 'nope']);

@@ -10,7 +10,7 @@ php bin/phlix migrate          # apply migrations/*.sql via MigrationRunner
 ./vendor/bin/phpunit           # PHPUnit 10
 ./vendor/bin/phpstan analyze --no-progress   # level 9, no baseline
 ./vendor/bin/psalm --no-progress             # errorLevel 1
-./vendor/bin/phpcs --standard=PSR12 src/     # PSR-12
+php scripts/assert-phpcs-corpus.php            # S299: PSR-12 over src+scripts+tests, with an asserted file count
 composer validate --strict
 php scripts/security-audit-check.php          # S246: audits runtime AND require-dev, prints the corpus
 cd web-ui && npm install && npm run build     # Vite SPA -> public/assets/app/

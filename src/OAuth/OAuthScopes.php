@@ -40,7 +40,7 @@ use function trim;
  *  - every member of {@see McpScopes::all()}, re-exported verbatim.
  *
  * That second clause is the load-bearing one and it is pinned by
- * `OAuthScopesTest::test_every_mcp_scope_is_grantable_over_oauth()`. An MCP
+ * `OAuthScopesTest::testEveryMcpScopeIsGrantableOverOauth()`. An MCP
  * client that migrates from a PAT to an OAuth authorization-code grant asks for
  * the SAME scope strings it asks for today, and
  * {@see \Phlix\Hub\Mcp\McpToolRegistry::call()} — which compares against

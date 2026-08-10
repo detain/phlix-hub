@@ -121,7 +121,7 @@ final class McpContainerWiringTest extends TestCase
      * This is the DEFAULT-OFF assertion, and it is written against an
      * unconfigured container on purpose — the state a fresh deployment is in.
      */
-    public function test_the_container_publishes_only_read_tools_when_the_flag_is_absent(): void
+    public function testTheContainerPublishesOnlyReadToolsWhenTheFlagIsAbsent(): void
     {
         $registry = $this->container()->get(McpToolRegistry::class);
         self::assertInstanceOf(McpToolRegistry::class, $registry);
@@ -147,7 +147,7 @@ final class McpContainerWiringTest extends TestCase
      *
      * @dataProvider notTrueProvider
      */
-    public function test_a_flag_value_that_is_not_exactly_true_leaves_the_tool_unregistered(mixed $value): void
+    public function testAFlagValueThatIsNotExactlyTrueLeavesTheToolUnregistered(mixed $value): void
     {
         $registry = $this->container(playbackControl: $value)->get(McpToolRegistry::class);
         self::assertInstanceOf(McpToolRegistry::class, $registry);
@@ -185,7 +185,7 @@ final class McpContainerWiringTest extends TestCase
      * perfectly — the "off by default" tests would all be green and the feature
      * would not exist. This is what makes them mean "gated" rather than "absent".
      */
-    public function test_the_flag_publishes_the_playback_control_tool(): void
+    public function testTheFlagPublishesThePlaybackControlTool(): void
     {
         $registry = $this->container(playbackControl: true)->get(McpToolRegistry::class);
         self::assertInstanceOf(McpToolRegistry::class, $registry);
@@ -211,7 +211,7 @@ final class McpContainerWiringTest extends TestCase
      * device. The flag and the scope are independent gates and neither
      * substitutes for the other.
      */
-    public function test_the_published_playback_tool_requires_the_control_scope(): void
+    public function testThePublishedPlaybackToolRequiresTheControlScope(): void
     {
         $registry = $this->container(playbackControl: true)->get(McpToolRegistry::class);
         self::assertInstanceOf(McpToolRegistry::class, $registry);
@@ -230,7 +230,7 @@ final class McpContainerWiringTest extends TestCase
      * The SSE transport resolves from the container and carries the configured
      * timings — the same silent-default trap `mcp_token_ttl` has.
      */
-    public function test_the_sse_stream_resolves_with_its_configured_timings(): void
+    public function testTheSseStreamResolvesWithItsConfiguredTimings(): void
     {
         $stream = $this->container(sseKeepalive: 7, sseMax: 77)->get(McpSseStream::class);
         self::assertInstanceOf(McpSseStream::class, $stream);
@@ -242,7 +242,7 @@ final class McpContainerWiringTest extends TestCase
     /**
      * Control for the test above: unconfigured, the documented defaults arrive.
      */
-    public function test_an_unconfigured_sse_stream_uses_the_documented_defaults(): void
+    public function testAnUnconfiguredSseStreamUsesTheDocumentedDefaults(): void
     {
         $stream = $this->container()->get(McpSseStream::class);
         self::assertInstanceOf(McpSseStream::class, $stream);
@@ -267,7 +267,7 @@ final class McpContainerWiringTest extends TestCase
      * so the tool would be off even when the operator asked for it) equally
      * invisible. This reads the real file.
      */
-    public function test_the_shipped_config_defaults_the_flag_to_boolean_false(): void
+    public function testTheShippedConfigDefaultsTheFlagToBooleanFalse(): void
     {
         /** @var array<string, mixed> $config */
         $config = require dirname(__DIR__, 3) . '/config/server.php';
@@ -284,7 +284,7 @@ final class McpContainerWiringTest extends TestCase
      * `mcp_token_ttl` reaches {@see McpTokenService}, rather than the factory
      * quietly falling back to the 90-day default.
      */
-    public function test_the_configured_token_ttl_reaches_the_token_service(): void
+    public function testTheConfiguredTokenTtlReachesTheTokenService(): void
     {
         $service = $this->container()->get(McpTokenService::class);
         self::assertInstanceOf(McpTokenService::class, $service);
@@ -299,7 +299,7 @@ final class McpContainerWiringTest extends TestCase
      * ignored the config entirely would be indistinguishable from one that
      * honoured it if the default happened to match.
      */
-    public function test_an_absent_token_ttl_falls_back_to_the_documented_default(): void
+    public function testAnAbsentTokenTtlFallsBackToTheDocumentedDefault(): void
     {
         $service = $this->container(ttl: null)->get(McpTokenService::class);
         self::assertInstanceOf(McpTokenService::class, $service);
@@ -319,7 +319,7 @@ final class McpContainerWiringTest extends TestCase
      * A factory that constructed its own registry would publish a different tool
      * list from the one asserted above, and nothing else would notice.
      */
-    public function test_the_endpoint_resolves_and_shares_the_containers_registry(): void
+    public function testTheEndpointResolvesAndSharesTheContainersRegistry(): void
     {
         $container = $this->container();
 
@@ -341,7 +341,7 @@ final class McpContainerWiringTest extends TestCase
      * endpoint validates against — a mint on one and a validate on the other
      * have to agree about TTL and hashing.
      */
-    public function test_the_token_controller_resolves_over_the_same_token_service(): void
+    public function testTheTokenControllerResolvesOverTheSameTokenService(): void
     {
         $container = $this->container();
 
@@ -366,7 +366,7 @@ final class McpContainerWiringTest extends TestCase
      * hands the flag in by hand, so it proves the controller obeys the flag and
      * says nothing about the flag arriving.
      */
-    public function test_the_token_controller_hides_the_write_scope_when_the_flag_is_absent(): void
+    public function testTheTokenControllerHidesTheWriteScopeWhenTheFlagIsAbsent(): void
     {
         $controller = $this->container()->get(McpTokenController::class);
         self::assertInstanceOf(McpTokenController::class, $controller);
@@ -386,7 +386,7 @@ final class McpContainerWiringTest extends TestCase
      * both publishes `playback_control` and advertises `mcp:playback:control`.
      * One reader of the flag, one answer.
      */
-    public function test_the_token_controller_advertises_the_write_scope_when_the_flag_is_true(): void
+    public function testTheTokenControllerAdvertisesTheWriteScopeWhenTheFlagIsTrue(): void
     {
         $container = $this->container(playbackControl: true);
 

@@ -45,7 +45,10 @@ final class SignupLoginFlowTest extends RealDatabaseTestCase
     {
         parent::setUp();
 
-        $loggerConfig = ['handlers' => ['stream' => ['type' => 'stream', 'path' => 'php://memory', 'level' => 'debug']], 'processors' => []];
+        $loggerConfig = [
+            'handlers' => ['stream' => ['type' => 'stream', 'path' => 'php://memory', 'level' => 'debug']],
+            'processors' => []
+        ];
         $logger = new StructuredLogger('test', $loggerConfig);
         $auditLogger = new StructuredLogger('test-audit', $loggerConfig);
 

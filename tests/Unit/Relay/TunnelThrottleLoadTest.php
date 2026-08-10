@@ -109,7 +109,7 @@ final class TunnelThrottleLoadTest extends TestCase
      * A's cap must not leak onto B or C, and the shared server tunnel must never
      * be paused.
      */
-    public function test_each_channel_realises_its_own_cap_on_one_shared_server_tunnel(): void
+    public function testEachChannelRealisesItsOwnCapOnOneSharedServerTunnel(): void
     {
         // The shared server tunnel must NEVER be paused for a per-user throttle.
         $this->serverWs->expects($this->never())->method('pauseRecv');
@@ -210,7 +210,7 @@ final class TunnelThrottleLoadTest extends TestCase
      * `Tunnel::$pendingClientFrames[$channelId]` sampled EVERY tick. The bound
      * that must hold is the production constant `MAX_CLIENT_QUEUE`.
      */
-    public function test_throttled_backlog_high_water_mark_stays_within_the_production_bound(): void
+    public function testThrottledBacklogHighWaterMarkStaysWithinTheProductionBound(): void
     {
         $tunnel = $this->activeTunnel();
         $tick = $this->drainIntervalSeconds();
@@ -256,7 +256,7 @@ final class TunnelThrottleLoadTest extends TestCase
      * stays ACTIVE, the server is never paused, and a second channel on the same
      * tunnel keeps delivering after the first one is torn down.
      */
-    public function test_sustained_gross_over_offer_bounds_memory_by_closing_only_that_channel(): void
+    public function testSustainedGrossOverOfferBoundsMemoryByClosingOnlyThatChannel(): void
     {
         $this->serverWs->expects($this->never())->method('pauseRecv');
         $this->serverWs->expects($this->never())->method('close');

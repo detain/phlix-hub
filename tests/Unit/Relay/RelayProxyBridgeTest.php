@@ -30,7 +30,7 @@ use const JSON_THROW_ON_ERROR;
  */
 final class RelayProxyBridgeTest extends TestCase
 {
-    public function test_reply_event_is_unique_per_instance(): void
+    public function testReplyEventIsUniquePerInstance(): void
     {
         $a = new RelayProxyBridge($this->createMock(StructuredLogger::class));
         $b = new RelayProxyBridge($this->createMock(StructuredLogger::class));
@@ -39,7 +39,7 @@ final class RelayProxyBridgeTest extends TestCase
         $this->assertNotSame($a->replyEvent(), $b->replyEvent());
     }
 
-    public function test_request_publishes_envelope_and_returns_reply(): void
+    public function testRequestPublishesEnvelopeAndReturnsReply(): void
     {
         /** @var array<string, mixed>|null $publishedData */
         $publishedData = null;
@@ -85,7 +85,7 @@ final class RelayProxyBridgeTest extends TestCase
         $this->assertSame('{"ok":true}', $result['body']);
     }
 
-    public function test_request_returns_null_when_no_reply_arrives(): void
+    public function testRequestReturnsNullWhenNoReplyArrives(): void
     {
         // Publisher does nothing → the channel stays empty → pop returns false.
         $bridge = new RelayProxyBridge(
@@ -99,7 +99,7 @@ final class RelayProxyBridgeTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_on_reply_for_unknown_request_is_noop(): void
+    public function testOnReplyForUnknownRequestIsNoop(): void
     {
         $bridge = new RelayProxyBridge($this->createMock(StructuredLogger::class));
         // Should not throw.
@@ -127,7 +127,7 @@ final class RelayProxyBridgeTest extends TestCase
      *
      * @dataProvider forwardedTimeoutProvider
      */
-    public function test_request_forwards_the_timeout_in_the_published_envelope(float $timeout): void
+    public function testRequestForwardsTheTimeoutInThePublishedEnvelope(float $timeout): void
     {
         /** @var array<string, mixed>|null $publishedData */
         $publishedData = null;
@@ -238,7 +238,7 @@ final class RelayProxyBridgeTest extends TestCase
         };
     }
 
-    public function test_stream_forwards_phased_body_to_the_sink_and_flags_the_envelope(): void
+    public function testStreamForwardsPhasedBodyToTheSinkAndFlagsTheEnvelope(): void
     {
         /** @var array<string, mixed>|null $publishedData */
         $publishedData = null;
@@ -247,7 +247,12 @@ final class RelayProxyBridgeTest extends TestCase
             $publishedData = $data;
             /** @var RelayProxyBridge $bridge */
             $id = $data['request_id'];
-            $bridge->onReply(['request_id' => $id, 'phase' => 'head', 'status' => 200, 'headers' => ['Content-Length' => '6']]);
+            $bridge->onReply([
+                'request_id' => $id,
+                'phase' => 'head',
+                'status' => 200,
+                'headers' => ['Content-Length' => '6']
+            ]);
             $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'foo']);
             $bridge->onReply(['request_id' => $id, 'phase' => 'body', 'body' => 'bar']);
             $bridge->onReply(['request_id' => $id, 'phase' => 'end']);
@@ -270,7 +275,7 @@ final class RelayProxyBridgeTest extends TestCase
         $this->assertSame('foobar', $sink->body);
     }
 
-    public function test_stream_emits_a_buffered_reply_as_head_body_end(): void
+    public function testStreamEmitsABufferedReplyAsHeadBodyEnd(): void
     {
         // A relay-worker error reply (or a legacy/non-streaming server) arrives as
         // a single buffered message with no `phase`; stream() must still drive the
@@ -295,7 +300,7 @@ final class RelayProxyBridgeTest extends TestCase
         $this->assertSame(['end'], $sink->events[array_key_last($sink->events)]);
     }
 
-    public function test_stream_synthesizes_a_504_when_no_reply_arrives(): void
+    public function testStreamSynthesizesA504WhenNoReplyArrives(): void
     {
         // Publisher never replies → the first-phase wait elapses → 504 + end.
         $bridge = new RelayProxyBridge(
@@ -316,7 +321,7 @@ final class RelayProxyBridgeTest extends TestCase
         $this->assertSame(['end'], $sink->events[array_key_last($sink->events)]);
     }
 
-    public function test_stream_stops_consuming_when_the_browser_is_gone(): void
+    public function testStreamStopsConsumingWhenTheBrowserIsGone(): void
     {
         $bridge = null;
         $publisher = function (string $event, array $data) use (&$bridge): void {
@@ -367,7 +372,7 @@ final class RelayProxyBridgeTest extends TestCase
      * `stream()`'s pop-loop ever runs (there is no real coroutine scheduler in
      * this process).
      */
-    public function test_stream_drops_replies_beyond_channel_capacity_without_hanging_and_closes_the_channel(): void
+    public function testStreamDropsRepliesBeyondChannelCapacityWithoutHangingAndClosesTheChannel(): void
     {
         /** @var Channel|null $capturedChannel */
         $capturedChannel = null;
@@ -424,7 +429,7 @@ final class RelayProxyBridgeTest extends TestCase
      * (a) passes the documented bounded timeout to `Channel::push()`, and
      * (b) drops and untracks the request when that push fails — independent
      * of which channel driver Workerman happens to select (unlike
-     * {@see self::test_stream_drops_replies_beyond_channel_capacity_without_hanging_and_closes_the_channel()},
+     * {@see self::testStreamDropsRepliesBeyondChannelCapacityWithoutHangingAndClosesTheChannel()},
      * which relies on the non-blocking `Memory` driver's overflow behavior).
      * Uses a hand-rolled `Channel` subclass that overrides `push()` to record
      * every call and return a controlled result, injected directly into the
@@ -452,9 +457,9 @@ final class RelayProxyBridgeTest extends TestCase
      * This test exercises Phase 1 + 2b in the PHPUnit environment (plain CLI,
      * no Swoole event loop → `Coroutine::getCid()` returns -1). The Phase 2a
      * fiber path requires a live Swoole scheduler and is verified by the
-     * `test_on_reply_spawns_fiber_when_channel_full` test below.
+     * `testOnReplySpawnsFiberWhenChannelFull` test below.
      */
-    public function test_on_reply_uses_nonblocking_probe_and_drops_when_no_coroutine_context(): void
+    public function testOnReplyUsesNonblockingProbeAndDropsWhenNoCoroutineContext(): void
     {
         $fakeChannel = new class (1) extends Channel {
             /** @var list<float> */
@@ -498,7 +503,7 @@ final class RelayProxyBridgeTest extends TestCase
      * Before the fix `RelayProxyBridge` carried no collector and `dropReply()`
      * only warned, so an operator was blind to exactly the stall H-R8 surfaces.
      */
-    public function test_drop_reply_records_a_reply_drop_on_the_injected_collector(): void
+    public function testDropReplyRecordsAReplyDropOnTheInjectedCollector(): void
     {
         $fakeChannel = new class (1) extends Channel {
             public bool $pushResult = false;
@@ -553,7 +558,7 @@ final class RelayProxyBridgeTest extends TestCase
      * fiber's bounded push, and a fake `Coroutine::getCid` that is overridden
      * to return a positive value so the fiber path is taken.
      */
-    public function test_on_reply_spawns_fiber_when_channel_full(): void
+    public function testOnReplySpawnsFiberWhenChannelFull(): void
     {
         $fakeChannel = new class (false) extends Channel {
             /** @var list<float> */
@@ -607,7 +612,7 @@ final class RelayProxyBridgeTest extends TestCase
      * exactly once. `abort()` must NOT be called in this case (there is
      * nothing to abort; a clean single response is still possible).
      */
-    public function test_stream_rethrows_when_head_itself_throws_before_any_bytes_are_written(): void
+    public function testStreamRethrowsWhenHeadItselfThrowsBeforeAnyBytesAreWritten(): void
     {
         $bridge = null;
         $publisher = function (string $event, array $data) use (&$bridge): void {
@@ -640,7 +645,7 @@ final class RelayProxyBridgeTest extends TestCase
      * buffered response would write a second, unrelated response onto a
      * connection that already carries partial HTTP framing.
      */
-    public function test_stream_aborts_instead_of_rethrowing_when_body_throws_after_head_succeeded(): void
+    public function testStreamAbortsInsteadOfRethrowingWhenBodyThrowsAfterHeadSucceeded(): void
     {
         $bridge = null;
         $publisher = function (string $event, array $data) use (&$bridge): void {

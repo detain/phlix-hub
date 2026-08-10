@@ -233,7 +233,11 @@ final class UserQuotaControllerTest extends TestCase
             'missing max_concurrent_streams' => [['quota_bytes_in' => 1, 'quota_bytes_out' => 1]],
             'negative bytes_in' => [['quota_bytes_in' => -1, 'quota_bytes_out' => 1, 'max_concurrent_streams' => 1]],
             'non-integer float' => [['quota_bytes_in' => 1.5, 'quota_bytes_out' => 1, 'max_concurrent_streams' => 1]],
-            'non-numeric string' => [['quota_bytes_in' => 'lots', 'quota_bytes_out' => 1, 'max_concurrent_streams' => 1]],
+            'non-numeric string' => [[
+                'quota_bytes_in' => 'lots',
+                'quota_bytes_out' => 1,
+                'max_concurrent_streams' => 1
+            ]],
             'streams over bound' => [['quota_bytes_in' => 1, 'quota_bytes_out' => 1, 'max_concurrent_streams' => 1001]],
             'bytes over bound' => [
                 ['quota_bytes_in' => 1125899906842645, 'quota_bytes_out' => 1, 'max_concurrent_streams' => 1],

@@ -176,7 +176,7 @@ final class ConnectionResponseSinkThrottleLoadTest extends TestCase
      * cap realises ITS own cap; an Unlimited stream is untouched; and the pacing
      * wait never blocks the scheduler.
      */
-    public function test_throttled_proxy_body_realises_its_cap_on_a_real_clock(): void
+    public function testThrottledProxyBodyRealisesItsCapOnARealClock(): void
     {
         $measurement = $this->measureInForkedChild();
         $result = $measurement['streams'];

@@ -62,7 +62,7 @@ final class ClientRelayTokenControllerTest extends TestCase
         return new ClientRelayTokenService($db);
     }
 
-    public function test_unauthenticated_returns_401(): void
+    public function testUnauthenticatedReturns401(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $controller = $this->controller($info, $this->tokenService());
@@ -71,7 +71,7 @@ final class ClientRelayTokenControllerTest extends TestCase
         $this->assertSame(401, $response->statusCode);
     }
 
-    public function test_unknown_server_returns_404(): void
+    public function testUnknownServerReturns404(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getServerInfo')->willReturn(null);
@@ -81,7 +81,7 @@ final class ClientRelayTokenControllerTest extends TestCase
         $this->assertSame(404, $response->statusCode);
     }
 
-    public function test_not_owned_returns_403_and_does_not_mint(): void
+    public function testNotOwnedReturns403AndDoesNotMint(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getServerInfo')->willReturn($this->dto('someone-else'));
@@ -100,7 +100,7 @@ final class ClientRelayTokenControllerTest extends TestCase
         $this->assertSame('server.not_owned', $body['code'] ?? null);
     }
 
-    public function test_owned_server_mints_token_and_returns_201(): void
+    public function testOwnedServerMintsTokenAndReturns201(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getServerInfo')->willReturn($this->dto('user-1'));

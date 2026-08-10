@@ -30,7 +30,11 @@ final class ServerClaimControllerTest extends TestCase
         $request->body = [
             'serverName' => 'Test',
             'version' => '0.11.0',
-            'publicKeysJwk' => ['kty' => 'OKP', 'crv' => 'Ed25519', 'x' => 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='],
+            'publicKeysJwk' => [
+                'kty' => 'OKP',
+                'crv' => 'Ed25519',
+                'x' => 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+            ],
             'hostnameCandidates' => [],
             'protocolVersion' => 'v1',
         ];

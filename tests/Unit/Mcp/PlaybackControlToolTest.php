@@ -60,7 +60,7 @@ final class PlaybackControlToolTest extends TestCase
     // The descriptor a model reads
     // ------------------------------------------------------------------
 
-    public function test_the_tool_requires_the_write_scope_not_a_read_one(): void
+    public function testTheToolRequiresTheWriteScopeNotAReadOne(): void
     {
         self::assertSame(McpScopes::PLAYBACK_CONTROL, (new PlaybackControlTool())->requiredScope());
     }
@@ -71,7 +71,7 @@ final class PlaybackControlToolTest extends TestCase
      * Exact-substring on the shared constant, so rewording the constant without
      * rewording the description (or vice versa) cannot drift them apart.
      */
-    public function test_the_description_carries_the_best_effort_caveat(): void
+    public function testTheDescriptionCarriesTheBestEffortCaveat(): void
     {
         $description = (new PlaybackControlTool())->description();
 
@@ -83,14 +83,14 @@ final class PlaybackControlToolTest extends TestCase
     /**
      * ...and it does NOT claim the tool starts playback, because it cannot.
      */
-    public function test_the_description_does_not_promise_it_can_start_playback(): void
+    public function testTheDescriptionDoesNotPromiseItCanStartPlayback(): void
     {
         $description = strtolower((new PlaybackControlTool())->description());
 
         self::assertStringContainsString('cannot start playback', $description);
     }
 
-    public function test_the_schema_is_closed_and_names_its_required_arguments(): void
+    public function testTheSchemaIsClosedAndNamesItsRequiredArguments(): void
     {
         $schema = (new PlaybackControlTool())->inputSchema();
 
@@ -162,7 +162,7 @@ final class PlaybackControlToolTest extends TestCase
      *
      * @dataProvider forwardedCallProvider
      */
-    public function test_each_action_forwards_the_expected_verb_and_path(
+    public function testEachActionForwardsTheExpectedVerbAndPath(
         array $arguments,
         string $method,
         string $path,
@@ -188,7 +188,7 @@ final class PlaybackControlToolTest extends TestCase
      *
      * @dataProvider seekUnitProvider
      */
-    public function test_seek_converts_seconds_into_the_targets_own_unit(
+    public function testSeekConvertsSecondsIntoTheTargetsOwnUnit(
         string $target,
         int $seconds,
         string $expectedField,
@@ -223,7 +223,7 @@ final class PlaybackControlToolTest extends TestCase
      * `ServerProxyController::reconstructBody()` turns into an absent one, and
      * inventing `{}` for a pause would be a fabricated request field.
      */
-    public function test_a_non_seek_action_forwards_no_body(): void
+    public function testANonSeekActionForwardsNoBody(): void
     {
         (new PlaybackControlTool())->call([
             'server_id' => self::SERVER_OF_A,
@@ -248,7 +248,7 @@ final class PlaybackControlToolTest extends TestCase
      * refusal lets the model choose another action; letting it through would
      * have handed a model a server-side outbound-fetch primitive.
      */
-    public function test_dlna_play_is_refused_by_name_and_never_forwarded(): void
+    public function testDlnaPlayIsRefusedByNameAndNeverForwarded(): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
         $this->expectExceptionMessageMatches('/not available for target "dlna"/');
@@ -270,7 +270,7 @@ final class PlaybackControlToolTest extends TestCase
      * available on chromecast, where it means resume. Without this row a tool
      * that refused every `play` would satisfy the test above.
      */
-    public function test_chromecast_play_is_available(): void
+    public function testChromecastPlayIsAvailable(): void
     {
         $outcome = (new PlaybackControlTool())->call([
             'server_id' => self::SERVER_OF_A,
@@ -289,7 +289,7 @@ final class PlaybackControlToolTest extends TestCase
      *
      * @dataProvider unusableArgumentProvider
      */
-    public function test_unusable_arguments_are_refused(array $arguments): void
+    public function testUnusableArgumentsAreRefused(array $arguments): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
 
@@ -347,7 +347,7 @@ final class PlaybackControlToolTest extends TestCase
      * forwarded it and the server answered 200" is not the same claim as "the
      * device did anything".
      */
-    public function test_a_successful_response_still_carries_the_caveat(): void
+    public function testASuccessfulResponseStillCarriesTheCaveat(): void
     {
         $outcome = (new PlaybackControlTool())->call([
             'server_id' => self::SERVER_OF_A,
@@ -367,7 +367,7 @@ final class PlaybackControlToolTest extends TestCase
      * ...and so does a REFUSAL from the server, without losing the server's own
      * fields.
      */
-    public function test_an_upstream_error_keeps_both_the_server_payload_and_the_caveat(): void
+    public function testAnUpstreamErrorKeepsBothTheServerPayloadAndTheCaveat(): void
     {
         $outcome = (new PlaybackControlTool())->call([
             'server_id' => self::SERVER_OF_A,
@@ -387,7 +387,7 @@ final class PlaybackControlToolTest extends TestCase
      * The caveat lives under a `_phlix` key so it cannot be mistaken for — or
      * collide with — a field the media server itself returned.
      */
-    public function test_the_caveat_does_not_overwrite_a_server_field(): void
+    public function testTheCaveatDoesNotOverwriteAServerField(): void
     {
         $outcome = (new PlaybackControlTool())->call([
             'server_id' => self::SERVER_OF_A,

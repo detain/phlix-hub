@@ -26,7 +26,7 @@ use Workerman\MySQL\Connection;
  */
 class SubdomainControllerTest extends TestCase
 {
-    public function test_allocate_returns_401_without_auth_header(): void
+    public function testAllocateReturns401WithoutAuthHeader(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -44,7 +44,7 @@ class SubdomainControllerTest extends TestCase
         $this->assertSame(401, $response->statusCode);
     }
 
-    public function test_allocate_returns_400_without_server_id(): void
+    public function testAllocateReturns400WithoutServerId(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -62,7 +62,7 @@ class SubdomainControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
     }
 
-    public function test_revoke_returns_401_without_auth_header(): void
+    public function testRevokeReturns401WithoutAuthHeader(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -80,7 +80,7 @@ class SubdomainControllerTest extends TestCase
         $this->assertSame(401, $response->statusCode);
     }
 
-    public function test_revoke_returns_400_without_server_id(): void
+    public function testRevokeReturns400WithoutServerId(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -105,7 +105,7 @@ class SubdomainControllerTest extends TestCase
      * behaviour would either return 204 (success) or 500 (mystery) —
      * both fail this assertion.
      */
-    public function test_refreshCertificate_returns_501_when_acme_not_implemented(): void
+    public function testRefreshCertificateReturns501WhenAcmeNotImplemented(): void
     {
         $dnsManager = $this->createMock(DnsAliasManager::class);
         $dnsManager->method('refreshCertificate')->willThrowException(new \RuntimeException(
@@ -132,7 +132,7 @@ class SubdomainControllerTest extends TestCase
         $this->assertStringContainsString('docs/hub-admin/tls.md', $responseBody);
     }
 
-    public function test_refreshCertificate_returns_400_without_server_id(): void
+    public function testRefreshCertificateReturns400WithoutServerId(): void
     {
         $dnsManager = $this->createMock(DnsAliasManager::class);
         $certManager = $this->createMock(TlsCertificateManager::class);

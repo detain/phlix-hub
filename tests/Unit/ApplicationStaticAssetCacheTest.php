@@ -27,7 +27,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
 
     // ---- header presence ---------------------------------------------------
 
-    public function test_non_hashed_asset_carries_etag_and_short_cache_control(): void
+    public function testNonHashedAssetCarriesEtagAndShortCacheControl(): void
     {
         $mtime = 1_700_000_000;
         $size = 4096;
@@ -49,7 +49,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertStringNotContainsString('immutable', $decision['headers']['Cache-Control']);
     }
 
-    public function test_hashed_asset_carries_immutable_long_max_age_and_no_etag(): void
+    public function testHashedAssetCarriesImmutableLongMaxAgeAndNoEtag(): void
     {
         $decision = Application::computeStaticCacheDecision(
             'application/javascript; charset=utf-8',
@@ -70,7 +70,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertArrayNotHasKey('Last-Modified', $decision['headers']);
     }
 
-    public function test_hashed_asset_ignores_conditional_headers_and_stays_200(): void
+    public function testHashedAssetIgnoresConditionalHeadersAndStays200(): void
     {
         // Even if a client sends If-None-Match, an immutable asset is served 200
         // (the browser never revalidates it, so no ETag / 304 machinery).
@@ -89,7 +89,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
 
     // ---- conditional GET / 304 --------------------------------------------
 
-    public function test_matching_if_none_match_yields_304_with_validators_no_body(): void
+    public function testMatchingIfNoneMatchYields304WithValidatorsNoBody(): void
     {
         $mtime = 1_700_000_000;
         $size = 4096;
@@ -111,7 +111,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertArrayNotHasKey('Content-Type', $decision['headers']);
     }
 
-    public function test_non_matching_if_none_match_yields_200_with_body_and_etag(): void
+    public function testNonMatchingIfNoneMatchYields200WithBodyAndEtag(): void
     {
         $mtime = 1_700_000_000;
         $size = 4096;
@@ -130,7 +130,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertSame(self::CSS_MIME, $decision['headers']['Content-Type']);
     }
 
-    public function test_weak_if_none_match_matches_strong_etag(): void
+    public function testWeakIfNoneMatchMatchesStrongEtag(): void
     {
         $mtime = 1_700_000_000;
         $size = 4096;
@@ -148,7 +148,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertSame(304, $decision['status']);
     }
 
-    public function test_star_if_none_match_yields_304(): void
+    public function testStarIfNoneMatchYields304(): void
     {
         $decision = Application::computeStaticCacheDecision(
             self::CSS_MIME,
@@ -162,7 +162,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertSame(304, $decision['status']);
     }
 
-    public function test_if_none_match_list_containing_etag_yields_304(): void
+    public function testIfNoneMatchListContainingEtagYields304(): void
     {
         $mtime = 1_700_000_000;
         $size = 4096;
@@ -180,7 +180,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertSame(304, $decision['status']);
     }
 
-    public function test_if_modified_since_not_older_than_mtime_yields_304(): void
+    public function testIfModifiedSinceNotOlderThanMtimeYields304(): void
     {
         $mtime = 1_700_000_000;
         $ims = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
@@ -197,7 +197,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertSame(304, $decision['status']);
     }
 
-    public function test_if_modified_since_older_than_mtime_yields_200(): void
+    public function testIfModifiedSinceOlderThanMtimeYields200(): void
     {
         $mtime = 1_700_000_000;
         $ims = gmdate('D, d M Y H:i:s', $mtime - 3600) . ' GMT';
@@ -215,7 +215,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertArrayHasKey('Content-Type', $decision['headers']);
     }
 
-    public function test_if_none_match_takes_precedence_over_if_modified_since(): void
+    public function testIfNoneMatchTakesPrecedenceOverIfModifiedSince(): void
     {
         // Non-matching If-None-Match wins even though If-Modified-Since would 304.
         $mtime = 1_700_000_000;
@@ -249,7 +249,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         return $result;
     }
 
-    public function test_stat_memo_resolves_real_mtime_and_size(): void
+    public function testStatMemoResolvesRealMtimeAndSize(): void
     {
         $tmp = tempnam(sys_get_temp_dir(), 'phlix_asset_');
         $this->assertIsString($tmp);
@@ -265,7 +265,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         unlink($tmp);
     }
 
-    public function test_stat_memo_hit_does_not_restat_after_file_removed(): void
+    public function testStatMemoHitDoesNotRestatAfterFileRemoved(): void
     {
         // A second lookup for the same path must return the memoized stat even
         // after the file is deleted — proving no re-stat/re-realpath syscall.
@@ -284,7 +284,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         $this->assertSame(77, $second['size']);
     }
 
-    public function test_stat_memo_returns_false_for_missing_path(): void
+    public function testStatMemoReturnsFalseForMissingPath(): void
     {
         $missing = sys_get_temp_dir() . '/phlix_asset_does_not_exist_' . uniqid('', true);
 

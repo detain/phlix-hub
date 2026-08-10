@@ -233,7 +233,14 @@ final class ClaimRequestHandlerTest extends TestCase
 
         $db = $this->createMock(Connection::class);
         $db->method('query')
-            ->willReturnCallback(function (string $sql, array $params) use ($existingCode, $existingClaimId, $sharedJwk) {
+            ->willReturnCallback(function (
+                string $sql,
+                array $params,
+            ) use (
+                $existingCode,
+                $existingClaimId,
+                $sharedJwk
+) {
                 if (str_contains($sql, 'SELECT') && str_contains($sql, 'claimed_by IS NULL')) {
                     return [[
                         'id' => $existingClaimId,

@@ -15,7 +15,7 @@ use Workerman\MySQL\Connection;
 
 class RelayRouterTest extends TestCase
 {
-    public function test_extractSubdomain_extracts_correctly(): void
+    public function testExtractSubdomainExtractsCorrectly(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -31,7 +31,7 @@ class RelayRouterTest extends TestCase
         $this->assertSame('abc12345', $result);
     }
 
-    public function test_extractSubdomain_returns_null_for_non_phlix_domain(): void
+    public function testExtractSubdomainReturnsNullForNonPhlixDomain(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -47,7 +47,7 @@ class RelayRouterTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_extractSubdomain_handles_case_insensitivity(): void
+    public function testExtractSubdomainHandlesCaseInsensitivity(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -63,7 +63,7 @@ class RelayRouterTest extends TestCase
         $this->assertSame('abc12345', $result);
     }
 
-    public function test_extractSubdomain_returns_null_for_invalid_subdomain_length(): void
+    public function testExtractSubdomainReturnsNullForInvalidSubdomainLength(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -79,7 +79,7 @@ class RelayRouterTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_extractSubdomain_returns_null_for_empty_subdomain(): void
+    public function testExtractSubdomainReturnsNullForEmptySubdomain(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');
@@ -95,7 +95,7 @@ class RelayRouterTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_routeBySubdomain_returns_server_id(): void
+    public function testRouteBySubdomainReturnsServerId(): void
     {
         $serverId = 'server-abc-123';
         $db = $this->createMock(Connection::class);
@@ -116,7 +116,7 @@ class RelayRouterTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_getRelaySession_returns_null_when_no_session(): void
+    public function testGetRelaySessionReturnsNullWhenNoSession(): void
     {
         $db = $this->createMock(Connection::class);
         $zoneManager = new StaticZoneManager('/tmp/zones');

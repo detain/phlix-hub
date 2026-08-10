@@ -31,7 +31,13 @@ final class AuthManagerTest extends TestCase
     private const SECRET = 'an-extra-long-test-secret-with-32-bytes-min';
 
     /**
-     * @return array{0: UserRepository&\PHPUnit\Framework\MockObject\MockObject, 1: JwtHandler, 2: AuditLogger&\PHPUnit\Framework\MockObject\MockObject, 3: StructuredLogger&\PHPUnit\Framework\MockObject\MockObject, 4: RateLimiter}
+     * @return array{
+     *     0: UserRepository&\PHPUnit\Framework\MockObject\MockObject,
+     *     1: JwtHandler,
+     *     2: AuditLogger&\PHPUnit\Framework\MockObject\MockObject,
+     *     3: StructuredLogger&\PHPUnit\Framework\MockObject\MockObject,
+     *     4: RateLimiter
+     * }
      */
     private function deps(): array
     {
@@ -103,7 +109,12 @@ final class AuthManagerTest extends TestCase
         $repo->method('emailExists')->willReturn(false);
         $repo->method('countUsers')->willReturn(2);
         $repo->method('create')->willReturn('u-new');
-        $repo->method('findById')->willReturn(['id' => 'u-new', 'username' => 'alice', 'email' => 'a@example.com', 'password_hash' => 'secret']);
+        $repo->method('findById')->willReturn([
+            'id' => 'u-new',
+            'username' => 'alice',
+            'email' => 'a@example.com',
+            'password_hash' => 'secret'
+        ]);
 
         $audit->expects(self::once())->method('logSignup')->with('u-new', 'alice', 'a@example.com');
 

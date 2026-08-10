@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class McpArgumentsTest extends TestCase
 {
-    public function test_required_string_returns_a_trimmed_value(): void
+    public function testRequiredStringReturnsATrimmedValue(): void
     {
         self::assertSame('dune', McpArguments::requiredString(['query' => '  dune  '], 'query'));
     }
@@ -25,7 +25,7 @@ final class McpArgumentsTest extends TestCase
     /**
      * @dataProvider unusableStringProvider
      */
-    public function test_required_string_throws_on_anything_unusable(mixed $value): void
+    public function testRequiredStringThrowsOnAnythingUnusable(mixed $value): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
 
@@ -49,7 +49,7 @@ final class McpArgumentsTest extends TestCase
         ];
     }
 
-    public function test_id_accepts_a_uuid(): void
+    public function testIdAcceptsAUuid(): void
     {
         self::assertSame(
             'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -63,7 +63,7 @@ final class McpArgumentsTest extends TestCase
      *
      * @dataProvider multiSegmentIdProvider
      */
-    public function test_id_rejects_anything_that_is_not_one_path_segment(string $value): void
+    public function testIdRejectsAnythingThatIsNotOnePathSegment(string $value): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
 
@@ -97,7 +97,7 @@ final class McpArgumentsTest extends TestCase
      *
      * @dataProvider legitimateIdProvider
      */
-    public function test_id_accepts_legitimate_identifiers(string $value): void
+    public function testIdAcceptsLegitimateIdentifiers(string $value): void
     {
         self::assertSame($value, McpArguments::id(['media_id' => $value], 'media_id'));
     }
@@ -116,14 +116,14 @@ final class McpArgumentsTest extends TestCase
         ];
     }
 
-    public function test_bounded_int_defaults_when_absent_or_unusable(): void
+    public function testBoundedIntDefaultsWhenAbsentOrUnusable(): void
     {
         self::assertSame(20, McpArguments::boundedInt([], 'limit', 20, 100));
         self::assertSame(20, McpArguments::boundedInt(['limit' => 'many'], 'limit', 20, 100));
         self::assertSame(20, McpArguments::boundedInt(['limit' => ['5']], 'limit', 20, 100));
     }
 
-    public function test_bounded_int_clamps_rather_than_rejecting(): void
+    public function testBoundedIntClampsRatherThanRejecting(): void
     {
         self::assertSame(100, McpArguments::boundedInt(['limit' => 5000], 'limit', 20, 100));
         self::assertSame(1, McpArguments::boundedInt(['limit' => 0], 'limit', 20, 100));
@@ -139,7 +139,7 @@ final class McpArgumentsTest extends TestCase
     /**
      * `oneOf()` accepts a member of the closed set — and returns it verbatim.
      */
-    public function test_one_of_accepts_a_member_of_the_set(): void
+    public function testOneOfAcceptsAMemberOfTheSet(): void
     {
         self::assertSame('pause', McpArguments::oneOf(['action' => 'pause'], 'action', ['play', 'pause']));
         self::assertSame('play', McpArguments::oneOf(['action' => '  play  '], 'action', ['play', 'pause']));
@@ -157,7 +157,7 @@ final class McpArgumentsTest extends TestCase
      *
      * @dataProvider notInTheSetProvider
      */
-    public function test_one_of_rejects_a_value_outside_the_set(mixed $value): void
+    public function testOneOfRejectsAValueOutsideTheSet(mixed $value): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
 
@@ -185,7 +185,7 @@ final class McpArgumentsTest extends TestCase
      * `oneOf()` names the permitted values, so a model can correct itself in one
      * round trip rather than guessing.
      */
-    public function test_one_of_names_the_permitted_values_in_its_message(): void
+    public function testOneOfNamesThePermittedValuesInItsMessage(): void
     {
         try {
             McpArguments::oneOf(['action' => 'reboot'], 'action', ['play', 'pause']);
@@ -205,7 +205,7 @@ final class McpArgumentsTest extends TestCase
      * `true` flag) survives every other row in this file, because none of them
      * uses a numeric set — which is exactly why this row exists.
      */
-    public function test_one_of_compares_strictly_so_numeric_spellings_do_not_collide(): void
+    public function testOneOfComparesStrictlySoNumericSpellingsDoNotCollide(): void
     {
         self::assertSame('1000', McpArguments::oneOf(['action' => '1000'], 'action', ['1000']));
 
@@ -213,7 +213,7 @@ final class McpArgumentsTest extends TestCase
         McpArguments::oneOf(['action' => '1e3'], 'action', ['1000']);
     }
 
-    public function test_non_negative_int_accepts_whole_numbers_and_numeric_strings(): void
+    public function testNonNegativeIntAcceptsWholeNumbersAndNumericStrings(): void
     {
         self::assertSame(0, McpArguments::nonNegativeInt(['p' => 0], 'p', 100));
         self::assertSame(42, McpArguments::nonNegativeInt(['p' => 42], 'p', 100));
@@ -227,7 +227,7 @@ final class McpArgumentsTest extends TestCase
      *
      * @dataProvider unusablePositionProvider
      */
-    public function test_non_negative_int_rejects_rather_than_clamping(mixed $value): void
+    public function testNonNegativeIntRejectsRatherThanClamping(mixed $value): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
 
@@ -254,7 +254,7 @@ final class McpArgumentsTest extends TestCase
         ];
     }
 
-    public function test_non_negative_int_is_required(): void
+    public function testNonNegativeIntIsRequired(): void
     {
         $this->expectException(McpInvalidArgumentsException::class);
 

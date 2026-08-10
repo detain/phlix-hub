@@ -89,7 +89,7 @@ use function strlen;
  * instant at which frames were still queued, so the window ends with the sink
  * saturated rather than mid-drain-tail. The burst that a freshly mounted stream
  * legitimately gets is measured separately, in
- * {@see test_a_full_bucket_releases_exactly_one_burst_window_then_paces_to_the_cap()}.
+ * {@see testAFullBucketReleasesExactlyOneBurstWindowThenPacesToTheCap()}.
  *
  * @covers \Phlix\Hub\Relay\Tunnel
  * @covers \Phlix\Hub\Relay\TokenBucket
@@ -155,7 +155,7 @@ final class TunnelThrottleRateSweepTest extends TestCase
     }
 
     #[DataProvider('capAndFrameSizeProvider')]
-    public function test_realised_rate_matches_the_configured_cap(int $capBps, int $payloadBytes): void
+    public function testRealisedRateMatchesTheConfiguredCap(int $capBps, int $payloadBytes): void
     {
         // A per-user throttle is strictly per-channel: the tunnel that multiplexes
         // every other user on this server must never be paused or closed for it.
@@ -322,7 +322,7 @@ final class TunnelThrottleRateSweepTest extends TestCase
      * reads `cap + capacity/window`, which is why the sweep above spends the burst
      * before its window opens.
      */
-    public function test_a_full_bucket_releases_exactly_one_burst_window_then_paces_to_the_cap(): void
+    public function testAFullBucketReleasesExactlyOneBurstWindowThenPacesToTheCap(): void
     {
         $capBps = 3_000_000; // the S41 product default
         $capBytes = $capBps / 8.0;

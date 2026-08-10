@@ -46,7 +46,7 @@ final class McpSseStreamTest extends TestCase
     // Wire format
     // ------------------------------------------------------------------
 
-    public function test_the_headers_declare_an_unbuffered_event_stream(): void
+    public function testTheHeadersDeclareAnUnbufferedEventStream(): void
     {
         $headers = McpSseStream::headers();
 
@@ -66,12 +66,12 @@ final class McpSseStreamTest extends TestCase
      * `'text/event-stream'` is a substring of every spelling that would NOT hit
      * that branch.
      */
-    public function test_the_content_type_is_bare_so_workermans_own_sse_branch_matches(): void
+    public function testTheContentTypeIsBareSoWorkermansOwnSseBranchMatches(): void
     {
         self::assertSame('text/event-stream', McpSseStream::headers()['Content-Type'] ?? null);
     }
 
-    public function test_a_comment_frame_is_a_colon_line_terminated_by_a_blank_line(): void
+    public function testACommentFrameIsAColonLineTerminatedByABlankLine(): void
     {
         $frame = McpSseStream::comment('hello');
 
@@ -84,7 +84,7 @@ final class McpSseStreamTest extends TestCase
      * text be parsed as an SSE FIELD — an injection into the protocol. Both CR
      * and LF are neutralised.
      */
-    public function test_a_comment_cannot_inject_a_field(): void
+    public function testACommentCannotInjectAField(): void
     {
         $frame = McpSseStream::comment("ok\ndata: {\"jsonrpc\":\"2.0\"}\r\nevent: message");
 
@@ -93,7 +93,7 @@ final class McpSseStreamTest extends TestCase
         self::assertStringNotContainsString("\nevent:", $frame);
     }
 
-    public function test_the_retry_field_is_a_whole_frame(): void
+    public function testTheRetryFieldIsAWholeFrame(): void
     {
         self::assertSame("retry: 3000\n\n", McpSseStream::retry(3000));
     }
@@ -104,7 +104,7 @@ final class McpSseStreamTest extends TestCase
      * under pressure later — and because a `data:` payload spanning two lines
      * would be parsed as two frames, which is the failure it is easiest to ship.
      */
-    public function test_a_message_frame_carries_the_envelope_on_one_data_line(): void
+    public function testAMessageFrameCarriesTheEnvelopeOnOneDataLine(): void
     {
         $frame = McpSseStream::message(['jsonrpc' => '2.0', 'method' => 'notifications/tools/list_changed']);
 
@@ -129,7 +129,7 @@ final class McpSseStreamTest extends TestCase
      * intermediary waiting for first bytes releases at once instead of holding
      * the connection until the first keep-alive 15 seconds later.
      */
-    public function test_the_opening_bytes_carry_a_retry_hint_and_a_comment(): void
+    public function testTheOpeningBytesCarryARetryHintAndAComment(): void
     {
         $opening = McpSseStream::opening();
 
@@ -141,7 +141,7 @@ final class McpSseStreamTest extends TestCase
     // Opening a stream
     // ------------------------------------------------------------------
 
-    public function test_opening_writes_a_head_then_the_opening_frames(): void
+    public function testOpeningWritesAHeadThenTheOpeningFrames(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';
@@ -163,7 +163,7 @@ final class McpSseStreamTest extends TestCase
     /**
      * Exactly two timers: a repeating keep-alive and a one-shot deadline.
      */
-    public function test_opening_schedules_a_repeating_keepalive_and_a_one_shot_deadline(): void
+    public function testOpeningSchedulesARepeatingKeepaliveAndAOneShotDeadline(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';
@@ -179,7 +179,7 @@ final class McpSseStreamTest extends TestCase
         );
     }
 
-    public function test_the_keepalive_writes_a_comment_frame(): void
+    public function testTheKeepaliveWritesACommentFrame(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';
@@ -202,7 +202,7 @@ final class McpSseStreamTest extends TestCase
      * response ended and reconnects on the `retry:` hint; one that sees a bare
      * socket reset reports an error.
      */
-    public function test_the_deadline_terminates_the_stream_and_closes_the_connection(): void
+    public function testTheDeadlineTerminatesTheStreamAndClosesTheConnection(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';
@@ -231,7 +231,7 @@ final class McpSseStreamTest extends TestCase
      * `onClose` hook is invoked the way Workerman invokes it, and both scheduled
      * ids must have been cancelled.
      */
-    public function test_a_client_hangup_cancels_every_timer(): void
+    public function testAClientHangupCancelsEveryTimer(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';
@@ -252,7 +252,7 @@ final class McpSseStreamTest extends TestCase
      * ...and the keep-alive is INERT afterwards: a timer that somehow fires
      * after close must not write to a dead socket.
      */
-    public function test_the_keepalive_writes_nothing_after_close(): void
+    public function testTheKeepaliveWritesNothingAfterClose(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';
@@ -280,7 +280,7 @@ final class McpSseStreamTest extends TestCase
      * its callback would introduce a leak while fixing one — the exact shape
      * that makes a "cleanup" change a regression.
      */
-    public function test_a_pre_existing_onclose_handler_is_still_invoked(): void
+    public function testAPreExistingOncloseHandlerIsStillInvoked(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';
@@ -304,7 +304,7 @@ final class McpSseStreamTest extends TestCase
      * cancellation happens first precisely so it cannot be skipped by somebody
      * else's bug.
      */
-    public function test_a_throwing_predecessor_does_not_prevent_cancellation(): void
+    public function testAThrowingPredecessorDoesNotPreventCancellation(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';
@@ -324,7 +324,7 @@ final class McpSseStreamTest extends TestCase
      * A failed keep-alive WRITE terminates the stream rather than firing at a
      * dead socket every 15 seconds until the deadline.
      */
-    public function test_a_failed_keepalive_write_terminates_the_stream(): void
+    public function testAFailedKeepaliveWriteTerminatesTheStream(): void
     {
         $timers = new RecordingStreamTimers();
         $sends = 0;
@@ -357,7 +357,7 @@ final class McpSseStreamTest extends TestCase
      * The alternative (throwing) would take down the request that was being
      * served over a keep-alive that is a nicety.
      */
-    public function test_a_stream_still_opens_when_no_timer_can_be_scheduled(): void
+    public function testAStreamStillOpensWhenNoTimerCanBeScheduled(): void
     {
         $timers = new RecordingStreamTimers(refuse: true);
         $written = '';
@@ -386,7 +386,7 @@ final class McpSseStreamTest extends TestCase
      * over the whole lifecycle — open, keep-alive, close — rather than at one
      * instant.
      */
-    public function test_nothing_the_stream_emits_by_itself_is_a_data_frame(): void
+    public function testNothingTheStreamEmitsByItselfIsADataFrame(): void
     {
         $timers = new RecordingStreamTimers();
         $written = '';

@@ -43,7 +43,7 @@ class TunnelTest extends TestCase
         $this->serverWs = $this->createMock(TcpConnection::class);
     }
 
-    public function test_tunnel_initializes_with_pending_status(): void
+    public function testTunnelInitializesWithPendingStatus(): void
     {
         $tunnel = new Tunnel(
             'server-123',
@@ -60,7 +60,7 @@ class TunnelTest extends TestCase
         $this->assertNotEmpty($tunnel->tunnelId);
     }
 
-    public function test_tunnel_transitions_to_active_on_hello(): void
+    public function testTunnelTransitionsToActiveOnHello(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -101,7 +101,7 @@ class TunnelTest extends TestCase
         $this->assertSame($sessionId, $tunnel->relaySessionId);
     }
 
-    public function test_tunnel_closes_on_malformed_hello(): void
+    public function testTunnelClosesOnMalformedHello(): void
     {
         $this->sessionManager
             ->expects($this->never())
@@ -125,7 +125,7 @@ class TunnelTest extends TestCase
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
 
-    public function test_send_to_client_routes_only_to_the_owning_channel(): void
+    public function testSendToClientRoutesOnlyToTheOwningChannel(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -185,7 +185,7 @@ class TunnelTest extends TestCase
         $this->assertSame(1, $decoded->channelId());
     }
 
-    public function test_send_to_client_drops_data_for_unknown_channel(): void
+    public function testSendToClientDropsDataForUnknownChannel(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -217,7 +217,7 @@ class TunnelTest extends TestCase
         $this->assertSame(0, $tunnel->getBytesIn());
     }
 
-    public function test_send_to_server_encodes_and_records_bytes(): void
+    public function testSendToServerEncodesAndRecordsBytes(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -255,7 +255,7 @@ class TunnelTest extends TestCase
         $this->assertNotNull($sentData);
     }
 
-    public function test_server_close_closes_all_clients_and_session(): void
+    public function testServerCloseClosesAllClientsAndSession(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -292,7 +292,7 @@ class TunnelTest extends TestCase
         $this->assertCount(0, $tunnel->clientConnections);
     }
 
-    public function test_is_stale_returns_true_when_idle(): void
+    public function testIsStaleReturnsTrueWhenIdle(): void
     {
         $tunnel = new Tunnel(
             'server-123',
@@ -309,7 +309,7 @@ class TunnelTest extends TestCase
         $this->assertFalse($tunnel->isStale(120));
     }
 
-    public function test_register_client_sends_client_connect_to_server(): void
+    public function testRegisterClientSendsClientConnectToServer(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -348,7 +348,7 @@ class TunnelTest extends TestCase
         $this->assertSame(RelayFrameType::CLIENT_CONNECT, $decoded->type);
     }
 
-    public function test_remove_client_sends_client_disconnect_to_server(): void
+    public function testRemoveClientSendsClientDisconnectToServer(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -392,7 +392,7 @@ class TunnelTest extends TestCase
         $this->assertSame($channelId, $decoded->channelId());
     }
 
-    public function test_send_heartbeat_does_not_touch_last_frame_at(): void
+    public function testSendHeartbeatDoesNotTouchLastFrameAt(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -417,7 +417,7 @@ class TunnelTest extends TestCase
         $this->assertSame($initialLastFrameAt, $tunnel->lastFrameAt);
     }
 
-    public function test_is_stale_reflects_last_inbound_frame_not_outbound_heartbeat(): void
+    public function testIsStaleReflectsLastInboundFrameNotOutboundHeartbeat(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -440,14 +440,20 @@ class TunnelTest extends TestCase
         usleep(1000);
         $tunnel->sendHeartbeat();
 
-        $this->assertTrue($tunnel->isStale(90), 'Tunnel should still be stale after outbound heartbeat (lastFrameAt must not be refreshed by sendHeartbeat)');
+        $this->assertTrue(
+            $tunnel->isStale(90),
+            'Tunnel should still be stale after outbound heartbeat (lastFrameAt must not be refreshed by sendHeartbeat)'
+        );
 
         $tunnel->onServerMessage($this->codec->encode(RelayFrameType::HEARTBEAT, 0, ''));
 
-        $this->assertFalse($tunnel->isStale(90), 'Tunnel should not be stale after inbound heartbeat (lastFrameAt updated by onServerMessage)');
+        $this->assertFalse(
+            $tunnel->isStale(90),
+            'Tunnel should not be stale after inbound heartbeat (lastFrameAt updated by onServerMessage)'
+        );
     }
 
-    public function test_send_to_client_records_bytes_in_for_the_target_only(): void
+    public function testSendToClientRecordsBytesInForTheTargetOnly(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -493,7 +499,7 @@ class TunnelTest extends TestCase
         $this->assertGreaterThan(0, $tunnel->getBytesIn());
     }
 
-    public function test_send_to_server_increments_bytes_out(): void
+    public function testSendToServerIncrementsBytesOut(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -520,7 +526,7 @@ class TunnelTest extends TestCase
         $this->assertGreaterThan(0, $tunnel->getBytesOut());
     }
 
-    public function test_send_to_client_increments_bytes_in(): void
+    public function testSendToClientIncrementsBytesIn(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -552,7 +558,7 @@ class TunnelTest extends TestCase
         $this->assertGreaterThan(0, $tunnel->getBytesIn());
     }
 
-    public function test_client_to_server_data_is_tagged_with_channel_id(): void
+    public function testClientToServerDataIsTaggedWithChannelId(): void
     {
         $sessionId = 'session-456';
         $this->sessionManager
@@ -610,7 +616,7 @@ class TunnelTest extends TestCase
             . '.' . $b64('signature');
     }
 
-    public function test_hello_with_valid_jwt_activates_tunnel(): void
+    public function testHelloWithValidJwtActivatesTunnel(): void
     {
         $jwt = $this->jwtWithKid('k1');
 
@@ -641,7 +647,7 @@ class TunnelTest extends TestCase
         $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
     }
 
-    public function test_hello_with_invalid_jwt_rejects_tunnel(): void
+    public function testHelloWithInvalidJwtRejectsTunnel(): void
     {
         $jwt = $this->jwtWithKid('k1');
 
@@ -670,7 +676,7 @@ class TunnelTest extends TestCase
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
 
-    public function test_hello_with_mismatched_server_id_in_jwt_rejects_tunnel(): void
+    public function testHelloWithMismatchedServerIdInJwtRejectsTunnel(): void
     {
         $jwt = $this->jwtWithKid('k1');
 
@@ -699,7 +705,7 @@ class TunnelTest extends TestCase
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
 
-    public function test_http_response_frame_is_routed_to_proxy_manager(): void
+    public function testHttpResponseFrameIsRoutedToProxyManager(): void
     {
         $managerLogger = $this->createMock(StructuredLogger::class);
         // An HTTP_RESPONSE for an unknown request id makes the manager log a
@@ -745,7 +751,7 @@ class TunnelTest extends TestCase
         $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
     }
 
-    public function test_active_tunnel_closes_cleanly_on_undecodable_frame(): void
+    public function testActiveTunnelClosesCleanlyOnUndecodableFrame(): void
     {
         // A JSON HELLO/HELLO_ACK ({"type":...) arriving on an already-ACTIVE
         // tunnel is read by the binary FrameDecoder as frame type 0x70 ('p', the
@@ -806,7 +812,7 @@ class TunnelTest extends TestCase
      * buffer). It must be re-queued, the SERVER paused (upstream backpressure),
      * and the frame delivered byte-exact when the client's buffer drains.
      */
-    public function test_send_to_client_requeues_dropped_frame_and_delivers_it_on_drain(): void
+    public function testSendToClientRequeuesDroppedFrameAndDeliversItOnDrain(): void
     {
         $tunnel = $this->activeTunnel();
 
@@ -858,7 +864,7 @@ class TunnelTest extends TestCase
      * closes the tunnel with the backpressure-timeout reason (a hard, visible
      * failure) rather than leaving a silently corrupt stream.
      */
-    public function test_client_backpressure_timeout_closes_tunnel(): void
+    public function testClientBackpressureTimeoutClosesTunnel(): void
     {
         $tunnel = $this->activeTunnel();
         $this->serverWs->method('send')->willReturn(true);
@@ -895,7 +901,7 @@ class TunnelTest extends TestCase
      * in-flight proxy requests (those now belong to the promoted tunnel, and
      * failServer() is keyed by server_id).
      */
-    public function test_begin_drain_keeps_clients_during_grace_then_closes_without_failserver(): void
+    public function testBeginDrainKeepsClientsDuringGraceThenClosesWithoutFailserver(): void
     {
         // RelayProxyManager is final (cannot be mocked); use a real one and seed
         // one in-flight request for this server. The drain-end close must LEAVE it
@@ -960,7 +966,7 @@ class TunnelTest extends TestCase
      * 503 the legitimate incumbent's requests (HB-2.2 residual DoS via
      * failServer(), which is keyed by server_id).
      */
-    public function test_close_of_never_activated_tunnel_does_not_failserver(): void
+    public function testCloseOfNeverActivatedTunnelDoesNotFailserver(): void
     {
         $proxyManager = $this->newProxyManager();
         $this->seedPendingRequest($proxyManager, 'server-123');
@@ -1051,7 +1057,7 @@ class TunnelTest extends TestCase
      * clients paused (upstream backpressure), and the frame delivered byte-exact
      * when the server's buffer drains.
      */
-    public function test_send_to_server_body_requeues_dropped_frame_and_delivers_it_on_drain(): void
+    public function testSendToServerBodyRequeuesDroppedFrameAndDeliversItOnDrain(): void
     {
         $tunnel = $this->activeTunnel();
 
@@ -1108,7 +1114,7 @@ class TunnelTest extends TestCase
      * SERVER low-priority BODY path: if the server's buffer never drains, the
      * safety timeout closes the tunnel with the backpressure-timeout reason.
      */
-    public function test_server_backpressure_timeout_closes_tunnel(): void
+    public function testServerBackpressureTimeoutClosesTunnel(): void
     {
         $tunnel = $this->activeTunnel();
 
@@ -1171,7 +1177,7 @@ class TunnelTest extends TestCase
      * fired. Frames must be delivered in strict enqueue order, and any body
      * frame queued behind them must stay after the control frames.
      */
-    public function test_high_priority_frames_preserve_fifo_and_never_overtake_backlog(): void
+    public function testHighPriorityFramesPreserveFifoAndNeverOvertakeBacklog(): void
     {
         $tunnel = $this->activeTunnel();
 
@@ -1224,7 +1230,7 @@ class TunnelTest extends TestCase
      * be delivered in enqueue order once its buffer drains (a reordering
      * regression on the client path would flip them).
      */
-    public function test_client_queue_delivers_multiple_frames_in_fifo_order(): void
+    public function testClientQueueDeliversMultipleFramesInFifoOrder(): void
     {
         $tunnel = $this->activeTunnel();
         $this->serverWs->method('send')->willReturn(true);
@@ -1266,7 +1272,7 @@ class TunnelTest extends TestCase
      * disconnects will never fire its drain handler, so if its slot is not
      * released the server stays paused forever.
      */
-    public function test_remove_client_releases_backpressure_slot_and_resumes_server(): void
+    public function testRemoveClientReleasesBackpressureSlotAndResumesServer(): void
     {
         $tunnel = $this->activeTunnel();
         $this->serverWs->method('send')->willReturn(true); // CLIENT_CONNECT / DISCONNECT
@@ -1294,7 +1300,7 @@ class TunnelTest extends TestCase
      * count semantics). Draining one leaves the server paused (count 2→1);
      * draining the second resumes it (count 1→0).
      */
-    public function test_two_congested_clients_resume_server_only_after_both_drain(): void
+    public function testTwoCongestedClientsResumeServerOnlyAfterBothDrain(): void
     {
         $tunnel = $this->activeTunnel();
         $this->serverWs->method('send')->willReturn(true);
@@ -1343,7 +1349,7 @@ class TunnelTest extends TestCase
      * backpressure_overflow (a hard, visible failure) rather than dropping a
      * DATA frame (silent corruption).
      */
-    public function test_client_queue_overflow_closes_tunnel(): void
+    public function testClientQueueOverflowClosesTunnel(): void
     {
         $tunnel = $this->activeTunnel();
         $this->serverWs->method('send')->willReturn(true);
@@ -1372,7 +1378,7 @@ class TunnelTest extends TestCase
      * BODY queue overflow: exceeding MAX_BODY_QUEUE closes the tunnel with
      * backpressure_overflow rather than dropping a body frame.
      */
-    public function test_body_queue_overflow_closes_tunnel(): void
+    public function testBodyQueueOverflowClosesTunnel(): void
     {
         $tunnel = $this->activeTunnel();
         $this->serverWs->method('send')->willReturn(false); // server always full
@@ -1399,7 +1405,7 @@ class TunnelTest extends TestCase
      * a control frame (a dropped CANCEL/CLIENT_DISCONNECT would strand server
      * state / leak an in-flight request).
      */
-    public function test_high_priority_queue_overflow_closes_tunnel(): void
+    public function testHighPriorityQueueOverflowClosesTunnel(): void
     {
         $tunnel = $this->activeTunnel();
         $this->serverWs->method('send')->willReturn(false); // always full
@@ -1438,9 +1444,9 @@ class TunnelTest extends TestCase
      * only as INTER-request fairness, never for within-request ordering. The
      * actual per-channel fairness / anti-starvation guarantee (one bulk channel
      * must not starve another channel's browse request) is proved by
-     * {@see test_body_queue_round_robin_prevents_one_channel_starving_another}.
+     * {@see testBodyQueueRoundRobinPreventsOneChannelStarvingAnother}.
      */
-    public function test_is_high_priority_frame_classifies_by_type_without_decoding_payload(): void
+    public function testIsHighPriorityFrameClassifiesByTypeWithoutDecodingPayload(): void
     {
         $tunnel = $this->activeTunnel();
         $method = new \ReflectionMethod($tunnel, 'isHighPriorityFrame');
@@ -1451,7 +1457,11 @@ class TunnelTest extends TestCase
         // Real wire-codec stream sub-frames: must classify LOW and NOT throw.
         $streamLow = [
             'HEAD' => new RelayFrame(RelayFrameType::HTTP_REQUEST, 1, RelayHttpRequestCodec::encodeHead($head)),
-            'BODY' => new RelayFrame(RelayFrameType::HTTP_REQUEST, 1, RelayHttpRequestCodec::encodeBody("\x00\xFF binary\x01")),
+            'BODY' => new RelayFrame(
+                RelayFrameType::HTTP_REQUEST,
+                1,
+                RelayHttpRequestCodec::encodeBody("\x00\xFF binary\x01")
+            ),
             'END'  => new RelayFrame(RelayFrameType::HTTP_REQUEST, 1, RelayHttpRequestCodec::encodeEnd()),
             'DATA' => new RelayFrame(RelayFrameType::DATA, 1, "\x00\x01\x02 raw bytes"),
         ];
@@ -1485,7 +1495,7 @@ class TunnelTest extends TestCase
      * the SAME (LOW) priority class, they share one FIFO body queue and order is
      * preserved; a residual END-jumps-BODY reorder would fail this.
      */
-    public function test_chunked_request_head_body_end_deliver_in_order_under_backpressure(): void
+    public function testChunkedRequestHeadBodyEndDeliverInOrderUnderBackpressure(): void
     {
         $tunnel = $this->activeTunnel();
 
@@ -1546,7 +1556,7 @@ class TunnelTest extends TestCase
      * channel A's own HEAD/BODY/END chunks stay in strict intra-channel FIFO
      * order, so per-request framing is never corrupted.
      */
-    public function test_body_queue_round_robin_prevents_one_channel_starving_another(): void
+    public function testBodyQueueRoundRobinPreventsOneChannelStarvingAnother(): void
     {
         $tunnel = $this->activeTunnel();
 
@@ -1600,8 +1610,16 @@ class TunnelTest extends TestCase
         // FAIRNESS: B's request interleaves on the FIRST round-robin pass (index
         // 1, right after A's first chunk) — bounded delay, NOT after A's entire
         // 8-frame backlog. A flat-FIFO regression would put it at index 8.
-        $this->assertSame(1, $bIndex, 'browse request must interleave on the first pass, not wait for the whole bulk backlog');
-        $this->assertLessThan($burst, $bIndex, 'browse request delay must be bounded by the channel count, not the backlog size');
+        $this->assertSame(
+            1,
+            $bIndex,
+            'browse request must interleave on the first pass, not wait for the whole bulk backlog'
+        );
+        $this->assertLessThan(
+            $burst,
+            $bIndex,
+            'browse request delay must be bounded by the channel count, not the backlog size'
+        );
 
         // INTRA-CHANNEL FIFO: channel A's chunks stay in strict producer order.
         $aOrder = array_values(array_filter($order, fn (string $p): bool => $p !== $bPayload));
@@ -1618,7 +1636,7 @@ class TunnelTest extends TestCase
      * This drives a REAL Tunnel via onServerMessage (as RelayWorker::onMessage
      * does) and asserts the tunnel state, not merely that decode() throws.
      */
-    public function test_tunnel_closes_on_frame_buffer_overflow(): void
+    public function testTunnelClosesOnFrameBufferOverflow(): void
     {
         $sessionId = 'session-overflow';
         $this->sessionManager
@@ -1704,7 +1722,7 @@ class TunnelTest extends TestCase
      * Unlimited (throttle_bps=0) channel multiplexed on the same tunnel must keep
      * sending immediately.
      */
-    public function test_throttled_frame_is_queued_not_sent_and_never_pauses_server(): void
+    public function testThrottledFrameIsQueuedNotSentAndNeverPausesServer(): void
     {
         $tunnel = $this->activeThrottleTunnel();
 
@@ -1729,10 +1747,16 @@ class TunnelTest extends TestCase
         $tunnel->registerClient($client2);
 
         // Throttled DATA for channel 1 is queued (not delivered).
-        $tunnel->sendToClient($client1->channelId, new RelayFrame(RelayFrameType::DATA, $client1->channelId, 'blocked'));
+        $tunnel->sendToClient(
+            $client1->channelId,
+            new RelayFrame(RelayFrameType::DATA, $client1->channelId, 'blocked')
+        );
 
         // Unlimited DATA for channel 2 is delivered immediately (unaffected).
-        $tunnel->sendToClient($client2->channelId, new RelayFrame(RelayFrameType::DATA, $client2->channelId, 'through'));
+        $tunnel->sendToClient(
+            $client2->channelId,
+            new RelayFrame(RelayFrameType::DATA, $client2->channelId, 'through')
+        );
 
         $queues = $this->readPendingClientFrames($tunnel);
         $this->assertArrayHasKey($client1->channelId, $queues);
@@ -1746,7 +1770,7 @@ class TunnelTest extends TestCase
      * as simulated time advances, while a second (Unlimited) channel on the SAME
      * server tunnel keeps delivering immediately.
      */
-    public function test_throttled_queue_drains_in_fifo_at_token_rate_other_channel_unaffected(): void
+    public function testThrottledQueueDrainsInFifoAtTokenRateOtherChannelUnaffected(): void
     {
         $tunnel = $this->activeThrottleTunnel();
         $this->serverWs->expects($this->never())->method('pauseRecv');
@@ -1809,7 +1833,7 @@ class TunnelTest extends TestCase
      * per-channel failure), never the whole tunnel and never the shared server —
      * so memory cannot grow without limit.
      */
-    public function test_throttled_queue_is_bounded_and_overflow_closes_only_the_channel(): void
+    public function testThrottledQueueIsBoundedAndOverflowClosesOnlyTheChannel(): void
     {
         $tunnel = $this->activeThrottleTunnel();
         $this->serverWs->expects($this->never())->method('pauseRecv');
@@ -1847,7 +1871,7 @@ class TunnelTest extends TestCase
      * send-buffer backpressure slot, so mis-releasing one would corrupt the
      * count (and could false-resume/false-close the tunnel).
      */
-    public function test_remove_throttled_client_does_not_touch_backpressure_count(): void
+    public function testRemoveThrottledClientDoesNotTouchBackpressureCount(): void
     {
         $tunnel = $this->activeThrottleTunnel();
         $this->serverWs->expects($this->never())->method('resumeRecv');
@@ -1876,7 +1900,7 @@ class TunnelTest extends TestCase
      * the shared server is NOT paused — tokens are not charged for a frame that
      * did not go out.
      */
-    public function test_throttled_drain_stops_when_client_buffer_full_without_pausing_server(): void
+    public function testThrottledDrainStopsWhenClientBufferFullWithoutPausingServer(): void
     {
         $tunnel = $this->activeThrottleTunnel();
         $this->serverWs->expects($this->never())->method('pauseRecv');
@@ -1903,7 +1927,7 @@ class TunnelTest extends TestCase
      * The drain timer is armed at most once (an already-armed id is left intact)
      * and is cancelled when the client is removed.
      */
-    public function test_throttle_drain_timer_guard_and_cancel_paths(): void
+    public function testThrottleDrainTimerGuardAndCancelPaths(): void
     {
         $tunnel = $this->activeThrottleTunnel();
 
@@ -1947,7 +1971,7 @@ class TunnelTest extends TestCase
      * control (`delay()` never called) is asserted alongside the positive one, so
      * the test fails in BOTH directions.
      */
-    public function test_throttle_drain_timer_is_repeating_and_is_cancelled_via_the_event_driver(): void
+    public function testThrottleDrainTimerIsRepeatingAndIsCancelledViaTheEventDriver(): void
     {
         $recorder = new class implements \Workerman\Events\EventInterface {
             /** @var list<float> */

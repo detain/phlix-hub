@@ -28,9 +28,9 @@ use function count;
  * `@covers` does not merely ANNOTATE — it DISCARDS every executed line outside
  * the named classes. This suite drives the five shipped tools directly: the
  * registry's constructor calls `name()` and `requiredScope()` on each,
- * {@see test_describe_lists_every_tool_with_a_schema_and_a_scope()} calls
+ * {@see testDescribeListsEveryToolWithASchemaAndAScope()} calls
  * `describe()` (which calls `description()` and `inputSchema()` on each), and
- * {@see test_every_shipped_tool_declares_a_usable_schema()} asserts, per tool,
+ * {@see testEveryShippedToolDeclaresAUsableSchema()} asserts, per tool,
  * that the schema is an object, that it refuses unknown properties, that the
  * description is non-empty and that the required scope is one {@see McpScopes}
  * knows. Those are assertions ABOUT each tool class, not incidental traffic, so
@@ -57,7 +57,7 @@ final class McpToolRegistryTest extends TestCase
      * registration wins and nothing notices. A registry keyed by name has the
      * same hazard, so it throws instead.
      */
-    public function test_a_duplicate_tool_name_throws_rather_than_replacing(): void
+    public function testADuplicateToolNameThrowsRatherThanReplacing(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessageMatches('/Duplicate MCP tool name/');
@@ -69,7 +69,7 @@ final class McpToolRegistryTest extends TestCase
      * A tool that requires a scope nobody can hold would be silently dead —
      * present in `tools/list`, refused on every call. Fail at wiring instead.
      */
-    public function test_a_tool_requiring_an_unknown_scope_throws(): void
+    public function testAToolRequiringAnUnknownScopeThrows(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessageMatches('/unknown scope/');
@@ -108,7 +108,7 @@ final class McpToolRegistryTest extends TestCase
         }]);
     }
 
-    public function test_describe_lists_every_tool_with_a_schema_and_a_scope(): void
+    public function testDescribeListsEveryToolWithASchemaAndAScope(): void
     {
         $registry = self::productionRegistry();
         $described = $registry->describe();
@@ -128,7 +128,7 @@ final class McpToolRegistryTest extends TestCase
      * and a filtered list makes "you lack the scope" indistinguishable from "the
      * tool was removed".
      */
-    public function test_describe_is_not_filtered_by_scope(): void
+    public function testDescribeIsNotFilteredByScope(): void
     {
         $registry = self::productionRegistry();
 
@@ -136,7 +136,7 @@ final class McpToolRegistryTest extends TestCase
         self::assertTrue($registry->has('get_playback_info'));
     }
 
-    public function test_calling_an_unregistered_tool_is_a_named_404(): void
+    public function testCallingAnUnregisteredToolIsANamed404(): void
     {
         $outcome = self::productionRegistry()->call('rm_rf', [], self::context());
 
@@ -150,7 +150,7 @@ final class McpToolRegistryTest extends TestCase
      *
      * @dataProvider shippedToolProvider
      */
-    public function test_every_shipped_tool_declares_a_usable_schema(McpToolInterface $tool): void
+    public function testEveryShippedToolDeclaresAUsableSchema(McpToolInterface $tool): void
     {
         $schema = $tool->inputSchema();
 

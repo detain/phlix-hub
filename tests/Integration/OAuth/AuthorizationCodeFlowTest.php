@@ -682,7 +682,11 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         // destination the real client never registered.
         self::assertSame(400, $response->statusCode);
         self::assertArrayNotHasKey('Location', $response->headers, 'an unregistered URI must never be redirected to');
-        self::assertStringNotContainsString($candidate, $response->body, 'the rejected URI was reflected into the page');
+        self::assertStringNotContainsString(
+            $candidate,
+            $response->body,
+            'the rejected URI was reflected into the page'
+        );
         self::assertSame(0, $this->countRows('oauth_consent_requests'));
 
         // Control: the registered URI, same request otherwise, renders the

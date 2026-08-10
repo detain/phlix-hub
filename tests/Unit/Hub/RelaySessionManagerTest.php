@@ -347,7 +347,8 @@ final class RelaySessionManagerTest extends TestCase
         $logger = $this->createMock(StructuredLogger::class);
 
         $db->method('query')->willReturnCallback(
-            function (string $sql, $params = null): void {},
+            function (string $sql, $params = null): void {
+            },
         );
 
         $manager = new RelaySessionManager($db, $logger);

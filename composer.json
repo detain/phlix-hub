@@ -43,7 +43,7 @@
     "scripts": {
         "test": "phpunit",
         "stan": "phpstan analyze --no-progress",
-        "cs": "phpcs --standard=PSR12 src/",
+        "cs": "@php scripts/assert-phpcs-corpus.php",
         "psalm": "psalm --no-progress",
         "start": "php public/index.php start"
     }

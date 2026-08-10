@@ -24,7 +24,7 @@ use function time;
  */
 final class McpTokenServiceTest extends TestCase
 {
-    public function test_mint_persists_only_a_hash_never_the_plaintext(): void
+    public function testMintPersistsOnlyAHashNeverThePlaintext(): void
     {
         $db = $this->createMock(Connection::class);
 
@@ -52,7 +52,7 @@ final class McpTokenServiceTest extends TestCase
         }
     }
 
-    public function test_a_minted_token_carries_the_prefix_and_enough_entropy(): void
+    public function testAMintedTokenCarriesThePrefixAndEnoughEntropy(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
@@ -69,7 +69,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertFalse(McpTokenService::looksLikeMcpToken('eyJhbGciOiJIUzI1NiJ9.x'));
     }
 
-    public function test_mint_drops_unknown_scopes_rather_than_storing_them(): void
+    public function testMintDropsUnknownScopesRatherThanStoringThem(): void
     {
         $db = $this->createMock(Connection::class);
         /** @var array<string, mixed> $captured */
@@ -88,7 +88,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertSame(McpScopes::SERVERS_READ, $captured['scopes']);
     }
 
-    public function test_the_default_ttl_is_long_but_finite(): void
+    public function testTheDefaultTtlIsLongButFinite(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
@@ -103,7 +103,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertLessThan(400 * 86400, McpTokenService::DEFAULT_TTL_SECONDS);
     }
 
-    public function test_a_non_positive_ttl_falls_back_to_the_default(): void
+    public function testANonPositiveTtlFallsBackToTheDefault(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
@@ -114,7 +114,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertSame($before + McpTokenService::DEFAULT_TTL_SECONDS, $minted['expires_at']);
     }
 
-    public function test_validate_requires_an_active_unexpired_unrevoked_row(): void
+    public function testValidateRequiresAnActiveUnexpiredUnrevokedRow(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects(self::once())
@@ -144,7 +144,7 @@ final class McpTokenServiceTest extends TestCase
     /**
      * @dataProvider unusableRowProvider
      */
-    public function test_validate_fails_closed(mixed $rows): void
+    public function testValidateFailsClosed(mixed $rows): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn($rows);
@@ -167,7 +167,7 @@ final class McpTokenServiceTest extends TestCase
         ];
     }
 
-    public function test_an_empty_token_is_rejected_without_a_query(): void
+    public function testAnEmptyTokenIsRejectedWithoutAQuery(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects(self::never())->method('query');
@@ -179,7 +179,7 @@ final class McpTokenServiceTest extends TestCase
      * The `user_id` predicate on revoke is load-bearing: without it, learning a
      * token id would let anyone cut somebody else's credential.
      */
-    public function test_revoke_is_scoped_to_the_owning_user(): void
+    public function testRevokeIsScopedToTheOwningUser(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects(self::once())
@@ -196,7 +196,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertTrue((new McpTokenService($db))->revokeForUser('user-1', 'row-1'));
     }
 
-    public function test_revoking_nothing_reports_false(): void
+    public function testRevokingNothingReportsFalse(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn(0);
@@ -204,7 +204,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertFalse((new McpTokenService($db))->revokeForUser('user-1', 'row-1'));
     }
 
-    public function test_revoke_short_circuits_on_empty_identifiers(): void
+    public function testRevokeShortCircuitsOnEmptyIdentifiers(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects(self::never())->method('query');
@@ -214,7 +214,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertFalse($service->revokeForUser('user-1', ''));
     }
 
-    public function test_list_for_user_returns_metadata_and_never_the_hash(): void
+    public function testListForUserReturnsMetadataAndNeverTheHash(): void
     {
         $now = time();
         $db = $this->createMock(Connection::class);
@@ -270,7 +270,7 @@ final class McpTokenServiceTest extends TestCase
      * The sweep must be an OR, not an AND: with AND the common
      * expired-never-revoked row would accumulate forever.
      */
-    public function test_prune_removes_long_expired_or_revoked_rows(): void
+    public function testPruneRemovesLongExpiredOrRevokedRows(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects(self::once())
@@ -286,7 +286,7 @@ final class McpTokenServiceTest extends TestCase
         self::assertSame(3, (new McpTokenService($db))->pruneExpiredTokens());
     }
 
-    public function test_touch_updates_last_used_and_ignores_an_empty_id(): void
+    public function testTouchUpdatesLastUsedAndIgnoresAnEmptyId(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects(self::once())

@@ -66,7 +66,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->queries = [];
     }
 
-    public function test_flush_noops_when_collector_disabled(): void
+    public function testFlushNoopsWhenCollectorDisabled(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, false);
@@ -79,7 +79,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame([], $this->queries);
     }
 
-    public function test_flush_upserts_overall_rollup_with_histogram_columns(): void
+    public function testFlushUpsertsOverallRollupWithHistogramColumns(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -96,7 +96,10 @@ final class MetricsFlushServiceTest extends TestCase
         $q = $overall[0];
         $this->assertStringContainsString('ON DUPLICATE KEY UPDATE', $q['sql']);
         $this->assertStringContainsString('request_count   = request_count + VALUES(request_count)', $q['sql']);
-        $this->assertStringContainsString('duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max))', $q['sql']);
+        $this->assertStringContainsString(
+            'duration_ms_max = GREATEST(duration_ms_max, VALUES(duration_ms_max))',
+            $q['sql']
+        );
 
         $p = $q['params'];
         $this->assertSame(date('Y-m-d H:i:s', 1000), $p['bucket']);
@@ -115,7 +118,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(0, $p['h8']);
     }
 
-    public function test_flush_upserts_route_rollup(): void
+    public function testFlushUpsertsRouteRollup(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -136,7 +139,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(1, $p['request_count']);
     }
 
-    public function test_connection_rate_is_zero_on_first_flush_and_delta_on_second(): void
+    public function testConnectionRateIsZeroOnFirstFlushAndDeltaOnSecond(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -166,7 +169,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(15000, $second[0]['params']['bytes_out_val']);
     }
 
-    public function test_connection_rate_never_negative(): void
+    public function testConnectionRateNeverNegative(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -186,7 +189,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertGreaterThanOrEqual(0, $conn[0]['params']['bytes_out_rate']);
     }
 
-    public function test_prune_emits_three_deletes_with_cutoffs(): void
+    public function testPruneEmitsThreeDeletesWithCutoffs(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -212,7 +215,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(date('Y-m-d H:i:s', $now - 7 * 86400), $rollupDeletes[0]['params']['cutoff']);
     }
 
-    public function test_prune_is_throttled_across_flushes(): void
+    public function testPruneIsThrottledAcrossFlushes(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -230,7 +233,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(1, $this->queriesMatching('DELETE FROM metrics_rollup'));
     }
 
-    public function test_flush_does_not_prune_when_should_prune_is_false(): void
+    public function testFlushDoesNotPruneWhenShouldPruneIsFalse(): void
     {
         // [H-W3] single-pruner gate — the NON-pruning worker (an HTTP or the
         // client-relay worker). It still flushes its own registry every tick,
@@ -260,7 +263,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(0, $this->queriesMatching('DELETE FROM metrics_route_rollup'));
     }
 
-    public function test_flush_prunes_only_on_the_designated_pruning_worker(): void
+    public function testFlushPrunesOnlyOnTheDesignatedPruningWorker(): void
     {
         // The single designated pruner (the count=1 relay worker) passes
         // $shouldPrune=true, so on the throttled prune tick it — and only it —
@@ -279,7 +282,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(1, $this->queriesMatching('DELETE FROM metrics_route_rollup'));
     }
 
-    public function test_in_ram_connection_eviction_runs_even_when_prune_is_gated_off(): void
+    public function testInRamConnectionEvictionRunsEvenWhenPruneIsGatedOff(): void
     {
         // Decoupling proof: the per-worker in-RAM registry eviction is NOT gated
         // by $shouldPrune — it must keep every worker's connection map bounded
@@ -307,7 +310,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(0, $this->queriesMatching('DELETE FROM metrics_connections'));
     }
 
-    public function test_flush_forgets_rate_state_for_departed_connections(): void
+    public function testFlushForgetsRateStateForDepartedConnections(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -336,7 +339,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(0, $conn[0]['params']['bytes_out_rate']);
     }
 
-    public function test_no_metrics_insert_has_prefix_colliding_bind_params(): void
+    public function testNoMetricsInsertHasPrefixCollidingBindParams(): void
     {
         // Regression: under emulated prepares (which PhlixMySQLConnection requires)
         // a named placeholder that is a strict PREFIX of another in the same
@@ -373,7 +376,7 @@ final class MetricsFlushServiceTest extends TestCase
         }
     }
 
-    public function test_flush_queries_honour_the_workerman_binding_contract(): void
+    public function testFlushQueriesHonourTheWorkermanBindingContract(): void
     {
         // The real proof: BindingContractConnection replays workerman's bind()
         // rule — every :placeholder must have a colon-FREE key, and a ':'-prefixed
@@ -408,7 +411,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertTrue($has('DELETE FROM metrics_connections'));
     }
 
-    public function test_flush_interval_seconds_exposes_configured_cadence(): void
+    public function testFlushIntervalSecondsExposesConfiguredCadence(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -425,7 +428,7 @@ final class MetricsFlushServiceTest extends TestCase
         );
     }
 
-    public function test_prune_tick_evicts_stale_registry_connections(): void
+    public function testPruneTickEvictsStaleRegistryConnections(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -449,7 +452,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertArrayNotHasKey('stale-1', $registry->snapshotConnections());
     }
 
-    public function test_prune_tick_keeps_live_registry_connections(): void
+    public function testPruneTickKeepsLiveRegistryConnections(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -471,7 +474,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertArrayHasKey('live-1', $registry->snapshotConnections());
     }
 
-    public function test_flush_drains_and_persists_relay_metrics_into_rollup_columns(): void
+    public function testFlushDrainsAndPersistsRelayMetricsIntoRollupColumns(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -529,7 +532,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(0, $p['rl8']);
     }
 
-    public function test_relay_flush_skips_an_idle_all_zero_window(): void
+    public function testRelayFlushSkipsAnIdleAllZeroWindow(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -541,7 +544,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(0, $this->queriesMatching('relay_pending_requests'));
     }
 
-    public function test_relay_metrics_are_drained_so_a_second_flush_writes_nothing(): void
+    public function testRelayMetricsAreDrainedSoASecondFlushWritesNothing(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -560,7 +563,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertCount(0, $this->queriesMatching('relay_pending_requests'));
     }
 
-    public function test_relay_insert_has_no_prefix_colliding_bind_params(): void
+    public function testRelayInsertHasNoPrefixCollidingBindParams(): void
     {
         // Same emulated-prepares guard as test_no_metrics_insert_has_prefix_...
         // but for the relay UPSERT: :rl0..:rl8 / :re503 / :re504 / :rpending etc.
@@ -594,7 +597,7 @@ final class MetricsFlushServiceTest extends TestCase
         }
     }
 
-    public function test_relay_flush_honours_the_workerman_binding_contract(): void
+    public function testRelayFlushHonoursTheWorkermanBindingContract(): void
     {
         // Drive the relay UPSERT through BindingContractConnection: any colon-in-
         // key or double-colon mis-keying would throw HY093 here.
@@ -614,7 +617,7 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertTrue($has('relay_pending_requests'), 'the relay UPSERT must have run without an HY093');
     }
 
-    public function test_relay_latency_histogram_bucketing_writes_its_own_bucket(): void
+    public function testRelayLatencyHistogramBucketingWritesItsOwnBucket(): void
     {
         // A latency observed in an EARLIER bucket than the flush's scalar bucket
         // is written into that earlier bucket's row (the histogram is

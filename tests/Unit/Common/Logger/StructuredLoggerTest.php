@@ -18,7 +18,7 @@ use ReflectionProperty;
  */
 final class StructuredLoggerTest extends TestCase
 {
-    public function test_monolog_loop_detection_is_disabled_for_coroutine_safety(): void
+    public function testMonologLoopDetectionIsDisabledForCoroutineSafety(): void
     {
         // Monolog's infinite-loop guard keys recursion depth on the current PHP
         // Fiber, but Swoole coroutines are not Fibers — so under SWOOLE_HOOK_ALL a

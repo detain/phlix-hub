@@ -4,7 +4,8 @@
  * Concurrent-writer fixture for {@see \Phlix\Hub\Common\RateLimit\DbRateLimiter}.
  *
  * Run as an ISOLATED child php process (one per concurrent writer) by
- * {@see \Phlix\Hub\Tests\Integration\Common\RateLimit\DbRateLimiterIntegrationTest::testConcurrentHitsDoNotLoseIncrements}.
+ * `DbRateLimiterIntegrationTest::testConcurrentHitsDoNotLoseIncrements`
+ * ({@see \Phlix\Hub\Tests\Integration\Common\RateLimit\DbRateLimiterIntegrationTest}).
  * Each process opens its OWN real {@see Connection} — a distinct MySQL session —
  * and fires `$iterations` {@see DbRateLimiter::hit()} calls at the SAME shared
  * `$key`, so the parent test can prove the atomic `INSERT … ON DUPLICATE KEY

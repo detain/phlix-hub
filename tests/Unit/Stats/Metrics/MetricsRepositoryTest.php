@@ -52,7 +52,7 @@ final class MetricsRepositoryTest extends TestCase
         $this->seenSql = [];
     }
 
-    public function test_snapshot_aggregates_and_derives_rates(): void
+    public function testSnapshotAggregatesAndDerivesRates(): void
     {
         $rollupRow = [
             'request_count' => 100,
@@ -95,7 +95,7 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertSame(1000, $snap['p99_ms']);
     }
 
-    public function test_snapshot_handles_empty_rollup(): void
+    public function testSnapshotHandlesEmptyRollup(): void
     {
         $mock = $this->mockConnection([
             'FROM metrics_rollup'      => [],
@@ -119,7 +119,7 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertSame(0, $snap['p99_ms']);
     }
 
-    public function test_snapshot_all_slow_requests_report_overflow_bound(): void
+    public function testSnapshotAllSlowRequestsReportOverflowBound(): void
     {
         $rollupRow = [
             'request_count' => 4,
@@ -154,7 +154,7 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertSame(5000, $snap['p95_ms']);
     }
 
-    public function test_history_hydrates_and_computes_percentiles_per_row(): void
+    public function testHistoryHydratesAndComputesPercentilesPerRow(): void
     {
         $row = [
             'bucket'    => '2026-07-01 10:00:00',
@@ -202,7 +202,7 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertStringNotContainsString('GROUP BY FLOOR', $historySql);
     }
 
-    public function test_live_connections_hydrates_rows(): void
+    public function testLiveConnectionsHydratesRows(): void
     {
         $rows = [
             [
@@ -242,7 +242,7 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertSame(1800, $c['bytes_out_rate']);
     }
 
-    public function test_top_routes_computes_avg_and_hydrates(): void
+    public function testTopRoutesComputesAvgAndHydrates(): void
     {
         $rows = [
             [
@@ -285,7 +285,7 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertSame(0, $routes[1]['avg_ms']);
     }
 
-    public function test_active_connection_count_uses_configured_ttl(): void
+    public function testActiveConnectionCountUsesConfiguredTtl(): void
     {
         $captured = [];
         $mock = $this->createMock(Connection::class);
@@ -311,7 +311,7 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertSame(['ttl' => 42], $captured);
     }
 
-    public function test_all_read_queries_are_select_leading(): void
+    public function testAllReadQueriesAreSelectLeading(): void
     {
         $mock = $this->mockConnection([
             'FROM metrics_rollup'       => [],

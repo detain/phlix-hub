@@ -31,7 +31,7 @@ final class McpProtocolTest extends TestCase
      * The list is non-empty, duplicate-free and newest-first — the order
      * {@see McpProtocol::LATEST} claims to head.
      */
-    public function test_the_supported_list_is_coherent(): void
+    public function testTheSupportedListIsCoherent(): void
     {
         $supported = McpProtocol::SUPPORTED;
 
@@ -60,7 +60,7 @@ final class McpProtocolTest extends TestCase
      * the promise the list makes to a client, and a malformed entry would be a
      * revision no client ever sends — i.e. a silent no-op.
      */
-    public function test_every_supported_revision_is_a_date_stamp(): void
+    public function testEverySupportedRevisionIsADateStamp(): void
     {
         foreach (McpProtocol::SUPPORTED as $revision) {
             self::assertSame(
@@ -76,7 +76,7 @@ final class McpProtocolTest extends TestCase
      * speaks, or the assumption is incoherent: the hub would be assuming a
      * revision it would then 400 if the client stated it explicitly.
      */
-    public function test_the_header_absent_assumption_is_itself_supported(): void
+    public function testTheHeaderAbsentAssumptionIsItselfSupported(): void
     {
         self::assertTrue(McpProtocol::isSupported(McpProtocol::ASSUMED_WHEN_HEADER_ABSENT));
     }
@@ -88,7 +88,7 @@ final class McpProtocolTest extends TestCase
      * with the thing it negotiates for — the endpoint would advertise one
      * revision and accept another.
      */
-    public function test_the_controller_constant_is_the_same_value(): void
+    public function testTheControllerConstantIsTheSameValue(): void
     {
         self::assertSame(McpProtocol::LATEST, McpController::PROTOCOL_VERSION);
     }
@@ -96,7 +96,7 @@ final class McpProtocolTest extends TestCase
     /**
      * @dataProvider negotiationProvider
      */
-    public function test_negotiate_echoes_what_it_supports_and_downgrades_the_rest(
+    public function testNegotiateEchoesWhatItSupportsAndDowngradesTheRest(
         string $requested,
         string $expected,
     ): void {

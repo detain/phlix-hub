@@ -1,12 +1,11 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * Process-isolated end-to-end smoke for the B4 transaction-scoped coroutine
  * mutex on {@see \Phlix\Hub\Common\Database\PhlixMySQLConnection}.
  *
- * Run by {@see \Phlix\Hub\Tests\Unit\Common\Database\PhlixMySQLConnectionTest::testConcurrentTransactionSerialisesSecondCoroutine()}
+ * Run by `PhlixMySQLConnectionTest::testConcurrentTransactionSerialisesSecondCoroutine()`
+ * ({@see \Phlix\Hub\Tests\Unit\Common\Database\PhlixMySQLConnectionTest})
  * in a CHILD php process: nested Swoole coroutines inside the PHPUnit runner
  * can segfault (exit 139) — the exact runtime fragility this mutex guards
  * against — so the real cross-coroutine Channel hand-off is proven here, out
@@ -32,6 +31,8 @@ declare(strict_types=1);
  * `PhlixMySQLConnectionTest::testConcurrentTransactionSerialisesSecondCoroutine()`
  * on BOTH coverage drivers.
  */
+
+declare(strict_types=1);
 
 // Silence swoole's reactor/coroutine TRACE/DEBUG chatter so stdout is clean.
 if (\function_exists('swoole_async_set')) {

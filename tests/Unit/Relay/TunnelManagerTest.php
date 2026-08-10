@@ -36,7 +36,7 @@ class TunnelManagerTest extends TestCase
         $this->sessionManager = $this->createMock(RelaySessionManager::class);
     }
 
-    public function test_accept_server_creates_new_tunnel(): void
+    public function testAcceptServerCreatesNewTunnel(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -59,7 +59,7 @@ class TunnelManagerTest extends TestCase
         $this->assertSame(Tunnel::STATUS_PENDING, $tunnel->status);
     }
 
-    public function test_accept_server_does_not_close_incumbent_immediately(): void
+    public function testAcceptServerDoesNotCloseIncumbentImmediately(): void
     {
         // HB-2.2: The incumbent tunnel must NOT be closed in acceptServer().
         // It is only closed after the new tunnel's JWT validates successfully
@@ -104,7 +104,7 @@ class TunnelManagerTest extends TestCase
         $this->assertNotSame(Tunnel::STATUS_CLOSED, $tunnel1->status);
     }
 
-    public function test_finalize_server_connection_drains_then_displaces_incumbent(): void
+    public function testFinalizeServerConnectionDrainsThenDisplacesIncumbent(): void
     {
         // HB-2.2 + H-R6: After JWT validation succeeds, finalizeServerConnection()
         // promotes the validated tunnel into the routing map and DRAINS the
@@ -154,7 +154,7 @@ class TunnelManagerTest extends TestCase
         $this->assertSame($tunnel2, $manager->getTunnelForServer('server-abc'));
     }
 
-    public function test_finalize_server_connection_immediate_displace_when_grace_zero(): void
+    public function testFinalizeServerConnectionImmediateDisplaceWhenGraceZero(): void
     {
         // Grace of 0 disables the drain — the incumbent is displaced immediately.
         $manager = new TunnelManager(
@@ -180,7 +180,7 @@ class TunnelManagerTest extends TestCase
         $this->assertSame($tunnel2, $manager->getTunnelForServer('server-abc'));
     }
 
-    public function test_finalize_server_connection_does_nothing_when_no_incumbent(): void
+    public function testFinalizeServerConnectionDoesNothingWhenNoIncumbent(): void
     {
         // finalizeServerConnection() is safe to call when there is no incumbent
         // (i.e., this was a fresh connection, not a reconnect).
@@ -206,7 +206,7 @@ class TunnelManagerTest extends TestCase
         $this->assertNotNull($manager->getTunnelForServer('server-abc'));
     }
 
-    public function test_abort_pending_connection_leaves_incumbent_routable(): void
+    public function testAbortPendingConnectionLeavesIncumbentRoutable(): void
     {
         // HB-2.2: a rejected reconnect (bad HELLO) must be discarded WITHOUT
         // touching the live incumbent, which stays routable.
@@ -240,7 +240,7 @@ class TunnelManagerTest extends TestCase
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel2->status);
     }
 
-    public function test_abort_pending_connection_removes_fresh_rejected_tunnel(): void
+    public function testAbortPendingConnectionRemovesFreshRejectedTunnel(): void
     {
         // Fresh connection (no incumbent) whose HELLO fails: the rejected tunnel
         // was placed directly in the map and must be removed so getTunnelForServer
@@ -263,7 +263,7 @@ class TunnelManagerTest extends TestCase
         $this->assertSame(Tunnel::STATUS_CLOSED, $tunnel->status);
     }
 
-    public function test_get_tunnel_for_server_returns_tunnel_when_exists(): void
+    public function testGetTunnelForServerReturnsTunnelWhenExists(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -286,7 +286,7 @@ class TunnelManagerTest extends TestCase
         $this->assertSame('server-abc', $tunnel->serverId);
     }
 
-    public function test_get_tunnel_for_server_returns_null_when_not_found(): void
+    public function testGetTunnelForServerReturnsNullWhenNotFound(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -299,7 +299,7 @@ class TunnelManagerTest extends TestCase
         $this->assertNull($tunnel);
     }
 
-    public function test_accept_client_returns_null_when_tunnel_not_found(): void
+    public function testAcceptClientReturnsNullWhenTunnelNotFound(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -314,7 +314,7 @@ class TunnelManagerTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_accept_client_returns_null_when_tunnel_not_active(): void
+    public function testAcceptClientReturnsNullWhenTunnelNotActive(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -338,7 +338,7 @@ class TunnelManagerTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_accept_client_creates_client_connection_when_tunnel_active(): void
+    public function testAcceptClientCreatesClientConnectionWhenTunnelActive(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -372,7 +372,7 @@ class TunnelManagerTest extends TestCase
         $this->assertFalse($result->isThrottled());
     }
 
-    public function test_accept_client_attaches_resolved_user_throttle(): void
+    public function testAcceptClientAttachesResolvedUserThrottle(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -402,7 +402,7 @@ class TunnelManagerTest extends TestCase
         $this->assertNotNull($result->throttleBucket);
     }
 
-    public function test_accept_client_unlimited_when_user_throttle_is_zero(): void
+    public function testAcceptClientUnlimitedWhenUserThrottleIsZero(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -429,7 +429,7 @@ class TunnelManagerTest extends TestCase
         $this->assertNull($result->throttleBucket);
     }
 
-    public function test_accept_client_fails_open_to_unlimited_when_throttle_lookup_throws(): void
+    public function testAcceptClientFailsOpenToUnlimitedWhenThrottleLookupThrows(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -460,7 +460,7 @@ class TunnelManagerTest extends TestCase
         $this->assertFalse($result->isThrottled());
     }
 
-    public function test_close_tunnel_closes_server_and_removes_from_map(): void
+    public function testCloseTunnelClosesServerAndRemovesFromMap(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -493,7 +493,7 @@ class TunnelManagerTest extends TestCase
         $this->assertNull($manager->getTunnelForServer('server-abc'));
     }
 
-    public function test_all_tunnels_yields_only_active_tunnels(): void
+    public function testAllTunnelsYieldsOnlyActiveTunnels(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -527,7 +527,7 @@ class TunnelManagerTest extends TestCase
         $this->assertArrayNotHasKey('server-2', $activeTunnels);
     }
 
-    public function test_get_active_tunnel_count_returns_correct_count(): void
+    public function testGetActiveTunnelCountReturnsCorrectCount(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -555,7 +555,7 @@ class TunnelManagerTest extends TestCase
         $this->assertSame(1, $manager->getActiveTunnelCount());
     }
 
-    public function test_has_tunnel_returns_true_when_active(): void
+    public function testHasTunnelReturnsTrueWhenActive(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,
@@ -580,7 +580,7 @@ class TunnelManagerTest extends TestCase
         $this->assertTrue($manager->hasTunnel('server-abc'));
     }
 
-    public function test_remove_tunnel_removes_from_map(): void
+    public function testRemoveTunnelRemovesFromMap(): void
     {
         $manager = new TunnelManager(
             $this->sessionManager,

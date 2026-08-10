@@ -36,7 +36,7 @@ class TlsCertificateManagerTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_getCertificatePath_returns_null_when_not_exists(): void
+    public function testGetCertificatePathReturnsNullWhenNotExists(): void
     {
         $subdomain = 'nonexistent';
 
@@ -45,7 +45,7 @@ class TlsCertificateManagerTest extends TestCase
         $this->assertNull($path);
     }
 
-    public function test_getPrivateKeyPath_returns_null_when_not_exists(): void
+    public function testGetPrivateKeyPathReturnsNullWhenNotExists(): void
     {
         $subdomain = 'nonexistent-key';
 
@@ -54,7 +54,7 @@ class TlsCertificateManagerTest extends TestCase
         $this->assertNull($path);
     }
 
-    public function test_certificate_directory_structure_created(): void
+    public function testCertificateDirectoryStructureCreated(): void
     {
         $subdomain = 'test-dir';
         $fqdn = $subdomain . '.phlix.media';
@@ -82,7 +82,7 @@ class TlsCertificateManagerTest extends TestCase
      * something. It must throw clearly so a future regression is
      * caught immediately.
      */
-    public function test_provisionCertificate_throws_not_implemented(): void
+    public function testProvisionCertificateThrowsNotImplemented(): void
     {
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage(TlsCertificateManager::NOT_IMPLEMENTED_MESSAGE);
@@ -95,7 +95,7 @@ class TlsCertificateManagerTest extends TestCase
      * runbooks grep for it. Lock the exact string in case someone
      * refactors it.
      */
-    public function test_provisionCertificate_exception_message_is_stable(): void
+    public function testProvisionCertificateExceptionMessageIsStable(): void
     {
         $this->assertSame(
             'ACME certificate provisioning is not implemented in this build. '
@@ -118,12 +118,12 @@ class TlsCertificateManagerTest extends TestCase
         }
     }
 
-    public function test_isProvisioned_false_when_no_files(): void
+    public function testIsProvisionedFalseWhenNoFiles(): void
     {
         $this->assertFalse($this->manager->isProvisioned('never-set-up'));
     }
 
-    public function test_isProvisioned_true_when_both_files_exist(): void
+    public function testIsProvisionedTrueWhenBothFilesExist(): void
     {
         $fqdn = 'wired.phlix.media';
         $dir = $this->tmpDir . '/' . $fqdn;
@@ -136,12 +136,12 @@ class TlsCertificateManagerTest extends TestCase
         $this->assertSame($dir . '/privkey.pem', $this->manager->getPrivateKeyPath('wired'));
     }
 
-    public function test_needsRenewal_true_when_cert_absent(): void
+    public function testNeedsRenewalTrueWhenCertAbsent(): void
     {
         $this->assertTrue($this->manager->needsRenewal('absent'));
     }
 
-    public function test_getAcmeEmail_returns_configured_email(): void
+    public function testGetAcmeEmailReturnsConfiguredEmail(): void
     {
         $this->assertSame('test@example.com', $this->manager->getAcmeEmail());
     }

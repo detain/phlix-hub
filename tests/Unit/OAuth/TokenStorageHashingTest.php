@@ -101,7 +101,7 @@ final class TokenStorageHashingTest extends TestCase
         return $db;
     }
 
-    public function test_a_consent_ticket_is_stored_only_as_a_hash(): void
+    public function testAConsentTicketIsStoredOnlyAsAHash(): void
     {
         /** @var array<int, array<string, mixed>> $captured */
         $captured = [];
@@ -120,7 +120,7 @@ final class TokenStorageHashingTest extends TestCase
         self::assertSame(64, strlen($issued['ticket']), '256 bits of CSPRNG material');
     }
 
-    public function test_an_authorization_code_is_stored_only_as_a_hash(): void
+    public function testAnAuthorizationCodeIsStoredOnlyAsAHash(): void
     {
         /** @var array<int, array<string, mixed>> $captured */
         $captured = [];
@@ -137,7 +137,7 @@ final class TokenStorageHashingTest extends TestCase
         self::assertOnlyTheHashWasStored($minted['code'], $captured, 'authorization code');
     }
 
-    public function test_both_issued_tokens_are_stored_only_as_hashes(): void
+    public function testBothIssuedTokensAreStoredOnlyAsHashes(): void
     {
         /** @var array<int, array<string, mixed>> $captured */
         $captured = [];
@@ -154,7 +154,7 @@ final class TokenStorageHashingTest extends TestCase
         self::assertStringStartsWith(OAuthTokenService::REFRESH_TOKEN_PREFIX, $issued['refresh_token']);
     }
 
-    public function test_a_client_secret_is_stored_only_as_a_hash(): void
+    public function testAClientSecretIsStoredOnlyAsAHash(): void
     {
         /** @var array<int, array<string, mixed>> $captured */
         $captured = [];
@@ -171,7 +171,7 @@ final class TokenStorageHashingTest extends TestCase
         self::assertOnlyTheHashWasStored('the-client-secret', $captured, 'client secret');
     }
 
-    public function test_the_token_response_reports_a_finite_lifetime(): void
+    public function testTheTokenResponseReportsAFiniteLifetime(): void
     {
         /** @var array<int, array<string, mixed>> $captured */
         $captured = [];
@@ -186,7 +186,7 @@ final class TokenStorageHashingTest extends TestCase
         self::assertSame(OAuthScopes::PROFILE_READ, $issued['scope']);
     }
 
-    public function test_a_non_positive_ttl_falls_back_to_the_default_rather_than_zero(): void
+    public function testANonPositiveTtlFallsBackToTheDefaultRatherThanZero(): void
     {
         // A zero or negative TTL configured by mistake must not produce a code
         // that has already expired (unusable) or one with no expiry at all.
@@ -198,7 +198,13 @@ final class TokenStorageHashingTest extends TestCase
 
         self::assertSame(
             $before + AuthorizationCodeService::DEFAULT_TTL_SECONDS,
-            (new AuthorizationCodeService($db, 0))->mint('c', 'u', 'https://e.test/cb', [OAuthScopes::PROFILE_READ], 'x')['expires_at'],
+            (new AuthorizationCodeService($db, 0))->mint(
+                'c',
+                'u',
+                'https://e.test/cb',
+                [OAuthScopes::PROFILE_READ],
+                'x'
+            )['expires_at'],
         );
         self::assertSame(
             $before + ConsentTicketService::DEFAULT_TTL_SECONDS,
@@ -212,7 +218,7 @@ final class TokenStorageHashingTest extends TestCase
         );
     }
 
-    public function test_the_authorization_code_lifetime_is_short(): void
+    public function testTheAuthorizationCodeLifetimeIsShort(): void
     {
         // RFC 6749 §4.1.2 permits up to 10 minutes. The exchange is a
         // server-to-server call that happens within a second, so anything
@@ -222,7 +228,7 @@ final class TokenStorageHashingTest extends TestCase
         self::assertLessThanOrEqual(120, AuthorizationCodeService::DEFAULT_TTL_SECONDS);
     }
 
-    public function test_the_two_token_kinds_are_distinct_labels(): void
+    public function testTheTwoTokenKindsAreDistinctLabels(): void
     {
         // `validateAccess()` filters on this column, so a collision between the
         // two would let a refresh token be presented as a bearer credential.

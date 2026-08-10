@@ -35,7 +35,7 @@ final class McpTokenControllerTest extends TestCase
     /**
      * @dataProvider unauthenticatedCallProvider
      */
-    public function test_every_route_refuses_an_unauthenticated_caller(string $method): void
+    public function testEveryRouteRefusesAnUnauthenticatedCaller(string $method): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects(self::never())->method('query');
@@ -61,7 +61,7 @@ final class McpTokenControllerTest extends TestCase
         return [['index'], ['create'], ['revoke']];
     }
 
-    public function test_create_returns_the_plaintext_exactly_once(): void
+    public function testCreateReturnsThePlaintextExactlyOnce(): void
     {
         /** @var array<string, mixed> $captured */
         $captured = [];
@@ -92,7 +92,7 @@ final class McpTokenControllerTest extends TestCase
      * A body naming somebody else's user id changes nothing: the row is bound
      * to `$request->userId`.
      */
-    public function test_a_user_id_in_the_body_is_ignored(): void
+    public function testAUserIdInTheBodyIsIgnored(): void
     {
         /** @var array<string, mixed> $captured */
         $captured = [];
@@ -113,7 +113,7 @@ final class McpTokenControllerTest extends TestCase
         self::assertSame(self::USER_A, $captured['user_id']);
     }
 
-    public function test_a_scope_list_with_nothing_known_in_it_is_refused(): void
+    public function testAScopeListWithNothingKnownInItIsRefused(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects(self::never())->method('query');
@@ -140,7 +140,7 @@ final class McpTokenControllerTest extends TestCase
      * invisible to the suite. It is written out as a literal list now for the
      * same reason `McpScopesTest` does: the granted set is an interface.
      */
-    public function test_omitting_scopes_grants_the_read_only_set_and_not_the_write_scope(): void
+    public function testOmittingScopesGrantsTheReadOnlySetAndNotTheWriteScope(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
@@ -180,7 +180,7 @@ final class McpTokenControllerTest extends TestCase
      * gated on `mcp_playback_control_enabled`: the flag is a runtime switch an
      * operator can flip without every agent re-minting.
      */
-    public function test_an_explicit_request_for_the_write_scope_is_still_granted(): void
+    public function testAnExplicitRequestForTheWriteScopeIsStillGranted(): void
     {
         $db = $this->createMock(Connection::class);
         /** @var array<string, mixed> $captured */
@@ -211,7 +211,7 @@ final class McpTokenControllerTest extends TestCase
      * deliberately sends the write scope FIRST, so a controller that preserved
      * caller order would store a different string for the same grant.
      */
-    public function test_an_explicit_mixed_list_is_granted_whole_and_in_vocabulary_order(): void
+    public function testAnExplicitMixedListIsGrantedWholeAndInVocabularyOrder(): void
     {
         $db = $this->createMock(Connection::class);
         /** @var array<string, mixed> $captured */
@@ -243,7 +243,7 @@ final class McpTokenControllerTest extends TestCase
      * create form (which builds its checkboxes from this list and pre-ticks
      * every one) to offer a capability the server would not honour.
      */
-    public function test_index_omits_the_write_scope_from_available_scopes_when_the_flag_is_off(): void
+    public function testIndexOmitsTheWriteScopeFromAvailableScopesWhenTheFlagIsOff(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
@@ -282,7 +282,7 @@ final class McpTokenControllerTest extends TestCase
      * would satisfy the test above exactly, and the list would be a ban rather
      * than a reflection of the operator's setting.
      */
-    public function test_index_advertises_the_write_scope_when_the_operator_enabled_it(): void
+    public function testIndexAdvertisesTheWriteScopeWhenTheOperatorEnabledIt(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
@@ -310,7 +310,7 @@ final class McpTokenControllerTest extends TestCase
      *
      * @param list<string> $expected
      */
-    public function test_the_no_valid_scopes_error_advertises_the_flag_filtered_list(
+    public function testTheNoValidScopesErrorAdvertisesTheFlagFilteredList(
         bool $flag,
         array $expected,
     ): void {
@@ -343,7 +343,7 @@ final class McpTokenControllerTest extends TestCase
         ];
     }
 
-    public function test_revoking_a_row_that_is_not_yours_is_an_indistinguishable_404(): void
+    public function testRevokingARowThatIsNotYoursIsAnIndistinguishable404(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn(0);
@@ -354,7 +354,7 @@ final class McpTokenControllerTest extends TestCase
         self::assertSame('mcp_token.not_found', self::body($response)['code'] ?? null);
     }
 
-    public function test_revoking_your_own_row_succeeds_and_is_audited(): void
+    public function testRevokingYourOwnRowSucceedsAndIsAudited(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn(1);

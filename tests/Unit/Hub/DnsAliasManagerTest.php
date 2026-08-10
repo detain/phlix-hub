@@ -45,7 +45,7 @@ class DnsAliasManagerTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_getFqdn_returns_full_domain(): void
+    public function testGetFqdnReturnsFullDomain(): void
     {
         $subdomain = 'abc12345';
 
@@ -54,7 +54,7 @@ class DnsAliasManagerTest extends TestCase
         $this->assertSame('abc12345.phlix.media', $fqdn);
     }
 
-    public function test_allocateSubdomain_generates_8_char_subdomain(): void
+    public function testAllocateSubdomainGenerates8CharSubdomain(): void
     {
         $serverId = 'server-123-uuid';
 
@@ -84,7 +84,7 @@ class DnsAliasManagerTest extends TestCase
         $this->assertMatchesRegularExpression('/^[a-f0-9]+$/', $subdomain);
     }
 
-    public function test_getSubdomain_returns_null_when_not_allocated(): void
+    public function testGetSubdomainReturnsNullWhenNotAllocated(): void
     {
         $serverId = 'server-unallocated';
 
@@ -101,7 +101,7 @@ class DnsAliasManagerTest extends TestCase
         $this->assertNull($subdomain);
     }
 
-    public function test_resolve_returns_null_for_unknown_subdomain(): void
+    public function testResolveReturnsNullForUnknownSubdomain(): void
     {
         $subdomain = 'unknown123';
 
@@ -125,7 +125,7 @@ class DnsAliasManagerTest extends TestCase
      * manager — so DNS works while operators install TLS material
      * out-of-band; see docs/hub-admin/tls.md.
      */
-    public function test_allocateSubdomain_does_not_invoke_cert_provisioning(): void
+    public function testAllocateSubdomainDoesNotInvokeCertProvisioning(): void
     {
         $serverId = 'server-no-cert-call';
 
@@ -144,7 +144,7 @@ class DnsAliasManagerTest extends TestCase
      * path; silently swallowing it would re-introduce the silent-stub
      * lie at a different layer.
      */
-    public function test_refreshCertificate_propagates_not_implemented_exception(): void
+    public function testRefreshCertificatePropagatesNotImplementedException(): void
     {
         $serverId = 'server-refresh';
 

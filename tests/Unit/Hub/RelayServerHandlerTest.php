@@ -32,7 +32,7 @@ class RelayServerHandlerTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_onFrame_ping_returns_pong_response(): void
+    public function testOnFramePingReturnsPongResponse(): void
     {
         $handler = new RelayServerHandler(
             $this->createStubSessionManager(),
@@ -49,7 +49,7 @@ class RelayServerHandlerTest extends TestCase
         $this->assertSame(42, $result['seq']);
     }
 
-    public function test_onFrame_pong_returns_null(): void
+    public function testOnFramePongReturnsNull(): void
     {
         $handler = new RelayServerHandler(
             $this->createStubSessionManager(),
@@ -64,7 +64,7 @@ class RelayServerHandlerTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_onFrame_http_request_returns_null(): void
+    public function testOnFrameHttpRequestReturnsNull(): void
     {
         $handler = new RelayServerHandler(
             $this->createStubSessionManager(),
@@ -89,7 +89,7 @@ class RelayServerHandlerTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_constructor_accepts_worker_node(): void
+    public function testConstructorAcceptsWorkerNode(): void
     {
         $handler = new RelayServerHandler(
             $this->createStubSessionManager(),
@@ -100,17 +100,19 @@ class RelayServerHandlerTest extends TestCase
         $this->assertInstanceOf(RelayServerHandler::class, $handler);
     }
 
-    public function test_onClose_delegates_to_session_manager(): void
+    public function testOnCloseDelegatesToSessionManager(): void
     {
         $closeCallArgs = [];
 
         $sessionManager = new class ($closeCallArgs) extends \Phlix\Hub\Hub\RelaySessionManager {
             /** @var array<string, string> */
             private array $closeArgsCapture;
-            public function __construct(array &$capture) {
+            public function __construct(array &$capture)
+            {
                 $this->closeArgsCapture = &$capture;
             }
-            public function closeSession(string $sessionId, string $reason): void {
+            public function closeSession(string $sessionId, string $reason): void
+            {
                 $this->closeArgsCapture[] = ['sessionId' => $sessionId, 'reason' => $reason];
             }
         };
@@ -129,17 +131,19 @@ class RelayServerHandlerTest extends TestCase
         $this->assertSame('server_disconnect', $closeCallArgs[0]['reason']);
     }
 
-    public function test_onClose_with_custom_reason(): void
+    public function testOnCloseWithCustomReason(): void
     {
         $closeCallArgs = [];
 
         $sessionManager = new class ($closeCallArgs) extends \Phlix\Hub\Hub\RelaySessionManager {
             /** @var array<string, string> */
             private array $closeArgsCapture;
-            public function __construct(array &$capture) {
+            public function __construct(array &$capture)
+            {
                 $this->closeArgsCapture = &$capture;
             }
-            public function closeSession(string $sessionId, string $reason): void {
+            public function closeSession(string $sessionId, string $reason): void
+            {
                 $this->closeArgsCapture[] = ['sessionId' => $sessionId, 'reason' => $reason];
             }
         };

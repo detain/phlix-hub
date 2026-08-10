@@ -40,7 +40,7 @@ final class WorkermanStreamTimersTest extends TestCase
      * Outside a workerman runtime, scheduling REPORTS failure rather than
      * throwing.
      */
-    public function test_scheduling_outside_a_worker_reports_false_instead_of_throwing(): void
+    public function testSchedulingOutsideAWorkerReportsFalseInsteadOfThrowing(): void
     {
         $this->forceNoWorkermanRuntime();
         self::assertStringStartsWith(
@@ -66,7 +66,7 @@ final class WorkermanStreamTimersTest extends TestCase
      * one that never scheduled anything — would satisfy the test above
      * perfectly, and every SSE stream would silently have no keep-alive.
      */
-    public function test_scheduling_inside_a_worker_returns_a_timer_id(): void
+    public function testSchedulingInsideAWorkerReturnsATimerId(): void
     {
         $this->forceWorkermanRuntime();
         self::assertSame(
@@ -98,7 +98,7 @@ final class WorkermanStreamTimersTest extends TestCase
      * deadline timer has already consumed itself. Throwing there would surface
      * as an unhandled error while a client was merely hanging up.
      */
-    public function test_cancelling_an_unknown_timer_is_silent(): void
+    public function testCancellingAnUnknownTimerIsSilent(): void
     {
         $this->forceNoWorkermanRuntime();
 
