@@ -1,0 +1,239 @@
+# ============================================================================
+# S300 — phlix-hub builds and BOOTS its own image, on its own PRs.
+# ============================================================================
+# Until this file existed, `.github/workflows/` here held exactly one workflow
+# (ci.yml) and it contained no image build at all: `grep -l 'boot\|docker'`
+# over the directory returned nothing. The hub image was built by
+# `phlix-server/.github/workflows/docker.yml`'s "Build and Push phlix-hub" job,
+# which checks out `detain/phlix-hub` at a hardcoded `ref: master`. Three
+# consequences, all live until now:
+#
+#   1. A phlix-hub PR NEVER built its own image. The Dockerfile could break —
+#      and it was broken, see below — with every hub check green through merge.
+#   2. The image was only ever built from hub `master`, triggered by unrelated
+#      phlix-server activity, so the build lagged the merge and described a
+#      commit the triggering PR had nothing to do with. phlix-server PR #662
+#      (a DLNA change) shows "Build and Push phlix-hub: pass"; that green is
+#      evidence about hub master @ 96b39eb, collected before hub S93
+#      (d71e663b) existed.
+#   3. A hub defect reddened a phlix-server PR — misattribution by
+#      construction, landing on whoever touched the server next.
+#
+# The image that job kept passing had never run: `docker run` exited **2** with
+# `sh: can't open '/docker-entrypoint.sh': No such file or directory`, measured
+# 2026-08-10 at master @ 4e8828d. **A `docker build` never executes CMD,
+# ENTRYPOINT or HEALTHCHECK**, so the build job could not have seen it. That is
+# why the job that matters here is not the build — it is `docker-boot-gate`,
+# which BOOTS the image against a throwaway MySQL and asserts it serves.
+#
+# The upstream job carries its own TODO saying the hub Dockerfile lives in this
+# repository and "the next PR (in the phlix-hub repo) should add it". This is
+# that PR. phlix-server's `docker-hub` job is now redundant and should be
+# deleted; that change belongs to the phlix-server repository.
+# ============================================================================
+name: Docker Image
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+    branches: [master, main]
+
+env:
+  REGISTRY: ghcr.io
+  # Shared base image (OS packages + PHP + compiled Swoole/UV + Composer),
+  # built and published by phlix-server's docker.yml `docker-base` job. This
+  # repository consumes it; it does not build it.
+  BASE_IMAGE: ghcr.io/detain/phlix-base
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Resolve the base image ONCE, to a DIGEST, and hand that to both jobs below.
+  #
+  # A tag is mutable. `:latest` can move between the boot gate's build and the
+  # publish build — phlix-server pushes it on every master merge — and then the
+  # artefact that was booted is not the artefact that was published. The digest
+  # is immutable, so pinning it here makes both jobs measure the same base and
+  # makes the run SAY which base that was.
+  #
+  # This repository cannot rebuild the base from this commit (Dockerfile.base
+  # lives in phlix-server), so "the base for this commit" is by definition the
+  # currently published one. Stating the digest is the honest version of that.
+  # --------------------------------------------------------------------------
+  base-digest:
+    name: Resolve base image digest
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: read
+
+    outputs:
+      base_ref: ${{ steps.resolve.outputs.base_ref }}
+
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve ${{ env.BASE_IMAGE }}:latest to an immutable digest
+        id: resolve
+        run: |
+          set -euo pipefail
+          DIGEST="$(docker buildx imagetools inspect "${BASE_IMAGE}:latest" \
+                      --format '{{.Manifest.Digest}}' | head -1 | tr -d ' \r\n')"
+          # An unresolvable digest is a hard error, never a fallback to the
+          # mutable `:latest` — that fallback is what made phlix-server's
+          # stale-base defect invisible for the life of its images.
+          case "$DIGEST" in
+            sha256:*) ;;
+            *)
+              echo "::error::could not resolve ${BASE_IMAGE}:latest to a digest (got '${DIGEST}')."
+              exit 1 ;;
+          esac
+          echo "base_ref=${BASE_IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Base image for this run: ${BASE_IMAGE}@${DIGEST}"
+          docker buildx imagetools inspect "${BASE_IMAGE}@${DIGEST}" | head -20
+
+  # --------------------------------------------------------------------------
+  # THE GATE. Builds the image from THIS ref into the local daemon, boots it
+  # against a throwaway MySQL, and asserts 16 things about the running
+  # container — /health returning `"service":"phlix-hub"`, the migration
+  # chain, the schema, the process table, the relay ports, the SPA shell,
+  # 60 seconds of stability, the HEALTHCHECK reaching `healthy` with a start
+  # period short enough for `unhealthy` to be reachable, composer's platform
+  # requirements, and a deliberately-misconfigured control container that MUST
+  # die non-zero.
+  #
+  # It runs on `pull_request` — that is the entire point. It is amd64 only; the
+  # publish job below is the one that produces arm64, and no runner boots that.
+  #
+  # Do NOT add `continue-on-error`, do NOT gate it behind an `if:`, and do NOT
+  # delete it: tests/Unit/Docker/DockerImageContractTest.php parses this file
+  # and fails on each of those edits.
+  # --------------------------------------------------------------------------
+  docker-boot-gate:
+    name: Boot gate (hub image)
+    runs-on: ubuntu-latest
+    needs: base-digest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report what is about to be measured
+        env:
+          BASE_REF: ${{ needs.base-digest.outputs.base_ref }}
+        run: |
+          set -euo pipefail
+          echo "ref        : ${GITHUB_REF} @ ${GITHUB_SHA}"
+          echo "event      : ${GITHUB_EVENT_NAME}"
+          echo "base image : ${BASE_REF}"
+          echo "dockerfile : $(wc -l < Dockerfile) lines, $(wc -c < Dockerfile) bytes"
+          echo "context    : $(git ls-files | wc -l) tracked files"
+          echo "migrations : $(ls migrations/*.sql | wc -l) .sql files (the gate asserts every one is applied)"
+
+      # The image is built INSIDE the smoke script, uncached and unpushed, into
+      # the local daemon — so the image it boots is exactly the image it built.
+      - name: Build and BOOT the hub image
+        env:
+          PHLIX_BASE_IMAGE: ${{ needs.base-digest.outputs.base_ref }}
+        run: |
+          chmod +x scripts/docker-boot-smoke.sh
+          ./scripts/docker-boot-smoke.sh phlix-hub-boot:${{ github.sha }}
+
+  # --------------------------------------------------------------------------
+  # Publish. `needs: docker-boot-gate` on purpose: an image that cannot boot
+  # must never reach the registry, which is exactly what happened for the whole
+  # life of the upstream job.
+  #
+  # `push:` is false on a pull request — a PR must not move a tag anyone
+  # deploys — so on a PR this job is a multi-arch BUILD check and nothing more.
+  # --------------------------------------------------------------------------
+  docker-build:
+    name: Build and Push phlix-hub
+    runs-on: ubuntu-latest
+    needs: [base-digest, docker-boot-gate]
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Built as an explicit list rather than a conditional line inside
+      # `tags: |`, so there is never an empty entry whose handling depends on
+      # the action's input parsing. `:latest` moves only on master/tags.
+      - name: Compute image tags
+        id: meta
+        run: |
+          set -euo pipefail
+          SHA="${GITHUB_SHA::12}"
+          TAGS="${REGISTRY}/${{ github.repository }}:${SHA}"
+          if [ "${GITHUB_EVENT_NAME}" != "pull_request" ]; then
+            TAGS="${REGISTRY}/${{ github.repository }}:latest,${TAGS}"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "publishing: ${TAGS} (push=${{ github.event_name != 'pull_request' }})"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          # A dedicated cache tag, never the image tag: pushing `mode=max` cache
+          # to `:latest` pollutes the image manifest with a buildkit
+          # cacheconfig blob, which later breaks `FROM …:latest`
+          # ("unknown type application/vnd.buildkit.cacheconfig.v0").
+          #
+          # `ignore-error=true` on the REGISTRY export only: a fork PR gets a
+          # read-only GITHUB_TOKEN, so writing `…:buildcache` 403s — and a
+          # buildkit cache-export failure fails the whole build STEP even
+          # though the image built fine. A cache is not an artefact; `push:` is
+          # a separate exporter and a failure to publish the IMAGE still fails
+          # hard.
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}:buildcache
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
+          build-args: |
+            PHLIX_BASE_IMAGE=${{ needs.base-digest.outputs.base_ref }}

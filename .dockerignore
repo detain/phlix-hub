@@ -1,0 +1,45 @@
+# ============================================================================
+# Build context exclusions (S300).
+# ----------------------------------------------------------------------------
+# `Dockerfile` runs `composer install --no-dev` and then `COPY . /var/www/html/`.
+# Without this file that COPY overwrites the freshly installed production
+# vendor/ tree with whatever is on the BUILDING MACHINE — on a developer box
+# that is the DEV tree (phpunit, psalm, phpstan, mockery), so a local build
+# produces an image that is not the image CI produces, and a `--no-dev`
+# dependency that is missing from composer.json still resolves.
+#
+# It is also 500 MB of context (vendor/ 136 MB + web-ui/ 183 MB of
+# node_modules + coverage-report/ + .git/) for a 17 MB source tree.
+#
+# ⚠ `public/assets/app/` — the BUILT Vue SPA — is deliberately NOT excluded:
+# src/Http/ViteAssets.php serves the shell from there and the image does not
+# run a node build.
+# ============================================================================
+
+.git
+.github
+.caliber
+.claude
+.agents
+.opencode
+.remember
+.logs
+.phpunit.cache
+
+# Dependencies restored inside the image by composer install --no-dev.
+vendor
+
+# SPA sources + toolchain. The BUILT output under public/assets/app/ ships.
+web-ui/node_modules
+web-ui/src
+web-ui/dist
+
+# Test/analysis artefacts.
+coverage-report
+coverage.xml
+junit.xml
+.phpcs-cache
+
+# Local environment.
+.env
+var
