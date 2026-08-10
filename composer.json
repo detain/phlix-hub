@@ -45,6 +45,6 @@
         "stan": "phpstan analyze --no-progress",
         "cs": "@php scripts/assert-phpcs-corpus.php",
         "psalm": "psalm --no-progress",
-        "start": "php public/index.php start"
+        "start": "php start.php start"
     }
 }
