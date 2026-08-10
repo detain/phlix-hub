@@ -27,7 +27,7 @@ final class MetricsRegistryTest extends TestCase
         return new MetricsRegistry($bucketSeconds, self::BOUNDS, $cap);
     }
 
-    public function test_record_request_populates_current_bucket(): void
+    public function testRecordRequestPopulatesCurrentBucket(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('GET', '/api/v1/media', 200, 42.0, 100, 900, 1234);
@@ -47,7 +47,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(900, $bucket['bytes_out']);
     }
 
-    public function test_requests_land_in_separate_time_buckets(): void
+    public function testRequestsLandInSeparateTimeBuckets(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('GET', '/a', 200, 5.0, 0, 0, 1000);
@@ -61,7 +61,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(1, $drained['overall'][1010]['request_count']);
     }
 
-    public function test_drain_resets_accumulators(): void
+    public function testDrainResetsAccumulators(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('GET', '/a', 200, 5.0, 0, 0, 1000);
@@ -75,7 +75,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame([], $second['routes']);
     }
 
-    public function test_error_classification_counts_5xx_only(): void
+    public function testErrorClassificationCounts5xxOnly(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('GET', '/a', 200, 1.0, 0, 0, 1000);
@@ -90,7 +90,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(2, $drained['overall'][1000]['error_count']);
     }
 
-    public function test_duration_sum_and_max_round_and_track_peak(): void
+    public function testDurationSumAndMaxRoundAndTrackPeak(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('GET', '/a', 200, 10.4, 0, 0, 1000);
@@ -102,7 +102,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(100, $bucket['duration_ms_max']);
     }
 
-    public function test_histogram_bucketing_at_boundaries(): void
+    public function testHistogramBucketingAtBoundaries(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('GET', '/a', 200, 10.0, 0, 0, 1000);
@@ -123,7 +123,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(1, $h[-1]);
     }
 
-    public function test_zero_ms_request_lands_in_lowest_bucket(): void
+    public function testZeroMsRequestLandsInLowestBucket(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('GET', '/a', 200, 0.0, 0, 0, 1000);
@@ -133,7 +133,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(0, $h[-1]);
     }
 
-    public function test_route_rollup_normalises_method_and_records_per_route(): void
+    public function testRouteRollupNormalisesMethodAndRecordsPerRoute(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('get', '/api/v1/media', 200, 5.0, 0, 0, 1000);
@@ -160,7 +160,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(1, $byKey['POST /api/v1/media']['request_count']);
     }
 
-    public function test_empty_route_is_normalised_to_slash(): void
+    public function testEmptyRouteIsNormalisedToSlash(): void
     {
         $reg = $this->registry(10);
         $reg->recordRequest('GET', '', 200, 5.0, 0, 0, 1000);
@@ -170,7 +170,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame('/', $routes[0]['route']);
     }
 
-    public function test_route_cardinality_cap_folds_to_other(): void
+    public function testRouteCardinalityCapFoldsToOther(): void
     {
         $cap = 3;
         $reg = $this->registry(10, $cap);
@@ -200,7 +200,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(1, $other['error_count']);
     }
 
-    public function test_open_touch_and_snapshot_connection(): void
+    public function testOpenTouchAndSnapshotConnection(): void
     {
         $reg = $this->registry(10);
         $reg->openConnection('0-1', 'websocket', 'user-1', '10.0.0.5', 'sess-1', 'media-9', 1000);
@@ -221,7 +221,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(1005, $c['last_seen_at']);
     }
 
-    public function test_open_connection_normalises_unknown_kind_to_http(): void
+    public function testOpenConnectionNormalisesUnknownKindToHttp(): void
     {
         $reg = $this->registry(10);
         $reg->openConnection('0-1', 'BOGUS', null, null, null, null, 1000);
@@ -229,7 +229,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame('http', $reg->snapshotConnections()['0-1']['kind']);
     }
 
-    public function test_touch_without_open_creates_connection(): void
+    public function testTouchWithoutOpenCreatesConnection(): void
     {
         $reg = $this->registry(10);
         $reg->touchConnection('0-7', 10, 20, 2000);
@@ -243,7 +243,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertSame(2000, $snap['0-7']['last_seen_at']);
     }
 
-    public function test_close_connection_removes_it_from_snapshot(): void
+    public function testCloseConnectionRemovesItFromSnapshot(): void
     {
         $reg = $this->registry(10);
         $reg->openConnection('0-1', 'http', null, null, null, null, 1000);
@@ -256,7 +256,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertArrayHasKey('0-2', $snap);
     }
 
-    public function test_snapshot_does_not_reset_connections(): void
+    public function testSnapshotDoesNotResetConnections(): void
     {
         $reg = $this->registry(10);
         $reg->openConnection('0-1', 'http', null, null, null, null, 1000);
@@ -265,7 +265,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertNotEmpty($reg->snapshotConnections());
     }
 
-    public function test_prune_stale_connections_evicts_by_last_seen(): void
+    public function testPruneStaleConnectionsEvictsByLastSeen(): void
     {
         $reg = $this->registry(10);
         // 'old' last seen at t=1000; 'fresh' touched forward to t=2000.
@@ -281,7 +281,7 @@ final class MetricsRegistryTest extends TestCase
         $this->assertArrayHasKey('fresh', $snap);
     }
 
-    public function test_prune_stale_connections_keeps_all_when_none_expired(): void
+    public function testPruneStaleConnectionsKeepsAllWhenNoneExpired(): void
     {
         $reg = $this->registry(10);
         $reg->openConnection('a', 'websocket', null, null, null, null, 3000);
@@ -293,13 +293,13 @@ final class MetricsRegistryTest extends TestCase
         $this->assertCount(2, $reg->snapshotConnections());
     }
 
-    public function test_latency_bounds_are_sorted_and_exposed(): void
+    public function testLatencyBoundsAreSortedAndExposed(): void
     {
         $reg = new MetricsRegistry(10, [500, 10, 100], 200);
         $this->assertSame([10, 100, 500], $reg->latencyBounds());
     }
 
-    public function test_bucket_seconds_floored_to_one_minimum(): void
+    public function testBucketSecondsFlooredToOneMinimum(): void
     {
         $reg = new MetricsRegistry(0, self::BOUNDS, 200);
         $reg->recordRequest('GET', '/a', 200, 1.0, 0, 0, 1000);

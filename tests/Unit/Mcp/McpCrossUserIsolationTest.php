@@ -107,7 +107,7 @@ final class McpCrossUserIsolationTest extends TestCase
      *
      * @param array<string, mixed> $arguments
      */
-    public function test_a_token_for_user_a_cannot_reach_a_server_owned_by_user_b(
+    public function testATokenForUserACannotReachAServerOwnedByUserB(
         string $tool,
         array $arguments,
     ): void {
@@ -141,7 +141,7 @@ final class McpCrossUserIsolationTest extends TestCase
      *
      * @param array<string, mixed> $arguments
      */
-    public function test_an_unknown_server_is_a_404_not_a_403(string $tool, array $arguments): void
+    public function testAnUnknownServerIsA404NotA403(string $tool, array $arguments): void
     {
         /** @var array<string, mixed> $unknownArguments */
         $unknownArguments = $arguments;
@@ -160,7 +160,7 @@ final class McpCrossUserIsolationTest extends TestCase
      * asserts the user id it was asked for. That id is the one thing this step
      * has to get right: it must come from the token, never from an argument.
      */
-    public function test_list_servers_asks_the_handler_only_for_the_tokens_own_user(): void
+    public function testListServersAsksTheHandlerOnlyForTheTokensOwnUser(): void
     {
         $serverInfo = $this->createMock(ServerInfoHandler::class);
         $serverInfo->expects(self::once())
@@ -192,7 +192,7 @@ final class McpCrossUserIsolationTest extends TestCase
      * {@see McpToolContext} sets the request's user id from the token on every
      * call and reads no argument at all.
      */
-    public function test_a_user_id_smuggled_into_the_arguments_is_ignored(): void
+    public function testAUserIdSmuggledIntoTheArgumentsIsIgnored(): void
     {
         $serverInfo = $this->createMock(ServerInfoHandler::class);
         $serverInfo->expects(self::once())
@@ -222,7 +222,7 @@ final class McpCrossUserIsolationTest extends TestCase
      * require a live tunnel. Asserting 503 here rather than 200 is deliberate:
      * a 200 would need the bridge, and the bridge is the tripwire.
      */
-    public function test_the_owning_user_passes_the_ownership_gate_and_fails_later(): void
+    public function testTheOwningUserPassesTheOwnershipGateAndFailsLater(): void
     {
         $outcome = self::registry()->call(
             'list_libraries',
@@ -243,7 +243,7 @@ final class McpCrossUserIsolationTest extends TestCase
      * Scope enforcement lives in the registry, so it applies to every tool
      * without any tool implementing it.
      */
-    public function test_a_token_without_the_required_scope_is_refused_before_the_tool_runs(): void
+    public function testATokenWithoutTheRequiredScopeIsRefusedBeforeTheToolRuns(): void
     {
         $context = new McpToolContext(
             new McpToken('token-row-1', self::USER_A, [McpScopes::SERVERS_READ]),
@@ -370,7 +370,7 @@ final class McpCrossUserIsolationTest extends TestCase
      * or "user A cannot see user B's server" would be trivially true because
      * there is only one user.
      */
-    public function test_the_fixture_users_and_servers_are_actually_distinct(): void
+    public function testTheFixtureUsersAndServersAreActuallyDistinct(): void
     {
         self::assertNotSame(self::USER_A, self::USER_B);
         self::assertNotSame(self::SERVER_OF_B, self::SERVER_UNKNOWN);
@@ -387,7 +387,7 @@ final class McpCrossUserIsolationTest extends TestCase
      * The refusals asserted in this suite must be JSON bodies produced by the
      * proxy controller, not empty responses that happen to decode to nothing.
      */
-    public function test_the_refusal_payloads_are_real_decoded_json(): void
+    public function testTheRefusalPayloadsAreRealDecodedJson(): void
     {
         $outcome = self::registry()->call(
             'list_libraries',

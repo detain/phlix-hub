@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class McpScopesTest extends TestCase
 {
-    public function test_all_scopes_are_namespaced_and_distinct(): void
+    public function testAllScopesAreNamespacedAndDistinct(): void
     {
         $all = McpScopes::all();
 
@@ -27,7 +27,7 @@ final class McpScopesTest extends TestCase
         }
     }
 
-    public function test_parse_keeps_known_scopes_and_drops_unknown_ones(): void
+    public function testParseKeepsKnownScopesAndDropsUnknownOnes(): void
     {
         $parsed = McpScopes::parse(McpScopes::SERVERS_READ . ' not-a-scope ' . McpScopes::LIBRARY_READ);
 
@@ -38,12 +38,12 @@ final class McpScopesTest extends TestCase
      * A typo must fail CLOSED — an unknown scope becomes no scope, never a
      * scope that silently matches nothing later.
      */
-    public function test_an_entirely_unknown_list_parses_to_nothing(): void
+    public function testAnEntirelyUnknownListParsesToNothing(): void
     {
         self::assertSame([], McpScopes::parse('admin:* root everything'));
     }
 
-    public function test_parse_is_order_independent_and_de_duplicating(): void
+    public function testParseIsOrderIndependentAndDeDuplicating(): void
     {
         $a = McpScopes::parse(McpScopes::LIBRARY_READ . ' ' . McpScopes::SERVERS_READ);
         $b = McpScopes::parse(McpScopes::SERVERS_READ . '  ' . McpScopes::LIBRARY_READ . ' ' . McpScopes::LIBRARY_READ);
@@ -51,28 +51,28 @@ final class McpScopesTest extends TestCase
         self::assertSame($a, $b);
     }
 
-    public function test_parse_splits_on_any_whitespace(): void
+    public function testParseSplitsOnAnyWhitespace(): void
     {
         $parsed = McpScopes::parse("  " . McpScopes::SERVERS_READ . "\n\t" . McpScopes::PLAYBACK_READ . "  ");
 
         self::assertSame([McpScopes::SERVERS_READ, McpScopes::PLAYBACK_READ], $parsed);
     }
 
-    public function test_from_array_drops_non_string_members_rather_than_coercing_them(): void
+    public function testFromArrayDropsNonStringMembersRatherThanCoercingThem(): void
     {
         $parsed = McpScopes::fromArray([McpScopes::SERVERS_READ, 0, null, ['nested'], true]);
 
         self::assertSame([McpScopes::SERVERS_READ], $parsed);
     }
 
-    public function test_to_storage_round_trips_through_parse(): void
+    public function testToStorageRoundTripsThroughParse(): void
     {
         $stored = McpScopes::toStorage([McpScopes::PLAYBACK_READ, 'bogus', McpScopes::SERVERS_READ]);
 
         self::assertSame([McpScopes::SERVERS_READ, McpScopes::PLAYBACK_READ], McpScopes::parse($stored));
     }
 
-    public function test_is_known_rejects_a_near_miss(): void
+    public function testIsKnownRejectsANearMiss(): void
     {
         self::assertTrue(McpScopes::isKnown(McpScopes::LIBRARY_READ));
         self::assertFalse(McpScopes::isKnown(McpScopes::LIBRARY_READ . ' '));
@@ -90,7 +90,7 @@ final class McpScopesTest extends TestCase
      * here, so adding a SECOND write scope reds this test and has to be argued
      * for, exactly as this one was.
      */
-    public function test_the_write_scopes_are_exactly_the_named_set(): void
+    public function testTheWriteScopesAreExactlyTheNamedSet(): void
     {
         $writes = [];
         foreach (McpScopes::all() as $scope) {
@@ -119,7 +119,7 @@ final class McpScopesTest extends TestCase
      * ...with the reads re-asserted beside it, so the test above cannot pass by
      * the list having been emptied.
      */
-    public function test_the_read_scopes_are_still_present(): void
+    public function testTheReadScopesAreStillPresent(): void
     {
         // Literals for the same reason as above: these strings are stored in the
         // database and pasted into client configs, so they are an interface, not
@@ -139,7 +139,7 @@ final class McpScopesTest extends TestCase
      * separate strings and `parse()` never promotes between them — a token
      * minted to READ playback information must not be able to stop a film.
      */
-    public function test_the_read_scope_does_not_imply_the_control_scope(): void
+    public function testTheReadScopeDoesNotImplyTheControlScope(): void
     {
         self::assertSame([McpScopes::PLAYBACK_READ], McpScopes::parse(McpScopes::PLAYBACK_READ));
         self::assertNotContains(McpScopes::PLAYBACK_CONTROL, McpScopes::parse(McpScopes::PLAYBACK_READ));
@@ -157,7 +157,7 @@ final class McpScopesTest extends TestCase
      * `McpScopes::SERVERS_READ` here would let a constant rename move the
      * expectation along with the subject and assert nothing.
      */
-    public function test_read_only_is_exactly_the_three_read_scopes(): void
+    public function testReadOnlyIsExactlyTheThreeReadScopes(): void
     {
         self::assertSame(
             ['mcp:servers:read', 'mcp:library:read', 'mcp:playback:read'],
@@ -177,7 +177,7 @@ final class McpScopesTest extends TestCase
      * cannot see. `assertNotSame` against the whole literal is the only
      * comparison that means what this test says.
      */
-    public function test_read_only_excludes_the_write_scope_by_exact_comparison(): void
+    public function testReadOnlyExcludesTheWriteScopeByExactComparison(): void
     {
         foreach (McpScopes::readOnly() as $scope) {
             self::assertNotSame('mcp:playback:control', $scope);
@@ -197,7 +197,7 @@ final class McpScopesTest extends TestCase
      * different order would be silently re-ordered on the way to the column and
      * the minted response would not match what a caller could predict.
      */
-    public function test_read_only_is_an_ordered_subset_of_all(): void
+    public function testReadOnlyIsAnOrderedSubsetOfAll(): void
     {
         $all = McpScopes::all();
         $readOnly = McpScopes::readOnly();
@@ -228,7 +228,7 @@ final class McpScopesTest extends TestCase
      * suffix rule authoritative again and re-open the fail-open hole the
      * enumeration exists to close.
      */
-    public function test_every_read_scope_in_all_is_also_in_read_only(): void
+    public function testEveryReadScopeInAllIsAlsoInReadOnly(): void
     {
         $readOnly = McpScopes::readOnly();
         $missed = [];

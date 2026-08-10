@@ -28,7 +28,7 @@ class IdleReaperTest extends TestCase
         $this->logger = $this->createMock(StructuredLogger::class);
     }
 
-    public function test_tick_reaps_only_stale_tunnels(): void
+    public function testTickReapsOnlyStaleTunnels(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -72,7 +72,7 @@ class IdleReaperTest extends TestCase
         $this->assertSame(1, $reapedCount);
     }
 
-    public function test_tick_reaps_nothing_when_all_tunnels_active(): void
+    public function testTickReapsNothingWhenAllTunnelsActive(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -105,7 +105,7 @@ class IdleReaperTest extends TestCase
         $this->assertSame(0, $reapedCount);
     }
 
-    public function test_tick_reaps_multiple_stale_tunnels(): void
+    public function testTickReapsMultipleStaleTunnels(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -145,7 +145,7 @@ class IdleReaperTest extends TestCase
         $this->assertSame(2, $reapedCount);
     }
 
-    public function test_tick_handles_empty_tunnel_list(): void
+    public function testTickHandlesEmptyTunnelList(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -169,7 +169,7 @@ class IdleReaperTest extends TestCase
         $this->assertSame(0, $reapedCount);
     }
 
-    public function test_get_interval_seconds_returns_configured_value(): void
+    public function testGetIntervalSecondsReturnsConfiguredValue(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -184,7 +184,7 @@ class IdleReaperTest extends TestCase
         $this->assertSame(45, $reaper->getStaleThresholdSeconds());
     }
 
-    public function test_tick_uses_configured_stale_threshold(): void
+    public function testTickUsesConfiguredStaleThreshold(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -218,7 +218,7 @@ class IdleReaperTest extends TestCase
         $this->assertSame(0, $reapedCount);
     }
 
-    public function test_tick_uses_custom_stale_threshold(): void
+    public function testTickUsesCustomStaleThreshold(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -253,7 +253,7 @@ class IdleReaperTest extends TestCase
         $this->assertSame(1, $reapedCount);
     }
 
-    public function test_reap_db_maintenance_reaps_stale_db_sessions_when_session_manager_wired(): void
+    public function testReapDbMaintenanceReapsStaleDbSessionsWhenSessionManagerWired(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -274,7 +274,7 @@ class IdleReaperTest extends TestCase
         $reaper->reapDbMaintenance();
     }
 
-    public function test_reap_db_maintenance_is_noop_for_db_sessions_when_session_manager_null(): void
+    public function testReapDbMaintenanceIsNoopForDbSessionsWhenSessionManagerNull(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -290,7 +290,7 @@ class IdleReaperTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
-    public function test_reap_db_maintenance_prunes_expired_tokens_when_client_relay_token_service_wired(): void
+    public function testReapDbMaintenancePrunesExpiredTokensWhenClientRelayTokenServiceWired(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -324,7 +324,7 @@ class IdleReaperTest extends TestCase
         $this->assertStringContainsString('revoked_at IS NOT NULL', $capturedSql);
     }
 
-    public function test_reap_db_maintenance_is_noop_for_client_relay_tokens_when_service_null(): void
+    public function testReapDbMaintenanceIsNoopForClientRelayTokensWhenServiceNull(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -349,7 +349,7 @@ class IdleReaperTest extends TestCase
      * an injectable clock and asserts the expired sidecar file is unlinked by the
      * reap — removing the wiring leaves the file and fails the assertion.
      */
-    public function test_reap_db_maintenance_purges_expired_previous_key_when_key_manager_wired(): void
+    public function testReapDbMaintenancePurgesExpiredPreviousKeyWhenKeyManagerWired(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -388,7 +388,7 @@ class IdleReaperTest extends TestCase
         @unlink($sidecar);
     }
 
-    public function test_reap_db_maintenance_is_noop_for_key_manager_when_null(): void
+    public function testReapDbMaintenanceIsNoopForKeyManagerWhenNull(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -414,7 +414,7 @@ class IdleReaperTest extends TestCase
      * + pruneAllServerHeartbeats + pruneExpiredTokens itself — this test FAILS
      * against that wiring (the never() expectations trip).
      */
-    public function test_tick_flushes_accumulators_and_scans_tunnels_but_runs_no_db_pruners(): void
+    public function testTickFlushesAccumulatorsAndScansTunnelsButRunsNoDbPruners(): void
     {
         $staleTunnel = $this->createMock(TunnelInterface::class);
         $staleTunnel->method('getTunnelId')->willReturn('tunnel-stale');
@@ -461,7 +461,7 @@ class IdleReaperTest extends TestCase
      * but must NOT touch the live tunnel registry (allTunnels/closeTunnel) nor
      * flush the in-memory accumulators (flushAll) — those are relay-worker work.
      */
-    public function test_reap_db_maintenance_runs_db_pruners_but_never_touches_tunnel_registry_or_flush(): void
+    public function testReapDbMaintenanceRunsDbPrunersButNeverTouchesTunnelRegistryOrFlush(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
         $tunnelManager->expects($this->never())->method('allTunnels');
@@ -517,7 +517,7 @@ class IdleReaperTest extends TestCase
      * than giving it a `Timer::add(86400, …)` of its own is deliberate: a bare
      * daily timer never fires on a box that restarts more often than once a day.
      */
-    public function test_reap_db_maintenance_prunes_expired_mcp_tokens_when_service_wired(): void
+    public function testReapDbMaintenancePrunesExpiredMcpTokensWhenServiceWired(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
@@ -561,7 +561,7 @@ class IdleReaperTest extends TestCase
      * in-memory {@see IdleReaper::tick()} — the same HB-2.6 data-locality rule
      * every other pruner here obeys.
      */
-    public function test_tick_never_prunes_mcp_tokens(): void
+    public function testTickNeverPrunesMcpTokens(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
         $tunnelManager->method('allTunnels')->willReturn($this->createTunnelGenerator([]));
@@ -588,7 +588,7 @@ class IdleReaperTest extends TestCase
      * An unwired MCP token service must leave the sweep working, exactly as the
      * other optional collaborators do.
      */
-    public function test_reap_db_maintenance_is_noop_for_mcp_tokens_when_service_null(): void
+    public function testReapDbMaintenanceIsNoopForMcpTokensWhenServiceNull(): void
     {
         $reaper = new IdleReaper(
             $this->createMock(TunnelManagerInterface::class),

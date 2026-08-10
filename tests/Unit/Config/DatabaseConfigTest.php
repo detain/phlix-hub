@@ -28,7 +28,7 @@ final class DatabaseConfigTest extends TestCase
         return $config;
     }
 
-    public function test_defines_the_named_connections(): void
+    public function testDefinesTheNamedConnections(): void
     {
         $config = $this->config();
 
@@ -40,7 +40,7 @@ final class DatabaseConfigTest extends TestCase
         }
     }
 
-    public function test_isolated_connections_mirror_the_mysql_credentials(): void
+    public function testIsolatedConnectionsMirrorTheMysqlCredentials(): void
     {
         $config = $this->config();
 

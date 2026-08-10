@@ -29,7 +29,7 @@ final class PkceTest extends TestCase
     /** A syntactically valid 43-character verifier. */
     private const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
 
-    public function test_s256_is_the_only_supported_method(): void
+    public function testS256IsTheOnlySupportedMethod(): void
     {
         // Control: the one method that IS supported.
         self::assertTrue(Pkce::isSupportedMethod('S256'));
@@ -43,7 +43,7 @@ final class PkceTest extends TestCase
         self::assertFalse(Pkce::isSupportedMethod('S256plain'), 'must not be a prefix match');
     }
 
-    public function test_the_plain_constant_names_the_method_that_is_refused(): void
+    public function testThePlainConstantNamesTheMethodThatIsRefused(): void
     {
         // Pins the constant to the RFC's spelling, so the rejection message and
         // the tests cannot drift apart from what a client actually sends.
@@ -52,7 +52,7 @@ final class PkceTest extends TestCase
         self::assertTrue(Pkce::isSupportedMethod(Pkce::METHOD_S256));
     }
 
-    public function test_challenge_derivation_matches_the_rfc_7636_worked_example(): void
+    public function testChallengeDerivationMatchesTheRfc7636WorkedExample(): void
     {
         // RFC 7636 Appendix B's verifier/challenge pair. An independently
         // published vector, so this test cannot be satisfied by an
@@ -64,7 +64,7 @@ final class PkceTest extends TestCase
         self::assertTrue(Pkce::verify($verifier, $challenge));
     }
 
-    public function test_the_challenge_is_unpadded_base64url_not_base64(): void
+    public function testTheChallengeIsUnpaddedBase64urlNotBase64(): void
     {
         $challenge = Pkce::challengeFor(self::VERIFIER);
         $plain     = base64_encode(hash('sha256', self::VERIFIER, true));
@@ -76,7 +76,7 @@ final class PkceTest extends TestCase
         self::assertSame(43, strlen($challenge));
     }
 
-    public function test_verify_accepts_the_matching_verifier_and_refuses_a_different_one(): void
+    public function testVerifyAcceptsTheMatchingVerifierAndRefusesADifferentOne(): void
     {
         $challenge = Pkce::challengeFor(self::VERIFIER);
 
@@ -88,7 +88,7 @@ final class PkceTest extends TestCase
         self::assertFalse(Pkce::verify($other, $challenge));
     }
 
-    public function test_verify_refuses_a_verifier_that_is_too_short_or_too_long(): void
+    public function testVerifyRefusesAVerifierThatIsTooShortOrTooLong(): void
     {
         // Control: exactly at the lower bound.
         $atMin = str_repeat('a', Pkce::MIN_VERIFIER_LENGTH);
@@ -109,7 +109,7 @@ final class PkceTest extends TestCase
         self::assertFalse(Pkce::verify('', Pkce::challengeFor('')), 'an empty verifier proves nothing');
     }
 
-    public function test_verify_refuses_a_verifier_outside_the_unreserved_alphabet(): void
+    public function testVerifyRefusesAVerifierOutsideTheUnreservedAlphabet(): void
     {
         // Control: 43 characters, all legal, including every legal punctuation.
         $legal = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJ-._~01234';
@@ -125,7 +125,7 @@ final class PkceTest extends TestCase
         }
     }
 
-    public function test_a_malformed_challenge_is_refused_even_by_its_own_verifier(): void
+    public function testAMalformedChallengeIsRefusedEvenByItsOwnVerifier(): void
     {
         // Control: a well-formed challenge validates.
         self::assertTrue(Pkce::isValidChallenge(Pkce::challengeFor(self::VERIFIER)));
@@ -142,7 +142,7 @@ final class PkceTest extends TestCase
         self::assertFalse(Pkce::isValidChallenge(str_repeat('a', 42) . '='));
     }
 
-    public function test_plain_style_verification_is_impossible(): void
+    public function testPlainStyleVerificationIsImpossible(): void
     {
         // Under `plain`, challenge === verifier. This asserts the server cannot
         // be tricked into that behaviour by simply sending the challenge as the

@@ -66,11 +66,26 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
-      # S109: no `-n`. Warnings are gate failures here — `-n` suppressed them
-      # entirely, which is how a PSR-12 line-length regression reached review.
-      # phpcs exits non-zero on warnings alone, so this step is red on either.
-      - name: Run PHPCS
-        run: ./vendor/bin/phpcs --standard=PSR12 --colors src/
+      # S299. This step used to be `./vendor/bin/phpcs --standard=PSR12 --colors
+      # src/`, which (a) ignored phpcs.xml.dist entirely and (b) never looked at
+      # tests/ — a tree that had NEVER been linted and carried 696 errors and 141
+      # warnings across 69 of its 241 files while this check was green on every
+      # commit since the workflow was written.
+      #
+      # ⚠ A gate that inspects zero files is indistinguishable from one that
+      # passes: same exit 0, same green tick, less output. So the replacement does
+      # not merely run the linter — it prints `N / N (100%) files inspected` per
+      # path and fails below a hard-coded floor, and it takes its verdict from the
+      # JSON report's totals rather than from phpcs's exit code, which lies.
+      #
+      # S109 still holds: warnings are gate failures here, not just errors.
+      #
+      # Do NOT replace this with a bare phpcs invocation, do NOT add
+      # continue-on-error, and do NOT drop a <file> entry from phpcs.xml.dist:
+      # tests/Unit/Support/PhpcsCorpusGateTest.php parses this file and the
+      # ruleset and fails on each of those edits.
+      - name: Run PHPCS over the whole corpus with an asserted file count (S299)
+        run: php scripts/assert-phpcs-corpus.php
 
   phpstan:
     name: PHPStan Static Analysis

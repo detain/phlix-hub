@@ -39,7 +39,7 @@ final class ConsentScreenTest extends TestCase
         );
     }
 
-    public function test_the_screen_names_every_scope_being_granted_and_no_others(): void
+    public function testTheScreenNamesEveryScopeBeingGrantedAndNoOthers(): void
     {
         $granted = [OAuthScopes::PROFILE_READ, McpScopes::LIBRARY_READ];
 
@@ -61,7 +61,7 @@ final class ConsentScreenTest extends TestCase
         self::assertStringNotContainsString(OAuthScopes::describe(McpScopes::PLAYBACK_CONTROL), $html);
     }
 
-    public function test_the_screen_carries_the_ticket_and_posts_to_the_authorize_path(): void
+    public function testTheScreenCarriesTheTicketAndPostsToTheAuthorizePath(): void
     {
         $html = ConsentScreen::render(self::client(), [OAuthScopes::PROFILE_READ], 'tk-123', '/oauth/authorize');
 
@@ -79,7 +79,7 @@ final class ConsentScreenTest extends TestCase
      * The consent screen is the only page a third party sends a user to, and the
      * client's display name is attacker-controlled at provisioning time.
      */
-    public function test_a_hostile_client_name_is_escaped_rather_than_rendered(): void
+    public function testAHostileClientNameIsEscapedRatherThanRendered(): void
     {
         $payload = '"><script>alert(1)</script>';
 
@@ -93,7 +93,7 @@ final class ConsentScreenTest extends TestCase
         self::assertStringContainsString('&quot;&gt;&lt;script&gt;', $html);
     }
 
-    public function test_a_hostile_ticket_value_is_escaped(): void
+    public function testAHostileTicketValueIsEscaped(): void
     {
         // The ticket is CSPRNG hex and cannot actually contain this. It is
         // escaped anyway, because "this one is safe" is how the next one stops
@@ -104,7 +104,7 @@ final class ConsentScreenTest extends TestCase
         self::assertStringContainsString('&lt;img', $html);
     }
 
-    public function test_the_screen_forbids_being_framed_and_loads_nothing_external(): void
+    public function testTheScreenForbidsBeingFramedAndLoadsNothingExternal(): void
     {
         $html = ConsentScreen::render(self::client(), [OAuthScopes::PROFILE_READ], 'tk', '/oauth/authorize');
 
@@ -121,7 +121,7 @@ final class ConsentScreenTest extends TestCase
         self::assertStringNotContainsString('<link', $html);
     }
 
-    public function test_the_error_page_states_that_nothing_was_shared(): void
+    public function testTheErrorPageStatesThatNothingWasShared(): void
     {
         $html = ConsentScreen::error('Unknown application', 'It is not registered with this hub.');
 
@@ -135,7 +135,7 @@ final class ConsentScreenTest extends TestCase
         self::assertStringNotContainsString(ConsentScreen::FIELD_TICKET, $html);
     }
 
-    public function test_the_error_page_escapes_its_inputs(): void
+    public function testTheErrorPageEscapesItsInputs(): void
     {
         $html = ConsentScreen::error('<b>x</b>', '<i>y</i>');
 
@@ -145,7 +145,7 @@ final class ConsentScreenTest extends TestCase
         self::assertStringContainsString('&lt;i&gt;', $html);
     }
 
-    public function test_allow_and_deny_are_distinct_and_allow_is_not_a_prefix_of_deny(): void
+    public function testAllowAndDenyAreDistinctAndAllowIsNotAPrefixOfDeny(): void
     {
         // The controller compares the decision with hash_equals against
         // DECISION_ALLOW. If the two constants ever collided or one became a
@@ -155,7 +155,7 @@ final class ConsentScreenTest extends TestCase
         self::assertStringStartsNotWith(ConsentScreen::DECISION_DENY, ConsentScreen::DECISION_ALLOW);
     }
 
-    public function test_the_document_is_well_formed_html(): void
+    public function testTheDocumentIsWellFormedHtml(): void
     {
         $html = ConsentScreen::render(self::client(), OAuthScopes::all(), 'tk', '/oauth/authorize');
 

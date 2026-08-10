@@ -109,7 +109,7 @@ final class McpScopes
      *
      * The omission risk that swaps in — adding a genuinely read-only scope to
      * `all()` and forgetting it here — is caught by
-     * `McpScopesTest::test_every_read_scope_in_all_is_also_in_read_only()`, which
+     * `McpScopesTest::testEveryReadScopeInAllIsAlsoInReadOnly()`, which
      * checks the suffix rule as a cross-check rather than as the implementation.
      *
      * ⚠ Not the same question as "what will the server honour". A scope can be

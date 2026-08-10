@@ -117,7 +117,7 @@ final class Pkce
         // BEFORE a final newline, so `/^[A-Za-z0-9\-._~]+$/` accepts
         // "aaa…aaa\n" — a verifier carrying a trailing newline would have been
         // treated as being in the unreserved alphabet. Caught by
-        // `PkceTest::test_verify_refuses_a_verifier_outside_the_unreserved_alphabet`.
+        // `PkceTest::testVerifyRefusesAVerifierOutsideTheUnreservedAlphabet`.
         return preg_match('/\A[A-Za-z0-9\-._~]+\z/', $verifier) === 1;
     }
 

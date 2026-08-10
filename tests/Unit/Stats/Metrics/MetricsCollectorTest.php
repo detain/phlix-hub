@@ -24,7 +24,7 @@ final class MetricsCollectorTest extends TestCase
         $this->clock = static fn (): int => 1000;
     }
 
-    public function test_enabled_collector_delegates_request_to_registry(): void
+    public function testEnabledCollectorDelegatesRequestToRegistry(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true, $this->clock);
@@ -41,7 +41,7 @@ final class MetricsCollectorTest extends TestCase
         $this->assertSame(22, $bucket['bytes_out']);
     }
 
-    public function test_disabled_collector_does_not_record_requests(): void
+    public function testDisabledCollectorDoesNotRecordRequests(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, false, $this->clock);
@@ -53,7 +53,7 @@ final class MetricsCollectorTest extends TestCase
         $this->assertSame([], $drained['routes']);
     }
 
-    public function test_enabled_collector_delegates_connection_lifecycle(): void
+    public function testEnabledCollectorDelegatesConnectionLifecycle(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true, $this->clock);
@@ -73,7 +73,7 @@ final class MetricsCollectorTest extends TestCase
         $this->assertArrayNotHasKey('0-1', $registry->snapshotConnections());
     }
 
-    public function test_disabled_collector_does_not_touch_connections(): void
+    public function testDisabledCollectorDoesNotTouchConnections(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, false, $this->clock);
@@ -85,7 +85,7 @@ final class MetricsCollectorTest extends TestCase
         $this->assertSame([], $registry->snapshotConnections());
     }
 
-    public function test_open_connection_uses_defaults_for_optional_args(): void
+    public function testOpenConnectionUsesDefaultsForOptionalArgs(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true, $this->clock);
@@ -99,14 +99,14 @@ final class MetricsCollectorTest extends TestCase
         $this->assertNull($c['media_item_id']);
     }
 
-    public function test_is_enabled_reflects_constructor_flag(): void
+    public function testIsEnabledReflectsConstructorFlag(): void
     {
         $registry = new MetricsRegistry(10);
         $this->assertTrue((new MetricsCollector($registry, true))->isEnabled());
         $this->assertFalse((new MetricsCollector($registry, false))->isEnabled());
     }
 
-    public function test_registry_accessor_returns_shared_instance(): void
+    public function testRegistryAccessorReturnsSharedInstance(): void
     {
         $registry  = new MetricsRegistry(10);
         $collector = new MetricsCollector($registry, true);
@@ -114,7 +114,7 @@ final class MetricsCollectorTest extends TestCase
         $this->assertSame($registry, $collector->registry());
     }
 
-    public function test_default_clock_is_time(): void
+    public function testDefaultClockIsTime(): void
     {
         $registry  = new MetricsRegistry(1);
         $collector = new MetricsCollector($registry, true);

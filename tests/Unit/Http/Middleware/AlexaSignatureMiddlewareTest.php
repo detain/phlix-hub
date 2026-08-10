@@ -599,11 +599,17 @@ final class AlexaSignatureMiddlewareTest extends TestCase
         // 149s old: inside the window. (149 rather than exactly 150 so a
         // sub-second lag between building the body and evaluating it cannot
         // flip the verdict.)
-        $inside = self::body(gmdate('Y-m-d\TH:i:s\Z', time() - (AlexaSignatureMiddleware::MAX_TIMESTAMP_SKEW_SECONDS - 1)));
+        $inside = self::body(gmdate(
+            'Y-m-d\TH:i:s\Z',
+            time() - (AlexaSignatureMiddleware::MAX_TIMESTAMP_SKEW_SECONDS - 1)
+        ));
         self::assertNull($middleware(self::request($inside, $fixture->sign($inside))));
 
         // 152s old: outside it.
-        $outside = self::body(gmdate('Y-m-d\TH:i:s\Z', time() - (AlexaSignatureMiddleware::MAX_TIMESTAMP_SKEW_SECONDS + 2)));
+        $outside = self::body(gmdate(
+            'Y-m-d\TH:i:s\Z',
+            time() - (AlexaSignatureMiddleware::MAX_TIMESTAMP_SKEW_SECONDS + 2)
+        ));
         $this->assertRejected($middleware(self::request($outside, $fixture->sign($outside))), 'ALEXA_TIMESTAMP_STALE');
     }
 

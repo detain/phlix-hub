@@ -97,7 +97,10 @@ final class RouterTest extends TestCase
     public function testPutRouteIsRegistered(): void
     {
         $router = new Router();
-        $router->put('/api/v1/servers/{id}', static fn (Request $r, array $p): Response => (new Response())->status(200)->json($p));
+        $router->put(
+            '/api/v1/servers/{id}',
+            static fn (Request $r, array $p): Response => (new Response())->status(200)->json($p)
+        );
 
         $res = $router->dispatch($this->request('PUT', '/api/v1/servers/123'));
         self::assertSame(200, $res->statusCode);
@@ -108,7 +111,10 @@ final class RouterTest extends TestCase
     public function testPatchRouteIsRegistered(): void
     {
         $router = new Router();
-        $router->patch('/api/v1/servers/{id}', static fn (Request $r, array $p): Response => (new Response())->status(200)->json($p));
+        $router->patch(
+            '/api/v1/servers/{id}',
+            static fn (Request $r, array $p): Response => (new Response())->status(200)->json($p)
+        );
 
         $res = $router->dispatch($this->request('PATCH', '/api/v1/servers/456'));
         self::assertSame(200, $res->statusCode);
@@ -119,7 +125,10 @@ final class RouterTest extends TestCase
     public function testDeleteRouteIsRegistered(): void
     {
         $router = new Router();
-        $router->delete('/api/v1/servers/{id}', static fn (Request $r, array $p): Response => (new Response())->status(204));
+        $router->delete(
+            '/api/v1/servers/{id}',
+            static fn (Request $r, array $p): Response => (new Response())->status(204)
+        );
 
         $res = $router->dispatch($this->request('DELETE', '/api/v1/servers/789'));
         self::assertSame(204, $res->statusCode);
@@ -237,7 +246,10 @@ final class RouterTest extends TestCase
     {
         $receivedParams = null;
         $router = new Router();
-        $router->get('/servers/{id}/details/{detail}', static function (Request $r, array $p) use (&$receivedParams): Response {
+        $router->get('/servers/{id}/details/{detail}', static function (
+            Request $r,
+            array $p,
+        ) use (&$receivedParams): Response {
             $receivedParams = $p;
             return (new Response())->status(200)->json($p);
         });

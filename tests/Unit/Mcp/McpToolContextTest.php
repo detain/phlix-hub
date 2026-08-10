@@ -25,7 +25,7 @@ use function sprintf;
  *
  * ## Why this file exists
  *
- * {@see McpToolIsolationTest::test_no_tool_targets_a_byte_streaming_prefix()}
+ * {@see McpToolIsolationTest::testNoToolTargetsAByteStreamingPrefix()}
  * already pins the INVARIANT that no shipped tool names `/hls`, `/dash` or
  * `/media`. That is a static check over source text: it proves the guard in
  * {@see McpToolContext::proxyGet()} is not needed TODAY, and in doing so it
@@ -61,7 +61,7 @@ final class McpToolContextTest extends TestCase
      * browser socket for that closure to write to, so decoding the (empty) body
      * would report a successful call that returned nothing.
      */
-    public function test_a_byte_streaming_path_is_refused_rather_than_returned_empty(): void
+    public function testAByteStreamingPathIsRefusedRatherThanReturnedEmpty(): void
     {
         $outcome = $this->context()->proxyGet(self::SERVER_OF_A, '/media/media-1/stream');
 
@@ -85,7 +85,7 @@ final class McpToolContextTest extends TestCase
      * reaching the bridge is a loud failure) — the one thing it must NOT be is
      * `mcp.streaming_unsupported`.
      */
-    public function test_a_buffered_path_is_not_caught_by_the_streaming_guard(): void
+    public function testABufferedPathIsNotCaughtByTheStreamingGuard(): void
     {
         $code = null;
         try {
@@ -134,7 +134,7 @@ final class McpToolContextTest extends TestCase
      * owned and the relay is up, so the allowlist is the only thing left to say
      * no.
      */
-    public function test_a_path_outside_the_browse_allowlist_is_refused_on_the_mcp_path(): void
+    public function testAPathOutsideTheBrowseAllowlistIsRefusedOnTheMcpPath(): void
     {
         $outcome = $this->context()->proxyGet(self::SERVER_OF_A, '/api/v1/admin/users');
 
@@ -158,7 +158,7 @@ final class McpToolContextTest extends TestCase
      *
      * @dataProvider shippedToolPathProvider
      */
-    public function test_the_paths_the_shipped_tools_forward_are_inside_the_browse_allowlist(
+    public function testThePathsTheShippedToolsForwardAreInsideTheBrowseAllowlist(
         string $path,
     ): void {
         try {
@@ -203,7 +203,7 @@ final class McpToolContextTest extends TestCase
      * by the production controller, and the control path must really not be.
      * If both were buffered, the first test could only ever have been vacuous.
      */
-    public function test_the_fixture_paths_are_classified_as_this_file_assumes(): void
+    public function testTheFixturePathsAreClassifiedAsThisFileAssumes(): void
     {
         $isStreaming = (new ReflectionClass(ServerProxyController::class))->getMethod('isStreamingPath');
 
@@ -234,7 +234,7 @@ final class McpToolContextTest extends TestCase
      *
      * @dataProvider deniedWritePathProvider
      */
-    public function test_a_post_outside_the_write_allowlist_is_refused(string $path): void
+    public function testAPostOutsideTheWriteAllowlistIsRefused(string $path): void
     {
         $outcome = $this->context()->proxyPost(self::SERVER_OF_A, $path, ['position_ms' => 1]);
 
@@ -271,7 +271,7 @@ final class McpToolContextTest extends TestCase
      *
      * @dataProvider playbackControlWritePathProvider
      */
-    public function test_the_paths_playback_control_writes_are_inside_the_write_allowlist(string $path): void
+    public function testThePathsPlaybackControlWritesAreInsideTheWriteAllowlist(string $path): void
     {
         try {
             $outcome = $this->context()->proxyPost(self::SERVER_OF_A, $path, []);
@@ -316,7 +316,7 @@ final class McpToolContextTest extends TestCase
      * from the 404 for an unknown server, so this is a decision and not a
      * blanket no.
      */
-    public function test_a_post_to_another_users_server_is_refused_by_ownership(): void
+    public function testAPostToAnotherUsersServerIsRefusedByOwnership(): void
     {
         $outcome = $this->context()->proxyPost(
             'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
@@ -337,7 +337,7 @@ final class McpToolContextTest extends TestCase
      * POST to it is refused by the SCOPE gate first — which is itself the
      * stronger answer, and is what this pins.
      */
-    public function test_a_post_to_a_streaming_family_never_reaches_the_producer_path(): void
+    public function testAPostToAStreamingFamilyNeverReachesTheProducerPath(): void
     {
         $outcome = $this->context()->proxyPost(self::SERVER_OF_A, '/media/media-1/stream', []);
 

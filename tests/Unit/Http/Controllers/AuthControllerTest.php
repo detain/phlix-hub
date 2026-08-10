@@ -224,7 +224,9 @@ final class AuthControllerTest extends TestCase
     public function testSignupJsonReturns400OnInvalidInput(): void
     {
         $mgr = $this->authMgr();
-        $mgr->method('register')->willThrowException(new InvalidArgumentException('Password must be at least 8 characters'));
+        $mgr->method('register')->willThrowException(
+            new InvalidArgumentException('Password must be at least 8 characters')
+        );
 
         $controller = $this->controller($mgr);
         $request = new Request();

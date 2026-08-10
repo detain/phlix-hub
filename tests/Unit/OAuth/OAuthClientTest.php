@@ -46,7 +46,7 @@ final class OAuthClientTest extends TestCase
 
     // ---- redirect_uri: exact, and only exact --------------------------------
 
-    public function test_an_exactly_registered_redirect_uri_is_accepted(): void
+    public function testAnExactlyRegisteredRedirectUriIsAccepted(): void
     {
         self::assertTrue(self::client()->allowsRedirectUri(self::REDIRECT));
     }
@@ -88,7 +88,7 @@ final class OAuthClientTest extends TestCase
     /**
      * @dataProvider nearMissRedirectUriProvider
      */
-    public function test_a_near_miss_redirect_uri_is_refused(string $candidate): void
+    public function testANearMissRedirectUriIsRefused(string $candidate): void
     {
         $client = self::client();
 
@@ -102,7 +102,7 @@ final class OAuthClientTest extends TestCase
         self::assertTrue($client->allowsRedirectUri(self::REDIRECT));
     }
 
-    public function test_each_of_several_registered_uris_matches_and_nothing_between_them_does(): void
+    public function testEachOfSeveralRegisteredUrisMatchesAndNothingBetweenThemDoes(): void
     {
         $a = 'https://alexa.amazon.co.jp/api/skill/link/M2ABCDEFG';
         $b = 'https://layla.amazon.com/api/skill/link/M2ABCDEFG';
@@ -119,7 +119,7 @@ final class OAuthClientTest extends TestCase
 
     // ---- the empty-allow-list fail-open, refused at construction ------------
 
-    public function test_a_client_with_no_registered_redirect_uris_cannot_exist(): void
+    public function testAClientWithNoRegisteredRedirectUrisCannotExist(): void
     {
         // The failure this refuses to allow: an empty list means the loop in
         // allowsRedirectUri() has nothing to compare against. This estate has
@@ -131,7 +131,7 @@ final class OAuthClientTest extends TestCase
         self::client([]);
     }
 
-    public function test_a_client_whose_redirect_uris_are_all_blank_cannot_exist(): void
+    public function testAClientWhoseRedirectUrisAreAllBlankCannotExist(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('no registered redirect URIs');
@@ -139,7 +139,7 @@ final class OAuthClientTest extends TestCase
         self::client(['', '']);
     }
 
-    public function test_a_client_with_no_recognised_scopes_cannot_exist(): void
+    public function testAClientWithNoRecognisedScopesCannotExist(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('no recognised allowed scopes');
@@ -147,7 +147,7 @@ final class OAuthClientTest extends TestCase
         self::client([self::REDIRECT], ['admin:*', 'nonsense']);
     }
 
-    public function test_a_client_with_an_empty_scope_list_cannot_exist(): void
+    public function testAClientWithAnEmptyScopeListCannotExist(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('no recognised allowed scopes');
@@ -155,7 +155,7 @@ final class OAuthClientTest extends TestCase
         self::client([self::REDIRECT], []);
     }
 
-    public function test_a_confidential_client_with_no_secret_hash_cannot_exist(): void
+    public function testAConfidentialClientWithNoSecretHashCannotExist(): void
     {
         // It could never be authenticated, so it would be a client that is
         // permanently unusable — or, worse, one a lenient token endpoint waves
@@ -166,7 +166,7 @@ final class OAuthClientTest extends TestCase
         OAuthClient::create('row-id', 'c', 'C', [self::REDIRECT], [OAuthScopes::PROFILE_READ], true, null);
     }
 
-    public function test_a_client_with_a_blank_client_id_cannot_exist(): void
+    public function testAClientWithABlankClientIdCannotExist(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('client_id must not be empty');
@@ -174,7 +174,7 @@ final class OAuthClientTest extends TestCase
         OAuthClient::create('row-id', '', 'C', [self::REDIRECT], [OAuthScopes::PROFILE_READ], false, null);
     }
 
-    public function test_a_valid_client_is_built_and_normalised(): void
+    public function testAValidClientIsBuiltAndNormalised(): void
     {
         // Control for every refusal above: the same factory does succeed.
         $client = self::client(
@@ -194,7 +194,7 @@ final class OAuthClientTest extends TestCase
 
     // ---- scope ceiling ------------------------------------------------------
 
-    public function test_permits_accepts_a_subset_and_refuses_anything_outside_the_ceiling(): void
+    public function testPermitsAcceptsASubsetAndRefusesAnythingOutsideTheCeiling(): void
     {
         $client = self::client([self::REDIRECT], [OAuthScopes::PROFILE_READ, McpScopes::LIBRARY_READ]);
 
@@ -207,7 +207,7 @@ final class OAuthClientTest extends TestCase
         self::assertFalse($client->permits([OAuthScopes::PROFILE_READ, McpScopes::PLAYBACK_CONTROL]));
     }
 
-    public function test_permits_refuses_an_empty_scope_list_rather_than_passing_it_vacuously(): void
+    public function testPermitsRefusesAnEmptyScopeListRatherThanPassingItVacuously(): void
     {
         // A `foreach` over an empty list falls straight through to `return
         // true`. "Requested nothing recognised" must not read as "requested
@@ -220,7 +220,7 @@ final class OAuthClientTest extends TestCase
 
     // ---- client secret ------------------------------------------------------
 
-    public function test_a_confidential_client_verifies_only_the_right_secret(): void
+    public function testAConfidentialClientVerifiesOnlyTheRightSecret(): void
     {
         $client = self::client([self::REDIRECT], [OAuthScopes::PROFILE_READ], 'super-secret-value');
 
@@ -237,7 +237,7 @@ final class OAuthClientTest extends TestCase
         );
     }
 
-    public function test_a_public_client_never_verifies_a_secret(): void
+    public function testAPublicClientNeverVerifiesASecret(): void
     {
         $client = self::client();
 

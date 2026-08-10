@@ -198,7 +198,7 @@ final class ServerProxyController
      * NOT as a prefix here. `/api/v1/images` is still dead surface either way:
      * the real path is `/api/v1/artwork/{id}`.
      * `ServerProxyControllerTest::s107FollowupDeadPrefixProvider()` and
-     * `test_browse_scope_allowlist_matches_the_pinned_upstream_backed_set()` pin
+     * `testBrowseScopeAllowlistMatchesThePinnedUpstreamBackedSet()` pin
      * both halves.
      *
      * ### HEAD is live (S247) but carries NO prefix — there is no HEAD key here

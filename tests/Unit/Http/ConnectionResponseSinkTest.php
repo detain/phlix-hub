@@ -25,7 +25,7 @@ final class ConnectionResponseSinkTest extends TestCase
      * Skips the parent constructor so no live socket is needed; close() is
      * overridden rather than delegating to the real `TcpConnection::close()`
      * so the force-close assertions are direct or (see
-     * {@see self::test_body_reports_false_when_the_connection_send_fails()}
+     * {@see self::testBodyReportsFalseWhenTheConnectionSendFails()}
      * onward) not entangled with `TcpConnection`'s internal socket/event-loop
      * state, which is never initialised for this double. No return type-hint
      * so PHPStan keeps the anonymous class's public properties visible to
@@ -55,7 +55,7 @@ final class ConnectionResponseSinkTest extends TestCase
         };
     }
 
-    public function test_fixed_length_preserves_content_length_and_streams_raw_body(): void
+    public function testFixedLengthPreservesContentLengthAndStreamsRawBody(): void
     {
         $connection = $this->connection();
         $sink = new ConnectionResponseSink($connection);
@@ -77,7 +77,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertCount(2, $written);
     }
 
-    public function test_bytes_streamed_counts_raw_body_bytes_for_fixed_length(): void
+    public function testBytesStreamedCountsRawBodyBytesForFixedLength(): void
     {
         // HB-3.4 G1: bytesStreamed() is the authoritative on-the-wire download
         // total the bandwidth accounting meters — real body bytes, not headers.
@@ -94,7 +94,7 @@ final class ConnectionResponseSinkTest extends TestCase
         self::assertSame(6, $sink->bytesStreamed());
     }
 
-    public function test_bytes_streamed_counts_raw_body_bytes_for_chunked(): void
+    public function testBytesStreamedCountsRawBodyBytesForChunked(): void
     {
         // Chunked framing wraps each fragment in a chunk header on the wire, but
         // bytesStreamed() must count only the RAW body bytes (the download the
@@ -110,7 +110,7 @@ final class ConnectionResponseSinkTest extends TestCase
         self::assertSame(14, $sink->bytesStreamed()); // 5 + 9
     }
 
-    public function test_bytes_streamed_does_not_count_a_failed_send(): void
+    public function testBytesStreamedDoesNotCountAFailedSend(): void
     {
         // When the connection reports the body send failed (client gone), those
         // bytes never reached the wire and must not be metered.
@@ -123,7 +123,7 @@ final class ConnectionResponseSinkTest extends TestCase
         self::assertSame(0, $sink->bytesStreamed());
     }
 
-    public function test_unknown_length_uses_chunked_transfer_encoding(): void
+    public function testUnknownLengthUsesChunkedTransferEncoding(): void
     {
         $connection = $this->connection();
         $sink = new ConnectionResponseSink($connection);
@@ -140,7 +140,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertSame("0\r\n\r\n", $written[2]);
     }
 
-    public function test_preserves_content_range_and_206_for_ranged_requests(): void
+    public function testPreservesContentRangeAnd206ForRangedRequests(): void
     {
         $connection = $this->connection();
         $sink = new ConnectionResponseSink($connection);
@@ -163,7 +163,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertStringContainsString('Content-Length: 5', $head);
     }
 
-    public function test_strips_hop_by_hop_headers_but_keeps_content_length(): void
+    public function testStripsHopByHopHeadersButKeepsContentLength(): void
     {
         $connection = $this->connection();
         $sink = new ConnectionResponseSink($connection);
@@ -185,7 +185,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertStringNotContainsString('Transfer-Encoding: gzip', $head);
     }
 
-    public function test_body_reports_false_when_the_connection_send_fails(): void
+    public function testBodyReportsFalseWhenTheConnectionSendFails(): void
     {
         $connection = $this->connection(sendResult: false);
         $sink = new ConnectionResponseSink($connection);
@@ -201,7 +201,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertTrue($connection->closeCalled);
     }
 
-    public function test_head_response_is_never_force_closed_for_a_short_body(): void
+    public function testHeadResponseIsNeverForceClosedForAShortBody(): void
     {
         // A HEAD response legitimately has zero body bytes regardless of its
         // Content-Length (RFC 9110 §9.3.2) — the short-body force-close
@@ -215,7 +215,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertFalse($connection->closeCalled);
     }
 
-    public function test_end_force_closes_a_short_fixed_length_response(): void
+    public function testEndForceClosesAShortFixedLengthResponse(): void
     {
         // Models the relay-side inactivity/absolute-duration ceiling ending a
         // stream (RelayProxyManager::onTimeout()/touchStreamTimer()) before all
@@ -231,7 +231,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertTrue($connection->closeCalled);
     }
 
-    public function test_end_does_not_force_close_a_complete_fixed_length_response(): void
+    public function testEndDoesNotForceCloseACompleteFixedLengthResponse(): void
     {
         $connection = $this->connection();
         $sink = new ConnectionResponseSink($connection);
@@ -243,7 +243,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertFalse($connection->closeCalled);
     }
 
-    public function test_body_parks_on_buffer_full_and_resumes_once_drained(): void
+    public function testBodyParksOnBufferFullAndResumesOnceDrained(): void
     {
         // Regression for finding 5: proves the onBufferFull -> resume->pop() ->
         // onBufferDrain hand-off actually runs (the earlier tests never flip
@@ -290,7 +290,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertFalse($connection->closeCalled);
     }
 
-    public function test_body_gives_up_and_force_closes_when_drain_never_arrives(): void
+    public function testBodyGivesUpAndForceClosesWhenDrainNeverArrives(): void
     {
         // Regression for finding 5: the abandon-while-paused path (drain never
         // comes) must report the downstream gone AND force-close (finding 3),
@@ -332,7 +332,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertFalse($sink->body('bar'));
     }
 
-    public function test_abort_force_closes_the_connection_and_detaches_the_hooks(): void
+    public function testAbortForceClosesTheConnectionAndDetachesTheHooks(): void
     {
         // The round-2 wire-corruption fix contract: after real bytes may have
         // been written, the bridge calls abort() (never end()) — it must
@@ -351,7 +351,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertNull($connection->onBufferDrain, 'abort() must detach the buffer-drain hook');
     }
 
-    public function test_abort_after_the_connection_is_already_closed_does_not_close_again(): void
+    public function testAbortAfterTheConnectionIsAlreadyClosedDoesNotCloseAgain(): void
     {
         // If the sink already force-closed (e.g. a send() failure mid-body),
         // a subsequent abort() from the bridge's exception path must be a no-op
@@ -387,7 +387,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertSame(1, $connection->closeCount, 'abort() must not close an already-closed connection again');
     }
 
-    public function test_abort_swallows_a_close_failure(): void
+    public function testAbortSwallowsACloseFailure(): void
     {
         // abort() is itself the error-recovery path (the caller has nowhere left
         // to route a failure), so a throw from close() must never escape it.
@@ -415,7 +415,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertNull($connection->onBufferFull, 'abort() must still detach even when close() throws');
     }
 
-    public function test_a_second_head_call_is_ignored(): void
+    public function testASecondHeadCallIsIgnored(): void
     {
         // head() is documented as called exactly once; a defensive second call
         // must be a no-op (not emit a second status line onto the wire).
@@ -430,7 +430,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertStringNotContainsString('500', $connection->written[0]);
     }
 
-    public function test_end_after_the_connection_is_already_closed_is_a_noop(): void
+    public function testEndAfterTheConnectionIsAlreadyClosedIsANoop(): void
     {
         // After a mid-body send() failure marked the sink closed, a late end()
         // must simply detach — no terminating write, no extra close().
@@ -466,7 +466,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertNull($connection->onBufferFull, 'end() must detach even on the closed path');
     }
 
-    public function test_fixed_length_head_defaults_content_type_when_absent(): void
+    public function testFixedLengthHeadDefaultsContentTypeWhenAbsent(): void
     {
         // A fixed-length response with no Content-Type must still get a valid
         // default so the browser is never left guessing the framing.
@@ -479,7 +479,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertStringContainsString('Connection: keep-alive', $connection->written[0]);
     }
 
-    public function test_body_before_head_is_ignored(): void
+    public function testBodyBeforeHeadIsIgnored(): void
     {
         $connection = $this->connection();
         $sink = new ConnectionResponseSink($connection);
@@ -489,7 +489,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertSame('', implode('', $connection->written));
     }
 
-    public function test_crlf_smuggling_headers_are_dropped(): void
+    public function testCrlfSmugglingHeadersAreDropped(): void
     {
         $connection = $this->connection();
         $sink = new ConnectionResponseSink($connection);
@@ -508,7 +508,7 @@ final class ConnectionResponseSinkTest extends TestCase
     // Per-user bandwidth throttle (S43, updates.md #50)
     // ---------------------------------------------------------------------
 
-    public function test_unlimited_stream_is_never_paced(): void
+    public function testUnlimitedStreamIsNeverPaced(): void
     {
         // 0 = Unlimited → fromThrottleBps() returns null → the sink takes its
         // fast path: body() must never invoke the sleeper (no pacing overhead)
@@ -533,7 +533,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertSame(50 * 1000, $sink->bytesStreamed());
     }
 
-    public function test_throttled_body_stream_is_paced_to_the_configured_cap(): void
+    public function testThrottledBodyStreamIsPacedToTheConfiguredCap(): void
     {
         // Drive the token bucket deterministically: a virtual clock advanced ONLY
         // by the injected sleeper, so total elapsed == the time the pacing loop
@@ -589,7 +589,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertSame($fragments + 2, count($connection->written));
     }
 
-    public function test_a_throttled_stream_does_not_affect_a_concurrent_unlimited_stream(): void
+    public function testAThrottledStreamDoesNotAffectAConcurrentUnlimitedStream(): void
     {
         // Model two users multiplexed on one worker: each has its OWN sink +
         // bucket + clock. Throttling one must not pace the other — the throttle
@@ -646,7 +646,7 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertSame(60 * 500, $bSink->bytesStreamed());
     }
 
-    public function test_an_oversized_fragment_never_deadlocks_a_throttled_stream(): void
+    public function testAnOversizedFragmentNeverDeadlocksAThrottledStream(): void
     {
         // A fragment far larger than the whole bucket must still be released
         // (mirrors the WS path: canSpend gates on ANY positive budget, so an

@@ -59,7 +59,7 @@ final class CollectionRouteSlashTest extends TestCase
      * The trap itself, pinned. If someone later "simplifies" the double
      * registration back to a single `'/'`, this documents what breaks.
      */
-    public function test_registering_only_a_slash_does_not_serve_the_slashless_path(): void
+    public function testRegisteringOnlyASlashDoesNotServeTheSlashlessPath(): void
     {
         $router = new Router();
         $router->group('/api/v1/me/things', static function (Router $r): void {
@@ -75,7 +75,7 @@ final class CollectionRouteSlashTest extends TestCase
     }
 
     /** And the mirror image, so the asymmetry is unambiguous. */
-    public function test_registering_only_empty_does_not_serve_the_slashed_path(): void
+    public function testRegisteringOnlyEmptyDoesNotServeTheSlashedPath(): void
     {
         $router = new Router();
         $router->group('/api/v1/me/things', static function (Router $r): void {
@@ -87,7 +87,7 @@ final class CollectionRouteSlashTest extends TestCase
     }
 
     /** Registering both is additive — same handler, either path, no collision. */
-    public function test_registering_both_forms_serves_both_paths(): void
+    public function testRegisteringBothFormsServesBothPaths(): void
     {
         $router = new Router();
         $router->group('/api/v1/me/things', static function (Router $r): void {
@@ -111,7 +111,7 @@ final class CollectionRouteSlashTest extends TestCase
      *
      * @dataProvider collectionGroups
      */
-    public function test_application_registers_both_forms_for_user_collections(string $group, string $verb): void
+    public function testApplicationRegistersBothFormsForUserCollections(string $group, string $verb): void
     {
         $src = file_get_contents(__DIR__ . '/../../../src/Application.php');
         self::assertIsString($src);

@@ -40,7 +40,14 @@ final class RequestManagerTest extends TestCase
                 if (str_contains($sql, 'INSERT INTO requests')) {
                     return [];
                 }
-                return [self::row(['id' => 'test-uuid', 'user_id' => 'user-123', 'type' => 'movie', 'tmdb_id' => 12345, 'title' => 'Test Movie', 'poster_url' => 'https://poster.url'])];
+                return [self::row([
+                    'id' => 'test-uuid',
+                    'user_id' => 'user-123',
+                    'type' => 'movie',
+                    'tmdb_id' => 12345,
+                    'title' => 'Test Movie',
+                    'poster_url' => 'https://poster.url'
+                ])];
             });
 
         $result = $this->manager->createRequest('user-123', 'movie', 12345, 'Test Movie', 'https://poster.url');
@@ -60,7 +67,15 @@ final class RequestManagerTest extends TestCase
                 if (str_contains($sql, 'INSERT INTO requests')) {
                     return [];
                 }
-                return [self::row(['id' => 'test-uuid', 'user_id' => 'user-456', 'type' => 'series', 'tmdb_id' => 54321, 'title' => 'Test Series', 'season' => 2, 'episode' => 5])];
+                return [self::row([
+                    'id' => 'test-uuid',
+                    'user_id' => 'user-456',
+                    'type' => 'series',
+                    'tmdb_id' => 54321,
+                    'title' => 'Test Series',
+                    'season' => 2,
+                    'episode' => 5
+                ])];
             });
 
         $result = $this->manager->createRequest('user-456', 'series', 54321, 'Test Series', null, 2, 5);
@@ -132,8 +147,22 @@ final class RequestManagerTest extends TestCase
                 ['user_id' => 'user-123'],
             )
             ->willReturn([
-                self::row(['id' => 'req-1', 'user_id' => 'user-123', 'tmdb_id' => 111, 'title' => 'Movie 1', 'status' => 'pending']),
-                self::row(['id' => 'req-2', 'user_id' => 'user-123', 'type' => 'series', 'tmdb_id' => 222, 'title' => 'Series 1', 'season' => 1, 'status' => 'pending']),
+                self::row([
+                    'id' => 'req-1',
+                    'user_id' => 'user-123',
+                    'tmdb_id' => 111,
+                    'title' => 'Movie 1',
+                    'status' => 'pending'
+                ]),
+                self::row([
+                    'id' => 'req-2',
+                    'user_id' => 'user-123',
+                    'type' => 'series',
+                    'tmdb_id' => 222,
+                    'title' => 'Series 1',
+                    'season' => 1,
+                    'status' => 'pending'
+                ]),
             ]);
 
         $result = $this->manager->listPendingRequests('user-123');
@@ -153,7 +182,11 @@ final class RequestManagerTest extends TestCase
 
     public function testListAvailableRequests(): void
     {
-        $this->db->method('query')->willReturn([self::row(['id' => 'req-1', 'title' => 'Available', 'status' => 'available'])]);
+        $this->db->method('query')->willReturn([self::row([
+            'id' => 'req-1',
+            'title' => 'Available',
+            'status' => 'available'
+        ])]);
         $result = $this->manager->listAvailableRequests();
         self::assertCount(1, $result);
         self::assertSame('available', $result[0]['status']);
@@ -193,13 +226,21 @@ final class RequestManagerTest extends TestCase
 
     public function testApproveMovieReturnsFalseWhenRadarrNotConfigured(): void
     {
-        $this->db->method('query')->willReturn([self::row(['id' => 'test-id', 'type' => 'movie', 'status' => 'pending'])]);
+        $this->db->method('query')->willReturn([self::row([
+            'id' => 'test-id',
+            'type' => 'movie',
+            'status' => 'pending'
+        ])]);
         self::assertFalse($this->manager->approveRequest('test-id'));
     }
 
     public function testApproveSeriesReturnsFalseWhenSonarrNotConfigured(): void
     {
-        $this->db->method('query')->willReturn([self::row(['id' => 'test-id', 'type' => 'series', 'status' => 'pending'])]);
+        $this->db->method('query')->willReturn([self::row([
+            'id' => 'test-id',
+            'type' => 'series',
+            'status' => 'pending'
+        ])]);
         self::assertFalse($this->manager->approveRequest('test-id'));
     }
 

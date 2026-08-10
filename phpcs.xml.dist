@@ -2,8 +2,30 @@
 <ruleset name="phlix-hub">
     <description>PSR-12 coding standard for detain/phlix-hub.</description>
 
+    <!--
+        S299 — `tests` joined this list on 2026-08-10. It had NEVER been linted:
+        the ruleset named only src + scripts, and CI ran phpcs with an explicit
+        PSR12 standard over src/ only, which ignores this file entirely and so
+        never consulted the list below. At f4ab19f the test tree carried
+        696 errors and 141 warnings across 69 of its 241 files while the
+        "PHP CodeSniffer (PSR-12)" check was green on every commit.
+
+        The standard for `tests` is deliberately IDENTICAL to `src` — no relaxed
+        line length, no exemption for snake_case method names — because the
+        evidence said the test tree already agreed with it: 2441 of its 3127
+        methods were camelCase before S299, and every one of the 141 over-long
+        lines was ordinary wrappable code, not an unbreakable fixture literal.
+        A per-sniff exemption here would have enshrined the minority drift and
+        silently admitted every new violation of it.
+
+        ⚠ Do not delete a <file> entry. `scripts/assert-phpcs-corpus.php` fails
+        the build when one goes missing, and asserts a floor on the number of
+        files phpcs actually inspected under each — a linter that traverses
+        nothing exits 0 and looks exactly like a clean run.
+    -->
     <file>src</file>
     <file>scripts</file>
+    <file>tests</file>
 
     <arg name="colors"/>
     <arg name="extensions" value="php"/>

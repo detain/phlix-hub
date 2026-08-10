@@ -30,7 +30,7 @@ final class OAuthScopesTest extends TestCase
      * intention, and it goes red the moment somebody adds an MCP scope without
      * re-exporting it.
      */
-    public function test_every_mcp_scope_is_grantable_over_oauth(): void
+    public function testEveryMcpScopeIsGrantableOverOauth(): void
     {
         self::assertNotSame([], McpScopes::all(), 'guard: the MCP vocabulary must not be empty');
 
@@ -42,7 +42,7 @@ final class OAuthScopesTest extends TestCase
         }
     }
 
-    public function test_the_vocabulary_is_the_identity_scope_plus_every_mcp_scope(): void
+    public function testTheVocabularyIsTheIdentityScopePlusEveryMcpScope(): void
     {
         $expected = [OAuthScopes::PROFILE_READ, ...McpScopes::all()];
 
@@ -50,7 +50,7 @@ final class OAuthScopesTest extends TestCase
         self::assertSame('phlix:profile:read', OAuthScopes::PROFILE_READ);
     }
 
-    public function test_parse_drops_unknown_values_rather_than_storing_them(): void
+    public function testParseDropsUnknownValuesRatherThanStoringThem(): void
     {
         // Control: a known scope survives.
         self::assertSame([OAuthScopes::PROFILE_READ], OAuthScopes::parse('phlix:profile:read'));
@@ -67,7 +67,7 @@ final class OAuthScopesTest extends TestCase
         );
     }
 
-    public function test_parse_deduplicates_and_fixes_the_order(): void
+    public function testParseDeduplicatesAndFixesTheOrder(): void
     {
         // Two equivalent grants must compare equal however they were written.
         $a = OAuthScopes::parse('mcp:library:read phlix:profile:read mcp:library:read');
@@ -77,7 +77,7 @@ final class OAuthScopesTest extends TestCase
         self::assertSame([OAuthScopes::PROFILE_READ, McpScopes::LIBRARY_READ], $a);
     }
 
-    public function test_an_empty_or_whitespace_scope_string_parses_to_nothing(): void
+    public function testAnEmptyOrWhitespaceScopeStringParsesToNothing(): void
     {
         // The fail-closed signal every caller keys off. It is deliberately NOT
         // "the usual set" — S261 shipped that shape for MCP tokens and it handed
@@ -90,7 +90,7 @@ final class OAuthScopesTest extends TestCase
         self::assertNotSame([], OAuthScopes::parse('phlix:profile:read'));
     }
 
-    public function test_from_array_drops_non_string_members_rather_than_coercing_them(): void
+    public function testFromArrayDropsNonStringMembersRatherThanCoercingThem(): void
     {
         self::assertSame(
             [OAuthScopes::PROFILE_READ],
@@ -100,7 +100,7 @@ final class OAuthScopesTest extends TestCase
         self::assertSame([], OAuthScopes::fromArray([1, 2, 3]));
     }
 
-    public function test_to_storage_round_trips_through_parse(): void
+    public function testToStorageRoundTripsThroughParse(): void
     {
         $stored = OAuthScopes::toStorage([McpScopes::PLAYBACK_CONTROL, OAuthScopes::PROFILE_READ, 'bogus']);
 
@@ -111,7 +111,7 @@ final class OAuthScopesTest extends TestCase
         );
     }
 
-    public function test_every_scope_has_a_written_description(): void
+    public function testEveryScopeHasAWrittenDescription(): void
     {
         foreach (OAuthScopes::all() as $scope) {
             $description = OAuthScopes::describe($scope);
@@ -125,7 +125,7 @@ final class OAuthScopesTest extends TestCase
         }
     }
 
-    public function test_an_unknown_scope_describes_as_itself_rather_than_inventing_a_sentence(): void
+    public function testAnUnknownScopeDescribesAsItselfRatherThanInventingASentence(): void
     {
         // A derived description would give a new scope a plausible-looking
         // sentence automatically, and the consent screen would describe a
@@ -135,7 +135,7 @@ final class OAuthScopesTest extends TestCase
         self::assertSame('', OAuthScopes::describe(''));
     }
 
-    public function test_is_known_is_exact_and_not_a_prefix_match(): void
+    public function testIsKnownIsExactAndNotAPrefixMatch(): void
     {
         self::assertTrue(OAuthScopes::isKnown(McpScopes::PLAYBACK_READ));
 
@@ -145,7 +145,7 @@ final class OAuthScopesTest extends TestCase
         self::assertFalse(OAuthScopes::isKnown(' mcp:playback:read'));
     }
 
-    public function test_the_identity_scope_is_the_only_non_mcp_member(): void
+    public function testTheIdentityScopeIsTheOnlyNonMcpMember(): void
     {
         foreach (OAuthScopes::all() as $scope) {
             if ($scope === OAuthScopes::PROFILE_READ) {

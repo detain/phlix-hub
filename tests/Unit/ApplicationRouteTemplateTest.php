@@ -28,24 +28,24 @@ final class ApplicationRouteTemplateTest extends TestCase
         return $result;
     }
 
-    public function test_root_and_empty_paths_map_to_slash(): void
+    public function testRootAndEmptyPathsMapToSlash(): void
     {
         $this->assertSame('/', $this->routeTemplate('/'));
         $this->assertSame('/', $this->routeTemplate(''));
     }
 
-    public function test_stable_word_segments_are_preserved(): void
+    public function testStableWordSegmentsArePreserved(): void
     {
         $this->assertSame('/api/v1/health', $this->routeTemplate('/api/v1/health'));
         $this->assertSame('/me/libraries', $this->routeTemplate('/me/libraries'));
     }
 
-    public function test_numeric_segment_is_collapsed(): void
+    public function testNumericSegmentIsCollapsed(): void
     {
         $this->assertSame('/api/v1/servers/{id}', $this->routeTemplate('/api/v1/servers/42'));
     }
 
-    public function test_uuid_segment_is_collapsed(): void
+    public function testUuidSegmentIsCollapsed(): void
     {
         $this->assertSame(
             '/api/v1/servers/{id}/detail',
@@ -53,13 +53,13 @@ final class ApplicationRouteTemplateTest extends TestCase
         );
     }
 
-    public function test_long_mixed_token_is_collapsed(): void
+    public function testLongMixedTokenIsCollapsed(): void
     {
         // 8+ chars mixing letters and digits (e.g. a slug/hash) is treated as an id.
         $this->assertSame('/download/{id}', $this->routeTemplate('/download/abc12345xyz'));
     }
 
-    public function test_short_mixed_tokens_are_preserved(): void
+    public function testShortMixedTokensArePreserved(): void
     {
         // Under 8 chars — a stable path word even though it mixes letters + digits.
         $this->assertSame('/tv/s01e02', $this->routeTemplate('/tv/s01e02'));

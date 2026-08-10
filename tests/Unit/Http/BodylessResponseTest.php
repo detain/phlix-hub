@@ -40,7 +40,7 @@ final class BodylessResponseTest extends TestCase
      * produced a duplicate in the first place — i.e. it would be proving
      * nothing. This is the positive control for the whole file.
      */
-    public function test_the_stock_encoder_emits_two_content_length_fields_for_a_sized_bodyless_reply(): void
+    public function testTheStockEncoderEmitsTwoContentLengthFieldsForASizedBodylessReply(): void
     {
         $stock = (string) new WorkermanResponse(
             200,
@@ -58,7 +58,7 @@ final class BodylessResponseTest extends TestCase
         $this->assertStringContainsString('Content-Length: 0', $stock);
     }
 
-    public function test_a_sized_bodyless_reply_emits_exactly_one_content_length_and_no_body(): void
+    public function testASizedBodylessReplyEmitsExactlyOneContentLengthAndNoBody(): void
     {
         $rendered = (string) new BodylessResponse(
             200,
@@ -80,7 +80,7 @@ final class BodylessResponseTest extends TestCase
         $this->assertSame(1, substr_count($rendered, "\r\n\r\n"), 'nothing may follow the head terminator');
     }
 
-    public function test_defaults_are_added_exactly_as_the_parent_adds_them(): void
+    public function testDefaultsAreAddedExactlyAsTheParentAddsThem(): void
     {
         $rendered = (string) new BodylessResponse(200, ['Content-Length' => '10'], '');
 
@@ -88,7 +88,7 @@ final class BodylessResponseTest extends TestCase
         $this->assertStringContainsString('Content-Type: text/html;charset=utf-8', $rendered);
     }
 
-    public function test_an_explicit_connection_header_is_not_duplicated(): void
+    public function testAnExplicitConnectionHeaderIsNotDuplicated(): void
     {
         $rendered = (string) new BodylessResponse(
             200,
@@ -101,7 +101,7 @@ final class BodylessResponseTest extends TestCase
         $this->assertStringContainsString('connection: close', $rendered);
     }
 
-    public function test_crlf_in_a_header_value_is_dropped_exactly_as_the_parent_drops_it(): void
+    public function testCrlfInAHeaderValueIsDroppedExactlyAsTheParentDropsIt(): void
     {
         $rendered = (string) new BodylessResponse(
             200,
@@ -143,7 +143,7 @@ final class BodylessResponseTest extends TestCase
      *
      * @param array<string, string> $headers
      */
-    public function test_every_other_shape_is_byte_identical_to_the_parent_encoder(
+    public function testEveryOtherShapeIsByteIdenticalToTheParentEncoder(
         int $status,
         array $headers,
         string $body,
@@ -164,7 +164,7 @@ final class BodylessResponseTest extends TestCase
      * keep-alive framing desync, not a HEAD — treating it as authoritative would
      * swap one defect for a worse one.
      */
-    public function test_the_builder_selects_the_bodyless_encoder_only_for_an_explicit_head_reply(): void
+    public function testTheBuilderSelectsTheBodylessEncoderOnlyForAnExplicitHeadReply(): void
     {
         $get = (new Response())->status(200)->header('Content-Length', '362807');
         $this->assertFalse($get->headOnly);
@@ -185,7 +185,7 @@ final class BodylessResponseTest extends TestCase
         );
     }
 
-    public function test_head_only_can_be_switched_back_off(): void
+    public function testHeadOnlyCanBeSwitchedBackOff(): void
     {
         $response = (new Response())->status(200)->header('Content-Length', '5')->headOnly()->headOnly(false);
 

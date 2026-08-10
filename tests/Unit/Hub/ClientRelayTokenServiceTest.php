@@ -23,7 +23,7 @@ use function time;
  */
 final class ClientRelayTokenServiceTest extends TestCase
 {
-    public function test_mint_stores_only_a_hash_never_the_plaintext(): void
+    public function testMintStoresOnlyAHashNeverThePlaintext(): void
     {
         $db = $this->createMock(Connection::class);
 
@@ -53,7 +53,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $this->assertSame('srv-1', $captured['server_id']);
     }
 
-    public function test_minted_token_is_csprng_and_at_least_128_bits(): void
+    public function testMintedTokenIsCsprngAndAtLeast128Bits(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
@@ -69,7 +69,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $this->assertNotSame($a, $b);
     }
 
-    public function test_validate_accepts_a_fresh_token_and_returns_identity(): void
+    public function testValidateAcceptsAFreshTokenAndReturnsIdentity(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects($this->once())
@@ -88,7 +88,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $this->assertSame(['user_id' => 'user-1', 'server_id' => 'srv-1'], $identity);
     }
 
-    public function test_validate_rejects_unknown_expired_or_revoked_token(): void
+    public function testValidateRejectsUnknownExpiredOrRevokedToken(): void
     {
         // The SQL filters out expired/revoked rows, so the DB returns nothing.
         $db = $this->createMock(Connection::class);
@@ -98,7 +98,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $this->assertNull($service->validate('does-not-exist'));
     }
 
-    public function test_validate_rejects_empty_token_without_querying(): void
+    public function testValidateRejectsEmptyTokenWithoutQuerying(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects($this->never())->method('query');
@@ -107,7 +107,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $this->assertNull($service->validate(''));
     }
 
-    public function test_revoke_marks_the_token_revoked(): void
+    public function testRevokeMarksTheTokenRevoked(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects($this->once())
@@ -123,7 +123,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $service->revoke('plain-token');
     }
 
-    public function test_revoke_empty_token_is_a_noop(): void
+    public function testRevokeEmptyTokenIsANoop(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects($this->never())->method('query');
@@ -132,7 +132,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $service->revoke('');
     }
 
-    public function test_revoke_for_user_server_targets_the_pair(): void
+    public function testRevokeForUserServerTargetsThePair(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects($this->once())
@@ -148,7 +148,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $service->revokeForUserServer('user-1', 'srv-1');
     }
 
-    public function test_custom_ttl_is_reflected_in_expiry(): void
+    public function testCustomTtlIsReflectedInExpiry(): void
     {
         $db = $this->createMock(Connection::class);
         /** @var array<string, mixed> $captured */
@@ -169,7 +169,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         $this->assertSame($result['expires_at'], $captured['expires_at']);
     }
 
-    public function test_non_positive_ttl_falls_back_to_default(): void
+    public function testNonPositiveTtlFallsBackToDefault(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
@@ -184,7 +184,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         );
     }
 
-    public function test_prune_expired_tokens_or_joins_expiry_and_revoked_predicates(): void
+    public function testPruneExpiredTokensOrJoinsExpiryAndRevokedPredicates(): void
     {
         $db = $this->createMock(Connection::class);
         $capturedSql = '';
@@ -235,7 +235,7 @@ final class ClientRelayTokenServiceTest extends TestCase
      * prove an expired-never-revoked row (revoked_at IS NULL) is removed. Under
      * the old AND bug that row survives — so a regression back to AND fails here.
      */
-    public function test_prune_deletes_expired_never_revoked_row_behaviorally(): void
+    public function testPruneDeletesExpiredNeverRevokedRowBehaviorally(): void
     {
         $now = time();
         $day = 86400;
@@ -309,7 +309,7 @@ final class ClientRelayTokenServiceTest extends TestCase
         );
     }
 
-    public function test_prune_expired_tokens_returns_zero_when_result_not_int(): void
+    public function testPruneExpiredTokensReturnsZeroWhenResultNotInt(): void
     {
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn(null);

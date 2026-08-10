@@ -189,7 +189,10 @@ final class SecurityAuditCheckTest extends TestCase
             'Audit corpus: 130 locked package(s) — 85 require, 45 require-dev',
             $result['output'],
         );
-        self::assertStringContainsString('No security advisories affecting the 130 locked package(s)', $result['output']);
+        self::assertStringContainsString(
+            'No security advisories affecting the 130 locked package(s)',
+            $result['output']
+        );
     }
 
     /**
@@ -225,7 +228,10 @@ final class SecurityAuditCheckTest extends TestCase
         $result = $this->runGate($this->payload(['advisories' => []]), $this->lock(10, 45));
 
         self::assertSame(1, $result['exit'], $result['output']);
-        self::assertStringContainsString('::error::Audit corpus is 55 package(s), below the floor of 80', $result['output']);
+        self::assertStringContainsString(
+            '::error::Audit corpus is 55 package(s), below the floor of 80',
+            $result['output']
+        );
     }
 
     /**
@@ -427,7 +433,10 @@ final class SecurityAuditCheckTest extends TestCase
         );
 
         self::assertSame(0, $result['exit'], $result['output']);
-        self::assertStringContainsString('::notice::1 security advisory/ies affecting 1 package(s) are IGNORED', $result['output']);
+        self::assertStringContainsString(
+            '::notice::1 security advisory/ies affecting 1 package(s) are IGNORED',
+            $result['output']
+        );
         self::assertStringContainsString('vendor/unfixable [require] locked at 3.1.0', $result['output']);
     }
 
@@ -526,7 +535,13 @@ final class SecurityAuditCheckTest extends TestCase
 
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
         $pipes       = [];
-        $process     = proc_open($command, $descriptors, $pipes, null, $env === [] ? null : $env + ['PATH' => (string) getenv('PATH')]);
+        $process     = proc_open(
+            $command,
+            $descriptors,
+            $pipes,
+            null,
+            $env === [] ? null : $env + ['PATH' => (string) getenv('PATH')]
+        );
 
         self::assertIsResource($process, 'could not start the gate script');
 
@@ -570,11 +585,17 @@ final class SecurityAuditCheckTest extends TestCase
         }
 
         while (count($sections['packages']) < $runtime) {
-            $sections['packages'][] = ['name' => 'filler/runtime-' . count($sections['packages']), 'version' => '1.0.0'];
+            $sections['packages'][] = [
+                'name' => 'filler/runtime-' . count($sections['packages']),
+                'version' => '1.0.0'
+            ];
         }
 
         while (count($sections['packages-dev']) < $dev) {
-            $sections['packages-dev'][] = ['name' => 'filler/dev-' . count($sections['packages-dev']), 'version' => '1.0.0'];
+            $sections['packages-dev'][] = [
+                'name' => 'filler/dev-' . count($sections['packages-dev']),
+                'version' => '1.0.0'
+            ];
         }
 
         $path = $this->workDir . '/composer-' . bin2hex(random_bytes(4)) . '.lock';
@@ -626,7 +647,11 @@ final class SecurityAuditCheckTest extends TestCase
             $flags = $found[1];
         }
 
-        self::assertNotSame([], $flags, 'AUDIT_ARGUMENTS parsed to an empty list — the assertion below would be vacuous.');
+        self::assertNotSame(
+            [],
+            $flags,
+            'AUDIT_ARGUMENTS parsed to an empty list — the assertion below would be vacuous.'
+        );
 
         return $flags;
     }

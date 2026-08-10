@@ -33,7 +33,7 @@ class FrameDecoderTest extends TestCase
             . $payload;
     }
 
-    public function test_encode_decode_roundtrip_data_frame(): void
+    public function testEncodeDecodeRoundtripDataFrame(): void
     {
         $payload = 'Hello, World!';
         $seq = 42;
@@ -48,7 +48,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame($payload, $decoded->payload);
     }
 
-    public function test_encode_decode_roundtrip_all_frame_types(): void
+    public function testEncodeDecodeRoundtripAllFrameTypes(): void
     {
         $payload = 'test payload';
         $seq = 100;
@@ -69,7 +69,7 @@ class FrameDecoderTest extends TestCase
         }
     }
 
-    public function test_decode_returns_null_for_incomplete_header(): void
+    public function testDecodeReturnsNullForIncompleteHeader(): void
     {
         // Only 5 bytes (not enough for 7-byte header)
         $partial = pack('N', 123) . chr(0x05);
@@ -80,7 +80,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame(5, $this->decoder->getBufferSize());
     }
 
-    public function test_decode_returns_null_for_incomplete_payload(): void
+    public function testDecodeReturnsNullForIncompletePayload(): void
     {
         // Header only (7 bytes): seq=1, type=DATA(0x05), len=100
         $header = pack('N', 1) . chr(0x05) . pack('n', 100);
@@ -91,7 +91,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame(7, $this->decoder->getBufferSize());
     }
 
-    public function test_decode_extracts_complete_frame_from_buffer(): void
+    public function testDecodeExtractsCompleteFrameFromBuffer(): void
     {
         $payload = 'test';
         $seq = 1;
@@ -109,7 +109,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame(strlen($extra), $this->decoder->getBufferSize());
     }
 
-    public function test_decode_multiple_frames_in_one_chunk(): void
+    public function testDecodeMultipleFramesInOneChunk(): void
     {
         $frame1 = $this->encodeFrame(RelayFrameType::DATA, 1, 'A');
         $frame2 = $this->encodeFrame(RelayFrameType::DATA, 2, 'B');
@@ -131,7 +131,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame(3, $result3->seq);
     }
 
-    public function test_decode_empty_payload(): void
+    public function testDecodeEmptyPayload(): void
     {
         $frame = $this->encodeFrame(RelayFrameType::HEARTBEAT, 1, '');
 
@@ -141,7 +141,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame('', $result->payload);
     }
 
-    public function test_decode_max_payload_size(): void
+    public function testDecodeMaxPayloadSize(): void
     {
         $payload = str_repeat('x', 65535);
         $frame = $this->encodeFrame(RelayFrameType::DATA, 1, $payload);
@@ -152,7 +152,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame($payload, $result->payload);
     }
 
-    public function test_encode_throws_for_payload_exceeding_max(): void
+    public function testEncodeThrowsForPayloadExceedingMax(): void
     {
         $payload = str_repeat('x', 65536);
 
@@ -160,7 +160,7 @@ class FrameDecoderTest extends TestCase
         $this->decoder->encode(RelayFrameType::DATA, 1, $payload);
     }
 
-    public function test_encode_hello_json(): void
+    public function testEncodeHelloJson(): void
     {
         $jwt = 'eyJhbGciOiJFUzI1NiJ9.test.test';
         $serverId = 'server-123';
@@ -173,7 +173,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame($serverId, $decoded['server_id']);
     }
 
-    public function test_encode_hello_ack_json(): void
+    public function testEncodeHelloAckJson(): void
     {
         $sessionId = 'session-456';
         $tunnelId = 'tunnel-789';
@@ -186,7 +186,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame($tunnelId, $decoded['tunnel_id']);
     }
 
-    public function test_reset_clears_buffer(): void
+    public function testResetClearsBuffer(): void
     {
         // Add partial data (5 bytes - not enough for 7-byte header)
         $partial = pack('N', 123) . chr(0x05);
@@ -198,13 +198,13 @@ class FrameDecoderTest extends TestCase
         $this->assertSame(0, $this->decoder->getBufferSize());
     }
 
-    public function test_get_buffer_size_initially_zero(): void
+    public function testGetBufferSizeInitiallyZero(): void
     {
         $decoder = new FrameDecoder();
         $this->assertSame(0, $decoder->getBufferSize());
     }
 
-    public function test_decode_boundary_size_0(): void
+    public function testDecodeBoundarySize0(): void
     {
         $frame = $this->encodeFrame(RelayFrameType::DATA, 1, '');
         $result = $this->decoder->decode($frame);
@@ -213,7 +213,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame('', $result->payload);
     }
 
-    public function test_decode_boundary_size_1(): void
+    public function testDecodeBoundarySize1(): void
     {
         $frame = $this->encodeFrame(RelayFrameType::DATA, 1, 'x');
         $result = $this->decoder->decode($frame);
@@ -222,7 +222,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame('x', $result->payload);
     }
 
-    public function test_decode_boundary_size_255(): void
+    public function testDecodeBoundarySize255(): void
     {
         $payload = str_repeat('x', 255);
         $frame = $this->encodeFrame(RelayFrameType::DATA, 1, $payload);
@@ -232,7 +232,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame($payload, $result->payload);
     }
 
-    public function test_decode_boundary_size_256(): void
+    public function testDecodeBoundarySize256(): void
     {
         $payload = str_repeat('x', 256);
         $frame = $this->encodeFrame(RelayFrameType::DATA, 1, $payload);
@@ -242,7 +242,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame($payload, $result->payload);
     }
 
-    public function test_decode_boundary_size_65534(): void
+    public function testDecodeBoundarySize65534(): void
     {
         $payload = str_repeat('x', 65534);
         $frame = $this->encodeFrame(RelayFrameType::DATA, 1, $payload);
@@ -252,7 +252,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame($payload, $result->payload);
     }
 
-    public function test_decode_boundary_size_65535(): void
+    public function testDecodeBoundarySize65535(): void
     {
         $payload = str_repeat('x', 65535);
         $frame = $this->encodeFrame(RelayFrameType::DATA, 1, $payload);
@@ -262,7 +262,7 @@ class FrameDecoderTest extends TestCase
         $this->assertSame($payload, $result->payload);
     }
 
-    public function test_decode_invalid_frame_type_throws(): void
+    public function testDecodeInvalidFrameTypeThrows(): void
     {
         // 4-byte seq (0x00000001) + invalid type (0xFF) + 2-byte len (0x0000)
         $invalidFrame = pack('N', 1) . chr(0xFF) . pack('n', 0);
@@ -279,7 +279,7 @@ class FrameDecoderTest extends TestCase
      * catch handles it) once the accumulation buffer passes the 128 KB cap
      * without completing a frame, and it drops the oversized buffer.
      */
-    public function test_buffer_overflow_throws_typed_exception(): void
+    public function testBufferOverflowThrowsTypedException(): void
     {
         $decoder = new FrameDecoder();
 

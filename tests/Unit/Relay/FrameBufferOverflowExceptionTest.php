@@ -60,6 +60,9 @@ final class FrameBufferOverflowExceptionTest extends TestCase
         $ex = new FrameBufferOverflowException(100000, 65536);
 
         // The parent message format: "{bufferSize} bytes buffered without a complete frame (max {maxBufferSize})"
-        self::assertStringContainsString('100000 bytes buffered without a complete frame (max 65536)', $ex->getMessage());
+        self::assertStringContainsString(
+            '100000 bytes buffered without a complete frame (max 65536)',
+            $ex->getMessage()
+        );
     }
 }

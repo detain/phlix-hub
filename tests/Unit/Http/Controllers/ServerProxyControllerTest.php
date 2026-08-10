@@ -140,7 +140,13 @@ final class ServerProxyControllerTest extends TestCase
         // than a limited:false stub, so tests exercise the actual limiter. A
         // single hit per test never trips 600/60s.
         $rateLimiter ??= new RateLimiter(60, 600);
-        return new ServerProxyController($info, $bridge, $this->createMock(StructuredLogger::class), $sessionManager, $rateLimiter);
+        return new ServerProxyController(
+            $info,
+            $bridge,
+            $this->createMock(StructuredLogger::class),
+            $sessionManager,
+            $rateLimiter
+        );
     }
 
     private function bridge(?callable $publisher): RelayProxyBridge
@@ -220,7 +226,7 @@ final class ServerProxyControllerTest extends TestCase
         return $connection;
     }
 
-    public function test_unauthenticated_returns_401(): void
+    public function testUnauthenticatedReturns401(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $controller = $this->controller($info, $this->bridge(static fn () => null));
@@ -237,7 +243,7 @@ final class ServerProxyControllerTest extends TestCase
      * assert none throw {@see RateLimitException} — the limiter is keyed by the
      * authenticated user (`proxy:{userId}`) placed AFTER the auth gate.
      */
-    public function test_normal_hls_segment_burst_of_100_never_trips_proxy_limiter(): void
+    public function testNormalHlsSegmentBurstOf100NeverTripsProxyLimiter(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(null); // owner null → 404 after the hit
@@ -261,7 +267,7 @@ final class ServerProxyControllerTest extends TestCase
      * trip — the 601st hit throws {@see RateLimitException} (mapped to 429 later
      * in HB-4.6g). Confirms the limiter is real, not a `limited:false` stub.
      */
-    public function test_proxy_limiter_trips_after_exceeding_600_in_window(): void
+    public function testProxyLimiterTripsAfterExceeding600InWindow(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(null);
@@ -294,7 +300,7 @@ final class ServerProxyControllerTest extends TestCase
      * (EXISTS + COUNT(server_libraries)) — that COUNT is paid on every one of
      * the dozens of segment requests per playback and admission never uses it.
      */
-    public function test_proxy_uses_lean_owner_query_and_never_full_getServerInfo(): void
+    public function testProxyUsesLeanOwnerQueryAndNeverFullGetServerInfo(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->expects(self::once())
@@ -324,27 +330,37 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
     }
 
-    public function test_unknown_server_returns_404(): void
+    public function testUnknownServerReturns404(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(null);
         $controller = $this->controller($info, $this->bridge(static fn () => null));
 
-        $response = $controller->proxy($this->request('GET', 'user-1'), ['id' => 'srv-1', 'path' => 'api/v1/libraries']);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/libraries']
+        );
         $this->assertSame(404, $response->statusCode);
     }
 
-    public function test_not_owned_returns_403(): void
+    public function testNotOwnedReturns403(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'someone-else', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'someone-else',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
         $controller = $this->controller($info, $this->bridge(static fn () => null));
 
-        $response = $controller->proxy($this->request('GET', 'user-1'), ['id' => 'srv-1', 'path' => 'api/v1/libraries']);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/libraries']
+        );
         $this->assertSame(403, $response->statusCode);
     }
 
-    public function test_online_server_without_relay_tunnel_returns_503_relay_unavailable(): void
+    public function testOnlineServerWithoutRelayTunnelReturns503RelayUnavailable(): void
     {
         // status=online (heartbeating) but no open relay session → the tunnel
         // simply isn't connected. The proxy must still refuse (503) but with the
@@ -355,11 +371,17 @@ final class ServerProxyControllerTest extends TestCase
         );
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
-        $response = $controller->proxy($this->request('GET', 'user-1'), ['id' => 'srv-1', 'path' => 'api/v1/libraries']);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/libraries']
+        );
 
         $this->assertSame(503, $response->statusCode);
         $this->assertFalse($forwarded, 'No tunnel → nothing may be forwarded over the relay bridge.');
@@ -368,7 +390,7 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('server.relay_unavailable', $body['code'] ?? null);
     }
 
-    public function test_offline_server_returns_503_server_offline(): void
+    public function testOfflineServerReturns503ServerOffline(): void
     {
         // status != online (genuinely down) AND no relay session → the classic
         // "server is offline" case keeps its `server.offline` code.
@@ -378,11 +400,17 @@ final class ServerProxyControllerTest extends TestCase
         );
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
-        $response = $controller->proxy($this->request('GET', 'user-1'), ['id' => 'srv-1', 'path' => 'api/v1/libraries']);
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'api/v1/libraries']
+        );
 
         $this->assertSame(503, $response->statusCode);
         $this->assertFalse($forwarded, 'Offline server → nothing may be forwarded over the relay bridge.');
@@ -391,10 +419,14 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('server.offline', $body['code'] ?? null);
     }
 
-    public function test_successful_proxy_returns_server_response(): void
+    public function testSuccessfulProxyReturnsServerResponse(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -430,10 +462,14 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('1', $forwarded['headers']['X-Phlix-Relay'] ?? null);
     }
 
-    public function test_forged_trust_headers_are_overwritten_by_hub_values(): void
+    public function testForgedTrustHeadersAreOverwrittenByHubValues(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -485,13 +521,20 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertNotSame('admin-attacker', $fwdHeaders['X-Phlix-Relay-User'] ?? null);
     }
 
-    public function test_disallowed_method_path_returns_403_and_is_not_forwarded(): void
+    public function testDisallowedMethodPathReturns403AndIsNotForwarded(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -507,13 +550,20 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
     }
 
-    public function test_disallowed_admin_get_returns_403(): void
+    public function testDisallowedAdminGetReturns403(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -526,10 +576,14 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertFalse($forwarded);
     }
 
-    public function test_allowed_browse_subpath_is_forwarded(): void
+    public function testAllowedBrowseSubpathIsForwarded(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -557,13 +611,20 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('/api/v1/media/abc', $forwarded['path']);
     }
 
-    public function test_sibling_prefix_is_not_treated_as_in_scope(): void
+    public function testSiblingPrefixIsNotTreatedAsInScope(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -647,7 +708,7 @@ final class ServerProxyControllerTest extends TestCase
      * (d) an unlisted sibling API family (`/api/v1/musicbrainz`); (e) **HEAD on
      * every music path** — S100 fix round 1 removed the inert HEAD mirror, and
      * S247 deleted the HEAD prefix key entirely: HEAD is ROUTABLE now (see
-     * {@see self::test_head_is_routed_only_for_the_direct_play_byte_stream()}),
+     * {@see self::testHeadIsRoutedOnlyForTheDirectPlayByteStream()}),
      * so a music HEAD entry would be LIVE surface making the server render a
      * whole payload — plus one HMAC signed URL per track row — for the hub to
      * discard; (f) **every
@@ -756,7 +817,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider musicBrowseScopeProvider
      */
-    public function test_music_browse_scope_gate(string $method, string $path, bool $expected): void
+    public function testMusicBrowseScopeGate(string $method, string $path, bool $expected): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -783,10 +844,14 @@ final class ServerProxyControllerTest extends TestCase
      * entry this was 403 `proxy.scope_denied`, which the SPA's
      * `catch { artists.value = [] }` rendered as an EMPTY music library.
      */
-    public function test_music_artists_get_is_forwarded(): void
+    public function testMusicArtistsGetIsForwarded(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -818,10 +883,14 @@ final class ServerProxyControllerTest extends TestCase
      * S100 end-to-end: the two-segment `tracks/{id}` read (the player mints a
      * `stream_url` from it at play time) is covered by the same prefix.
      */
-    public function test_music_track_by_id_get_is_forwarded(): void
+    public function testMusicTrackByIdGetIsForwarded(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -902,13 +971,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider deniedMusicScopeProvider
      */
-    public function test_denied_music_paths_return_403_and_are_not_forwarded(string $method, string $path): void
+    public function testDeniedMusicPathsReturn403AndAreNotForwarded(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -946,7 +1022,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider dlnaStillDeniedProvider
      */
-    public function test_dlna_paths_remain_out_of_browse_scope(string $path): void
+    public function testDlnaPathsRemainOutOfBrowseScope(string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -998,10 +1074,14 @@ final class ServerProxyControllerTest extends TestCase
      * mis-registered route, a broken bridge double) would produce the same
      * refusals and read as a pass.
      */
-    public function test_head_is_routed_only_for_the_direct_play_byte_stream(): void
+    public function testHeadIsRoutedOnlyForTheDirectPlayByteStream(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var list<array<string, mixed>> $forwarded */
         $forwarded = [];
@@ -1193,10 +1273,14 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider legitimateMusicReadProvider
      */
-    public function test_legitimate_music_reads_still_pass_the_hardened_guard(string $path): void
+    public function testLegitimateMusicReadsStillPassTheHardenedGuard(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -1235,7 +1319,7 @@ final class ServerProxyControllerTest extends TestCase
      * it exactly that one anchored entry and no prefix) — the HEAD rows for the
      * other families were removed, and their refusal is now asserted positively,
      * with a GET control beside it, by
-     * {@see self::test_s247_head_scope_is_only_the_byte_stream()}.
+     * {@see self::testS247HeadScopeIsOnlyTheByteStream()}.
      *
      * @return iterable<string, array{0: string, 1: string}>
      */
@@ -1263,14 +1347,18 @@ final class ServerProxyControllerTest extends TestCase
      *
      * S247: the HEAD row is no longer controller-level intent — HEAD is routed
      * for the byte stream, pinned end-to-end through the real router by
-     * {@see self::test_head_is_routed_only_for_the_direct_play_byte_stream()}.
+     * {@see self::testHeadIsRoutedOnlyForTheDirectPlayByteStream()}.
      *
      * @dataProvider acceptedStreamingScopeProvider
      */
-    public function test_streaming_reads_pass_scope_gate_and_are_forwarded(string $method, string $path): void
+    public function testStreamingReadsPassScopeGateAndAreForwarded(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -1324,10 +1412,14 @@ final class ServerProxyControllerTest extends TestCase
      * the Content-Length value. RelayProxyManagerTest asserts the manager
      * carries Content-Length through to its reply verbatim.)
      */
-    public function test_head_over_relay_returns_promptly_on_end_without_body_frames(): void
+    public function testHeadOverRelayReturnsPromptlyOnEndWithoutBodyFrames(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $proxyManager = null;
         $decoder = new FrameDecoder();
@@ -1404,10 +1496,14 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('', $response->body);
     }
 
-    public function test_streaming_read_returns_a_producer_and_streams_body_to_the_connection(): void
+    public function testStreamingReadReturnsAProducerAndStreamsBodyToTheConnection(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $bridge = null;
         $publisher = function (string $event, array $data) use (&$bridge): void {
@@ -1445,7 +1541,7 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('bar', $written[2]);
     }
 
-    public function test_streaming_read_consults_the_per_user_throttle_for_the_owner(): void
+    public function testStreamingReadConsultsThePerUserThrottleForTheOwner(): void
     {
         // S43: the streaming path must resolve the OWNING user's durable throttle
         // (getUserThrottleBps) at admission so the response-body sink can pace
@@ -1454,7 +1550,11 @@ final class ServerProxyControllerTest extends TestCase
         // (a positive cap would engage the real Timer::sleep and is exercised
         // deterministically in ConnectionResponseSinkTest, not here).
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $sessionManager = $this->createMock(RelaySessionManager::class);
         $sessionManager->method('checkUserQuota')->willReturn(
@@ -1512,7 +1612,7 @@ final class ServerProxyControllerTest extends TestCase
      * the bucket disconnected the two writes land microseconds apart, so the
      * separation between pass and fail is three orders of magnitude.
      */
-    public function test_the_resolved_throttle_bucket_actually_reaches_the_response_body_sink(): void
+    public function testTheResolvedThrottleBucketActuallyReachesTheResponseBodySink(): void
     {
         $capBps = 8_000_000;                                    // 1 000 000 B/s
         $first = str_repeat('a', 1_050_000);                    // empties the 1 s burst
@@ -1520,7 +1620,11 @@ final class ServerProxyControllerTest extends TestCase
         $expectedWaitSeconds = 50_000 / ($capBps / 8);          // 0.05 s
 
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $sessionManager = $this->createMock(RelaySessionManager::class);
         $sessionManager->method('checkUserQuota')->willReturn(
@@ -1624,15 +1728,22 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider deniedMutatingStreamingProvider
      */
-    public function test_mutating_methods_on_streaming_paths_return_403_and_are_not_forwarded(
+    public function testMutatingMethodsOnStreamingPathsReturn403AndAreNotForwarded(
         string $method,
         string $path,
     ): void {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -1667,13 +1778,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider siblingStreamingPrefixProvider
      */
-    public function test_sibling_streaming_prefixes_are_denied(string $path): void
+    public function testSiblingStreamingPrefixesAreDenied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -1695,13 +1813,20 @@ final class ServerProxyControllerTest extends TestCase
      * `proxy.scope_denied`) and is never forwarded — the widened allowlist does
      * not weaken the ownership boundary.
      */
-    public function test_streaming_path_on_unowned_server_returns_403_not_owned(): void
+    public function testStreamingPathOnUnownedServerReturns403NotOwned(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'someone-else', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'someone-else',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -1722,7 +1847,7 @@ final class ServerProxyControllerTest extends TestCase
      * an offline server with no live tunnel fails closed with 503
      * `server.offline` and is never forwarded.
      */
-    public function test_streaming_path_on_offline_server_fails_closed_503(): void
+    public function testStreamingPathOnOfflineServerFailsClosed503(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(
@@ -1730,7 +1855,10 @@ final class ServerProxyControllerTest extends TestCase
         );
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -1780,12 +1908,16 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider acceptedTranscodeStartProvider
      */
-    public function test_transcode_start_post_passes_scope_gate_and_is_forwarded(
+    public function testTranscodeStartPostPassesScopeGateAndIsForwarded(
         string $id,
         string $expectedPath,
     ): void {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -1821,10 +1953,14 @@ final class ServerProxyControllerTest extends TestCase
      * the QUERY STRING (`?profile=web`), not the body, so the proxy must forward
      * the raw query string intact alongside the POST.
      */
-    public function test_transcode_start_post_forwards_query_string(): void
+    public function testTranscodeStartPostForwardsQueryString(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -1899,10 +2035,14 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider musicNameInQueryStringProvider
      */
-    public function test_music_name_in_the_query_string_survives_the_path_traversal_guard(string $queryString): void
+    public function testMusicNameInTheQueryStringSurvivesThePathTraversalGuard(string $queryString): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -1943,20 +2083,27 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * Control for {@see self::test_music_name_in_the_query_string_survives_the_path_traversal_guard()}:
+     * Control for {@see self::testMusicNameInTheQueryStringSurvivesThePathTraversalGuard()}:
      * the SAME name in the SAME request, moved into the PATH, is still refused.
      *
      * Without this the test above would pass just as happily against a guard that
      * had been deleted outright — "the query string forwards" is only meaningful
      * alongside "the path spelling does not".
      */
-    public function test_the_same_music_name_in_the_path_is_still_refused(): void
+    public function testTheSameMusicNameInThePathIsStillRefused(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -1969,7 +2116,10 @@ final class ServerProxyControllerTest extends TestCase
         );
 
         $this->assertSame(403, $response->statusCode);
-        $this->assertFalse($forwarded, 'The PATH spelling must still be refused even when the query carries the name too');
+        $this->assertFalse(
+            $forwarded,
+            'The PATH spelling must still be refused even when the query carries the name too'
+        );
     }
 
     /**
@@ -1988,13 +2138,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider stillDeniedSiblingMediaPostProvider
      */
-    public function test_sibling_media_post_routes_still_denied(string $path): void
+    public function testSiblingMediaPostRoutesStillDenied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2031,14 +2188,21 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider allowedSiblingMediaPutProvider
      */
-    public function test_sibling_media_put_routes_are_allowed(string $path): void
+    public function testSiblingMediaPutRoutesAreAllowed(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = $d;
         }));
 
@@ -2067,14 +2231,21 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider allowedSiblingMediaPostWatchedProvider
      */
-    public function test_sibling_media_post_watched_unwatched_are_allowed(string $path): void
+    public function testSiblingMediaPostWatchedUnwatchedAreAllowed(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = $d;
         }));
 
@@ -2105,14 +2276,21 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider allowedMediaPostWriteProvider
      */
-    public function test_post_write_actions_favorite_and_playlist_are_allowed(string $path): void
+    public function testPostWriteActionsFavoriteAndPlaylistAreAllowed(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = $d;
         }));
 
@@ -2143,14 +2321,21 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider allowedMediaDeleteProvider
      */
-    public function test_delete_write_actions_are_allowed(string $path): void
+    public function testDeleteWriteActionsAreAllowed(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = $d;
         }));
 
@@ -2197,13 +2382,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider deniedNonListedWriteProvider
      */
-    public function test_non_listed_write_actions_are_denied(string $method, string $path): void
+    public function testNonListedWriteActionsAreDenied(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2239,13 +2431,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider patchAlwaysDeniedProvider
      */
-    public function test_patch_is_always_denied(string $path): void
+    public function testPatchIsAlwaysDenied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2270,7 +2469,7 @@ final class ServerProxyControllerTest extends TestCase
      * 200 is fed back over the tunnel so the controller completes → proves the
      * full write round-trip, not a 504.
      */
-    public function test_bodied_put_rating_round_trip_forwards_body_intact(): void
+    public function testBodiedPutRatingRoundTripForwardsBodyIntact(): void
     {
         [$captured, $response, $frames] = $this->roundTripWrite(
             'PUT',
@@ -2292,7 +2491,7 @@ final class ServerProxyControllerTest extends TestCase
      * proving large bodied writes traverse the proxy→relay bridge intact and are
      * NOT rejected (the old 413 cap / single-frame limit).
      */
-    public function test_large_bodied_put_round_trip_chunks_and_preserves_body_bytes(): void
+    public function testLargeBodiedPutRoundTripChunksAndPreservesBodyBytes(): void
     {
         // A body whose JSON encoding comfortably exceeds the 65535-byte single
         // frame limit, forcing RelayProxyManager onto the chunked HEAD/BODY/END
@@ -2317,7 +2516,7 @@ final class ServerProxyControllerTest extends TestCase
 
     /**
      * Drive a bodied write all the way through a real {@see RelayProxyManager} +
-     * live tunnel (mirrors {@see self::test_head_over_relay_returns_promptly_on_end_without_body_frames}),
+     * live tunnel (mirrors {@see self::testHeadOverRelayReturnsPromptlyOnEndWithoutBodyFrames}),
      * capturing and reassembling the {@see RelayHttpRequest} the hub emits on the
      * wire — whether a single-frame JSON envelope or the HB-2.1 chunked
      * HEAD/BODY…/END tag-byte sequence — then feeding back a 200 so the
@@ -2331,7 +2530,11 @@ final class ServerProxyControllerTest extends TestCase
     private function roundTripWrite(string $method, string $path, array $body): array
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $proxyManager = null;
         $decoder = new FrameDecoder();
@@ -2464,13 +2667,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider deniedTranscodeEdgeProvider
      */
-    public function test_transcode_regex_edge_paths_are_denied(string $path): void
+    public function testTranscodeRegexEdgePathsAreDenied(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2492,13 +2702,20 @@ final class ServerProxyControllerTest extends TestCase
      * `proxy.scope_denied`) and is never forwarded — the new write does not
      * weaken the ownership boundary.
      */
-    public function test_transcode_start_post_on_unowned_server_returns_403_not_owned(): void
+    public function testTranscodeStartPostOnUnownedServerReturns403NotOwned(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'someone-else', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'someone-else',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2519,7 +2736,7 @@ final class ServerProxyControllerTest extends TestCase
      * an offline server with no live tunnel fails closed with 503
      * `server.offline` and is never forwarded.
      */
-    public function test_transcode_start_post_on_offline_server_fails_closed_503(): void
+    public function testTranscodeStartPostOnOfflineServerFailsClosed503(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(
@@ -2527,7 +2744,10 @@ final class ServerProxyControllerTest extends TestCase
         );
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2548,7 +2768,7 @@ final class ServerProxyControllerTest extends TestCase
      * actionable 503 `server.relay_unavailable` for the transcode-start POST too
      * — the liveness gate precedes the scope gate for every method.
      */
-    public function test_transcode_start_post_on_online_server_without_tunnel_returns_503_relay_unavailable(): void
+    public function testTranscodeStartPostOnOnlineServerWithoutTunnelReturns503RelayUnavailable(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(
@@ -2556,7 +2776,10 @@ final class ServerProxyControllerTest extends TestCase
         );
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2576,7 +2799,7 @@ final class ServerProxyControllerTest extends TestCase
      * Auth runs FIRST: an unauthenticated transcode-start POST returns 401
      * `auth.required` before ownership, liveness, or scope are ever consulted.
      */
-    public function test_transcode_start_post_unauthenticated_returns_401(): void
+    public function testTranscodeStartPostUnauthenticatedReturns401(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $controller = $this->controller($info, $this->bridge(static fn () => null));
@@ -2690,13 +2913,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider knownUnreachableMusicNameProvider
      */
-    public function test_known_unreachable_music_names_are_denied_by_design(string $path): void
+    public function testKnownUnreachableMusicNamesAreDeniedByDesign(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2723,13 +2953,20 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider traversalPathProvider
      */
-    public function test_traversal_paths_return_403_and_are_not_forwarded(string $path): void
+    public function testTraversalPathsReturn403AndAreNotForwarded(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -2745,10 +2982,14 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
     }
 
-    public function test_timeout_returns_504(): void
+    public function testTimeoutReturns504(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         // Publisher never replies → bridge times out → controller 504.
         $controller = $this->controller($info, $this->bridge(static function (string $e, array $d): void {
@@ -2774,11 +3015,15 @@ final class ServerProxyControllerTest extends TestCase
      * EMPTY, and the manager replies 503 `server.no_tunnel` straight back —
      * proving the registry, not the stale flag, decides admission.
      */
-    public function test_stale_relay_active_with_no_live_tunnel_returns_503_not_504(): void
+    public function testStaleRelayActiveWithNoLiveTunnelReturns503Not504(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         // DB says the server is online (stale flag) — but there is no tunnel.
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         // Empty in-memory tunnel registry: no live tunnel for any server.
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
@@ -2851,7 +3096,7 @@ final class ServerProxyControllerTest extends TestCase
         // HEAD row that can be FORWARDED at all. The other families' HEAD rows
         // were removed with the HEAD prefix key; `replyTimeoutForPath()` still
         // branches on HEAD, and that classifier is exercised directly (without
-        // the scope gate in the way) by `test_reply_timeout_for_path_classifier`.
+        // the scope gate in the way) by `testReplyTimeoutForPathClassifier`.
         yield 'HEAD media direct-play stream -> 30' => ['HEAD', 'media/item-123/stream', 30.0];
 
         // The single permitted write (transcode START) keeps the default — only
@@ -2868,13 +3113,17 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider forwardedTimeoutProvider
      */
-    public function test_reply_timeout_is_forwarded_to_the_relay_bridge(
+    public function testReplyTimeoutIsForwardedToTheRelayBridge(
         string $method,
         string $path,
         float $expected,
     ): void {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -2956,7 +3205,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider replyTimeoutClassifierProvider
      */
-    public function test_reply_timeout_for_path_classifier(string $method, string $path, float $expected): void
+    public function testReplyTimeoutForPathClassifier(string $method, string $path, float $expected): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -2977,7 +3226,7 @@ final class ServerProxyControllerTest extends TestCase
      * injected wait (the controller takes the max of the default and the
      * streaming ceiling).
      */
-    public function test_reply_timeout_never_shortens_a_higher_injected_default(): void
+    public function testReplyTimeoutNeverShortensAHigherInjectedDefault(): void
     {
         $rateLimiter = new RateLimiter(60, 600);
         $controller = new ServerProxyController(
@@ -3001,7 +3250,7 @@ final class ServerProxyControllerTest extends TestCase
      * for a streaming path (max), while non-streaming reads keep the tighter
      * injected default.
      */
-    public function test_reply_timeout_widens_a_lower_injected_default_only_for_streaming(): void
+    public function testReplyTimeoutWidensALowerInjectedDefaultOnlyForStreaming(): void
     {
         $rateLimiter = new RateLimiter(60, 600);
         $controller = new ServerProxyController(
@@ -3029,10 +3278,14 @@ final class ServerProxyControllerTest extends TestCase
      * 503 `quota.exceeded` BEFORE the request is forwarded — the quota gate runs
      * for every admitted request (browse and stream alike).
      */
-    public function test_over_quota_user_returns_503_quota_exceeded_and_is_not_forwarded(): void
+    public function testOverQuotaUserReturns503QuotaExceededAndIsNotForwarded(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $sessionManager = $this->createMock(RelaySessionManager::class);
         $sessionManager->method('checkUserQuota')->willReturn([
@@ -3064,10 +3317,14 @@ final class ServerProxyControllerTest extends TestCase
      * concurrent-stream maximum, a further stream is refused with 503
      * `stream.limit` BEFORE any slot is occupied or anything forwarded.
      */
-    public function test_concurrent_stream_cap_reached_returns_503_stream_limit_and_is_not_forwarded(): void
+    public function testConcurrentStreamCapReachedReturns503StreamLimitAndIsNotForwarded(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $sessionManager = $this->createMock(RelaySessionManager::class);
         // Max of 2, already at 2 active → the 3rd stream is refused. The cap is
@@ -3108,10 +3365,14 @@ final class ServerProxyControllerTest extends TestCase
      * slot on start, is forwarded, and releases the slot once the producer
      * completes (no leak).
      */
-    public function test_stream_under_concurrent_cap_is_admitted_occupies_then_releases_slot(): void
+    public function testStreamUnderConcurrentCapIsAdmittedOccupiesThenReleasesSlot(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $sessionManager = $this->createMock(RelaySessionManager::class);
         // The concurrent cap (3) is folded into the single checkUserQuota row
@@ -3304,7 +3565,7 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s107DeniedActionEvasionProvider
      */
-    public function test_s107_write_action_paths_are_denied_under_a_read_verb(string $route, string $path): void
+    public function testS107WriteActionPathsAreDeniedUnderAReadVerb(string $route, string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -3339,7 +3600,7 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s107DeniedActionMethodProvider
      */
-    public function test_s107_write_action_paths_are_denied_for_every_method(string $method, string $path): void
+    public function testS107WriteActionPathsAreDeniedForEveryMethod(string $method, string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -3382,13 +3643,20 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s107DeniedEndToEndProvider
      */
-    public function test_s107_denied_action_paths_403_and_are_not_forwarded(string $method, string $path): void
+    public function testS107DeniedActionPaths403AndAreNotForwarded(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -3477,10 +3745,14 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s107LegitimateReadProvider
      */
-    public function test_s107_legitimate_reads_under_the_swept_prefixes_still_forward(string $path): void
+    public function testS107LegitimateReadsUnderTheSweptPrefixesStillForward(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -3567,7 +3839,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s107DispositionProvider
      */
-    public function test_s107_unpinned_write_routes_keep_their_disposition(
+    public function testS107UnpinnedWriteRoutesKeepTheirDisposition(
         string $method,
         string $path,
         bool $expected,
@@ -3617,7 +3889,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s107AllowedWriteStillAllowedProvider
      */
-    public function test_s107_sweep_does_not_break_the_allowed_writes(string $method, string $path): void
+    public function testS107SweepDoesNotBreakTheAllowedWrites(string $method, string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -3674,7 +3946,7 @@ final class ServerProxyControllerTest extends TestCase
      * `RelayRequestDispatcher::dispatch()` consults for a relayed request) and
      * dumping `Router::getRoutes()`.
      */
-    public function test_browse_scope_allowlist_matches_the_pinned_upstream_backed_set(): void
+    public function testBrowseScopeAllowlistMatchesThePinnedUpstreamBackedSet(): void
     {
         $raw = (new ReflectionClass(ServerProxyController::class))
             ->getConstant('BROWSE_SCOPE_ALLOWLIST');
@@ -3754,7 +4026,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s247ByteStreamMatcherProvider
      */
-    public function test_s247_byte_stream_is_matched_exactly_not_by_prefix(string $path, bool $expected): void
+    public function testS247ByteStreamIsMatchedExactlyNotByPrefix(string $path, bool $expected): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -3808,7 +4080,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s247HeadDeniedProvider
      */
-    public function test_s247_head_scope_is_only_the_byte_stream(string $path): void
+    public function testS247HeadScopeIsOnlyTheByteStream(string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -3902,7 +4174,7 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s107FollowupDeadPrefixProvider
      */
-    public function test_s107_followup_dead_prefixes_are_out_of_browse_scope(string $path): void
+    public function testS107FollowupDeadPrefixesAreOutOfBrowseScope(string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -3928,13 +4200,20 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s107FollowupDeadPrefixProvider
      */
-    public function test_s107_followup_dead_prefixes_403_and_are_not_forwarded(string $path): void
+    public function testS107FollowupDeadPrefixes403AndAreNotForwarded(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -3993,10 +4272,14 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s107FollowupSurvivingReadProvider
      */
-    public function test_s107_followup_removal_does_not_break_surviving_reads(string $path): void
+    public function testS107FollowupRemovalDoesNotBreakSurvivingReads(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -4084,7 +4367,7 @@ final class ServerProxyControllerTest extends TestCase
      * an explicit "nothing to check" message instead of a bare "value not in
      * array".
      */
-    public function test_s238_image_read_patterns_are_present_in_the_real_constant(): void
+    public function testS238ImageReadPatternsArePresentInTheRealConstant(): void
     {
         $raw = (new ReflectionClass(ServerProxyController::class))
             ->getConstant('BROWSE_SCOPE_PATTERNS');
@@ -4154,7 +4437,7 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s238ImageReadProvider
      */
-    public function test_s238_image_reads_are_within_browse_scope(string $path): void
+    public function testS238ImageReadsAreWithinBrowseScope(string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -4183,10 +4466,14 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s238ImageReadProvider
      */
-    public function test_s238_image_reads_forward_and_return_image_bytes(string $path): void
+    public function testS238ImageReadsForwardAndReturnImageBytes(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $png = "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\xff\xfe binary";
 
@@ -4249,12 +4536,16 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s238ImageQueryStringProvider
      */
-    public function test_s238_image_query_string_reaches_the_bridge_byte_for_byte(
+    public function testS238ImageQueryStringReachesTheBridgeByteForByte(
         string $path,
         string $queryString,
     ): void {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -4344,7 +4635,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s238MustStayDeniedProvider
      */
-    public function test_s238_widening_admits_nothing_beyond_the_two_image_reads(string $path): void
+    public function testS238WideningAdmitsNothingBeyondTheTwoImageReads(string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -4367,19 +4658,26 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * End-to-end control: a denied neighbour 403s `proxy.scope_denied` and never
      * reaches the bridge — the SUCCEEDING sibling being
-     * `test_s238_image_reads_forward_and_return_image_bytes()` above, so a 403
+     * `testS238ImageReadsForwardAndReturnImageBytes()` above, so a 403
      * here is provably "the scope gate refused it" and not "the harness never got
      * anywhere".
      *
      * @dataProvider s238MustStayDeniedProvider
      */
-    public function test_s238_denied_neighbours_403_and_are_not_forwarded(string $path): void
+    public function testS238DeniedNeighbours403AndAreNotForwarded(string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $forwarded = false;
-        $controller = $this->controller($info, $this->bridge(static function (string $e, array $d) use (&$forwarded): void {
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
             $forwarded = true;
         }));
 
@@ -4426,7 +4724,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s238NonGetVerbProvider
      */
-    public function test_s238_image_reads_are_get_only(string $method, string $path): void
+    public function testS238ImageReadsAreGetOnly(string $method, string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -4501,7 +4799,7 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s63ExpectedPatternProvider
      */
-    public function test_s63_cast_patterns_are_present_in_the_real_constant(string $method, string $pattern): void
+    public function testS63CastPatternsArePresentInTheRealConstant(string $method, string $pattern): void
     {
         $raw = (new ReflectionClass(ServerProxyController::class))
             ->getConstant('BROWSE_SCOPE_PATTERNS');
@@ -4564,7 +4862,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s63AllowedPathProvider
      */
-    public function test_s63_cast_paths_are_within_browse_scope(string $method, string $path): void
+    public function testS63CastPathsAreWithinBrowseScope(string $method, string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -4588,7 +4886,7 @@ final class ServerProxyControllerTest extends TestCase
      * its `position_ms` is a seek to zero — a silent, wrong action rather than a
      * visible failure — so "it was forwarded" is not enough to assert.
      */
-    public function test_s63_a_seek_post_forwards_its_body_to_the_bridge(): void
+    public function testS63ASeekPostForwardsItsBodyToTheBridge(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(
@@ -4741,7 +5039,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s63MustStayDeniedProvider
      */
-    public function test_s63_widening_admits_nothing_beyond_the_named_actions(string $method, string $path): void
+    public function testS63WideningAdmitsNothingBeyondTheNamedActions(string $method, string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -4761,13 +5059,13 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * End-to-end control: a denied neighbour 403s `proxy.scope_denied` and never
      * reaches the bridge — the SUCCEEDING sibling being
-     * `test_s63_a_seek_post_forwards_its_body_to_the_bridge()` above, so a 403
+     * `testS63ASeekPostForwardsItsBodyToTheBridge()` above, so a 403
      * here is provably "the scope gate refused it" and not "the harness never
      * got anywhere".
      *
      * @dataProvider s63MustStayDeniedProvider
      */
-    public function test_s63_denied_neighbours_403_and_are_not_forwarded(string $method, string $path): void
+    public function testS63DeniedNeighbours403AndAreNotForwarded(string $method, string $path): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn(
@@ -4822,7 +5120,7 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * @dataProvider s63WrongVerbProvider
      */
-    public function test_s63_each_action_is_opened_for_exactly_one_verb(string $method, string $path): void
+    public function testS63EachActionIsOpenedForExactlyOneVerb(string $method, string $path): void
     {
         $controller = $this->controller(
             $this->createMock(ServerInfoHandler::class),
@@ -4840,7 +5138,7 @@ final class ServerProxyControllerTest extends TestCase
 
     /**
      * S63 adds no PREFIX, so the S107 enumeration is not re-opened — asserted
-     * rather than argued, exactly as `test_s238_added_no_new_browse_scope_prefix()`
+     * rather than argued, exactly as `testS238AddedNoNewBrowseScopePrefix()`
      * does for its own change.
      *
      * This test fails if a future change quietly turns one of the eleven
@@ -4849,7 +5147,7 @@ final class ServerProxyControllerTest extends TestCase
      * make this file's own `dlnaStillDeniedProvider()` and
      * `s63AllowedPathProvider()` start disagreeing.
      */
-    public function test_s63_added_no_new_browse_scope_prefix(): void
+    public function testS63AddedNoNewBrowseScopePrefix(): void
     {
         $raw = (new ReflectionClass(ServerProxyController::class))
             ->getConstant('BROWSE_SCOPE_ALLOWLIST');
@@ -4895,7 +5193,7 @@ final class ServerProxyControllerTest extends TestCase
      * one of the anchored patterns into a prefix — the exact shortcut the
      * enumeration rule exists to catch.
      */
-    public function test_s238_added_no_new_browse_scope_prefix(): void
+    public function testS238AddedNoNewBrowseScopePrefix(): void
     {
         $raw = (new ReflectionClass(ServerProxyController::class))
             ->getConstant('BROWSE_SCOPE_ALLOWLIST');
@@ -5079,10 +5377,14 @@ final class ServerProxyControllerTest extends TestCase
      * the same test so "everything was forwarded" cannot pass as "Range was
      * forwarded".
      */
-    public function test_s247_range_request_header_reaches_the_paired_server_verbatim(): void
+    public function testS247RangeRequestHeaderReachesThePairedServerVerbatim(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -5164,13 +5466,17 @@ final class ServerProxyControllerTest extends TestCase
      *
      * @dataProvider s247RangeProvider
      */
-    public function test_s247_ranged_direct_play_matches_disk_byte_for_byte(?string $range, int $expectedStatus): void
+    public function testS247RangedDirectPlayMatchesDiskByteForByte(?string $range, int $expectedStatus): void
     {
         $size = 362807;
         $path = $this->byteStreamFixture($size);
 
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $bridge = null;
         $bridge = $this->bridge($this->diskRangePublisher($path, $bridge));
@@ -5273,13 +5579,17 @@ final class ServerProxyControllerTest extends TestCase
      * would still be visible, and it pins the 362 807-byte figure S238 measured
      * across the real frame encoder.
      */
-    public function test_s247_unranged_direct_play_streams_the_whole_file(): void
+    public function testS247UnrangedDirectPlayStreamsTheWholeFile(): void
     {
         $size = 362807;
         $path = $this->byteStreamFixture($size);
 
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $bridge = null;
         $bridge = $this->bridge($this->diskRangePublisher($path, $bridge));
@@ -5321,10 +5631,14 @@ final class ServerProxyControllerTest extends TestCase
      *  3. the CONTROL: the identical request, differing ONLY in the active
      *     stream count, is admitted, occupies a slot and is forwarded.
      */
-    public function test_s247_stream_limit_gate_fires_on_the_relayed_byte_stream(): void
+    public function testS247StreamLimitGateFiresOnTheRelayedByteStream(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         // ---- the REFUSAL ------------------------------------------------
         $denySessions = $this->createMock(RelaySessionManager::class);
@@ -5384,7 +5698,11 @@ final class ServerProxyControllerTest extends TestCase
                 'Content-Length' => '1024',
                 'Content-Range' => 'bytes 0-1023/362807',
             ]]);
-            $allowBridge->onReply(['request_id' => $d['request_id'], 'phase' => 'body', 'body' => str_repeat('x', 1024)]);
+            $allowBridge->onReply([
+                'request_id' => $d['request_id'],
+                'phase' => 'body',
+                'body' => str_repeat('x', 1024)
+            ]);
             $allowBridge->onReply(['request_id' => $d['request_id'], 'phase' => 'end']);
         });
 
@@ -5404,10 +5722,14 @@ final class ServerProxyControllerTest extends TestCase
      * succeeding control. `RelaySessionManager::checkUserQuota()` → 503
      * `quota.exceeded`, refused before the stream is admitted.
      */
-    public function test_s247_quota_gate_fires_on_the_relayed_byte_stream(): void
+    public function testS247QuotaGateFiresOnTheRelayedByteStream(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $overQuota = $this->createMock(RelaySessionManager::class);
         $overQuota->method('checkUserQuota')->willReturn([
@@ -5475,10 +5797,14 @@ final class ServerProxyControllerTest extends TestCase
      * mapping the hub identity to a server identity, this test goes red and the
      * caveat in `buildForwardHeaders()` has to be revisited in the same commit.
      */
-    public function test_s247_only_the_hub_uuid_crosses_the_tunnel_so_the_server_rating_gate_stays_inert(): void
+    public function testS247OnlyTheHubUuidCrossesTheTunnelSoTheServerRatingGateStaysInert(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         /** @var array<string, mixed>|null $forwarded */
         $forwarded = null;
@@ -5524,10 +5850,14 @@ final class ServerProxyControllerTest extends TestCase
      * encoder. The GET control immediately below it renders through the stock
      * encoder and is unaffected.
      */
-    public function test_s247_relayed_head_renders_exactly_one_content_length_on_the_wire(): void
+    public function testS247RelayedHeadRendersExactlyOneContentLengthOnTheWire(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
-        $info->method('getOwnerAndStatus')->willReturn(['userId' => 'user-1', 'status' => 'online', 'relayActive' => true]);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true
+        ]);
 
         $reply = static function (RelayProxyBridge $bridge, string $id, string $body): void {
             $bridge->onReply([

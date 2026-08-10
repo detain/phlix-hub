@@ -22,7 +22,7 @@ class FrameEncoderTest extends TestCase
         return $decoder->decode($bytes);
     }
 
-    public function test_data_frame_roundtrip(): void
+    public function testDataFrameRoundtrip(): void
     {
         $payload = 'Hello, World!';
         $seq = 42;
@@ -36,7 +36,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($payload, $decoded->payload);
     }
 
-    public function test_client_connect_frame_roundtrip(): void
+    public function testClientConnectFrameRoundtrip(): void
     {
         $seq = 10;
         $clientId = 'client-abc-123';
@@ -54,7 +54,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($sessionId, $payload['session_id']);
     }
 
-    public function test_client_disconnect_frame_roundtrip(): void
+    public function testClientDisconnectFrameRoundtrip(): void
     {
         $seq = 11;
         $clientId = 'client-abc-123';
@@ -70,7 +70,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($clientId, $payload['client_id']);
     }
 
-    public function test_heartbeat_frame_roundtrip(): void
+    public function testHeartbeatFrameRoundtrip(): void
     {
         $seq = 99;
 
@@ -83,7 +83,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame('', $decoded->payload);
     }
 
-    public function test_disconnected_frame_roundtrip(): void
+    public function testDisconnectedFrameRoundtrip(): void
     {
         $seq = 12;
         $reason = 'server_replaced';
@@ -99,7 +99,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($reason, $payload['reason']);
     }
 
-    public function test_error_frame_roundtrip(): void
+    public function testErrorFrameRoundtrip(): void
     {
         $seq = 13;
         $code = 'PROTOCOL_ERROR';
@@ -117,7 +117,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($message, $payload['message']);
     }
 
-    public function test_encode_hello_json(): void
+    public function testEncodeHelloJson(): void
     {
         $jwt = 'eyJhbGciOiJFUzI1NiJ9.test.test';
         $serverId = 'server-123';
@@ -131,7 +131,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($serverId, $decoded['server_id']);
     }
 
-    public function test_encode_hello_ack_json(): void
+    public function testEncodeHelloAckJson(): void
     {
         $sessionId = 'session-456';
         $tunnelId = 'tunnel-789';
@@ -145,7 +145,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($tunnelId, $decoded['tunnel_id']);
     }
 
-    public function test_instance_encode(): void
+    public function testInstanceEncode(): void
     {
         $encoder = new FrameEncoder();
         $payload = 'test';
@@ -159,7 +159,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($payload, $decoded->payload);
     }
 
-    public function test_static_decode_helper(): void
+    public function testStaticDecodeHelper(): void
     {
         $payload = 'test payload';
         $seq = 42;
@@ -175,7 +175,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($seq, $decoded->seq);
     }
 
-    public function test_static_decode_returns_null_for_incomplete(): void
+    public function testStaticDecodeReturnsNullForIncomplete(): void
     {
         // Only 5 bytes — not enough for 7-byte header (4 seq + 1 type + 2 len minimum)
         $result = FrameEncoder::decode('abc');
@@ -183,7 +183,7 @@ class FrameEncoderTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_encoder_accepts_custom_codec(): void
+    public function testEncoderAcceptsCustomCodec(): void
     {
         $customDecoder = new FrameDecoder();
         $encoder = new FrameEncoder($customDecoder);
@@ -198,7 +198,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame($payload, $decoded->payload);
     }
 
-    public function test_data_throws_for_payload_exceeding_max(): void
+    public function testDataThrowsForPayloadExceedingMax(): void
     {
         $payload = str_repeat('x', 65536);
 

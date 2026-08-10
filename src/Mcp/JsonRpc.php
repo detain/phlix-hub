@@ -74,7 +74,7 @@ final class JsonRpc
      * `json_decode('{}', true)` and `json_decode('[]', true)` are BOTH `[]` in
      * PHP — a test that decodes the body cannot tell the two apart. It was found
      * by driving an actual MCP client, and it is pinned by
-     * `McpControllerTest::test_an_empty_result_encodes_as_a_json_object()`,
+     * `McpControllerTest::testAnEmptyResultEncodesAsAJsonObject()`,
      * which asserts the RAW body string rather than the decoded one.
      *
      * @param string|int|null      $id     The request id, echoed verbatim.

@@ -303,6 +303,43 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **`tests/` had never been under phpcs, and the linter check was green the
+  whole time (S299).** Measured 2026-08-10 at `f4ab19f`: `phpcs.xml.dist` named
+  only `src` and `scripts`, and the CI step ran phpcs with an explicit PSR12
+  standard over `src/` — which ignores the ruleset file entirely. Running the
+  standard over the test tree reported **696 errors and 141 warnings across 69 of
+  its 241 files**, none of them from any single recent commit. The
+  "PHP CodeSniffer (PSR-12)" check had been green on every commit since the
+  workflow was written.
+  - 🚨 **A gate that inspects zero files is indistinguishable from one that
+    passes** — same exit 0, same green tick, usually *less* output. Nothing on
+    the old happy path ever stated a file count, so "0 files in `tests/`" and
+    "241 clean files in `tests/`" looked identical. The replacement,
+    `scripts/assert-phpcs-corpus.php`, prints `N / N (100%) files inspected` for
+    every path, fails below a **hard-coded** floor (`src` 180, `scripts` 6,
+    `tests` 220 — literals, because a count derived from its own subject
+    self-adjusts and can never fail), cross-checks phpcs's file list against the
+    files actually on disk, and takes its verdict from the JSON report's totals
+    rather than from **phpcs's exit code, which is not read at all**.
+  - **`tests/` gets the same standard as `src/`, with no exemptions.** The
+    evidence supported it: 2441 of the tree's 3127 methods were already
+    camelCase, so the 686 `snake_case` names were minority drift rather than a
+    convention, and every one of the 141 over-long lines was ordinary wrappable
+    code, not an unbreakable fixture literal. A per-sniff exemption would have
+    enshrined the drift and silently admitted every future violation of it.
+  - **The reformat cannot have changed what any test asserts.** All 75 changed
+    files were compared token-by-token against `origin/master` with whitespace
+    removed and the rename map applied: the executable token stream is
+    **identical** in every one. Three files additionally carry comment-only
+    edits. The suite reports the same **4060 tests, 28923 assertions, 0 skipped**
+    before and after.
+  - Verified by `tests/Unit/Support/PhpcsCorpusGateTest.php`, which drives the
+    real gate against a planted violation (red, naming the file), against an
+    empty directory (`0 / 0` is a **failure**, not a pass), and against a clean
+    one (green) — with the real corpus counts asserted above their floors in
+    every case, so a red caused by "phpcs found nothing" cannot be mistaken for a
+    red caused by the plant.
+
 - **`openapi.yaml` told clients the hub's most privileged MCP scope did not
   exist (S260).** Measured 2026-08-07: `McpScopes::all()` returns **four**
   scopes; `components.schemas.McpScope` enumerated **three**, omitting

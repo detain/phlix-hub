@@ -55,7 +55,7 @@ final class RecordingMcpTool implements McpToolInterface
      * empty payload is what `McpController::toolResult()` must render as
      * `"structuredContent": {}` rather than `[]`, and PHP's single array type
      * means no decoding assertion can tell those two apart — see
-     * `McpControllerTest::test_an_empty_tool_payload_encodes_as_a_json_object()`.
+     * `McpControllerTest::testAnEmptyToolPayloadEncodesAsAJsonObject()`.
      *
      * @var array<string, mixed>
      */

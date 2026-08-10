@@ -176,7 +176,7 @@ final class TunnelThrottleTimerLoopTest extends TestCase
      * The production drain-timer callback runs under a real event loop, keeps
      * running, and paces the stream to its configured cap.
      */
-    public function test_drain_timer_callback_runs_under_a_real_loop_and_paces_to_the_configured_cap(): void
+    public function testDrainTimerCallbackRunsUnderARealLoopAndPacesToTheConfiguredCap(): void
     {
         $tick = $this->drainIntervalSeconds();
         $capBytesPerSecond = self::CAP_BPS / 8.0;

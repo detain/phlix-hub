@@ -88,7 +88,7 @@ final class RelayProxyManagerTest extends TestCase
         return $tunnel;
     }
 
-    public function test_request_for_offline_server_publishes_503(): void
+    public function testRequestForOfflineServerPublishes503(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
         $tunnelManager->method('getTunnelForServer')->willReturn(null);
@@ -126,7 +126,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame('server.no_tunnel', $decoded['code'] ?? null);
     }
 
-    public function test_request_for_inactive_tunnel_publishes_503_no_tunnel(): void
+    public function testRequestForInactiveTunnelPublishes503NoTunnel(): void
     {
         // A tunnel object exists but is not in the ACTIVE status (e.g. closing).
         // The registry cross-check still treats this as "no live tunnel" and
@@ -166,7 +166,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame('server.no_tunnel', $decoded['code'] ?? null);
     }
 
-    public function test_request_sends_http_request_frame_down_the_tunnel(): void
+    public function testRequestSendsHttpRequestFrameDownTheTunnel(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -225,7 +225,7 @@ final class RelayProxyManagerTest extends TestCase
      * RelayHttpRequestCodec (not a hand-rolled parser) so this end asserts
      * against the SAME contract the phlix-server reassembly half verifies.
      */
-    public function test_large_binary_body_emits_head_body_end_chunks(): void
+    public function testLargeBinaryBodyEmitsHeadBodyEndChunks(): void
     {
         // Build a ~140 KB binary body cycling all 256 byte values so it
         // includes NUL (0x00) and 0xFF and is NOT valid UTF-8 / JSON. 140000 >
@@ -333,7 +333,7 @@ final class RelayProxyManagerTest extends TestCase
      * 65535 decision boundary so the chunking never fires early (regressing the
      * back-compat envelope) nor late (413-capping a bodied request).
      */
-    public function test_body_size_boundary_single_envelope_vs_chunked(): void
+    public function testBodySizeBoundarySingleEnvelopeVsChunked(): void
     {
         // Envelope shape used for the boundary probe (must match production's
         // method/path/query/headers so strlen(json) matches onRequest's check).
@@ -436,7 +436,7 @@ final class RelayProxyManagerTest extends TestCase
         return $frames;
     }
 
-    public function test_response_chunks_assemble_and_publish_reply(): void
+    public function testResponseChunksAssembleAndPublishReply(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -504,7 +504,7 @@ final class RelayProxyManagerTest extends TestCase
      * body, rather than waiting for a body frame that never comes (which would
      * stall the request until the reply timeout and surface downstream as a 504).
      */
-    public function test_head_buffered_path_completes_on_end_with_zero_body(): void
+    public function testHeadBufferedPathCompletesOnEndWithZeroBody(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -589,7 +589,7 @@ final class RelayProxyManagerTest extends TestCase
      * buffered HEAD reply carries the size/range headers and no body, and the
      * ranged GET streams back a 206 with the exact range bytes.
      */
-    public function test_head_then_ranged_get_returns_headers_then_bytes(): void
+    public function testHeadThenRangedGetReturnsHeadersThenBytes(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -685,7 +685,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame('end', $this->published[3]['data']['phase']);
     }
 
-    public function test_streaming_response_publishes_phased_frames_without_buffering(): void
+    public function testStreamingResponsePublishesPhasedFramesWithoutBuffering(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -766,7 +766,7 @@ final class RelayProxyManagerTest extends TestCase
         }
     }
 
-    public function test_fail_server_ends_a_started_stream_instead_of_publishing_503(): void
+    public function testFailServerEndsAStartedStreamInsteadOfPublishing503(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -827,7 +827,7 @@ final class RelayProxyManagerTest extends TestCase
      * "this stream has been open a long time" — the sweep must then terminate
      * the stream.
      */
-    public function test_absolute_stream_duration_ceiling_terminates_a_steadily_dripping_response(): void
+    public function testAbsoluteStreamDurationCeilingTerminatesASteadilyDrippingResponse(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -878,7 +878,11 @@ final class RelayProxyManagerTest extends TestCase
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
-            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                200,
+                ['Content-Length' => '1000000'],
+                1000000
+            )),
         ));
 
         // Run the sweep — it must detect the exceeded absolute duration.
@@ -904,7 +908,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount($countAfterTermination, $this->published);
     }
 
-    public function test_inactivity_timeout_ends_a_started_stream_instead_of_publishing_504(): void
+    public function testInactivityTimeoutEndsAStartedStreamInsteadOfPublishing504(): void
     {
         // Covers the onTimeout() streaming branch: once the head has been
         // streamed to the browser, a per-frame inactivity cutoff must terminate
@@ -962,7 +966,11 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame('head', $this->published[0]['data']['phase']);
         $this->assertSame(200, $this->published[0]['data']['status']);
         $this->assertSame('end', $this->published[1]['data']['phase']);
-        $this->assertArrayNotHasKey('status', $this->published[1]['data'], 'the terminating end phase must carry no status body');
+        $this->assertArrayNotHasKey(
+            'status',
+            $this->published[1]['data'],
+            'the terminating end phase must carry no status body'
+        );
 
         // The pending entry is torn down: further frames for it are dropped.
         $countAfter = count($this->published);
@@ -981,7 +989,7 @@ final class RelayProxyManagerTest extends TestCase
      * and absolute duration ceiling remains pending after frames arrive, and
      * the sweep does NOT prematurely terminate it.
      */
-    public function test_streaming_frames_preserve_pending_entry_until_sweep_timeout(): void
+    public function testStreamingFramesPreservePendingEntryUntilSweepTimeout(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1030,7 +1038,11 @@ final class RelayProxyManagerTest extends TestCase
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
-            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                200,
+                ['Content-Length' => '1000000'],
+                1000000
+            )),
         ));
 
         // The head phase is published; no terminating end phase.
@@ -1076,10 +1088,10 @@ final class RelayProxyManagerTest extends TestCase
      * evaluated `now - sent_at (300s) >= timeout (30s)` → true → it terminated a
      * normally-playing stream ~30s (direct-play `/media`) / ~60s (`/hls`,`/dash`)
      * after it started. This is the test that catches that regression; the
-     * existing `test_streaming_frames_preserve_pending_entry_until_sweep_timeout`
+     * existing `testStreamingFramesPreservePendingEntryUntilSweepTimeout`
      * only exercises a fresh entry (sent_at ≈ now), so it cannot.
      */
-    public function test_active_long_running_stream_survives_sweep_despite_old_start_time(): void
+    public function testActiveLongRunningStreamSurvivesSweepDespiteOldStartTime(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1133,7 +1145,11 @@ final class RelayProxyManagerTest extends TestCase
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
-            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                200,
+                ['Content-Length' => '1000000'],
+                1000000
+            )),
         ));
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
@@ -1170,7 +1186,7 @@ final class RelayProxyManagerTest extends TestCase
      * the fix — it must keep working after switching the sweep from `sent_at` to
      * `lastActivityAt`.
      */
-    public function test_idle_stream_beyond_timeout_is_terminated_by_sweep(): void
+    public function testIdleStreamBeyondTimeoutIsTerminatedBySweep(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1243,7 +1259,7 @@ final class RelayProxyManagerTest extends TestCase
      * MAX_STREAM_DURATION_SECONDS. The sweep must terminate it via the ceiling
      * regardless of ongoing activity.
      */
-    public function test_absolute_ceiling_terminates_active_stream_with_recent_activity(): void
+    public function testAbsoluteCeilingTerminatesActiveStreamWithRecentActivity(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1281,7 +1297,11 @@ final class RelayProxyManagerTest extends TestCase
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
-            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                200,
+                ['Content-Length' => '1000000'],
+                1000000
+            )),
         ));
 
         // Back-date ONLY stream_opened_at past the 900s ceiling; leave
@@ -1317,7 +1337,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertArrayNotHasKey($requestId, $remaining);
     }
 
-    public function test_response_for_unknown_request_is_dropped(): void
+    public function testResponseForUnknownRequestIsDropped(): void
     {
         $logger = $this->createMock(StructuredLogger::class);
         $logger->expects($this->atLeastOnce())->method('warning');
@@ -1338,7 +1358,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount(0, $this->published);
     }
 
-    public function test_fail_server_publishes_503_for_pending_requests(): void
+    public function testFailServerPublishes503ForPendingRequests(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1434,7 +1454,7 @@ final class RelayProxyManagerTest extends TestCase
     /**
      * @dataProvider timeoutCoercionProvider
      */
-    public function test_as_timeout_coerces_the_payload_field(mixed $value, float $expected): void
+    public function testAsTimeoutCoercesThePayloadField(mixed $value, float $expected): void
     {
         $manager = new RelayProxyManager(
             $this->createMock(TunnelManagerInterface::class),
@@ -1456,7 +1476,7 @@ final class RelayProxyManagerTest extends TestCase
      * built with a different default returns that on every non-positive /
      * non-numeric / absent value, while a valid value still wins.
      */
-    public function test_as_timeout_falls_back_to_the_injected_default(): void
+    public function testAsTimeoutFallsBackToTheInjectedDefault(): void
     {
         $manager = new RelayProxyManager(
             $this->createMock(TunnelManagerInterface::class),
@@ -1480,7 +1500,7 @@ final class RelayProxyManagerTest extends TestCase
      * pending entry; the sweep timer uses it to determine inactivity expiry.
      * This tests that the coerced timeout is stored correctly for the sweep.
      */
-    public function test_on_request_stores_coerced_timeout_in_pending_entry(): void
+    public function testOnRequestStoresCoercedTimeoutInPendingEntry(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1533,7 +1553,7 @@ final class RelayProxyManagerTest extends TestCase
      * specific clientRequestId must remove only that entry from pending,
      * leaving all others intact.
      */
-    public function test_cancel_uses_o1_lookup(): void
+    public function testCancelUsesO1Lookup(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1624,7 +1644,7 @@ final class RelayProxyManagerTest extends TestCase
      * Verifies the clientRequestId → relayRequestId map is cleared when a
      * request completes via onResponseFrame END (buffered path).
      */
-    public function test_client_to_relay_map_cleared_on_response_end(): void
+    public function testClientToRelayMapClearedOnResponseEnd(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1678,7 +1698,7 @@ final class RelayProxyManagerTest extends TestCase
     /**
      * Verifies the clientRequestId → relayRequestId map is cleared on timeout.
      */
-    public function test_client_to_relay_map_cleared_on_timeout(): void
+    public function testClientToRelayMapClearedOnTimeout(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1735,7 +1755,7 @@ final class RelayProxyManagerTest extends TestCase
      * Verifies the clientRequestId → relayRequestId map is cleared when
      * failServer removes pending entries for a server.
      */
-    public function test_client_to_relay_map_cleared_on_fail_server(): void
+    public function testClientToRelayMapClearedOnFailServer(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1783,7 +1803,7 @@ final class RelayProxyManagerTest extends TestCase
      * Verifies the clientRequestId → relayRequestId map is cleared when
      * onCancel successfully cancels an in-flight request.
      */
-    public function test_client_to_relay_map_cleared_on_cancel(): void
+    public function testClientToRelayMapClearedOnCancel(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1835,7 +1855,7 @@ final class RelayProxyManagerTest extends TestCase
      * is cancelled (client abandoned it → hub emits HTTP_CANCEL). A cancel for an
      * unknown/already-completed request must NOT increment the counter.
      */
-    public function test_cancel_records_the_cancel_metric(): void
+    public function testCancelRecordsTheCancelMetric(): void
     {
         $serverWs = $this->createMock(TcpConnection::class);
         $serverWs->method('send')->willReturn(true);
@@ -1890,7 +1910,7 @@ final class RelayProxyManagerTest extends TestCase
      * Verifies that sweepStreamTimers() times out a request that has exceeded
      * its inactivity timeout (sent_at + timeout).
      */
-    public function test_sweep_times_out_inactive_request(): void
+    public function testSweepTimesOutInactiveRequest(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1956,7 +1976,7 @@ final class RelayProxyManagerTest extends TestCase
      * Verifies that sweepStreamTimers() terminates a streaming entry that has
      * exceeded MAX_STREAM_DURATION_SECONDS (absolute duration ceiling).
      */
-    public function test_sweep_terminates_stream_exceeding_absolute_duration(): void
+    public function testSweepTerminatesStreamExceedingAbsoluteDuration(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -1994,7 +2014,11 @@ final class RelayProxyManagerTest extends TestCase
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
-            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '1000000'], 1000000)),
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(
+                200,
+                ['Content-Length' => '1000000'],
+                1000000
+            )),
         ));
 
         // Simulate a stream that has been open far beyond the absolute ceiling.
@@ -2026,7 +2050,7 @@ final class RelayProxyManagerTest extends TestCase
      * Verifies that sweepStreamTimers() does NOT affect a request that is
      * still within its timeout window.
      */
-    public function test_sweep_does_not_affect_active_requests(): void
+    public function testSweepDoesNotAffectActiveRequests(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -2080,7 +2104,7 @@ final class RelayProxyManagerTest extends TestCase
      * Verifies that sweepStreamTimers() handles an empty pending array without
      * errors (early return).
      */
-    public function test_sweep_handles_empty_pending(): void
+    public function testSweepHandlesEmptyPending(): void
     {
         $manager = new RelayProxyManager(
             $this->createMock(TunnelManagerInterface::class),
@@ -2102,7 +2126,7 @@ final class RelayProxyManagerTest extends TestCase
      * Verifies that sweepStreamTimers() gracefully skips an entry that has
      * already been removed by another mechanism (e.g. failServer, cancelRequest).
      */
-    public function test_sweep_skips_already_removed_entries(): void
+    public function testSweepSkipsAlreadyRemovedEntries(): void
     {
         $sent = [];
         $serverWs = $this->createMock(TcpConnection::class);
@@ -2213,7 +2237,7 @@ final class RelayProxyManagerTest extends TestCase
         return $serverWs;
     }
 
-    public function test_pending_gauge_increments_on_request_and_decrements_on_completion(): void
+    public function testPendingGaugeIncrementsOnRequestAndDecrementsOnCompletion(): void
     {
         $sent = [];
         $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
@@ -2253,7 +2277,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame(0, $this->registryInt($registry, 'relayPendingRequests'));
     }
 
-    public function test_no_tunnel_branch_records_relay_error_503(): void
+    public function testNoTunnelBranchRecordsRelayError503(): void
     {
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
         $tunnelManager->method('getTunnelForServer')->willReturn(null);
@@ -2279,7 +2303,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame(0, $this->registryInt($registry, 'relayError504'));
     }
 
-    public function test_fail_server_records_relay_error_503(): void
+    public function testFailServerRecordsRelayError503(): void
     {
         $sent = [];
         $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
@@ -2307,7 +2331,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame(0, $this->registryInt($registry, 'relayPendingRequests'));
     }
 
-    public function test_timeout_records_relay_error_504(): void
+    public function testTimeoutRecordsRelayError504(): void
     {
         $sent = [];
         $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
@@ -2339,7 +2363,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame(0, $this->registryInt($registry, 'relayError503'));
     }
 
-    public function test_unknown_response_frame_records_reply_drop(): void
+    public function testUnknownResponseFrameRecordsReplyDrop(): void
     {
         $registry = new MetricsRegistry(10);
         $manager  = $this->meteredManager(
@@ -2358,7 +2382,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount(0, $this->published);
     }
 
-    public function test_buffered_request_records_only_first_byte_latency(): void
+    public function testBufferedRequestRecordsOnlyFirstByteLatency(): void
     {
         $sent = [];
         $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));
@@ -2406,7 +2430,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame(1, $this->relayLatencyObservationCount($registry));
     }
 
-    public function test_streaming_request_records_only_first_byte_latency_not_stream_duration(): void
+    public function testStreamingRequestRecordsOnlyFirstByteLatencyNotStreamDuration(): void
     {
         $sent = [];
         $tunnel = $this->activeTunnel('srv-1', $this->capturingServerWs($sent));

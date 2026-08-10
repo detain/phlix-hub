@@ -46,10 +46,10 @@ use const T_DOC_COMMENT;
  * A detector that finds nothing is indistinguishable from a detector that finds
  * no problems, and this repository has been bitten by that repeatedly. So:
  *
- *  1. **The corpus is asserted.** {@see test_the_corpus_is_not_empty()} fails if
+ *  1. **The corpus is asserted.** {@see testTheCorpusIsNotEmpty()} fails if
  *     fewer than {@see MINIMUM_TOOLS} tool files are found, so a moved directory
  *     or a wrong glob reports as "nothing was inspected", not as a pass.
- *  2. **The detector is proven to fire.** {@see test_the_detector_actually_fires()}
+ *  2. **The detector is proven to fire.** {@see testTheDetectorActuallyFires()}
  *     runs the SAME {@see forbiddenSymbolsIn()} routine over synthetic sources
  *     that each contain one banned symbol, and requires a hit for every one. A
  *     rule nobody can trigger is not a rule.
@@ -57,7 +57,7 @@ use const T_DOC_COMMENT;
  *     `T_COMMENT`/`T_DOC_COMMENT` token before matching, so a docblock that
  *     NAMES `RelayProxyBridge` (as several of these files deliberately do, to
  *     explain why they must not use it) cannot make the detector fire on its own
- *     documentation. {@see test_comment_stripping_actually_removes_prose()}
+ *     documentation. {@see testCommentStrippingActuallyRemovesProse()}
  *     proves the stripping works rather than assuming it.
  *
  * ## Why there is deliberately no `@covers`
@@ -133,7 +133,7 @@ final class McpToolIsolationTest extends TestCase
      *
      * @dataProvider toolFileProvider
      */
-    public function test_a_tool_reaches_a_server_only_through_the_context(string $file): void
+    public function testAToolReachesAServerOnlyThroughTheContext(string $file): void
     {
         $found = self::forbiddenSymbolsIn(self::strippedSource($file));
 
@@ -171,7 +171,7 @@ final class McpToolIsolationTest extends TestCase
      *
      * @dataProvider toolFileProvider
      */
-    public function test_no_tool_targets_a_byte_streaming_prefix(string $file): void
+    public function testNoToolTargetsAByteStreamingPrefix(string $file): void
     {
         $code = self::strippedSource($file);
 
@@ -217,7 +217,7 @@ final class McpToolIsolationTest extends TestCase
      *
      * @dataProvider streamingRootProvider
      */
-    public function test_the_streaming_prefix_ban_actually_fires(string $root): void
+    public function testTheStreamingPrefixBanActuallyFires(string $root): void
     {
         $literal = $root . '/job-1/seg-00001.ts';
 
@@ -243,7 +243,7 @@ final class McpToolIsolationTest extends TestCase
     /**
      * The corpus must not be silently empty.
      */
-    public function test_the_corpus_is_not_empty(): void
+    public function testTheCorpusIsNotEmpty(): void
     {
         $files = self::toolFiles();
 
@@ -266,7 +266,7 @@ final class McpToolIsolationTest extends TestCase
      *
      * @dataProvider forbiddenSymbolProvider
      */
-    public function test_the_detector_actually_fires(string $symbol): void
+    public function testTheDetectorActuallyFires(string $symbol): void
     {
         $synthetic = '<?php class Bad { public function go(' . $symbol . ' $x) { return $x; } }';
 
@@ -281,7 +281,7 @@ final class McpToolIsolationTest extends TestCase
      * ...and must NOT fire when the symbol appears only in a comment, which is
      * how several of these files legitimately explain the rule.
      */
-    public function test_the_detector_ignores_its_own_documentation(): void
+    public function testTheDetectorIgnoresItsOwnDocumentation(): void
     {
         $synthetic = <<<'PHP'
         <?php
@@ -306,7 +306,7 @@ final class McpToolIsolationTest extends TestCase
      * test could pass because the matcher is broken rather than because
      * stripping works.
      */
-    public function test_comment_stripping_actually_removes_prose(): void
+    public function testCommentStrippingActuallyRemovesProse(): void
     {
         $synthetic = "<?php\n/** unmistakable-marker-in-a-docblock */\n// unmistakable-marker-in-a-line\n\$x = 1;";
         $stripped = self::stripComments($synthetic);
@@ -322,7 +322,7 @@ final class McpToolIsolationTest extends TestCase
      *
      * @dataProvider toolFileProvider
      */
-    public function test_every_file_in_the_tools_directory_is_a_tool(string $file): void
+    public function testEveryFileInTheToolsDirectoryIsATool(string $file): void
     {
         self::assertStringContainsString(
             'implements McpToolInterface',
