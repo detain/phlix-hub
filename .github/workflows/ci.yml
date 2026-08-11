@@ -250,13 +250,26 @@ jobs:
         # migration chain in setUp(), so it is independent of the step above.
         # --log-junit feeds the assertion step that follows; it is the only way to
         # tell "ran" from "skipped" after the fact, since both exit 0.
+        #
+        # S316: --coverage-clover is likewise NOT decoration. Until S316 this
+        # command passed no coverage flag at all, and coverage.xml existed solely
+        # because of the <coverage><report><clover/> block in phpunit.xml — so
+        # tidying one line of XML stopped all coverage reporting with the whole
+        # pipeline still green (both uploaders below are non-failing by design).
+        # Naming the file here makes the artifact depend on this command as well.
+        #
+        # Measured, not assumed: with the flag present PHPUnit emits Clover
+        # exactly ONCE ("Generating code coverage report in Clover XML format"
+        # appears one time), the <html> and <text> report targets configured in
+        # phpunit.xml are unaffected, and pointing the flag at a different path
+        # proves it OVERRIDES the XML target rather than adding a second one.
         env:
           HUB_TEST_DB_HOST: 127.0.0.1
           HUB_TEST_DB_PORT: '3306'
           HUB_TEST_DB_USER: root
           HUB_TEST_DB_PASSWORD: root
           HUB_TEST_DB_NAME: phlix_hub_test
-        run: php -d max_execution_time=0 ./vendor/bin/phpunit --colors=always --log-junit junit.xml
+        run: php -d max_execution_time=0 ./vendor/bin/phpunit --colors=always --coverage-clover coverage.xml --log-junit junit.xml
 
       - name: Assert the integration tests actually ran (S173)
         # ADDITIVE gate. It fails the build when any test was SKIPPED, and when
@@ -271,6 +284,35 @@ jobs:
         # mysql service, and on a missing HUB_TEST_DB_* variable.
         if: always()
         run: php scripts/assert-integration-tests-ran.php junit.xml
+
+      - name: Assert the coverage report exists and measured something (S316)
+        # ADDITIVE gate, and it must stay BEFORE the two upload steps below.
+        #
+        # Until S316 a vanished coverage.xml was a silent green: no --coverage-*
+        # flag on the PHPUnit command, `fail_ci_if_error: false` on Codecov and
+        # `continue-on-error: true` on Codacy. Deleting one line from phpunit.xml
+        # stopped all coverage reporting and nothing anywhere failed.
+        #
+        # The guard belongs HERE, on the local artifact, and NOT on the uploaders.
+        # Do NOT "fix" this by setting `fail_ci_if_error: true` or by removing
+        # Codacy's `continue-on-error`: that would make every unrelated PR depend
+        # on a third party being reachable, and a gate that reds for someone
+        # else's outage is the gate that gets deleted.
+        #
+        # The script asserts MAGNITUDE, not existence — byte count, file count,
+        # statement count, covered count and the percentage, each printed and each
+        # against a literal floor. A gate that ran and inspected zero files is
+        # indistinguishable from a clean pass; that is the failure mode being
+        # designed out, so the numbers are in the log on every run.
+        #
+        # Do NOT delete this step, add `continue-on-error`, or wrap it in an `if:`
+        # that can be false — `if [ -f coverage.xml ]` around a check is exactly
+        # the shape it exists to remove. `if: always()` is the only condition
+        # allowed, because it cannot evaluate false.
+        # tests/Unit/Support/CoverageArtifactGateTest.php parses this file and
+        # fails on each of those edits, and drives the script's failure paths
+        # against fixtures so a gate that can no longer fail is red too.
+        run: php scripts/assert-coverage-report.php coverage.xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
