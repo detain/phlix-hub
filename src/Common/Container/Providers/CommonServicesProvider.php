@@ -17,6 +17,7 @@ use Phlix\Hub\Common\RateLimit\DbRateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
+use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -133,7 +134,93 @@ final class CommonServicesProvider implements ServiceProviderInterface
         // one is ever requested directly.
         $definitions[RateLimiterInterface::class] = get(RateLimitProfiles::LOGIN);
 
+        // S312 — the maintenance worker's cross-process liveness record.
+        //
+        // Registered HERE, and not in HubServicesProvider, because BOTH forks
+        // need it from the same definition: the maintenance worker WRITES it
+        // from inside its guarded sweep, and the HTTP workers READ it to answer
+        // /health. Every fork builds its own container from the same providers,
+        // so one registration serves both.
+        //
+        // Explicit `factory()` rather than autowiring: the constructor takes a
+        // path, an int and a bool, none of which PHP-DI can invent, and this
+        // repository has been bitten before by `autowire()` silently SKIPPING
+        // optional constructor parameters and leaving a dependency null.
+        $heartbeatPath = self::stringOr(
+            $appConfig,
+            'maintenance_heartbeat_file',
+            dirname(__DIR__, 4) . '/var/maintenance-heartbeat.json',
+        );
+        $staleAfter = self::intOr(
+            $appConfig,
+            'maintenance_stale_seconds',
+            MaintenanceHeartbeat::DEFAULT_STALE_AFTER_SECONDS,
+        );
+        $maintenanceEnabled = self::maintenanceEnabled($appConfig);
+
+        $definitions[MaintenanceHeartbeat::class] = factory(
+            static fn (): MaintenanceHeartbeat => new MaintenanceHeartbeat(
+                $heartbeatPath,
+                $staleAfter,
+                $maintenanceEnabled,
+            )
+        );
+
         $builder->addDefinitions($definitions);
+    }
+
+    /**
+     * Whether `config/process.php` enables the dedicated maintenance worker.
+     *
+     * The path is injected by `start.php` as `process_config_path` (the same
+     * idiom as `db_config_path` / `logger_config_path`). When it is absent — a
+     * unit test building a container from a bare config array, say — the answer
+     * is the shipped default, `true`, which is also the conservative one: it
+     * makes an absent heartbeat record a DOWN verdict rather than a silent
+     * `disabled` that could never fail.
+     *
+     * @param array<array-key, mixed> $appConfig Application config.
+     */
+    private static function maintenanceEnabled(array $appConfig): bool
+    {
+        /** @var mixed $path */
+        $path = $appConfig['process_config_path'] ?? null;
+        if (!is_string($path) || $path === '' || !is_file($path)) {
+            return true;
+        }
+
+        /**
+         * @psalm-suppress UnresolvableInclude
+         * @var mixed $process
+         */
+        $process = require $path;
+        if (!is_array($process)) {
+            return true;
+        }
+
+        /** @var mixed $maintenance */
+        $maintenance = $process['maintenance'] ?? null;
+        if (!is_array($maintenance)) {
+            return true;
+        }
+
+        return ($maintenance['enabled'] ?? true) === true;
+    }
+
+    /**
+     * @param array<array-key, mixed> $config  Config array.
+     * @param string                  $key     Field name.
+     * @param string                  $default Fallback.
+     */
+    private static function stringOr(array $config, string $key, string $default): string
+    {
+        /**
+         * @var mixed $value
+         * @psalm-suppress MixedAssignment
+         */
+        $value = $config[$key] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : $default;
     }
 
     /**

@@ -137,6 +137,12 @@ Worker::$statusFile = $hubStatusFile;
 $serverConfig['db_config_path']     = $dbConfigPath;
 $serverConfig['logger_config_path'] = $loggerConfigPath;
 $serverConfig['auth_config_path']   = $authConfigPath;
+// S312: config/process.php is the single source of truth for whether the
+// maintenance worker runs at all. /health has to know, because "no heartbeat
+// record" means something completely different when the worker was never
+// supposed to exist. Injected as a PATH, like the three above, so the container
+// does not have to guess its own location relative to config/.
+$serverConfig['process_config_path'] = $configDir . '/process.php';
 // Document root for the static-file fast path inside Application::boot().
 $serverConfig['public_root']        = __DIR__ . '/public';
 

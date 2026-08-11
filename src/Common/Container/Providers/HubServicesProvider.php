@@ -25,6 +25,7 @@ use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
+use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AlexaSkillController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
@@ -1555,13 +1556,48 @@ final class HubServicesProvider implements ServiceProviderInterface
     {
         $logger = LoggerFactory::get(LogChannels::RELAY);
 
+        // S312 — the maintenance worker's cross-process liveness record.
+        //
+        // `arm()` writes it once, here, BEFORE any sweep is due, so /health has
+        // something to read during the first interval instead of reporting a
+        // missing worker. It continues an existing lineage when the record on
+        // disk is still fresh, which is what stops a re-forking worker from
+        // handing itself a new startup grace every minute.
+        $heartbeat = null;
+        try {
+            /** @var mixed $resolved */
+            $resolved = $container->get(MaintenanceHeartbeat::class);
+            if ($resolved instanceof MaintenanceHeartbeat) {
+                $heartbeat = $resolved;
+                $heartbeat->arm();
+            }
+        } catch (\Throwable $e) {
+            $logger->error(
+                'Maintenance: failed to arm the maintenance heartbeat',
+                ['error' => $e->getMessage()],
+            );
+        }
+
+        // Each sweep reports its own outcome. The record advances ONLY from
+        // inside a completed sweep — see MaintenanceHeartbeat's docblock for why
+        // a heartbeat on a timer of its own would be an uninformative green.
+        $reporter = static function (string $task) use ($heartbeat): ?\Closure {
+            if ($heartbeat === null) {
+                return null;
+            }
+
+            return static function (?\Throwable $error) use ($heartbeat, $task): void {
+                $heartbeat->recordSweep($task, $error);
+            };
+        };
+
         // Idle-reaper DB-maintenance sweep: stale-session reap + heartbeat/token
         // prune (HB-4.2/HB-4.3). DB-only — no tunnel-registry access.
         try {
             /** @var mixed $idleReaper */
             $idleReaper = $container->get(IdleReaper::class);
             if ($idleReaper instanceof IdleReaper) {
-                $idleReaper->startDbMaintenance();
+                $idleReaper->startDbMaintenance($reporter('idle_reaper_db'));
             }
         } catch (\Throwable $e) {
             $logger->error(
@@ -1575,7 +1611,7 @@ final class HubServicesProvider implements ServiceProviderInterface
             /** @var mixed $serverReaper */
             $serverReaper = $container->get(ServerReaper::class);
             if ($serverReaper instanceof ServerReaper) {
-                $serverReaper->start();
+                $serverReaper->start($reporter('server_reaper'));
             }
         } catch (\Throwable $e) {
             $logger->error('Maintenance: failed to start ServerReaper timer', ['error' => $e->getMessage()]);
@@ -1583,14 +1619,35 @@ final class HubServicesProvider implements ServiceProviderInterface
 
         // Federation session reaper: drop federation sessions with no heartbeat
         // for 60s, swept every 60s.
+        //
+        // ⚠ S312: the try/catch INSIDE the callback is not decoration. Until
+        // S312 this closure called `reapDeadSessions(60)` bare, and with no
+        // reachable database the PDOException it threw escaped into the event
+        // loop, where Workerman's `Worker::run()` error handler turned it into
+        // `Worker::stopAll(250, $e)` and killed the entire maintenance worker.
+        // The outer try/catch below only guards the ARMING; it has never been
+        // able to see a tick.
         try {
             /** @var mixed $federationSessionMgr */
             $federationSessionMgr = $container->get(FederationSessionManager::class);
             if ($federationSessionMgr instanceof FederationSessionManager) {
+                $onSweep = $reporter('federation_session_reaper');
                 Timer::add(
                     60,
-                    static function () use ($federationSessionMgr): void {
-                        $federationSessionMgr->reapDeadSessions(60);
+                    static function () use ($federationSessionMgr, $onSweep, $logger): void {
+                        $failure = null;
+                        try {
+                            $federationSessionMgr->reapDeadSessions(60);
+                        } catch (\Throwable $e) {
+                            $failure = $e;
+                            $logger->error('Maintenance: federation-session reaper sweep failed', [
+                                'error' => $e->getMessage(),
+                                'exception' => $e::class,
+                            ]);
+                        }
+                        if ($onSweep !== null) {
+                            $onSweep($failure);
+                        }
                     },
                 );
             }

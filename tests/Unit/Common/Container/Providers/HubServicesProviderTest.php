@@ -7,6 +7,7 @@ namespace Phlix\Hub\Tests\Unit\Common\Container\Providers;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Federation\FederationSessionManager;
+use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\TunnelManager;
@@ -102,6 +103,13 @@ final class HubServicesProviderTest extends TestCase
     private function expectedDbServices(): array
     {
         return [
+            // S312: resolved FIRST and armed before any sweep is due, so
+            // /health has a record to read during the first interval instead of
+            // reporting a maintenance worker that does not exist yet. It is
+            // also the reason the two tests above matter: a heartbeat whose
+            // resolution threw and aborted the rest of this method would leave
+            // the hub with no reapers at all AND no signal saying so.
+            MaintenanceHeartbeat::class,
             IdleReaper::class,
             ServerReaper::class,
             FederationSessionManager::class,

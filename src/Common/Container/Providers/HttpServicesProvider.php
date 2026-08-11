@@ -18,6 +18,8 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Health\HealthController;
+use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Controllers\MeController;
 use Phlix\Hub\Http\Controllers\ServerListController;
@@ -27,6 +29,7 @@ use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
+use function DI\get;
 
 /**
  * Registers the HTTP layer (JSON controllers + auth/admin middleware) with
@@ -46,6 +49,22 @@ final class HttpServicesProvider implements ServiceProviderInterface
         $publicDomain = self::stringOr($appConfig, 'public_domain', 'phlix.media');
 
         $builder->addDefinitions([
+            // S312 — EXPLICIT, and the explicitness is the point.
+            //
+            // HealthController used to be pure autowiring (no registration at
+            // all). It now takes a MaintenanceHeartbeat, and PHP-DI's
+            // `autowire()` SKIPS optional constructor parameters: left
+            // unregistered, the parameter would resolve to `null`, the probe
+            // would fall back to its pre-S312 payload, and /health would report
+            // `ok` for a crash-looping maintenance worker — the exact defect
+            // S312 exists to remove, silently reinstated by an omission that
+            // reads like working code.
+            HealthController::class => factory(static function (
+                MaintenanceHeartbeat $maintenance,
+            ): HealthController {
+                return new HealthController($maintenance);
+            })->parameter('maintenance', get(MaintenanceHeartbeat::class)),
+
             AuthController::class => factory(static function (
                 AuthManager $auth,
             ): AuthController {

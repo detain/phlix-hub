@@ -3077,11 +3077,31 @@ paths:
       summary: "Service health probe"
       description: |-
         Unauthenticated liveness probe used by HAProxy and the container health check.
+
+        Since S312 the payload also reports the dedicated MAINTENANCE WORKER, which is a
+        different fork from the HTTP workers that answer this route. Before S312 that fork
+        could be killed and re-forked every 60 seconds — measured, `docker run --network none`,
+        worker `etime` 0:39 against the container master's 4:41 — while this endpoint answered
+        `{"status":"ok"}` and `docker inspect` reported `healthy` with `RestartCount=0`.
+
+        `status` stays two-valued because HAProxy and the container `HEALTHCHECK` both consume
+        it: `ok` on 200, `unhealthy` on 503. The finer state is in `maintenance.status`, where
+        `degraded` means the worker is alive and sweeping but the work inside the sweep is
+        failing (an unreachable database, typically) — deliberately NOT a probe failure.
       x-phlix-middleware: []
       security: []
       responses:
         "200":
-          description: "Success."
+          description: "Success. The maintenance worker completed a sweep inside its stale window."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          description: |-
+            The maintenance worker has not completed a sweep inside `maintenance.stale_after_seconds`
+            — it is crash-looping, hung, dead, or was never armed. `maintenance.reason` says which
+            (`no_heartbeat_record`, `no_sweep_completed`, `stale_sweep`).
           content:
             application/json:
               schema:
@@ -4160,7 +4180,11 @@ components:
       properties:
         status:
           type: string
-          const: ok
+          enum: [ok, unhealthy]
+          description: |-
+            Probe verdict. `ok` accompanies HTTP 200, `unhealthy` accompanies HTTP 503. Kept
+            two-valued on purpose (S312): HAProxy and the container HEALTHCHECK both read it,
+            and a third value would mean different things to each.
         service:
           type: string
           const: phlix-hub
@@ -4173,6 +4197,57 @@ components:
         timestamp:
           type: integer
           description: "Unix seconds."
+        maintenance:
+          $ref: "#/components/schemas/MaintenanceHealth"
+    MaintenanceHealth:
+      type: object
+      description: |-
+        Liveness of the dedicated maintenance worker (S312), read from the record that worker
+        writes for itself at the end of every completed sweep. It is stamped by the SWEEP and
+        not by a timer of its own: in the measured crash-loop each incarnation lived a full 60
+        seconds, so an "I am alive" beat would have stayed fresh across every re-fork.
+      required: [status, reason, stale_after_seconds]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down, disabled]
+          description: |-
+            `ok` — last sweep completed cleanly. `degraded` — sweeps are completing but the work
+            inside them is failing (see `last_error`); the worker is alive, so this is NOT a probe
+            failure. `down` — no sweep completed inside `stale_after_seconds`; THIS is the probe
+            failure. `disabled` — `config/process.php` has `maintenance.enabled = false`.
+          example: ok
+        reason:
+          type: string
+          enum:
+            - sweeping
+            - starting_up
+            - sweep_failing
+            - stale_sweep
+            - no_sweep_completed
+            - no_heartbeat_record
+            - no_heartbeat_configured
+            - maintenance_worker_disabled
+        pid:
+          type: [integer, "null"]
+          description: "Pid of the maintenance worker incarnation that last wrote the record."
+        incarnations:
+          type: [integer, "null"]
+          description: |-
+            How many distinct pids have written the CURRENT lineage of this record. `1` on a
+            healthy hub. A climbing value is the crash-loop `docker inspect`'s `RestartCount`
+            cannot see, because that counter measures container restarts, not worker re-forks.
+        age_seconds:
+          type: [integer, "null"]
+          description: "Seconds since the last completed sweep (or since the lineage armed, if none)."
+        consecutive_failures:
+          type: [integer, "null"]
+        last_error:
+          type: [string, "null"]
+          description: "Class and message of the most recent sweep failure, clipped to 300 characters."
+        stale_after_seconds:
+          type: integer
+          description: "Seconds without a completed sweep before `status` becomes `down`."
     User:
       type: object
       properties:

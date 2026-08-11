@@ -38,6 +38,32 @@ return [
     'pid_file'      => $envStr('HUB_PID_FILE', dirname(__DIR__) . '/var/hub.pid'),
     'status_file'   => $envStr('HUB_STATUS_FILE', dirname(__DIR__) . '/var/hub.status'),
 
+    // S312 — the dedicated maintenance worker's own liveness record.
+    //
+    // The maintenance worker is a SEPARATE FORK from the HTTP workers that
+    // answer /health, so it cannot be observed in-process: this file is how it
+    // tells them it is still completing sweeps. Written by
+    // `Phlix\Hub\Health\MaintenanceHeartbeat` from inside the guarded sweep
+    // callback, read by `Phlix\Hub\Health\HealthController`.
+    //
+    // It lives in var/ for the same reason pid_file/status_file do: under the
+    // hardened systemd unit the install root is read-only and only .logs/, var/
+    // and config/ are ReadWritePaths. In the container image var/ is created and
+    // chowned to `nobody` by the Dockerfile.
+    //
+    // ⚠ Do NOT move this onto a tmpfs that is not shared between the forks — the
+    // whole point is that a DIFFERENT process reads what the maintenance worker
+    // wrote.
+    'maintenance_heartbeat_file' => $envStr(
+        'HUB_MAINTENANCE_HEARTBEAT_FILE',
+        dirname(__DIR__) . '/var/maintenance-heartbeat.json',
+    ),
+
+    // Seconds without a COMPLETED maintenance sweep before /health calls the
+    // maintenance worker down (and the container stops reporting `healthy`).
+    // Default 180 = 3 x config/process.php's `maintenance.poll_seconds`.
+    'maintenance_stale_seconds' => $envInt('HUB_MAINTENANCE_STALE_SECONDS', 180),
+
     // Public domain used to build relay URLs for subdomain-allocated servers.
     // Each enrolled server gets `<subdomain>.<public_domain>` (see migration
     // 008 and `Phlix\Hub\Hub\DnsAliasManager`).

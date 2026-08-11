@@ -156,13 +156,42 @@ final class IdleReaper
      * own DB connection because none of its work depends on the live tunnel
      * registry.
      *
+     * ## S312 — the callback is GUARDED, and that is load-bearing
+     *
+     * The timer callback used to be `[$this, 'reapDbMaintenance']`, i.e. the
+     * sweep itself. Every statement in that sweep goes through
+     * {@see \Phlix\Hub\Common\Database\PooledMySQLConnection}, which connects
+     * lazily, so with no reachable database the FIRST tick threw
+     * `PDOException: SQLSTATE[HY000] [2002] Connection refused` straight into
+     * the event loop. Workerman routes an exception escaping a callback to the
+     * event-loop error handler it installs in `Worker::run()`, which is
+     * `Worker::stopAll(250, $exception)` — so the whole maintenance worker died
+     * and was re-forked, once per interval, for ever. Measured on master under
+     * `docker run --network none`: the worker's `etime` was 0:39 against the
+     * container master's 4:41, while `docker inspect` said `healthy` and
+     * `RestartCount=0`.
+     *
+     * So the callback below catches, reports and returns. The sweep is
+     * idempotent and periodic: a failed sweep costs nothing and the next tick
+     * `$intervalSeconds` later retries, which is a backoff the process cannot
+     * give itself (Workerman's master re-forks immediately, with none).
+     *
+     * @param (\Closure(?\Throwable): void)|null $onSweep Called after every completed sweep with the
+     *                                                    failure, or null on success. This is how the
+     *                                                    maintenance worker's liveness record advances —
+     *                                                    see {@see \Phlix\Hub\Health\MaintenanceHeartbeat}
+     *                                                    for why it must be stamped HERE and not on a
+     *                                                    timer of its own.
+     *
      * @return int Timer ID (can be passed to Timer::del() to cancel).
      */
-    public function startDbMaintenance(): int
+    public function startDbMaintenance(?\Closure $onSweep = null): int
     {
         $timerId = Timer::add(
             $this->intervalSeconds,
-            [$this, 'reapDbMaintenance'],
+            function () use ($onSweep): void {
+                $this->runDbMaintenanceGuarded($onSweep);
+            },
         );
 
         $this->logger->debug('Relay: idle reaper DB-maintenance started', [
@@ -170,6 +199,36 @@ final class IdleReaper
         ]);
 
         return $timerId;
+    }
+
+    /**
+     * Run one DB-maintenance sweep so that NOTHING escapes to the event loop.
+     *
+     * Public so a test can invoke exactly what the timer holds without going
+     * through Workerman. See {@see startDbMaintenance()} for why the guard is
+     * not optional.
+     *
+     * @param (\Closure(?\Throwable): void)|null $onSweep Sweep-outcome reporter, or null.
+     *
+     * @return void
+     */
+    public function runDbMaintenanceGuarded(?\Closure $onSweep = null): void
+    {
+        $failure = null;
+
+        try {
+            $this->reapDbMaintenance();
+        } catch (\Throwable $e) {
+            $failure = $e;
+            $this->logger->error('Relay: idle reaper DB-maintenance sweep failed', [
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+
+        if ($onSweep !== null) {
+            $onSweep($failure);
+        }
     }
 
     /**
