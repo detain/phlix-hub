@@ -1635,19 +1635,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                 Timer::add(
                     60,
                     static function () use ($federationSessionMgr, $onSweep, $logger): void {
-                        $failure = null;
-                        try {
-                            $federationSessionMgr->reapDeadSessions(60);
-                        } catch (\Throwable $e) {
-                            $failure = $e;
-                            $logger->error('Maintenance: federation-session reaper sweep failed', [
-                                'error' => $e->getMessage(),
-                                'exception' => $e::class,
-                            ]);
-                        }
-                        if ($onSweep !== null) {
-                            $onSweep($failure);
-                        }
+                        self::runGuardedSweep(
+                            'federation-session reaper',
+                            static function () use ($federationSessionMgr): void {
+                                $federationSessionMgr->reapDeadSessions(60);
+                            },
+                            $onSweep,
+                            $logger,
+                        );
                     },
                 );
             }
@@ -1687,6 +1682,53 @@ final class HubServicesProvider implements ServiceProviderInterface
                 'Maintenance: failed to start core update check timer',
                 ['error' => $e->getMessage()],
             );
+        }
+    }
+
+    /**
+     * Run one maintenance sweep so that NOTHING escapes to the event loop, and
+     * report its outcome to the worker's liveness record.
+     *
+     * ## Why this is a named method and not three lines inside the closure
+     *
+     * ⚠ S312. A `try`/`catch` written inline in a `Timer::add()` closure is
+     * reachable only by arming a real Workerman timer, which a unit test cannot
+     * do, so the guard on the federation sweep — one of the three measured
+     * throwers — would be pinned by nothing but the container run. Named here,
+     * it is callable directly, and a mutation that deletes the `catch` is
+     * killed by {@see \Phlix\Hub\Tests\Unit\MaintenanceSweepGuardTest}.
+     *
+     * The two reapers guard themselves (`IdleReaper::runDbMaintenanceGuarded()`,
+     * `ServerReaper::runTickGuarded()`) because each owns its own log channel;
+     * this is for sweeps armed from the provider.
+     *
+     * @param string                             $task    Human-readable sweep name, for the log line.
+     * @param callable():void                    $work    The sweep.
+     * @param (\Closure(?\Throwable): void)|null $onSweep Liveness reporter, or null.
+     * @param StructuredLogger                   $logger  Where a failure is logged.
+     *
+     * @return void
+     */
+    public static function runGuardedSweep(
+        string $task,
+        callable $work,
+        ?\Closure $onSweep,
+        StructuredLogger $logger,
+    ): void {
+        $failure = null;
+
+        try {
+            $work();
+        } catch (\Throwable $e) {
+            $failure = $e;
+            $logger->error('Maintenance: ' . $task . ' sweep failed', [
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+
+        if ($onSweep !== null) {
+            $onSweep($failure);
         }
     }
 }

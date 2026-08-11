@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit;
 
 use PDOException;
+use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Phlix\Hub\Hub\RelaySessionManager;
@@ -204,6 +205,102 @@ final class MaintenanceSweepGuardTest extends TestCase
 
         $reaper = new ServerReaper($db, $logger, 60, 180, 7);
         $reaper->runTickGuarded(null);
+    }
+
+    // -----------------------------------------------------------------------
+    // The federation sweep — the third measured thrower.
+    //
+    // Its guard lives in HubServicesProvider::runGuardedSweep() rather than
+    // inline in the Timer closure precisely so it can be reached from here: an
+    // inline try/catch in a `Timer::add()` callback is testable only by arming a
+    // real Workerman timer, which would have left this thrower pinned by the
+    // container run alone.
+    // -----------------------------------------------------------------------
+
+    public function testGuardedSweepSwallowsTheThrowAndReportsIt(): void
+    {
+        $thrown = $this->connectionRefused();
+
+        $seen = 'not-called';
+        HubServicesProvider::runGuardedSweep(
+            'federation-session reaper',
+            static function () use ($thrown): void {
+                throw $thrown;
+            },
+            static function (?Throwable $e) use (&$seen): void {
+                $seen = $e;
+            },
+            $this->createMock(StructuredLogger::class),
+        );
+
+        self::assertSame($thrown, $seen);
+    }
+
+    public function testGuardedSweepReportsNullWhenTheWorkSucceeds(): void
+    {
+        $ran = false;
+        $seen = 'not-called';
+        HubServicesProvider::runGuardedSweep(
+            'federation-session reaper',
+            static function () use (&$ran): void {
+                $ran = true;
+            },
+            static function (?Throwable $e) use (&$seen): void {
+                $seen = $e;
+            },
+            $this->createMock(StructuredLogger::class),
+        );
+
+        self::assertTrue($ran, 'the guard must still RUN the work');
+        self::assertNull($seen);
+    }
+
+    public function testGuardedSweepLogsTheFailureWithTheTaskName(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(
+                self::identicalTo('Maintenance: federation-session reaper sweep failed'),
+                self::anything(),
+            );
+
+        HubServicesProvider::runGuardedSweep(
+            'federation-session reaper',
+            fn () => throw $this->connectionRefused(),
+            null,
+            $logger,
+        );
+    }
+
+    public function testGuardedSweepToleratesNoReporter(): void
+    {
+        HubServicesProvider::runGuardedSweep(
+            'federation-session reaper',
+            fn () => throw $this->connectionRefused(),
+            null,
+            $this->createMock(StructuredLogger::class),
+        );
+
+        self::assertTrue(true, 'reached without a rethrow');
+    }
+
+    /**
+     * The federation timer's closure must go THROUGH the guard. Asserting the
+     * guard works says nothing about whether the arming site uses it — that is
+     * the same omission shape as an unregistered DI parameter.
+     */
+    public function testTheFederationTimerIsArmedThroughTheGuard(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2) . '/src/Common/Container/Providers/HubServicesProvider.php',
+        );
+
+        self::assertStringContainsString('self::runGuardedSweep(', $source);
+        self::assertMatchesRegularExpression(
+            '/runGuardedSweep\(\s*\'federation-session reaper\'/',
+            $source,
+        );
     }
 
     // -----------------------------------------------------------------------
