@@ -11,8 +11,6 @@ use Phlix\Hub\Federation\FederationLibraryShareDto;
  * Unit tests for {@see FederationLibraryShareDto}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
- *
- * @covers \Phlix\Hub\Federation\FederationLibraryShareDto
  */
 final class FederationLibraryShareDtoTest extends TestCase
 {

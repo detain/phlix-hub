@@ -14,8 +14,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see EnrollmentJwtMiddleware}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Middleware
- *
- * @covers \Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware
  */
 final class EnrollmentJwtMiddlewareTest extends TestCase
 {

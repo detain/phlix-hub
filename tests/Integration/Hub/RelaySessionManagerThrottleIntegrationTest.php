@@ -32,8 +32,6 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  *
  * @package Phlix\Hub\Tests\Integration\Hub
  *
- * @covers \Phlix\Hub\Hub\RelaySessionManager
- *
  * @group integration
  */
 final class RelaySessionManagerThrottleIntegrationTest extends RealDatabaseTestCase

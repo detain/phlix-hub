@@ -13,7 +13,6 @@ use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 
@@ -29,7 +28,6 @@ use ReflectionProperty;
  * the drop the bridge records is actually persisted (mirrors
  * {@see RelayProxyManagerWiringTest}).
  */
-#[CoversClass(HubServicesProvider::class)]
 final class RelayProxyBridgeWiringTest extends TestCase
 {
     // LoggerFactory's static $configPath/$loggers are process-global; the trait

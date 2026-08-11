@@ -121,10 +121,6 @@ use function strlen;
  * {@see ITERATIONS} times and EVERY run must land in the band; the spread across
  * runs is reported (set `PHLIX_THROTTLE_REPORT=1` to print it to STDERR) rather
  * than averaged away.
- *
- * @covers \Phlix\Hub\Relay\Tunnel
- * @covers \Phlix\Hub\Relay\TokenBucket
- * @covers \Phlix\Hub\Relay\ClientConnection
  */
 final class TunnelThrottleTimerLoopTest extends TestCase
 {

@@ -14,9 +14,6 @@ use function implode;
 use function str_contains;
 use function str_repeat;
 
-/**
- * @covers \Phlix\Hub\Http\ConnectionResponseSink
- */
 final class ConnectionResponseSinkTest extends TestCase
 {
     /**

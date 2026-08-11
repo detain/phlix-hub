@@ -52,8 +52,6 @@ use function strlen;
  *      (not via the hub's own encoder) and fed through onMessage → Tunnel.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
- *
- * @covers \Phlix\Hub\Relay\RelayWorker
  */
 final class RelayWorkerTest extends TestCase
 {

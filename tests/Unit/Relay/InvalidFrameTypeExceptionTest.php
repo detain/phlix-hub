@@ -11,8 +11,6 @@ use Phlix\Hub\Relay\InvalidFrameTypeException;
  * Unit tests for {@see InvalidFrameTypeException}.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
- *
- * @covers \Phlix\Hub\Relay\InvalidFrameTypeException
  */
 final class InvalidFrameTypeExceptionTest extends TestCase
 {

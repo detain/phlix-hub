@@ -19,8 +19,6 @@ use Phlix\Hub\Http\Request;
  * Unit tests for {@see FederationController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\FederationController
  */
 final class FederationControllerTest extends TestCase
 {

@@ -11,8 +11,6 @@ use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
  * Unit tests for {@see RateLimitProfiles}.
  *
  * @package Phlix\Hub\Tests\Unit\Common\RateLimit
- *
- * @covers \Phlix\Hub\Common\RateLimit\RateLimitProfiles
  */
 final class RateLimitProfilesTest extends TestCase
 {

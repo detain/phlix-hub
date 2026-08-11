@@ -37,11 +37,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  * calls on the live dispatch path — so the casing transform actually runs.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Request
- * @covers \Phlix\Hub\Http\Controllers\RelayController
- * @covers \Phlix\Hub\Http\Controllers\SubdomainController
- * @covers \Phlix\Hub\Http\Controllers\ClientMountController
  */
 final class WorkermanHeaderBoundaryTest extends TestCase
 {

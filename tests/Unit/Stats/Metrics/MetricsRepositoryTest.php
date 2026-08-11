@@ -13,8 +13,6 @@ use Workerman\MySQL\Connection;
  *
  * The Workerman MySQL {@see Connection} is mocked and returns canned rows keyed
  * off SQL fragments (the repo issues several distinct SELECTs).
- *
- * @covers \Phlix\Hub\Stats\Metrics\MetricsRepository
  */
 final class MetricsRepositoryTest extends TestCase
 {

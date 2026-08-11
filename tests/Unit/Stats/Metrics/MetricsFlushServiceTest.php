@@ -16,8 +16,6 @@ use Workerman\MySQL\Connection;
  *
  * The Workerman MySQL {@see Connection} is mocked and every `query()` call is
  * captured (SQL + bindings) so we can assert the UPSERT / DELETE SQL fragments.
- *
- * @covers \Phlix\Hub\Stats\Metrics\MetricsFlushService
  */
 final class MetricsFlushServiceTest extends TestCase
 {

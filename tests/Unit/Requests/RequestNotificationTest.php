@@ -12,8 +12,6 @@ use Phlix\Hub\Requests\RequestNotification;
  * Unit tests for {@see RequestNotification}.
  *
  * @package Phlix\Hub\Tests\Unit\Requests
- *
- * @covers \Phlix\Hub\Requests\RequestNotification
  */
 final class RequestNotificationTest extends TestCase
 {

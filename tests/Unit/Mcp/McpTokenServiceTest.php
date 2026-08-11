@@ -18,9 +18,6 @@ use function time;
  * Unit tests for {@see McpTokenService}.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @covers \Phlix\Hub\Mcp\McpTokenService
- * @covers \Phlix\Hub\Mcp\McpToken
  */
 final class McpTokenServiceTest extends TestCase
 {

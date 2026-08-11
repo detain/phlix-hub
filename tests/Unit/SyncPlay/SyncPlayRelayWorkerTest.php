@@ -47,8 +47,6 @@ use function json_encode;
  * from raw request text, so the carrier under test is the carrier in production.
  *
  * @package Phlix\Hub\Tests\Unit\SyncPlay
- *
- * @covers \Phlix\Hub\SyncPlay\SyncPlayRelayWorker
  */
 final class SyncPlayRelayWorkerTest extends TestCase
 {

@@ -25,9 +25,6 @@ use PHPUnit\Framework\TestCase;
  * and LogController against a temp log directory.
  *
  * @package Phlix\Hub\Tests\Unit\Http
- *
- * @covers \Phlix\Hub\Http\Controllers\LogController
- * @covers \Phlix\Hub\Http\Middleware\AdminMiddleware
  */
 final class AdminLogRoutesTest extends TestCase
 {

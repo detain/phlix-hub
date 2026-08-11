@@ -27,10 +27,6 @@ use Phlix\Shared\Auth\JwtClaims;
  *
  * @package Phlix\Hub\Tests\Integration\Auth
  *
- * @covers \Phlix\Hub\Auth\AuthManager
- * @covers \Phlix\Hub\Auth\UserRepository
- * @covers \Phlix\Hub\Auth\JwtHandler
- *
  * @group integration
  */
 final class SignupLoginFlowTest extends RealDatabaseTestCase

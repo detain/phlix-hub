@@ -32,9 +32,6 @@ use PHPUnit\Framework\TestCase;
  * | `writes_large_output.php` | a drain implementation that deadlocks on a full pipe |
  *
  * @package Phlix\Hub\Tests\Unit\Support
- *
- * @covers \Phlix\Hub\Tests\Support\SwooleFixtureProcess
- * @covers \Phlix\Hub\Tests\Support\SwooleShutdownIsolation
  */
 final class SwooleFixtureProcessTest extends TestCase
 {

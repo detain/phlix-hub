@@ -72,11 +72,6 @@ use const PHP_URL_QUERY;
  *
  * @package Phlix\Hub\Tests\Integration\OAuth
  *
- * @covers \Phlix\Hub\Console\Commands\OAuthClientRegisterCommand
- * @covers \Phlix\Hub\Console\Commands\OAuthClientDisableCommand
- * @covers \Phlix\Hub\Console\Commands\OAuthClientListCommand
- * @covers \Phlix\Hub\OAuth\OAuthClientRegistry
- *
  * @group integration
  */
 final class OAuthAdminSurfaceTest extends RealDatabaseTestCase

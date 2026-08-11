@@ -13,8 +13,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see AuditLogRepository}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\AuditLogRepository
  */
 final class AuditLogRepositoryTest extends TestCase
 {

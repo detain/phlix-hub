@@ -12,8 +12,6 @@ use PHPUnit\Framework\TestCase;
  * rate-limit keys (mirrors the server's SV-4.15 HIGH fix).
  *
  * @package Phlix\Hub\Tests\Unit\Common\Http
- *
- * @covers \Phlix\Hub\Common\Http\TrustedProxyResolver
  */
 final class TrustedProxyResolverTest extends TestCase
 {

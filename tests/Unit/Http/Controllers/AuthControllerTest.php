@@ -26,8 +26,6 @@ use PHPUnit\Framework\TestCase;
  * under `/api/v1/auth/*`.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\AuthController
  */
 final class AuthControllerTest extends TestCase
 {

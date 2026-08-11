@@ -44,9 +44,6 @@ use function strtolower;
  * disappear at exactly the moment a model concludes "that worked".
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @covers \Phlix\Hub\Mcp\Tools\PlaybackControlTool
- * @covers \Phlix\Hub\Mcp\McpArguments
  */
 final class PlaybackControlToolTest extends TestCase
 {

@@ -12,8 +12,6 @@ use Workerman\Connection\TcpConnection;
  * Unit tests for {@see SyncPlayClient}.
  *
  * @package Phlix\Hub\Tests\Unit\SyncPlay
- *
- * @covers \Phlix\Hub\SyncPlay\SyncPlayClient
  */
 final class SyncPlayClientTest extends TestCase
 {

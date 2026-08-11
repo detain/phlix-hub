@@ -16,8 +16,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see LibrarySharingHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\LibrarySharingHandler
  */
 final class LibrarySharingHandlerTest extends TestCase
 {

@@ -15,8 +15,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see MeController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\MeController
  */
 final class MeControllerTest extends TestCase
 {

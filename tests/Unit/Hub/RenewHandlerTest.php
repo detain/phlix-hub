@@ -15,8 +15,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see RenewHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\RenewHandler
  */
 final class RenewHandlerTest extends TestCase
 {

@@ -16,8 +16,6 @@ use Psr\Container\ContainerInterface;
  * Unit tests for {@see MaintenanceWorker}.
  *
  * @package Phlix\Hub\Tests\Unit
- *
- * @covers \Phlix\Hub\MaintenanceWorker
  */
 final class MaintenanceWorkerTest extends TestCase
 {

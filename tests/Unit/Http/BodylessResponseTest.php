@@ -40,9 +40,6 @@ use function substr_count;
  * ⚠ Never write that annotation's name in prose, even in backticks — PHPUnit
  * reads it wherever it appears, the surrounding punctuation lands in the value,
  * and an invalid entry discards this file's coverage completely.
- *
- * @covers \Phlix\Hub\Http\BodylessResponse
- * @covers \Phlix\Hub\Http\Response
  */
 final class BodylessResponseTest extends TestCase
 {

@@ -49,11 +49,6 @@ use const JSON_THROW_ON_ERROR;
  * comparison would catch that anyway" — it would not.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @coversNothing This asserts a cross-repo CONTRACT, not the behaviour of any
- *                one class; {@see McpScopesTest} owns McpScopes' behaviour
- *                coverage. Claiming @covers here would silently DISCARD that
- *                file's attribution for no gain.
  */
 final class McpScopesContractTest extends TestCase
 {

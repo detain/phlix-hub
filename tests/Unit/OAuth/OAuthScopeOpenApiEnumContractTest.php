@@ -59,11 +59,6 @@ use function trim;
  * `yaml_parse()` here would pass on a dev box and fatal in CI.
  *
  * @package Phlix\Hub\Tests\Unit\OAuth
- *
- * @coversNothing This asserts a CONTRACT between a spec file and a set of
- *                constants, not the behaviour of a class. {@see OAuthScopesTest}
- *                owns OAuthScopes' coverage; claiming @covers here would
- *                silently DISCARD that attribution for no gain.
  */
 final class OAuthScopeOpenApiEnumContractTest extends TestCase
 {

@@ -16,8 +16,6 @@ use PHPUnit\Framework\TestCase;
  * i.e. the surfaces that rely on the central catch return 429, NOT 500.
  *
  * @package Phlix\Hub\Tests\Unit
- *
- * @covers \Phlix\Hub\Application
  */
 final class ApplicationRateLimitResponseTest extends TestCase
 {

@@ -12,8 +12,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see AuditLogger}.
  *
  * @package Phlix\Hub\Tests\Unit\Common\Logger
- *
- * @covers \Phlix\Hub\Common\Logger\AuditLogger
  */
 final class AuditLoggerTest extends TestCase
 {

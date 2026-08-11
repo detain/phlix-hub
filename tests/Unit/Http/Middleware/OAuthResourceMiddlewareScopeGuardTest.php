@@ -42,8 +42,6 @@ use ReflectionClass;
  * `Error` on the uninitialised connection rather than passing quietly.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Middleware
- *
- * @covers \Phlix\Hub\Http\Middleware\OAuthResourceMiddleware
  */
 final class OAuthResourceMiddlewareScopeGuardTest extends TestCase
 {

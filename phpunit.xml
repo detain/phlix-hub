@@ -1,5 +1,66 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd" bootstrap="tests/bootstrap.php" colors="true" cacheDirectory=".phpunit.cache" executionOrder="random" failOnRisky="true" failOnWarning="true" beStrictAboutOutputDuringTests="true" displayDetailsOnTestsThatTriggerDeprecations="true" displayDetailsOnTestsThatTriggerWarnings="true" displayDetailsOnTestsThatTriggerErrors="true">
+  <!--
+    S311 — HOW TO READ THIS REPO'S COVERAGE NUMBERS.
+
+    A 0.00% file is a file the suite NEVER EXECUTES. That sentence was NOT true
+    of this repository until S311, and the difference has already cost real work
+    twice and produced one wrongly-filed step.
+
+    ## The mechanism
+
+    PHPUnit narrows a test's RECORDED coverage to whatever its coverage metadata
+    names and throws the rest away without a word. In php-code-coverage's
+    `CodeCoverage::applyCoversAndUsesFilter()`: `false` (from a covers-nothing
+    marker) CLEARS the whole run's data for that test; a non-empty list keeps
+    only the named units' listed lines and DELETES every other file; and `[]`
+    (no metadata at all) keeps everything. None of the three warns.
+
+    ## Measured on this tree
+
+    PHP 8.3.6 + PCOV 1.0.11, real MySQL 8.0.46, a fixed execution order
+    (order-by=default) on both passes, the same tree twice with only the 233
+    metadata lines removed on the second. Both runs: 4160 tests, 29290
+    assertions, 0 skipped, green.
+
+      Clover metric     with metadata        without
+      .................................................
+      statements        79.42% 12284/15468   81.25% 12567/15468
+      classes           34.97% 64/183        38.80% 71/183
+      methods           64.96% 927/1427      67.55% 964/1427
+      files at 0.00%    14                   10
+      files that LOST   n/a                  0
+
+    30 files gained attribution and NOT ONE LINE was newly executed — the whole
+    delta is attribution. Four files went from "0.00%, apparently untested" to
+    executed: src/Common/Database/ConnectionPool.php (0 -> 21/38),
+    src/OAuth/OAuthGrant.php (0 -> 2/2), src/OAuth/AuthorizationCode.php and
+    src/OAuth/PendingAuthorization.php (0 -> 1/1 each). The biggest single mover
+    was src/Common/Container/Providers/HubServicesProvider.php, +70 statements.
+
+    ## The policy
+
+    No coverage metadata in tests/, in any spelling — docblock tag or attribute,
+    covers or uses, including the covers-nothing marker. There is no allow-list.
+
+    ⚠ Do NOT write the tag names out in prose in a docblock either. Measured
+    here: a mention with WHITESPACE after the tag ("... claiming @<tag> here
+    would ...") is parsed as a real entry with an invalid target, which discards
+    that test's ENTIRE contribution and reports only a PHPUnit *runner* warning
+    — which `failOnWarning="true"` above does NOT fail on. A mention closed
+    immediately by a backtick is inert, but the difference is one character, so
+    the rule is simply: describe the tag, never spell it.
+
+    ⚠ requireCoverageMetadata / beStrictAboutCoverageMetadata are deliberately
+    ABSENT from the root element, and no invocation passes the strict-coverage
+    CLI flag that is their command-line equivalent.
+    Setting either would turn "this test names no unit" into a risky-test
+    failure and become direct pressure to re-add what S311 removed.
+
+    tests/Unit/Support/CoverageMetadataPolicyTest.php is what stops this
+    statement from quietly becoming false again. Do not delete this comment; if
+    the policy changes, rewrite it and update that test in the same commit.
+  -->
   <testsuites>
     <testsuite name="Unit">
       <directory suffix="Test.php">tests</directory>

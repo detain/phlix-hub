@@ -13,7 +13,6 @@ use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -29,8 +28,6 @@ use Workerman\Timer;
  *
  * @package Phlix\Hub\Tests\Unit\Hub\Updates
  */
-#[CoversClass(CoreUpdateCheckService::class)]
-#[CoversClass(CoreUpdateStatus::class)]
 final class CoreUpdateCheckServiceTest extends TestCase
 {
     // LoggerFactory's static $configPath/$loggers are process-global; the trait

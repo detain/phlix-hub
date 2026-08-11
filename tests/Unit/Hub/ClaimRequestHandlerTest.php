@@ -17,8 +17,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see ClaimRequestHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\ClaimRequestHandler
  */
 final class ClaimRequestHandlerTest extends TestCase
 {

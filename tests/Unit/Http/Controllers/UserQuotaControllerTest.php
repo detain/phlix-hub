@@ -16,8 +16,6 @@ use Phlix\Hub\Http\Request;
  * Unit tests for {@see UserQuotaController} (HB-3.4 G5).
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\UserQuotaController
  */
 final class UserQuotaControllerTest extends TestCase
 {

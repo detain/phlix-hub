@@ -18,8 +18,6 @@ use function time;
  * Unit tests for {@see ClientRelayTokenService}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\ClientRelayTokenService
  */
 final class ClientRelayTokenServiceTest extends TestCase
 {

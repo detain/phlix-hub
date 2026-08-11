@@ -53,8 +53,6 @@ use function hash;
  * the target server via {@see ServerInfoHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
- *
- * @covers \Phlix\Hub\Relay\ClientRelayWorker
  */
 final class ClientRelayWorkerTest extends TestCase
 {

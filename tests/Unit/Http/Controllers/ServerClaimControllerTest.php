@@ -13,8 +13,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see ServerClaimController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\ServerClaimController
  */
 final class ServerClaimControllerTest extends TestCase
 {

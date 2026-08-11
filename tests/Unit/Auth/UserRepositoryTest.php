@@ -12,8 +12,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see UserRepository}.
  *
  * @package Phlix\Hub\Tests\Unit\Auth
- *
- * @covers \Phlix\Hub\Auth\UserRepository
  */
 final class UserRepositoryTest extends TestCase
 {

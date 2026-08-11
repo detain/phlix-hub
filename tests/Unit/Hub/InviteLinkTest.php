@@ -11,8 +11,6 @@ use Phlix\Hub\Hub\InviteLink;
  * Unit tests for {@see InviteLink}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\InviteLink
  */
 final class InviteLinkTest extends TestCase
 {

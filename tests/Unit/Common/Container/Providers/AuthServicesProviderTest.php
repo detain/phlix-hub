@@ -13,8 +13,6 @@ use ReflectionMethod;
  * Unit tests for {@see AuthServicesProvider} config helpers.
  *
  * @package Phlix\Hub\Tests\Unit\Common\Container\Providers
- *
- * @covers \Phlix\Hub\Common\Container\Providers\AuthServicesProvider
  */
 final class AuthServicesProviderTest extends TestCase
 {

@@ -97,9 +97,6 @@ use const PHP_URL_QUERY;
  *
  * @package Phlix\Hub\Tests\Integration\OAuth
  *
- * @covers \Phlix\Hub\Http\Middleware\OAuthResourceMiddleware
- * @covers \Phlix\Hub\Http\Controllers\OAuthUserInfoController
- *
  * @group integration
  */
 final class OAuthResourceServerTest extends RealDatabaseTestCase

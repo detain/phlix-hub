@@ -11,8 +11,6 @@ use Phlix\Hub\Hub\Dns\StaticZoneManager;
  * Unit tests for {@see StaticZoneManager}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub\Dns
- *
- * @covers \Phlix\Hub\Hub\Dns\StaticZoneManager
  */
 final class StaticZoneManagerTest extends TestCase
 {

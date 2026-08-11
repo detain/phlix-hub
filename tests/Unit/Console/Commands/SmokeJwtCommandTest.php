@@ -17,8 +17,6 @@ use Symfony\Component\Console\Tester\CommandTester;
  * with a throwaway test secret, so no mocking is required.
  *
  * @package Phlix\Hub\Tests\Unit\Console\Commands
- *
- * @covers \Phlix\Hub\Console\Commands\SmokeJwtCommand
  */
 final class SmokeJwtCommandTest extends TestCase
 {

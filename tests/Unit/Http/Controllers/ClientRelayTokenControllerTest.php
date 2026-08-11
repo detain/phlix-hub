@@ -15,9 +15,6 @@ use Workerman\MySQL\Connection;
 
 use function json_decode;
 
-/**
- * @covers \Phlix\Hub\Http\Controllers\ClientRelayTokenController
- */
 final class ClientRelayTokenControllerTest extends TestCase
 {
     private function dto(string $userId): ServerInfoDto

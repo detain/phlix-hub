@@ -21,8 +21,6 @@ use function strtr;
  * false for everything", which is the shape a broken implementation passes.
  *
  * @package Phlix\Hub\Tests\Unit\OAuth
- *
- * @covers \Phlix\Hub\OAuth\Pkce
  */
 final class PkceTest extends TestCase
 {

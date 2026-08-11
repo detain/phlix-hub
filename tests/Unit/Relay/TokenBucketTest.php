@@ -15,8 +15,6 @@ use PHPUnit\Framework\TestCase;
  * is deterministic without a running event loop.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
- *
- * @covers \Phlix\Hub\Relay\TokenBucket
  */
 final class TokenBucketTest extends TestCase
 {

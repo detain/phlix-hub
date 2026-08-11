@@ -47,7 +47,9 @@ use Workerman\MySQL\Connection;
  * throughout. These assert the FAILING path: the sweep throws, the guard eats
  * it, and the outcome reaches the liveness record.
  *
- * No `@covers`: it discards other files' coverage in this repository.
+ * No coverage metadata: it discards other files' coverage in this repository
+ * (S311). Do not write the tag name here either — spelled out in a docblock it
+ * is parsed as a real, invalid entry and throws this file's attribution away.
  *
  * @package Phlix\Hub\Tests\Unit
  */

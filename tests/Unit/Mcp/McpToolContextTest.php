@@ -43,8 +43,6 @@ use function sprintf;
  * on everything" would look identical to a working guard.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @covers \Phlix\Hub\Mcp\McpToolContext
  */
 final class McpToolContextTest extends TestCase
 {

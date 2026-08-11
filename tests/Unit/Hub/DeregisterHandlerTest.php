@@ -15,8 +15,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see DeregisterHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\DeregisterHandler
  */
 final class DeregisterHandlerTest extends TestCase
 {

@@ -46,10 +46,6 @@ use ReflectionMethod;
  * outcomes come from production auth code rather than a test stand-in.
  *
  * @package Phlix\Hub\Tests\Unit\Http
- *
- * @covers \Phlix\Hub\Application
- * @covers \Phlix\Hub\Http\Controllers\UserQuotaController
- * @covers \Phlix\Hub\Http\Middleware\AdminMiddleware
  */
 final class UserThrottleRouteRegistrationTest extends TestCase
 {

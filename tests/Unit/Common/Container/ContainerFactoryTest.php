@@ -18,8 +18,6 @@ use Phlix\Hub\Common\Container\ServiceProviderInterface;
  * Unit tests for {@see ContainerFactory}.
  *
  * @package Phlix\Hub\Tests\Unit\Common\Container
- *
- * @covers \Phlix\Hub\Common\Container\ContainerFactory
  */
 final class ContainerFactoryTest extends TestCase
 {

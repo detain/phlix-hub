@@ -14,8 +14,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see AdminMiddleware}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Middleware
- *
- * @covers \Phlix\Hub\Http\Middleware\AdminMiddleware
  */
 final class AdminMiddlewareTest extends TestCase
 {

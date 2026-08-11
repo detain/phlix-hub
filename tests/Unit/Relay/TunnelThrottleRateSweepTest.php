@@ -90,10 +90,6 @@ use function strlen;
  * saturated rather than mid-drain-tail. The burst that a freshly mounted stream
  * legitimately gets is measured separately, in
  * {@see testAFullBucketReleasesExactlyOneBurstWindowThenPacesToTheCap()}.
- *
- * @covers \Phlix\Hub\Relay\Tunnel
- * @covers \Phlix\Hub\Relay\TokenBucket
- * @covers \Phlix\Hub\Relay\ClientConnection
  */
 final class TunnelThrottleRateSweepTest extends TestCase
 {

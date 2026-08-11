@@ -35,11 +35,6 @@ use function time;
  * an extra column, a debug field, a value logged alongside its hash.
  *
  * @package Phlix\Hub\Tests\Unit\OAuth
- *
- * @covers \Phlix\Hub\OAuth\AuthorizationCodeService
- * @covers \Phlix\Hub\OAuth\ConsentTicketService
- * @covers \Phlix\Hub\OAuth\OAuthClientRegistry
- * @covers \Phlix\Hub\OAuth\OAuthTokenService
  */
 final class TokenStorageHashingTest extends TestCase
 {

@@ -21,9 +21,12 @@ use RuntimeException;
  * startup grace — each have a test whose control is the same scenario one step
  * away from failing.
  *
- * No `@covers` annotation on purpose: in this repository that annotation
+ * No coverage metadata on purpose (S311): in this repository that annotation
  * DISCARDS every other file's coverage from the test's contribution, and one
  * step has already been mis-filed off a `0.00%` that meant "not attributed".
+ * The tag is described rather than written because writing it — even inside
+ * backticks, even in a sentence saying not to use it — is itself parsed as an
+ * invalid entry that discards this file's attribution.
  *
  * @package Phlix\Hub\Tests\Health
  */

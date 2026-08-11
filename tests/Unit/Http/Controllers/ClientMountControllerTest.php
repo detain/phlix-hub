@@ -30,8 +30,6 @@ use Psr\Container\ContainerInterface;
  * do not add coverage of a header READ here.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\ClientMountController
  */
 final class ClientMountControllerTest extends TestCase
 {

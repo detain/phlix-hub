@@ -25,7 +25,6 @@ use Phlix\Hub\Mcp\McpTokenService;
 use Phlix\Hub\Mcp\McpToolRegistry;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionProperty;
@@ -72,7 +71,6 @@ use function uniqid;
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
  */
-#[CoversClass(HubServicesProvider::class)]
 final class McpContainerWiringTest extends TestCase
 {
     // LoggerFactory's static $configPath/$loggers are process-global; the trait

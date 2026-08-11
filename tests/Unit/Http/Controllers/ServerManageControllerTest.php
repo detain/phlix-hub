@@ -15,8 +15,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see ServerManageController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\ServerManageController
  */
 final class ServerManageControllerTest extends TestCase
 {

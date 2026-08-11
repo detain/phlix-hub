@@ -37,8 +37,6 @@ use function substr_count;
  * asserted directly.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @covers \Phlix\Hub\Mcp\McpSseStream
  */
 final class McpSseStreamTest extends TestCase
 {

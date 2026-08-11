@@ -25,9 +25,6 @@ use function json_decode;
 
 use const JSON_THROW_ON_ERROR;
 
-/**
- * @covers \Phlix\Hub\Relay\RelayProxyBridge
- */
 final class RelayProxyBridgeTest extends TestCase
 {
     public function testReplyEventIsUniquePerInstance(): void

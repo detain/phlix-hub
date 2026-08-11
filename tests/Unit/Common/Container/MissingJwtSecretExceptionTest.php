@@ -11,8 +11,6 @@ use Phlix\Hub\Common\Container\MissingJwtSecretException;
  * Unit tests for {@see MissingJwtSecretException}.
  *
  * @package Phlix\Hub\Tests\Unit\Common\Container
- *
- * @covers \Phlix\Hub\Common\Container\MissingJwtSecretException
  */
 final class MissingJwtSecretExceptionTest extends TestCase
 {

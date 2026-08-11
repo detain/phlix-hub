@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Common\Support;
 
 use Phlix\Hub\Common\Support\Ids;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -15,7 +14,6 @@ use PHPUnit\Framework\TestCase;
  * version-4 UUIDs, that draws are unique across a large sample, and that
  * the token helper yields the expected hex length.
  */
-#[CoversClass(Ids::class)]
 final class IdsTest extends TestCase
 {
     /**

@@ -11,8 +11,6 @@ use Phlix\Hub\Federation\FederationIncomingOfferDto;
  * Unit tests for {@see FederationIncomingOfferDto}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
- *
- * @covers \Phlix\Hub\Federation\FederationIncomingOfferDto
  */
 final class FederationIncomingOfferDtoTest extends TestCase
 {

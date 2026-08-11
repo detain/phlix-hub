@@ -38,11 +38,6 @@ use function str_contains;
  * host whose database is not up yet.
  *
  * @package Phlix\Hub\Tests\Unit\Console
- *
- * @coversNothing This asserts that a shell script registers a set of commands,
- *                not the behaviour of a class. The commands' own behaviour is
- *                covered by
- *                {@see \Phlix\Hub\Tests\Integration\OAuth\OAuthAdminSurfaceTest}.
  */
 final class CliCommandRegistrationTest extends TestCase
 {

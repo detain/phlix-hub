@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Hub;
 
 use Phlix\Hub\Hub\HubSettingsRepository;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -21,7 +20,6 @@ use Workerman\MySQL\Connection;
  *
  * @package Phlix\Hub\Tests\Unit\Hub
  */
-#[CoversClass(HubSettingsRepository::class)]
 final class HubSettingsAllowListTest extends TestCase
 {
     private function repository(): HubSettingsRepository

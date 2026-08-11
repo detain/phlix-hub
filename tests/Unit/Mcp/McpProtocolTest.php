@@ -22,8 +22,6 @@ use function preg_match;
  * the single copy of the version string really is single.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @covers \Phlix\Hub\Mcp\McpProtocol
  */
 final class McpProtocolTest extends TestCase
 {

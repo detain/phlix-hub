@@ -11,8 +11,6 @@ use Phlix\Hub\Hub\LibraryShare;
  * Unit tests for {@see LibraryShare}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\LibraryShare
  */
 final class LibraryShareTest extends TestCase
 {

@@ -17,8 +17,6 @@ use function hash;
  * centrepiece.
  *
  * @package Phlix\Hub\Tests\Unit\OAuth
- *
- * @covers \Phlix\Hub\OAuth\OAuthClient
  */
 final class OAuthClientTest extends TestCase
 {

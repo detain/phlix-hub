@@ -82,8 +82,6 @@ use const T_DOC_COMMENT;
  * a different auth path.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
- *
- * @coversNothing
  */
 final class RelayWorkerQueryStringCredentialTest extends TestCase
 {

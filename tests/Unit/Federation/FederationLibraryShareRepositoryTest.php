@@ -12,8 +12,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see FederationLibraryShareRepository}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
- *
- * @covers \Phlix\Hub\Federation\FederationLibraryShareRepository
  */
 final class FederationLibraryShareRepositoryTest extends TestCase
 {

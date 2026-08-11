@@ -75,9 +75,6 @@ use function strlen;
 use function strtoupper;
 use function substr;
 
-/**
- * @covers \Phlix\Hub\Http\Controllers\ServerProxyController
- */
 final class ServerProxyControllerTest extends TestCase
 {
     // Workerman's Timer statics and Worker registry are process-global; the trait

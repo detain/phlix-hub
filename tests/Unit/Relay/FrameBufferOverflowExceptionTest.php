@@ -12,8 +12,6 @@ use Phlix\Hub\Relay\InvalidFrameTypeException;
  * Unit tests for {@see FrameBufferOverflowException}.
  *
  * @package Phlix\Hub\Tests\Unit\Relay
- *
- * @covers \Phlix\Hub\Relay\FrameBufferOverflowException
  */
 final class FrameBufferOverflowExceptionTest extends TestCase
 {

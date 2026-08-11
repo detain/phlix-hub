@@ -14,8 +14,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see LoggerFactory}.
  *
  * @package Phlix\Hub\Tests\Unit\Common\Logger
- *
- * @covers \Phlix\Hub\Common\Logger\LoggerFactory
  */
 final class LoggerFactoryTest extends TestCase
 {

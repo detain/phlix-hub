@@ -10,7 +10,6 @@ use Phlix\Hub\Hub\Updates\CoreUpdateCheckService;
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
-use PHPUnit\Framework\Attributes\CoversClass;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
@@ -68,7 +67,6 @@ use Workerman\Timer;
  *
  * @package Phlix\Hub\Tests\Unit\Hub\Updates
  */
-#[CoversClass(CoreUpdateCheckWorker::class)]
 final class CoreUpdateCheckWorkerTest extends TestCase
 {
     // Workerman's Worker/Timer statics and LoggerFactory's $configPath are both
