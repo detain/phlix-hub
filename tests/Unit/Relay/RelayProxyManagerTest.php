@@ -40,9 +40,6 @@ use function substr;
 
 use const JSON_THROW_ON_ERROR;
 
-/**
- * @covers \Phlix\Hub\Relay\RelayProxyManager
- */
 final class RelayProxyManagerTest extends TestCase
 {
     private FrameDecoder $codec;

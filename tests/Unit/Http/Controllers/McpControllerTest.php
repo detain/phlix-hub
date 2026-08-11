@@ -59,11 +59,6 @@ use function str_repeat;
  * doubled, because those are the boundaries this suite is not testing.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\McpController
- * @covers \Phlix\Hub\Mcp\JsonRpc
- * @covers \Phlix\Hub\Mcp\McpProtocol
- * @covers \Phlix\Hub\Mcp\McpRequestValidator
  */
 final class McpControllerTest extends TestCase
 {

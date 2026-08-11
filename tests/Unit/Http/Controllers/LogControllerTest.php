@@ -12,8 +12,6 @@ use PHPUnit\Framework\TestCase;
  * Unit coverage for the hub admin log viewer: listing, tailing, line clamping,
  * the merged tail-all stream, and — most importantly — that the `file`
  * parameter cannot escape the log dir (traversal / absolute path / non-.log).
- *
- * @covers \Phlix\Hub\Http\Controllers\LogController
  */
 final class LogControllerTest extends TestCase
 {

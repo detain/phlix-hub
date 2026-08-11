@@ -30,9 +30,6 @@ use Workerman\MySQL\Connection;
  * allow-listed key.
  *
  * @package Phlix\Hub\Tests\Unit\Http
- *
- * @covers \Phlix\Hub\Http\Controllers\HubSettingsController
- * @covers \Phlix\Hub\Http\Middleware\AdminMiddleware
  */
 final class AdminSettingsRoutesTest extends TestCase
 {

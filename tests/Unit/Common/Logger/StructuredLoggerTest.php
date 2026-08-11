@@ -13,8 +13,6 @@ use ReflectionProperty;
  * Unit tests for {@see StructuredLogger}.
  *
  * @package Phlix\Hub\Tests\Unit\Common\Logger
- *
- * @covers \Phlix\Hub\Common\Logger\StructuredLogger
  */
 final class StructuredLoggerTest extends TestCase
 {

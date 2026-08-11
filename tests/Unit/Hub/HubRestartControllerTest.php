@@ -14,8 +14,6 @@ use PHPUnit\Framework\TestCase;
  * Auth (401/403) is enforced by {@see \Phlix\Hub\Http\Middleware\AdminMiddleware}
  * upstream of this controller and is covered by the middleware's own tests.
  * Here we assert the controller's restart-signal behaviour.
- *
- * @covers \Phlix\Hub\Http\Controllers\HubRestartController
  */
 final class HubRestartControllerTest extends TestCase
 {

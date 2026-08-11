@@ -11,8 +11,6 @@ use Phlix\Hub\Jwt\JwtHeader;
  * Unit tests for {@see JwtHeader}.
  *
  * @package Phlix\Hub\Tests\Unit\Jwt
- *
- * @covers \Phlix\Hub\Jwt\JwtHeader
  */
 final class JwtHeaderTest extends TestCase
 {

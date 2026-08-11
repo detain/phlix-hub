@@ -20,8 +20,6 @@ use Symfony\Component\Console\Tester\CommandTester;
  * factory and asserts the rendered summary and exit code.
  *
  * @package Phlix\Hub\Tests\Unit\Console\Commands
- *
- * @covers \Phlix\Hub\Console\Commands\MigrateCommand
  */
 final class MigrateCommandTest extends TestCase
 {

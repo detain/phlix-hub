@@ -32,8 +32,6 @@ use support\Context;
  * extension required) and additionally cover the ext-swoole-absent
  * graceful-fallback branch in `start.php`.
  *
- * @covers \Phlix\Hub\Http\RequestContext
- * @covers \support\Context
  * @package Phlix\Hub\Tests\Unit\Coroutine
  * @since   0.1.x (Step 0.2c)
  */

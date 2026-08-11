@@ -14,8 +14,6 @@ use function in_array;
  * Unit tests for {@see OAuthScopes}.
  *
  * @package Phlix\Hub\Tests\Unit\OAuth
- *
- * @covers \Phlix\Hub\OAuth\OAuthScopes
  */
 final class OAuthScopesTest extends TestCase
 {

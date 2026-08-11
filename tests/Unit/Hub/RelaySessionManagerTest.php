@@ -13,8 +13,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see RelaySessionManager}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\RelaySessionManager
  */
 final class RelaySessionManagerTest extends TestCase
 {

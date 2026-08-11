@@ -13,8 +13,6 @@ use PHPUnit\Framework\TestCase;
  * header (HB-4.6g).
  *
  * @package Phlix\Hub\Tests\Unit\Auth
- *
- * @covers \Phlix\Hub\Auth\RateLimitException
  */
 final class RateLimitExceptionTest extends TestCase
 {

@@ -25,8 +25,6 @@ use function str_contains;
  * {@see Connection}, so the SQL and the hashing stay under test.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\McpTokenController
  */
 final class McpTokenControllerTest extends TestCase
 {

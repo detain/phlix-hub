@@ -30,10 +30,6 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  *
  * @package Phlix\Hub\Tests\Integration\Hub
  *
- * @covers \Phlix\Hub\Http\Controllers\ServerListController
- * @covers \Phlix\Hub\Http\Controllers\ServerManageController
- * @covers \Phlix\Hub\Hub\ServerInfoHandler
- *
  * @group integration
  */
 final class MyServersFlowTest extends RealDatabaseTestCase

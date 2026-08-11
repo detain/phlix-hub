@@ -11,8 +11,6 @@ use Phlix\Hub\Common\RateLimit\RateLimitState;
  * Unit tests for {@see RateLimitState}.
  *
  * @package Phlix\Hub\Tests\Unit\Common\RateLimit
- *
- * @covers \Phlix\Hub\Common\RateLimit\RateLimitState
  */
 final class RateLimitStateTest extends TestCase
 {

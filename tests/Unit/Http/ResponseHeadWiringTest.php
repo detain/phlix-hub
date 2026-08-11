@@ -55,9 +55,6 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  * `BodylessResponse` unconditionally would keep every HEAD assertion green. The
  * GET expectation below contains Workerman's appended `Content-Length: 0`
  * verbatim, so that mutation reds here and the HEAD mutation reds above it.
- *
- * @covers \Phlix\Hub\Http\Response
- * @covers \Phlix\Hub\Http\BodylessResponse
  */
 final class ResponseHeadWiringTest extends TestCase
 {

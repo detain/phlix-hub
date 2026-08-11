@@ -11,8 +11,6 @@ use Phlix\Hub\Federation\FederationPeerDto;
  * Unit tests for {@see FederationPeerDto}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
- *
- * @covers \Phlix\Hub\Federation\FederationPeerDto
  */
 final class FederationPeerDtoTest extends TestCase
 {

@@ -29,8 +29,6 @@ use PHPUnit\Framework\TestCase;
  * so "returns false" is known to be a caught exception rather than an accident.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @covers \Phlix\Hub\Mcp\WorkermanStreamTimers
  */
 final class WorkermanStreamTimersTest extends TestCase
 {

@@ -30,6 +30,13 @@
 #     per run, 30 distinct lines in total (= 0.237% of the 12,661-line base), net
 #     swing observed -0.03%..+0.05%.
 #
+#     ⚠ SUPERSEDED BY S311 (2026-08-10) — the "12,661-line base" and the
+#     "0.237%" derived from it were measured while ~150 test files still carried
+#     coverage metadata, which DISCARDED other files' lines from the report. The
+#     flake mechanism below is unchanged and still correctly described; only the
+#     denominator it is expressed against moved. See the S311 note at the bottom
+#     of this file for the re-baselined figures.
+#
 #     CORRECTION (2026-08-05, re-measured): an earlier revision of this comment
 #     said the flip depended on "whether an earlier test left an event loop
 #     alive". That is wrong. Under PHPUnit there is NEVER an event loop —
@@ -69,8 +76,38 @@
 # read 491/493/495 covered statements, ClientRelayWorker.php 135/138 and
 # RelayProxyManager.php 253/254; after, all three are identical on every seed
 # (501, 140, 254) and the whole-project figure is a constant 8885/12061.
+# ⚠ That 8885/12061 is SUPERSEDED — see the S311 note below.
 # This threshold is left at 0.5% deliberately — it is the guard for the NEXT
 # source of noise, not for this one.
+#
+# S311 RE-BASELINE (2026-08-10). The numbers above were measured against a
+# report that was systematically understating itself: ~150 test files carried
+# coverage metadata, and that metadata DISCARDS every executed line outside the
+# units it names. S311 deleted all 233 of those lines and pinned the ban with
+# tests/Unit/Support/CoverageMetadataPolicyTest.php.
+#
+# Measured on the S311 branch, PHP 8.3.6 + PCOV 1.0.11 against a real MySQL
+# 8.0.46, the same tree twice with only the metadata removed on the second pass
+# (both passes: 4160 tests, 29290 assertions, 0 skipped, green):
+#
+#     Clover statements   79.42% 12284/15468  ->  81.25% 12567/15468
+#     Clover elements     78.19% 13211/16895  ->  80.09% 13531/16895
+#     files at 0.00%      14                  ->  10
+#     files that LOST     n/a                 ->  0
+#
+# ⚠ NOT ONE LINE WAS NEWLY EXECUTED. The whole +1.83 point move is ATTRIBUTION:
+# the same execution, finally credited to the file that ran. Do not read it as
+# a mountain of new tests, and do not read the four files that left 0.00% as
+# newly covered — they were being executed all along.
+#
+# ⚠ These are PCOV figures from a dev box. CI collects with XDEBUG, which
+# instruments a different line set, so the absolute percentage Codecov renders
+# will not equal 81.25%; the DIRECTION and the "no file lost" result are what
+# transfer. The pre-S311 CI headline was around 69.5%.
+#
+# The 0.5% threshold is deliberately NOT changed. It is a floor on a NEGATIVE
+# delta, and S311 moves the number upward, so nothing about the gate's
+# sensitivity needed to move with it.
 #
 # NOT CHANGED, deliberately:
 #   * `codecov/patch` keeps its defaults. It guards NEW code at threshold 0 and

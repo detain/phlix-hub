@@ -10,8 +10,6 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see MetricsCollector}, the per-worker façade.
- *
- * @covers \Phlix\Hub\Stats\Metrics\MetricsCollector
  */
 final class MetricsCollectorTest extends TestCase
 {

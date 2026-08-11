@@ -13,8 +13,6 @@ use Workerman\Connection\TcpConnection;
  * Unit tests for {@see FederationConnectionManager}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
- *
- * @covers \Phlix\Hub\Federation\FederationConnectionManager
  */
 final class FederationConnectionManagerTest extends TestCase
 {

@@ -13,8 +13,6 @@ use ReflectionMethod;
  * vs. short-max-age+ETag header decision, the conditional-GET (304) handling,
  * and the per-worker realpath/stat memo that keeps blocking syscalls off the
  * event loop.
- *
- * @covers \Phlix\Hub\Application
  */
 final class ApplicationStaticAssetCacheTest extends TestCase
 {

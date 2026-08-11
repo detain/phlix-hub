@@ -6,7 +6,6 @@ namespace Phlix\Hub\Tests\Integration\Common\RateLimit;
 
 use Phlix\Hub\Common\RateLimit\DbRateLimiter;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Group;
 
 /**
@@ -60,7 +59,6 @@ use PHPUnit\Framework\Attributes\Group;
  *
  * @group integration
  */
-#[CoversClass(DbRateLimiter::class)]
 #[Group('integration')]
 final class DbRateLimiterIntegrationTest extends RealDatabaseTestCase
 {

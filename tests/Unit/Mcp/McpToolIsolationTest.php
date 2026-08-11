@@ -60,16 +60,20 @@ use const T_DOC_COMMENT;
  *     documentation. {@see testCommentStrippingActuallyRemovesProse()}
  *     proves the stripping works rather than assuming it.
  *
- * ## Why there is deliberately no `@covers`
+ * ## Why there is deliberately no coverage metadata
  *
  * This suite loads no production class and executes no production line: it reads
  * `src/Mcp/Tools/*.php` as TEXT (`file_get_contents` + `token_get_all`) and
  * matches patterns against it. There is therefore nothing for it to be credited
- * with, and adding an `@covers` for the tool classes it INSPECTS would be a lie
- * of exactly the kind `@covers` exists to prevent — a class showing as covered
- * because a test named it, not because a test ran it. The tool classes earn
- * their coverage in {@see McpToolRegistryTest} (descriptors) and
- * {@see McpCrossUserIsolationTest} (`call()`), which do run them.
+ * with, and claiming the tool classes it INSPECTS would be a lie — a class
+ * showing as covered because a test named it, not because a test ran it. The
+ * tool classes earn their coverage in {@see McpToolRegistryTest} (descriptors)
+ * and {@see McpCrossUserIsolationTest} (`call()`), which do run them.
+ *
+ * ⚠ The tag is described, never written. Until S311 this very docblock spelled
+ * it out three times while claiming the file carried none, and PHPUnit parsed
+ * each mention as a real, invalid entry — which discarded the whole run's
+ * coverage for every test in this file, silently.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
  */

@@ -23,31 +23,26 @@ use function count;
 /**
  * Unit tests for {@see McpToolRegistry} and the shipped tool descriptors.
  *
- * ## Why the five tool classes are `@covers`ed here
+ * ## What this suite actually drives
  *
- * `@covers` does not merely ANNOTATE — it DISCARDS every executed line outside
- * the named classes. This suite drives the five shipped tools directly: the
+ * The five shipped tools, directly — this is not incidental traffic. The
  * registry's constructor calls `name()` and `requiredScope()` on each,
  * {@see testDescribeListsEveryToolWithASchemaAndAScope()} calls
  * `describe()` (which calls `description()` and `inputSchema()` on each), and
  * {@see testEveryShippedToolDeclaresAUsableSchema()} asserts, per tool,
  * that the schema is an object, that it refuses unknown properties, that the
  * description is non-empty and that the required scope is one {@see McpScopes}
- * knows. Those are assertions ABOUT each tool class, not incidental traffic, so
- * naming them is truthful attribution rather than a way to move a number.
+ * knows. Those are assertions ABOUT each tool class.
  *
  * What this suite does NOT exercise is `call()`; that is
- * {@see McpCrossUserIsolationTest}, which names the same five classes for the
- * same reason.
+ * {@see McpCrossUserIsolationTest}.
+ *
+ * This file carries no coverage metadata (S311) — in this repository that
+ * metadata discards every executed line outside the units it names, and the
+ * tag must not be written out in prose here either, because PHPUnit parses it
+ * out of a sentence as an invalid entry and discards the attribution anyway.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @covers \Phlix\Hub\Mcp\McpToolRegistry
- * @covers \Phlix\Hub\Mcp\Tools\GetMediaTool
- * @covers \Phlix\Hub\Mcp\Tools\GetPlaybackInfoTool
- * @covers \Phlix\Hub\Mcp\Tools\ListLibrariesTool
- * @covers \Phlix\Hub\Mcp\Tools\ListServersTool
- * @covers \Phlix\Hub\Mcp\Tools\SearchMediaTool
  */
 final class McpToolRegistryTest extends TestCase
 {

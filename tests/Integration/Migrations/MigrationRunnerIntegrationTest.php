@@ -48,8 +48,6 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  *
  * @package Phlix\Hub\Tests\Integration\Migrations
  *
- * @covers \Phlix\Hub\Common\Database\MigrationRunner
- *
  * @group integration
  */
 final class MigrationRunnerIntegrationTest extends RealDatabaseTestCase

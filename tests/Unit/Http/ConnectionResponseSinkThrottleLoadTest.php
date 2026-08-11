@@ -113,9 +113,6 @@ use const WNOHANG;
  * has touched a coroutine stack. Every assertion below still executes, on real
  * measured numbers, in every environment. A child that dies before reporting is
  * a hard test FAILURE, never a silent pass.
- *
- * @covers \Phlix\Hub\Http\ConnectionResponseSink
- * @covers \Phlix\Hub\Relay\TokenBucket
  */
 final class ConnectionResponseSinkThrottleLoadTest extends TestCase
 {

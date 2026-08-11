@@ -16,8 +16,6 @@ use Phlix\Hub\Hub\SharedLibraryDto;
  * Unit tests for {@see LibraryShareController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\LibraryShareController
  */
 final class LibraryShareControllerTest extends TestCase
 {

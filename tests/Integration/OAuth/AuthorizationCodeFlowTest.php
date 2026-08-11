@@ -61,12 +61,6 @@ use const PHP_URL_QUERY;
  *
  * @package Phlix\Hub\Tests\Integration\OAuth
  *
- * @covers \Phlix\Hub\Http\Controllers\OAuthController
- * @covers \Phlix\Hub\OAuth\AuthorizationCodeService
- * @covers \Phlix\Hub\OAuth\ConsentTicketService
- * @covers \Phlix\Hub\OAuth\OAuthClientRegistry
- * @covers \Phlix\Hub\OAuth\OAuthTokenService
- *
  * @group integration
  */
 final class AuthorizationCodeFlowTest extends RealDatabaseTestCase

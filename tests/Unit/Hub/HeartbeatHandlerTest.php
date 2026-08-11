@@ -20,8 +20,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see HeartbeatHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\HeartbeatHandler
  */
 final class HeartbeatHandlerTest extends TestCase
 {

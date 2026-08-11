@@ -13,8 +13,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see ServerInfoHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\ServerInfoHandler
  */
 final class ServerInfoHandlerTest extends TestCase
 {

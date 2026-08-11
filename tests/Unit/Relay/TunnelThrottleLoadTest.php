@@ -61,10 +61,6 @@ use function strlen;
  * clock. The production ingress code still runs verbatim — it simply cannot
  * manufacture budget — which keeps the measurement deterministic without
  * stubbing any production method.
- *
- * @covers \Phlix\Hub\Relay\Tunnel
- * @covers \Phlix\Hub\Relay\TokenBucket
- * @covers \Phlix\Hub\Relay\ClientConnection
  */
 final class TunnelThrottleLoadTest extends TestCase
 {

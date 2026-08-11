@@ -12,8 +12,6 @@ use ReflectionMethod;
  * Unit tests for {@see MetricsServicesProvider} config helpers.
  *
  * @package Phlix\Hub\Tests\Unit\Common\Container\Providers
- *
- * @covers \Phlix\Hub\Common\Container\Providers\MetricsServicesProvider
  */
 final class MetricsServicesProviderTest extends TestCase
 {

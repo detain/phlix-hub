@@ -11,8 +11,6 @@ use Phlix\Hub\Federation\FederationHubConfig;
  * Unit tests for {@see FederationHubConfig}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
- *
- * @covers \Phlix\Hub\Federation\FederationHubConfig
  */
 final class FederationHubConfigTest extends TestCase
 {

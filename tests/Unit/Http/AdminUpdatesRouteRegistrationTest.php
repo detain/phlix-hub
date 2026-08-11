@@ -20,7 +20,6 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Router;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
@@ -47,7 +46,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  *
  * @package Phlix\Hub\Tests\Unit\Http
  */
-#[CoversClass(AdminUpdatesController::class)]
 final class AdminUpdatesRouteRegistrationTest extends TestCase
 {
     // LoggerFactory's static $configPath/$loggers are process-global; the trait

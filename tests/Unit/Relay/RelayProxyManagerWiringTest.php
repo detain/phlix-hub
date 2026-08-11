@@ -14,7 +14,6 @@ use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 
@@ -29,7 +28,6 @@ use ReflectionProperty;
  * is the SAME instance (and registry) the {@see MetricsFlushService} drains — so
  * everything the proxy manager records is actually persisted.
  */
-#[CoversClass(HubServicesProvider::class)]
 final class RelayProxyManagerWiringTest extends TestCase
 {
     // LoggerFactory's static $configPath/$loggers are process-global; the trait

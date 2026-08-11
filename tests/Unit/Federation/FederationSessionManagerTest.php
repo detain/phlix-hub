@@ -13,8 +13,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see FederationSessionManager}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
- *
- * @covers \Phlix\Hub\Federation\FederationSessionManager
  */
 final class FederationSessionManagerTest extends TestCase
 {

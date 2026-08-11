@@ -18,8 +18,6 @@ use support\Context;
  * Unit tests for {@see AuthMiddleware}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Middleware
- *
- * @covers \Phlix\Hub\Http\Middleware\AuthMiddleware
  */
 final class AuthMiddlewareTest extends TestCase
 {

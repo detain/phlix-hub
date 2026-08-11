@@ -19,8 +19,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see InviteLinkHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Hub\InviteLinkHandler
  */
 final class InviteLinkHandlerTest extends TestCase
 {

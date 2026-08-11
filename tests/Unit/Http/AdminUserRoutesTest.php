@@ -34,10 +34,6 @@ use Workerman\MySQL\Connection;
  * controller's queries.
  *
  * @package Phlix\Hub\Tests\Unit\Http
- *
- * @covers \Phlix\Hub\Http\Controllers\AdminUserController
- * @covers \Phlix\Hub\Http\Middleware\AdminMiddleware
- * @covers \Phlix\Hub\Auth\UserRepository
  */
 final class AdminUserRoutesTest extends TestCase
 {

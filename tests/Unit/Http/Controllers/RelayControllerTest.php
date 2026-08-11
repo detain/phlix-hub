@@ -29,8 +29,6 @@ use Phlix\Hub\Http\Request;
  * do not add coverage of a header READ here.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\RelayController
  */
 final class RelayControllerTest extends TestCase
 {

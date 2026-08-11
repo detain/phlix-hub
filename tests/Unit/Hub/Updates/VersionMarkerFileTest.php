@@ -6,7 +6,6 @@ namespace Phlix\Hub\Tests\Unit\Hub\Updates;
 
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckService;
 use Phlix\Hub\Version;
-use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -22,7 +21,6 @@ use PHPUnit\Framework\TestCase;
  *
  * @package Phlix\Hub\Tests\Unit\Hub\Updates
  */
-#[CoversNothing]
 final class VersionMarkerFileTest extends TestCase
 {
     private function markerPath(): string

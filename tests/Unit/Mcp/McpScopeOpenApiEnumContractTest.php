@@ -65,11 +65,6 @@ use function trim;
  * reads the same file the same way for the same reason.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @coversNothing This asserts a CONTRACT between a spec file and a constant, not
- *                the behaviour of any one class; {@see McpScopesTest} owns
- *                McpScopes' coverage and claiming @covers here would silently
- *                DISCARD that file's attribution for no gain.
  */
 final class McpScopeOpenApiEnumContractTest extends TestCase
 {

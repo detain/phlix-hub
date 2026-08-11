@@ -16,8 +16,6 @@ use Phlix\Hub\Http\Request;
  * Unit tests for {@see InviteLinkController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\InviteLinkController
  */
 final class InviteLinkControllerTest extends TestCase
 {

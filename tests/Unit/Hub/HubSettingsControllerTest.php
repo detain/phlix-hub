@@ -14,8 +14,6 @@ use Workerman\MySQL\Connection;
  * Unit tests for {@see HubSettingsController}.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
- *
- * @covers \Phlix\Hub\Http\Controllers\HubSettingsController
  */
 final class HubSettingsControllerTest extends TestCase
 {

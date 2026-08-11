@@ -11,8 +11,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see McpScopes}.
  *
  * @package Phlix\Hub\Tests\Unit\Mcp
- *
- * @covers \Phlix\Hub\Mcp\McpScopes
  */
 final class McpScopesTest extends TestCase
 {

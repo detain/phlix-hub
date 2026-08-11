@@ -13,7 +13,6 @@ use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\ServerReaper;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 
@@ -41,7 +40,6 @@ use Psr\Container\ContainerInterface;
  * (no event loop) by never letting a real reaper resolve, so no
  * {@see \Workerman\Timer::add()} is ever reached.
  */
-#[CoversClass(HubServicesProvider::class)]
 final class HubServicesProviderTest extends TestCase
 {
     // LoggerFactory's static $configPath/$loggers are process-global; the trait

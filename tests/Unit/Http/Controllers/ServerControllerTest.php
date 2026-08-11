@@ -17,8 +17,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see ServerController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\ServerController
  */
 final class ServerControllerTest extends TestCase
 {

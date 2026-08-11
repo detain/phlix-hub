@@ -11,8 +11,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see Response} cookie defaults (step S3).
  *
  * @package Phlix\Hub\Tests\Unit\Http
- *
- * @covers \Phlix\Hub\Http\Response
  */
 final class ResponseTest extends TestCase
 {

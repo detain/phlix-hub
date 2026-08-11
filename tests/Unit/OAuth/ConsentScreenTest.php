@@ -21,8 +21,6 @@ use PHPUnit\Framework\TestCase;
  * to).
  *
  * @package Phlix\Hub\Tests\Unit\OAuth
- *
- * @covers \Phlix\Hub\OAuth\ConsentScreen
  */
 final class ConsentScreenTest extends TestCase
 {

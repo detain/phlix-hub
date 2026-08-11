@@ -11,8 +11,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see CoreServicesProvider}.
  *
  * @package Phlix\Hub\Tests\Unit\Common\Container\Providers
- *
- * @covers \Phlix\Hub\Common\Container\Providers\CoreServicesProvider
  */
 final class CoreServicesProviderTest extends TestCase
 {

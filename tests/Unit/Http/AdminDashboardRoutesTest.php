@@ -36,9 +36,6 @@ use Workerman\MySQL\Connection;
  * summary counters and the audit-feed reads.
  *
  * @package Phlix\Hub\Tests\Unit\Http
- *
- * @covers \Phlix\Hub\Http\Controllers\AdminDashboardController
- * @covers \Phlix\Hub\Http\Middleware\AdminMiddleware
  */
 final class AdminDashboardRoutesTest extends TestCase
 {

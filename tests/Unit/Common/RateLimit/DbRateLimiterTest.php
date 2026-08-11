@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Common\RateLimit;
 
 use Phlix\Hub\Common\RateLimit\DbRateLimiter;
-use Phlix\Hub\Common\RateLimit\RateLimitState;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -22,11 +20,7 @@ use Workerman\MySQL\Connection;
  * Repository-style DB classes in this repo are unit-tested against a mock
  * {@see Connection} (the coroutine-safety of the socket lives in and is tested
  * on {@see \Phlix\Hub\Common\Database\PhlixMySQLConnection}, not here).
- *
- * @covers \Phlix\Hub\Common\RateLimit\DbRateLimiter
  */
-#[CoversClass(DbRateLimiter::class)]
-#[CoversClass(RateLimitState::class)]
 final class DbRateLimiterTest extends TestCase
 {
     /**

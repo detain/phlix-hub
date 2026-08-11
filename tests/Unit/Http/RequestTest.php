@@ -15,8 +15,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  * {@see Request::getTrustedClientIp()} used to key the login/jwks rate limiters.
  *
  * @package Phlix\Hub\Tests\Unit\Http
- *
- * @covers \Phlix\Hub\Http\Request
  */
 final class RequestTest extends TestCase
 {

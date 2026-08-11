@@ -14,8 +14,6 @@ use Phlix\Shared\Hub\ServerInfoDto;
  * Unit tests for {@see ServerListController}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
- *
- * @covers \Phlix\Hub\Http\Controllers\ServerListController
  */
 final class ServerListControllerTest extends TestCase
 {

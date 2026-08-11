@@ -12,8 +12,6 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see HubProtocolMiddleware}.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Middleware
- *
- * @covers \Phlix\Hub\Http\Middleware\HubProtocolMiddleware
  */
 final class HubProtocolMiddlewareTest extends TestCase
 {

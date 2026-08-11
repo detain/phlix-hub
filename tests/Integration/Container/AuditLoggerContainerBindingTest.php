@@ -60,11 +60,6 @@ use ReflectionProperty;
  *
  * @package Phlix\Hub\Tests\Integration\Container
  *
- * @covers \Phlix\Hub\Common\Container\Providers\AuthServicesProvider
- * @covers \Phlix\Hub\Common\Logger\AuditLogger
- * @covers \Phlix\Hub\Hub\AuditLogRepository
- * @covers \Phlix\Hub\Http\Controllers\AuditLogController
- *
  * @group integration
  */
 final class AuditLoggerContainerBindingTest extends RealDatabaseTestCase

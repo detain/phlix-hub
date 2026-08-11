@@ -12,8 +12,6 @@ use ReflectionMethod;
  * Unit tests for {@see Application}'s private route-template collapsing, which
  * keeps the per-route metrics table bounded by folding high-cardinality path
  * segments (numeric ids, UUIDs, long mixed tokens) to `{id}`.
- *
- * @covers \Phlix\Hub\Application
  */
 final class ApplicationRouteTemplateTest extends TestCase
 {

@@ -36,8 +36,6 @@ use PHPUnit\Framework\TestCase;
  * **Why no existing test caught it:** the controller tests set `$request->path`
  * and invoke the controller directly, bypassing the Router entirely. Any guard
  * for this class of defect MUST dispatch through a real {@see Router}.
- *
- * @covers \Phlix\Hub\Http\Router
  */
 final class CollectionRouteSlashTest extends TestCase
 {

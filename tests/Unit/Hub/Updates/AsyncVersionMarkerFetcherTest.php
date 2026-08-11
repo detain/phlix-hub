@@ -7,7 +7,6 @@ namespace Phlix\Hub\Tests\Unit\Hub\Updates;
 use Phlix\Hub\Hub\Updates\AsyncVersionMarkerFetcher;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
-use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\Http\Client;
@@ -27,7 +26,6 @@ use Workerman\Timer;
  *
  * @package Phlix\Hub\Tests\Unit\Hub\Updates
  */
-#[CoversClass(AsyncVersionMarkerFetcher::class)]
 final class AsyncVersionMarkerFetcherTest extends TestCase
 {
     // Workerman's Timer statics and Worker registry are process-global; the trait

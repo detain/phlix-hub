@@ -17,8 +17,6 @@ use Workerman\Connection\ConnectionInterface;
  * Unit tests for {@see FederationFrameHandler}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
- *
- * @covers \Phlix\Hub\Federation\FederationFrameHandler
  */
 final class FederationFrameHandlerTest extends TestCase
 {

@@ -19,9 +19,11 @@ use RuntimeException;
  * was being killed and re-forked every 60 seconds, and both `docker inspect`
  * and `RestartCount` agreed the container was fine.
  *
- * The `@covers` annotation this file used to carry has been removed: in this
- * repository it DISCARDS every other file's coverage from this test's
- * contribution, and the payload now spans two classes.
+ * The coverage metadata this file used to carry has been removed (S311): in
+ * this repository it DISCARDS every other file's coverage from this test's
+ * contribution, and the payload now spans two classes. Naming the tag in prose
+ * here would be the same defect in a quieter form — PHPUnit parses it out of
+ * the sentence as an invalid entry and throws the attribution away anyway.
  *
  * @package Phlix\Hub\Tests\Health
  */

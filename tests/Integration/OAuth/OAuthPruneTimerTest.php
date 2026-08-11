@@ -74,11 +74,6 @@ use function unlink;
  *
  * @package Phlix\Hub\Tests\Integration\OAuth
  *
- * @covers \Phlix\Hub\Relay\IdleReaper
- * @covers \Phlix\Hub\OAuth\OAuthTokenService
- * @covers \Phlix\Hub\OAuth\AuthorizationCodeService
- * @covers \Phlix\Hub\OAuth\ConsentTicketService
- *
  * @group integration
  */
 final class OAuthPruneTimerTest extends RealDatabaseTestCase
