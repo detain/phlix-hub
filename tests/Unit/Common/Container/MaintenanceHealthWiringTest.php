@@ -5,10 +5,15 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Common\Container;
 
 use Phlix\Hub\Common\Container\ContainerFactory;
+use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Health\MaintenanceHeartbeat;
+use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
+use Psr\Container\ContainerInterface;
 use ReflectionProperty;
+use RuntimeException;
 
 /**
  * S312 — the container really hands {@see HealthController} a
@@ -36,6 +41,11 @@ use ReflectionProperty;
  */
 final class MaintenanceHealthWiringTest extends TestCase
 {
+    // LoggerFactory's static $configPath/$loggers are process-global;
+    // startDbMaintenanceTimers() resolves a logger, so the trait snapshots and
+    // restores them around every test here.
+    use LoggerFactoryIsolation;
+
     private string $dir = '';
 
     protected function setUp(): void
@@ -43,10 +53,18 @@ final class MaintenanceHealthWiringTest extends TestCase
         parent::setUp();
         $this->dir = sys_get_temp_dir() . '/phlix-hub-s312-wire-' . uniqid('', true);
         mkdir($this->dir, 0700, true);
+        file_put_contents(
+            $this->dir . '/logger.php',
+            "<?php return ['default' => 'mem', 'handlers' => ['mem' => "
+            . "['type' => 'stream', 'path' => 'php://memory', 'level' => 'debug']]];",
+        );
+        LoggerFactory::reset();
+        LoggerFactory::init($this->dir . '/logger.php');
     }
 
     protected function tearDown(): void
     {
+        LoggerFactory::reset();
         foreach (glob($this->dir . '/*') ?: [] as $file) {
             @unlink($file);
         }
@@ -202,6 +220,62 @@ final class MaintenanceHealthWiringTest extends TestCase
         self::assertInstanceOf(MaintenanceHeartbeat::class, $heartbeat);
         self::assertTrue($heartbeat->enabled());
         self::assertSame(MaintenanceHeartbeat::STATUS_DOWN, $heartbeat->snapshot()['status']);
+    }
+
+    /**
+     * `startDbMaintenanceTimers()` must ARM the heartbeat, not merely resolve it.
+     *
+     * 🔴 Added because a mutation survived. Commenting out `$heartbeat->arm()`
+     * left the whole suite green: `HubServicesProviderTest` asserts the id is
+     * RESOLVED (its recording container hands back a stub), and every other test
+     * calls `arm()` itself. Without the call there is no lineage — `armed_at`
+     * and `incarnations` never exist, so the crash-loop counter that
+     * `RestartCount` could not give an operator would always read null, and a
+     * healthy hub would answer `no_heartbeat_record` until its first sweep
+     * instead of `starting_up`.
+     */
+    public function testStartingTheMaintenanceTimersArmsTheHeartbeat(): void
+    {
+        $path = $this->dir . '/armed.json';
+        $heartbeat = new MaintenanceHeartbeat($path, 180, true);
+
+        // Everything except the heartbeat throws, so nothing arms a Workerman
+        // timer and the only observable effect is the record on disk. The same
+        // shape HubServicesProviderTest uses for its resolution assertions.
+        $container = new class ($heartbeat) implements ContainerInterface {
+            public function __construct(private readonly MaintenanceHeartbeat $heartbeat)
+            {
+            }
+
+            public function get(string $id): mixed
+            {
+                if ($id === MaintenanceHeartbeat::class) {
+                    return $this->heartbeat;
+                }
+
+                throw new RuntimeException('not available in this test: ' . $id);
+            }
+
+            public function has(string $id): bool
+            {
+                return $id === MaintenanceHeartbeat::class;
+            }
+        };
+
+        self::assertFileDoesNotExist($path, 'control: nothing has written the record yet');
+
+        HubServicesProvider::startDbMaintenanceTimers($container);
+
+        self::assertFileExists($path, 'startDbMaintenanceTimers() never armed the heartbeat');
+        /** @var array<string, mixed> $record */
+        $record = json_decode((string) file_get_contents($path), true);
+        self::assertSame(1, $record['incarnations'] ?? null);
+        self::assertIsInt($record['armed_at'] ?? null);
+
+        // And the verdict it produces is the startup grace, not "no record".
+        $snapshot = $heartbeat->snapshot();
+        self::assertSame(MaintenanceHeartbeat::STATUS_OK, $snapshot['status']);
+        self::assertSame('starting_up', $snapshot['reason']);
     }
 
     /**
