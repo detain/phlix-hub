@@ -134,6 +134,7 @@ no-cgi
 relay-ports
 spa-shell
 stability
+maintenance-liveness
 healthcheck-declared
 healthcheck-healthy
 healthcheck-start-period
@@ -768,6 +769,91 @@ elif [ "$STAB_OK" = "1" ]; then
 else
     fail stability "NOT STABLE after ${STAB_SAMPLES} sample(s) — ${STAB_REASON}"
     dump_diagnostics
+fi
+
+# ---------------------------------------------------------------------------
+# 10b. ASSERT — the MAINTENANCE WORKER is alive and sweeping (S312).
+#
+# The single most uninformative green this gate ever produced. Measured on
+# master @ 65763eb under `docker run --network none`: the maintenance worker was
+# killed and re-forked every ~60s — its process `etime` reached 0:39 while the
+# container master's was 4:41 — and EVERY signal an operator checks said the
+# container was fine. `/health` was 200 `{"status":"ok"}` because it is answered
+# by the HTTP workers, a DIFFERENT FORK; `docker inspect` said `healthy` and
+# `RestartCount=0`, because that counter measures container restarts, not worker
+# re-forks, so a supervisor faithfully respawning a dying child is invisible to
+# it. Even the `stability` check above could not see it: it always supplies a
+# database, so the sweeps never fail in its arm.
+#
+# Three independent readings, because each alone has already been fooled:
+#
+#   a. the /health BODY — `maintenance.status` must be `ok` and
+#      `maintenance.incarnations` must be 1. This is the new signal;
+#   b. the PROCESS TABLE — a `phlix-hub-maintenance` process must exist, and its
+#      `etime` must be within MAINT_ETIME_TOLERANCE of the container master's.
+#      A worker that has re-forked is YOUNGER than the master by construction,
+#      and this reading does not depend on the app agreeing that it is healthy;
+#   c. the pid must not change across the sample.
+#
+# ⚠ (b) is not redundant with (a). A signal derived from the thing it is
+# checking can self-adjust; `etime` is read from the kernel and cannot.
+# ---------------------------------------------------------------------------
+say "ASSERT — the maintenance worker is alive and sweeping (S312)"
+MAINT_ETIME_TOLERANCE="${MAINT_ETIME_TOLERANCE:-30}"
+
+# busybox ps only offers `etime` (no `etimes`), formatted MM:SS, HH:MM:SS or
+# DD-HH:MM:SS. Parsed in bash, pipeline-free.
+etime_to_seconds() {
+    local v="${1:-}" days=0 h=0 m=0 s=0
+    case "$v" in
+        *-*) days="${v%%-*}"; v="${v#*-}" ;;
+    esac
+    case "$v" in
+        *:*:*) h="${v%%:*}"; v="${v#*:}"; m="${v%%:*}"; s="${v##*:}" ;;
+        *:*)   m="${v%%:*}"; s="${v##*:}" ;;
+        *)     s="$v" ;;
+    esac
+    days="${days#0}"; h="${h#0}"; m="${m#0}"; s="${s#0}"
+    is_uint "${days:-0}" && is_uint "${h:-0}" && is_uint "${m:-0}" && is_uint "${s:-0}" || { printf 'NaN'; return; }
+    printf '%s' $(( ${days:-0} * 86400 + ${h:-0} * 3600 + ${m:-0} * 60 + ${s:-0} ))
+}
+
+MAINT_PS="$($DOCKER exec "$APP_NAME" ps -eo pid,etime,args 2>&1 || true)"
+MAINT_PID="$(printf '%s\n' "$MAINT_PS" | awk '/phlix-hub-maintenance/ {print $1; exit}')"
+MAINT_ETIME_RAW="$(printf '%s\n' "$MAINT_PS" | awk '/phlix-hub-maintenance/ {print $2; exit}')"
+MASTER_ETIME_RAW="$(printf '%s\n' "$MAINT_PS" | awk '/WorkerMan: master process/ {print $2; exit}')"
+MAINT_AGE="$(etime_to_seconds "${MAINT_ETIME_RAW:-}")"
+MASTER_AGE="$(etime_to_seconds "${MASTER_ETIME_RAW:-}")"
+
+HEALTH_RC=0
+MAINT_BODY="$(probe_curl -fsS --max-time 5 "${PROBE_URL}/health" 2>/dev/null)" || HEALTH_RC=$?
+MAINT_FLAT="${MAINT_BODY//$'\n'/}"
+info "maintenance pid=${MAINT_PID:-NONE} etime=${MAINT_ETIME_RAW:-NONE} (${MAINT_AGE}s) master etime=${MASTER_ETIME_RAW:-NONE} (${MASTER_AGE}s)"
+info "health rc=${HEALTH_RC} body=$(clip 400 "$MAINT_FLAT")"
+
+if [ -z "${MAINT_PID:-}" ]; then
+    fail maintenance-liveness "no phlix-hub-maintenance process in the container at all"
+elif [ "$HEALTH_RC" -ne 0 ]; then
+    # curl -fsS fails on the 503 the hub now answers when the maintenance
+    # worker is down. That is the signal doing its job — report it as such.
+    fail maintenance-liveness "/health answered non-2xx (curl rc=${HEALTH_RC}); the hub is reporting its maintenance worker down: $(clip 300 "$MAINT_FLAT")"
+elif [[ ! "$MAINT_FLAT" =~ \"maintenance\" ]]; then
+    fail maintenance-liveness "/health carries no \"maintenance\" section — the S312 signal is not wired into this image"
+elif [[ ! "$MAINT_FLAT" =~ \"maintenance\"[[:space:]]*:[[:space:]]*\{[[:space:]]*\"status\"[[:space:]]*:[[:space:]]*\"ok\" ]]; then
+    fail maintenance-liveness "maintenance.status is not ok: $(clip 300 "$MAINT_FLAT")"
+elif [[ ! "$MAINT_FLAT" =~ \"incarnations\"[[:space:]]*:[[:space:]]*1[,}] ]]; then
+    fail maintenance-liveness "maintenance.incarnations is not 1 — the worker has RE-FORKED: $(clip 300 "$MAINT_FLAT")"
+elif ! is_uint "$MAINT_AGE" || ! is_uint "$MASTER_AGE"; then
+    fail maintenance-liveness "could not read both etimes (maintenance='${MAINT_ETIME_RAW}' master='${MASTER_ETIME_RAW}') — refusing to skip the check"
+elif [ "$(( MASTER_AGE - MAINT_AGE ))" -gt "$MAINT_ETIME_TOLERANCE" ]; then
+    fail maintenance-liveness "the maintenance worker is ${MAINT_AGE}s old against the master's ${MASTER_AGE}s (> ${MAINT_ETIME_TOLERANCE}s younger) — it has been re-forked"
+else
+    MAINT_PID2="$($DOCKER exec "$APP_NAME" ps -eo pid,args 2>/dev/null | awk '/phlix-hub-maintenance/ {print $1; exit}' || true)"
+    if [ "${MAINT_PID2:-}" != "$MAINT_PID" ]; then
+        fail maintenance-liveness "the maintenance worker pid changed ${MAINT_PID} -> ${MAINT_PID2:-NONE} within this check"
+    else
+        pass maintenance-liveness "maintenance worker pid=${MAINT_PID} alive ${MAINT_AGE}s (master ${MASTER_AGE}s), /health reports maintenance ok with incarnations=1"
+    fi
 fi
 
 # ---------------------------------------------------------------------------

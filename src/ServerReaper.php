@@ -88,13 +88,32 @@ final class ServerReaper
     /**
      * Start the periodic reaper timer.
      *
+     * ## S312 — the callback is GUARDED, and that is load-bearing
+     *
+     * `[$this, 'tick']` used to be the callback. {@see markStaleServersOffline()}
+     * is a bare `$this->db->query(...)` and the connection is lazy, so with no
+     * reachable database the first tick threw `PDOException: SQLSTATE[HY000]
+     * [2002] Connection refused` into the event loop. Workerman hands an
+     * exception that escapes a callback to the error handler installed in
+     * `Worker::run()` — `Worker::stopAll(250, $exception)` — which kills the
+     * whole maintenance worker; the master then re-forks it, once per interval,
+     * silently (the child exits **0**, and the master only logs a NON-zero
+     * status). See {@see \Phlix\Hub\Health\MaintenanceHeartbeat} for the
+     * measurements.
+     *
+     * @param (\Closure(?\Throwable): void)|null $onSweep Called after every completed tick with the
+     *                                                    failure, or null on success — the maintenance
+     *                                                    worker's liveness record.
+     *
      * @return int Timer ID (pass to Timer::del() to cancel).
      */
-    public function start(): int
+    public function start(?\Closure $onSweep = null): int
     {
         $timerId = Timer::add(
             $this->intervalSeconds,
-            [$this, 'tick'],
+            function () use ($onSweep): void {
+                $this->runTickGuarded($onSweep);
+            },
         );
 
         $this->logger->debug('ServerReaper: started', [
@@ -104,6 +123,35 @@ final class ServerReaper
         ]);
 
         return $timerId;
+    }
+
+    /**
+     * Run one reaper tick so that NOTHING escapes to the event loop.
+     *
+     * Public so a test can invoke exactly what the timer holds without going
+     * through Workerman. See {@see start()} for why the guard is not optional.
+     *
+     * @param (\Closure(?\Throwable): void)|null $onSweep Sweep-outcome reporter, or null.
+     *
+     * @return void
+     */
+    public function runTickGuarded(?\Closure $onSweep = null): void
+    {
+        $failure = null;
+
+        try {
+            $this->tick();
+        } catch (\Throwable $e) {
+            $failure = $e;
+            $this->logger->error('ServerReaper: tick failed', [
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+
+        if ($onSweep !== null) {
+            $onSweep($failure);
+        }
     }
 
     /**

@@ -321,8 +321,16 @@ final class Application
             throw new \RuntimeException('Container returned an unexpected HealthController instance');
         }
 
+        // S312: the payload now carries the MAINTENANCE WORKER's own liveness,
+        // and the probe answers 503 when that worker is not completing sweeps.
+        // `curl -fsS` (the image's HEALTHCHECK) fails on 503, so a container
+        // whose maintenance worker is crash-looping stops reporting `healthy` —
+        // which, measured on master, it did not: `docker inspect` said `healthy`
+        // and `RestartCount=0` while the worker was re-forked every 60s.
         $this->router->get('/health', static function () use ($health): Response {
-            return (new Response())->json($health());
+            $payload = $health();
+
+            return (new Response())->json($payload, HealthController::statusCodeFor($payload));
         });
 
         // The legacy Smarty SSR UI has been retired: the bare root and the old

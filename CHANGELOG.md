@@ -303,6 +303,67 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The maintenance worker crash-looped invisibly whenever its database was
+  unreachable, and every signal an operator would check said the container was
+  fine (S312).** Measured against master `65763eb`, `docker run --network none`,
+  image built from `Dockerfile` on `ghcr.io/detain/phlix-base:latest`:
+  - the `phlix-hub-maintenance` process was killed and re-forked **every 61
+    seconds** — pids `22 → 281 → 350 → 443 → 536 → 635 → 734` — so its process
+    `etime` read `0:39` against the container master's `4:41`, and
+    `.logs/workerman.log` gained **exactly three** identical stack traces per
+    incarnation, timestamped 60 s after each fork;
+  - throughout, `docker inspect` reported `healthy` and `RestartCount=0`, and a
+    control with a reachable MySQL held **one** pid (`39`) for the whole
+    4-minute window with zero traces.
+  - **Three throwers, all `PDOException: SQLSTATE[HY000] [2002] Connection
+    refused` out of the lazily-connecting pool:**
+    `Hub/RelaySessionManager.php:231` via `Relay/IdleReaper.php:303`
+    (`reapDbMaintenance()`), `ServerReaper.php:135` via `ServerReaper.php:119`
+    (`tick()`), and `Federation/FederationSessionManager.php:201` via the
+    federation-reaper closure in `HubServicesProvider`.
+  - 🚨 **The cause was NOT "an uncaught exception at worker startup", which is
+    what it looks like.** The arming path was already fully guarded, and the
+    first throw came 60 s after the fork, from a TIMER. `Events/Swoole.php`'s
+    `safeCall()` *catches* the throw and hands it to the error handler
+    `Worker::run()` installs — `Worker::stopAll(250, $exception)`. In a child
+    that sets `STATUS_SHUTDOWN`, stops the loop, and lets `Worker::run()` fall
+    through to **`exit(0)`**. Exit code **zero** is why nothing reported it:
+    `Worker::monitorWorkersForLinux()` logs a dead child only on a NON-zero
+    status, and `RestartCount` counts *container* restarts, not worker re-forks.
+    An isolated control in the same image — one worker, one 3 s timer,
+    `Worker::$onWorkerExit` printing the raw wait status — produced
+    `raw_status=0 exitcode=0 signalled=no` on every re-fork when the callback
+    threw, and **one pid surviving every tick** when the identical callback
+    caught its own exception.
+  - **Decision: degrade, not exit.** A fast exit plus a supervisor respawn is a
+    legitimate strategy, but all three things that make it legitimate were
+    missing here — the exit was indistinguishable from a clean stop, Workerman's
+    master re-forks immediately with **no backoff** (the 60 s cadence was just
+    the timer interval), and restarting cannot make an unreachable database
+    reachable. The sweeps are idempotent and periodic, so a failed sweep now
+    costs one skipped sweep and the next tick retries.
+  - `IdleReaper::startDbMaintenance()` and `ServerReaper::start()` now arm
+    guarded callbacks (`runDbMaintenanceGuarded()` / `runTickGuarded()`), the
+    federation closure guards itself, and `MaintenanceWorker::start()` installs
+    a loop-level backstop for any callback nobody thought to guard.
+  - **And it is now visible.** The maintenance worker writes a small liveness
+    record (`var/maintenance-heartbeat.json`, `Health\MaintenanceHeartbeat`) that
+    the HTTP workers read, and `/health` answers **503** with
+    `{"status":"unhealthy"}` when no sweep has completed inside
+    `maintenance.stale_after_seconds` (default 180 = 3 × `poll_seconds`), so
+    `curl -fsS` fails and the container stops reporting `healthy`. The record is
+    stamped by the SWEEP, not by a beat of its own — each looping incarnation
+    lived a full 60 s, so an "I am alive" timer would have stayed fresh across
+    every re-fork — and `armed_at` is lineage-scoped so a re-fork cannot renew
+    its own startup grace. A worker that is alive but whose sweeps are failing
+    reports `maintenance.status: "degraded"` in the body and stays **200**: it is
+    a different condition from "the worker is gone", and a database blip should
+    not pull a reachable hub out of an HAProxy pool.
+  - `scripts/docker-boot-smoke.sh` gains a `maintenance-liveness` check that
+    reads the `/health` body **and** the kernel's own `etime` for the worker
+    against the container master's, because a signal derived from the thing it
+    is checking can self-adjust and `etime` cannot.
+
 - **The hub fetched a version marker from `raw.githubusercontent.com` on the
   BOOT path, and on an egress-filtered box that hung the maintenance worker
   (S308).** `CoreUpdateCheckWorker::start()` ran one check synchronously from
