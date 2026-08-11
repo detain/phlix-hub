@@ -268,9 +268,13 @@ final class CoverageMetadataPolicyTest extends TestCase
      * `phpunit --strict-coverage` sets `beStrictAboutCoverageMetadata` for the
      * run regardless of what the XML says, so a workflow could reintroduce the
      * pressure this policy removes without touching a file the test above reads.
-     * The hub's CI passes no coverage flag at all (`coverage.xml` comes solely
-     * from the report block in `phpunit.xml`), so the assertion is that the
-     * workflow stays that way.
+     *
+     * ⚠ Updated by S316. This docblock used to say the hub's CI passes no
+     * coverage flag at all; it now passes `--coverage-clover coverage.xml`,
+     * because an artifact that existed only by virtue of one line of XML could
+     * vanish with the whole pipeline still green. The assertion here is
+     * unchanged and is narrower than that sentence ever implied: no workflow may
+     * pass the STRICTNESS flag. Report-destination flags are fine.
      */
     public function testNoWorkflowPassesTheStrictCoverageFlag(): void
     {
