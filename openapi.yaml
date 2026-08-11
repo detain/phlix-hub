@@ -4206,6 +4206,10 @@ components:
         writes for itself at the end of every completed sweep. It is stamped by the SWEEP and
         not by a timer of its own: in the measured crash-loop each incarnation lived a full 60
         seconds, so an "I am alive" beat would have stayed fresh across every re-fork.
+
+        The record keeps a row per sweep and the verdict is taken over the WORST of them —
+        freshness from the OLDEST `last_sweep_at`, failures from the highest count — so one
+        stuck sweep beside three healthy ones cannot read as healthy.
       required: [status, reason, stale_after_seconds]
       properties:
         status:
@@ -4228,6 +4232,13 @@ components:
             - no_heartbeat_record
             - no_heartbeat_configured
             - maintenance_worker_disabled
+        task:
+          type: [string, "null"]
+          description: |-
+            The sweep the verdict is about — the stalest one for `stale_sweep`, the
+            worst-failing one for `sweep_failing`. Null when the verdict is not about a
+            particular sweep.
+          example: server_reaper
         pid:
           type: [integer, "null"]
           description: "Pid of the maintenance worker incarnation that last wrote the record."

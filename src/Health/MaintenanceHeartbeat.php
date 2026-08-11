@@ -21,7 +21,7 @@ use Throwable;
  * Measured 2026-08-10 against master @ 65763eb, `docker run --network none`:
  * the maintenance worker's DB sweeps threw `PDOException: SQLSTATE[HY000]
  * [2002] Connection refused`, the throw escaped the Workerman timer callback,
- * and the worker was killed and re-forked **every 60 seconds** — the container
+ * and the worker was killed and re-forked **every 61 seconds** — the container
  * master's process `etime` reached 4:41 while the maintenance worker's was
  * 0:39. Throughout, `docker inspect` reported `healthy` and `RestartCount=0`.
  *
@@ -54,6 +54,16 @@ use Throwable;
  * to completion. A worker that dies mid-sweep — or hangs, or never arms —
  * stamps nothing, and {@see snapshot()} reports {@see STATUS_DOWN}.
  *
+ * ## Per-TASK accounting, because a per-record counter hides a stuck sweep
+ *
+ * Four sweeps share this record. A single top-level `consecutive_failures`
+ * would be reset by whichever task happened to report last, so one permanently
+ * failing sweep beside three healthy ones would read `ok` — the same shape of
+ * uninformative green, one level down. Each task therefore keeps its own row,
+ * and the verdict is taken over the WORST of them: the freshness test uses the
+ * OLDEST `last_sweep_at`, so a task that stops sweeping is visible even while
+ * the others keep ticking.
+ *
  * ## Lineage, so a crash-loop cannot renew its own grace period
  *
  * `armed_at` is the start of the current *lineage*, not of the current
@@ -65,23 +75,41 @@ use Throwable;
  *
  * `incarnations` counts the distinct pids that have written the current
  * lineage. It is diagnostic only — the verdict is the staleness rule — but it
- * is the number that tells an operator "this worker has re-forked 47 times",
+ * is the number that tells an operator "this worker has re-forked 9 times",
  * which is precisely what `RestartCount=0` refused to say.
  *
- * ## Writes are atomic
+ * ## Writes: unique temp file, then rename — and MEASURED, not assumed
  *
- * Write to a sibling temp file then `rename()`, so an HTTP worker reading
- * concurrently sees either the previous record or the next one, never a
- * half-written one. A read that fails for any reason is reported as
- * {@see STATUS_DOWN} with a reason, never as an exception: this object sits on
- * the `/health` path and must not be able to take it down.
+ * 🚨 The first cut of this class used ONE temp path, `<path>.<pid>.tmp`, on the
+ * theory that a pid makes it unique. It does not: the four sweeps run as four
+ * COROUTINES IN THE SAME PROCESS, their `file_put_contents()` calls interleave
+ * at the Swoole hook, and the control container produced a record ending
+ * `…"started_at":1786408197}}1786408197}` — a longer previous write with a
+ * shorter one laid over its head. `json_decode()` then failed, `read()`
+ * returned null, and `/health` reported `no_heartbeat_record` → 503 in an arm
+ * that was supposed to be green. The signal was honest; the writer was broken.
+ *
+ * So the temp name now carries a per-write sequence as well as the pid, and the
+ * record is held IN MEMORY between writes: two coroutines racing the file can
+ * no longer lose each other's updates, because neither re-reads it. `rename()`
+ * is atomic, so a reader sees one complete version or another.
+ *
+ * ⚠ This depends on there being exactly ONE instance per fork. PHP-DI caches
+ * `factory()` definitions, and `MaintenanceHealthWiringTest` asserts the
+ * container hands out the same object. If that ever stops being true,
+ * {@see recordSweep()} falls back to re-reading the file, which is correct but
+ * loses concurrent updates again.
+ *
+ * A read that fails for any reason is reported as {@see STATUS_DOWN} with a
+ * reason, never as an exception: this object sits on the `/health` path and
+ * must not be able to take it down.
  *
  * @package Phlix\Hub\Health
  * @since   S312
  */
 final class MaintenanceHeartbeat
 {
-    /** The maintenance worker completed its most recent sweep cleanly. */
+    /** The maintenance worker completed its most recent sweeps cleanly. */
     public const string STATUS_OK = 'ok';
 
     /**
@@ -98,8 +126,8 @@ final class MaintenanceHeartbeat
     public const string STATUS_DEGRADED = 'degraded';
 
     /**
-     * No sweep has completed inside the stale window: the worker is looping,
-     * hung, dead, or was never armed. THIS is the probe failure.
+     * No sweep completed inside the stale window: the worker is looping, hung,
+     * dead, or was never armed. THIS is the probe failure.
      */
     public const string STATUS_DOWN = 'down';
 
@@ -117,6 +145,21 @@ final class MaintenanceHeartbeat
      * cannot mask it.
      */
     public const int DEFAULT_STALE_AFTER_SECONDS = 180;
+
+    /** Clip for `last_error`: it is served over /health and rewritten every failing tick. */
+    private const int MAX_ERROR_LENGTH = 300;
+
+    /**
+     * The record this process owns, between writes. See the class docblock:
+     * re-reading the file on every {@see recordSweep()} loses updates when two
+     * sweep coroutines interleave.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $state = null;
+
+    /** Per-write counter, so two coroutines never share a temp filename. */
+    private int $writeSequence = 0;
 
     /**
      * @param string $path              Absolute path of the JSON record.
@@ -168,31 +211,29 @@ final class MaintenanceHeartbeat
      */
     public function arm(?int $pid = null, ?int $now = null): void
     {
-        $pid ??= getmypid() === false ? 0 : (int) getmypid();
+        $pid ??= self::currentPid();
         $now ??= time();
 
         $previous = $this->read();
         $continues = $previous !== null && ($now - $this->lastWriteOf($previous)) <= $this->staleAfterSeconds;
 
         if ($continues) {
-            /** @var array<string, mixed> $previous */
+            /** @var array<string, mixed> $record */
             $record = $previous;
-            $record['incarnations'] = $this->intOf($previous, 'incarnations') + ($pid === $this->intOf($previous, 'pid') ? 0 : 1);
+            $record['incarnations'] = $this->intOf($previous, 'incarnations')
+                + ($pid === $this->intOf($previous, 'pid') ? 0 : 1);
         } else {
             $record = [
                 'armed_at' => $now,
                 'incarnations' => 1,
-                'last_sweep_at' => null,
-                'last_success_at' => null,
-                'consecutive_failures' => 0,
-                'last_error' => null,
-                'last_failed_task' => null,
+                'tasks' => [],
             ];
         }
 
         $record['pid'] = $pid;
         $record['started_at'] = $now;
 
+        $this->state = $record;
         $this->write($record);
     }
 
@@ -202,9 +243,9 @@ final class MaintenanceHeartbeat
      * Call this from inside the guarded timer callback, after the work — see
      * the class docblock for why it must not be on a timer of its own.
      *
-     * @param string    $task  Sweep identifier, e.g. `idle_reaper_db`.
-     * @param Throwable $error The failure, or null when the sweep succeeded.
-     * @param int|null  $now   Unix seconds; injectable for tests.
+     * @param string         $task  Sweep identifier, e.g. `idle_reaper_db`.
+     * @param Throwable|null $error The failure, or null when the sweep succeeded.
+     * @param int|null       $now   Unix seconds; injectable for tests.
      *
      * @return void
      */
@@ -212,34 +253,40 @@ final class MaintenanceHeartbeat
     {
         $now ??= time();
 
-        $record = $this->read() ?? [
+        // In-memory first. Falling back to the file is correct but loses a
+        // concurrent coroutine's update, so it is the exception, not the rule.
+        $record = $this->state ?? $this->read() ?? [
             'armed_at' => $now,
             'incarnations' => 1,
-            'last_sweep_at' => null,
-            'last_success_at' => null,
-            'consecutive_failures' => 0,
-            'last_error' => null,
-            'last_failed_task' => null,
-            'pid' => getmypid() === false ? 0 : (int) getmypid(),
+            'tasks' => [],
+            'pid' => self::currentPid(),
             'started_at' => $now,
         ];
 
-        $record['last_sweep_at'] = $now;
+        /** @var mixed $tasksRaw */
+        $tasksRaw = $record['tasks'] ?? null;
+        /** @var array<string, mixed> $tasks */
+        $tasks = is_array($tasksRaw) ? $tasksRaw : [];
 
+        /** @var mixed $rowRaw */
+        $rowRaw = $tasks[$task] ?? null;
+        /** @var array<string, mixed> $row */
+        $row = is_array($rowRaw) ? $rowRaw : [];
+
+        $row['last_sweep_at'] = $now;
         if ($error === null) {
-            $record['last_success_at'] = $now;
-            $record['consecutive_failures'] = 0;
-            $record['last_error'] = null;
-            $record['last_failed_task'] = null;
+            $row['last_success_at'] = $now;
+            $row['consecutive_failures'] = 0;
+            $row['last_error'] = null;
         } else {
-            $record['consecutive_failures'] = $this->intOf($record, 'consecutive_failures') + 1;
-            // Clipped: this string is served over /health and written on every
-            // failing tick. A driver message can carry a DSN, and an unbounded
-            // one would grow the record without bound.
-            $record['last_error'] = substr($error::class . ': ' . $error->getMessage(), 0, 300);
-            $record['last_failed_task'] = $task;
+            $row['consecutive_failures'] = $this->intOf($row, 'consecutive_failures') + 1;
+            $row['last_error'] = substr($error::class . ': ' . $error->getMessage(), 0, self::MAX_ERROR_LENGTH);
         }
 
+        $tasks[$task] = $row;
+        $record['tasks'] = $tasks;
+
+        $this->state = $record;
         $this->write($record);
     }
 
@@ -247,13 +294,15 @@ final class MaintenanceHeartbeat
      * The verdict, for {@see HealthController}.
      *
      * Never throws: an unreadable, absent or malformed record is DOWN with a
-     * reason, because this runs on the `/health` path.
+     * reason, because this runs on the `/health` path. It reads from DISK on
+     * purpose — the caller is an HTTP fork, which never writes.
      *
      * @param int|null $now Unix seconds; injectable for tests.
      *
      * @return array{
      *     status: string,
      *     reason: string,
+     *     task: string|null,
      *     pid: int|null,
      *     incarnations: int|null,
      *     age_seconds: int|null,
@@ -267,63 +316,94 @@ final class MaintenanceHeartbeat
         $now ??= time();
 
         if (!$this->enabled) {
-            return $this->verdict(self::STATUS_DISABLED, 'maintenance_worker_disabled', null, null);
+            return $this->verdict(self::STATUS_DISABLED, 'maintenance_worker_disabled', null, null, null);
         }
 
         $record = $this->read();
         if ($record === null) {
-            return $this->verdict(self::STATUS_DOWN, 'no_heartbeat_record', null, null);
+            return $this->verdict(self::STATUS_DOWN, 'no_heartbeat_record', null, null, null);
         }
 
         $pid = $this->intOf($record, 'pid');
         $incarnations = $this->intOf($record, 'incarnations');
-        $failures = $this->intOf($record, 'consecutive_failures');
-        /** @var mixed $lastErrorRaw */
-        $lastErrorRaw = $record['last_error'] ?? null;
-        $lastError = is_string($lastErrorRaw) ? $lastErrorRaw : null;
 
-        /** @var mixed $lastSweepRaw */
-        $lastSweepRaw = $record['last_sweep_at'] ?? null;
-        $lastSweep = is_int($lastSweepRaw) ? $lastSweepRaw : null;
+        /** @var mixed $tasksRaw */
+        $tasksRaw = $record['tasks'] ?? null;
+        /** @var array<string, mixed> $tasks */
+        $tasks = is_array($tasksRaw) ? $tasksRaw : [];
 
         // No sweep has EVER completed in this lineage. Legitimate for the first
         // interval after boot; a crash-loop never leaves this branch, and
         // because `armed_at` is lineage-scoped it cannot renew the grace.
-        if ($lastSweep === null) {
+        if ($tasks === []) {
             $age = $now - $this->intOf($record, 'armed_at');
             if ($age > $this->staleAfterSeconds) {
-                return $this->verdict(
-                    self::STATUS_DOWN,
-                    'no_sweep_completed',
-                    $pid,
-                    $incarnations,
-                    $age,
-                    $failures,
-                    $lastError,
-                );
+                return $this->verdict(self::STATUS_DOWN, 'no_sweep_completed', null, $pid, $incarnations, $age);
             }
 
-            return $this->verdict(self::STATUS_OK, 'starting_up', $pid, $incarnations, $age, $failures, $lastError);
+            return $this->verdict(self::STATUS_OK, 'starting_up', null, $pid, $incarnations, $age);
         }
 
-        $age = $now - $lastSweep;
+        // The verdict is taken over the WORST task, never an average and never
+        // the last writer: one permanently stuck sweep beside three healthy
+        // ones must not read as healthy.
+        // PHP_INT_MAX rather than null: `$tasks` is non-empty here (checked
+        // above), so the first iteration always lowers it, and keeping it a
+        // plain int spares the rest of the method a nullable both analysers
+        // then argue about in opposite directions.
+        $stalestTask = null;
+        $stalestAt = PHP_INT_MAX;
+        $worstTask = null;
+        $worstFailures = 0;
+        $worstError = null;
+
+        /** @var mixed $rowRaw */
+        foreach ($tasks as $name => $rowRaw) {
+            /** @var array<string, mixed> $row */
+            $row = is_array($rowRaw) ? $rowRaw : [];
+            $sweptAt = $this->intOf($row, 'last_sweep_at');
+            if ($sweptAt < $stalestAt) {
+                $stalestAt = $sweptAt;
+                $stalestTask = $name;
+            }
+            $failures = $this->intOf($row, 'consecutive_failures');
+            if ($failures > $worstFailures) {
+                $worstFailures = $failures;
+                $worstTask = $name;
+                /** @var mixed $err */
+                $err = $row['last_error'] ?? null;
+                $worstError = is_string($err) ? $err : null;
+            }
+        }
+
+        $age = $now - $stalestAt;
         if ($age > $this->staleAfterSeconds) {
-            return $this->verdict(self::STATUS_DOWN, 'stale_sweep', $pid, $incarnations, $age, $failures, $lastError);
-        }
-
-        if ($failures > 0) {
             return $this->verdict(
-                self::STATUS_DEGRADED,
-                'sweep_failing',
+                self::STATUS_DOWN,
+                'stale_sweep',
+                $stalestTask,
                 $pid,
                 $incarnations,
                 $age,
-                $failures,
-                $lastError,
+                $worstFailures,
+                $worstError,
             );
         }
 
-        return $this->verdict(self::STATUS_OK, 'sweeping', $pid, $incarnations, $age, $failures, $lastError);
+        if ($worstFailures > 0) {
+            return $this->verdict(
+                self::STATUS_DEGRADED,
+                'sweep_failing',
+                $worstTask,
+                $pid,
+                $incarnations,
+                $age,
+                $worstFailures,
+                $worstError,
+            );
+        }
+
+        return $this->verdict(self::STATUS_OK, 'sweeping', null, $pid, $incarnations, $age, 0, null);
     }
 
     /**
@@ -367,8 +447,10 @@ final class MaintenanceHeartbeat
     }
 
     /**
-     * Atomic write: temp sibling + rename, so a concurrent reader on an HTTP
-     * worker never observes a partial record.
+     * Atomic write: UNIQUE temp sibling + rename.
+     *
+     * The uniqueness is the part that was measured wrong once — see the class
+     * docblock. A pid alone is not unique across the coroutines of one process.
      *
      * Silently gives up when the directory is not writable. A hub whose var/
      * directory is read-only should not have its maintenance sweeps start
@@ -389,7 +471,7 @@ final class MaintenanceHeartbeat
             return;
         }
 
-        $tmp = $this->path . '.' . (getmypid() === false ? '0' : (string) getmypid()) . '.tmp';
+        $tmp = $this->tempPath();
         if (@file_put_contents($tmp, $json) === false) {
             return;
         }
@@ -399,13 +481,50 @@ final class MaintenanceHeartbeat
     }
 
     /**
+     * A temp path no concurrent writer can be using.
+     *
+     * Pid AND a per-instance sequence: the pid separates forks, the sequence
+     * separates the coroutines within one fork, which is the case that actually
+     * corrupted the record in a measured container run.
+     */
+    private function tempPath(): string
+    {
+        $this->writeSequence++;
+
+        return sprintf('%s.%d.%d.tmp', $this->path, self::currentPid(), $this->writeSequence);
+    }
+
+    /**
+     * Current pid, or 0 where the platform will not say.
+     */
+    private static function currentPid(): int
+    {
+        $pid = getmypid();
+
+        return $pid === false ? 0 : $pid;
+    }
+
+    /**
      * The most recent moment this record was touched by any writer.
      *
      * @param array<string, mixed> $record Decoded record.
      */
     private function lastWriteOf(array $record): int
     {
-        return max($this->intOf($record, 'started_at'), $this->intOf($record, 'last_sweep_at'));
+        $latest = $this->intOf($record, 'started_at');
+
+        /** @var mixed $tasksRaw */
+        $tasksRaw = $record['tasks'] ?? null;
+        if (is_array($tasksRaw)) {
+            /** @var mixed $rowRaw */
+            foreach ($tasksRaw as $rowRaw) {
+                /** @var array<string, mixed> $row */
+                $row = is_array($rowRaw) ? $rowRaw : [];
+                $latest = max($latest, $this->intOf($row, 'last_sweep_at'));
+            }
+        }
+
+        return $latest;
     }
 
     /**
@@ -424,6 +543,7 @@ final class MaintenanceHeartbeat
      * @return array{
      *     status: string,
      *     reason: string,
+     *     task: string|null,
      *     pid: int|null,
      *     incarnations: int|null,
      *     age_seconds: int|null,
@@ -435,6 +555,7 @@ final class MaintenanceHeartbeat
     private function verdict(
         string $status,
         string $reason,
+        ?string $task,
         ?int $pid,
         ?int $incarnations,
         ?int $ageSeconds = null,
@@ -444,6 +565,7 @@ final class MaintenanceHeartbeat
         return [
             'status' => $status,
             'reason' => $reason,
+            'task' => $task,
             'pid' => $pid,
             'incarnations' => $incarnations,
             'age_seconds' => $ageSeconds,

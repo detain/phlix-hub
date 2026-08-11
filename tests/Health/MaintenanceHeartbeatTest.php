@@ -166,6 +166,153 @@ final class MaintenanceHeartbeatTest extends TestCase
         self::assertNull($snapshot['last_error']);
     }
 
+    // -----------------------------------------------------------------------
+    // Per-task accounting — a single counter would hide a stuck sweep
+    // -----------------------------------------------------------------------
+
+    /**
+     * Four sweeps share this record. With one top-level counter, whichever task
+     * reported LAST would decide the verdict, so three healthy sweeps would
+     * paint over one that has been failing since boot — the same uninformative
+     * green as the defect this class exists to remove, one level down.
+     */
+    public function testOneFailingTaskIsNotMaskedByThreeHealthyOnes(): void
+    {
+        $hb = $this->heartbeat(180);
+        $hb->arm(4242, 1_000);
+
+        // The failing one reports FIRST, so a last-writer-wins counter would
+        // have been reset by the three that follow.
+        $hb->recordSweep('server_reaper', new RuntimeException('Connection refused'), 1_060);
+        $hb->recordSweep('idle_reaper_db', null, 1_060);
+        $hb->recordSweep('federation_session_reaper', null, 1_060);
+        $hb->recordSweep('core_update_check', null, 1_060);
+
+        $snapshot = $hb->snapshot(1_070);
+
+        self::assertSame(MaintenanceHeartbeat::STATUS_DEGRADED, $snapshot['status']);
+        self::assertSame('server_reaper', $snapshot['task']);
+        self::assertSame(1, $snapshot['consecutive_failures']);
+    }
+
+    /**
+     * The control for the test above: with every task succeeding, the same four
+     * calls read `ok`. Without it, the assertion above would also pass against
+     * a snapshot hard-wired to `degraded`.
+     */
+    public function testAllTasksSucceedingReadsOk(): void
+    {
+        $hb = $this->heartbeat(180);
+        $hb->arm(4242, 1_000);
+        foreach (['server_reaper', 'idle_reaper_db', 'federation_session_reaper'] as $task) {
+            $hb->recordSweep($task, null, 1_060);
+        }
+
+        $snapshot = $hb->snapshot(1_070);
+
+        self::assertSame(MaintenanceHeartbeat::STATUS_OK, $snapshot['status']);
+        self::assertNull($snapshot['task']);
+    }
+
+    /**
+     * Freshness is taken over the OLDEST task, so a sweep that quietly stops
+     * ticking is visible even while its siblings keep reporting.
+     */
+    public function testOneTaskThatStopsSweepingGoesStaleDespiteHealthySiblings(): void
+    {
+        $hb = $this->heartbeat(180);
+        $hb->arm(4242, 1_000);
+        $hb->recordSweep('server_reaper', null, 1_060);
+        $hb->recordSweep('idle_reaper_db', null, 1_060);
+
+        // `idle_reaper_db` keeps going; `server_reaper` never reports again.
+        for ($t = 1_120; $t <= 1_300; $t += 60) {
+            $hb->recordSweep('idle_reaper_db', null, $t);
+        }
+
+        // Control: at 179s past the last server_reaper sweep, still ok.
+        self::assertSame(MaintenanceHeartbeat::STATUS_OK, $hb->snapshot(1_239)['status']);
+
+        $snapshot = $hb->snapshot(1_241);
+        self::assertSame(MaintenanceHeartbeat::STATUS_DOWN, $snapshot['status']);
+        self::assertSame('stale_sweep', $snapshot['reason']);
+        self::assertSame('server_reaper', $snapshot['task']);
+    }
+
+    // -----------------------------------------------------------------------
+    // The measured writer defect (see the class docblock)
+    // -----------------------------------------------------------------------
+
+    /**
+     * 🚨 REGRESSION for a defect this implementation actually shipped and a
+     * container run caught.
+     *
+     * The first cut re-read the record from disk on every `recordSweep()` and
+     * wrote through a temp path keyed only by pid. The four sweeps are four
+     * COROUTINES IN ONE PROCESS, so their writes interleaved and the control
+     * container's record ended `…"started_at":1786408197}}1786408197}`.
+     * `json_decode()` failed, `read()` returned null, and `/health` answered
+     * 503 `no_heartbeat_record` in the arm that was supposed to be green.
+     *
+     * ⚠ PHPUnit cannot enter a coroutine, so this cannot reproduce the
+     * interleaving. It pins the two properties that fix it instead: the record
+     * is held in memory, so a clobbered file does not reset the counters; and
+     * every write gets its own temp name.
+     */
+    public function testTheRecordIsHeldInMemorySoAClobberedFileDoesNotResetCounters(): void
+    {
+        $hb = $this->heartbeat(180);
+        $hb->arm(4242, 1_000);
+        $hb->recordSweep('server_reaper', new RuntimeException('one'), 1_060);
+
+        // Simulate the interleaved write that corrupted the container's record.
+        file_put_contents($this->path, '{"armed_at":1,"tasks":{}}}1786408197}');
+
+        $hb->recordSweep('server_reaper', new RuntimeException('two'), 1_120);
+
+        $snapshot = $hb->snapshot(1_130);
+        self::assertSame(
+            2,
+            $snapshot['consecutive_failures'],
+            'a re-read from a clobbered file would have restarted the count at 1',
+        );
+        self::assertSame(4242, $snapshot['pid'], 'the lineage must survive the clobber too');
+        self::assertSame(MaintenanceHeartbeat::STATUS_DEGRADED, $snapshot['status']);
+    }
+
+    public function testEveryWriteUsesADistinctTempPath(): void
+    {
+        $hb = $this->heartbeat();
+        $method = new \ReflectionMethod(MaintenanceHeartbeat::class, 'tempPath');
+
+        $paths = [];
+        for ($i = 0; $i < 8; $i++) {
+            $paths[] = (string) $method->invoke($hb);
+        }
+
+        self::assertCount(8, array_unique($paths), 'a shared temp name is what corrupted the record');
+        foreach ($paths as $p) {
+            self::assertStringStartsWith($this->path . '.', $p);
+            self::assertStringEndsWith('.tmp', $p);
+        }
+    }
+
+    /**
+     * The falsifying control for the test above: the ORIGINAL, defective naming
+     * scheme — path + pid only — produces the SAME string every time. Without
+     * this, `assertCount(8, array_unique(...))` would look like a strong
+     * assertion about a property that any implementation happens to satisfy.
+     */
+    public function testTheOriginalPidOnlyTempNameWouldHaveCollided(): void
+    {
+        $defective = [];
+        for ($i = 0; $i < 8; $i++) {
+            $defective[] = $this->path . '.' . (string) getmypid() . '.tmp';
+        }
+
+        self::assertCount(1, array_unique($defective));
+    }
+
     public function testDisabledWorkerIsNotAProbeFailure(): void
     {
         $snapshot = $this->heartbeat(180, false)->snapshot(1_000);

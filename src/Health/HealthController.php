@@ -82,6 +82,7 @@ final class HealthController
      *     maintenance: array{
      *         status: string,
      *         reason: string,
+     *         task: string|null,
      *         pid: int|null,
      *         incarnations: int|null,
      *         age_seconds: int|null,
@@ -97,6 +98,7 @@ final class HealthController
         $maintenance = $this->maintenance?->snapshot() ?? [
             'status' => MaintenanceHeartbeat::STATUS_DISABLED,
             'reason' => 'no_heartbeat_configured',
+            'task' => null,
             'pid' => null,
             'incarnations' => null,
             'age_seconds' => null,
