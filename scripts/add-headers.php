@@ -36,7 +36,7 @@ declare(strict_types=1);
  * @param list<string> $files    Accumulator, appended to in place.
  * @param list<string> $excludes Directory basenames whose subtrees are skipped.
  */
-$collect = static function (string $dir, array &$files, array $excludes): void {
+$collect = /** @param list<string> $files */ static function (string $dir, array &$files, array $excludes): void {
     $pruned = new RecursiveCallbackFilterIterator(
         new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
         static function (mixed $node) use ($excludes): bool {

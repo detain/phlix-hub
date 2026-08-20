@@ -143,7 +143,7 @@ const REQUIRED_EXTENSIONS = [
  *
  * @return list<string>
  */
-$alsoRequired = /** @return list<string> */ static function (array $argv): array {
+$alsoRequired = /** @param list<string> $argv @return list<string> */ static function (array $argv): array {
     $extra = [];
 
     foreach ($argv as $argument) {
