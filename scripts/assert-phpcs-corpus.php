@@ -40,11 +40,17 @@
  *     anywhere in this script: it is unreliable (it has reported 0 with findings
  *     present, and 1 for reasons unrelated to the code). The verdict comes from
  *     the report's `totals`, and every offending file is named.
+ *  6. **No warning-suppression flag in the ruleset.** S333: the `<arg value="np"/>`
+ *     flag (phpcs `-n` + `-p`) was live once this gate ran `phpcs` against
+ *     `phpcs.xml.dist` directly, and it hid 6 warnings across 5 files under
+ *     scripts/. Warnings are gate failures per S109, so the PARSED ruleset is
+ *     checked for any `<arg value>` whose dash-stripped content contains `n` —
+ *     re-adding one fails the build on the ruleset content, never on exit codes.
  *
  * ## Usage
  *
  * ```
- * php scripts/assert-phpcs-corpus.php [--extra-path=DIR] [--cache=FILE]
+ * php scripts/assert-phpcs-corpus.php [--extra-path=DIR] [--cache=FILE] [--ruleset=FILE]
  * ```
  *
  * `--extra-path=DIR` ADDS a directory to the corpus and requires it to contain at
@@ -53,7 +59,9 @@
  * {@see \Phlix\Hub\Tests\Unit\Support\PhpcsCorpusGateTest} uses it to prove both
  * that the gate goes red on a planted violation and that a zero-file corpus is a
  * failure rather than a pass. `--cache=FILE` is a phpcs speed-up used by that test;
- * CI deliberately runs without it.
+ * CI deliberately runs without it. `--ruleset=FILE` is TEST-ONLY: it overrides the
+ * ruleset path so the failure path can be driven red in a test — a gate whose
+ * failure path cannot be driven red is not a gate.
  *
  * @package Phlix\Hub
  */
@@ -97,6 +105,7 @@ $fail = static function (string $message): never {
 
 $extraPath = null;
 $cacheFile = null;
+$rulesetOverride = null;
 /** @var list<string> $arguments */
 $arguments = array_slice(array_map('strval', $argv), 1);
 foreach ($arguments as $arg) {
@@ -108,11 +117,23 @@ foreach ($arguments as $arg) {
         $cacheFile = substr($arg, strlen('--cache='));
         continue;
     }
+    if (str_starts_with($arg, '--ruleset=')) {
+        $rulesetOverride = substr($arg, strlen('--ruleset='));
+        continue;
+    }
     $fail(sprintf('S299 phpcs corpus gate: unknown argument "%s".', $arg));
 }
 
 if ($extraPath !== null && !is_dir($extraPath)) {
     $fail(sprintf('S299 phpcs corpus gate: --extra-path "%s" is not a directory.', $extraPath));
+}
+
+// `--ruleset=FILE` is a TEST-ONLY override so the S333 np-flag check and the
+// missing-path check can be driven red without editing the real ruleset. It is
+// applied after argument parsing — exactly like --cache/--extra-path — and
+// before the ruleset is read below.
+if ($rulesetOverride !== null) {
+    $rulesetPath = $rulesetOverride;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +167,29 @@ if ($missingPaths !== []) {
         implode(', ', EXPECTED_PATHS),
         implode(', ', $missingPaths),
     ));
+}
+
+// ---------------------------------------------------------------------------
+// 1b. S333 — no warning-suppression flag may come back.
+//
+// This asserts on PARSED RULESET CONTENT, never on phpcs's exit code: `-n`
+// (e.g. `<arg value="np"/>`) makes phpcs silent about warnings, which are gate
+// failures per S109, and the suppressed set is invisible to every later check.
+// ---------------------------------------------------------------------------
+foreach ($ruleset->arg as $arg) {
+    $value = (string) $arg['value'];
+    if ($value === '') {
+        continue;
+    }
+    $stripped = ltrim($value, '-');
+    if (str_contains($stripped, 'n')) {
+        $fail(sprintf(
+            'S333 phpcs corpus gate: the ruleset re-introduces a warning-suppression flag '
+            . '(<arg value="%s"/>). The `n` flag suppresses warnings, which are gate failures '
+            . 'per S109 — re-adding it is a build break.',
+            $value,
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +342,12 @@ foreach ($corpus as $path) {
 }
 
 $total = array_sum($perPath);
-printf("  %-10s %d file(s) inspected in total (phpcs exit code %d, NOT used as the verdict)\n", 'TOTAL', $total, $phpcsExit);
+printf(
+    "  %-10s %d file(s) inspected in total (phpcs exit code %d, NOT used as the verdict)\n",
+    'TOTAL',
+    $total,
+    $phpcsExit,
+);
 
 if ($total === 0) {
     $problems[] = 'phpcs inspected ZERO files in total. That is a failure, not a pass.';

@@ -44,6 +44,12 @@ use PHPUnit\Framework\TestCase;
  *     that goes red prints the real corpus lines, and those are asserted to be
  *     at or above the floors — so a red caused by "phpcs found nothing at all"
  *     cannot be mistaken for a red caused by the planted violation.
+ *  6. **No warning-suppression flag in the ruleset.** S333: `-n` (e.g.
+ *     `<arg value="np"/>`) was live in `phpcs.xml.dist` and hid 6 warnings
+ *     across 5 files under scripts/. Warnings are gate failures per S109, so the
+ *     gate now fails on any `<arg value>` that re-introduces `n`, and
+ *     {@see testTheGateFailsWhenWarningSuppressionIsReAdded()} drives that
+ *     failure red through the test-only `--ruleset=` override.
  *
  * ⚠ `--extra-path` can only ADD a directory to the inspected corpus. It is
  * structurally incapable of making the gate pass something it would otherwise
@@ -145,6 +151,82 @@ final class PhpcsCorpusGateTest extends TestCase
             'S299: phpcs.xml.dist must lint src, scripts AND tests. tests/ was unlinted for the whole '
             . 'life of this repository (696 errors / 141 warnings when first measured).',
         );
+    }
+
+    /**
+     * S333 — the ruleset must not re-introduce phpcs's `-n` (suppress warnings).
+     *
+     * Parsed with simplexml exactly like the gate script parses it. Non-vacuity
+     * first: prove the `<arg>` elements were actually read, then assert that no
+     * dash-stripped `value` contains `n`. Warnings are gate failures per S109,
+     * and `-n` would hide exactly the 6 warnings S333 fixed under scripts/.
+     */
+    public function testTheRulesetHasNoWarningSuppressionFlag(): void
+    {
+        $xml = simplexml_load_string((string) file_get_contents(self::RULESET));
+        self::assertNotFalse($xml, 'phpcs.xml.dist must be parseable XML');
+
+        $args = iterator_to_array($xml->arg, false);
+        self::assertNotSame([], $args, 'no <arg> elements were parsed out of phpcs.xml.dist');
+
+        foreach ($args as $arg) {
+            $value = (string) $arg['value'];
+            if ($value === '') {
+                continue;
+            }
+            self::assertStringNotContainsString(
+                'n',
+                ltrim($value, '-'),
+                sprintf(
+                    'S333: <arg value="%s"/> would suppress warnings (phpcs `-n`), and warnings are '
+                    . 'gate failures per S109. Removing it fixed 6 warnings across 5 scripts/ files.',
+                    $value,
+                ),
+            );
+        }
+    }
+
+    /**
+     * S333 — prove the gate goes red when `-n` comes back.
+     *
+     * Copies the REAL ruleset text and inserts `<arg value="np"/>`, then drives
+     * the gate with the test-only `--ruleset=` override. The copy still names
+     * every expected path, so the S299 path check passes and the S333 np-flag
+     * check is what fails — BEFORE phpcs even runs. A gate whose failure path
+     * cannot be driven red in a test is not a gate.
+     */
+    public function testTheGateFailsWhenWarningSuppressionIsReAdded(): void
+    {
+        $ruleset = (string) file_get_contents(self::RULESET);
+
+        // The S333 comment in the real ruleset mentions `<arg value="np"/>` as
+        // prose, so parse the elements instead of scanning the raw text: no
+        // actual `<arg value>` may already carry the `n` flag.
+        $xml = simplexml_load_string($ruleset);
+        self::assertNotFalse($xml, 'phpcs.xml.dist must be parseable XML');
+        $argValues = array_map(
+            static fn (\SimpleXMLElement $e): string => ltrim((string) $e['value'], '-'),
+            iterator_to_array($xml->arg, false),
+        );
+        self::assertNotContains(
+            'n',
+            $argValues,
+            'the real ruleset must not already carry a warning-suppression flag',
+        );
+
+        $withNp = str_replace(
+            '<arg name="extensions" value="php"/>',
+            "<arg name=\"extensions\" value=\"php\"/>\n    <arg value=\"np\"/>",
+            $ruleset,
+        );
+        $rulesetPath = $this->workDir . '/ruleset-with-np.xml';
+        file_put_contents($rulesetPath, $withNp);
+
+        $result = $this->runGate(['--ruleset=' . $rulesetPath]);
+
+        self::assertSame(1, $result['exit'], "re-adding np must go RED:\n" . $result['output']);
+        self::assertStringContainsString('<arg value="np"/>', $result['output']);
+        self::assertStringContainsString('S333', $result['output']);
     }
 
     /**

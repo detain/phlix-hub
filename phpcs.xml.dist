@@ -22,6 +22,12 @@
         the build when one goes missing, and asserts a floor on the number of
         files phpcs actually inspected under each — a linter that traverses
         nothing exits 0 and looks exactly like a clean run.
+
+        S333 — the `<arg value="np"/>` flag (phpcs `-n` + `-p`) was removed on
+        2026-08-20. The S299 gate runs phpcs against this ruleset file, so `-n`
+        was live and suppressed 6 warnings across 5 files under scripts/.
+        Warnings are gate failures per S109. `scripts/assert-phpcs-corpus.php`
+        fails the build if any `<arg value>` re-introduces the `n` flag.
     -->
     <file>src</file>
     <file>scripts</file>
@@ -29,7 +35,6 @@
 
     <arg name="colors"/>
     <arg name="extensions" value="php"/>
-    <arg value="np"/>
 
     <rule ref="PSR12"/>
 </ruleset>
