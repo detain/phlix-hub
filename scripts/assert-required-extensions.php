@@ -143,8 +143,7 @@ const REQUIRED_EXTENSIONS = [
  *
  * @return list<string>
  */
-function alsoRequired(array $argv): array
-{
+$alsoRequired = /** @param list<string> $argv @return list<string> */ static function (array $argv): array {
     $extra = [];
 
     foreach ($argv as $argument) {
@@ -157,7 +156,7 @@ function alsoRequired(array $argv): array
     }
 
     return $extra;
-}
+};
 
 /** @var list<string> $argvList */
 $argvList = array_map('strval', $argv ?? []);
@@ -165,7 +164,7 @@ $argvList = array_map('strval', $argv ?? []);
 /** @var array<string, array{symbol: string|null, source: string|null, why: string}> $contract */
 $contract = REQUIRED_EXTENSIONS;
 
-foreach (alsoRequired($argvList) as $extra) {
+foreach ($alsoRequired($argvList) as $extra) {
     $contract[$extra] = [
         'symbol' => null,
         'source' => null,

@@ -112,6 +112,11 @@
 
 declare(strict_types=1);
 
+// phpcs:disable PSR1.Files.SideEffects -- S333 waiver: 19 named functions form a self-contained
+// CLI audit tool; converting them all to closures is the estate convention but is a separate
+// refactor, out of scope for S333. Expires when this file is refactored to the estate's closure
+// convention (tracked as an S333 follow-up) or the next phpcs major upgrade — whichever comes first.
+
 /** `composer audit` was added in Composer 2.4; older is unusable. */
 const MIN_COMPOSER_VERSION = '2.4.0';
 
@@ -735,7 +740,8 @@ if ($ignored !== []) {
     annotate(
         'notice',
         sprintf(
-            '%d security advisory/ies affecting %d package(s) are IGNORED by composer config — acknowledged, not fixed.',
+            '%d security advisory/ies affecting %d package(s) are IGNORED by composer config '
+            . '— acknowledged, not fixed.',
             countAdvisories($ignored),
             count($ignored),
         ),

@@ -13,81 +13,6 @@
 
 declare(strict_types=1);
 
-$repoRoot = __DIR__ . '/..';
-$copyrightLine = '@copyright 2026 Joe Huss <detain@interserver.net>';
-$headerTemplate = <<<'PHPBLOCK'
-
-/**
- * <one-line description>.
- *
- * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
- */
-PHPBLOCK;
-
-$changed = 0;
-$skipped = 0;
-
-foreach (getPHPFiles($repoRoot) as $file) {
-    $relativePath = substr($file, strlen($repoRoot) + 1);
-
-    // Skip files that already carry the copyright line.
-    $content = file_get_contents($file);
-    if ($content === false) {
-        // Never silently continue past an unreadable file: this script rewrites
-        // what it reads, so "could not read" must not become "wrote nothing".
-        fwrite(STDERR, "ERROR {$relativePath}  (could not be read)\n");
-        exit(1);
-    }
-    if (str_contains($content, $copyrightLine)) {
-        echo "SKIP  {$relativePath}  (already has copyright)\n";
-        $skipped++;
-        continue;
-    }
-
-    // Build the specific docblock for this file.
-    $description = inferDescription($file, $relativePath);
-    $docblock = str_replace('<one-line description>.', $description . '.', $headerTemplate);
-
-    // Insert after <?php, preserving existing content.
-    if (preg_match('/^<\?php\r?\n?/', $content, $openMatch)) {
-        $afterOpenTag = substr($content, strlen($openMatch[0]));
-        $newContent = "<?php\n" . $docblock . "\n" . $afterOpenTag;
-    } else {
-        // Fallback: prepend.
-        $newContent = "<?php\n" . $docblock . "\n" . $content;
-    }
-
-    file_put_contents($file, $newContent);
-    echo "ADDED {$relativePath}\n";
-    $changed++;
-}
-
-echo "\nDone. {$changed} file(s) updated, {$skipped} already had copyright.\n";
-
-/**
- * Recursively collect all .php files under src/, excluding vendor/, .git/, generated.
- *
- * @return list<string> Absolute file paths.
- */
-function getPHPFiles(string $repoRoot): array
-{
-    $dirs = ['src'];
-    $excludes = ['vendor', '.git', 'generated', 'node_modules', '.phpunit.cache'];
-
-    $files = [];
-    foreach ($dirs as $dir) {
-        $path = $repoRoot . '/' . $dir;
-        if (!is_dir($path)) {
-            continue;
-        }
-        collect($path, $files, $excludes);
-    }
-
-    sort($files);
-    return $files;
-}
-
 /**
  * Append every `.php` file under `$dir` to `$files`, pruning excluded subtrees.
  *
@@ -102,11 +27,16 @@ function getPHPFiles(string $repoRoot): array
  * `FilesystemIterator`, where the value 16 means `CURRENT_AS_SELF`, not
  * "catch get child" — PHPStan level 9 reports that as `argument.invalidConstant`.
  *
+ * Declared as a closure (estate convention) so the file stays free of named
+ * functions: a named function in a script that also executes logic trips
+ * PSR1.Files.SideEffects, and warnings are gate failures per S109. The walk
+ * itself recurses through {@see RecursiveIteratorIterator}, so the closure needs
+ * no self-reference.
+ *
  * @param list<string> $files    Accumulator, appended to in place.
  * @param list<string> $excludes Directory basenames whose subtrees are skipped.
  */
-function collect(string $dir, array &$files, array $excludes): void
-{
+$collect = /** @param list<string> $files */ static function (string $dir, array &$files, array $excludes): void {
     $pruned = new RecursiveCallbackFilterIterator(
         new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
         static function (mixed $node) use ($excludes): bool {
@@ -129,13 +59,34 @@ function collect(string $dir, array &$files, array $excludes): void
             $files[] = $node->getPathname();
         }
     }
-}
+};
+
+/**
+ * Recursively collect all .php files under src/, excluding vendor/, .git/, generated.
+ *
+ * @return list<string> Absolute file paths.
+ */
+$getPHPFiles = /** @return list<string> */ static function (string $repoRoot) use ($collect): array {
+    $dirs = ['src'];
+    $excludes = ['vendor', '.git', 'generated', 'node_modules', '.phpunit.cache'];
+
+    $files = [];
+    foreach ($dirs as $dir) {
+        $path = $repoRoot . '/' . $dir;
+        if (!is_dir($path)) {
+            continue;
+        }
+        $collect($path, $files, $excludes);
+    }
+
+    sort($files);
+    return $files;
+};
 
 /**
  * Best-effort one-line description derived from namespace / class name.
  */
-function inferDescription(string $file, string $relativePath): string
-{
+$inferDescription = static function (string $file, string $relativePath): string {
     $content = file_get_contents($file);
     if ($content === false) {
         return 'Phlix hub source file.';
@@ -155,4 +106,56 @@ function inferDescription(string $file, string $relativePath): string
     }
 
     return 'Phlix hub source file.';
+};
+
+$repoRoot = __DIR__ . '/..';
+$copyrightLine = '@copyright 2026 Joe Huss <detain@interserver.net>';
+$headerTemplate = <<<'PHPBLOCK'
+
+/**
+ * <one-line description>.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MIT
+ */
+PHPBLOCK;
+
+$changed = 0;
+$skipped = 0;
+
+foreach ($getPHPFiles($repoRoot) as $file) {
+    $relativePath = substr($file, strlen($repoRoot) + 1);
+
+    // Skip files that already carry the copyright line.
+    $content = file_get_contents($file);
+    if ($content === false) {
+        // Never silently continue past an unreadable file: this script rewrites
+        // what it reads, so "could not read" must not become "wrote nothing".
+        fwrite(STDERR, "ERROR {$relativePath}  (could not be read)\n");
+        exit(1);
+    }
+    if (str_contains($content, $copyrightLine)) {
+        echo "SKIP  {$relativePath}  (already has copyright)\n";
+        $skipped++;
+        continue;
+    }
+
+    // Build the specific docblock for this file.
+    $description = $inferDescription($file, $relativePath);
+    $docblock = str_replace('<one-line description>.', $description . '.', $headerTemplate);
+
+    // Insert after <?php, preserving existing content.
+    if (preg_match('/^<\?php\r?\n?/', $content, $openMatch)) {
+        $afterOpenTag = substr($content, strlen($openMatch[0]));
+        $newContent = "<?php\n" . $docblock . "\n" . $afterOpenTag;
+    } else {
+        // Fallback: prepend.
+        $newContent = "<?php\n" . $docblock . "\n" . $content;
+    }
+
+    file_put_contents($file, $newContent);
+    echo "ADDED {$relativePath}\n";
+    $changed++;
 }
+
+echo "\nDone. {$changed} file(s) updated, {$skipped} already had copyright.\n";

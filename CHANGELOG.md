@@ -728,11 +728,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `vendor/bin/phpcs --standard=PSR12 src/` is now `0 errors / 0 warnings`, exit 0.
   ⚠ Note for future runs: phpcs exits non-zero on WARNINGS alone, so judge a run by
   its `FOUND n ERRORS AND m WARNINGS` lines and never by the exit code.
-  (`phpcs.xml.dist`'s `<arg value="np"/>` still carries an `n` for a *bare* `phpcs`
-  invocation, which no gate or documented command uses — left alone deliberately:
-  removing it turns bare `phpcs` red on a `PSR1.Files.SideEffects` warning in
-  `scripts/add-headers.php` that cannot be fixed without splitting that script,
-  which is outside this change.)
+  (⚠ As of S333 the ruleset's `<arg value="np"/>` — which S299's gate had made
+  LIVE by invoking `phpcs --standard=<repoRoot>/phpcs.xml.dist` — is gone, and the
+  `scripts/add-headers.php` SideEffects warning it shielded was fixed by refactoring
+  that script to closures. The gate now fails the build if any `<arg value>` re-adds
+  the `n` flag.)
 
 ### Security
 
@@ -957,6 +957,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     monthly BYTE-CAP quota and the concurrent-stream cap stay period-scoped on
     `relay_user_quotas` and are untouched. The admin endpoint
     (`PUT /api/v1/admin/users/{id}/throttle`) round-trips through these unchanged.
+
+### Changed
+
+- **The phpcs ruleset no longer suppresses warnings, and the gate now fails the
+  build if anyone re-adds the suppression (S333).** `phpcs.xml.dist`'s
+  `<arg value="np"/>` (phpcs `-n` + `-p`) was inert while CI passed an explicit
+  `src/` path; S299 made it LIVE by invoking
+  `phpcs --standard=<repoRoot>/phpcs.xml.dist`, hiding **6 warnings across 5
+  files under `scripts/`** (measured: 0 errors / 6 warnings with
+  `--warning-severity=1`; warnings are gate failures per S109). The flag is gone
+  and the six are fixed — `add-headers.php`, `assert-coverage-report.php`,
+  `assert-required-extensions.php` refactored to the estate's closure
+  convention; `security-audit-check.php` waived by name with a written reason
+  and expiry condition; two long lines wrapped. The gate fails the build if any
+  `<arg value>` re-adds the `n` flag — asserted on parsed ruleset content, never
+  phpcs's exit code (test-only `--ruleset=FILE` override) — pinned by
+  `testTheRulesetHasNoWarningSuppressionFlag` and
+  `testTheGateFailsWhenWarningSuppressionIsReAdded`. Measured after: 456 files,
+  0 errors / 0 warnings, A/B with `--warning-severity=1` also 0 / 0.
 
 ## [0.5.0] - 2026-07-20
 

@@ -110,8 +110,7 @@ const MIN_FILES = 150;
  * Every failure path in this script ends here. There is no path that returns
  * success without having read a real number out of a real report.
  */
-function coverageGateFail(string $headline, string ...$detail): never
-{
+$coverageGateFail = static function (string $headline, string ...$detail): never {
     fwrite(STDERR, '::error::' . $headline . "\n");
 
     foreach ($detail as $line) {
@@ -119,7 +118,7 @@ function coverageGateFail(string $headline, string ...$detail): never
     }
 
     exit(1);
-}
+};
 
 /**
  * Read one project-level Clover metric as a non-negative integer, or die trying.
@@ -128,13 +127,16 @@ function coverageGateFail(string $headline, string ...$detail): never
  * shape this gate understands. The honest response is to fail, never to invent a
  * zero and carry on.
  */
-function coverageGateMetric(DOMXPath $xpath, string $attribute, string $reportPath): int
-{
+$coverageGateMetric = static function (
+    DOMXPath $xpath,
+    string $attribute,
+    string $reportPath,
+) use ($coverageGateFail): int {
     $expression = '/coverage/project/metrics/@' . $attribute;
     $nodes = $xpath->query($expression);
 
     if ($nodes === false || $nodes->length === 0) {
-        coverageGateFail(
+        $coverageGateFail(
             sprintf('S316 coverage gate: %s has no %s at %s.', $reportPath, $attribute, $expression),
             'PHPUnit\'s Clover writer always emits this attribute on the project element, so its',
             'absence means this file is not PHPUnit Clover XML. Do not switch to another report',
@@ -145,7 +147,7 @@ function coverageGateMetric(DOMXPath $xpath, string $attribute, string $reportPa
     $raw = trim((string) $nodes->item(0)?->nodeValue);
 
     if (preg_match('/^\d+$/', $raw) !== 1) {
-        coverageGateFail(
+        $coverageGateFail(
             sprintf('S316 coverage gate: metric %s is not a non-negative integer.', $attribute),
             sprintf('Parsed value: "%s" (from %s)', $raw, $expression),
             'A gate that cannot read its own input must fail, not skip.',
@@ -153,7 +155,7 @@ function coverageGateMetric(DOMXPath $xpath, string $attribute, string $reportPa
     }
 
     return (int) $raw;
-}
+};
 
 $reportPath = $argv[1] ?? (dirname(__DIR__) . '/coverage.xml');
 
@@ -166,7 +168,7 @@ $reportPath = $argv[1] ?? (dirname(__DIR__) . '/coverage.xml');
 // -----------------------------------------------------------------------------
 
 if (!is_file($reportPath)) {
-    coverageGateFail(
+    $coverageGateFail(
         sprintf('S316 coverage gate: the coverage report "%s" was NOT produced.', $reportPath),
         'The "Run PHPUnit" step passes `--coverage-clover coverage.xml`, and phpunit.xml also',
         'configures <coverage><report><clover outputFile="coverage.xml"/>. Both would have to be',
@@ -178,7 +180,7 @@ if (!is_file($reportPath)) {
 $bytes = filesize($reportPath);
 
 if ($bytes === false || $bytes === 0) {
-    coverageGateFail(
+    $coverageGateFail(
         sprintf('S316 coverage gate: the coverage report "%s" exists but is EMPTY (0 bytes).', $reportPath),
         'A zero-byte report is a truncated or interrupted write, not an empty result set.',
         'Uploading it would report a coverage collapse to Codecov as if it were real.',
@@ -195,7 +197,7 @@ if ($bytes === false || $bytes === 0) {
 // -----------------------------------------------------------------------------
 
 if (!class_exists('DOMDocument') || !class_exists('DOMXPath')) {
-    coverageGateFail(
+    $coverageGateFail(
         'S316 coverage gate: PHP is missing ext-dom (DOMDocument/DOMXPath), so the coverage report '
         . 'cannot be parsed.',
         'Add "dom" to the setup-php `extensions:` list in .github/workflows/ci.yml.',
@@ -223,7 +225,7 @@ libxml_use_internal_errors($previous);
 if ($loaded === false) {
     $messages = array_map(static fn (LibXMLError $error): string => trim($error->message), $xmlErrors);
 
-    coverageGateFail(
+    $coverageGateFail(
         sprintf('S316 coverage gate: "%s" is not parseable XML.', $reportPath),
         $messages === [] ? 'libxml reported no detail.' : 'libxml: ' . implode('; ', $messages),
     );
@@ -231,9 +233,9 @@ if ($loaded === false) {
 
 $xpath = new DOMXPath($document);
 
-$files = coverageGateMetric($xpath, 'files', $reportPath);
-$statements = coverageGateMetric($xpath, 'statements', $reportPath);
-$covered = coverageGateMetric($xpath, 'coveredstatements', $reportPath);
+$files = $coverageGateMetric($xpath, 'files', $reportPath);
+$statements = $coverageGateMetric($xpath, 'statements', $reportPath);
+$covered = $coverageGateMetric($xpath, 'coveredstatements', $reportPath);
 
 // -----------------------------------------------------------------------------
 // 4. The magnitudes. Printed first, so a run that measured nothing cannot look
@@ -250,7 +252,7 @@ printf(
 );
 
 if ($files < MIN_FILES) {
-    coverageGateFail(
+    $coverageGateFail(
         sprintf(
             'S316 coverage gate: the report accounts for only %d file(s), expected at least %d.',
             $files,
@@ -262,7 +264,7 @@ if ($files < MIN_FILES) {
 }
 
 if ($statements === 0) {
-    coverageGateFail(
+    $coverageGateFail(
         'S316 coverage gate: the report contains 0 statements — the run measured NOTHING.',
         'This is a broken report, not an empty one. Check that a coverage driver is loaded',
         '(`coverage: xdebug` in setup-php) and that phpunit.xml\'s <source> still includes src/.',
@@ -271,7 +273,7 @@ if ($statements === 0) {
 }
 
 if ($statements < MIN_STATEMENTS) {
-    coverageGateFail(
+    $coverageGateFail(
         sprintf(
             'S316 coverage gate: only %d statements are accounted for, expected at least %d.',
             $statements,
@@ -283,7 +285,7 @@ if ($statements < MIN_STATEMENTS) {
 }
 
 if ($covered === 0) {
-    coverageGateFail(
+    $coverageGateFail(
         sprintf('S316 coverage gate: 0 of %d statements are marked covered.', $statements),
         'The report was written but the coverage driver collected nothing — the usual cause is a',
         'driver that is present but disabled for the run.',
@@ -291,7 +293,7 @@ if ($covered === 0) {
 }
 
 if ($covered > $statements) {
-    coverageGateFail(sprintf(
+    $coverageGateFail(sprintf(
         'S316 coverage gate: the report is internally inconsistent — coveredstatements (%d) exceeds '
         . 'statements (%d).',
         $covered,
@@ -315,7 +317,7 @@ printf(
 );
 
 if ($percentage < MIN_STATEMENT_COVERAGE) {
-    coverageGateFail(
+    $coverageGateFail(
         sprintf(
             'S316 coverage gate: statement coverage %.2f%% is below the floor of %.2f%%.',
             $percentage,
