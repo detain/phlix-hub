@@ -66,7 +66,7 @@ $collect = static function (string $dir, array &$files, array $excludes): void {
  *
  * @return list<string> Absolute file paths.
  */
-$getPHPFiles = static function (string $repoRoot) use ($collect): array {
+$getPHPFiles = /** @return list<string> */ static function (string $repoRoot) use ($collect): array {
     $dirs = ['src'];
     $excludes = ['vendor', '.git', 'generated', 'node_modules', '.phpunit.cache'];
 
