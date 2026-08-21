@@ -67,7 +67,7 @@ $say = static function (string $message): void {
 /**
  * @param list<string> $argv
  */
-$option = static function (array $argv, string $name): ?string {
+$option = /** @param list<string> $argv @return ?string */ static function (array $argv, string $name): ?string {
     foreach ($argv as $arg) {
         if (str_starts_with($arg, "--{$name}=")) {
             return substr($arg, strlen($name) + 3);
@@ -176,6 +176,7 @@ $say('sdk loads in node: yes');
 // ---------------------------------------------------------------------------
 
 $bootExtensions = ['swoole', 'uv', 'pcntl', 'posix'];
+/** @var list<string> $missing */
 $missing = [];
 foreach ($bootExtensions as $extension) {
     if (!extension_loaded($extension)) {

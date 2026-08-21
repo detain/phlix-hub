@@ -113,8 +113,8 @@ try {
     $fail('could not mint the MCP tokens: ' . $e->getMessage());
 }
 
-$fullToken = (string) ($full['token'] ?? '');
-$readonlyToken = (string) ($readonly['token'] ?? '');
+$fullToken = $full['token'] ?? '';
+$readonlyToken = $readonly['token'] ?? '';
 if ($fullToken === '' || $readonlyToken === '') {
     $fail('mint() returned an empty plaintext token');
 }
@@ -130,6 +130,13 @@ if ($service->validate($readonlyToken) === null) {
 }
 
 $outPath = __DIR__ . '/../var/mcp-e2e-tokens.json';
+// A fresh checkout has no var/ directory (it is gitignored); the script owns
+// its output path, so it creates the directory rather than assuming the CI
+// job or an install script did.
+$outDir = dirname($outPath);
+if (!is_dir($outDir) && !mkdir($outDir, 0775, true) && !is_dir($outDir)) {
+    $fail(sprintf('could not create %s', $outDir));
+}
 $payload = [
     'full_token' => $fullToken,
     'readonly_token' => $readonlyToken,

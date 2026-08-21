@@ -302,21 +302,21 @@ jobs:
         # phpunit.xml are unaffected, and pointing the flag at a different path
         # proves it OVERRIDES the XML target rather than adding a second one.
         #
-        # S329: the suites are named EXPLICITLY (Unit + Integration), never the
-        # implicit "all suites". phpunit.xml gained an E2E suite for the
-        # live-session harness, and that suite only runs in the mcp-e2e job
-        # that BOOTS the hub — a plain `phpunit` here would run its cases
-        # against a non-existent hub, they would skip, and the whole-suite
-        # zero-skip gate below would red the build. `--testsuite Unit
-        # --testsuite Integration` is the same set this job always ran, stated
-        # deliberately.
+        # S329: the suites are named EXPLICITLY, never the implicit "all
+        # suites". phpunit.xml gained an E2E suite for the live-session
+        # harness, and that suite only runs in the mcp-e2e job that BOOTS the
+        # hub — a plain `phpunit` here would run its cases against a
+        # non-existent hub, they would skip, and the whole-suite zero-skip
+        # gate below would red the build. PHPUnit 10 takes ONE `--testsuite`
+        # flag, so the two suites are comma-joined: `--testsuite Unit,Integration`
+        # is the same set this job always ran, stated deliberately.
         env:
           HUB_TEST_DB_HOST: 127.0.0.1
           HUB_TEST_DB_PORT: '3306'
           HUB_TEST_DB_USER: root
           HUB_TEST_DB_PASSWORD: root
           HUB_TEST_DB_NAME: phlix_hub_test
-        run: php -d max_execution_time=0 ./vendor/bin/phpunit --testsuite Unit --testsuite Integration --colors=always --coverage-clover coverage.xml --log-junit junit.xml
+        run: php -d max_execution_time=0 ./vendor/bin/phpunit --testsuite Unit,Integration --colors=always --coverage-clover coverage.xml --log-junit junit.xml
 
       - name: Assert the integration tests actually ran (S173)
         # ADDITIVE gate. It fails the build when any test was SKIPPED, and when
@@ -545,6 +545,10 @@ jobs:
           HUB_MCP_PLAYBACK_CONTROL: 'true'
         run: |
           set -euo pipefail
+          # Fresh checkout: no var/ (pid/status/heartbeat files) and no .logs/
+          # (the Workerman log) exist. The install scripts create them; CI must
+          # too, or boot fails on the first pid-file write.
+          mkdir -p var .logs
           php start.php start -d
           # Readiness = the app is booted AND the route is registered: an
           # unauthenticated POST /mcp must answer 401 (auth.required) — that

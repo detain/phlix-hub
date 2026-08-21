@@ -262,7 +262,7 @@ printf("%s\n", implode("\n", $lines));
 printf("  live-session cases wall clock: %.1fs\n", $wallClock);
 
 if ($skipped === []) {
-    printf("No test in this run was skipped.\n");
+    fwrite(STDOUT, "No test in this run was skipped.\n");
 } else {
     printf("Skips in this run (%d), for the record — none of them a required live-session case:\n", count($skipped));
     foreach ($skipped as $case) {
