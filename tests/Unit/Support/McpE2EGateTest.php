@@ -27,10 +27,22 @@ use function str_contains;
  * A gate that can no longer fail is not a gate — it is the S146/S173 shape
  * this repository keeps mistaking for coverage. The two new scripts
  * (`scripts/ci-mcp-e2e-prereqs.php` and `scripts/assert-mcp-e2e-ran.php`) are
- * checked here in the same style as phlix-server's `BrowserE2EGateTest`:
- * every failure path is driven against a fixture or an override and must exit
- * non-zero, and the required-case map is reconciled against the REAL test
- * class so a renamed/deleted case cannot silently stop being demanded.
+*  checked here in the same style as phlix-server's `BrowserE2EGateTest`:
+ *  every failure path is driven against a fixture or an override and must exit
+ *  non-zero, and the required-case map is reconciled against the REAL test
+ *  class so a renamed/deleted case cannot silently stop being demanded.
+ *
+ * ## The one failure path that is NOT drivable offline
+ *
+ * The prereqs script's "installed SDK version ≠ pinned version" branch reads
+ * `tests/E2E/Mcp/node_modules/@modelcontextprotocol/sdk/package.json` (the
+ * INSTALLED tree) and compares it with `package-lock.json` (the PIN). Both are
+ * the real, un-mutated artefacts: node_modules is gitignored and recreated by
+ * `npm ci`, so there is no fixture that can stand in for "an SDK of the wrong
+ * version is installed" without mutating the very install CI proves. The
+ * branch is exercised in the mcp-e2e CI job whenever `npm ci` resolves a
+ * different version than the lockfile pins — which `npm ci` refuses to do by
+ * design, so the branch is a belt-and-braces guard rather than a normal path.
  *
  * @package Phlix\Hub\Tests\Unit\Support
  */
@@ -114,6 +126,14 @@ final class McpE2EGateTest extends TestCase
 
         self::assertNotSame(0, $result['exit']);
         self::assertStringContainsString('not produced', $result['output']);
+    }
+
+    public function testTheGateFailsWhenTheReportIsNotParseableXml(): void
+    {
+        $result = $this->runScript(self::ASSERT_SCRIPT, [self::FIXTURES . '/broken.xml']);
+
+        self::assertNotSame(0, $result['exit']);
+        self::assertStringContainsString('not parseable', $result['output']);
     }
 
     public function testTheRequiredCasesMapMatchesTheE2ETestClass(): void

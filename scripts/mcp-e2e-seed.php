@@ -142,6 +142,11 @@ $written = file_put_contents(
 if ($written === false) {
     $fail(sprintf('could not write %s', $outPath));
 }
+// The file holds plaintext PATs. 0600 is one line and removes the
+// "world-readable credentials" smell if the job workspace is ever inspected.
+if (!chmod($outPath, 0600)) {
+    $fail(sprintf('could not chmod 0600 %s', $outPath));
+}
 
 $say('seeded user ' . $userId . ' (' . $username . ')');
 $say('full token     : ' . $fullToken . '  scopes=' . implode(' ', $full['scopes'] ?? []));

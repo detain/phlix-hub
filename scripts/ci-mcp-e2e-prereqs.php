@@ -144,6 +144,33 @@ if ($installed !== $pinned) {
     ));
 }
 
+// 2b. The pinned SDK must also LOAD in node. Existence plus version equality
+// can still pass a package whose `exports` map broke or whose dist was
+// truncated; importing the very entry point the probe imports proves the
+// whole module graph resolves. A packaging regression then reds HERE, seconds
+// into the job, instead of as a confusing E2E failure after the hub has booted.
+$loadScript = sprintf(
+    'await import("file://%s"); console.log("sdk load: ok");',
+    $sdkDist,
+);
+/** @var list<string> $loadOut */
+$loadOut = [];
+$loadExit = 0;
+exec(
+    escapeshellarg($node) . ' --input-type=module -e ' . escapeshellarg($loadScript) . ' 2>&1',
+    $loadOut,
+    $loadExit,
+);
+if ($loadExit !== 0) {
+    $fail(sprintf(
+        'the pinned SDK does not LOAD in node %s (%s): %s',
+        $node,
+        $sdkDist,
+        implode("\n", $loadOut),
+    ));
+}
+$say('sdk loads in node: yes');
+
 // ---------------------------------------------------------------------------
 // 3. The PHP extensions the hub needs to BOOT on this runner.
 // ---------------------------------------------------------------------------
