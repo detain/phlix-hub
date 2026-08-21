@@ -301,6 +301,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     `assertSame([], [])` — a gate that inspects nothing wearing the costume of
     one that inspects everything.
 
+- **No real MCP client had ever touched the hub, and nothing in CI could have
+  noticed (S329).** The SSE transport claim behind S62/S63 rested on 14 unit
+  test files that drive `RecordingStreamTimers`; PHPUnit never enters the
+  Workerman event loop, so the timer/keep-alive cases said nothing about a live
+  connection. Measured on master: greps for `modelcontextprotocol|mcp-sdk`
+  across `composer.json`, `package.json`, `tests/` and `scripts/` returned
+  nothing. This step lands the S57/S305 real-harness shape for the hub — a
+  dedicated CI job (`Real MCP Client SSE Session`) that:
+  - fails cheaply via `scripts/ci-mcp-e2e-prereqs.php` when node, the pinned
+    `@modelcontextprotocol/sdk` (1.30.0, from a committed `package-lock.json`),
+    the boot extensions, or the phpunit E2E wiring is missing;
+  - applies the migration chain to a MySQL 8 service container and seeds a user
+    plus two PATs through the REAL `McpTokenService`
+    (`scripts/mcp-e2e-seed.php`, round-tripped through `validate()`);
+  - boots the real hub on `:8800` and drives it with the OFFICIAL SDK client
+    (`tests/E2E/Mcp/mcp-client-session.mjs`, a thin wrapper over
+    `StreamableHTTPClientTransport`) through initialise → tools/list → one tool
+    call → clean close, plus a denied-scope case and a broken-transport
+    negative control;
+  - reads its own JUnit report afterwards and fails when any required case is
+    absent, skipped, or asserted nothing (`scripts/assert-mcp-e2e-ran.php`,
+    printing its denominator) — a skipped gate counts as SUCCESS with no branch
+    protection in this estate, so the job deliberately has no `needs:` and the
+    wiring is pinned by `tests/Unit/Support/McpE2ECiWiringTest.php`.
+  - The two plan risk-notes that motivated the denied-scope case were verified
+    stale on this branch: scope checks are exact `in_array(..., true)`
+    (`McpScopes`, `McpToken`, `McpToolRegistry`) with no substring prefix
+    matching, and `McpTokenController::create()` refuses empty/unrecognised
+    scope lists (fail-closed, S261). The denied-scope case is still shipped
+    because it is in the acceptance criteria and would red if the scope gate is
+    ever emptied.
+
 ### Fixed
 
 - **The maintenance worker crash-looped invisibly whenever its database was

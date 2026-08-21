@@ -812,6 +812,12 @@ CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci
   PHPUnit exits `0` with *"OK, but some tests were skipped!"*, so before this gate
   a missing MySQL service made all 31 integration tests skip on every run while
   the check stayed green
+- **Real MCP client SSE session (S329)** — the `mcp-e2e` job boots the real hub
+  on `:8800` against the MySQL service, mints PATs through the real
+  `McpTokenService`, and drives the official `@modelcontextprotocol/sdk` client
+  through initialise → tools/list → one tool call → clean close. A JUnit gate
+  (`scripts/assert-mcp-e2e-ran.php`) fails when any required case is absent,
+  skipped, or asserted nothing — never a bare green.
 - Composer security audit
 
 ## Project structure
