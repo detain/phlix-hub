@@ -65,9 +65,18 @@
     <testsuite name="Unit">
       <directory suffix="Test.php">tests</directory>
       <exclude>tests/Integration</exclude>
+      <!-- S329: the live-session suite only runs in the CI job that BOOTS the
+           hub (mcp-e2e). In the plain phpunit job there is no hub on :8800, so
+           these cases would skip — and a skipped test reads as a pass while
+           tripping the S173 whole-suite zero-skip gate. They are a separate
+           suite, run explicitly via the E2E testsuite by that job. -->
+      <exclude>tests/E2E</exclude>
     </testsuite>
     <testsuite name="Integration">
       <directory suffix="Test.php">tests/Integration</directory>
+    </testsuite>
+    <testsuite name="E2E">
+      <directory suffix="Test.php">tests/E2E</directory>
     </testsuite>
   </testsuites>
   <source>

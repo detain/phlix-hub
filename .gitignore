@@ -32,3 +32,9 @@ public/workerman.log
 .opencode/.env
 .opencode/cache/
 .opencode/logs/
+
+# S329: the MCP SDK client harness installs @modelcontextprotocol/sdk via
+# `npm ci` in tests/E2E/Mcp — the lockfile is committed, node_modules is not.
+/tests/E2E/Mcp/node_modules/
+# S329: the mcp-e2e job's JUnit report, read by scripts/assert-mcp-e2e-ran.php
+/junit-mcp.xml

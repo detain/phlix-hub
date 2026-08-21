@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="E2E" tests="6" assertions="20" errors="0" failures="0" skipped="0" time="3.738">
+    <testcase name="testRealMcpClientInitialisesAgainstTheRunningHub" class="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" classname="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" file="/home/runner/work/phlix-hub/phlix-hub/tests/E2E/Mcp/McpClientSseE2ETest.php" line="86" assertions="4" time="0.812"/>
+    <testcase name="testRealMcpClientListsToolsAgainstTheRunningHub" class="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" classname="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" file="/home/runner/work/phlix-hub/phlix-hub/tests/E2E/Mcp/McpClientSseE2ETest.php" line="101" assertions="4" time="0.744"/>
+    <testcase name="testRealMcpClientCallsOneToolAgainstTheRunningHub" class="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" classname="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" file="/home/runner/work/phlix-hub/phlix-hub/tests/E2E/Mcp/McpClientSseE2ETest.php" line="116" assertions="3" time="0.791"/>
+    <testcase name="testRealMcpClientClosesCleanlyAgainstTheRunningHub" class="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" classname="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" file="/home/runner/work/phlix-hub/phlix-hub/tests/E2E/Mcp/McpClientSseE2ETest.php" line="131" assertions="2" time="0.688"/>
+    <testcase name="testDeniedScopeIsRefusedFailClosedByTheRunningHub" class="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" classname="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" file="/home/runner/work/phlix-hub/phlix-hub/tests/E2E/Mcp/McpClientSseE2ETest.php" line="144" assertions="3" time="0.703"/>
+    <testcase name="testTheProbeFailsAgainstABrokenTransport" class="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" classname="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest" file="/home/runner/work/phlix-hub/phlix-hub/tests/E2E/Mcp/McpClientSseE2ETest.php" line="158" assertions="0" time="0.001"/>
+  </testsuite>
+</testsuites>
