@@ -30,12 +30,14 @@
  * ## Cross-repo boundary and staleness
  *
  * phlix-hub's CI clones ONE repository, so it cannot boot phlix-server at test
- * time. The snapshot is therefore VENDORED and the test that consumes it pins
- * the recorded `source_sha` — when phlix-server master moves, that pin goes RED
- * and the fix is to re-run this script and commit the regenerated fixture in
- * the same commit. `--check` is the byte-identical comparison used by the
- * premerge ritual so the snapshot that MERGES is proven current against the
- * real server tree.
+ * time. The snapshot is therefore VENDORED. Staleness is caught three ways:
+ * the `Server Route Snapshot Currency` CI job compares the recorded
+ * `source_sha` against phlix-server's live master on every PR; the test that
+ * consumes the snapshot keeps the fixture and its pin in lockstep; and
+ * `--check` (below) byte-compares against a live checkout — the S332 premerge
+ * gate runs it, so the snapshot that MERGES is proven current against the
+ * real server tree. When the server moves, the fix is to re-run this script
+ * and commit the regenerated fixture in the same commit.
  *
  * ## Usage
  *

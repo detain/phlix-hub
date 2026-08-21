@@ -3440,7 +3440,7 @@ final class ServerProxyControllerTest extends TestCase
      *   :1717 refresh-metadata · :1727 prune · :1728 clear-metadata ·
      *   :1729 clear-artwork · :1730 delete-all · :1734 theme-media/scan ·
      *   :1783 bulk-add · :1784 collection refresh · :587 match/apply ·
-     *   :660 subtitles/download.
+     *   :660 subtitles/download · :1787 regenerate-assets (S284/S332).
      *
      * @return array<string, string> label => `/`-prefixed concrete path
      */
@@ -3622,7 +3622,7 @@ final class ServerProxyControllerTest extends TestCase
      * End-to-end through `proxy()`, not just the private gate: every S107 route
      * 403s `proxy.scope_denied` and never reaches the relay bridge.
      *
-     * Rows: all thirteen routes under GET (the verb the prefix forwarded) and
+     * Rows: all fourteen routes under GET (the verb the prefix forwarded) and
      * under POST (the verb the server actually registers — proving the refusal now
      * comes from the deny layer, which runs BEFORE both scope maps, rather than
      * from the absence of a POST entry), plus all twenty-one evasion spellings of
@@ -3927,20 +3927,25 @@ final class ServerProxyControllerTest extends TestCase
     // ## How the manifest crosses the repo boundary and how staleness is caught
     //
     // The hub's CI clones ONE repository, so it cannot boot phlix-server at
-    // test time. The snapshot is therefore vendored, and every staleness hole
-    // is closed LOUDLY rather than silently:
-    //  - **`source_sha` is pinned** ({@see S332_EXPECTED_SERVER_SOURCE_SHA}).
-    //    When phlix-server's master moves past the snapshot, the pin test goes
-    //    RED with a message naming the regeneration command. Re-snapshotting is
-    //    therefore a deliberate, reviewed event — never a silent drift.
+    // test time. The snapshot is therefore vendored, and staleness is caught by
+    // THREE independent mechanisms, each loud rather than silent:
+    //  - **the `Server Route Snapshot Currency` CI job** compares the
+    //    snapshot's recorded `source_sha` against phlix-server's live master
+    //    on every PR and fails the build until the snapshot is regenerated.
+    //    This is the true drift detector: the pin test below is only a
+    //    consistency anchor between the fixture and its pin.
+    //  - **the pin test below** ({@see S332_EXPECTED_SERVER_SOURCE_SHA}) keeps
+    //    the fixture and the pin in lockstep — regenerating the fixture
+    //    without bumping the pin (or bumping the pin without regenerating)
+    //    goes RED here, so re-snapshotting is a deliberate, reviewed event
+    //    rather than a silent half-edit.
     //  - **`sha256` is re-derived from the route list** in the test, so the
     //    fixture cannot be hand-edited into a different route set than it
-    //    claims (`source_sha` would also trip, but a hand edit is caught here
-    //    even against the SAME pin — e.g. someone "fixing" a route spelling).
-    //  - **`tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php --check`** regenerates
-    //    the snapshot from a live phlix-server checkout and fails on ANY byte
-    //    drift; the S332 premerge gate runs it, so the snapshot that merges is
-    //    proven byte-identical to the real server tree.
+    //    claims (e.g. someone "fixing" a route spelling by hand).
+    //  - **`tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php
+    //    --check`** regenerates the snapshot from a live phlix-server checkout
+    //    and fails on ANY byte drift; the S332 premerge gate runs it, so the
+    //    snapshot that merges is proven byte-identical to the real server tree.
     //
     // ## The inclusion criteria (S107's four, made mechanical)
     //
@@ -3968,9 +3973,15 @@ final class ServerProxyControllerTest extends TestCase
     /**
      * phlix-server master SHA the vendored snapshot was generated from.
      *
-     * This is the STALENESS TRIPWIRE: bump it only by re-running
-     * `php tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php [server-root]` and
-     * committing the regenerated fixture in the same commit — never by hand.
+     * This pin is a CONSISTENCY ANCHOR between the fixture and this constant:
+     * the test below goes red when one side is updated without the other, so
+     * re-snapshotting is a deliberate, reviewed event. It is NOT the drift
+     * detector — phlix-server master moving by itself leaves both sides
+     * unchanged, and that drift is caught by the `Server Route Snapshot
+     * Currency` CI job (and by the generator's `--check` gate at premerge).
+     * Bump this constant only by re-running
+     * `php tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php
+     * [server-root]` and committing the regenerated fixture in the same commit.
      */
     private const S332_EXPECTED_SERVER_SOURCE_SHA = '578833a6e03c832dc628e21a64b5353b84979424';
 
@@ -4272,6 +4283,7 @@ final class ServerProxyControllerTest extends TestCase
      */
     public function testS332DerivedSetIsNonVacuousAndCoversRegenerateAssets(): void
     {
+        $manifest = self::s332ServerRouteManifest();
         $derived = [];
         foreach (self::s332ManifestDerivedInScopeProvider() as $label => $route) {
             $derived[$label] = $route;
@@ -4279,16 +4291,19 @@ final class ServerProxyControllerTest extends TestCase
 
         $denominator = count($derived);
         fwrite(STDERR, sprintf(
-            "S332 deriving check examined %d in-scope routes from the phlix-server route manifest\n",
+            "S332 deriving check examined %d of %d manifest route(s); %d route(s) met the S107 "
+            . "inclusion criteria and are asserted denied\n",
+            $denominator,
+            count($manifest['routes']),
             $denominator,
         ));
 
         $this->assertGreaterThanOrEqual(
             15,
             $denominator,
-            'the derivation examined fewer than the known 15 in-scope routes — an empty or gutted '
+            'the derivation found fewer than the known 15 in-scope routes — an empty or gutted '
             . "scan is not a pass. If phlix-server's route table genuinely shrank, re-snapshot and "
-            . 'raise this floor in the same commit.',
+            . 're-derive this floor in the same commit.',
         );
 
         $this->assertArrayHasKey(
@@ -4300,10 +4315,12 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * The vendored snapshot is GENUINE and CURRENT: its sha256 is re-derived
+     * The vendored snapshot is GENUINE and CONSISTENT: its sha256 is re-derived
      * from the route list (a hand-edited fixture cannot claim a route set it
      * does not contain), and its `source_sha` matches the pinned phlix-server
-     * master (a moved server trips this until the snapshot is regenerated).
+     * master. Server DRIFT (master moving past the snapshot without anyone
+     * regenerating) is caught by the `Server Route Snapshot Currency` CI job —
+     * this test only keeps the fixture and the pin in lockstep.
      */
     public function testS332ServerRouteManifestIsGenuineAndCurrent(): void
     {
@@ -4337,11 +4354,12 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame(
             self::S332_EXPECTED_SERVER_SOURCE_SHA,
             $manifest['source_sha'],
-            'phlix-server master has moved past this snapshot. The S107-derived deny enumeration now '
-            . 'describes an OLD route table — re-run '
+            'the recorded source_sha does not match the S332 pin. The fixture and '
+            . 'S332_EXPECTED_SERVER_SOURCE_SHA must move in lockstep: regenerate with '
             . '`php tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php '
-            . '[server-root]`, commit the regenerated fixture AND bump '
-            . 'S332_EXPECTED_SERVER_SOURCE_SHA in the same commit.',
+            . '[server-root]` and bump the pin in the same commit. (If phlix-server master moved '
+            . 'and nobody regenerated, the Server Route Snapshot Currency CI job is the detector '
+            . 'for that.)',
         );
     }
 
