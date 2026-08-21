@@ -161,12 +161,15 @@ exec(
     $loadOut,
     $loadExit,
 );
+// exec()'s by-reference output param resets the type to `mixed`; the lines it
+// appended are strings, so re-state that for the analysers before any use.
+/** @var list<string> $loadOut */
 if ($loadExit !== 0) {
     $fail(sprintf(
         'the pinned SDK does not LOAD in node %s (%s): %s',
         $node,
         $sdkDist,
-        implode("\n", array_map('strval', $loadOut)),
+        implode("\n", $loadOut),
     ));
 }
 $say('sdk loads in node: yes');
