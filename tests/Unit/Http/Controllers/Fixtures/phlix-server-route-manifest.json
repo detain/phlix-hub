@@ -1,0 +1,1565 @@
+{
+    "generator": "tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php",
+    "source_repo": "detain/phlix-server",
+    "source_sha": "578833a6e03c832dc628e21a64b5353b84979424",
+    "route_count": 389,
+    "sha256": "25a075daa3d7beb9de613a530a4a5f885d940afe57c7779daeca69f31bb09938",
+    "routes": [
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/backup/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/livetv/recordings/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/livetv/series-rules/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/livetv/tuners/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/plugins/catalog/sources"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/plugins/{name}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/profiles/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/profiles/{id}/pin"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/profiles/{profileId}/schedules/{scheduleId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/profiles/{profileId}/tags/{tagId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/users/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/webhooks/subscriptions/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/webhooks/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/collections/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/collections/{id}/items/{mediaItemId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/libraries/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/libraries/{id}/theme-media"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/me/recommendations/{mediaItemId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/me/webauthn/credentials/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/media/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/media/{id}/favorite"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/media/{id}/markers/{markerId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/media/{id}/rating"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/profiles/{profileId}/schedules/{scheduleId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/profiles/{profileId}/tags/{tagId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/sessions/{id}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/users/me/avatar"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/users/me/history"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/users/me/history/{mediaItemId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/auth/identities/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/.well-known/jwks.json"
+        },
+        {
+            "method": "GET",
+            "path": "/admin/health/jobs"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/auth-providers"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/auth-providers/github/config"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/auth-providers/github/schema"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/auth-providers/ldap/config"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/auth-providers/ldap/schema"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/auth-providers/oidc/config"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/auth-providers/oidc/schema"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/auth-providers/{name}/config-schema"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/backup/list"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/backup/schedule"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/dashboard/activity"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/dashboard/now-playing"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/dashboard/storage"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/dashboard/top-media"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/dashboard/top-users"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/dlna/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/fs/browse"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/libraries/{id}/duplicates"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/channels"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/channels/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/channels/{id}/stream"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/guide"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/guide/programs/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/recordings"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/recordings/series/{seriesId}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/recordings/upcoming"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/recordings/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/series-rules"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/series-rules/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/tuners"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/tuners/scan"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/livetv/tuners/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/logs"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/logs/tail"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/logs/tail-all"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/maintenance/jobs"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/maintenance/jobs/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/maintenance/tasks"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/metadata/sources"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/metrics/connections"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/metrics/history"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/metrics/routes"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/metrics/snapshot"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/plugins"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/plugins/auto-update"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/plugins/catalog"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/plugins/catalog/channel"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/plugins/updates"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/plugins/{name}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/profiles/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/profiles/{profileId}/active-streams"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/profiles/{profileId}/schedules"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/profiles/{profileId}/schedules/{scheduleId}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/profiles/{profileId}/stream-limits"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/profiles/{profileId}/tags"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/remote/hub/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/remote/portforward/candidates"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/remote/portforward/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/remote/relay/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/remote/subdomain/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/services/lastfm/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/services/trakt/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/settings"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/stats/playback"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/stats/storage"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/stats/top-media"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/stats/top-users"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/sync/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/transcoding/accelerators"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/transcoding/tone-mapping"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/updates/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/users"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/users/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/users/{userId}/profiles"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/watch-history"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/webhooks"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/webhooks/deliveries"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/admin/webhooks/subscriptions"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/airplay/devices"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/airplay/devices/{id}/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/audiobooks"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/audiobooks/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/audiobooks/{id}/chapters"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/audiobooks/{id}/progress"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/audiobooks/{id}/read"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/audiobooks/{id}/stream"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/auth/me"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/books"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/books/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/books/{id}/cover"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/books/{id}/download"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/books/{id}/read"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/cast/devices"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/cast/devices/{id}/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/collections"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/collections/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/dlna/renderers"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/dlna/renderers/{id}/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/health/network"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/health/relay"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/libraries"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/libraries/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/libraries/{id}/items"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/libraries/{id}/scan-history"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/libraries/{id}/scan-status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/libraries/{id}/theme-media"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/libraries/{libraryId}/collections"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/me/continue-watching"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/me/playback/preferences"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/me/recommendations"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/me/sessions"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/me/webauthn/credentials"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/facets"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/index"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/letter-index"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/most-watched"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/search"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/search/by-marker"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/chapters"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/chapters/{index}/thumbnail"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/collection"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/download"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/extras"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/extras/other"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/markers"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/markers/intro"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/markers/outro"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/markers/search"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/match/search"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/missing-episodes"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/playback"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/playback-info"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/posters"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/ratings"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/similar"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/subtitles"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/subtitles/external/{streamId}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/subtitles/search"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/subtitles/{index}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/trailers"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/media/{id}/trickplay"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/music/albums"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/music/albums/{mbid}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/music/artists"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/music/artists/{mbid}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/music/now-playing"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/music/tracks"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/music/tracks/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/oauth/lastfm"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/oauth/lastfm/callback"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/oauth/trakt"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/oauth/trakt/callback"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/photo/albums"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/photo/albums/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/photo/photos"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/photo/photos/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/photo/photos/{id}/full"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/photo/photos/{id}/thumbnail"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/photo/slideshow"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/profiles/{profileId}/active-streams"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/profiles/{profileId}/schedules"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/profiles/{profileId}/schedules/{scheduleId}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/profiles/{profileId}/stream-limits"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/profiles/{profileId}/tags"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/roku/devices"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/roku/devices/{id}/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/servers"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/sessions/{id}/progress"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/shows/{id}/markers/bulk"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/syncplay/groups"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/syncplay/groups/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/themes"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/themes/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/transcode/{jobId}/status"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/users/me/continue-watching"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/users/me/favorites"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/users/me/next-up"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/users/me/recently-watched"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/users/me/settings"
+        },
+        {
+            "method": "GET",
+            "path": "/auth/github/authorize"
+        },
+        {
+            "method": "GET",
+            "path": "/auth/github/callback"
+        },
+        {
+            "method": "GET",
+            "path": "/auth/identities"
+        },
+        {
+            "method": "GET",
+            "path": "/auth/identities/link/github"
+        },
+        {
+            "method": "GET",
+            "path": "/auth/identities/link/oidc"
+        },
+        {
+            "method": "GET",
+            "path": "/auth/logout"
+        },
+        {
+            "method": "GET",
+            "path": "/auth/oidc/authorize"
+        },
+        {
+            "method": "GET",
+            "path": "/auth/oidc/callback"
+        },
+        {
+            "method": "GET",
+            "path": "/dash/{job_id}/manifest"
+        },
+        {
+            "method": "GET",
+            "path": "/dash/{job_id}/{file}"
+        },
+        {
+            "method": "GET",
+            "path": "/health"
+        },
+        {
+            "method": "GET",
+            "path": "/hls/{job_id}/playlist"
+        },
+        {
+            "method": "GET",
+            "path": "/hls/{job_id}/{file}"
+        },
+        {
+            "method": "GET",
+            "path": "/livetv/recording/{id}/stream"
+        },
+        {
+            "method": "GET",
+            "path": "/livetv/timeshift/{sessionId}/stream"
+        },
+        {
+            "method": "GET",
+            "path": "/livetv/timeshift/{sessionId}/{segment}"
+        },
+        {
+            "method": "GET",
+            "path": "/opds/v1.2"
+        },
+        {
+            "method": "GET",
+            "path": "/opds/v1.2/books/{id}/cover"
+        },
+        {
+            "method": "GET",
+            "path": "/opds/v1.2/books/{id}/download"
+        },
+        {
+            "method": "GET",
+            "path": "/opds/v1.2/libraries"
+        },
+        {
+            "method": "GET",
+            "path": "/opds/v1.2/libraries/{id}"
+        },
+        {
+            "method": "GET",
+            "path": "/stream/theme-media/item/{mediaItemId}"
+        },
+        {
+            "method": "GET",
+            "path": "/stream/theme-media/{libraryId}/audio"
+        },
+        {
+            "method": "GET",
+            "path": "/stream/theme-media/{libraryId}/video"
+        },
+        {
+            "method": "GET",
+            "path": "/system/info"
+        },
+        {
+            "method": "GET",
+            "path": "/trickplay/{jobId}/sprite.jpg"
+        },
+        {
+            "method": "GET",
+            "path": "/trickplay/{jobId}/thumbs.bif"
+        },
+        {
+            "method": "GET",
+            "path": "/trickplay/{jobId}/timeline.json"
+        },
+        {
+            "method": "PATCH",
+            "path": "/api/v1/media/{id}/metadata"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/auth-providers/github/config"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/auth-providers/ldap/config"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/auth-providers/ldap/test"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/auth-providers/oidc/config"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/auth-providers/{name}/disable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/auth-providers/{name}/enable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/backup/create"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/backup/{id}/restore"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/backup/{id}/upload-s3"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/dlna/start"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/dlna/stop"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/livetv/guide/refresh"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/livetv/recordings"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/livetv/series-rules"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/maintenance/cleanup-orphaned-stats"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/maintenance/dedupe-paths"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/maintenance/reap-scan-jobs"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/maintenance/reap-transcode-jobs"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/maintenance/storage-snapshot"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/media/merge"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/plugins/catalog/sources"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/plugins/install"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/plugins/updates/apply"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/plugins/{name}/disable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/plugins/{name}/enable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/plugins/{name}/test"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/plugins/{name}/update"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/profiles/{id}/pin"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/profiles/{profileId}/schedules"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/profiles/{profileId}/tags"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/hub/complete"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/hub/heartbeat"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/hub/pair"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/hub/poll"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/hub/unenroll"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/portforward/disable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/portforward/enable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/relay/disable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/relay/enable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/relay/ping"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/subdomain/claim"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/remote/subdomain/release"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/restart"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/services/lastfm/disconnect"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/services/trakt/disconnect"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/sync/trash-guides"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/users"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/users/{id}/approve"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/users/{id}/disable"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/users/{id}/reject"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/users/{id}/reset-password"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/users/{id}/set-admin"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/users/{userId}/profiles"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/webhooks"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/webhooks/subscriptions"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/admin/webhooks/{id}/test"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/airplay/devices/{id}/pause"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/airplay/devices/{id}/resume"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/airplay/devices/{id}/stop"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/airplay/devices/{id}/stream"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/audiobooks/{id}/progress"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/hub-token"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/login"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/refresh"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/register"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/webauthn/login/options"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/webauthn/login/verify"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/webauthn/register/options"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/webauthn/register/verify"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/cast/devices/{id}/cast"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/cast/devices/{id}/pause"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/cast/devices/{id}/play"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/cast/devices/{id}/seek"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/cast/devices/{id}/stop"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/collections"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/collections/{id}/bulk-add"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/collections/{id}/items/{mediaItemId}"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/collections/{id}/refresh"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/dlna/renderers/{id}/pause"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/dlna/renderers/{id}/play"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/dlna/renderers/{id}/seek"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/dlna/renderers/{id}/stop"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/clear-artwork"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/clear-metadata"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/delete-all"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/match-metadata"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/prune"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/refresh-metadata"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/regenerate-assets"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/rescan"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/scan"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/libraries/{id}/theme-media/scan"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/media/{id}/favorite"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/media/{id}/markers"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/media/{id}/match/apply"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/media/{id}/ratings"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/media/{id}/subtitles/download"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/media/{id}/transcode"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/media/{id}/unwatched"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/media/{id}/watched"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/music/scan"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/playlists"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/profiles/{profileId}/schedules"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/profiles/{profileId}/tags"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/roku/devices/{id}/key/{keyName}"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/roku/devices/{id}/launch/{channelId}"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/roku/devices/{id}/send"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/sessions"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/sessions/{id}/complete"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/sessions/{id}/progress"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/shuffle"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/syncplay/groups"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/syncplay/groups/{id}/join"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/syncplay/groups/{id}/leave"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/users/me/avatar"
+        },
+        {
+            "method": "POST",
+            "path": "/auth/identities/link/ldap"
+        },
+        {
+            "method": "POST",
+            "path": "/auth/login"
+        },
+        {
+            "method": "POST",
+            "path": "/auth/logout"
+        },
+        {
+            "method": "POST",
+            "path": "/auth/refresh"
+        },
+        {
+            "method": "POST",
+            "path": "/auth/register"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/backup/schedule"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/livetv/channels/{id}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/livetv/series-rules/{id}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/livetv/tuners/{id}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/plugins/auto-update"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/plugins/catalog/channel"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/plugins/{name}/settings"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/profiles/{id}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/profiles/{profileId}/schedules/{scheduleId}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/profiles/{profileId}/stream-limits"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/settings"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/sync/enable"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/transcoding/tone-mapping"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/updates/settings"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/users/{id}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/admin/webhooks/{id}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/collections/{id}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/libraries/{id}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/me/playback/preferences"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/media/{id}/like"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/media/{id}/poster"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/media/{id}/rating"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/profiles/{profileId}/schedules/{scheduleId}"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/profiles/{profileId}/stream-limits"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/users/me/settings"
+        }
+    ]
+}

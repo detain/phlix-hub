@@ -759,6 +759,14 @@ final class ServerProxyController
         // POST /api/v1/libraries/{id}/delete-all     — Application.php:1730
         // (DESTRUCTIVE: removes every item in the library.)
         '#^/api/v1/libraries/[^/]*/delete-all(/|$)#i',
+        // POST /api/v1/libraries/{id}/regenerate-assets — Application.php:1787
+        // (S284: re-prime the FILE-based media-asset queue — chapter thumbnails
+        // and `media_item_assets` rows. It met all four of S107's inclusion
+        // criteria six days after S107 shipped and was silently absent here —
+        // S332 re-pins it, and the manifest-driven check in
+        // `ServerProxyControllerTest` re-derives this whole list from
+        // phlix-server's route table so a third occurrence cannot land unseen.)
+        '#^/api/v1/libraries/[^/]*/regenerate-assets(/|$)#i',
         // POST /api/v1/libraries/{id}/theme-media/scan — Application.php:1734.
         // Needs its own entry: the `(re)?scan` pattern above cannot reach it,
         // because `[^/]*` never crosses a `/`. GET /theme-media (:1733) and
