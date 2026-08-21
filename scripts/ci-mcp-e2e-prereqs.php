@@ -177,12 +177,10 @@ $say('sdk loads in node: yes');
 
 $bootExtensions = ['swoole', 'uv', 'pcntl', 'posix'];
 /** @var list<string> $missing */
-$missing = [];
-foreach ($bootExtensions as $extension) {
-    if (!extension_loaded($extension)) {
-        $missing[] = $extension;
-    }
-}
+$missing = array_values(array_filter(
+    $bootExtensions,
+    static fn (string $extension): bool => !extension_loaded($extension),
+));
 if ($missing !== []) {
     $fail(sprintf(
         'the hub cannot boot without %s; the mcp-e2e job must install them (setup-php + the php-uv '

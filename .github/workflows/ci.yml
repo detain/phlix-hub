@@ -549,6 +549,11 @@ jobs:
           # (the Workerman log) exist. The install scripts create them; CI must
           # too, or boot fails on the first pid-file write.
           mkdir -p var .logs
+          # The hub refuses to boot without a configured JWT secret (fail-closed
+          # boot). The E2E flow authenticates via PAT (mcp_tokens), never JWT, so
+          # a per-run random value is right: it signs nothing a client verifies,
+          # and no static credential lives in the workflow.
+          export HUB_JWT_SECRET="$(openssl rand -hex 32)"
           php start.php start -d
           # Readiness = the app is booted AND the route is registered: an
           # unauthenticated POST /mcp must answer 401 (auth.required) — that
