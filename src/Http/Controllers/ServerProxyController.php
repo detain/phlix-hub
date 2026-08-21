@@ -711,6 +711,16 @@ final class ServerProxyController
      * question for that prefix. Re-run the enumeration against phlix-server's
      * route table in the same commit.
      *
+     * ### S332: the enumeration is now self-maintaining
+     * `ServerProxyControllerTest::s332ManifestDerivedInScopeProvider()` re-derives
+     * the S107 deny enumeration from a VENDORED snapshot of phlix-server's route
+     * table (`tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json`),
+     * so a future write route under an allowlisted read prefix fails the build
+     * until it is denied here (or deliberately dispositioned in the test). When
+     * phlix-server master moves, regenerate the snapshot with
+     * `tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php`;
+     * the `Server Route Snapshot Currency` CI job enforces this.
+     *
      * ### S107: two matcher extensions, both load-bearing for a `{id}` segment
      * S100's patterns had no variable segment, which hid two under-denies that
      * appear the moment one does:
