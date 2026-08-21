@@ -573,7 +573,10 @@ jobs:
 
       - name: Run the real MCP client SSE session suite
         env:
-          HUB_MCP_E2E_BASE_URL: http://127.0.0.1:8800
+          # The MCP endpoint, not the bare host: the SDK client POSTs to the
+          # URL it is given (and opens the SSE stream on it), and the hub has
+          # no route at "/" — a bare host 404s every request.
+          HUB_MCP_E2E_BASE_URL: http://127.0.0.1:8800/mcp
           HUB_MCP_E2E_TOKENS_FILE: var/mcp-e2e-tokens.json
         run: php -d max_execution_time=0 ./vendor/bin/phpunit --colors=always --testsuite E2E --log-junit junit-mcp.xml
 
@@ -589,6 +592,10 @@ jobs:
 
       - name: Stop the hub (cleanup)
         # Hygiene only, never a gate: `|| true` is correct here because a job
-        # that redded earlier still deserves to stop its daemon.
+        # that redded earlier still deserves to stop its daemon. The JWT secret
+        # export is required even for `stop`: start.php builds the container
+        # (which resolves the secret) before it signals the daemon.
         if: always()
-        run: php start.php stop || true
+        run: |
+          export HUB_JWT_SECRET="$(openssl rand -hex 32)"
+          php start.php stop || true

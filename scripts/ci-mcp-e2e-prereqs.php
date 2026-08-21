@@ -166,7 +166,7 @@ if ($loadExit !== 0) {
         'the pinned SDK does not LOAD in node %s (%s): %s',
         $node,
         $sdkDist,
-        implode("\n", $loadOut),
+        implode("\n", array_map('strval', $loadOut)),
     ));
 }
 $say('sdk loads in node: yes');

@@ -201,7 +201,7 @@ final class McpClientSseE2ETest extends TestCase
      */
     public function testTheProbeFailsAgainstABrokenTransport(): void
     {
-        $result = $this->runProbe('initialize', 'http://127.0.0.1:9');
+        $result = $this->runProbe('initialize', 'http://127.0.0.1:9/mcp');
 
         $this->assertNotSame(0, $result['exit'], 'a probe that cannot reach the hub must NOT exit 0');
         $this->assertFalse(
