@@ -44,6 +44,44 @@ jobs:
       - name: Lint openapi.yaml
         run: npx --yes @redocly/cli@2.30.5 lint openapi.yaml
 
+  snapshot-currency:
+    name: Server Route Snapshot Currency
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # S332. The S107 deny enumeration is re-derived from a VENDORED snapshot
+      # of phlix-server's route table
+      # (tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json).
+      # The deriving tests can only see the routes the snapshot contains, so a
+      # snapshot that outlives the server is the SAME silent decay S107
+      # suffered — S284's `regenerate-assets` was invisible because the tests
+      # grew with the LIST, not with the ROUTES. This job is the drift
+      # tripwire: it compares the snapshot's recorded source_sha against
+      # phlix-server's live master and fails the build until the snapshot is
+      # regenerated and the S332_EXPECTED_SERVER_SOURCE_SHA pin is bumped in
+      # the SAME commit.
+      #
+      # phlix-server is public, so no token is needed for git ls-remote. A
+      # network failure is a FAILURE, never a pass: a job that cannot measure
+      # the other side must not report success (same rule as the S204
+      # cross-repo check).
+      - name: Compare snapshot source_sha against phlix-server master
+        run: |
+          SERVER_SHA="$(git ls-remote https://github.com/detain/phlix-server.git refs/heads/master | cut -f1)"
+          FIXTURE_SHA="$(python3 -c 'import json; print(json.load(open("tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json"))["source_sha"])')"
+          echo "phlix-server master : ${SERVER_SHA:-<unreadable>}"
+          echo "snapshot source_sha: $FIXTURE_SHA"
+          [ -n "$SERVER_SHA" ] || { echo "::error::could not read phlix-server master from GitHub — nothing was compared"; exit 1; }
+          [ "$SERVER_SHA" = "$FIXTURE_SHA" ] || {
+            echo "::error::phlix-server master ($SERVER_SHA) has moved past the vendored route snapshot ($FIXTURE_SHA)."
+            echo "::error::Regenerate the snapshot (php tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php <server-root>)"
+            echo "::error::and bump S332_EXPECTED_SERVER_SOURCE_SHA in the SAME commit."
+            exit 1
+          }
+
   phpcs:
     name: PHP CodeSniffer (PSR-12)
     runs-on: ubuntu-latest

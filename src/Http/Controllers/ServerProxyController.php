@@ -711,6 +711,16 @@ final class ServerProxyController
      * question for that prefix. Re-run the enumeration against phlix-server's
      * route table in the same commit.
      *
+     * ### S332: the enumeration is now self-maintaining
+     * `ServerProxyControllerTest::s332ManifestDerivedInScopeProvider()` re-derives
+     * the S107 deny enumeration from a VENDORED snapshot of phlix-server's route
+     * table (`tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json`),
+     * so a future write route under an allowlisted read prefix fails the build
+     * until it is denied here (or deliberately dispositioned in the test). When
+     * phlix-server master moves, regenerate the snapshot with
+     * `tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php`;
+     * the `Server Route Snapshot Currency` CI job enforces this.
+     *
      * ### S107: two matcher extensions, both load-bearing for a `{id}` segment
      * S100's patterns had no variable segment, which hid two under-denies that
      * appear the moment one does:
@@ -759,6 +769,14 @@ final class ServerProxyController
         // POST /api/v1/libraries/{id}/delete-all     — Application.php:1730
         // (DESTRUCTIVE: removes every item in the library.)
         '#^/api/v1/libraries/[^/]*/delete-all(/|$)#i',
+        // POST /api/v1/libraries/{id}/regenerate-assets — Application.php:1787
+        // (S284: re-prime the FILE-based media-asset queue — chapter thumbnails
+        // and `media_item_assets` rows. It met all four of S107's inclusion
+        // criteria six days after S107 shipped and was silently absent here —
+        // S332 re-pins it, and the manifest-driven check in
+        // `ServerProxyControllerTest` re-derives this whole list from
+        // phlix-server's route table so a third occurrence cannot land unseen.)
+        '#^/api/v1/libraries/[^/]*/regenerate-assets(/|$)#i',
         // POST /api/v1/libraries/{id}/theme-media/scan — Application.php:1734.
         // Needs its own entry: the `(re)?scan` pattern above cannot reach it,
         // because `[^/]*` never crosses a `/`. GET /theme-media (:1733) and
