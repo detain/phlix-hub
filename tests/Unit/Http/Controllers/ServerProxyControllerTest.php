@@ -4367,7 +4367,7 @@ final class ServerProxyControllerTest extends TestCase
      * S350 — the exact/anchored compare the prune is measured against: the
      * vendored phlix-server route snapshot carries EXACTLY the three trickplay
      * routes the server registers, and neither of the two pruned pattern
-     * families (`thumb-[0-9]+.(jpg|png)` and `index.xml`) matches ANY manifest
+     * families (`thumb-[0-9]+\.(jpg|png)` and `index.xml`) matches ANY manifest
      * path. The trickplay route set is printed as the denominator (S345
      * lesson 3): a `thumb-*` or `index.xml` route appearing here would mean the
      * prune removed surface a live server route needs.
@@ -5295,6 +5295,11 @@ final class ServerProxyControllerTest extends TestCase
         yield 'trickplay thumb-0 png' => ['/trickplay/job-abc/thumb-0.png', false];
         yield 'trickplay thumb-12345 jpg' => ['/trickplay/job-abc/thumb-12345.jpg', false];
         yield 'trickplay index xml' => ['/trickplay/job-abc/index.xml', false];
+
+        // `thumbs.bif` is a LIVE server route the hub has never mirrored — it
+        // stays outside browse scope, pinned so a future accidental allow
+        // pattern for it cannot land unpinned.
+        yield 'trickplay thumbs bif' => ['/trickplay/job-abc/thumbs.bif', false];
 
         // Sibling bleed: the anchored patterns are exact, so a tail that merely
         // shares a prefix must not ride a surviving pattern.
