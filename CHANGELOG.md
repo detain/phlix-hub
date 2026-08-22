@@ -8,6 +8,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Security
 
+- **The relay proxy no longer forwards dead trickplay paths (S350).** Two allow
+  patterns were pruned from `BROWSE_SCOPE_PATTERNS['GET']` in
+  `src/Http/Controllers/ServerProxyController.php`:
+  `#^/trickplay/[^/]+/thumb-[0-9]+\.(jpg|png)$#` and
+  `#^/trickplay/[^/]+/index\.xml$#`, together with the comments that described
+  them. They mirrored routes S275 deleted from phlix-server — only the deleted
+  `TrickplayGenerator` wrote the `bif_NN.jpg` / `index.xml` files behind them —
+  and the S332-derived route snapshot (389 routes, source_sha 49f95f5d) confirms
+  no live route needs the pruned patterns: the server's route table registers
+  exactly three trickplay routes (`sprite.jpg`, `thumbs.bif`, `timeline.json`),
+  and the live `sprite.jpg` / `timeline.json` patterns here are untouched. The
+  dead families now fail closed at the hub (403 `proxy.scope_denied`) instead of
+  being forwarded to a 404 at the server — a strict narrowing of relay surface.
+
 - **An MCP token minted without a `scopes` field received the WRITE scope
   (S261).** Measured 2026-08-07: `McpTokenController::create()` fell back to
   `McpScopes::all()` whenever the request body omitted `scopes`, so an API caller
