@@ -767,7 +767,7 @@ final class ServerProxyController
         '#^/api/v1/libraries/[^/]*/delete-all(/|$)#i',
         // POST /api/v1/libraries/{id}/regenerate-assets — Application.php:1787
         // (S284: re-prime the FILE-based media-asset queue — chapter thumbnails
-        // and `media_item_assets` rows. It met all four of S107's inclusion
+        // and `media_asset_jobs` queue entries. It met all four of S107's inclusion
         // criteria six days after S107 shipped and was silently absent here —
         // S332 re-pins it, and the manifest-driven check in
         // `ServerProxyControllerTest` re-derives this whole list from
