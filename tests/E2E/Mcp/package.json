@@ -1,0 +1,12 @@
+{
+  "name": "phlix-hub-mcp-e2e-client",
+  "private": true,
+  "description": "S329 — the real MCP SDK client harness that proves the hub's SSE transport in CI. Nothing here is shipped; the SDK is installed pinned (see package-lock.json) solely to run tests/E2E/Mcp/mcp-client-session.mjs against a running hub.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0"
+  }
+}

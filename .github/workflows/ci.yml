@@ -301,13 +301,22 @@ jobs:
         # appears one time), the <html> and <text> report targets configured in
         # phpunit.xml are unaffected, and pointing the flag at a different path
         # proves it OVERRIDES the XML target rather than adding a second one.
+        #
+        # S329: the suites are named EXPLICITLY, never the implicit "all
+        # suites". phpunit.xml gained an E2E suite for the live-session
+        # harness, and that suite only runs in the mcp-e2e job that BOOTS the
+        # hub — a plain `phpunit` here would run its cases against a
+        # non-existent hub, they would skip, and the whole-suite zero-skip
+        # gate below would red the build. PHPUnit 10 takes ONE `--testsuite`
+        # flag, so the two suites are comma-joined: `--testsuite Unit,Integration`
+        # is the same set this job always ran, stated deliberately.
         env:
           HUB_TEST_DB_HOST: 127.0.0.1
           HUB_TEST_DB_PORT: '3306'
           HUB_TEST_DB_USER: root
           HUB_TEST_DB_PASSWORD: root
           HUB_TEST_DB_NAME: phlix_hub_test
-        run: php -d max_execution_time=0 ./vendor/bin/phpunit --colors=always --coverage-clover coverage.xml --log-junit junit.xml
+        run: php -d max_execution_time=0 ./vendor/bin/phpunit --testsuite Unit,Integration --colors=always --coverage-clover coverage.xml --log-junit junit.xml
 
       - name: Assert the integration tests actually ran (S173)
         # ADDITIVE gate. It fails the build when any test was SKIPPED, and when
@@ -396,3 +405,197 @@ jobs:
       # on each of those edits.
       - name: Run Security Audit (runtime AND development dependencies)
         run: php scripts/security-audit-check.php
+
+  # --------------------------------------------------------------------------
+  # S329 — THE live-session gate: a REAL MCP client against a RUNNING hub.
+  # --------------------------------------------------------------------------
+  # Until this job existed, the hub's MCP transport (S62/S63) had 14 unit test
+  # files and no evidence from a real client: the SSE cases drive
+  # RecordingStreamTimers and PHPUnit never enters the Workerman event loop,
+  # so the timer/keep-alive claims say nothing about a live connection — the
+  # same class of "verified against a double" as S57's caption tests.
+  #
+  # This job is the S57/S305 real-harness shape for the hub:
+  #
+  #   1. `scripts/ci-mcp-e2e-prereqs.php` fails CHEAPLY when a prerequisite is
+  #      missing (node, the pinned @modelcontextprotocol/sdk, the extensions
+  #      the hub needs to boot, the phpunit E2E wiring);
+  #   2. the migration chain is applied to the MySQL service container;
+  #   3. `scripts/mcp-e2e-seed.php` creates a user and mints PATs through the
+  #      REAL McpTokenService, writing var/mcp-e2e-tokens.json;
+  #   4. the hub BOOTS (start.php -d) with HUB_MCP_PLAYBACK_CONTROL=true so
+  #      the write-scoped playback_control tool is registered;
+  #   5. `tests/E2E/Mcp/McpClientSseE2ETest` drives the official MCP SDK
+  #      client through full SSE sessions: initialise → tools/list → one tool
+  #      call → clean close, plus the denied-scope case and the
+  #      broken-transport negative control;
+  #   6. `if: always()` `scripts/assert-mcp-e2e-ran.php junit-mcp.xml` reads
+  #      the JUnit report and fails when any required case is absent or
+  #      skipped — a skipped test reads as a pass, which is the whole defect.
+  #
+  # ⚠ THIS JOB HAS NO `needs:`, DELIBERATELY, AND MUST NOT ACQUIRE ONE.
+  # GitHub's response to a failed dependency is to SKIP the dependents, and a
+  # skipped job counts as SUCCESS to the checks API — with no branch protection
+  # anywhere in this estate, a merge decision taken on "nothing failed" would
+  # ship a PR whose live-session gate never ran. That is the exact failure
+  # mode this job exists to remove (the same rule docker-boot-gate documents).
+  # Also do NOT add `continue-on-error` to the E2E run or the gate step:
+  # tests/Unit/Support/McpE2ECiWiringTest.php parses this file and fails on
+  # each of those edits, on a missing mysql service, on a dropped HUB_DB_*
+  # variable, and on any `needs:` appearing in this job.
+  #
+  # node is NOT pinned via actions/setup-node: ubuntu-latest ships node >= 20,
+  # and the prereqs script ASSERTS the version instead of assuming it — a
+  # future runner image that drops node reds the job HERE, named, rather than
+  # three silently-skipped tests later.
+  mcp-e2e:
+    name: Real MCP Client SSE Session
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: phlix_hub_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '8.3'
+          # S258: the same security-path extension set the other PHP jobs
+          # carry. swoole + uv are what the hub's boot path needs (see the
+          # php-uv build step below), and the prereqs script re-asserts them.
+          extensions: json, pcntl, posix, swoole, openssl, curl, sodium, mbstring, hash, filter, ctype
+
+      - name: Assert every security-path extension is loaded (S258)
+        run: php scripts/assert-required-extensions.php
+
+      - name: Build and enable php-uv
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
+          git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv
+          cd /tmp/php-uv && phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
+          echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
+
+      - name: Verify swoole + uv loaded
+        run: php -m | grep -iE '^(swoole|uv)$'
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      # S329: the SDK is installed PINNED from the committed package-lock.json
+      # (exact version + integrity). A bare `npm install` would float the
+      # version and silently change what the probe proves.
+      - name: Install the pinned MCP SDK client
+        working-directory: tests/E2E/Mcp
+        run: npm ci
+
+      - name: Assert the MCP E2E prerequisites (S329)
+        run: php scripts/ci-mcp-e2e-prereqs.php
+
+      - name: Apply database migrations
+        # HUB_DB_* (not HUB_TEST_DB_*) because scripts/run-migrations.php and
+        # scripts/mcp-e2e-seed.php resolve their target through
+        # config/database.php, which reads HUB_DB_*.
+        env:
+          HUB_DB_HOST: 127.0.0.1
+          HUB_DB_PORT: '3306'
+          HUB_DB_USER: root
+          HUB_DB_PASSWORD: root
+          HUB_DB_NAME: phlix_hub_test
+        run: php scripts/run-migrations.php
+
+      - name: Seed the MCP E2E user and mint PATs (S329)
+        # Mints a user + two PATs through the REAL McpTokenService and writes
+        # var/mcp-e2e-tokens.json. Exits 1 when a mint does not round-trip
+        # through validate() — a gate that cannot seed cannot measure.
+        env:
+          HUB_DB_HOST: 127.0.0.1
+          HUB_DB_PORT: '3306'
+          HUB_DB_USER: root
+          HUB_DB_PASSWORD: root
+          HUB_DB_NAME: phlix_hub_test
+        run: php scripts/mcp-e2e-seed.php
+
+      - name: Boot the hub
+        env:
+          HUB_DB_HOST: 127.0.0.1
+          HUB_DB_PORT: '3306'
+          HUB_DB_USER: root
+          HUB_DB_PASSWORD: root
+          HUB_DB_NAME: phlix_hub_test
+          HUB_PORT: '8800'
+          HUB_WORKERS: '1'
+          # Registers playback_control — the write tool the denied-scope case
+          # needs to exist in tools/list (default OFF is the production value,
+          # but a denied scope is only observable when the tool is registered).
+          HUB_MCP_PLAYBACK_CONTROL: 'true'
+        run: |
+          set -euo pipefail
+          # Fresh checkout: no var/ (pid/status/heartbeat files) and no .logs/
+          # (the Workerman log) exist. The install scripts create them; CI must
+          # too, or boot fails on the first pid-file write.
+          mkdir -p var .logs
+          # The hub refuses to boot without a configured JWT secret (fail-closed
+          # boot). The E2E flow authenticates via PAT (mcp_tokens), never JWT, so
+          # a per-run random value is right: it signs nothing a client verifies,
+          # and no static credential lives in the workflow.
+          export HUB_JWT_SECRET="$(openssl rand -hex 32)"
+          php start.php start -d
+          # Readiness = the app is booted AND the route is registered: an
+          # unauthenticated POST /mcp must answer 401 (auth.required) — that
+          # 401 happens before any limiter or DB touch, so it proves the worker
+          # is serving without depending on the seed.
+          for i in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8800/mcp || true)"
+            if [ "$code" = "401" ]; then
+              echo "hub is ready (POST /mcp answered $code) after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::hub did not become ready on :8800 in 60s — see the workerman log"
+          cat .logs/workerman.log 2>/dev/null || true
+          exit 1
+
+      - name: Run the real MCP client SSE session suite
+        env:
+          # The MCP endpoint, not the bare host: the SDK client POSTs to the
+          # URL it is given (and opens the SSE stream on it), and the hub has
+          # no route at "/" — a bare host 404s every request.
+          HUB_MCP_E2E_BASE_URL: http://127.0.0.1:8800/mcp
+          HUB_MCP_E2E_TOKENS_FILE: var/mcp-e2e-tokens.json
+        run: php -d max_execution_time=0 ./vendor/bin/phpunit --colors=always --testsuite E2E --log-junit junit-mcp.xml
+
+      - name: Assert the MCP live-session cases actually ran (S329)
+        # ADDITIVE gate: fails when a required case is absent, skipped, or
+        # asserted nothing. `if: always()` so a red suite still reports whether
+        # its live-session half ran at all. Do NOT delete this step, do NOT add
+        # continue-on-error, do NOT wrap it in an `if:` that can be false:
+        # tests/Unit/Support/McpE2ECiWiringTest.php parses this file and fails
+        # on each of those edits.
+        if: always()
+        run: php scripts/assert-mcp-e2e-ran.php junit-mcp.xml
+
+      - name: Stop the hub (cleanup)
+        # Hygiene only, never a gate: `|| true` is correct here because a job
+        # that redded earlier still deserves to stop its daemon. The JWT secret
+        # export is required even for `stop`: start.php builds the container
+        # (which resolves the secret) before it signals the daemon.
+        if: always()
+        run: |
+          export HUB_JWT_SECRET="$(openssl rand -hex 32)"
+          php start.php stop || true

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="E2E" tests="1" assertions="0">
+    <testcase name="testRealMcpClientInitialisesAgainstTheRunningHub" class="Phlix\Hub\Tests\E2E\Mcp\McpClientSseE2ETest">
+</testsuites>
