@@ -4363,6 +4363,65 @@ final class ServerProxyControllerTest extends TestCase
         );
     }
 
+    /**
+     * S350 — the exact/anchored compare the prune is measured against: the
+     * vendored phlix-server route snapshot carries EXACTLY the three trickplay
+     * routes the server registers, and neither of the two pruned pattern
+     * families (`thumb-[0-9]+\.(jpg|png)` and `index.xml`) matches ANY manifest
+     * path. The trickplay route set is printed as the denominator (S345
+     * lesson 3): a `thumb-*` or `index.xml` route appearing here would mean the
+     * prune removed surface a live server route needs.
+     */
+    public function testS350TrickplayManifestContainsOnlyTheLiveRoutes(): void
+    {
+        $manifest = self::s332ServerRouteManifest();
+
+        $trickplay = [];
+        foreach ($manifest['routes'] as $route) {
+            if (str_starts_with($route['path'], '/trickplay/')) {
+                $trickplay[] = $route['method'] . ' ' . $route['path'];
+            }
+        }
+        sort($trickplay);
+
+        fwrite(STDERR, sprintf(
+            "S350 trickplay route set (denominator, %d route(s)):\n  %s\n",
+            count($trickplay),
+            implode("\n  ", $trickplay),
+        ));
+
+        $this->assertSame(
+            [
+                'GET /trickplay/{jobId}/sprite.jpg',
+                'GET /trickplay/{jobId}/thumbs.bif',
+                'GET /trickplay/{jobId}/timeline.json',
+            ],
+            $trickplay,
+            'the S332-derived snapshot must carry EXACTLY the three trickplay routes the server '
+            . 'registers — a `thumb-*` or `index.xml` route here would mean S350 pruned surface a '
+            . 'live route needs',
+        );
+
+        $prunedPatterns = [
+            '#^/trickplay/[^/]+/thumb-[0-9]+\.(jpg|png)$#',
+            '#^/trickplay/[^/]+/index\.xml$#',
+        ];
+        foreach ($manifest['routes'] as $route) {
+            foreach ($prunedPatterns as $pattern) {
+                $this->assertSame(
+                    0,
+                    preg_match($pattern, $route['path']),
+                    sprintf(
+                        'the pruned pattern %s must match NO manifest path — it matched %s %s',
+                        $pattern,
+                        $route['method'],
+                        $route['path'],
+                    ),
+                );
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // S107 follow-up: an allowlist prefix that matches NO phlix-server route is
     // dead relay surface — it widens what the hub forwards without delivering
@@ -4795,8 +4854,9 @@ final class ServerProxyControllerTest extends TestCase
      * Anti-vacuity floor for `BROWSE_SCOPE_PATTERNS['GET']`.
      *
      * The S238 rows below are only meaningful if the map they read is populated.
-     * Nine is the count at the time of writing (2 HLS audio + 1 chapter thumbnail
-     * + 4 trickplay + the 2 S238 image reads); the assertion is `>=`, so adding an
+     * Twelve is the count at the time of writing (2 HLS audio + 1 chapter
+     * thumbnail + the 1 direct-play byte stream + 2 trickplay + the 2 S238 image
+     * reads + the 4 S63 cast/DLNA reads); the assertion is `>=`, so adding an
      * entry is fine and hollowing the map fails LOUDLY with the count in the
      * message rather than passing trivially. Proved by emptying the `GET` key.
      */
@@ -5197,6 +5257,130 @@ final class ServerProxyControllerTest extends TestCase
             "{$method} {$path} must fail closed — S238 opens a READ, never a write "
             . '(POST/DELETE /api/v1/users/me/avatar are real server writes at this exact path)',
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // S350 — the trickplay allow patterns mirror ONLY the routes the server
+    // still registers. `sprite.jpg` and `timeline.json` survive; S275 deleted
+    // the `thumb-{index}.jpg`/`index.xml` route family (only the deleted
+    // `TrickplayGenerator` wrote the `bif_NN.jpg`/`index.xml` files behind
+    // them), so the hub patterns mirroring those routes were dead relay
+    // surface — forwarded here, 404 at the server. The deny rows are the guard
+    // the prune needs: a re-added `thumb-*`/`index.xml` pattern would make one
+    // of them green, and a dropped live pattern would make one of the allow
+    // rows red.
+    // -----------------------------------------------------------------------
+
+    /**
+     * The trickplay surface the hub admits, and the two families S350 pruned.
+     *
+     * @return iterable<string, array{0: string, 1: bool}>
+     */
+    public static function s350TrickplayScopeProvider(): iterable
+    {
+        // The two route families the server still registers
+        // (`Server\Core\Application::loadTrickplayRoutes()`: sprite.jpg,
+        // thumbs.bif, timeline.json) and the hub still mirrors.
+        yield 'trickplay sprite sheet' => ['/trickplay/job-abc/sprite.jpg', true];
+        yield 'trickplay sprite sheet, uuid job' => [
+            '/trickplay/550e8400-e29b-41d4-a716-446655440000/sprite.jpg',
+            true,
+        ];
+        yield 'trickplay timeline json' => ['/trickplay/job-abc/timeline.json', true];
+
+        // S275 removed `thumb-{index}.jpg` and `index.xml` from the server; the
+        // hub patterns mirroring them are pruned, so every shape in those two
+        // families now fails closed HERE (403) instead of 404-ing at the server.
+        yield 'trickplay thumb-0 jpg' => ['/trickplay/job-abc/thumb-0.jpg', false];
+        yield 'trickplay thumb-0 png' => ['/trickplay/job-abc/thumb-0.png', false];
+        yield 'trickplay thumb-12345 jpg' => ['/trickplay/job-abc/thumb-12345.jpg', false];
+        yield 'trickplay index xml' => ['/trickplay/job-abc/index.xml', false];
+
+        // `thumbs.bif` is a LIVE server route the hub has never mirrored — it
+        // stays outside browse scope, pinned so a future accidental allow
+        // pattern for it cannot land unpinned.
+        yield 'trickplay thumbs bif' => ['/trickplay/job-abc/thumbs.bif', false];
+
+        // Sibling bleed: the anchored patterns are exact, so a tail that merely
+        // shares a prefix must not ride a surviving pattern.
+        yield 'trickplay thumb without index' => ['/trickplay/job-abc/thumb.jpg', false];
+        yield 'trickplay thumb-0 gif sibling' => ['/trickplay/job-abc/thumb-0.gif', false];
+        yield 'trickplay index html sibling' => ['/trickplay/job-abc/index.html', false];
+        yield 'trickplay two-segment job id' => ['/trickplay/a/b/sprite.jpg', false];
+    }
+
+    /**
+     * @dataProvider s350TrickplayScopeProvider
+     */
+    public function testS350TrickplayScopeMatchesTheSurvivingServerRoutes(
+        string $path,
+        bool $expected,
+    ): void {
+        $controller = $this->controller(
+            $this->createMock(ServerInfoHandler::class),
+            $this->bridge(static fn () => null),
+        );
+
+        $reflected = new ReflectionMethod(ServerProxyController::class, 'isWithinBrowseScope');
+        $reflected->setAccessible(true);
+
+        $this->assertSame(
+            $expected,
+            $reflected->invoke($controller, 'GET', $path),
+            $expected
+                ? "GET {$path} is a live trickplay route and must be forwarded over the relay"
+                : "GET {$path} mirrors a route S275 deleted and must fail closed (out of browse scope)",
+        );
+    }
+
+    /**
+     * The S275-deleted trickplay families, for the end-to-end refusal rows.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function s350TrickplayDeadFamilyProvider(): iterable
+    {
+        yield 'thumb-0 jpg' => ['/trickplay/job-abc/thumb-0.jpg'];
+        yield 'thumb-0 png' => ['/trickplay/job-abc/thumb-0.png'];
+        yield 'thumb-12345 jpg' => ['/trickplay/job-abc/thumb-12345.jpg'];
+        yield 'index xml' => ['/trickplay/job-abc/index.xml'];
+    }
+
+    /**
+     * End-to-end control: the dead families now 403 `proxy.scope_denied` and
+     * never reach the bridge. Before S350 they were forwarded and 404'd only at
+     * the server — relying on the peer's route table for a path the hub itself
+     * had decided to admit. After the prune the hub's own gate is the refusal.
+     *
+     * @dataProvider s350TrickplayDeadFamilyProvider
+     */
+    public function testS350TrickplayDeadFamilies403AndAreNotForwarded(string $path): void
+    {
+        $info = $this->createMock(ServerInfoHandler::class);
+        $info->method('getOwnerAndStatus')->willReturn([
+            'userId' => 'user-1',
+            'status' => 'online',
+            'relayActive' => true,
+        ]);
+
+        $forwarded = false;
+        $controller = $this->controller($info, $this->bridge(static function (
+            string $e,
+            array $d,
+        ) use (&$forwarded): void {
+            $forwarded = true;
+        }));
+
+        $response = $controller->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => ltrim($path, '/')],
+        );
+
+        $this->assertSame(403, $response->statusCode, "GET {$path} must fail closed");
+        $this->assertFalse($forwarded, "GET {$path} must never reach the relay bridge");
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
     }
 
     // -----------------------------------------------------------------------

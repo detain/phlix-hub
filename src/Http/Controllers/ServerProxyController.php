@@ -480,10 +480,6 @@ final class ServerProxyController
             '#^/trickplay/[^/]+/sprite\.(jpg|png)$#',
             // Covers: /trickplay/{jobId}/timeline.json
             '#^/trickplay/[^/]+/timeline\.json$#',
-            // Covers: /trickplay/{jobId}/thumb-{index}.jpg (BIF thumbnails)
-            '#^/trickplay/[^/]+/thumb-[0-9]+\.(jpg|png)$#',
-            // Covers: /trickplay/{jobId}/index.xml (BIF index)
-            '#^/trickplay/[^/]+/index\.xml$#',
 
             // ---- S63: the cast/DLNA session READS ---------------------------
             // The two device catalogues and the two per-device status reads
