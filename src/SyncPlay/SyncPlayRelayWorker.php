@@ -322,6 +322,14 @@ final class SyncPlayRelayWorker
                 static fn (string $protocol): bool => $protocol !== '',
             );
             if (in_array($token, $offered, true)) {
+                // `$connection->headers` is Workerman's ONLY 101-extension
+                // point: its own Websocket::dealHandshake() appends the array
+                // to the 101 after onWebSocketConnect returns
+                // (vendor/workerman/workerman/src/Protocols/Websocket.php:449).
+                // The @internal/@deprecated tags target the webman HTTP
+                // `$response` API, which does not exist on this handshake
+                // path — there is no other way to echo Sec-WebSocket-Protocol.
+                /** @psalm-suppress InternalProperty, DeprecatedProperty */
                 $connection->headers = ['Sec-WebSocket-Protocol: ' . $token];
             }
         }
