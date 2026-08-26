@@ -218,14 +218,25 @@ final class SyncPlayRelayWorkerTest extends TestCase
     // ---- S355: the 101 must echo the negotiated subprotocol ---------------
 
     /**
-     * S355 — RFC 6455 §4.2.2: a server that accepts a client's subprotocol
-     * MUST echo it in the 101 response. Workerman composes the 101 from
-     * `$connection->headers` (appended after `onWebSocketConnect` returns), and
-     * without the echo a strict client — a browser or undici, exactly the S298
-     * ui consumer's `new WebSocket(url, ['bearer', token])` — aborts the
-     * handshake (no open, 1006). S237's tests proved token EXTRACTION only;
-     * this test covers the NEGOTIATION, i.e. that the 101 carries the echoed
-     * `bearer, <token>` form back to the client.
+     * S355 — RFC 6455 §4.1/§4.2.2: a server that accepts a client's
+     * subprotocol MUST echo EXACTLY ONE of the offered protocols in the 101
+     * response. Workerman composes the 101 from `$connection->headers`
+     * (appended after `onWebSocketConnect` returns), and without the echo a
+     * strict client — a browser or undici, exactly the S298 ui consumer's
+     * `new WebSocket(url, ['bearer', token])` — aborts the handshake (no
+     * open, 1006). S237's tests proved token EXTRACTION only; this test
+     * covers the NEGOTIATION, i.e. that the 101 carries a protocol the client
+     * actually offered, back to the client.
+     *
+     * ⚠ The consumer offers TWO subprotocols — `bearer` and `<token>` — so
+     * the echo must be a SINGLE offered protocol. Echoing the comma-joined
+     * `bearer, <token>` as one value answers a negotiation the client never
+     * made: undici rejects it as not-in-offered-list and the handshake dies
+     * with the same 1006 the fix exists to cure (probed with undici 7.29.0,
+     * the ui's pinned runtime). The token is always one of the offered
+     * entries for EVERY shape `extractClientToken()` accepts, and it carries
+     * the client's own credential — so the echo is
+     * `Sec-WebSocket-Protocol: <token>`.
      *
      * This FAILS against the pre-fix code (no headers are ever set on the
      * connection), and PASSES after the fix.
@@ -247,12 +258,12 @@ final class SyncPlayRelayWorkerTest extends TestCase
         // testTheSanctionedCarriersAuthenticate).
         self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
 
-        // And the 101 must echo the client's requested subprotocol, carrying
+        // And the 101 must echo ONE of the client's offered subprotocols —
         // the client's token — the exact header Workerman appends to the 101.
         self::assertSame(
-            ['Sec-WebSocket-Protocol: bearer, token-a'],
+            ['Sec-WebSocket-Protocol: token-a'],
             $connection->headers,
-            'S355: the 101 must echo the client-requested bearer subprotocol with the client\'s token',
+            'S355: the 101 must echo an offered subprotocol carrying the client\'s token',
         );
     }
 
