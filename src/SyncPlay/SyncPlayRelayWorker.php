@@ -25,11 +25,16 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Timer;
 use Workerman\Worker;
 
+use function array_filter;
+use function array_map;
 use function count;
+use function explode;
+use function in_array;
 use function is_string;
 use function json_decode;
 use function spl_object_id;
 use function time;
+use function trim;
 
 /**
  * WebSocket worker that handles inbound SyncPlay relay connections.
@@ -280,12 +285,53 @@ final class SyncPlayRelayWorker
             $userId = $this->validateClientAuth($token, $serverId);
         }
 
-        if ($userId === null) {
+        if ($token === null || $token === '' || $userId === null) {
             $logger->warning('SyncPlay: rejected connection, invalid or missing relay token', [
                 'server_id' => $serverId,
             ]);
             $this->rejectUnauthorized($connection);
             return;
+        }
+
+        // S355 — RFC 6455 §4.1/§4.2.2: a server that accepts a client's
+        // subprotocol MUST echo EXACTLY ONE of the offered protocols in the
+        // 101 response. Workerman composes the 101 from `$connection->headers`
+        // (appended after onWebSocketConnect returns), and without the echo a
+        // strict client — a browser or undici, exactly the S298 ui consumer's
+        // `new WebSocket(url, ['bearer', token])` — aborts the handshake (no
+        // open, 1006). `$token` is a non-empty string here: the guard above
+        // returns on every null/empty path.
+        //
+        // The echo is the TOKEN ALONE, not the comma-joined `bearer, <token>`
+        // carrier form: the ui consumer offers TWO protocols (`bearer` and
+        // `<token>`) and a strict client rejects a response protocol that is
+        // not one of the offered entries — echoing the joined form reproduces
+        // the very 1006 this fixes (probed against undici 7.29.0, the ui's
+        // pinned runtime). In the subprotocol-carrier shape the token is
+        // always an offered entry and carries the client's own credential.
+        // The echo is gated on the client HAVING offered the
+        // TOKEN as a subprotocol: echoing one to an `Authorization: Bearer`
+        // client — or to a both-carrier client whose subprotocol header does
+        // not contain the token — would answer a negotiation the client never
+        // made (RFC 6455 §4.1).
+        /** @var mixed $requestedProtocol */
+        $requestedProtocol = $request->header('sec-websocket-protocol');
+        if (is_string($requestedProtocol) && $requestedProtocol !== '') {
+            $offered = array_filter(
+                array_map('trim', explode(',', $requestedProtocol)),
+                static fn (string $protocol): bool => $protocol !== '',
+            );
+            if (in_array($token, $offered, true)) {
+                // `$connection->headers` is Workerman's ONLY 101-extension
+                // point: its own Websocket::dealHandshake() appends the array
+                // to the 101 after onWebSocketConnect returns
+                // (vendor/workerman/workerman/src/Protocols/Websocket.php:449).
+                // The @internal/@deprecated tags target the webman HTTP
+                // `$response` API, which does not exist on this handshake
+                // path — there is no other way to echo Sec-WebSocket-Protocol.
+                /** @psalm-suppress InternalProperty, DeprecatedProperty */
+                $connection->headers = ['Sec-WebSocket-Protocol: ' . $token];
+            }
         }
 
         // Create client state with authenticated userId

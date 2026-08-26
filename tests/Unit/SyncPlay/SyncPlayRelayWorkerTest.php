@@ -215,6 +215,138 @@ final class SyncPlayRelayWorkerTest extends TestCase
         yield 'Sec-WebSocket-Protocol: bearer' => ['subprotocol'];
     }
 
+    // ---- S355: the 101 must echo the negotiated subprotocol ---------------
+
+    /**
+     * S355 — RFC 6455 §4.1/§4.2.2: a server that accepts a client's
+     * subprotocol MUST echo EXACTLY ONE of the offered protocols in the 101
+     * response. Workerman composes the 101 from `$connection->headers`
+     * (appended after `onWebSocketConnect` returns), and without the echo a
+     * strict client — a browser or undici, exactly the S298 ui consumer's
+     * `new WebSocket(url, ['bearer', token])` — aborts the handshake (no
+     * open, 1006). S237's tests proved token EXTRACTION only; this test
+     * covers the NEGOTIATION, i.e. that the 101 carries a protocol the client
+     * actually offered, back to the client.
+     *
+     * ⚠ The consumer offers TWO subprotocols — `bearer` and `<token>` — so
+     * the echo must be a SINGLE offered protocol. Echoing the comma-joined
+     * `bearer, <token>` as one value answers a negotiation the client never
+     * made: undici rejects it as not-in-offered-list and the handshake dies
+     * with the same 1006 the fix exists to cure (probed with undici 7.29.0,
+     * the ui's pinned runtime). The token is always one of the offered
+     * entries for EVERY shape `extractClientToken()` accepts, and it carries
+     * the client's own credential — so the echo is
+     * `Sec-WebSocket-Protocol: <token>`.
+     *
+     * This FAILS against the pre-fix code (no headers are ever set on the
+     * connection), and PASSES after the fix.
+     */
+    public function testAuthenticatedSubprotocolConnectEchoesTheNegotiatedSubprotocol(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'subprotocol'),
+        );
+
+        // The client authenticated (control: the very same token/carrier
+        // combination is asserted to authenticate by
+        // testTheSanctionedCarriersAuthenticate).
+        self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
+
+        // And the 101 must echo ONE of the client's offered subprotocols —
+        // the client's token — the exact header Workerman appends to the 101.
+        self::assertSame(
+            ['Sec-WebSocket-Protocol: token-a'],
+            $connection->headers,
+            'S355: the 101 must echo an offered subprotocol carrying the client\'s token',
+        );
+    }
+
+    /**
+     * S355 — the echo is a NEGOTIATION answer: a client that authenticated via
+     * `Authorization: Bearer` never offered a subprotocol, and echoing one
+     * would answer a negotiation the client never made. Strict clients reject
+     * a server-selected protocol they did not offer (RFC 6455 §4.1), so this
+     * must stay empty or the header carrier (roku/mobile — the S298 wire-proof
+     * carrier) would start failing the handshake.
+     */
+    public function testAuthorizationHeaderConnectDoesNotEchoASubprotocol(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'header'),
+        );
+
+        self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
+        self::assertSame(
+            [],
+            $connection->headers,
+            'S355: no subprotocol was offered, so none may be echoed',
+        );
+    }
+
+    /**
+     * S355 — a REJECTED connect must not echo anything: the handshake is
+     * aborted (close), so no 101 and no subprotocol line may leave the hub.
+     */
+    public function testRejectedConnectDoesNotEchoASubprotocol(): void
+    {
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->expects($this->once())->method('close')->with('', true);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'never-minted', 'subprotocol'),
+        );
+
+        self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
+        self::assertSame(
+            [],
+            $connection->headers,
+            'S355: a rejected connect must not echo a subprotocol',
+        );
+    }
+
+    /**
+     * S355 — a client that authenticated via `Authorization: Bearer` while
+     * ALSO offering a subprotocol that does not contain the token must not
+     * receive an echo: RFC 6455 §4.1 forbids selecting a protocol the client
+     * did not offer, and a strict client answers such an echo with the same
+     * 1006 this fix exists to cure. No current client combines the carriers —
+     * this pins the gate against the pathological shape.
+     */
+    public function testAuthHeaderWithUnrelatedSubprotocolOfferGetsNoEcho(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'header', 'bearer'),
+        );
+
+        self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
+        self::assertSame(
+            [],
+            $connection->headers,
+            'S355: the authenticated token was not among the offered subprotocols, so none may be echoed',
+        );
+    }
+
     // ---- AC2: ownership scoping (the security guard) ---------------------
 
     /**
@@ -456,22 +588,24 @@ final class SyncPlayRelayWorkerTest extends TestCase
     }
 
     /**
-     * @param string $path Request path (with optional query).
-     */
-    /**
      * Build a REAL {@see WorkermanRequest} by parsing a raw upgrade request, so
      * the token travels through the same header parsing production uses.
      *
-     * @param string      $path    Request target, query string included.
-     * @param string|null $token   Relay token to present, or null for none.
-     * @param string      $carrier `header` (`Authorization: Bearer`),
-     *                             `subprotocol` (`Sec-WebSocket-Protocol`), or
-     *                             `query` (S237 — must NOT authenticate).
+     * @param string      $path              Request target, query string included.
+     * @param string|null $token             Relay token to present, or null for none.
+     * @param string      $carrier           `header` (`Authorization: Bearer`),
+     *                                       `subprotocol` (`Sec-WebSocket-Protocol`), or
+     *                                       `query` (S237 — must NOT authenticate).
+     * @param string|null $extraSubprotocol  Extra `Sec-WebSocket-Protocol` value to
+     *                                       present ALONGSIDE the chosen carrier (S355 —
+     *                                       the both-carrier edge: auth via header while
+     *                                       offering an unrelated subprotocol).
      */
     private function makeUpgradeRequest(
         string $path,
         ?string $token = null,
         string $carrier = 'header',
+        ?string $extraSubprotocol = null,
     ): WorkermanRequest {
         $headers = [
             'Host' => 'hub.example.com',
@@ -490,6 +624,10 @@ final class SyncPlayRelayWorkerTest extends TestCase
                 // 'query' — the S237 defect shape. Deliberately NOT a header.
                 $path .= (str_contains($path, '?') ? '&' : '?') . 'token=' . rawurlencode($token);
             }
+        }
+
+        if ($extraSubprotocol !== null) {
+            $headers['Sec-WebSocket-Protocol'] = $extraSubprotocol;
         }
 
         $lines = ["GET {$path} HTTP/1.1"];
