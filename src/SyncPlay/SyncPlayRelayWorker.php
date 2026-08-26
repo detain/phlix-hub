@@ -25,11 +25,16 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Timer;
 use Workerman\Worker;
 
+use function array_filter;
+use function array_map;
 use function count;
+use function explode;
+use function in_array;
 use function is_string;
 use function json_decode;
 use function spl_object_id;
 use function time;
+use function trim;
 
 /**
  * WebSocket worker that handles inbound SyncPlay relay connections.
@@ -304,13 +309,21 @@ final class SyncPlayRelayWorker
         // the very 1006 this fixes (probed against undici 7.29.0, the ui's
         // pinned runtime). The token is always an offered entry for EVERY
         // shape `extractClientToken()` accepts, and it carries the client's
-        // own credential. The echo is gated on the client HAVING offered a
-        // subprotocol: echoing one to an `Authorization: Bearer` client would
-        // answer a negotiation the client never made (RFC 6455 §4.1).
+        // own credential. The echo is gated on the client HAVING offered the
+        // TOKEN as a subprotocol: echoing one to an `Authorization: Bearer`
+        // client — or to a both-carrier client whose subprotocol header does
+        // not contain the token — would answer a negotiation the client never
+        // made (RFC 6455 §4.1).
         /** @var mixed $requestedProtocol */
         $requestedProtocol = $request->header('sec-websocket-protocol');
         if (is_string($requestedProtocol) && $requestedProtocol !== '') {
-            $connection->headers = ['Sec-WebSocket-Protocol: ' . $token];
+            $offered = array_filter(
+                array_map('trim', explode(',', $requestedProtocol)),
+                static fn (string $protocol): bool => $protocol !== '',
+            );
+            if (in_array($token, $offered, true)) {
+                $connection->headers = ['Sec-WebSocket-Protocol: ' . $token];
+            }
         }
 
         // Create client state with authenticated userId

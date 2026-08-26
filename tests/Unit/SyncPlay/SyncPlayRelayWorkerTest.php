@@ -319,6 +319,34 @@ final class SyncPlayRelayWorkerTest extends TestCase
         );
     }
 
+    /**
+     * S355 — a client that authenticated via `Authorization: Bearer` while
+     * ALSO offering a subprotocol that does not contain the token must not
+     * receive an echo: RFC 6455 §4.1 forbids selecting a protocol the client
+     * did not offer, and a strict client answers such an echo with the same
+     * 1006 this fix exists to cure. No current client combines the carriers —
+     * this pins the gate against the pathological shape.
+     */
+    public function testAuthHeaderWithUnrelatedSubprotocolOfferGetsNoEcho(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'header', 'bearer'),
+        );
+
+        self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
+        self::assertSame(
+            [],
+            $connection->headers,
+            'S355: the authenticated token was not among the offered subprotocols, so none may be echoed',
+        );
+    }
+
     // ---- AC2: ownership scoping (the security guard) ---------------------
 
     /**
@@ -559,23 +587,25 @@ final class SyncPlayRelayWorkerTest extends TestCase
         };
     }
 
-    /**
-     * @param string $path Request path (with optional query).
-     */
-    /**
+/**
      * Build a REAL {@see WorkermanRequest} by parsing a raw upgrade request, so
      * the token travels through the same header parsing production uses.
      *
-     * @param string      $path    Request target, query string included.
-     * @param string|null $token   Relay token to present, or null for none.
-     * @param string      $carrier `header` (`Authorization: Bearer`),
-     *                             `subprotocol` (`Sec-WebSocket-Protocol`), or
-     *                             `query` (S237 — must NOT authenticate).
+     * @param string      $path              Request target, query string included.
+     * @param string|null $token             Relay token to present, or null for none.
+     * @param string      $carrier           `header` (`Authorization: Bearer`),
+     *                                       `subprotocol` (`Sec-WebSocket-Protocol`), or
+     *                                       `query` (S237 — must NOT authenticate).
+     * @param string|null $extraSubprotocol  Extra `Sec-WebSocket-Protocol` value to
+     *                                       present ALONGSIDE the chosen carrier (S355 —
+     *                                       the both-carrier edge: auth via header while
+     *                                       offering an unrelated subprotocol).
      */
     private function makeUpgradeRequest(
         string $path,
         ?string $token = null,
         string $carrier = 'header',
+        ?string $extraSubprotocol = null,
     ): WorkermanRequest {
         $headers = [
             'Host' => 'hub.example.com',
@@ -594,6 +624,10 @@ final class SyncPlayRelayWorkerTest extends TestCase
                 // 'query' — the S237 defect shape. Deliberately NOT a header.
                 $path .= (str_contains($path, '?') ? '&' : '?') . 'token=' . rawurlencode($token);
             }
+        }
+
+        if ($extraSubprotocol !== null) {
+            $headers['Sec-WebSocket-Protocol'] = $extraSubprotocol;
         }
 
         $lines = ["GET {$path} HTTP/1.1"];
