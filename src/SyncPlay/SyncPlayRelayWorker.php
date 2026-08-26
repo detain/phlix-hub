@@ -307,9 +307,9 @@ final class SyncPlayRelayWorker
         // `<token>`) and a strict client rejects a response protocol that is
         // not one of the offered entries — echoing the joined form reproduces
         // the very 1006 this fixes (probed against undici 7.29.0, the ui's
-        // pinned runtime). The token is always an offered entry for EVERY
-        // shape `extractClientToken()` accepts, and it carries the client's
-        // own credential. The echo is gated on the client HAVING offered the
+        // pinned runtime). In the subprotocol-carrier shape the token is
+        // always an offered entry and carries the client's own credential.
+        // The echo is gated on the client HAVING offered the
         // TOKEN as a subprotocol: echoing one to an `Authorization: Bearer`
         // client — or to a both-carrier client whose subprotocol header does
         // not contain the token — would answer a negotiation the client never

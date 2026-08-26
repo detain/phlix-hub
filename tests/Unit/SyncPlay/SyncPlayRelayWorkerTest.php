@@ -587,7 +587,7 @@ final class SyncPlayRelayWorkerTest extends TestCase
         };
     }
 
-/**
+    /**
      * Build a REAL {@see WorkermanRequest} by parsing a raw upgrade request, so
      * the token travels through the same header parsing production uses.
      *
