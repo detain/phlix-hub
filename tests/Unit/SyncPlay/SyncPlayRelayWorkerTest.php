@@ -215,6 +215,99 @@ final class SyncPlayRelayWorkerTest extends TestCase
         yield 'Sec-WebSocket-Protocol: bearer' => ['subprotocol'];
     }
 
+    // ---- S355: the 101 must echo the negotiated subprotocol ---------------
+
+    /**
+     * S355 — RFC 6455 §4.2.2: a server that accepts a client's subprotocol
+     * MUST echo it in the 101 response. Workerman composes the 101 from
+     * `$connection->headers` (appended after `onWebSocketConnect` returns), and
+     * without the echo a strict client — a browser or undici, exactly the S298
+     * ui consumer's `new WebSocket(url, ['bearer', token])` — aborts the
+     * handshake (no open, 1006). S237's tests proved token EXTRACTION only;
+     * this test covers the NEGOTIATION, i.e. that the 101 carries the echoed
+     * `bearer, <token>` form back to the client.
+     *
+     * This FAILS against the pre-fix code (no headers are ever set on the
+     * connection), and PASSES after the fix.
+     */
+    public function testAuthenticatedSubprotocolConnectEchoesTheNegotiatedSubprotocol(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'subprotocol'),
+        );
+
+        // The client authenticated (control: the very same token/carrier
+        // combination is asserted to authenticate by
+        // testTheSanctionedCarriersAuthenticate).
+        self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
+
+        // And the 101 must echo the client's requested subprotocol, carrying
+        // the client's token — the exact header Workerman appends to the 101.
+        self::assertSame(
+            ['Sec-WebSocket-Protocol: bearer, token-a'],
+            $connection->headers,
+            'S355: the 101 must echo the client-requested bearer subprotocol with the client\'s token',
+        );
+    }
+
+    /**
+     * S355 — the echo is a NEGOTIATION answer: a client that authenticated via
+     * `Authorization: Bearer` never offered a subprotocol, and echoing one
+     * would answer a negotiation the client never made. Strict clients reject
+     * a server-selected protocol they did not offer (RFC 6455 §4.1), so this
+     * must stay empty or the header carrier (roku/mobile — the S298 wire-proof
+     * carrier) would start failing the handshake.
+     */
+    public function testAuthorizationHeaderConnectDoesNotEchoASubprotocol(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'header'),
+        );
+
+        self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
+        self::assertSame(
+            [],
+            $connection->headers,
+            'S355: no subprotocol was offered, so none may be echoed',
+        );
+    }
+
+    /**
+     * S355 — a REJECTED connect must not echo anything: the handshake is
+     * aborted (close), so no 101 and no subprotocol line may leave the hub.
+     */
+    public function testRejectedConnectDoesNotEchoASubprotocol(): void
+    {
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->expects($this->once())->method('close')->with('', true);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'never-minted', 'subprotocol'),
+        );
+
+        self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
+        self::assertSame(
+            [],
+            $connection->headers,
+            'S355: a rejected connect must not echo a subprotocol',
+        );
+    }
+
     // ---- AC2: ownership scoping (the security guard) ---------------------
 
     /**

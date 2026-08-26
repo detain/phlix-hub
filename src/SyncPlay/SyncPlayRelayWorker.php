@@ -280,12 +280,31 @@ final class SyncPlayRelayWorker
             $userId = $this->validateClientAuth($token, $serverId);
         }
 
-        if ($userId === null) {
+        if ($token === null || $token === '' || $userId === null) {
             $logger->warning('SyncPlay: rejected connection, invalid or missing relay token', [
                 'server_id' => $serverId,
             ]);
             $this->rejectUnauthorized($connection);
             return;
+        }
+
+        // S355 — RFC 6455 §4.2.2: a server that accepts a client's subprotocol
+        // MUST echo it in the 101 response. Workerman composes the 101 from
+        // `$connection->headers` (appended after onWebSocketConnect returns),
+        // and without the echo a strict client — a browser or undici, exactly
+        // the S298 ui consumer's `new WebSocket(url, ['bearer', token])` —
+        // aborts the handshake (no open, 1006). `$token` is a non-empty string
+        // here: the guard above returns on every null/empty path.
+        //
+        // The echo is a NEGOTIATION answer and is therefore gated on the client
+        // HAVING offered the subprotocol: echoing it to an
+        // `Authorization: Bearer` client would answer a negotiation the client
+        // never made, and strict clients reject a server-selected protocol they
+        // did not offer (RFC 6455 §4.1).
+        /** @var mixed $requestedProtocol */
+        $requestedProtocol = $request->header('sec-websocket-protocol');
+        if (is_string($requestedProtocol) && $requestedProtocol !== '') {
+            $connection->headers = ['Sec-WebSocket-Protocol: bearer, ' . $token];
         }
 
         // Create client state with authenticated userId
