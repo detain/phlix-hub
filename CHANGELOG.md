@@ -349,6 +349,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The :8804 SyncPlay relay authenticated the `Sec-WebSocket-Protocol:
+  bearer, <token>` carrier (S237) but never echoed a subprotocol in its 101, so
+  strict RFC 6455 clients aborted the handshake and no browser carrier worked
+  (S355).** Workerman sends only headers set on `$connection->headers`, which
+  stayed empty after the authenticated handshake — browsers and undici (the
+  S298 ui consumer's `new WebSocket(url, ['bearer', token])`) treat a 101
+  without a response subprotocol as a failed negotiation: no `open`, close
+  1006.
+  - `SyncPlayRelayWorker::onWebSocketConnect()` now sets `$connection->headers`
+    after a successful authenticated handshake, echoing ONE of the client's
+    OFFERED subprotocols — the authenticated token — gated on the token being
+    among the offered entries (RFC 6455 §4.1); `Authorization: Bearer`-only
+    clients get no echo, so header carriers are unaffected.
+  - The echo is the token ALONE, not the comma-joined `bearer, <token>`: the ui
+    consumer offers `bearer` and `<token>` as separate protocols, and a strict
+    client rejects a response protocol not in the offered list — the joined
+    form reproduced the same 1006 (probed against undici 7.29.0).
+  - Pinned by a unit test that FAILS on the pre-fix code (empty headers) and
+    PASSES after (echo present), alongside the existing S237
+    extraction/authentication tests.
+
 - **The maintenance worker crash-looped invisibly whenever its database was
   unreachable, and every signal an operator would check said the container was
   fine (S312).** Measured against master `65763eb`, `docker run --network none`,
