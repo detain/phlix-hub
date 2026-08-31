@@ -1,9 +1,9 @@
 {
     "generator": "tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php",
     "source_repo": "detain/phlix-server",
-    "source_sha": "b73f9ffab0cab60ccb763fa034d4117c02614f6d",
-    "route_count": 390,
-    "sha256": "3ac5a94a32ceeb200eedc85d9ba632c2f6d8853559fb80c99fadecdbcb5c0e5a",
+    "source_sha": "8f72faec6ef85c9df1382148d4f294a450d71bed",
+    "route_count": 400,
+    "sha256": "bd71a582c891104675576f65a48ed5a6ab1176735bea94893c357e40bca63d2f",
     "routes": [
         {
             "method": "DELETE",
@@ -96,6 +96,14 @@
         {
             "method": "DELETE",
             "path": "/api/v1/media/{id}/rating"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/profiles/{profileId}"
+        },
+        {
+            "method": "DELETE",
+            "path": "/api/v1/profiles/{profileId}/pin"
         },
         {
             "method": "DELETE",
@@ -783,6 +791,14 @@
         },
         {
             "method": "GET",
+            "path": "/api/v1/profiles"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/profiles/{profileId}"
+        },
+        {
+            "method": "GET",
             "path": "/api/v1/profiles/{profileId}/active-streams"
         },
         {
@@ -1391,7 +1407,27 @@
         },
         {
             "method": "POST",
+            "path": "/api/v1/profiles"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/profiles/{profileId}/avatar"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/profiles/{profileId}/pin"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/profiles/{profileId}/pin/verify"
+        },
+        {
+            "method": "POST",
             "path": "/api/v1/profiles/{profileId}/schedules"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/profiles/{profileId}/switch"
         },
         {
             "method": "POST",
@@ -1552,6 +1588,10 @@
         {
             "method": "PUT",
             "path": "/api/v1/media/{id}/rating"
+        },
+        {
+            "method": "PUT",
+            "path": "/api/v1/profiles/{profileId}"
         },
         {
             "method": "PUT",
