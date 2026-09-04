@@ -455,9 +455,12 @@ final class ServerProxyController
             // QUERY STRING, which never reaches this matcher: the scope gate and
             // `hasTraversalSegment()` both take the PATH only, and
             // `$request->queryString` is forwarded to the bridge byte-for-byte
-            // (S108b) — so a signed artwork URL verifies server-side unchanged
-            // (`serveArtwork()` rebuilds `'/api/v1/artwork/'.$id.'?size='.$size`
-            // from `$wr->path()` + `$wr->get('size')`).
+            // (S108b) — and the query is not signed material either:
+            // `Auth\SignedUrl::canonicalResource()` strips everything from the
+            // first `?` before hashing (and `mint()` signs only the query-less
+            // path), so the ITEM is bound while the `?size=` variant is not —
+            // a signed artwork URL therefore verifies server-side unchanged
+            // (S238-M3 execution proof; ui sweep: S245).
             '#^/api/v1/artwork/[^/]+$#',
             // Avatars: GET /api/v1/users/{userId}/avatar, served by
             // `HttpHandler::serveUserAvatar()` — the same pre-router fast path
