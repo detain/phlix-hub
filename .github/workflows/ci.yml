@@ -599,3 +599,64 @@ jobs:
         run: |
           export HUB_JWT_SECRET="$(openssl rand -hex 32)"
           php start.php stop || true
+
+  # --------------------------------------------------------------------------
+  # S411 — the S204 cross-repo path contract gets its automated home.
+  # --------------------------------------------------------------------------
+  # S204 was a production 404 with every gate in both repositories green:
+  # phlix-server called `/api/v1/servers/{id}/subdomain` while phlix-hub
+  # registered `/servers/{id}/subdomain` — a mismatch BETWEEN repos that
+  # neither side's suite can see from inside its own checkout. S204 shipped
+  # the measurement (scripts/assert-cross-repo-hub-paths.php) and S411
+  # measured the missing half: NOTHING ran it. A check that fires only when a
+  # human remembers is a check that does not fire, so this job runs it on
+  # every push and every pull request against master.
+  #
+  # Cost, measured before choosing the venue (~25–40 s class): a depth-1
+  # anonymous clone of phlix-server plus one pure-string PHP script — no
+  # composer install, no vendor tree, no database. The script reads exactly
+  # three files (hub src/Application.php; server src/Hub/SubdomainClient.php
+  # and config/relay.php) and compares BOTH contract arms; it exits 0 only
+  # after comparing, and exits 1 with a `::error::` annotation for ANY
+  # unmeasurable state — absent sibling, unreadable file, pattern-count drift,
+  # disagreement, incomplete sweep. A failed fetch therefore reddens the job
+  # instead of quietly skipping the comparison: the same rule
+  # snapshot-currency states above ("a job that cannot measure the other side
+  # must not report success").
+  #
+  # Do NOT delete this job, give it a `needs:`, or add `continue-on-error` to
+  # any of its steps: tests/Unit/Support/CrossRepoPathAssertCiWiringTest.php
+  # parses this file and fails on each of those edits, on the fetch or the
+  # script invocation disappearing, and on the script vanishing from disk or
+  # failing to parse. The job set of ci.yml is otherwise UNPINNED — this
+  # guard is the only thing standing between removal and a silent green.
+  cross-repo-paths:
+    name: Cross-Repo Path Contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # phlix-server is public, so this fetch needs no token — ci.yml already
+      # reads it anonymously (git ls-remote) in snapshot-currency. A failed
+      # fetch is a FAILURE, never a pass: nothing can be compared if only one
+      # side is on disk. The fetched sha is logged so every run is
+      # attributable to a phlix-server revision.
+      - name: Fetch phlix-server master source (anonymous)
+        run: |
+          git clone --depth 1 https://github.com/detain/phlix-server.git ../phlix-server \
+            || { echo "::error::could not fetch phlix-server master — nothing was compared (S204)"; exit 1; }
+          echo "phlix-server master fetched at $(git -C ../phlix-server rev-parse HEAD)"
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '8.3'
+
+      # The script needs no vendor tree and no shell guard around it: it is
+      # pure string parsing, and it already fails loud (exit 1 + ::error::) on
+      # every state in which it cannot measure. exit 0 here means BOTH
+      # contract arms were read from real source on both sides and agree.
+      - name: Assert hub and server path literals agree (S204)
+        run: php scripts/assert-cross-repo-hub-paths.php ../phlix-server
