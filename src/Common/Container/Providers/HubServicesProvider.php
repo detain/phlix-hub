@@ -959,7 +959,7 @@ final class HubServicesProvider implements ServiceProviderInterface
             // re-affirms hook_flags SWOOLE_HOOK_ALL in Coroutine::set and wraps every
             // event callback in Coroutine::create), so SWOOLE_HOOK_NATIVE_CURL is ON:
             // curl_exec() inside the only *arr call chain in this repo (Application.php
-            // route POST /api/v1/requests/{id}/approve -> RequestController::approveRequest
+            // route POST /api/v1/admin/requests/{id}/approve -> RequestController::approveRequest
             // -> RequestManager::approveMovieRequest/approveSeriesRequest -> shared
             // RadarrClient/SonarrClient) yields its coroutine rather than stalling the
             // worker. phlix-server needs its explicit \Phlix\Server\Arr\WorkermanArrTransport
