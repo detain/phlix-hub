@@ -950,6 +950,32 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new LibraryController($sharingHandler);
             })->parameter('sharingHandler', get(LibrarySharingHandler::class)),
 
+            // S425 ADJUDICATION — deliberately NO ArrTransportInterface injected here.
+            // The clients this factory builds therefore use phlix-shared's blocking
+            // CurlArrTransport, and that is SAFE on this runtime — it must not be
+            // "fixed" by porting the server's transport. The hub's resident workers run
+            // on Workerman\Events\Swoole (start.php sets Worker::$eventLoopClass to it
+            // and calls Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL); the driver
+            // re-affirms hook_flags SWOOLE_HOOK_ALL in Coroutine::set and wraps every
+            // event callback in Coroutine::create), so SWOOLE_HOOK_NATIVE_CURL is ON:
+            // curl_exec() inside the only *arr call chain in this repo (Application.php
+            // route POST /api/v1/requests/{id}/approve -> RequestController::approveRequest
+            // -> RequestManager::approveMovieRequest/approveSeriesRequest -> shared
+            // RadarrClient/SonarrClient) yields its coroutine rather than stalling the
+            // worker. phlix-server needs its explicit \Phlix\Server\Arr\WorkermanArrTransport
+            // precisely because its curated hook mask EXCLUDES SWOOLE_HOOK_NATIVE_CURL
+            // (server src/Server/Runtime/SwooleRuntime.php) — the inverse posture. Porting
+            // it here would be a production no-op (the hook already yields curl) AND a
+            // degraded-mode regression: with ext-swoole absent, start.php degrades to the
+            // stream-select loop where the blocking transport still WORKS (slowly) while
+            // the Swoole-native class hard-throws on every approve. No hub CLI path builds
+            // this factory (bin/phlix boots no worker and registers no request command),
+            // and RequestManagerTest constructs the factory with an empty config (clients
+            // resolve null; no I/O in tests). Re-open S425 (async hub Arr transport, e.g.
+            // over workerman/http-client as AsyncVersionMarkerFetcher does) if and only if
+            // the SWOOLE_HOOK_ALL posture above changes or a swoole-less resident deployment
+            // becomes supported; the full census is recorded in the S425 PR body
+            // (branch s425-hub-arr-posture).
             ArrClientFactory::class => factory(static function () use ($appConfig): ArrClientFactory {
                 /** @var array{sonarr?: array{url?: string, api_key?: string, enabled?: bool}, radarr?: array{url?: string, api_key?: string, enabled?: bool}} $arrConfig */
                 $arrConfig = is_array($appConfig['arr'] ?? null) ? $appConfig['arr'] : [];
