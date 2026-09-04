@@ -347,6 +347,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     because it is in the acceptance criteria and would red if the scope gate is
     ever emptied.
 
+- **The S204 cross-repo path assertion finally has an automated home (S411).**
+  S204 landed the measurement — `scripts/assert-cross-repo-hub-paths.php`
+  compares the path literals hub and server write against each other in real
+  source — and S411 measured the half S204 left open: NOTHING ran the script.
+  No workflow in either repository invoked it, so a planted hub⇄server path
+  divergence would still ship green, the exact silent-gap class S204 opened.
+  The fix is a tenth job in the hub's CI (`Cross-Repo Path Contract`): it
+  fetches public phlix-server master at depth one, anonymously — no token, the
+  way snapshot-currency already reads it — and treats a failed fetch as a loud
+  failure, because a job that cannot measure the other side must not report
+  success; then it executes the assertion, which compares BOTH contract arms
+  and exits non-zero with a `::error::` annotation on any disagreement,
+  missing file or pattern-count drift. The job deliberately has no dependency
+  chain and no advisory mode: a skipped or soft-failing gate reads as SUCCESS
+  with no branch protection in this estate.
+  - The workflow's job set is otherwise unpinned — measured: adding and
+    removing a tenth job passes every pre-existing parser of `ci.yml` — so
+    the absence cannot silently return:
+    `tests/Unit/Support/CrossRepoPathAssertCiWiringTest.php` extracts the job
+    block by indentation with comment lines stripped, and pins the fetch, the
+    invocation, the unconditional-run shape, and that the script it points at
+    exists on disk and parses.
+  - AC-first proof on the real venue: a temporary one-path rewrite on the hub
+    side reddened the new job on GitHub's runners with the named error, and
+    the revert re-greened it.
+
 ### Fixed
 
 - **The :8804 SyncPlay relay authenticated the `Sec-WebSocket-Protocol:
