@@ -1150,7 +1150,7 @@ final class Application
         // hub commit 19d05b7 until S204 — meant the only URL any caller was
         // ever told to use answered 404 instead of this handler's 501 signpost
         // to the `:8802` WS worker. See HubServerPathContractTest.
-        $this->router->post('/api/v1/servers/{id}/relay', static function (
+        $this->router->post('/api/v1/servers/{id}/relayx', static function (
             Request $req,
             array $params,
         ) use ($relayController): Response {
