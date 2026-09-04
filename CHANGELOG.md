@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#17 currency cascade: route-snapshot re-pin to server `4b620f59` (2026-09-04)
+
+- **The route snapshot follows server master `888a42b2` → `4b620f59`.** The
+  vendored contracts fixture
+  (`tests/Unit/Http/Controllers/Fixtures/contracts-server-route-manifest.json`)
+  and the S332-derived server snapshot
+  (`tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json`,
+  with `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA`
+  following) are re-pinned in lock-step with the six client re-vendorings.
+  All 400 tuples unchanged — the route-set sha256 is byte-identical. The
+  parity survival token is now `S280hubgate-manifest-parity@400-4b620f59`
+  and the vendored manifest md5 pin moves `9727f2d3` → `81eeef82`.
+- **S428 hub leg folded in (comment-only):** the `HubServicesProvider` route
+  docblock now names the real `POST /api/v1/admin/requests/{id}/approve` —
+  the `admin/` segment was missing from the comment string.
+- **The sanctioned `Server Route Snapshot Currency` master red clears with
+  this wave** — fixture provenance and the live server agree again.
+
 ### Security
 
 - **The relay proxy no longer forwards dead trickplay paths (S350).** Two allow
