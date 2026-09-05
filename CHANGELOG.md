@@ -6,6 +6,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#20 currency cascade: route-snapshot re-pin to server `f35a5742` + web-ui `@phlix/ui` v0.99.1 (2026-09-05)
+
+- **The hub route snapshot follows server master `3a253991` → `f35a5742`
+  and the web-ui `@phlix/ui` pin moves `v0.99.0` → `v0.99.1` in one PR.**
+  The S332-derived server snapshot re-dumps in place — `route_count` 400
+  and route-set sha256 `bd71a582…` UNCHANGED (server added no routes; only
+  `source_sha` moves) — the vendored contracts fixture re-vendors
+  byte-for-byte from `@phlix/contracts` master `f2e284b3` (md5 `5bc7dd6d` →
+  `05db9e75`), and `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA`
+  plus the S280 parity survival token advance to current provenance.
+  RED/GREEN proven locally: planting one divergent tuple in the contracts
+  export fails the tuple-identity gate, restoring it greens all five S280
+  tests. This clears the `Server Route Snapshot Currency` master red that
+  server motion re-armed. The web-ui leg is the tarball URL + lock entry
+  only — the nested `@phlix/contracts` `v0.4.5` / `@phlix/syncplay` `v0.1.4`
+  ride in via ui's own manifest, the lock churn stays confined to the
+  `@phlix/ui` subtree, and a local `npm ci` proves the lock installs (the hub
+  carries no web-ui CI gate); both outputs are quoted in the PR.
+
 ### Changed — cs#19 currency cascade: route-snapshot re-pin to server `3a253991` (2026-09-05)
 
 - **The route snapshot follows server master `e74cdc88` → `3a253991`** —
