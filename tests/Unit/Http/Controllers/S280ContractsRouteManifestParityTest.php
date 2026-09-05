@@ -60,7 +60,7 @@ use const JSON_UNESCAPED_SLASHES;
  * pinned (S332/S350). The export is VENDORED, not imported: contracts'
  * `exports` map blocks subpath JSON access, and vendoring byte-identical
  * snapshots is the sanctioned cross-repo pattern (md5 at commit time:
- * 9f69628da115378b3d11adc1fe5f55ea).
+ * 5bc7dd6d26b0f540eaa413ef66a1050d).
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  */
@@ -75,7 +75,7 @@ final class S280ContractsRouteManifestParityTest extends TestCase
      * asserted absent from both vendored files (it identifies the GATE, not
      * the data). Bump the sha/count suffix in lockstep with the pins below.
      */
-    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@400-e74cdc88';
+    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@400-3a253991';
 
     /**
      * The tuple count BOTH derivations must carry — the canonical contracts
