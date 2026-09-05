@@ -6,10 +6,11 @@ Multi-server cloud directory + reverse-tunnel relay for Phlix media servers. Thi
 
 ```bash
 composer install                              # deps
-php start.php start                           # run HTTP :8800 + relay :8802/:8803
+php start.php start                           # HTTP :8800 + relay :8802/:8803 + SyncPlay :8804 + federation :8805
 php bin/phlix migrate                         # apply migrations/*.sql
 php bin/phlix smoke:jwt                        # JwtHandler<->JwtClaims roundtrip
-./vendor/bin/phpunit                           # tests (PHPUnit 10)
+php bin/phlix oauth:client:register             # OAuth client admin (also oauth:client:list / oauth:client:disable)
+./vendor/bin/phpunit                           # tests (PHPUnit 10) — testsuites Unit, Integration, E2E
 ./vendor/bin/phpstan analyze --no-progress     # level 9, no baseline
 ./vendor/bin/psalm --no-progress               # errorLevel 1
 php scripts/assert-phpcs-corpus.php            # S299: PSR-12 over src+scripts+tests, with an asserted file count
@@ -28,22 +29,28 @@ php scripts/run-migrations.php                 # standalone CLI migration runner
 CI mirrors the local gates:
 
 ```bash
-ls .github/workflows/                          # CI pipelines: phpunit + phpstan + psalm + phpcs
+ls .github/workflows/                          # CI pipelines: phpunit + phpstan + psalm + phpcs + mcp-e2e + docker
+php scripts/assert-required-extensions.php     # S258: every security-path extension is loaded
+php scripts/assert-coverage-report.php coverage.xml   # S316: the coverage artifact measured something
+php scripts/assert-mcp-e2e-ran.php junit-mcp.xml      # S329: the real MCP client SSE cases actually ran
+npx --yes @redocly/cli lint openapi.yaml       # HTTP surface description (config in redocly.yaml)
 ```
 
 ## Architecture
 
 **Entry**: `start.php` (sets Swoole event loop) → `src/Application.php` (`boot()` registers routes + workers). **Container**: PHP-DI 7 `src/Common/Container/ContainerFactory.php` — register via `ServiceProviderInterface`, never `set()`.
 
-**HTTP** (`src/Http/`): `Request.php` · `Response.php` · `Router.php` (regex `{id}` params) · `ConnectionResponseSink.php` (chunked relay→HTTP streaming with the per-user throttle) · controllers in `Http/Controllers/` · middleware `AuthMiddleware`/`AdminMiddleware`/`EnrollmentJwtMiddleware`/`HubProtocolMiddleware`. Per-request user id via `Http/RequestContext.php` (coroutine-local `support\Context`).
+**HTTP** (`src/Http/`): `Request.php` · `Response.php` · `BodylessResponse.php` · `Router.php` (regex `{id}` params) · `ConnectionResponseSink.php` (chunked relay→HTTP streaming with the per-user throttle) · controllers in `Http/Controllers/` · middleware `AuthMiddleware`/`AdminMiddleware`/`EnrollmentJwtMiddleware`/`HubProtocolMiddleware`/`OAuthResourceMiddleware`/`AlexaSignatureMiddleware`. Per-request user id via `Http/RequestContext.php` (coroutine-local `support\Context`).
 
-**Domain** (`src/Hub/`): claim/enroll/heartbeat/relay/sharing handlers + `EnrollmentJwtService` (Ed25519), `Ed25519KeyManager`, `RelaySessionManager` (per-user `throttle_bps`), `DnsAliasManager`, `TlsCertificateManager`, DTOs (`LibraryShare`, `InviteLink`, `SharedLibraryDto`). **Relay** (`src/Relay/`): `RelayWorker` (:8802 servers) · `ClientRelayWorker` (:8803 clients) · `Tunnel`/`TunnelManager` · `RelayProxyManager`/`RelayProxyBridge`/`IdleReaper` · `ClientConnection` · `TokenBucket` (per-user byte-rate throttle) · `Frame{Encoder,Decoder}`. **Federation** (`src/Federation/`). **Auth** (`src/Auth/`): `AuthManager` · `JwtHandler` (HS256) · `UserRepository` · `RateLimitException` (429).
+**Domain** (`src/Hub/`): claim/enroll/heartbeat/relay/sharing handlers + `EnrollmentJwtService` (Ed25519), `Ed25519KeyManager`, `RelaySessionManager` (per-user `throttle_bps`), `DnsAliasManager`, `TlsCertificateManager`, DTOs (`LibraryShare`, `InviteLink`, `SharedLibraryDto`). **Relay** (`src/Relay/`): `RelayWorker` (:8802 servers) · `ClientRelayWorker` (:8803 clients) · `Tunnel`/`TunnelManager` · `RelayProxyManager`/`RelayProxyBridge`/`IdleReaper` · `ClientConnection` · `TokenBucket` (per-user byte-rate throttle) · `Frame{Encoder,Decoder}`. **Federation** (`src/Federation/` + `Relay/FederationWorker` :8805). **SyncPlay** (`src/SyncPlay/`): `SyncPlayRelayWorker` (:8804) · `PendingCommandDispatcher`/`ChannelPendingCommandPusher`/`PendingCommandProtocol`. **Auth** (`src/Auth/`): `AuthManager` · `JwtHandler` (HS256) · `UserRepository` · `RateLimitException` (429).
+
+**MCP** (`src/Mcp/`): `McpController` serves JSON-RPC on `POST /mcp` and SSE on `GET /mcp`; `McpToolRegistry` + `Mcp/Tools/` (`ListServersTool`, `SearchMediaTool`, `PlaybackControlTool`, …); PAT auth via `McpTokenService` (`/api/v1/me/mcp-tokens`, migration `044_mcp_tokens`, sha256 `token_hash`) and `McpScopes`. **OAuth** (`src/OAuth/`): the shared authorization server — `OAuthClientRegistry`, `AuthorizationCodeService`, `Pkce` (**S256 only**), `ConsentScreen`/`ConsentTicketService`, `OAuthTokenService`, `OAuthScopes` (`profile:read` + every `McpScopes` value), migration `045_oauth_authorization_server`; `/oauth/authorize` + `/oauth/token`, resource surface `/oauth/userinfo` behind `OAuthResourceMiddleware`. **Alexa** (`src/Alexa/`): `AlexaSkillController` behind `AlexaSignatureMiddleware` (`ChainVerification`, `CurlCertChainFetcher`), `AlexaMediaGateway`/`AlexaSpeech`/`AlexaPhrases`. **Updates** (`src/Hub/Updates/`): `CoreUpdateCheckWorker`/`CoreUpdateCheckService` (`config/updates.php`). **CLI** (`src/Console/Commands/`) behind `bin/phlix`.
 
 **DB**: `src/Common/Database/` — `PhlixMySQLConnection`, `ConnectionPool`, `PooledMySQLConnection`, `MigrationRunner`. **Rate limiting** (`src/Common/RateLimit/`): per-surface `RateLimiter` + shared DB-backed `DbRateLimiter` (login), `RateLimitProfiles`; IP-keyed surfaces resolve the real client address through `src/Common/Http/TrustedProxyResolver.php` (`TRUSTED_PROXIES`). **Relay metrics** (`src/Stats/Metrics/`): `MetricsRegistry`/`MetricsCollector`/`MetricsFlushService`. Logging: `src/Common/Logger/LoggerFactory::get(LogChannels::*)`. **Web UI**: the `/app` Vue SPA (`@phlix/hub-web-ui` consuming `@phlix/ui`, built to `public/assets/app/`, shell served via `src/Http/ViteAssets.php`) is the **only** UI. The legacy Smarty stack (`src/Common/WebPortal/PageRenderer.php`, `PageController`, `CsrfMiddleware`, `public/templates/`, `public/assets/js|css/`) and the `smarty/smarty` dependency were **removed**; legacy page paths 302-redirect to `/app` in `src/Application.php`.
 
-**Ops & tooling**: `docker/` holds `docker-entrypoint.sh` and `nginx.conf` for the container image; `scripts/` holds `install.sh` (provisioning) and `run-migrations.php` (standalone migrator outside the app loop); `.github/workflows/` runs the CI gates (PHPUnit/PHPStan/Psalm/phpcs). Agent context lives in `.opencode/` (`memory`, `skills`, `package.json`) and `.remember/`.
+**Ops & tooling**: `docker/` holds `docker-entrypoint.sh` and `nginx.conf` for the container image; `scripts/` holds `install.sh` (provisioning), `run-migrations.php` (standalone migrator outside the app loop), `add-headers.php` (idempotent file-level `@copyright`/`@license` docblocks) and the CI gate scripts (`assert-*.php`, `security-audit-check.php`, `docker-boot-smoke.sh`, `mcp-e2e-seed.php`); `.github/workflows/` runs the CI gates (PHPUnit/PHPStan/Psalm/phpcs, MCP E2E, docker). Agent context lives in `.opencode/` (`memory`, `skills`, `package.json`) and `.remember/`.
 
-**Config**: `config/{server,database,logger,auth}.php`. **Shared types**: cross-repo DTOs live in the `Phlix\Shared\*` namespace (the shared composer package) — do not duplicate.
+**Config**: `config/{server,database,logger,auth,updates}.php`. **API description**: `openapi.yaml` (linted with `redocly.yaml`) covers the `:8800` HTTP surface; `docs/websockets.md` covers the `:8802`/`:8803`/`:8804`/`:8805` WebSocket surfaces. **Shared types**: cross-repo DTOs live in the `Phlix\Shared\*` namespace (the shared composer package) — do not duplicate.
 
 ## Conventions
 

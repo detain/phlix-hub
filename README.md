@@ -88,6 +88,14 @@ You can use the public Hub or run your own — the same codebase powers both.
   paths 302-redirect to `/app` (e.g. `/my-servers` → `/app/servers`, `/login` → `/app/login`, the public
   `/invite/{token}` → `/app/invite/{token}`). The `smarty/smarty` dependency was removed — the hub renders
   no templates. Everything is backed by a full JSON API under `/api/v1` (incl. `/api/v1/admin/*`).
+- **MCP server** — an [MCP](https://modelcontextprotocol.io) endpoint at `/mcp` (JSON-RPC over
+  `POST`, SSE over `GET`) exposing read-only tools over the servers you own. Authenticated with
+  scoped personal access tokens minted at `/api/v1/me/mcp-tokens` and stored only as a SHA-256 hash.
+- **OAuth 2.0 authorization server** — `/oauth/authorize`, `/oauth/token`, and the scoped resource
+  surface `/oauth/userinfo`, with **S256-only** PKCE and a scope vocabulary shared with MCP. Clients
+  are registered from the CLI (`php bin/phlix oauth:client:register`).
+- **Alexa skill** — an account-linked skill endpoint at `/alexa/skill`, gated by full Amazon
+  signature + certificate-chain verification, that drives playback on your servers by voice.
 - **Operations-ready** — structured JSON logging (Monolog) across dedicated channels
   (app, error, hub, relay, audit), a `/health` endpoint, and idempotent SQL migrations.
 
@@ -101,6 +109,11 @@ process group:
 | HTTP | `8800` | REST API + the Vue SPA (`/app`; legacy page paths 302-redirect here) + `/health` |
 | Relay (server-facing) | `8802` | Servers connect here to open their outbound tunnel |
 | Relay (client-facing) | `8803` | Remote clients connect (`GET /client/{server_id}`) and are routed down a tunnel |
+| SyncPlay relay | `8804` | Synchronised-playback clients (`GET /syncplay/{server_id}`) |
+| Federation | `8805` | Hub-to-hub peer tunnel |
+
+Every WebSocket surface is documented in [`docs/websockets.md`](docs/websockets.md); the `:8800`
+HTTP surface is described by [`openapi.yaml`](openapi.yaml).
 
 Supporting pieces:
 
@@ -336,6 +349,10 @@ ships at `bin/phlix`:
 php bin/phlix list         # list available commands (works with no database)
 php bin/phlix migrate      # apply migrations/*.sql (idempotent; tracking table)
 php bin/phlix smoke:jwt    # smoke-test the JWT create/validate round-trip
+
+php bin/phlix oauth:client:register   # register an OAuth client (prints the one-time secret)
+php bin/phlix oauth:client:list       # list registered clients and their status
+php bin/phlix oauth:client:disable    # disable a client (add --revoke-tokens to cut live tokens)
 ```
 
 `migrate` is the CLI equivalent of `php scripts/run-migrations.php`.
@@ -755,12 +772,28 @@ WS relay and the browser HTTP-over-relay proxy via `src/Http/ConnectionResponseS
 `docs/hub-admin/relay-tuning.md` in
 [phlix-docs](https://github.com/detain/phlix-docs) for the full reference.
 
+### MCP, OAuth & Alexa
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `POST` | `/mcp` | MCP JSON-RPC (PAT or OAuth `Bearer`) |
+| `GET` | `/mcp` | MCP SSE stream (PAT or OAuth `Bearer`) |
+| `GET`/`POST`/`DELETE` | `/api/v1/me/mcp-tokens`, `/api/v1/me/mcp-tokens/{id}` | Mint / list / revoke PATs (protected) |
+| `GET`/`POST` | `/oauth/authorize` | Authorization + consent (hub session; PKCE `S256` required) |
+| `POST` | `/oauth/token` | Code exchange / refresh (no hub session) |
+| `GET` | `/oauth/userinfo` | Scoped resource surface (`OAuthResourceMiddleware`) |
+| `POST` | `/alexa/skill` | Alexa skill endpoint (signature + certificate chain verified) |
+
 ### Relay (WebSocket)
+
+Full protocol reference in [`docs/websockets.md`](docs/websockets.md).
 
 | Endpoint | Port | Notes |
 |----------|------|-------|
 | Server tunnel | `8802` | Server opens its outbound tunnel here |
 | `GET /client/{server_id}` | `8803` | Client connects and is routed to its server |
+| `GET /syncplay/{server_id}` | `8804` | SyncPlay client joins a synchronised-playback session |
+| Federation tunnel | `8805` | Peer hub connects for hub-to-hub shares |
 
 ## Connecting a media server
 
@@ -776,9 +809,11 @@ WS relay and the browser HTTP-over-relay proxy via `src/Http/ConnectionResponseS
 
 ```bash
 composer test     # PHPUnit (Unit + Integration suites)
-composer cs       # PHP_CodeSniffer (PSR-12)
+composer cs       # PHP_CodeSniffer (PSR-12) via scripts/assert-phpcs-corpus.php
 composer stan     # PHPStan (level 9)
 composer psalm    # Psalm (errorLevel 1)
+
+./vendor/bin/phpunit --testsuite E2E   # real MCP client SSE session (needs a booted hub + MySQL)
 ```
 
 ### Running the Integration suite (real MySQL)
@@ -796,7 +831,7 @@ HUB_TEST_DB_USER=root HUB_TEST_DB_PASSWORD=root HUB_TEST_DB_NAME=phlix_hub_test 
 ```
 
 The named database must already exist (the tests create tables, not schemas).
-Expect roughly 15 s per test: each one re-applies all 29 migrations.
+Expect roughly 15 s per test: each one re-applies all 31 migrations.
 
 CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci.yml):
 
@@ -824,22 +859,31 @@ CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci
 
 ```
 phlix-hub/
-├── config/          # Environment-driven config (server, database, auth, logger)
+├── config/          # Environment-driven config (server, database, auth, logger, updates)
+├── docs/            # websockets.md — the :8802/:8803/:8804/:8805 surfaces
 ├── migrations/      # Idempotent SQL migrations
+├── openapi.yaml     # HTTP surface description (linted with redocly.yaml)
 ├── public/
 │   └── index.php    # Workerman HTTP entry point
 ├── scripts/
-│   └── run-migrations.php
+│   ├── run-migrations.php
+│   └── assert-*.php     # CI gates (phpcs corpus, coverage, integration + MCP E2E currency)
 ├── src/
 │   ├── Application.php   # Worker bootstrap + route registration
+│   ├── Alexa/           # Skill envelope, signature/certificate-chain verification, media gateway
 │   ├── Auth/            # JWT, users, auth manager
 │   ├── Common/          # Container, database pool, logging, rate limiting, trusted-proxy resolver
+│   ├── Console/         # bin/phlix commands (migrate, smoke:jwt, oauth:client:*)
 │   ├── Http/            # Router, request/response, controllers, middleware, response sink
-│   ├── Hub/             # Claims, heartbeats, sharing, DNS, TLS, relay sessions
+│   ├── Hub/             # Claims, heartbeats, sharing, DNS, TLS, relay sessions, update checks
 │   ├── Federation/      # Hub-to-hub federation peers, shares, sessions
+│   ├── Mcp/             # MCP protocol, tool registry + tools, PAT service, scopes
+│   ├── OAuth/           # Authorization server: clients, codes, PKCE, tokens, consent, scopes
 │   ├── Relay/           # Reverse-tunnel relay workers, frame codec, tunnels, throttle token bucket
-│   └── Requests/        # Media request manager
-├── tests/           # PHPUnit Unit + Integration suites
+│   ├── Requests/        # Media request manager
+│   ├── Stats/           # Relay metrics registry, collector, flush service
+│   └── SyncPlay/        # SyncPlay relay worker + pending-command dispatch
+├── tests/           # PHPUnit Unit + Integration + E2E suites
 ├── web-ui/          # Vite + TypeScript SPA (@phlix/hub-web-ui), built to public/assets/app/
 └── Dockerfile
 ```
