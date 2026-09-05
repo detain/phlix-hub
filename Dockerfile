@@ -122,4 +122,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
 
 USER nobody
 
+RUN false  # S429 scratch break — runner-side Boot gate RED proof — DO NOT MERGE
+
 CMD ["sh", "/docker-entrypoint.sh"]
