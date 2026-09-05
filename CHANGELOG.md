@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#19 currency cascade: route-snapshot re-pin to server `3a253991` (2026-09-05)
+
+- **The route snapshot follows server master `e74cdc88` → `3a253991`** —
+  exactly one commit (S431 executable Request dynamic-property census,
+  CHANGELOG + one test file, no `src/`, zero route hunks). The vendored
+  contracts fixture
+  (`tests/Unit/Http/Controllers/Fixtures/contracts-server-route-manifest.json`)
+  is re-vendored byte-for-byte from `@phlix/contracts` master `2250def2`
+  (md5 `9f69628d` → `5bc7dd6d`), the S332-derived server snapshot
+  (`tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json`,
+  via the dump script — `route_count` 400 and route-set sha256 `bd71a582…`
+  UNCHANGED, only `source_sha` moves) re-dumps in the same commit, with
+  `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA` and the
+  parity survival token `S280hubgate-manifest-parity@400-3a253991`
+  following. This kills the `Server Route Snapshot Currency` master red that
+  cs#18 re-armed by server motion. Untagged wave: no version or pin moves.
+
 ### Changed — cs#18 currency cascade: route-snapshot re-pin to server `e74cdc88` (2026-09-05)
 
 - **The route snapshot follows server master `4b620f59` → `e74cdc88`.** The
