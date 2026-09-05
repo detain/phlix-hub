@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#18 currency cascade: route-snapshot re-pin to server `e74cdc88` (2026-09-05)
+
+- **The route snapshot follows server master `4b620f59` → `e74cdc88`.** The
+  vendored contracts fixture
+  (`tests/Unit/Http/Controllers/Fixtures/contracts-server-route-manifest.json`)
+  and the S332-derived server snapshot
+  (`tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json`,
+  with `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA`
+  following) are re-pinned in lock-step with the six client re-vendorings
+  off contracts master `51ed6cd3`. All 400 tuples unchanged — the route-set
+  sha256 is byte-identical, regenerated deterministically by the dump
+  script. The parity survival token and the vendored manifest md5 pin
+  follow the new provenance. This greens the sanctioned
+  `Server Route Snapshot Currency` master red (fixture == live master;
+  server hard-quiet for the whole wave).
+
 ### Changed — cs#17 currency cascade: route-snapshot re-pin to server `4b620f59` (2026-09-04)
 
 - **The route snapshot follows server master `888a42b2` → `4b620f59`.** The
