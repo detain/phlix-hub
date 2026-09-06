@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Hub\DnsAliasManager;
 use Phlix\Hub\Hub\Dns\StaticZoneManager;
 use Phlix\Hub\Hub\TlsCertificateManager;
@@ -14,9 +15,9 @@ use Workerman\MySQL\Connection;
 class DnsAliasManagerTest extends TestCase
 {
     private string $tmpDir;
-    private Connection $db;
+    private Connection&MockObject $db;
     private StaticZoneManager $zoneManager;
-    private TlsCertificateManager $certManager;
+    private TlsCertificateManager&MockObject $certManager;
     private StructuredLogger $logger;
     private DnsAliasManager $manager;
 

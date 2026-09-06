@@ -14,6 +14,7 @@ use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 
 /**
@@ -34,6 +35,8 @@ use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
  */
 final class MyServersFlowTest extends RealDatabaseTestCase
 {
+    use DecodedJsonAssertions;
+
     private const SECRET = 'integration-test-secret-32-bytes-minimum';
 
     private AuthManager $auth;
@@ -87,7 +90,7 @@ final class MyServersFlowTest extends RealDatabaseTestCase
     public function testListServersReturnsEmptyWhenNoServers(): void
     {
         $userResult = $this->auth->register('alice', 'alice@example.com', 'password123');
-        $userId = (string) ($userResult['user']['id'] ?? '');
+        $userId = self::stringNode($userResult['user']['id'] ?? '');
         self::assertNotEmpty($userId);
 
         $request = new Request();
@@ -101,7 +104,7 @@ final class MyServersFlowTest extends RealDatabaseTestCase
     public function testListServersReturnsServerAfterClaim(): void
     {
         $userResult = $this->auth->register('bob', 'bob@example.com', 'password123');
-        $userId = (string) ($userResult['user']['id'] ?? '');
+        $userId = self::stringNode($userResult['user']['id'] ?? '');
         self::assertNotEmpty($userId);
 
         $serverId = $this->insertTestServer($userId, 'My NAS Server', '0.11.0', 'online');
@@ -119,7 +122,7 @@ final class MyServersFlowTest extends RealDatabaseTestCase
     public function testDeleteServerRemovesOwnedServer(): void
     {
         $userResult = $this->auth->register('carol', 'carol@example.com', 'password123');
-        $userId = (string) ($userResult['user']['id'] ?? '');
+        $userId = self::stringNode($userResult['user']['id'] ?? '');
         self::assertNotEmpty($userId);
 
         $serverId = $this->insertTestServer($userId, 'Deletable Server', '0.11.0', 'online');
@@ -137,10 +140,10 @@ final class MyServersFlowTest extends RealDatabaseTestCase
     public function testDeleteServerReturns403ForOtherUsersServer(): void
     {
         $user1Result = $this->auth->register('dave', 'dave@example.com', 'password123');
-        $user1Id = (string) ($user1Result['user']['id'] ?? '');
+        $user1Id = self::stringNode($user1Result['user']['id'] ?? '');
 
         $user2Result = $this->auth->register('eve', 'eve@example.com', 'password123');
-        $user2Id = (string) ($user2Result['user']['id'] ?? '');
+        $user2Id = self::stringNode($user2Result['user']['id'] ?? '');
 
         $serverId = $this->insertTestServer($user1Id, 'Daves Server', '0.11.0', 'online');
 
@@ -155,7 +158,7 @@ final class MyServersFlowTest extends RealDatabaseTestCase
     public function testAccessInfoReturnsDirectUrl(): void
     {
         $userResult = $this->auth->register('frank', 'frank@example.com', 'password123');
-        $userId = (string) ($userResult['user']['id'] ?? '');
+        $userId = self::stringNode($userResult['user']['id'] ?? '');
         self::assertNotEmpty($userId);
 
         $directUrl = 'https://192.168.1.100:32400';
@@ -207,6 +210,9 @@ final class MyServersFlowTest extends RealDatabaseTestCase
         return $decoded['servers'];
     }
 
+    /**
+     * @param list<string> $hostnameCandidates
+     */
     private function insertTestServer(
         string $userId,
         string $name,

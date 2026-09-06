@@ -21,6 +21,7 @@ use Phlix\Hub\Http\Response;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\Tests\Support\Alexa\AlexaEnvelopeHonesty;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\TestCase;
 
@@ -85,6 +86,8 @@ use function str_repeat;
  */
 final class AlexaSkillControllerTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private const SECRET = 'S91-alexa-skill-controller-secret-0123456789';
 
     private const USER_ID = 'user-linked-1';
@@ -372,10 +375,10 @@ final class AlexaSkillControllerTest extends TestCase
         );
 
         self::assertSame(AlexaPhrases::CAPABILITY, self::speechOf($envelope));
-        self::assertFalse($envelope['response']['shouldEndSession']);
+        self::assertFalse(self::responseOf($envelope)['shouldEndSession']);
         self::assertSame(
             ['outputSpeech', 'reprompt', 'shouldEndSession'],
-            array_keys($envelope['response']),
+            array_keys(self::responseOf($envelope)),
         );
     }
 
@@ -390,7 +393,7 @@ final class AlexaSkillControllerTest extends TestCase
         ));
 
         self::assertSame(AlexaPhrases::LINK_ACCOUNT, self::speechOf($envelope));
-        self::assertSame(['type' => 'LinkAccount'], $envelope['response']['card']);
+        self::assertSame(['type' => 'LinkAccount'], self::responseOf($envelope)['card']);
     }
 
     /**
@@ -419,7 +422,7 @@ final class AlexaSkillControllerTest extends TestCase
         ));
 
         self::assertSame(AlexaPhrases::MISSING_TITLE, self::speechOf($envelope));
-        self::assertFalse($envelope['response']['shouldEndSession'], 'a re-prompt must keep the session open');
+        self::assertFalse(self::responseOf($envelope)['shouldEndSession'], 'a re-prompt must keep the session open');
     }
 
     public function testAWhitespaceOnlyTitleSlotIsTreatedAsMissing(): void
@@ -781,7 +784,7 @@ final class AlexaSkillControllerTest extends TestCase
                     . "Phlix open.\n\n"
                     . 'https://hub.phlix.test/app/search?q=Inception',
             ],
-            $envelope['response']['card'],
+            self::responseOf($envelope)['card'],
             'the card must carry the hub SPA search route with the MATCHED title, single-slashed',
         );
     }
@@ -798,7 +801,7 @@ final class AlexaSkillControllerTest extends TestCase
 
         self::assertStringContainsString(
             'https://hub.phlix.test/app/search?q=Blade+Runner+2049+%26+Friends',
-            (string) $envelope['response']['card']['content'],
+            self::stringNode(self::arrayNode(self::responseOf($envelope)['card'])['content']),
         );
     }
 
@@ -1064,12 +1067,24 @@ final class AlexaSkillControllerTest extends TestCase
     }
 
     /**
+     * The `response` object of an Alexa envelope, asserted to be an array.
+     *
+     * @param array<string, mixed> $envelope
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function responseOf(array $envelope): array
+    {
+        return self::arrayNode($envelope['response']);
+    }
+
+    /**
      * @param array<string, mixed> $envelope
      */
     private static function speechOf(array $envelope): string
     {
-        /** @var mixed $text */
-        $text = $envelope['response']['outputSpeech']['text'] ?? null;
+        $outputSpeech = self::arrayNode(self::responseOf($envelope)['outputSpeech']);
+        $text = $outputSpeech['text'] ?? null;
         self::assertIsString($text, 'the envelope carries no spoken text');
 
         return $text;

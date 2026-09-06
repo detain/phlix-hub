@@ -12,6 +12,7 @@ use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
@@ -42,6 +43,8 @@ use const JSON_THROW_ON_ERROR;
 
 final class RelayProxyManagerTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private FrameDecoder $codec;
 
     /** @var list<array{event: string, data: array<string, mixed>}> */
@@ -564,8 +567,8 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertArrayNotHasKey('phase', $reply['data'], 'buffered HEAD must publish one reply, not phases');
         $this->assertSame(200, $reply['data']['status']);
         // The head's Content-Length + range support are carried through verbatim.
-        $this->assertSame('12345', $reply['data']['headers']['Content-Length'] ?? null);
-        $this->assertSame('bytes', $reply['data']['headers']['Accept-Ranges'] ?? null);
+        $this->assertSame('12345', self::arrayNode($reply['data']['headers'] ?? [])['Content-Length'] ?? null);
+        $this->assertSame('bytes', self::arrayNode($reply['data']['headers'] ?? [])['Accept-Ranges'] ?? null);
         // No body frame was sent → the assembled body is empty.
         $this->assertSame('', $reply['data']['body']);
 
@@ -617,7 +620,7 @@ final class RelayProxyManagerTest extends TestCase
             'headers' => [],
             'body_b64' => '',
         ]);
-        $headReqId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $headReqId = self::lastSentFrame($sent)->seq;
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $headReqId,
@@ -635,8 +638,8 @@ final class RelayProxyManagerTest extends TestCase
 
         $this->assertCount(1, $this->published);
         $this->assertSame(200, $this->published[0]['data']['status']);
-        $this->assertSame('10', $this->published[0]['data']['headers']['Content-Length'] ?? null);
-        $this->assertSame('bytes', $this->published[0]['data']['headers']['Accept-Ranges'] ?? null);
+        $this->assertSame('10', self::arrayNode($this->published[0]['data']['headers'] ?? [])['Content-Length'] ?? null);
+        $this->assertSame('bytes', self::arrayNode($this->published[0]['data']['headers'] ?? [])['Accept-Ranges'] ?? null);
         $this->assertSame('', $this->published[0]['data']['body'], 'a HEAD carries no body');
 
         // 2) Ranged GET (streamed): 206 + Content-Range + the requested bytes.
@@ -651,7 +654,7 @@ final class RelayProxyManagerTest extends TestCase
             'body_b64' => '',
             'stream' => true,
         ]);
-        $getReqId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $getReqId = self::lastSentFrame($sent)->seq;
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $getReqId,
@@ -676,7 +679,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount(4, $this->published);
         $this->assertSame('head', $this->published[1]['data']['phase']);
         $this->assertSame(206, $this->published[1]['data']['status']);
-        $this->assertSame('bytes 0-4/10', $this->published[1]['data']['headers']['Content-Range'] ?? null);
+        $this->assertSame('bytes 0-4/10', self::arrayNode($this->published[1]['data']['headers'] ?? [])['Content-Range'] ?? null);
         $this->assertSame('body', $this->published[2]['data']['phase']);
         $this->assertSame('Hello', $this->published[2]['data']['body'], 'the ranged GET returns the requested bytes');
         $this->assertSame('end', $this->published[3]['data']['phase']);
@@ -745,8 +748,8 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount(4, $this->published);
         $this->assertSame('head', $this->published[0]['data']['phase']);
         $this->assertSame(200, $this->published[0]['data']['status']);
-        $this->assertSame('video/mp2t', $this->published[0]['data']['headers']['Content-Type'] ?? null);
-        $this->assertSame('6', $this->published[0]['data']['headers']['Content-Length'] ?? null);
+        $this->assertSame('video/mp2t', self::arrayNode($this->published[0]['data']['headers'] ?? [])['Content-Type'] ?? null);
+        $this->assertSame('6', self::arrayNode($this->published[0]['data']['headers'] ?? [])['Content-Length'] ?? null);
 
         $this->assertSame('body', $this->published[1]['data']['phase']);
         $this->assertSame('foo', $this->published[1]['data']['body']);
@@ -1044,7 +1047,7 @@ final class RelayProxyManagerTest extends TestCase
 
         // The head phase is published; no terminating end phase.
         $this->assertSame($publishedBefore + 1, count($this->published));
-        $this->assertSame('head', $this->published[array_key_last($this->published)]['data']['phase']);
+        $this->assertSame('head', $this->published[array_key_last($this->published)]['data']['phase'] ?? null);
 
         // Send body frame.
         $publishedBefore = count($this->published);
@@ -1056,7 +1059,7 @@ final class RelayProxyManagerTest extends TestCase
 
         // The body phase is published; no terminating end phase.
         $this->assertSame($publishedBefore + 1, count($this->published));
-        $this->assertSame('body', $this->published[array_key_last($this->published)]['data']['phase']);
+        $this->assertSame('body', $this->published[array_key_last($this->published)]['data']['phase'] ?? null);
 
         // Entry is still pending (no sweep timeout yet).
         /** @var array<int, array<string, mixed>> $after */
@@ -1172,8 +1175,10 @@ final class RelayProxyManagerTest extends TestCase
 
         // Proof of the fix: idleness is measured from the refreshed
         // lastActivityAt (recent), NOT the old sent_at (300s ago).
-        $this->assertGreaterThan($after[$requestId]['sent_at'], $after[$requestId]['lastActivityAt']);
-        $this->assertLessThan(30.0, microtime(true) - $after[$requestId]['lastActivityAt']);
+        $lastActivityAt = $after[$requestId]['lastActivityAt'];
+        self::assertIsFloat($lastActivityAt, 'lastActivityAt is stored as a float');
+        $this->assertGreaterThan($after[$requestId]['sent_at'], $lastActivityAt);
+        $this->assertLessThan(30.0, microtime(true) - $lastActivityAt);
     }
 
     /**
@@ -1521,23 +1526,23 @@ final class RelayProxyManagerTest extends TestCase
 
         // A valid streaming timeout is stored verbatim.
         $manager->onRequest($this->proxyPayload(['timeout' => 60]));
-        $pending = $pendingProp->getValue($manager);
-        $this->assertSame(60.0, end($pending)['timeout'], 'a valid timeout is stored verbatim');
+        $pending = self::arrayNode($pendingProp->getValue($manager));
+        $this->assertSame(60.0, self::arrayNode(end($pending))['timeout'], 'a valid timeout is stored verbatim');
 
         // An absent field falls back to the injected default (30s).
         $manager->onRequest($this->proxyPayload());
-        $pending = $pendingProp->getValue($manager);
-        $this->assertSame(30.0, end($pending)['timeout'], 'an absent timeout falls back to the injected default');
+        $pending = self::arrayNode($pendingProp->getValue($manager));
+        $this->assertSame(30.0, self::arrayNode(end($pending))['timeout'], 'an absent timeout falls back to the injected default');
 
         // A negative value falls back to the injected default (30s).
         $manager->onRequest($this->proxyPayload(['timeout' => -5]));
-        $pending = $pendingProp->getValue($manager);
-        $this->assertSame(30.0, end($pending)['timeout'], 'a negative timeout falls back to the injected default');
+        $pending = self::arrayNode($pendingProp->getValue($manager));
+        $this->assertSame(30.0, self::arrayNode(end($pending))['timeout'], 'a negative timeout falls back to the injected default');
 
         // A non-numeric value falls back to the injected default (30s).
         $manager->onRequest($this->proxyPayload(['timeout' => 'bogus']));
-        $pending = $pendingProp->getValue($manager);
-        $this->assertSame(30.0, end($pending)['timeout'], 'a non-numeric timeout falls back to the injected default');
+        $pending = self::arrayNode($pendingProp->getValue($manager));
+        $this->assertSame(30.0, self::arrayNode(end($pending))['timeout'], 'a non-numeric timeout falls back to the injected default');
     }
 
     // ---------------------------------------------------------------------
@@ -1679,7 +1684,7 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertArrayHasKey('req-test', $mapBefore, 'map must have entry before END');
 
         // Complete via onResponseFrame END (buffered path).
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = self::lastSentFrame($sent);
         $requestId = $reqFrame->seq;
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
@@ -1737,7 +1742,7 @@ final class RelayProxyManagerTest extends TestCase
         $pendingProp->setAccessible(true);
         /** @var array<int, array<string, mixed>> $pending */
         $pending = $pendingProp->getValue($manager);
-        $requestId = (int) (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $requestId = self::lastSentFrame($sent)->seq;
 
         $onTimeout = new ReflectionMethod(RelayProxyManager::class, 'onTimeout');
         $onTimeout->setAccessible(true);
@@ -1938,7 +1943,7 @@ final class RelayProxyManagerTest extends TestCase
             'timeout' => 30,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = self::lastSentFrame($sent);
         $requestId = $reqFrame->seq;
 
         // Rewind the inactivity clock to simulate a request that's been idle
@@ -2004,7 +2009,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = self::lastSentFrame($sent);
         $requestId = $reqFrame->seq;
 
         // Send HEAD first so stream_started = true (END phase requires this).
@@ -2078,7 +2083,7 @@ final class RelayProxyManagerTest extends TestCase
             'timeout' => 30,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = self::lastSentFrame($sent);
         $requestId = $reqFrame->seq;
 
         // Run the sweep on a fresh request (well within timeout).
@@ -2258,7 +2263,7 @@ final class RelayProxyManagerTest extends TestCase
         // The pending gauge tracks the one in-flight request.
         $this->assertSame(1, $this->registryInt($registry, 'relayPendingRequests'));
 
-        $requestId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $requestId = self::lastSentFrame($sent)->seq;
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
@@ -2349,7 +2354,7 @@ final class RelayProxyManagerTest extends TestCase
             'body_b64' => '',
         ]);
 
-        $requestId = (int) (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $requestId = self::lastSentFrame($sent)->seq;
 
         $onTimeout = new ReflectionMethod(RelayProxyManager::class, 'onTimeout');
         $onTimeout->setAccessible(true);
@@ -2399,7 +2404,7 @@ final class RelayProxyManagerTest extends TestCase
             'headers' => [],
             'body_b64' => '',
         ]);
-        $requestId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $requestId = self::lastSentFrame($sent)->seq;
 
         // No latency yet — nothing has come back.
         $this->assertSame(0, $this->relayLatencyObservationCount($registry));
@@ -2448,7 +2453,7 @@ final class RelayProxyManagerTest extends TestCase
             'body_b64' => '',
             'stream' => true,
         ]);
-        $requestId = (new FrameDecoder())->decode($sent[count($sent) - 1])->seq;
+        $requestId = self::lastSentFrame($sent)->seq;
 
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
@@ -2521,5 +2526,24 @@ final class RelayProxyManagerTest extends TestCase
             $total += $bucket[-1] ?? 0;
         }
         return $total;
+    }
+    /**
+     * Decode the last frame handed to the server-WS double, asserting it is a
+     * frame. Keeps `->seq` accesses honest at PHPStan level 9: decode() may
+     * legitimately return null for garbage, which must never be silently
+     * null-propagated through a test.
+     *
+     * @param array<int, string> $sent
+     */
+    private static function lastSentFrame(array $sent): RelayFrame
+    {
+        $frame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        self::assertInstanceOf(
+            RelayFrame::class,
+            $frame,
+            'the connection double only ever receives validly encoded frames',
+        );
+
+        return $frame;
     }
 }

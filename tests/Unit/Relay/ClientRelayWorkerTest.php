@@ -31,6 +31,7 @@ use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
 use Workerman\MySQL\Connection;
@@ -67,9 +68,9 @@ final class ClientRelayWorkerTest extends TestCase
     private const OWNER_USER_ID = 'user-owner-1';
 
     private string $tmpDir;
-    private RelaySessionManager $sessionManager;
+    private RelaySessionManager&MockObject $sessionManager;
     private RelayWireCodecInterface $codec;
-    private StructuredLogger $logger;
+    private StructuredLogger&MockObject $logger;
     private TunnelManager $tunnelManager;
     private ClientMountController $controller;
 

@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Hub\LibrarySharingHandler;
 use Phlix\Hub\Http\Controllers\LibraryShareController;
@@ -19,7 +20,7 @@ use Phlix\Hub\Hub\SharedLibraryDto;
  */
 final class LibraryShareControllerTest extends TestCase
 {
-    private LibrarySharingHandler $handler;
+    private LibrarySharingHandler&MockObject $handler;
     private LibraryShareController $controller;
 
     protected function setUp(): void

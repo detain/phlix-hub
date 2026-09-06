@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
@@ -19,7 +20,7 @@ use Phlix\Hub\Http\Request;
  */
 final class InviteLinkControllerTest extends TestCase
 {
-    private InviteLinkHandler $handler;
+    private InviteLinkHandler&MockObject $handler;
     private InviteLinkController $controller;
 
     protected function setUp(): void

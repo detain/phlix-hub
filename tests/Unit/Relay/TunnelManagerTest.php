@@ -15,6 +15,7 @@ use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\Connection\TcpConnection;
 
 class TunnelManagerTest extends TestCase
@@ -24,8 +25,8 @@ class TunnelManagerTest extends TestCase
     use WorkermanTimerRuntimeControl;
 
     private RelayWireCodecInterface $codec;
-    private StructuredLogger $logger;
-    private RelaySessionManager $sessionManager;
+    private StructuredLogger&MockObject $logger;
+    private RelaySessionManager&MockObject $sessionManager;
 
     protected function setUp(): void
     {

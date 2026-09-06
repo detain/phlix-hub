@@ -19,7 +19,6 @@ use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManagerInterface;
-use Phlix\Shared\Hub\ServerInfoDto;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
@@ -28,6 +27,7 @@ use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
+use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
@@ -80,23 +80,6 @@ final class ServerProxyControllerTest extends TestCase
     // Workerman's Timer statics and Worker registry are process-global; the trait
     // snapshots them before setUp() and restores them after tearDown().
     use WorkermanTimerRuntimeControl;
-
-    private function dto(
-        string $userId,
-        bool $relayActive,
-        string $status = ServerInfoDto::STATUS_ONLINE,
-    ): ServerInfoDto {
-        return new ServerInfoDto(
-            'srv-1',
-            $userId,
-            'My Server',
-            '1.0.0',
-            null,
-            $status,
-            [],
-            $relayActive,
-        );
-    }
 
     private function request(string $method, ?string $userId): Request
     {
@@ -183,27 +166,10 @@ final class ServerProxyControllerTest extends TestCase
 
     /**
      * A test double for the browser connection that records everything written.
-     * The real {@see TcpConnection} needs a live socket; this subclass skips the
-     * parent constructor and captures {@see self::send()} payloads instead.
      */
-    private function fakeConnection()
+    private function fakeConnection(): RecordingBrowserConnection
     {
-        return new class extends TcpConnection {
-            /** @var list<string> */
-            public array $written = [];
-
-            public function __construct()
-            {
-                // Intentionally skips the parent constructor: no live socket is
-                // needed — send() just records what would go on the wire.
-            }
-
-            public function send(mixed $sendBuffer, bool $raw = false): bool
-            {
-                $this->written[] = (string) $sendBuffer;
-                return true;
-            }
-        };
+        return new RecordingBrowserConnection();
     }
 
     /**
@@ -211,10 +177,9 @@ final class ServerProxyControllerTest extends TestCase
      * HTTP worker would invoke with the live connection. For streaming (`/hls`,
      * `/dash`, `/media`) paths this is where the request is actually forwarded
      * and the body written; for buffered paths it is a no-op. Returns the fake
-     * connection the stream wrote to (no declared return type so PHPStan keeps
-     * the anonymous class's `$written` property visible).
+     * connection the stream wrote to.
      */
-    private function drive(Response $response)
+    private function drive(Response $response): RecordingBrowserConnection
     {
         $connection = $this->fakeConnection();
         if ($response->streamProducer !== null) {
@@ -1666,7 +1631,8 @@ final class ServerProxyControllerTest extends TestCase
 
             public function send(mixed $sendBuffer, bool $raw = false): bool
             {
-                $this->sizes[] = strlen((string) $sendBuffer);
+                Assert::assertIsString($sendBuffer);
+                $this->sizes[] = strlen($sendBuffer);
                 $this->at[] = hrtime(true) / 1_000_000_000;
 
                 return true;
@@ -3031,7 +2997,7 @@ final class ServerProxyControllerTest extends TestCase
         // The publisher routes the HTTP-worker request into the relay-worker's
         // RelayProxyManager::onRequest (cross-process channel hop simulated
         // in-process); the manager's reply is fed back via the bridge.
-        $publisher = function (string $event, array $data) use (&$bridge, &$proxyManager): void {
+        $publisher = function (string $event, array $data) use (&$proxyManager): void {
             /** @var RelayProxyManager $proxyManager */
             $proxyManager->onRequest($data);
         };
@@ -6156,8 +6122,12 @@ final class ServerProxyControllerTest extends TestCase
 
         // ---- expected slice, computed from the file on DISK -------------
         [$start, $end] = self::expectedSlice($range, $size);
-        $expectedBytes = (string) file_get_contents($path, false, null, $start, $end - $start + 1);
-        $this->assertSame($end - $start + 1, strlen($expectedBytes), 'the fixture slice is the wrong size');
+        $length = $end - $start + 1;
+        self::assertGreaterThan(0, $length, 'the requested byte range must be non-empty');
+        // max(0, ...) is dead here by assertion above; it is what lets PHPStan
+        // see the provably non-negative int the stream length parameter demands.
+        $expectedBytes = (string) file_get_contents($path, false, null, $start, max(0, $length));
+        $this->assertSame($length, strlen($expectedBytes), 'the fixture slice is the wrong size');
 
         // ---- Content-Range, by VALUE ------------------------------------
         if ($expectedStatus === 206) {
@@ -6561,5 +6531,29 @@ final class ServerProxyControllerTest extends TestCase
             $getWire,
             'CONTROL: on a GET the server\'s stale Content-Length is stripped and recomputed from the body',
         );
+    }
+}
+
+/**
+ * A {@see TcpConnection} double that skips the parent constructor (no live
+ * socket needed) and records every `send()` payload on the wire.
+ */
+final class RecordingBrowserConnection extends TcpConnection
+{
+    /** @var list<string> */
+    public array $written = [];
+
+    public function __construct()
+    {
+        // Intentionally skips the parent constructor: no live socket is
+        // needed — send() just records what would go on the wire.
+    }
+
+    public function send(mixed $sendBuffer, bool $raw = false): bool
+    {
+        Assert::assertIsString($sendBuffer, 'the proxy must write strings to the browser connection');
+        $this->written[] = $sendBuffer;
+
+        return true;
     }
 }

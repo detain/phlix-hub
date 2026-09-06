@@ -13,6 +13,7 @@ use Phlix\Hub\Relay\TunnelInterface;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\Connection\TcpConnection;
 
 /**
@@ -22,8 +23,8 @@ use Workerman\Connection\TcpConnection;
  */
 final class ClientConnectionTest extends TestCase
 {
-    private StructuredLogger $logger;
-    private TcpConnection $clientWs;
+    private StructuredLogger&MockObject $logger;
+    private TcpConnection&MockObject $clientWs;
 
     protected function setUp(): void
     {

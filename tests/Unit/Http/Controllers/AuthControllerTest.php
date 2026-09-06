@@ -16,6 +16,7 @@ use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Request;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -36,7 +37,7 @@ final class AuthControllerTest extends TestCase
         return new AuthController($auth);
     }
 
-    private function authMgr(): AuthManager
+    private function authMgr(): AuthManager&MockObject
     {
         $mgr = $this->createMock(AuthManager::class);
         $mgr->method('jwt')->willReturn(new JwtHandler(self::SECRET));
@@ -100,28 +101,9 @@ final class AuthControllerTest extends TestCase
      * buckets on. Always reports not-limited so login proceeds to the (failing)
      * credential check that records the hit.
      */
-    private function recordingLimiter(): RateLimiterInterface
+    private function recordingLimiter(): RecordingRateLimiter
     {
-        return new class implements RateLimiterInterface {
-            /** @var list<string> */
-            public array $hits = [];
-
-            public function hit(string $key): RateLimitState
-            {
-                $this->hits[] = $key;
-
-                return new RateLimitState(1, 4, time() + 900, false, 5);
-            }
-
-            public function reset(string $key): void
-            {
-            }
-
-            public function peek(string $key): RateLimitState
-            {
-                return new RateLimitState(0, 5, 0, false, 5);
-            }
-        };
+        return new RecordingRateLimiter();
     }
 
     /**
@@ -376,5 +358,32 @@ final class AuthControllerTest extends TestCase
 
         $response = $controller($request);
         self::assertSame(404, $response->statusCode);
+    }
+}
+
+/**
+ * A recording {@see RateLimiterInterface} double: captures every key passed to
+ * hit() so tests can assert which IP the login limiter buckets on. Always
+ * reports not-limited so login proceeds to the credential check.
+ */
+final class RecordingRateLimiter implements RateLimiterInterface
+{
+    /** @var list<string> */
+    public array $hits = [];
+
+    public function hit(string $key): RateLimitState
+    {
+        $this->hits[] = $key;
+
+        return new RateLimitState(1, 4, time() + 900, false, 5);
+    }
+
+    public function reset(string $key): void
+    {
+    }
+
+    public function peek(string $key): RateLimitState
+    {
+        return new RateLimitState(0, 5, 0, false, 5);
     }
 }

@@ -101,7 +101,8 @@ final class RelayProxyBridgeTest extends TestCase
         $bridge = new RelayProxyBridge($this->createMock(StructuredLogger::class));
         // Should not throw.
         $bridge->onReply(['request_id' => 'nope', 'status' => 200]);
-        $this->assertTrue(true);
+        // Passing means the unknown reply was ignored: no observable state to assert.
+        $this->addToAssertionCount(1);
     }
 
     /**
@@ -152,39 +153,9 @@ final class RelayProxyBridgeTest extends TestCase
      * A recording {@see RelayResponseSink}. `$bodyReturn` lets a test simulate
      * the browser going away mid-stream (body() returning false).
      */
-    private function recordingSink(bool $bodyReturn = true): RelayResponseSink
+    private function recordingSink(bool $bodyReturn = true): RecordingResponseSink
     {
-        return new class ($bodyReturn) implements RelayResponseSink {
-            /** @var list<array{0: string, 1?: mixed, 2?: mixed}> */
-            public array $events = [];
-            public string $body = '';
-
-            public function __construct(private readonly bool $bodyReturn)
-            {
-            }
-
-            public function head(int $status, array $headers): void
-            {
-                $this->events[] = ['head', $status, $headers];
-            }
-
-            public function body(string $bytes): bool
-            {
-                $this->events[] = ['body', $bytes];
-                $this->body .= $bytes;
-                return $this->bodyReturn;
-            }
-
-            public function end(): void
-            {
-                $this->events[] = ['end'];
-            }
-
-            public function abort(): void
-            {
-                $this->events[] = ['abort'];
-            }
-        };
+        return new RecordingResponseSink($bodyReturn);
     }
 
     /**
@@ -192,47 +163,9 @@ final class RelayProxyBridgeTest extends TestCase
      * for the D3s re-review Finding B regression tests below (mid-stream
      * exception must not corrupt the connection with a second response).
      */
-    private function throwingSink(bool $throwOnHead, bool $throwOnBody): RelayResponseSink
+    private function throwingSink(bool $throwOnHead, bool $throwOnBody): ThrowingResponseSink
     {
-        return new class ($throwOnHead, $throwOnBody) implements RelayResponseSink {
-            public bool $headCalled = false;
-            public bool $bodyCalled = false;
-            public bool $endCalled = false;
-            public bool $abortCalled = false;
-
-            public function __construct(
-                private readonly bool $throwOnHead,
-                private readonly bool $throwOnBody,
-            ) {
-            }
-
-            public function head(int $status, array $headers): void
-            {
-                $this->headCalled = true;
-                if ($this->throwOnHead) {
-                    throw new RuntimeException('boom-in-head');
-                }
-            }
-
-            public function body(string $bytes): bool
-            {
-                $this->bodyCalled = true;
-                if ($this->throwOnBody) {
-                    throw new RuntimeException('boom-in-body');
-                }
-                return true;
-            }
-
-            public function end(): void
-            {
-                $this->endCalled = true;
-            }
-
-            public function abort(): void
-            {
-                $this->abortCalled = true;
-            }
-        };
+        return new ThrowingResponseSink($throwOnHead, $throwOnBody);
     }
 
     public function testStreamForwardsPhasedBodyToTheSinkAndFlagsTheEnvelope(): void
@@ -311,7 +244,7 @@ final class RelayProxyBridgeTest extends TestCase
         $bridge->stream('srv-1', 'GET', '/hls/job/seg-00007.ts', '', [], '', 0.01, $sink);
 
         $this->assertSame('head', $sink->events[0][0]);
-        $this->assertSame(504, $sink->events[0][1]);
+        $this->assertSame(504, $sink->events[0][1] ?? null);
         /** @var array<string, mixed> $decoded */
         $decoded = json_decode($sink->body, true, 8, JSON_THROW_ON_ERROR);
         $this->assertSame('gateway.timeout', $decoded['code'] ?? null);
@@ -662,5 +595,95 @@ final class RelayProxyBridgeTest extends TestCase
         $this->assertTrue($sink->bodyCalled);
         $this->assertTrue($sink->abortCalled, 'bytes were already written — the sink must be aborted');
         $this->assertFalse($sink->endCalled, 'end() must not run after an abort()');
+    }
+}
+
+/**
+ * A {@see RelayResponseSink} double that records every protocol event and the
+ * concatenated body. Named so callers can read `events`/`body` through the
+ * concrete type (an anonymous class typed as the interface hides them).
+ */
+final class RecordingResponseSink implements RelayResponseSink
+{
+    /** @var list<array{0: string, 1?: mixed, 2?: mixed}> */
+    public array $events = [];
+
+    public string $body = '';
+
+    public function __construct(private readonly bool $bodyReturn = true)
+    {
+    }
+
+    public function head(int $status, array $headers): void
+    {
+        $this->events[] = ['head', $status, $headers];
+    }
+
+    public function body(string $bytes): bool
+    {
+        $this->events[] = ['body', $bytes];
+        $this->body .= $bytes;
+
+        return $this->bodyReturn;
+    }
+
+    public function end(): void
+    {
+        $this->events[] = ['end'];
+    }
+
+    public function abort(): void
+    {
+        $this->events[] = ['abort'];
+    }
+}
+
+/**
+ * A {@see RelayResponseSink} whose `head()`/`body()` can be made to throw, for
+ * the D3s re-review Finding B regression tests (a mid-stream exception must not
+ * corrupt the connection with a second response).
+ */
+final class ThrowingResponseSink implements RelayResponseSink
+{
+    public bool $headCalled = false;
+
+    public bool $bodyCalled = false;
+
+    public bool $endCalled = false;
+
+    public bool $abortCalled = false;
+
+    public function __construct(
+        private readonly bool $throwOnHead,
+        private readonly bool $throwOnBody,
+    ) {
+    }
+
+    public function head(int $status, array $headers): void
+    {
+        $this->headCalled = true;
+        if ($this->throwOnHead) {
+            throw new RuntimeException('boom-in-head');
+        }
+    }
+
+    public function body(string $bytes): bool
+    {
+        $this->bodyCalled = true;
+        if ($this->throwOnBody) {
+            throw new RuntimeException('boom-in-body');
+        }
+
+        return true;
+    }
+
+    public function end(): void
+    {
+        $this->endCalled = true;
+    }
+
+    public function abort(): void
+    {
+        $this->abortCalled = true;
     }
 }

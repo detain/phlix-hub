@@ -18,6 +18,7 @@ use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\Connection\TcpConnection;
 
 class TunnelTest extends TestCase
@@ -27,10 +28,10 @@ class TunnelTest extends TestCase
     use WorkermanTimerRuntimeControl;
 
     private RelayWireCodecInterface $codec;
-    private StructuredLogger $logger;
-    private StructuredLogger $clientLogger;
-    private RelaySessionManager $sessionManager;
-    private TcpConnection $serverWs;
+    private StructuredLogger&MockObject $logger;
+    private StructuredLogger&MockObject $clientLogger;
+    private RelaySessionManager&MockObject $sessionManager;
+    private TcpConnection&MockObject $serverWs;
 
     protected function setUp(): void
     {
@@ -95,6 +96,7 @@ class TunnelTest extends TestCase
             'server_id' => 'server-123',
         ]);
 
+        self::assertIsString($helloPayload);
         $tunnel->onServerMessage($helloPayload);
 
         $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
@@ -369,6 +371,7 @@ class TunnelTest extends TestCase
         $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, 'relay-session-1');
 
         // Capture every frame sent to the server (CLIENT_CONNECT then DISCONNECT).
+        /** @var list<string> $sent */
         $sent = [];
         $this->serverWs
             ->method('send')
@@ -575,6 +578,7 @@ class TunnelTest extends TestCase
         $tunnel->relaySessionId = $sessionId;
         $tunnel->status = Tunnel::STATUS_ACTIVE;
 
+        /** @var list<string> $sent */
         $sent = [];
         $this->serverWs
             ->method('send')
@@ -823,7 +827,9 @@ class TunnelTest extends TestCase
 
         // Client whose buffer is "full" for the first send, then drains.
         $clientWs = $this->createMock(TcpConnection::class);
+        /** @var bool $full */
         $full = true;
+        /** @var list<string> $delivered */
         $delivered = [];
         $clientWs->method('send')->willReturnCallback(
             function (string $data) use (&$full, &$delivered): bool {
@@ -847,10 +853,12 @@ class TunnelTest extends TestCase
 
         // Buffer drains — invoke the onBufferDrain handler the tunnel armed.
         $this->assertIsCallable($clientWs->onBufferDrain);
+        /** @var bool $full */
         $full = false;
         ($clientWs->onBufferDrain)();
 
         // AC (a): the previously-failing frame is delivered byte-exact — zero loss.
+        /** @var list<string> $delivered — re-widened: the send() double fills it from the mock callback. */
         $this->assertCount(1, $delivered);
         $decoded = $this->codec->decode($delivered[0]);
         $this->assertInstanceOf(RelayFrame::class, $decoded);
@@ -1068,7 +1076,9 @@ class TunnelTest extends TestCase
         $clientWs->expects($this->once())->method('resumeRecv');
         $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
 
+        /** @var bool $full */
         $full = false;
+        /** @var list<string> $sent */
         $sent = [];
         $this->serverWs->method('send')->willReturnCallback(
             function (string $data) use (&$full, &$sent): bool {
@@ -1084,6 +1094,7 @@ class TunnelTest extends TestCase
         $sentBeforeBody = count($sent);
 
         // Now the server's send buffer is full.
+        /** @var bool $full */
         $full = true;
 
         // REAL wire codec: a chunked HTTP_REQUEST BODY sub-frame is a tag-byte
@@ -1099,6 +1110,7 @@ class TunnelTest extends TestCase
 
         // Buffer drains — invoke the server onBufferDrain handler the tunnel armed.
         $this->assertIsCallable($this->serverWs->onBufferDrain);
+        /** @var bool $full */
         $full = false;
         ($this->serverWs->onBufferDrain)();
 
@@ -1124,6 +1136,7 @@ class TunnelTest extends TestCase
         $clientWs->method('resumeRecv');
         $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
 
+        /** @var bool $full */
         $full = false;
         $this->serverWs->method('send')->willReturnCallback(
             function () use (&$full): bool {
@@ -1133,6 +1146,7 @@ class TunnelTest extends TestCase
         $this->serverWs->expects($this->once())->method('close');
 
         $tunnel->registerClient($client);
+        /** @var bool $full */
         $full = true;
 
         $bodyFrame = new RelayFrame(
@@ -1181,7 +1195,9 @@ class TunnelTest extends TestCase
     {
         $tunnel = $this->activeTunnel();
 
+        /** @var bool $full */
         $full = true;
+        /** @var list<string> $sent */
         $sent = [];
         $this->serverWs->method('send')->willReturnCallback(
             function (string $data) use (&$full, &$sent): bool {
@@ -1202,12 +1218,14 @@ class TunnelTest extends TestCase
         // Buffer drops below the high-watermark so send() would succeed again —
         // but onBufferDrain has NOT fired. A newly generated control frame must
         // queue BEHIND the backlog, never overtake it (the #1 reordering bug).
+        /** @var bool $full */
         $full = false;
         $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_CANCEL, 0, 'CTRL-2'));
         $this->assertSame([], $sent, 'second control frame must queue behind the backlog, not overtake it');
 
         // A body frame while a control backlog exists must queue behind the
         // control frames (control-first-then-body preserved).
+        /** @var bool $full */
         $full = true;
         $bodyPayload = RelayHttpRequestCodec::encodeBody('BODY-1');
         $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $bodyPayload));
@@ -1215,9 +1233,11 @@ class TunnelTest extends TestCase
 
         // Drain: control queue FIFO first, then the body frame.
         $this->assertIsCallable($this->serverWs->onBufferDrain);
+        /** @var bool $full */
         $full = false;
         ($this->serverWs->onBufferDrain)();
 
+        /** @var list<string> $sent — re-widened: the send() double fills it from the mock callback. */
         $this->assertCount(3, $sent);
         $this->assertSame('CTRL-1', $this->decodeFrame($sent[0])->payload);
         $this->assertSame('CTRL-2', $this->decodeFrame($sent[1])->payload);
@@ -1238,7 +1258,9 @@ class TunnelTest extends TestCase
         $this->serverWs->method('resumeRecv');
 
         $clientWs = $this->createMock(TcpConnection::class);
+        /** @var bool $full */
         $full = true;
+        /** @var list<string> $delivered */
         $delivered = [];
         $clientWs->method('send')->willReturnCallback(
             function (string $data) use (&$full, &$delivered): bool {
@@ -1257,10 +1279,12 @@ class TunnelTest extends TestCase
         $tunnel->sendToClient($client->channelId, new RelayFrame(RelayFrameType::DATA, $client->channelId, 'SECOND'));
         $this->assertSame([], $delivered);
 
+        /** @var bool $full */
         $full = false;
         $this->assertIsCallable($clientWs->onBufferDrain);
         ($clientWs->onBufferDrain)();
 
+        /** @var list<string> $delivered — re-widened: the send() double fills it from the mock callback. */
         $this->assertCount(2, $delivered);
         $this->assertSame('FIRST', $this->decodeFrame($delivered[0])->payload);
         $this->assertSame('SECOND', $this->decodeFrame($delivered[1])->payload);
@@ -1307,6 +1331,7 @@ class TunnelTest extends TestCase
         $this->serverWs->expects($this->once())->method('pauseRecv');
         $this->serverWs->expects($this->once())->method('resumeRecv');
 
+        /** @var bool $full1 */
         $full1 = true;
         $ws1 = $this->createMock(TcpConnection::class);
         $ws1->method('send')->willReturnCallback(function () use (&$full1): bool {
@@ -1314,6 +1339,7 @@ class TunnelTest extends TestCase
         });
         $c1 = new ClientConnection($ws1, 'server-123', 'client-1', $this->clientLogger, '');
 
+        /** @var bool $full2 */
         $full2 = true;
         $ws2 = $this->createMock(TcpConnection::class);
         $ws2->method('send')->willReturnCallback(function () use (&$full2): bool {
@@ -1332,12 +1358,14 @@ class TunnelTest extends TestCase
         $this->assertSame(2, $count->getValue($tunnel));
 
         // First client drains — server must STAY paused.
+        /** @var bool $full1 */
         $full1 = false;
         $this->assertIsCallable($ws1->onBufferDrain);
         ($ws1->onBufferDrain)();
         $this->assertSame(1, $count->getValue($tunnel), 'server stays paused while a second client is congested');
 
         // Second client drains — server resumes.
+        /** @var bool $full2 */
         $full2 = false;
         $this->assertIsCallable($ws2->onBufferDrain);
         ($ws2->onBufferDrain)();
@@ -1366,7 +1394,8 @@ class TunnelTest extends TestCase
             ->method('closeSession')
             ->with('session-456', 'backpressure_overflow');
 
-        $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_CLIENT_QUEUE'))->getValue();
+        $max = (new \ReflectionClassConstant(Tunnel::class, 'MAX_CLIENT_QUEUE'))->getValue();
+        self::assertIsInt($max, 'MAX_CLIENT_QUEUE is an integer constant');
         for ($i = 0; $i <= $max; $i++) {
             $tunnel->sendToClient($client->channelId, new RelayFrame(RelayFrameType::DATA, $client->channelId, 'x'));
         }
@@ -1390,7 +1419,8 @@ class TunnelTest extends TestCase
             ->method('closeSession')
             ->with('session-456', 'backpressure_overflow');
 
-        $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_BODY_QUEUE'))->getValue();
+        $max = (new \ReflectionClassConstant(Tunnel::class, 'MAX_BODY_QUEUE'))->getValue();
+        self::assertIsInt($max, 'MAX_BODY_QUEUE is an integer constant');
         $bodyPayload = RelayHttpRequestCodec::encodeBody('x');
         for ($i = 0; $i <= $max; $i++) {
             $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, 0, $bodyPayload));
@@ -1417,7 +1447,8 @@ class TunnelTest extends TestCase
             ->method('closeSession')
             ->with('session-456', 'backpressure_overflow');
 
-        $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_HIGH_PRIORITY_QUEUE'))->getValue();
+        $max = (new \ReflectionClassConstant(Tunnel::class, 'MAX_HIGH_PRIORITY_QUEUE'))->getValue();
+        self::assertIsInt($max, 'MAX_HIGH_PRIORITY_QUEUE is an integer constant');
         for ($i = 0; $i <= $max; $i++) {
             $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_CANCEL, 0, 'c'));
         }
@@ -1499,7 +1530,9 @@ class TunnelTest extends TestCase
     {
         $tunnel = $this->activeTunnel();
 
+        /** @var bool $full */
         $full = true; // buffer full from the start: every sub-frame queues
+        /** @var list<string> $sent */
         $sent = [];
         $this->serverWs->method('send')->willReturnCallback(
             function (string $data) use (&$full, &$sent): bool {
@@ -1530,9 +1563,11 @@ class TunnelTest extends TestCase
 
         // Buffer drains — the tunnel flushes the body FIFO.
         $this->assertIsCallable($this->serverWs->onBufferDrain);
+        /** @var bool $full */
         $full = false;
         ($this->serverWs->onBufferDrain)();
 
+        /** @var list<string> $sent — re-widened: the send() double fills it from the mock callback. */
         $this->assertCount(4, $sent);
         $this->assertSame($headPayload, $this->decodeFrame($sent[0])->payload, 'HEAD first');
         $this->assertSame($body1, $this->decodeFrame($sent[1])->payload, 'BODY-1 second');
@@ -1560,7 +1595,9 @@ class TunnelTest extends TestCase
     {
         $tunnel = $this->activeTunnel();
 
+        /** @var bool $full */
         $full = true; // buffer full from the start: every frame queues per-channel
+        /** @var list<string> $sent */
         $sent = [];
         $this->serverWs->method('send')->willReturnCallback(
             function (string $data) use (&$full, &$sent): bool {
@@ -1598,6 +1635,7 @@ class TunnelTest extends TestCase
 
         // Buffer drains — the tunnel flushes the per-channel body queues round-robin.
         $this->assertIsCallable($this->serverWs->onBufferDrain);
+        /** @var bool $full */
         $full = false;
         ($this->serverWs->onBufferDrain)();
 
@@ -1840,7 +1878,8 @@ class TunnelTest extends TestCase
         // Overflow must close the CHANNEL, not the tunnel/server.
         $this->serverWs->expects($this->never())->method('close');
 
-        $max = (int) (new \ReflectionClassConstant(Tunnel::class, 'MAX_CLIENT_QUEUE'))->getValue();
+        $max = (new \ReflectionClassConstant(Tunnel::class, 'MAX_CLIENT_QUEUE'))->getValue();
+        self::assertIsInt($max, 'MAX_CLIENT_QUEUE is an integer constant');
 
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->expects($this->once())->method('close'); // the channel is closed
@@ -1920,7 +1959,9 @@ class TunnelTest extends TestCase
         // frames remain queued, and the shared server tunnel was never paused.
         $this->assertCount(2, $this->readPendingClientFrames($tunnel)[$client->channelId]);
         // Tokens were not charged for the undelivered frame.
-        $this->assertSame(1000.0, $client->throttleBucket->tokens(1000.0));
+        $bucket = $client->throttleBucket;
+        self::assertInstanceOf(TokenBucket::class, $bucket, 'an 8 Mbps channel has a throttle bucket');
+        $this->assertSame(1000.0, $bucket->tokens(1000.0));
     }
 
     /**
@@ -1982,12 +2023,14 @@ class TunnelTest extends TestCase
             public array $cancelled = [];
             private int $nextId = 900;
 
+            /** @param array<int, mixed> $args */
             public function delay(float $delay, callable $func, array $args = []): int
             {
                 $this->delays[] = $delay;
                 return ++$this->nextId;
             }
 
+            /** @param array<int, mixed> $args */
             public function repeat(float $interval, callable $func, array $args = []): int
             {
                 $this->repeats[] = $interval;
@@ -2074,10 +2117,11 @@ class TunnelTest extends TestCase
             $drain = new \ReflectionMethod($tunnel, 'drainThrottled');
             $drain->invoke($tunnel, $client, 1000.0);
 
-            $interval = (float) (new \ReflectionClassConstant(
+            $interval = (new \ReflectionClassConstant(
                 Tunnel::class,
                 'THROTTLE_DRAIN_INTERVAL_SECONDS',
             ))->getValue();
+            self::assertIsFloat($interval, 'the drain interval constant is a float');
 
             $this->assertSame(
                 [$interval],
