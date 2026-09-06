@@ -20,6 +20,7 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Router;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
+use Phlix\Hub\Tests\Support\Updates\LiveMarkerHolder;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
@@ -78,7 +79,7 @@ final class AdminUpdatesRouteRegistrationTest extends TestCase
     private Router $router;
 
     /** Marker body the fake fetcher will answer with. */
-    private string $marker = '0.5.0';
+    private LiveMarkerHolder $markerHolder;
 
     protected function setUp(): void
     {
@@ -96,6 +97,8 @@ final class AdminUpdatesRouteRegistrationTest extends TestCase
         file_put_contents($this->tmpDir . '/updates.php', "<?php\n\nreturn ['check_enabled' => true];\n");
         LoggerFactory::reset();
         LoggerFactory::init($this->tmpDir . '/logger.php');
+
+        $this->markerHolder = new LiveMarkerHolder();
 
         $this->db    = new InMemoryHubSettingsConnection();
         $this->users = $this->createMock(UserRepository::class);
@@ -119,16 +122,14 @@ final class AdminUpdatesRouteRegistrationTest extends TestCase
     /** The service under test, over the shared in-memory `hub_settings` store. */
     private function service(): CoreUpdateCheckService
     {
-        $marker  = &$this->marker;
-        $fetcher = new class ($marker) implements VersionMarkerFetcherInterface {
-            /** @param string $marker Live reference to the test's marker body. */
-            public function __construct(private string &$marker)
+        $fetcher = new class ($this->markerHolder) implements VersionMarkerFetcherInterface {
+            public function __construct(private readonly LiveMarkerHolder $holder)
             {
             }
 
             public function fetch(string $url, callable $onDone): void
             {
-                $onDone($this->marker, null);
+                $onDone($this->holder->body, null);
             }
         };
 
@@ -304,7 +305,7 @@ final class AdminUpdatesRouteRegistrationTest extends TestCase
         self::assertNull($before['data']['latestVersion']);
 
         // Seed a newer marker and run the REAL worker's boot catch-up.
-        $this->marker = "0.9.9\n";
+        $this->markerHolder->body = "0.9.9\n";
         (new CoreUpdateCheckWorker($this->service(), LoggerFactory::get('hub'), 86400))->tick();
 
         $response = $this->router->dispatch($this->request('GET', self::STATUS_PATH, $token));
@@ -335,7 +336,7 @@ final class AdminUpdatesRouteRegistrationTest extends TestCase
     {
         $token = $this->adminToken('s75-admin-same');
 
-        $this->marker = self::CURRENT_VERSION;
+        $this->markerHolder->body = self::CURRENT_VERSION;
         (new CoreUpdateCheckWorker($this->service(), LoggerFactory::get('hub'), 86400))->tick();
 
         $payload = $this->decode(
@@ -486,7 +487,7 @@ final class AdminUpdatesRouteRegistrationTest extends TestCase
     {
         $token = $this->adminToken('s75-wire-status');
 
-        $this->marker = "0.9.9\n";
+        $this->markerHolder->body = "0.9.9\n";
         (new CoreUpdateCheckWorker($this->service(), LoggerFactory::get('hub'), 86400))->tick();
 
         $response = $this->router->dispatch($this->wireRequest('GET', self::STATUS_PATH, $token));

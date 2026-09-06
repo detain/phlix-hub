@@ -200,7 +200,7 @@ final class RelayProxyManagerTest extends TestCase
 
         // First send is the HELLO_ACK; the last is our HTTP_REQUEST frame.
         $this->assertNotEmpty($sent);
-        $frame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $frame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($frame);
         $this->assertSame(RelayFrameType::HTTP_REQUEST, $frame->type);
 
@@ -290,7 +290,7 @@ final class RelayProxyManagerTest extends TestCase
         // Sequence shape: exactly one HEAD, then N BODY, then exactly one END.
         $this->assertGreaterThanOrEqual(5, count($chunks)); // HEAD + 3 BODY + END
         $head = $chunks[0];
-        $end = $chunks[count($chunks) - 1];
+        $end = $chunks[count($chunks) === 0 ? 0 : count($chunks) - 1];
         $this->assertSame(RelayHttpRequestChunk::KIND_HEAD, $head->kind);
         $this->assertSame(RelayHttpRequestChunk::KIND_END, $end->kind);
 
@@ -374,7 +374,8 @@ final class RelayProxyManagerTest extends TestCase
             $overChunks[] = RelayHttpRequestCodec::decode($f->payload);
         }
         $this->assertSame(RelayHttpRequestChunk::KIND_HEAD, $overChunks[0]->kind);
-        $this->assertSame(RelayHttpRequestChunk::KIND_END, $overChunks[count($overChunks) - 1]->kind);
+        $endChunk = $overChunks[count($overChunks) === 0 ? 0 : count($overChunks) - 1];
+        $this->assertSame(RelayHttpRequestChunk::KIND_END, $endChunk->kind);
         $reassembled = '';
         for ($i = 1; $i < count($overChunks) - 1; $i++) {
             $this->assertSame(RelayHttpRequestChunk::KIND_BODY, $overChunks[$i]->kind);
@@ -468,7 +469,7 @@ final class RelayProxyManagerTest extends TestCase
         ]);
 
         // Recover the request id the manager allocated (the HTTP_REQUEST frame seq).
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -536,7 +537,7 @@ final class RelayProxyManagerTest extends TestCase
             'body_b64' => '',
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -719,7 +720,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -799,7 +800,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -862,7 +863,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -947,7 +948,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -1022,7 +1023,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -1125,7 +1126,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -1221,7 +1222,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -1294,7 +1295,7 @@ final class RelayProxyManagerTest extends TestCase
             'stream' => true,
         ]);
 
-        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertNotNull($reqFrame);
         $requestId = $reqFrame->seq;
 
@@ -2543,7 +2544,7 @@ final class RelayProxyManagerTest extends TestCase
      */
     private static function lastSentFrame(array $sent): RelayFrame
     {
-        $frame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $frame = (new FrameDecoder())->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         self::assertInstanceOf(
             RelayFrame::class,
             $frame,

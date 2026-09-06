@@ -38,7 +38,7 @@ final class RecordingVersionHttpClient extends Client
     }
 
     /**
-     * @param array<string, mixed> $options
+     * @param array<array-key, mixed> $options
      */
     public function request(string $url, array $options = []): mixed
     {

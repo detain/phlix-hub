@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — S306: `tests/` under PHPStan + Psalm with a paths-asserted scope gate
+
+- **PHPStan level 9 now analyses `src` + `scripts` + `tests` from one merged
+  `phpstan.neon.dist` (731 findings at intake → 0, no `ignoreErrors` entries —
+  the list is literally `[]` and the new `StaticAnalysisScopeTest` keeps it
+  that way), and Psalm's `psalm.xml` gained `<directory name="tests"/>` at a
+  measured `errorLevel="5"` (826 findings at level 1 → ladder recorded in the
+  config header; the 30 level-5 findings fixed honestly, including three real
+  undefined-`use`-variable bugs and a duplicate-`kid` JWT fixture). Scope is
+  asserted three ways — config `paths`/`projectFiles`, the CI steps' verbatim
+  command lines (no `--level`/`--config` escape hatches), and allow-listed
+  `excludePaths`/`ignoreFiles` carrying exactly one written-why entry (the
+  S332 cross-repo route-manifest dumper) — so silently shrinking coverage
+  reddens the suite, not just the analysis jobs. Test-side fixes preserve every
+  assertion (tautologies became `addToAssertionCount`, decoded-JSON access goes
+  through the new `DecodedJsonAssertions` trait, inline doubles were named).
+
 ### Changed — cs#22 currency cascade: route-snapshot re-pin to server `8a90e20e` (2026-09-06)
 
 - **The hub route snapshot follows server master `e729d48a` → `8a90e20e`.**

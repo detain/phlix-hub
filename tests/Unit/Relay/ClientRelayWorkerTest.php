@@ -31,6 +31,7 @@ use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\Relay\RecordingMountLimiter;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
+use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Container\ContainerInterface;
@@ -639,8 +640,10 @@ final class ClientRelayWorkerTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use (&$delivered): bool {
+                if (!is_string($data)) {
+                    Assert::fail('the relay must only send string frames to the client');
+                }
                 $delivered++;
-                unset($data);
                 return true;
             },
         );
@@ -718,8 +721,10 @@ final class ClientRelayWorkerTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use (&$delivered): bool {
+                if (!is_string($data)) {
+                    Assert::fail('the relay must only send string frames to the client');
+                }
                 $delivered++;
-                unset($data);
                 return true;
             },
         );

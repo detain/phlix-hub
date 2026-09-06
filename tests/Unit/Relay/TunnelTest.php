@@ -389,7 +389,7 @@ class TunnelTest extends TestCase
         $this->assertNotEmpty($sent);
 
         // The LAST frame sent is the CLIENT_DISCONNECT, tagged with the channel id.
-        $decoded = $this->codec->decode($sent[count($sent) - 1]);
+        $decoded = $this->codec->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertInstanceOf(RelayFrame::class, $decoded);
         $this->assertSame(RelayFrameType::CLIENT_DISCONNECT, $decoded->type);
         $this->assertSame($channelId, $decoded->channelId());
@@ -602,7 +602,7 @@ class TunnelTest extends TestCase
         $tunnel->sendClientData($client, $clientFrame);
 
         // Last frame sent to the server is the tagged DATA frame.
-        $decoded = $this->codec->decode($sent[count($sent) - 1]);
+        $decoded = $this->codec->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertInstanceOf(RelayFrame::class, $decoded);
         $this->assertSame(RelayFrameType::DATA, $decoded->type);
         $this->assertSame($client->channelId, $decoded->channelId());
@@ -1116,7 +1116,7 @@ class TunnelTest extends TestCase
 
         // AC (a): the previously-failing body frame is delivered byte-exact.
         $this->assertCount($sentBeforeBody + 1, $sent);
-        $decoded = $this->codec->decode($sent[count($sent) - 1]);
+        $decoded = $this->codec->decode($sent[count($sent) === 0 ? 0 : count($sent) - 1]);
         $this->assertInstanceOf(RelayFrame::class, $decoded);
         $this->assertSame(RelayFrameType::HTTP_REQUEST, $decoded->type);
         $this->assertSame($bodyPayload, $decoded->payload);
@@ -1631,7 +1631,7 @@ class TunnelTest extends TestCase
         $tunnel->sendToServer(new RelayFrame(RelayFrameType::HTTP_REQUEST, $channelB, $bPayload));
 
         // Nothing on the wire yet — all queued behind the full buffer, none dropped.
-        $this->assertSame([], $sent, 'all frames queued while congested, none dropped');
+        $this->assertCount(0, $sent, 'all frames queued while congested, none dropped');
 
         // Buffer drains — the tunnel flushes the per-channel body queues round-robin.
         $this->assertIsCallable($this->serverWs->onBufferDrain);
@@ -2023,14 +2023,14 @@ class TunnelTest extends TestCase
             public array $cancelled = [];
             private int $nextId = 900;
 
-            /** @param array<int, mixed> $args */
+            /** @param array<array-key, mixed> $args */
             public function delay(float $delay, callable $func, array $args = []): int
             {
                 $this->delays[] = $delay;
                 return ++$this->nextId;
             }
 
-            /** @param array<int, mixed> $args */
+            /** @param array<array-key, mixed> $args */
             public function repeat(float $interval, callable $func, array $args = []): int
             {
                 $this->repeats[] = $interval;
