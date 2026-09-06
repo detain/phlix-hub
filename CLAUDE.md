@@ -12,7 +12,8 @@ php bin/phlix smoke:jwt                        # JwtHandler<->JwtClaims roundtri
 php bin/phlix oauth:client:register             # OAuth client admin (also oauth:client:list / oauth:client:disable)
 ./vendor/bin/phpunit                           # tests (PHPUnit 10) — testsuites Unit, Integration, E2E
 ./vendor/bin/phpstan analyze --no-progress     # level 9, no baseline
-./vendor/bin/psalm --no-progress               # errorLevel 1
+./vendor/bin/psalm --no-progress               # psalm.xml: src+scripts @ errorLevel 1, no baseline (S444)
+./vendor/bin/psalm --no-progress --config=psalm-tests.xml  # psalm-tests.xml: tests/ @ measured errorLevel 5
 php scripts/assert-phpcs-corpus.php            # S299: PSR-12 over src+scripts+tests, with an asserted file count
 ```
 

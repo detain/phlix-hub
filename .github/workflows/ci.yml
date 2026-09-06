@@ -175,8 +175,20 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
-      - name: Run Psalm
+      # S444 — two psalm analyses, two configs, each failing this job on its
+      # own. psalm errorLevel is per-config (psalm 6.x has no per-directory
+      # level), so S306's single widened config had relaxed src/scripts from
+      # their pre-S306 L1-clean pin down to L5. psalm.xml restores the
+      # production corpus at L1; psalm-tests.xml keeps tests/ at the measured
+      # L5. The steps are pinned VERBATIM by
+      # tests/Unit/Support/StaticAnalysisScopeTest.php — note the tests step
+      # carries --config=psalm-tests.xml as the scope itself; silently
+      # repointing or dropping either step reddens the suite, not just CI.
+      - name: Run Psalm (src + scripts at L1)
         run: ./vendor/bin/psalm --no-progress --show-info=false
+
+      - name: Run Psalm (tests at L5)
+        run: ./vendor/bin/psalm --no-progress --show-info=false --config=psalm-tests.xml
 
   phpunit:
     name: PHPUnit Test Suite
