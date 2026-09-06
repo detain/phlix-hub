@@ -215,7 +215,7 @@ final class ServerReaperTest extends TestCase
         $logger = $this->createMock(StructuredLogger::class);
 
         $db->method('query')->willReturnCallback(
-            function (string $sql, $params = null): int|array {
+            function (string $sql, $params = null): array {
                 if (str_starts_with(ltrim($sql), 'SELECT')) {
                     return [['id' => 'aaa']];
                 }

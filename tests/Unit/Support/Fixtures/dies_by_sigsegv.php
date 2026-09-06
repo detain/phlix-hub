@@ -20,7 +20,13 @@ echo "marker=ok\n";
 flush();
 fflush(STDOUT);
 
-posix_kill(getmypid(), 11 /* SIGSEGV */);
+$pid = getmypid();
+if (!is_int($pid)) {
+    // Without a pid we cannot self-segfault; exit non-zero so the parent's
+    // "must die by signal" assertion fails loudly instead of silently.
+    exit(1);
+}
+posix_kill($pid, 11 /* SIGSEGV */);
 
 // Not reached: SIGSEGV's default disposition terminates the process.
 exit(0);

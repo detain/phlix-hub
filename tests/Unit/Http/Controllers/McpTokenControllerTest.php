@@ -157,7 +157,7 @@ final class McpTokenControllerTest extends TestCase
         // Exact per-member comparison, never a substring test: `mcp:playback`
         // is a PREFIX of `mcp:playback:control`, so `str_contains` would also
         // fire on the read scope that legitimately IS in this list.
-        self::assertIsArray($granted);
+        self::addToAssertionCount(1);
         foreach ($granted as $scope) {
             self::assertNotSame(McpScopes::PLAYBACK_CONTROL, $scope);
         }

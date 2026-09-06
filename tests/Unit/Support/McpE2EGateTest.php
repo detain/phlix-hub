@@ -59,6 +59,8 @@ final class McpE2EGateTest extends TestCase
     /**
      * Run a script and capture exit code, stdout and stderr together.
      *
+     * @param list<string> $args
+     *
      * @return array{exit: int, output: string}
      */
     private function runScript(string $script, array $args = []): array

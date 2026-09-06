@@ -150,7 +150,7 @@ final class McpTokenServiceTest extends TestCase
     }
 
     /**
-     * @return list<array{0: mixed}>
+     * @return array<string, array{0: mixed}>
      */
     public static function unusableRowProvider(): array
     {

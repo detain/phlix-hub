@@ -31,6 +31,7 @@ final class DeregisterHandlerTest extends TestCase
     {
         parent::tearDown();
         $files = glob($this->tmpDir . '/*');
+        self::assertIsArray($files);
         foreach ($files as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -60,7 +61,7 @@ final class DeregisterHandlerTest extends TestCase
 
         $token = $jwtService->createEnrollmentJwt($serverId);
         $handler->handle($serverId, $token);
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     public function testDeregisterThrowsOnInvalidToken(): void

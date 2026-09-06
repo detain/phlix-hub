@@ -146,6 +146,9 @@ class SubdomainControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
     }
 
+    /**
+     * @param array<string, mixed> $body
+     */
     private function createRequest(string $method, array $body, ?string $authHeader): Request
     {
         $request = new Request();

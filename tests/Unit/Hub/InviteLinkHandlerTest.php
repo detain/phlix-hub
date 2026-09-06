@@ -181,7 +181,7 @@ final class InviteLinkHandlerTest extends TestCase
         });
 
         $this->handler->revokeInviteLink('owner-1', 'link-1');
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     public function testRevokeInviteLinkNotFoundThrows(): void

@@ -256,15 +256,15 @@ final class ClientRelayTokenServiceTest extends TestCase
             function (string $sql) use (&$survivors, $now, $day): int {
                 // Extract the operator that joins the two predicates so a
                 // regression back to AND is evaluated as AND (and thus caught).
-                $this->assertSame(
-                    1,
+                if (
                     preg_match(
                         '/INTERVAL\s+1\s+DAY\s+(AND|OR)\s+revoked_at\s+IS\s+NOT\s+NULL/i',
                         $sql,
                         $operator,
-                    ),
-                    'prune SQL must join the expiry and revoked predicates with a single AND/OR',
-                );
+                    ) !== 1
+                ) {
+                    self::fail('prune SQL must join the expiry and revoked predicates with a single AND/OR');
+                }
                 $usesOr    = strtoupper($operator[1]) === 'OR';
                 $threshold = $now - $day; // NOW() - INTERVAL 1 DAY
 

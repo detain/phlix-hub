@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Http;
 
 use Phlix\Hub\Http\ConnectionResponseSink;
 use Phlix\Hub\Relay\TokenBucket;
+use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\TestCase;
 use Swoole\Coroutine;
 use Workerman\Connection\TcpConnection;
@@ -132,6 +133,7 @@ final class ConnectionResponseSinkThrottleLoadTest extends TestCase
      */
     private const int CHILD_BUDGET_SECONDS = 120;
 
+    /** @var class-string<\Workerman\Events\EventInterface>|null */
     private ?string $previousEventLoopClass = null;
 
     protected function setUp(): void
@@ -432,7 +434,12 @@ final class ConnectionResponseSinkThrottleLoadTest extends TestCase
 
             public function send(mixed $sendBuffer, bool $raw = false): bool
             {
-                $this->bytes += strlen((string) $sendBuffer);
+                if (!is_string($sendBuffer)) {
+                    // Inside the anonymous connection double `self` is the double,
+                    // not the TestCase — call Assert directly.
+                    Assert::fail('the sink must only be sent string frames');
+                }
+                $this->bytes += strlen($sendBuffer);
 
                 return true;
             }

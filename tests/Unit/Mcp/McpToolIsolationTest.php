@@ -182,7 +182,6 @@ final class McpToolIsolationTest extends TestCase
         $matched = preg_match_all("/'(\\/[^']*)'/", $code, $matches);
         self::assertNotFalse($matched);
 
-        /** @var list<string> $literals */
         $literals = $matches[1];
 
         if ($literals === []) {

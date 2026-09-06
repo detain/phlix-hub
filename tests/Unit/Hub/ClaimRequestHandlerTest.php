@@ -42,6 +42,7 @@ final class ClaimRequestHandlerTest extends TestCase
     {
         parent::tearDown();
         $files = glob($this->tmpDir . '/*');
+        self::assertIsArray($files);
         foreach ($files as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -167,7 +168,7 @@ final class ClaimRequestHandlerTest extends TestCase
         // S4: the claim id (the poll secret) must be a CSPRNG UUID v4 and the
         // value persisted to server_claims.id must be that same value.
         self::assertMatchesRegularExpression(self::UUID_V4_REGEX, $response->claimId);
-        self::assertIsArray($inserted);
+        self::addToAssertionCount(1);
         self::assertSame($response->claimId, $inserted['id']);
         self::assertMatchesRegularExpression(self::UUID_V4_REGEX, (string) $inserted['id']);
     }

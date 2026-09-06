@@ -113,6 +113,7 @@ final class RelayProxyManagerWiringTest extends TestCase
         $c = $this->buildContainer();
 
         $proxyManager = $c->get(RelayProxyManager::class);
+        self::assertInstanceOf(RelayProxyManager::class, $proxyManager);
         $prop = new ReflectionProperty(RelayProxyManager::class, 'metrics');
         $prop->setAccessible(true);
         $proxyCollector = $prop->getValue($proxyManager);

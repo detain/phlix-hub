@@ -117,6 +117,23 @@ abstract class RealDatabaseTestCase extends TestCase
         $this->ensureMigratedSchema();
     }
 
+    /**
+     * Printable form of one cell from the emptiness probe (name column is a
+     * string, count column an int — anything else means the probe query changed).
+     */
+    private static function scalarCell(mixed $cell): string
+    {
+        if (is_string($cell)) {
+            return $cell;
+        }
+
+        if (is_int($cell)) {
+            return (string) $cell;
+        }
+
+        self::fail('unexpected cell type in leakage probe: ' . get_debug_type($cell));
+    }
+
     protected function tearDown(): void
     {
         if (isset($this->db)) {
@@ -203,7 +220,7 @@ abstract class RealDatabaseTestCase extends TestCase
         $leaked = [];
         foreach ((array) $rows as $row) {
             if (is_array($row)) {
-                $leaked[] = (string) ($row['tbl'] ?? '?') . '=' . (string) ($row['rows_left'] ?? '?');
+                $leaked[] = self::scalarCell($row['tbl'] ?? '?') . '=' . self::scalarCell($row['rows_left'] ?? '?');
             }
         }
 

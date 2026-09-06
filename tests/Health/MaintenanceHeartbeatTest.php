@@ -290,7 +290,9 @@ final class MaintenanceHeartbeatTest extends TestCase
 
         $paths = [];
         for ($i = 0; $i < 8; $i++) {
-            $paths[] = (string) $method->invoke($hb);
+            $path = $method->invoke($hb);
+            self::assertIsString($path, 'tempPath() must return the record path as a string');
+            $paths[] = $path;
         }
 
         self::assertCount(8, array_unique($paths), 'a shared temp name is what corrupted the record');

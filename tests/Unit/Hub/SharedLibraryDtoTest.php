@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Hub;
 
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Hub\SharedLibraryDto;
@@ -15,6 +16,8 @@ use Phlix\Hub\Hub\SharedLibraryDto;
  */
 final class SharedLibraryDtoTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     public function testCanWriteReturnsTrueForReadwrite(): void
     {
         $dto = new SharedLibraryDto(
@@ -79,7 +82,7 @@ final class SharedLibraryDtoTest extends TestCase
         self::assertSame('My Movies', $payload['library_name']);
         self::assertSame(42, $payload['library_item_count']);
         self::assertSame('read', $payload['permission_level']);
-        self::assertCount(2, $payload['access_urls']);
+        self::assertCount(2, self::arrayNode($payload['access_urls']));
         self::assertSame(1700086400, $payload['expires_at']);
         // The SPA's "Received" column reads `created_at`; it must be on the wire as
         // UNIX seconds (same encoding as `expires_at`), not omitted.

@@ -23,6 +23,7 @@ use Phlix\Hub\Tests\Support\Alexa\AlexaEnvelopeHonesty;
 use Phlix\Hub\Tests\Support\SyncPlay\RecordingPendingCommandPusher;
 use Phlix\Shared\Hub\ServerInfoDto;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 
 use function json_decode;
@@ -70,6 +71,8 @@ use function str_replace;
  */
 final class AlexaPlayInAppIntentTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private const SECRET = 'S93-alexa-play-in-app-intent-secret-0123456789';
 
     private const USER_ID = 'user-linked-1';
@@ -720,8 +723,9 @@ final class AlexaPlayInAppIntentTest extends TestCase
      */
     private static function speechOf(array $envelope): string
     {
-        /** @var mixed $text */
-        $text = $envelope['response']['outputSpeech']['text'] ?? null;
+        $responseNode = self::arrayNode($envelope['response'] ?? []);
+        $speechNode = self::arrayNode($responseNode['outputSpeech'] ?? []);
+        $text = $speechNode['text'] ?? null;
         self::assertIsString($text, 'the envelope carries no spoken text');
 
         return $text;

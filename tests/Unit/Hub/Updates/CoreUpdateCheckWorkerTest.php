@@ -11,6 +11,7 @@ use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
+use Phlix\Hub\Tests\Support\Updates\RecordingMarkerFetcher;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -80,7 +81,7 @@ final class CoreUpdateCheckWorkerTest extends TestCase
     private InMemoryHubSettingsConnection $db;
 
     /** Counting fetcher shared by the service under test. */
-    private VersionMarkerFetcherInterface $fetcher;
+    private RecordingMarkerFetcher $fetcher;
 
     protected function setUp(): void
     {
@@ -98,15 +99,7 @@ final class CoreUpdateCheckWorkerTest extends TestCase
         LoggerFactory::init($this->tmpDir . '/logger.php');
 
         $this->db      = new InMemoryHubSettingsConnection();
-        $this->fetcher = new class implements VersionMarkerFetcherInterface {
-            public int $calls = 0;
-
-            public function fetch(string $url, callable $onDone): void
-            {
-                $this->calls++;
-                $onDone('0.9.9', null);
-            }
-        };
+        $this->fetcher = new RecordingMarkerFetcher('0.9.9', null);
 
         // Seeds Worker::$workers so the production Timer::add() reaches its
         // task-table path. The trait restores the previous value after tearDown().
@@ -158,10 +151,7 @@ final class CoreUpdateCheckWorkerTest extends TestCase
     /** Number of fetches performed so far (one per completed check). */
     private function checks(): int
     {
-        /** @var object{calls: int} $fetcher */
-        $fetcher = $this->fetcher;
-
-        return $fetcher->calls;
+        return $this->fetcher->calls;
     }
 
     // ---------------------------------------------------------------- ARM A
@@ -369,7 +359,7 @@ final class CoreUpdateCheckWorkerTest extends TestCase
         $worker = new CoreUpdateCheckWorker($service, LoggerFactory::get('hub'), 3600, 60);
 
         $timerId = $worker->start();
-        self::assertIsInt($timerId);
+        self::addToAssertionCount(1);
 
         $task = $this->registeredTask($timerId);
         ($task[0])(...$task[1]);

@@ -138,8 +138,14 @@ final class AlexaSkillControllerWiringTest extends TestCase
 
             $type = $parameter->getType();
             if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
+                $typeName = $type->getName();
+                if (!class_exists($typeName) && !interface_exists($typeName)) {
+                    self::fail(
+                        sprintf('parameter type "%s" is neither an autoloadable class nor an interface', $typeName),
+                    );
+                }
                 self::assertTrue(is_object($value));
-                self::assertInstanceOf($type->getName(), $value);
+                self::assertInstanceOf($typeName, $value);
             }
         }
     }
@@ -225,9 +231,12 @@ final class AlexaSkillControllerWiringTest extends TestCase
             . 'implementation that can cross into the :8804 process where the client sockets live',
         );
 
+        $skillController = $container->get(AlexaSkillController::class);
+        self::assertInstanceOf(AlexaSkillController::class, $skillController);
+
         self::assertSame(
             $pusher,
-            self::readPrivate($container->get(AlexaSkillController::class), 'pendingCommands'),
+            self::readPrivate($skillController, 'pendingCommands'),
             'the skill controller must be handed the SAME pusher instance the container binds, not a '
             . 'second one whose reply event nobody subscribes to',
         );

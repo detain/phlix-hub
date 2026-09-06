@@ -21,6 +21,7 @@ use Workerman\MySQL\Connection;
 final class MetricsFlushServiceTest extends TestCase
 {
     use DecodedJsonAssertions;
+
     /**
      * @var array<int, array{sql: string, params: array<string, mixed>}>
      */

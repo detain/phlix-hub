@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Http\Middleware;
 
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Alexa\AlexaAccountLink;
 use Phlix\Hub\Alexa\AlexaPhrases;
 use Phlix\Hub\Alexa\AuditLogAlexaRejectionAuditor;
@@ -87,6 +88,8 @@ use function str_repeat;
  */
 final class AlexaSignatureRateLimitAndAuditTest extends RouteRegistrationTestCase
 {
+    use DecodedJsonAssertions;
+
     private const VALID_URL = 'https://s3.amazonaws.com/echo.api/echo-api-cert-12.pem';
 
     /** The HAProxy-shaped front the hub sits behind in these tests. */
@@ -479,9 +482,11 @@ final class AlexaSignatureRateLimitAndAuditTest extends RouteRegistrationTestCas
 
         $envelope = self::decode($accepted);
         self::assertSame('1.0', $envelope['version'] ?? null);
+        $responseNode = self::arrayNode($envelope['response'] ?? []);
+        $speechNode = self::arrayNode($responseNode['outputSpeech'] ?? []);
         self::assertSame(
             AlexaPhrases::CAPABILITY,
-            $envelope['response']['outputSpeech']['text'] ?? null,
+            $speechNode['text'] ?? null,
             'the accepted request must have reached AlexaSkillController, not merely passed the gate',
         );
     }

@@ -187,7 +187,7 @@ final class LibrarySharingHandlerTest extends TestCase
         });
 
         $this->handler->revokeShare('owner-1', 'share-1');
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     public function testRevokeShareThrowsWhenShareNotFound(): void
@@ -400,6 +400,6 @@ final class LibrarySharingHandlerTest extends TestCase
         });
 
         $this->handler->updateSharePermission('owner-1', 'share-1', LibraryShare::PERMISSION_READWRITE);
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 }

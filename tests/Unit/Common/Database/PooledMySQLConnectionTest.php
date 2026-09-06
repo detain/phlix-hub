@@ -176,9 +176,11 @@ final class PooledMySQLConnectionTest extends TestCase
         $out = $this->runHarness('distinct');
 
         self::assertMatchesRegularExpression('/^idxA=(\d+)$/m', $out, "harness output:\n{$out}");
-        preg_match('/^idxA=(\d+)$/m', $out, $a);
+        if (preg_match('/^idxA=(\d+)$/m', $out, $a) !== 1) {
+            self::fail("harness output:\n{$out}");
+        }
         preg_match('/^idxB=(\d+)$/m', $out, $b);
-        self::assertNotSame('', $a[1] ?? '', "harness output:\n{$out}");
+        self::assertNotSame('', $a[1], "harness output:\n{$out}");
         self::assertNotSame(
             $a[1],
             $b[1] ?? '',

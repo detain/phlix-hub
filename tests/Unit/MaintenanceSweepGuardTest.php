@@ -158,7 +158,7 @@ final class MaintenanceSweepGuardTest extends TestCase
 
         $reaper->runDbMaintenanceGuarded(null);
 
-        self::assertTrue(true, 'reached without a rethrow');
+        self::addToAssertionCount(1); // reached without a rethrow
     }
 
     // -----------------------------------------------------------------------
@@ -284,7 +284,7 @@ final class MaintenanceSweepGuardTest extends TestCase
             $this->createMock(StructuredLogger::class),
         );
 
-        self::assertTrue(true, 'reached without a rethrow');
+        self::addToAssertionCount(1); // reached without a rethrow
     }
 
     /**

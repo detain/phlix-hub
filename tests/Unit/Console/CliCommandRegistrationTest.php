@@ -125,10 +125,7 @@ final class CliCommandRegistrationTest extends TestCase
         $lines = [];
         exec($command, $lines, $exitCode);
 
-        $output = implode("\n", array_map(
-            static fn (mixed $line): string => is_string($line) ? $line : '',
-            $lines,
-        ));
+        $output = implode("\n", $lines);
 
         self::assertSame(0, $exitCode, 'bin/phlix ' . $args . ' exited ' . $exitCode . ":\n" . $output);
 
