@@ -26,6 +26,20 @@ use PHPUnit\Framework\TestCase;
  * is recorded in phpstan.neon.dist's header: the hub's CI step passes no path
  * or level on the command line, so the config IS the scope, and level 9 over
  * tests/ was reached with zero findings and zero mutes.
+ *
+ * S444 extended that discipline to the Psalm split. S306 had widened the one
+ * psalm.xml to cover tests/ and pinned its shared errorLevel to 5 — silently
+ * relaxing src/ and scripts/, which had held a clean level 1 for years, down
+ * to level 5. Psalm 6.x has no per-directory errorLevel (the pre-Psalm-3
+ * <levels> element is absent from vendor/vimeo/psalm/config.xsd — verified by
+ * schema inspection), so strictness now splits the way the server splits its
+ * phpstan/phpstan-tests.neon pair: psalm.xml (src + scripts @ L1) and
+ * psalm-tests.xml (tests/ @ L5), each run by its own CI step. The tests step
+ * legitimately carries `--config=psalm-tests.xml` — the scope itself, not an
+ * override — so the escape-hatch ban list keeps `--error-level` and the
+ * soft-fail idioms, while BOTH command lines are additionally pinned
+ * verbatim: silently repointing the tests step back at psalm.xml (analysing
+ * production twice, tests zero times) reddens the exact-string pin.
  */
 final class StaticAnalysisScopeTest extends TestCase
 {
@@ -36,6 +50,12 @@ final class StaticAnalysisScopeTest extends TestCase
      */
     public const SURVIVAL_TOKEN = 'S306HUBANALYSISX9K4';
 
+    /**
+     * S444 lane survival token — code-resident by design, same policy as the
+     * S306 token above (which it deliberately leaves untouched).
+     */
+    public const SURVIVAL_TOKEN_S444 = 'S444PSALML1X2Q8';
+
     private const REPO = __DIR__ . '/../../..';
 
     private const WORKFLOW = self::REPO . '/.github/workflows/ci.yml';
@@ -44,9 +64,13 @@ final class StaticAnalysisScopeTest extends TestCase
 
     private const PSALM_CONFIG = self::REPO . '/psalm.xml';
 
+    private const PSALM_TESTS_CONFIG = self::REPO . '/psalm-tests.xml';
+
     /**
      * The single analysis corpus that genuinely cannot be analysed inside this
-     * repository (S332 cross-repo dumper — see the written why in BOTH configs).
+     * repository (S332 cross-repo dumper — since S444 the written-why lives in
+     * the two configs that actually cover tests/: phpstan.neon.dist and
+     * psalm-tests.xml; psalm.xml no longer analyses the test tree at all).
      */
     private const EXCLUDED_DUMPER = 'tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php';
 
@@ -56,9 +80,18 @@ final class StaticAnalysisScopeTest extends TestCase
         self::assertMatchesRegularExpression('/^[A-Z0-9]{16,32}$/', self::SURVIVAL_TOKEN);
     }
 
+    public function testTheS444TokenIsResidentAndIntact(): void
+    {
+        self::assertSame('S444PSALML1X2Q8', self::SURVIVAL_TOKEN_S444);
+        // {15,32}: the S444 lane token is fixed by the plan at 15 chars — one shy
+        // of S306's 16 — so the charset/format check widens accordingly.
+        self::assertMatchesRegularExpression('/^[A-Z0-9]{15,32}$/', self::SURVIVAL_TOKEN_S444);
+        self::assertNotSame(self::SURVIVAL_TOKEN, self::SURVIVAL_TOKEN_S444, 'the lanes carry distinct tokens');
+    }
+
     public function testTheAnalysisConfigsAndWorkflowAreReadable(): void
     {
-        foreach ([self::WORKFLOW, self::PHPSTAN_CONFIG, self::PSALM_CONFIG] as $path) {
+        foreach ([self::WORKFLOW, self::PHPSTAN_CONFIG, self::PSALM_CONFIG, self::PSALM_TESTS_CONFIG] as $path) {
             self::assertIsString(file_get_contents($path), "{$path} must be readable");
         }
     }
@@ -176,15 +209,15 @@ final class StaticAnalysisScopeTest extends TestCase
 
     // ----------------------------------------------------------------- Psalm
 
-    public function testCiPsalmStepRunsTheShippedConfigWithNoCliOverrides(): void
+    public function testCiPsalmProductionStepRunsPsalmXmlWithNoCliOverrides(): void
     {
-        $run = $this->runStep('Run Psalm');
+        $run = $this->runStep('Run Psalm (src + scripts at L1)');
 
         self::assertSame(
             './vendor/bin/psalm --no-progress --show-info=false',
             trim($run),
-            'the CI step is pinned verbatim: --error-level or --config on the CLI would '
-            . 'let the shipped, measured level drift away from what CI runs',
+            'the production step is pinned verbatim and must keep resolving psalm.xml by default: '
+            . '--error-level or --config on this CLI would let the shipped L1 pin drift away from what CI runs',
         );
 
         foreach (['--error-level', '--config', '|| true', '|| exit 0', '; true'] as $escape) {
@@ -196,43 +229,115 @@ final class StaticAnalysisScopeTest extends TestCase
         }
     }
 
-    public function testPsalmConfigCoversTheCorpusAtTheMeasuredLevel(): void
+    public function testCiPsalmTestsStepRunsPsalmTestsXmlVerbatim(): void
+    {
+        $run = $this->runStep('Run Psalm (tests at L5)');
+
+        self::assertSame(
+            './vendor/bin/psalm --no-progress --show-info=false --config=psalm-tests.xml',
+            trim($run),
+            'the tests step is pinned verbatim: the ONLY sanctioned --config here names the second shipped '
+            . 'config itself. Dropping it silently re-runs psalm.xml (production twice, tests never); '
+            . 'pointing it anywhere else escapes the measured scope',
+        );
+
+        self::assertSame(
+            1,
+            substr_count($run, '--config'),
+            'exactly one --config, and it is psalm-tests.xml — chaining overrides would let the last one win',
+        );
+
+        foreach (['--error-level', '|| true', '|| exit 0', '; true'] as $escape) {
+            self::assertStringNotContainsString(
+                $escape,
+                $run,
+                "a CLI {$escape} overrides or neuters the shipped config",
+            );
+        }
+    }
+
+    public function testMainPsalmConfigAnalysesSrcAndScriptsAtLevelOne(): void
     {
         $config = $this->contents(self::PSALM_CONFIG);
 
         self::assertMatchesRegularExpression(
-            '/errorLevel="5"/',
+            '/errorLevel="1"/',
             $config,
-            'level 5 is the measured, documented pin (ladder in the config header); '
-            . 'raising strictness further must update the pin, not mute it',
+            'S444 restored the production corpus to the level 1 src/ and scripts/ held clean before '
+            . "S306's widened single-config pin; relaxing it again must update this gate, not mute it",
         );
 
         $projectFiles = $this->xmlBlock($config, 'projectFiles');
 
         self::assertSame(
-            ['src', 'scripts', 'tests'],
+            ['src', 'scripts'],
             $this->xmlDirectoryNames($projectFiles),
-            'dropping the tests directory from psalm.xml must redden the suite, not just lose coverage silently',
+            'dropping src or scripts from psalm.xml must redden the suite, not just lose coverage silently',
+        );
+
+        self::assertSame(
+            [],
+            $this->xmlFileNames($projectFiles),
+            'the production config carries zero <file> exclusions — the documented dumper lives under tests/ '
+            . 'and belongs to psalm-tests.xml; anything added here is a new mute',
+        );
+    }
+
+    public function testPsalmTestsConfigAnalysesTestsAtMeasuredLevelFive(): void
+    {
+        $config = $this->contents(self::PSALM_TESTS_CONFIG);
+
+        self::assertMatchesRegularExpression(
+            '/errorLevel="5"/',
+            $config,
+            'level 5 remains the measured, documented pin for tests/ (ladder in this config header); '
+            . 'raising strictness further must update the pin and the evidence, not mute it',
+        );
+
+        $projectFiles = $this->xmlBlock($config, 'projectFiles');
+
+        self::assertSame(
+            ['tests'],
+            $this->xmlDirectoryNames($projectFiles),
+            'dropping the tests directory from psalm-tests.xml must redden the suite, not just lose coverage silently',
         );
 
         self::assertSame(
             [self::EXCLUDED_DUMPER],
             $this->xmlFileNames($projectFiles),
-            'the psalm ignoreFiles list is an allow-list with exactly one written-why entry',
+            'the tests-config ignoreFiles list is an allow-list with exactly one written-why entry',
         );
     }
 
-    public function testPsalmHasNoIssueHandlerAndNoBaseline(): void
+    public function testThePsalmExclusionAllowListIsTheUnionAcrossBothConfigs(): void
     {
-        // Comments excluded: the config's own prose quotes the element name it forbids.
-        $config = (string) preg_replace('/<!--.*?-->|<\?.*?\?>/s', '', $this->contents(self::PSALM_CONFIG), -1);
-
-        self::assertStringNotContainsString(
-            '<IssueHandler',
-            $config,
-            'a per-issue-type suppress block is the psalm equivalent of a mute list — '
-            . 'fix test code at the source (S306 policy)',
+        $excluded = array_merge(
+            $this->xmlFileNames($this->xmlBlock($this->contents(self::PSALM_CONFIG), 'projectFiles')),
+            $this->xmlFileNames($this->xmlBlock($this->contents(self::PSALM_TESTS_CONFIG), 'projectFiles')),
         );
+        sort($excluded);
+
+        self::assertSame(
+            [self::EXCLUDED_DUMPER],
+            $excluded,
+            'the combined psalm exclusion corpus is exactly one written-why entry — smuggling a second mute into '
+            . 'either config, or hopping one between configs, reddens this union assertion',
+        );
+    }
+
+    public function testNeitherPsalmConfigHasAnIssueHandlerAndNoBaselineExists(): void
+    {
+        foreach ([self::PSALM_CONFIG, self::PSALM_TESTS_CONFIG] as $path) {
+            // Comments excluded: the configs' own prose quotes the element name they forbid.
+            $bare = (string) preg_replace('/<!--.*?-->|<\?.*?\?>/s', '', $this->contents($path), -1);
+
+            self::assertStringNotContainsString(
+                '<IssueHandler',
+                $bare,
+                "a per-issue-type suppress block in {$path} is the psalm equivalent of a mute list — "
+                . 'fix code at the source (S306 policy, carried through the S444 split)',
+            );
+        }
 
         self::assertFileDoesNotExist(
             self::REPO . '/psalm-baseline.xml',
@@ -240,9 +345,9 @@ final class StaticAnalysisScopeTest extends TestCase
         );
     }
 
-    public function testTheLadderEvidenceStaysInThePsalmConfig(): void
+    public function testTheLadderEvidenceStaysInThePsalmTestsConfig(): void
     {
-        $config = $this->contents(self::PSALM_CONFIG);
+        $config = $this->contents(self::PSALM_TESTS_CONFIG);
 
         foreach (
             [
@@ -253,9 +358,72 @@ final class StaticAnalysisScopeTest extends TestCase
             self::assertStringContainsString(
                 $measurement,
                 $config,
-                "the measured ladder evidence '{$measurement}' was edited out — "
+                "the measured ladder evidence '{$measurement}' was edited out of psalm-tests.xml — "
                 . 're-measure and record honestly instead of deleting the proof',
             );
+        }
+    }
+
+    public function testSilentlyDroppingEitherConfigOrPathReddensTheGate(): void
+    {
+        // S444 negative fuzz, executed in-suite: each mutant below is exactly one
+        // member of the silent-regression class this gate exists for, applied to
+        // the shipped text in memory. The parsers MUST falsify on every mutant —
+        // an assertion that cannot fail is the S146 theatre this test replaces.
+        $main = $this->contents(self::PSALM_CONFIG);
+        $tests = $this->contents(self::PSALM_TESTS_CONFIG);
+        $workflow = $this->contents(self::WORKFLOW);
+
+        $mutant = str_replace('<directory name="scripts"/>', '', $main);
+        self::assertNotSame($main, $mutant, 'the scripts-directory mutant must actually bite the text');
+        self::assertNotSame(
+            ['src', 'scripts'],
+            $this->xmlDirectoryNames($this->xmlBlock($mutant, 'projectFiles')),
+            'dropping scripts/ from psalm.xml would go unnoticed — the corpus pin is a paper tiger',
+        );
+
+        $mutant = str_replace('<directory name="tests"/>', '', $tests);
+        self::assertNotSame($tests, $mutant, 'the tests-directory mutant must actually bite the text');
+        self::assertNotSame(
+            ['tests'],
+            $this->xmlDirectoryNames($this->xmlBlock($mutant, 'projectFiles')),
+            'dropping tests/ from psalm-tests.xml would go unnoticed — the corpus pin is a paper tiger',
+        );
+
+        $mutant = str_replace('<file name="' . self::EXCLUDED_DUMPER . '"/>', '', $tests);
+        self::assertNotSame($tests, $mutant, 'the dumper-exclusion mutant must actually bite the text');
+        self::assertNotSame(
+            [self::EXCLUDED_DUMPER],
+            $this->xmlFileNames($this->xmlBlock($mutant, 'projectFiles')),
+            'deleting the allow-list entry would go unnoticed — the exclusion pin is a paper tiger',
+        );
+
+        // Silently repointing the tests step back at psalm.xml keeps a valid
+        // command and the step name — only the verbatim pin sees it.
+        $mutant = str_replace('--config=psalm-tests.xml', '', $workflow);
+        self::assertNotSame($workflow, $mutant, 'the repoint mutant must actually bite the workflow');
+        self::assertNotSame(
+            './vendor/bin/psalm --no-progress --show-info=false --config=psalm-tests.xml',
+            trim($this->runStep('Run Psalm (tests at L5)', $mutant)),
+            'a tests step stripped of its config would silently re-analyse production twice — '
+            . 'the exact-string pin must catch it',
+        );
+
+        // Deleting the whole step must make lookup fail outright, not fall back
+        // to the surviving production step.
+        $mutant = (string) preg_replace(
+            '/^      - name: Run Psalm \(tests at L5\)\n        run: .*$\n/m',
+            '',
+            $workflow,
+            1,
+        );
+        self::assertNotSame($workflow, $mutant, 'the step-deletion mutant must actually bite the workflow');
+
+        try {
+            $this->runStep('Run Psalm (tests at L5)', $mutant);
+            self::fail('a deleted tests step must not resolve — runStep proves the pin bites');
+        } catch (\PHPUnit\Framework\AssertionFailedError $expected) {
+            self::assertStringContainsString('exactly one CI step', $expected->getMessage());
         }
     }
 
@@ -297,11 +465,13 @@ final class StaticAnalysisScopeTest extends TestCase
     }
 
     /**
-     * The `run:` body of the uniquely-named workflow step.
+     * The `run:` body of the uniquely-named workflow step. The text is
+     * injectable so the S444 negative fuzz can prove the pin bites on mutants
+     * without touching the shipped workflow.
      */
-    private function runStep(string $stepName): string
+    private function runStep(string $stepName, ?string $workflow = null): string
     {
-        $lines = explode("\n", $this->contents(self::WORKFLOW));
+        $lines = explode("\n", $workflow ?? $this->contents(self::WORKFLOW));
         $hits = [];
 
         foreach ($lines as $index => $line) {
@@ -372,7 +542,7 @@ final class StaticAnalysisScopeTest extends TestCase
     {
         $pattern = '#<' . $element . '>(.*?)</' . $element . '>#s';
         if (preg_match($pattern, $config, $match) !== 1) {
-            self::fail("psalm.xml must declare <{$element}>");
+            self::fail("the psalm config must declare <{$element}>");
         }
 
         return [$match[1]];

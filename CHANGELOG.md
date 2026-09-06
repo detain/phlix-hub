@@ -22,6 +22,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   both again. This clears the `Server Route Snapshot Currency` master red that
   server motion re-armed.
 
+### Changed — S444: Psalm strictness split — `src`/`scripts` back to L1, `tests/` stays measured L5
+
+- **S306's single widened `psalm.xml` pinned one `errorLevel` (5) over all three
+  corpora, silently relaxing `src` + `scripts` — clean at level 1 before it —
+  down four tiers of issue types.** Psalm 6.x (the pinned 6.5.0) has no
+  per-directory level, so strictness now splits the way the server splits its
+  phpstan/phpstan-tests pair: `psalm.xml` analyses `src` + `scripts` at
+  `errorLevel="1"` with zero file exclusions; new `psalm-tests.xml` analyses
+  `tests/` at the measured `errorLevel="5"` (ladder evidence and written-why
+  dumper exclusion migrated verbatim). The `Psalm Static Analysis` CI job runs
+  BOTH commands, each failing the build on its own, and the extended
+  `StaticAnalysisScopeTest` pins both levels, both command lines verbatim, the
+  cross-config exclusion union (still exactly one documented entry) and an
+  in-suite negative fuzz proving every silent-regression mutant — dropped
+  config path, repointed `--config`, deleted step — actually reddens the gate.
+  Both halves verified clean in the s306-style docker venue (0 findings at
+  L1 for production, 0 at L5 for tests) and on CI's extension set.
+
 ### Added — S306: `tests/` under PHPStan + Psalm with a paths-asserted scope gate
 
 - **PHPStan level 9 now analyses `src` + `scripts` + `tests` from one merged
