@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#21 currency cascade: route-snapshot re-pin to server `e729d48a` (2026-09-06)
+
+- **The hub route snapshot follows server master `f35a5742` → `e729d48a`.**
+  The seven server commits are caliber-sync (S433–S437) and route-content
+  preserving: the S332-derived snapshot re-dumps in place — `route_count` 400
+  and route-set sha256 `bd71a582…` UNCHANGED, the provenance diff is the
+  `source_sha` line alone — and the vendored contracts fixture re-vendors
+  byte-for-byte from `@phlix/contracts` master `341fc6e2` (md5 `05db9e75` →
+  `7accd31d`). `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA`
+  and the S280 parity survival token advance in lockstep. RED/GREEN proven
+  locally: flipping one `source_sha` byte in the hub fixture fails the S280
+  same-sha gate naming both pins; restoring it greens the suite again. This
+  clears the `Server Route Snapshot Currency` master red that server motion
+  re-armed.
+
 ### Changed — cs#20 currency cascade: route-snapshot re-pin to server `f35a5742` + web-ui `@phlix/ui` v0.99.1 (2026-09-05)
 
 - **The hub route snapshot follows server master `3a253991` → `f35a5742`
