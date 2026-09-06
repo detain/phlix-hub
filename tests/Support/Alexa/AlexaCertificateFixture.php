@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Support\Alexa;
 
+use OpenSSLCertificateSigningRequest;
 use OpenSSLAsymmetricKey;
 use OpenSSLCertificate;
 use RuntimeException;
@@ -250,7 +251,7 @@ final class AlexaCertificateFixture
         }
 
         $csr = openssl_csr_new(['commonName' => $commonName], $key, ['digest_alg' => 'sha256']);
-        if ($csr === false) {
+        if (!$csr instanceof OpenSSLCertificateSigningRequest) {
             throw new RuntimeException('could not build the CA CSR');
         }
 
@@ -281,7 +282,7 @@ final class AlexaCertificateFixture
         }
 
         $csr = openssl_csr_new(['commonName' => $commonName], $key, ['digest_alg' => 'sha256']);
-        if ($csr === false) {
+        if (!$csr instanceof OpenSSLCertificateSigningRequest) {
             throw new RuntimeException('could not build the intermediate CSR');
         }
 
@@ -319,7 +320,7 @@ final class AlexaCertificateFixture
         }
 
         $csr = openssl_csr_new(['commonName' => 'echo-api.amazon.com'], $key, ['digest_alg' => 'sha256']);
-        if ($csr === false) {
+        if (!$csr instanceof OpenSSLCertificateSigningRequest) {
             throw new RuntimeException('could not build the leaf CSR');
         }
 

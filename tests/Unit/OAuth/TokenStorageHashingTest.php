@@ -92,7 +92,6 @@ final class TokenStorageHashingTest extends TestCase
             },
         );
 
-        /** @var Connection $db */
         return $db;
     }
 

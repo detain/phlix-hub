@@ -209,11 +209,9 @@ final class OAuthScopeOpenApiEnumContractTest extends TestCase
                 break; // dedented out of the enum block
             }
 
-            self::assertSame(
-                1,
-                preg_match('/^\s*-\s*"([^"]+)"\s*$/', $line, $m),
-                sprintf('Unparsable member in %s.enum: %s', $schema, $line),
-            );
+            if (preg_match('/^\s*-\s*"([^"]+)"\s*$/', $line, $m) !== 1) {
+                self::fail(sprintf('Unparsable member in %s.enum: %s', $schema, $line));
+            }
             $members[] = $m[1];
         }
 
@@ -226,7 +224,6 @@ final class OAuthScopeOpenApiEnumContractTest extends TestCase
             ),
         );
 
-        /** @var list<string> $members */
         return $members;
     }
 
@@ -279,7 +276,6 @@ final class OAuthScopeOpenApiEnumContractTest extends TestCase
         $source = file_get_contents(self::SPEC);
         self::assertTrue($source !== false && strlen($source) > 0, 'openapi.yaml could not be read.');
 
-        /** @var string $source */
         return $source;
     }
 }

@@ -158,7 +158,7 @@ final class ClientConnectionTest extends TestCase
         $client->onMessage("\x00\x01\x02", $decoder);
 
         // No exception means success
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     public function testOnMessageClosesConnectionOnFrameBufferOverflow(): void
@@ -181,7 +181,7 @@ final class ClientConnectionTest extends TestCase
         $client->onMessage(str_repeat("\x00", 140000), $decoder);
 
         // No exception escaped — the guard closed the connection instead.
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     public function testOnMessageWithNonDataFrameSendsErrorToClient(): void
@@ -239,7 +239,7 @@ final class ClientConnectionTest extends TestCase
         // Should not throw even though tunnel is null
         $client->onMessage($encoded, $decoder);
 
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     public function testOnMessageWithDataFrameWithRealTunnelForwardsToServer(): void

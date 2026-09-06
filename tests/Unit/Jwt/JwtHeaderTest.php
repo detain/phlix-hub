@@ -17,10 +17,22 @@ final class JwtHeaderTest extends TestCase
     /**
      * Build a minimal three-segment JWT with a given header JSON.
      */
+    /**
+     * @param array<string, mixed> $header
+     */
     private function buildJwt(array $header): string
     {
+        return $this->buildJwtWithRawHeader((string) json_encode($header));
+    }
+
+    /**
+     * Variant that takes the header as raw JSON text, so wire forms a PHP array
+     * cannot express — duplicate keys among them — can be fed to the parser.
+     */
+    private function buildJwtWithRawHeader(string $rawHeader): string
+    {
         $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
-        return $b64((string) json_encode($header)) . '.' . $b64('payload') . '.' . $b64('signature');
+        return $b64($rawHeader) . '.' . $b64('payload') . '.' . $b64('signature');
     }
 
     public function testKidReturnsKidWhenPresent(): void
@@ -89,8 +101,10 @@ final class JwtHeaderTest extends TestCase
 
     public function testKidHandlesMultipleKidOccurrences(): void
     {
-        // JSON parse takes last when multiple 'kid' keys exist
-        $jwt = $this->buildJwt(['alg' => 'EdDSA', 'kid' => 'first', 'kid' => 'last']);
+        // JSON parse takes last when multiple 'kid' keys exist. The duplicate key
+        // must reach the parser raw: a PHP array literal cannot carry two 'kid'
+        // entries — the first is silently dropped at compile time.
+        $jwt = $this->buildJwtWithRawHeader('{"alg":"EdDSA","kid":"first","kid":"last"}');
 
         $kid = JwtHeader::kid($jwt);
 

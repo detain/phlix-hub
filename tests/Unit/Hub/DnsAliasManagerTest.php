@@ -60,7 +60,7 @@ class DnsAliasManagerTest extends TestCase
         $serverId = 'server-123-uuid';
 
         $this->db->method('query')
-            ->willReturnCallback(function (string $sql, array $params) use ($serverId) {
+            ->willReturnCallback(function (string $sql, array $params) {
                 if (str_contains($sql, 'UPDATE servers SET subdomain')) {
                     return [];
                 }
@@ -80,7 +80,6 @@ class DnsAliasManagerTest extends TestCase
 
         $subdomain = $this->manager->allocateSubdomain($serverId);
 
-        $this->assertIsString($subdomain);
         $this->assertSame(8, strlen($subdomain));
         $this->assertMatchesRegularExpression('/^[a-f0-9]+$/', $subdomain);
     }
@@ -135,7 +134,6 @@ class DnsAliasManagerTest extends TestCase
 
         $subdomain = $this->manager->allocateSubdomain($serverId);
 
-        $this->assertIsString($subdomain);
         $this->assertSame(8, strlen($subdomain));
     }
 

@@ -191,7 +191,10 @@ final class TunnelThrottleRateSweepTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use ($meter): bool {
-                $meter->bytes += strlen((string) $data);
+                if (!is_string($data)) {
+                    self::fail('the throttled socket must only be sent string frames');
+                }
+                $meter->bytes += strlen($data);
                 $meter->frames++;
                 return true;
             },
@@ -336,7 +339,10 @@ final class TunnelThrottleRateSweepTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use ($meter): bool {
-                $meter->bytes += strlen((string) $data);
+                if (!is_string($data)) {
+                    self::fail('the throttled socket must only be sent string frames');
+                }
+                $meter->bytes += strlen($data);
                 $meter->frames++;
                 return true;
             },

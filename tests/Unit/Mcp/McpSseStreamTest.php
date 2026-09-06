@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Mcp;
 
 use Phlix\Hub\Mcp\McpSseStream;
 use Phlix\Hub\Tests\Support\RecordingStreamTimers;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Workerman\Connection\TcpConnection;
 
@@ -411,12 +412,15 @@ final class McpSseStreamTest extends TestCase
      *
      * @param string $sink Receives every byte written, by reference.
      */
-    private function connection(string &$sink): TcpConnection
+    private function connection(string &$sink): TcpConnection&MockObject
     {
         $connection = $this->createMock(TcpConnection::class);
         $connection->method('send')->willReturnCallback(
             static function (mixed $payload) use (&$sink): bool {
-                $sink .= (string) $payload;
+                if (!is_string($payload)) {
+                    self::fail('the SSE stream must only write string frames');
+                }
+                $sink .= $payload;
                 return true;
             },
         );

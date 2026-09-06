@@ -29,6 +29,7 @@ use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
+use Phlix\Hub\Tests\Support\Relay\RecordingMountLimiter;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -493,28 +494,9 @@ final class ClientRelayWorkerTest extends TestCase
      * to hit() and always reports not-limited, so the mount proceeds far enough
      * to record the key without needing a valid token / tunnel.
      */
-    private function recordingMountLimiter(): RateLimiterInterface
+    private function recordingMountLimiter(): RecordingMountLimiter
     {
-        return new class implements RateLimiterInterface {
-            /** @var list<string> */
-            public array $hits = [];
-
-            public function hit(string $key): RateLimitState
-            {
-                $this->hits[] = $key;
-
-                return new RateLimitState(1, 4, time() + 900, false, 5);
-            }
-
-            public function reset(string $key): void
-            {
-            }
-
-            public function peek(string $key): RateLimitState
-            {
-                return new RateLimitState(0, 5, 0, false, 5);
-            }
-        };
+        return new RecordingMountLimiter();
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Hub;
 
 use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -15,6 +16,8 @@ use RuntimeException;
  */
 final class Ed25519KeyManagerTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private string $tmpDir;
     private string $keyPath;
 
@@ -69,7 +72,7 @@ final class Ed25519KeyManagerTest extends TestCase
 
         self::assertSame('OKP', $jwk['kty']);
         self::assertSame('Ed25519', $jwk['crv']);
-        self::assertSame(32, strlen(base64_decode(strtr($jwk['x'], '-_', '+/'))));
+        self::assertSame(32, strlen(base64_decode(strtr(self::stringNode($jwk['x']), '-_', '+/'))));
         self::assertSame('sig', $jwk['use']);
         self::assertSame('EdDSA', $jwk['alg']);
         self::assertNotEmpty($jwk['kid']);
@@ -143,7 +146,7 @@ final class Ed25519KeyManagerTest extends TestCase
         $activeKids = array_map(static fn (array $k): string => $k['kid'], $manager->getActivePublicKeys());
         self::assertEqualsCanonicalizing([$newKid, $oldKid], $activeKids);
 
-        $jwkKids = array_map(static fn (array $k): string => (string) $k['kid'], $manager->getPublicKeyJwks());
+        $jwkKids = array_map(static fn (array $k): string => self::stringNode($k['kid']), $manager->getPublicKeyJwks());
         self::assertEqualsCanonicalizing([$newKid, $oldKid], $jwkKids);
 
         // The current key is always first / listed.
