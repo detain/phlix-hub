@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#23 currency cascade: route-snapshot re-pin to server `bab33ff2` (2026-09-06)
+
+- **The hub route snapshot follows server master `8a90e20e` → `bab33ff2`.**
+  The three server commits (S289/S291/S443 — SyncPlay identity, reported-position
+  semantics, `Uuid::v4` CSPRNG entropy) are route-content preserving: the
+  S332-derived snapshot re-dumps in place — `route_count` 400 and route-set
+  sha256 `bd71a582…` UNCHANGED, the provenance diff is the `source_sha` line
+  alone — and the vendored contracts fixture re-vendors byte-for-byte from
+  `@phlix/contracts` master `bcd27dfd` (md5 `7dee0d22` → `e8b23b9b`).
+  `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA` and the S280
+  parity survival token advance in lockstep. RED/GREEN proven locally: flipping
+  one `source_sha` byte in the hub fixture fails the S280 same-sha gate naming
+  both pins AND the generator's `--check` premerge gate; restoring it greens
+  both again. This clears the `Server Route Snapshot Currency` master red that
+  server motion re-armed.
+
 ### Added — S306: `tests/` under PHPStan + Psalm with a paths-asserted scope gate
 
 - **PHPStan level 9 now analyses `src` + `scripts` + `tests` from one merged
