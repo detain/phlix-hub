@@ -566,7 +566,7 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
 
                 return (new Response())->json(['reached' => true]);
             });
-        }, [$this->container->get(OAuthResourceMiddleware::class)]);
+        }, [self::resourceMiddleware()]);
 
         // --- CONTROL: a good token reaches the handler, fully hydrated -------
         RequestContext::setUserId(null);
@@ -707,6 +707,21 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
      *
      * @return array<string, string>
      */
+    /**
+     * The container hands back `mixed`; PHPStan level 9 will not let that be
+     * passed where Router::group() wants `callable`. Asserting the callable
+     * shape here keeps the narrowing honest (and fails loudly if the binding
+     * ever stops being invokable).
+     */
+    private function resourceMiddleware(): callable
+    {
+        $middleware = $this->container->get(OAuthResourceMiddleware::class);
+        self::assertIsCallable($middleware);
+
+        return $middleware;
+    }
+
+    /** @return array{access_token: string, refresh_token: string, scope: string} the decoded token response */
     private function issueTokensFor(string $clientId, string $secret, string $scope): array
     {
         $authorize          = new Request();
@@ -725,11 +740,10 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
 
         $screen = $this->authServer->authorize($authorize);
         self::assertSame(200, $screen->statusCode, 'the consent screen did not render: ' . $screen->body);
-        self::assertSame(
-            1,
-            preg_match('/name="' . ConsentScreen::FIELD_TICKET . '" value="([a-f0-9]{64})"/', $screen->body, $m),
-            'no consent ticket in the rendered screen',
-        );
+        $ticketPattern = '/name="' . ConsentScreen::FIELD_TICKET . '" value="([a-f0-9]{64})"/';
+        if (preg_match($ticketPattern, $screen->body, $m) !== 1) {
+            self::fail('no consent ticket in the rendered screen');
+        }
 
         $consent         = new Request();
         $consent->method = 'POST';
@@ -770,7 +784,7 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
         self::assertIsString($payload['access_token'] ?? null);
         self::assertIsString($payload['refresh_token'] ?? null);
 
-        /** @var array<string, string> $out */
+        /** @var array{access_token: string, refresh_token: string, scope: string} $out */
         $out = [
             'access_token'  => (string) $payload['access_token'],
             'refresh_token' => (string) $payload['refresh_token'],

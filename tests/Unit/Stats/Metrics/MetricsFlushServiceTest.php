@@ -8,6 +8,7 @@ use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
 use Phlix\Hub\Tests\Support\BindingContractConnection;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -19,6 +20,7 @@ use Workerman\MySQL\Connection;
  */
 final class MetricsFlushServiceTest extends TestCase
 {
+    use DecodedJsonAssertions;
     /**
      * @var array<int, array{sql: string, params: array<string, mixed>}>
      */
@@ -36,6 +38,9 @@ final class MetricsFlushServiceTest extends TestCase
         return $mock;
     }
 
+    /**
+     * @param array<string, mixed> $configOverrides
+     */
     private function service(MetricsCollector $collector, array $configOverrides = []): MetricsFlushService
     {
         $config = array_merge([
@@ -363,6 +368,9 @@ final class MetricsFlushServiceTest extends TestCase
             foreach ($keys as $a) {
                 foreach ($keys as $b) {
                     if ($a !== $b) {
+                        if ($a === '' || $b === '') {
+                            $this->fail('bind param names must be non-empty');
+                        }
                         $this->assertStringStartsNotWith(
                             $a,
                             $b,
@@ -585,6 +593,9 @@ final class MetricsFlushServiceTest extends TestCase
         foreach ($keys as $a) {
             foreach ($keys as $b) {
                 if ($a !== $b) {
+                    if ($a === '' || $b === '') {
+                        $this->fail('bind param names must be non-empty');
+                    }
                     $this->assertStringStartsNotWith(
                         $a,
                         $b,
@@ -634,7 +645,8 @@ final class MetricsFlushServiceTest extends TestCase
 
         $byBucket = [];
         foreach ($relay as $q) {
-            $byBucket[$q['params']['bucket']] = $q['params'];
+            $bucket = self::stringNode($q['params']['bucket']);
+            $byBucket[$bucket] = $q['params'];
         }
         $this->assertArrayHasKey(date('Y-m-d H:i:s', 1000), $byBucket);
         $this->assertArrayHasKey(date('Y-m-d H:i:s', 1020), $byBucket);

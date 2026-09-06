@@ -14,6 +14,7 @@ use Phlix\Hub\Http\Controllers\ServerProxyController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Shared\Hub\ServerInfoDto;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 
 use function array_column;
@@ -69,6 +70,8 @@ use function str_starts_with;
  */
 final class AlexaMediaGatewayTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private const SERVER_ID = 'srv-alexa-1';
 
     private const OWNER = 'user-ctor';
@@ -129,7 +132,7 @@ final class AlexaMediaGatewayTest extends TestCase
         $gateway->search(self::SERVER_ID, 'Dune&limit=999&admin=1', 5);
 
         $parsed = [];
-        parse_str($forwarded[0]['query'], $parsed);
+        parse_str(self::stringNode($forwarded[0]['query']), $parsed);
 
         self::assertSame(
             ['q' => 'Dune&limit=999&admin=1', 'limit' => '5'],
@@ -211,9 +214,10 @@ final class AlexaMediaGatewayTest extends TestCase
         $gateway = new AlexaMediaGateway($proxy, new ServerListController($info), self::OWNER, self::CLIENT_IP);
         $gateway->search(self::SERVER_ID, 'Inception', 5);
 
+        $relayHeaders = self::arrayNode($forwarded[0]['headers']);
         self::assertSame(
             self::OWNER,
-            $forwarded[0]['headers']['X-Phlix-Relay-User'] ?? null,
+            $relayHeaders['X-Phlix-Relay-User'] ?? null,
             'the relayed identity header must carry the gateway\'s own user id',
         );
     }
@@ -254,12 +258,13 @@ final class AlexaMediaGatewayTest extends TestCase
 
         $proxy->proxy($passthrough, ['id' => self::SERVER_ID, 'path' => 'api/v1/media/search']);
 
+        $passthroughHeaders = self::arrayNode($forwarded[0]['headers']);
         self::assertArrayHasKey(
             'SIGNATURE-256',
-            $forwarded[0]['headers'],
+            $passthroughHeaders,
             'the proxy forwards unstripped inbound headers, so dropping them is the GATEWAY\'s job',
         );
-        self::assertArrayHasKey('SIGNATURECERTCHAINURL', $forwarded[0]['headers']);
+        self::assertArrayHasKey('SIGNATURECERTCHAINURL', $passthroughHeaders);
     }
 
     public function testTheGatewayForwardsAnExactMinimalHeaderSetAndNoInboundHeader(): void
@@ -269,7 +274,7 @@ final class AlexaMediaGatewayTest extends TestCase
 
         $gateway->search(self::SERVER_ID, 'Inception', 5);
 
-        $keys = array_keys($forwarded[0]['headers']);
+        $keys = array_keys(self::arrayNode($forwarded[0]['headers']));
         sort($keys);
 
         self::assertSame(
@@ -277,7 +282,8 @@ final class AlexaMediaGatewayTest extends TestCase
             $keys,
             'the gateway mints its own request: only Accept survives, plus the proxy\'s own trust markers',
         );
-        self::assertSame(self::CLIENT_IP, $forwarded[0]['headers']['X-Forwarded-For']);
+        $minimalHeaders = self::arrayNode($forwarded[0]['headers']);
+        self::assertSame(self::CLIENT_IP, $minimalHeaders['X-Forwarded-For']);
     }
 
     // ------------------------------------------------------------------

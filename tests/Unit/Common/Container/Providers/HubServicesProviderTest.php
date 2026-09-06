@@ -12,6 +12,8 @@ use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\ServerReaper;
+use Phlix\Hub\Tests\Support\Container\RecordingThrowingContainer;
+use Phlix\Hub\Tests\Support\Container\RecordingWrongTypeContainer;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
@@ -122,23 +124,9 @@ final class HubServicesProviderTest extends TestCase
      * A container recording every get() id, then throwing — so if a set's arms
      * were not each independently guarded, the first throw would abort the rest.
      */
-    private function recordingThrowingContainer(): ContainerInterface
+    private function recordingThrowingContainer(): RecordingThrowingContainer
     {
-        return new class implements ContainerInterface {
-            /** @var list<string> */
-            public array $seen = [];
-
-            public function get(string $id): mixed
-            {
-                $this->seen[] = $id;
-                throw new \RuntimeException("unavailable: {$id}");
-            }
-
-            public function has(string $id): bool
-            {
-                return true;
-            }
-        };
+        return new RecordingThrowingContainer();
     }
 
     /**
@@ -146,23 +134,9 @@ final class HubServicesProviderTest extends TestCase
      * the instanceof guards are all false, no reaper starts, no Timer is armed,
      * and every service is still attempted.
      */
-    private function recordingWrongTypeContainer(): ContainerInterface
+    private function recordingWrongTypeContainer(): RecordingWrongTypeContainer
     {
-        return new class implements ContainerInterface {
-            /** @var list<string> */
-            public array $seen = [];
-
-            public function get(string $id): mixed
-            {
-                $this->seen[] = $id;
-                return new \stdClass();
-            }
-
-            public function has(string $id): bool
-            {
-                return true;
-            }
-        };
+        return new RecordingWrongTypeContainer();
     }
 
     public function testInMemoryReapersResolveEveryServiceEvenWhenEachResolutionThrows(): void
@@ -337,9 +311,6 @@ final class HubServicesProviderTest extends TestCase
                 continue;
             }
             $definition = $helper->getDefinition($id);
-            if (!$definition instanceof \DI\Definition\FactoryDefinition) {
-                continue;
-            }
 
             return array_values(array_map(strval(...), array_keys($definition->getParameters())));
         }

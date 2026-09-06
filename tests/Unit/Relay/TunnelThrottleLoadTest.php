@@ -10,6 +10,7 @@ use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Relay\Tunnel;
+use Phlix\Hub\Tests\Support\Relay\ThrottleMeter;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
@@ -550,36 +551,4 @@ final class TunnelThrottleLoadTest extends TestCase
 
         return $value;
     }
-}
-
-/**
- * Mutable counters the load harness shares between the connection double and
- * the assertions. Named (not anonymous) so PHPStan can see the fields through
- * the harness' array-shaped return value.
- */
-final class ThrottleMeter
-{
-    /**
-     * Read side of the closed flag. The connection double writes `closed` from
-     * a mock callback, so PHPStan cannot see the mutation from inside the tick
-     * loop; this method keeps the read honest (bool) instead of constant-folded.
-     */
-    public function isClosed(): bool
-    {
-        return $this->closed;
-    }
-
-    public int $bytes = 0;
-
-    public int $frames = 0;
-
-    public int $queueHighWater = 0;
-
-    public bool $closed = false;
-
-    public int $closedAtTick = 0;
-
-    public int $bytesAtPeerClose = 0;
-
-    public int $bytesAfterPeerClose = 0;
 }

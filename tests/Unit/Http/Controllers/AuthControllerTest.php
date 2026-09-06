@@ -12,10 +12,10 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
-use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Http\Controllers\AuthController;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Tests\Support\RecordingRateLimiter;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
@@ -358,32 +358,5 @@ final class AuthControllerTest extends TestCase
 
         $response = $controller($request);
         self::assertSame(404, $response->statusCode);
-    }
-}
-
-/**
- * A recording {@see RateLimiterInterface} double: captures every key passed to
- * hit() so tests can assert which IP the login limiter buckets on. Always
- * reports not-limited so login proceeds to the credential check.
- */
-final class RecordingRateLimiter implements RateLimiterInterface
-{
-    /** @var list<string> */
-    public array $hits = [];
-
-    public function hit(string $key): RateLimitState
-    {
-        $this->hits[] = $key;
-
-        return new RateLimitState(1, 4, time() + 900, false, 5);
-    }
-
-    public function reset(string $key): void
-    {
-    }
-
-    public function peek(string $key): RateLimitState
-    {
-        return new RateLimitState(0, 5, 0, false, 5);
     }
 }

@@ -10,6 +10,7 @@ use Phlix\Hub\Hub\HubSettingsRepository;
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckService;
 use Phlix\Hub\Hub\Updates\CoreUpdateStatus;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
+use Phlix\Hub\Tests\Support\Updates\RecordingMarkerFetcher;
 use Phlix\Hub\Tests\Support\InMemoryHubSettingsConnection;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
@@ -89,27 +90,9 @@ final class CoreUpdateCheckServiceTest extends TestCase
      * A fetcher that answers synchronously with a fixed body/error and counts
      * its calls, so "did a fetch happen at all" is directly observable.
      */
-    private function fetcher(?string $body, ?string $error = null): VersionMarkerFetcherInterface
+    private function fetcher(?string $body, ?string $error = null): RecordingMarkerFetcher
     {
-        return new class ($body, $error) implements VersionMarkerFetcherInterface {
-            public int $calls = 0;
-
-            /** @var list<string> */
-            public array $urls = [];
-
-            public function __construct(
-                private readonly ?string $body,
-                private readonly ?string $error,
-            ) {
-            }
-
-            public function fetch(string $url, callable $onDone): void
-            {
-                $this->calls++;
-                $this->urls[] = $url;
-                $onDone($this->body, $this->error);
-            }
-        };
+        return new RecordingMarkerFetcher($body, $error);
     }
 
     /**
@@ -117,16 +100,9 @@ final class CoreUpdateCheckServiceTest extends TestCase
      * box, where the Swoole-hooked DNS resolution inside `stream_socket_client()`
      * does not return and no callback ever arrives.
      */
-    private function silentFetcher(): VersionMarkerFetcherInterface
+    private function silentFetcher(): RecordingMarkerFetcher
     {
-        return new class implements VersionMarkerFetcherInterface {
-            public int $calls = 0;
-
-            public function fetch(string $url, callable $onDone): void
-            {
-                $this->calls++;
-            }
-        };
+        return new RecordingMarkerFetcher(null, null, false);
     }
 
     private function service(
@@ -332,7 +308,7 @@ final class CoreUpdateCheckServiceTest extends TestCase
         $service = $this->service($this->fetcher('0.9.9'));
         $service->check();
 
-        $this->db->statements = [];
+        $this->db->resetStatementLog();
         $service->status();
 
         foreach ($this->db->statements as $statement) {

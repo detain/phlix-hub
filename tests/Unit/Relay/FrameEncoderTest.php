@@ -7,12 +7,15 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 use InvalidArgumentException;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
 
 class FrameEncoderTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     /**
      * Helper: decode a frame using the same codec.
      */
@@ -49,7 +52,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame(RelayFrameType::CLIENT_CONNECT, $decoded->type);
         $this->assertSame($seq, $decoded->seq);
 
-        $payload = json_decode($decoded->payload, true, 2, JSON_THROW_ON_ERROR);
+        $payload = self::arrayNode(json_decode($decoded->payload, true, 2, JSON_THROW_ON_ERROR));
         $this->assertSame($clientId, $payload['client_id']);
         $this->assertSame($sessionId, $payload['session_id']);
     }
@@ -66,7 +69,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame(RelayFrameType::CLIENT_DISCONNECT, $decoded->type);
         $this->assertSame($seq, $decoded->seq);
 
-        $payload = json_decode($decoded->payload, true, 2, JSON_THROW_ON_ERROR);
+        $payload = self::arrayNode(json_decode($decoded->payload, true, 2, JSON_THROW_ON_ERROR));
         $this->assertSame($clientId, $payload['client_id']);
     }
 
@@ -95,7 +98,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame(RelayFrameType::DISCONNECTED, $decoded->type);
         $this->assertSame($seq, $decoded->seq);
 
-        $payload = json_decode($decoded->payload, true, 2, JSON_THROW_ON_ERROR);
+        $payload = self::arrayNode(json_decode($decoded->payload, true, 2, JSON_THROW_ON_ERROR));
         $this->assertSame($reason, $payload['reason']);
     }
 
@@ -112,7 +115,7 @@ class FrameEncoderTest extends TestCase
         $this->assertSame(RelayFrameType::ERROR, $decoded->type);
         $this->assertSame($seq, $decoded->seq);
 
-        $payload = json_decode($decoded->payload, true, 2, JSON_THROW_ON_ERROR);
+        $payload = self::arrayNode(json_decode($decoded->payload, true, 2, JSON_THROW_ON_ERROR));
         $this->assertSame($code, $payload['code']);
         $this->assertSame($message, $payload['message']);
     }
@@ -125,7 +128,7 @@ class FrameEncoderTest extends TestCase
         $encoder = new FrameEncoder();
         $result = $encoder->encodeHello($jwt, $serverId);
 
-        $decoded = json_decode($result, true, 2, JSON_THROW_ON_ERROR);
+        $decoded = self::arrayNode(json_decode($result, true, 2, JSON_THROW_ON_ERROR));
         $this->assertSame('hello', $decoded['type']);
         $this->assertSame($jwt, $decoded['enrollment_jwt']);
         $this->assertSame($serverId, $decoded['server_id']);
@@ -139,7 +142,7 @@ class FrameEncoderTest extends TestCase
         $encoder = new FrameEncoder();
         $result = $encoder->encodeHelloAck($sessionId, $tunnelId);
 
-        $decoded = json_decode($result, true, 2, JSON_THROW_ON_ERROR);
+        $decoded = self::arrayNode(json_decode($result, true, 2, JSON_THROW_ON_ERROR));
         $this->assertSame('hello_ack', $decoded['type']);
         $this->assertSame($sessionId, $decoded['relay_session_id']);
         $this->assertSame($tunnelId, $decoded['tunnel_id']);

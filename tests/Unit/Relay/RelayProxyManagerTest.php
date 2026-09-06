@@ -638,8 +638,9 @@ final class RelayProxyManagerTest extends TestCase
 
         $this->assertCount(1, $this->published);
         $this->assertSame(200, $this->published[0]['data']['status']);
-        $this->assertSame('10', self::arrayNode($this->published[0]['data']['headers'] ?? [])['Content-Length'] ?? null);
-        $this->assertSame('bytes', self::arrayNode($this->published[0]['data']['headers'] ?? [])['Accept-Ranges'] ?? null);
+        $headers = self::arrayNode($this->published[0]['data']['headers'] ?? []);
+        $this->assertSame('10', $headers['Content-Length'] ?? null);
+        $this->assertSame('bytes', $headers['Accept-Ranges'] ?? null);
         $this->assertSame('', $this->published[0]['data']['body'], 'a HEAD carries no body');
 
         // 2) Ranged GET (streamed): 206 + Content-Range + the requested bytes.
@@ -679,7 +680,8 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount(4, $this->published);
         $this->assertSame('head', $this->published[1]['data']['phase']);
         $this->assertSame(206, $this->published[1]['data']['status']);
-        $this->assertSame('bytes 0-4/10', self::arrayNode($this->published[1]['data']['headers'] ?? [])['Content-Range'] ?? null);
+        $rangeHeaders = self::arrayNode($this->published[1]['data']['headers'] ?? []);
+        $this->assertSame('bytes 0-4/10', $rangeHeaders['Content-Range'] ?? null);
         $this->assertSame('body', $this->published[2]['data']['phase']);
         $this->assertSame('Hello', $this->published[2]['data']['body'], 'the ranged GET returns the requested bytes');
         $this->assertSame('end', $this->published[3]['data']['phase']);
@@ -748,7 +750,8 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertCount(4, $this->published);
         $this->assertSame('head', $this->published[0]['data']['phase']);
         $this->assertSame(200, $this->published[0]['data']['status']);
-        $this->assertSame('video/mp2t', self::arrayNode($this->published[0]['data']['headers'] ?? [])['Content-Type'] ?? null);
+        $mp2tHeaders = self::arrayNode($this->published[0]['data']['headers'] ?? []);
+        $this->assertSame('video/mp2t', $mp2tHeaders['Content-Type'] ?? null);
         $this->assertSame('6', self::arrayNode($this->published[0]['data']['headers'] ?? [])['Content-Length'] ?? null);
 
         $this->assertSame('body', $this->published[1]['data']['phase']);
@@ -1532,17 +1535,20 @@ final class RelayProxyManagerTest extends TestCase
         // An absent field falls back to the injected default (30s).
         $manager->onRequest($this->proxyPayload());
         $pending = self::arrayNode($pendingProp->getValue($manager));
-        $this->assertSame(30.0, self::arrayNode(end($pending))['timeout'], 'an absent timeout falls back to the injected default');
+        $timeoutEntry = self::arrayNode(end($pending));
+        $this->assertSame(30.0, $timeoutEntry['timeout'], 'an absent timeout falls back to the injected default');
 
         // A negative value falls back to the injected default (30s).
         $manager->onRequest($this->proxyPayload(['timeout' => -5]));
         $pending = self::arrayNode($pendingProp->getValue($manager));
-        $this->assertSame(30.0, self::arrayNode(end($pending))['timeout'], 'a negative timeout falls back to the injected default');
+        $timeoutEntry = self::arrayNode(end($pending));
+        $this->assertSame(30.0, $timeoutEntry['timeout'], 'a negative timeout falls back to the injected default');
 
         // A non-numeric value falls back to the injected default (30s).
         $manager->onRequest($this->proxyPayload(['timeout' => 'bogus']));
         $pending = self::arrayNode($pendingProp->getValue($manager));
-        $this->assertSame(30.0, self::arrayNode(end($pending))['timeout'], 'a non-numeric timeout falls back to the injected default');
+        $timeoutEntry = self::arrayNode(end($pending));
+        $this->assertSame(30.0, $timeoutEntry['timeout'], 'a non-numeric timeout falls back to the injected default');
     }
 
     // ---------------------------------------------------------------------

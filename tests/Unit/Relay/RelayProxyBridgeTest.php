@@ -11,6 +11,8 @@ use Phlix\Hub\Relay\RelayResponseSink;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
 use PHPUnit\Framework\TestCase;
+use Phlix\Hub\Tests\Support\Relay\RecordingResponseSink;
+use Phlix\Hub\Tests\Support\Relay\ThrowingResponseSink;
 use ReflectionProperty;
 use RuntimeException;
 use Workerman\Coroutine\Channel;
@@ -595,95 +597,5 @@ final class RelayProxyBridgeTest extends TestCase
         $this->assertTrue($sink->bodyCalled);
         $this->assertTrue($sink->abortCalled, 'bytes were already written — the sink must be aborted');
         $this->assertFalse($sink->endCalled, 'end() must not run after an abort()');
-    }
-}
-
-/**
- * A {@see RelayResponseSink} double that records every protocol event and the
- * concatenated body. Named so callers can read `events`/`body` through the
- * concrete type (an anonymous class typed as the interface hides them).
- */
-final class RecordingResponseSink implements RelayResponseSink
-{
-    /** @var list<array{0: string, 1?: mixed, 2?: mixed}> */
-    public array $events = [];
-
-    public string $body = '';
-
-    public function __construct(private readonly bool $bodyReturn = true)
-    {
-    }
-
-    public function head(int $status, array $headers): void
-    {
-        $this->events[] = ['head', $status, $headers];
-    }
-
-    public function body(string $bytes): bool
-    {
-        $this->events[] = ['body', $bytes];
-        $this->body .= $bytes;
-
-        return $this->bodyReturn;
-    }
-
-    public function end(): void
-    {
-        $this->events[] = ['end'];
-    }
-
-    public function abort(): void
-    {
-        $this->events[] = ['abort'];
-    }
-}
-
-/**
- * A {@see RelayResponseSink} whose `head()`/`body()` can be made to throw, for
- * the D3s re-review Finding B regression tests (a mid-stream exception must not
- * corrupt the connection with a second response).
- */
-final class ThrowingResponseSink implements RelayResponseSink
-{
-    public bool $headCalled = false;
-
-    public bool $bodyCalled = false;
-
-    public bool $endCalled = false;
-
-    public bool $abortCalled = false;
-
-    public function __construct(
-        private readonly bool $throwOnHead,
-        private readonly bool $throwOnBody,
-    ) {
-    }
-
-    public function head(int $status, array $headers): void
-    {
-        $this->headCalled = true;
-        if ($this->throwOnHead) {
-            throw new RuntimeException('boom-in-head');
-        }
-    }
-
-    public function body(string $bytes): bool
-    {
-        $this->bodyCalled = true;
-        if ($this->throwOnBody) {
-            throw new RuntimeException('boom-in-body');
-        }
-
-        return true;
-    }
-
-    public function end(): void
-    {
-        $this->endCalled = true;
-    }
-
-    public function abort(): void
-    {
-        $this->abortCalled = true;
     }
 }

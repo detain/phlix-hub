@@ -8,9 +8,18 @@
     xmlns="https://getpsalm.org/schema/config"
     xsi:schemaLocation="https://getpsalm.org/schema/config vendor/vimeo/psalm/config.xsd"
 >
+    <!-- S306 — tests/ joins the analysed corpus at the same errorLevel 1 as src/ and
+         scripts/. Scope is asserted by tests/Unit/Support/StaticAnalysisScopeTest.php,
+         which parses THIS file and the CI workflow: dropping the <directory name="tests"/>
+         entry, adding an <IssueHandler> suppression, or shipping a psalm-baseline.xml all
+         redden the suite, not just the psalm job. CI's Psalm job installs swoole (see the
+         extension list + comment in .github/workflows/ci.yml) so Swoole\Coroutine\Channel
+         resolves there; the venue cannot run Psalm at all (needs PHP >= 8.3.16) — CI's
+         "Psalm Static Analysis" check is the authoritative verdict for this tree. -->
     <projectFiles>
         <directory name="src"/>
         <directory name="scripts"/>
+        <directory name="tests"/>
         <ignoreFiles>
             <directory name="vendor"/>
         </ignoreFiles>

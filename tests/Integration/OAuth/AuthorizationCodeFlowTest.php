@@ -18,6 +18,7 @@ use Phlix\Hub\OAuth\OAuthError;
 use Phlix\Hub\OAuth\OAuthScopes;
 use Phlix\Hub\OAuth\OAuthTokenService;
 use Phlix\Hub\OAuth\Pkce;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 
 use function hash;
@@ -65,6 +66,8 @@ use const PHP_URL_QUERY;
  */
 final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
 {
+    use DecodedJsonAssertions;
+
     /** Amazon's real account-linking redirect for a European skill. */
     private const REDIRECT = 'https://layla.amazon.com/api/skill/link/M2ABCDEFG';
 
@@ -189,7 +192,9 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         self::assertSame(200, $response->statusCode, 'the consent screen did not render');
 
         $pattern = '/name="' . ConsentScreen::FIELD_TICKET . '" value="([a-f0-9]{64})"/';
-        self::assertSame(1, preg_match($pattern, $response->body, $m), 'no consent ticket in the rendered screen');
+        if (preg_match($pattern, $response->body, $m) !== 1) {
+            self::fail('no consent ticket in the rendered screen');
+        }
 
         return $m[1];
     }
@@ -230,7 +235,6 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         parse_str($query, $parsed);
 
         $out = [];
-        /** @var mixed $value */
         foreach ($parsed as $key => $value) {
             if (is_string($value)) {
                 $out[(string) $key] = $value;
@@ -304,7 +308,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
 
         // The issued access token actually validates, and carries exactly the
         // consented identity and scopes.
-        $grant = $this->tokens->validateAccess((string) $payload['access_token']);
+        $grant = $this->tokens->validateAccess(self::stringNode($payload['access_token']));
         self::assertNotNull($grant);
         self::assertSame(self::USER, $grant->userId);
         self::assertSame(self::CLIENT_ID, $grant->clientId);
@@ -316,8 +320,8 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         $rows = $this->db->query('SELECT token_hash FROM oauth_tokens ORDER BY kind ASC');
         self::assertIsArray($rows);
         self::assertCount(2, $rows);
-        self::assertSame(hash('sha256', (string) $payload['access_token']), $rows[0]['token_hash']);
-        self::assertSame(hash('sha256', (string) $payload['refresh_token']), $rows[1]['token_hash']);
+        self::assertSame(hash('sha256', self::stringNode($payload['access_token'])), $rows[0]['token_hash']);
+        self::assertSame(hash('sha256', self::stringNode($payload['refresh_token'])), $rows[1]['token_hash']);
     }
 
     /**
@@ -347,7 +351,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         ])));
         self::assertSame($consented, $escalate['scope'], 'the token request widened the grant');
 
-        $grant = $this->tokens->validateAccess((string) $escalate['access_token']);
+        $grant = $this->tokens->validateAccess(self::stringNode($escalate['access_token']));
         self::assertNotNull($grant);
         self::assertFalse($grant->hasScope(McpScopes::PLAYBACK_READ), 'an unconsented scope reached the token');
 
@@ -497,8 +501,8 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         // First redemption: the control.
         $first = $this->controller->token($this->tokenRequest($code));
         self::assertSame(200, $first->statusCode);
-        $accessToken  = (string) self::json($first)['access_token'];
-        $refreshToken = (string) self::json($first)['refresh_token'];
+        $accessToken  = self::stringNode(self::json($first)['access_token']);
+        $refreshToken = self::stringNode(self::json($first)['refresh_token']);
         self::assertNotNull($this->tokens->validateAccess($accessToken));
 
         // Second redemption of the SAME code.
@@ -543,7 +547,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
 
         $first = $this->controller->token($this->tokenRequest($code));
         self::assertSame(200, $first->statusCode);
-        $accessToken = (string) self::json($first)['access_token'];
+        $accessToken = self::stringNode(self::json($first)['access_token']);
 
         // Move the redemption into the past so re-stamping it would be a real
         // write. Nothing else about the row changes.
@@ -632,7 +636,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         $code  = $this->obtainCode();
         $first = $this->controller->token($this->tokenRequest($code));
         self::assertSame(200, $first->statusCode);
-        $accessToken = (string) self::json($first)['access_token'];
+        $accessToken = self::stringNode(self::json($first)['access_token']);
 
         // A code that never existed is not a replay, and must not cost anybody
         // their live tokens.
@@ -1095,7 +1099,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
             'grant_type'    => 'refresh_token',
             'client_id'     => self::CLIENT_ID,
             'client_secret' => self::SECRET,
-            'refresh_token' => (string) $first['refresh_token'],
+            'refresh_token' => self::stringNode($first['refresh_token']),
         ], null));
 
         self::assertSame(200, $rotated->statusCode);
@@ -1105,7 +1109,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         self::assertSame($first['scope'], $second['scope']);
 
         // The new access token works...
-        self::assertNotNull($this->tokens->validateAccess((string) $second['access_token']));
+        self::assertNotNull($this->tokens->validateAccess(self::stringNode($second['access_token'])));
 
         // ...and the old refresh token is dead. Presenting it again is the
         // signature of a stolen token, so it cuts the whole lineage.
@@ -1113,13 +1117,13 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
             'grant_type'    => 'refresh_token',
             'client_id'     => self::CLIENT_ID,
             'client_secret' => self::SECRET,
-            'refresh_token' => (string) $first['refresh_token'],
+            'refresh_token' => self::stringNode($first['refresh_token']),
         ], null));
         self::assertSame(400, $replay->statusCode);
         self::assertSame(OAuthError::INVALID_GRANT, self::json($replay)['error']);
 
         self::assertNull(
-            $this->tokens->validateAccess((string) $second['access_token']),
+            $this->tokens->validateAccess(self::stringNode($second['access_token'])),
             'a replayed refresh token did not revoke the lineage',
         );
     }
@@ -1133,7 +1137,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
             'grant_type'    => 'refresh_token',
             'client_id'     => self::CLIENT_ID,
             'client_secret' => self::SECRET,
-            'refresh_token' => (string) $issued['refresh_token'],
+            'refresh_token' => self::stringNode($issued['refresh_token']),
             'scope'         => OAuthScopes::PROFILE_READ,
         ], null));
         self::assertSame(200, $narrowed->statusCode);
@@ -1145,7 +1149,7 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
             'grant_type'    => 'refresh_token',
             'client_id'     => self::CLIENT_ID,
             'client_secret' => self::SECRET,
-            'refresh_token' => (string) self::json($narrowed)['refresh_token'],
+            'refresh_token' => self::stringNode(self::json($narrowed)['refresh_token']),
             'scope'         => OAuthScopes::PROFILE_READ . ' ' . McpScopes::PLAYBACK_READ,
         ], null));
         self::assertSame(400, $widened->statusCode);
@@ -1158,12 +1162,12 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
 
         // The two kinds share a table; the `kind` column is what keeps them
         // apart. A prefix check alone would not.
-        self::assertNull($this->tokens->validateAccess((string) $issued['refresh_token']));
-        self::assertNull($this->tokens->consumeRefresh((string) $issued['access_token']));
+        self::assertNull($this->tokens->validateAccess(self::stringNode($issued['refresh_token'])));
+        self::assertNull($this->tokens->consumeRefresh(self::stringNode($issued['access_token'])));
 
         // Control: each in its own role.
-        self::assertNotNull($this->tokens->validateAccess((string) $issued['access_token']));
-        self::assertNotNull($this->tokens->consumeRefresh((string) $issued['refresh_token']));
+        self::assertNotNull($this->tokens->validateAccess(self::stringNode($issued['access_token'])));
+        self::assertNotNull($this->tokens->consumeRefresh(self::stringNode($issued['refresh_token'])));
     }
 
     // =====================================================================
@@ -1178,15 +1182,15 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
         $spent = self::json($this->controller->token($this->tokenRequest($this->obtainCode())));
         $this->db->query(
             'UPDATE oauth_tokens SET revoked_at = NOW() WHERE token_hash = :h',
-            ['h' => hash('sha256', (string) $spent['access_token'])],
+            ['h' => hash('sha256', self::stringNode($spent['access_token']))],
         );
 
         self::assertGreaterThan(0, $this->tokens->pruneExpired());
         self::assertNotNull(
-            $this->tokens->validateAccess((string) $live['access_token']),
+            $this->tokens->validateAccess(self::stringNode($live['access_token'])),
             'pruning deleted a live token',
         );
-        self::assertNull($this->tokens->validateAccess((string) $spent['access_token']));
+        self::assertNull($this->tokens->validateAccess(self::stringNode($spent['access_token'])));
     }
 
     public function testAnUnauthenticatedCallerReachesNeitherTheScreenNorACode(): void

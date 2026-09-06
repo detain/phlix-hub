@@ -8,12 +8,15 @@ use InvalidArgumentException;
 use Phlix\Hub\Relay\FrameBufferOverflowException;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
 
 class FrameDecoderTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private FrameDecoder $decoder;
 
     protected function setUp(): void
@@ -167,7 +170,7 @@ class FrameDecoderTest extends TestCase
 
         $result = $this->decoder->encodeHello($jwt, $serverId);
 
-        $decoded = json_decode($result, true, 2, JSON_THROW_ON_ERROR);
+        $decoded = self::arrayNode(json_decode($result, true, 2, JSON_THROW_ON_ERROR));
         $this->assertSame('hello', $decoded['type']);
         $this->assertSame($jwt, $decoded['enrollment_jwt']);
         $this->assertSame($serverId, $decoded['server_id']);
@@ -180,7 +183,7 @@ class FrameDecoderTest extends TestCase
 
         $result = $this->decoder->encodeHelloAck($sessionId, $tunnelId);
 
-        $decoded = json_decode($result, true, 2, JSON_THROW_ON_ERROR);
+        $decoded = self::arrayNode(json_decode($result, true, 2, JSON_THROW_ON_ERROR));
         $this->assertSame('hello_ack', $decoded['type']);
         $this->assertSame($sessionId, $decoded['relay_session_id']);
         $this->assertSame($tunnelId, $decoded['tunnel_id']);

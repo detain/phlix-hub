@@ -19,6 +19,7 @@ use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManagerInterface;
+use Phlix\Hub\Tests\Support\RecordingBrowserConnection;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
@@ -6531,29 +6532,5 @@ final class ServerProxyControllerTest extends TestCase
             $getWire,
             'CONTROL: on a GET the server\'s stale Content-Length is stripped and recomputed from the body',
         );
-    }
-}
-
-/**
- * A {@see TcpConnection} double that skips the parent constructor (no live
- * socket needed) and records every `send()` payload on the wire.
- */
-final class RecordingBrowserConnection extends TcpConnection
-{
-    /** @var list<string> */
-    public array $written = [];
-
-    public function __construct()
-    {
-        // Intentionally skips the parent constructor: no live socket is
-        // needed — send() just records what would go on the wire.
-    }
-
-    public function send(mixed $sendBuffer, bool $raw = false): bool
-    {
-        Assert::assertIsString($sendBuffer, 'the proxy must write strings to the browser connection');
-        $this->written[] = $sendBuffer;
-
-        return true;
     }
 }

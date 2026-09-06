@@ -52,6 +52,7 @@ final class HeartbeatHandlerTest extends TestCase
     {
         parent::tearDown();
         $files = glob($this->tmpDir . '/*');
+        self::assertIsArray($files);
         foreach ($files as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -95,7 +96,7 @@ final class HeartbeatHandlerTest extends TestCase
         );
 
         $handler->handle($serverId, $token, $heartbeat);
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     /**
@@ -146,7 +147,7 @@ final class HeartbeatHandlerTest extends TestCase
             $now += 60;
         }
 
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     public function testHandleCachesReportedLibraries(): void
@@ -455,7 +456,7 @@ final class HeartbeatHandlerTest extends TestCase
 
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql, array $params = []) use ($serverId): array {
+            function (string $sql, array $params = []): array {
                 // COUNT query returns 5 rows, keepLast is 100 → no DELETE should run.
                 if (str_contains($sql, 'COUNT(*)')) {
                     return [['cnt' => 5]];
@@ -517,7 +518,7 @@ final class HeartbeatHandlerTest extends TestCase
 
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql, array $params = []) use ($serverId): array {
+            function (string $sql, array $params = []): array {
                 // COUNT query returns exactly 100 rows, keepLast is 100 → no DELETE.
                 if (str_contains($sql, 'COUNT(*)')) {
                     return [['cnt' => 100]];

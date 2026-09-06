@@ -372,7 +372,10 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use ($meter): bool {
-                $meter->bytes += strlen((string) $data);
+                if (!is_string($data)) {
+                    self::fail('the throttled socket must only be sent string frames');
+                }
+                $meter->bytes += strlen($data);
                 $meter->frames++;
                 $meter->sentAt[] = microtime(true);
                 return true;
@@ -576,6 +579,7 @@ final class TunnelThrottleTimerLoopTest extends TestCase
             $mean += $ratio;
         }
         $mean /= max(count($ratios), 1);
+        self::assertNotEmpty($ratios, 'the cadence sample must contain at least one batch');
 
         fwrite(STDERR, sprintf(
             "  batch-to-batch ratio min=%.4f max=%.4f mean=%.4f spread=%.4f (n=%d)\n",

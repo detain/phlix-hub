@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Http;
 
 use Phlix\Hub\Http\ConnectionResponseSink;
 use Phlix\Hub\Relay\TokenBucket;
+use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\TestCase;
 use Workerman\Connection\TcpConnection;
 
@@ -24,9 +25,11 @@ final class ConnectionResponseSinkTest extends TestCase
      * so the force-close assertions are direct or (see
      * {@see self::testBodyReportsFalseWhenTheConnectionSendFails()}
      * onward) not entangled with `TcpConnection`'s internal socket/event-loop
-     * state, which is never initialised for this double. No return type-hint
-     * so PHPStan keeps the anonymous class's public properties visible to
-     * callers.
+     * state, which is never initialised for this double. The object shape in
+     * the return type keeps the double's public recording properties visible
+     * to callers without naming the anonymous class.
+     *
+     * @return TcpConnection&object{written: list<string>, closeCalled: bool}
      */
     private function connection(bool $sendResult = true)
     {
@@ -41,7 +44,10 @@ final class ConnectionResponseSinkTest extends TestCase
 
             public function send(mixed $sendBuffer, bool $raw = false): bool
             {
-                $this->written[] = (string) $sendBuffer;
+                if (!is_string($sendBuffer)) {
+                    Assert::fail('the sink must only be sent string frames');
+                }
+                $this->written[] = $sendBuffer;
                 return $this->sendResult;
             }
 
@@ -260,7 +266,10 @@ final class ConnectionResponseSinkTest extends TestCase
 
             public function send(mixed $sendBuffer, bool $raw = false): bool
             {
-                $this->written[] = (string) $sendBuffer;
+                if (!is_string($sendBuffer)) {
+                    Assert::fail('the sink must only be sent string frames');
+                }
+                $this->written[] = $sendBuffer;
                 if (count($this->written) === 2) {
                     // The body write fills the buffer, then immediately drains.
                     /** @var callable $onBufferFull */
@@ -303,7 +312,10 @@ final class ConnectionResponseSinkTest extends TestCase
 
             public function send(mixed $sendBuffer, bool $raw = false): bool
             {
-                $this->written[] = (string) $sendBuffer;
+                if (!is_string($sendBuffer)) {
+                    Assert::fail('the sink must only be sent string frames');
+                }
+                $this->written[] = $sendBuffer;
                 if (count($this->written) === 2) {
                     // Buffer fills and never drains.
                     /** @var callable $onBufferFull */
@@ -364,7 +376,10 @@ final class ConnectionResponseSinkTest extends TestCase
 
             public function send(mixed $sendBuffer, bool $raw = false): bool
             {
-                $this->written[] = (string) $sendBuffer;
+                if (!is_string($sendBuffer)) {
+                    Assert::fail('the sink must only be sent string frames');
+                }
+                $this->written[] = $sendBuffer;
                 return false; // client gone → body() force-closes + marks closed
             }
 
@@ -442,7 +457,10 @@ final class ConnectionResponseSinkTest extends TestCase
 
             public function send(mixed $sendBuffer, bool $raw = false): bool
             {
-                $this->written[] = (string) $sendBuffer;
+                if (!is_string($sendBuffer)) {
+                    Assert::fail('the sink must only be sent string frames');
+                }
+                $this->written[] = $sendBuffer;
                 return false;
             }
 

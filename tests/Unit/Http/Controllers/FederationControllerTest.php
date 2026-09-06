@@ -689,5 +689,4 @@ final class FederationControllerTest extends TestCase
 
         self::assertSame(404, $response->statusCode);
     }
-
 }

@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Hub\Dns;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Hub\Dns\StaticZoneManager;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 
 /**
  * Unit tests for {@see StaticZoneManager}.
@@ -14,6 +15,8 @@ use Phlix\Hub\Hub\Dns\StaticZoneManager;
  */
 final class StaticZoneManagerTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private string $tmpDir;
 
     protected function setUp(): void
@@ -27,6 +30,7 @@ final class StaticZoneManagerTest extends TestCase
     {
         parent::tearDown();
         $files = glob($this->tmpDir . '/*');
+        self::assertIsArray($files);
         foreach ($files as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -45,7 +49,7 @@ final class StaticZoneManagerTest extends TestCase
 
         $zoneFile = $this->tmpDir . '/phlix.media.zone';
         self::assertFileExists($zoneFile);
-        self::assertStringContainsString('abc123.phlix.media', file_get_contents($zoneFile));
+        self::assertStringContainsString('abc123.phlix.media', self::stringNode(file_get_contents($zoneFile)));
     }
 
     public function testAddRecordDoesNotDuplicateSameRecord(): void
@@ -56,7 +60,7 @@ final class StaticZoneManagerTest extends TestCase
         $manager->addRecord('phlix.media', 'abc123', 'A', '192.0.2.1');
 
         $zoneFile = $this->tmpDir . '/phlix.media.zone';
-        $content = file_get_contents($zoneFile);
+        $content = self::stringNode(file_get_contents($zoneFile));
         self::assertSame(1, substr_count($content, 'abc123.phlix.media'));
     }
 
@@ -69,7 +73,7 @@ final class StaticZoneManagerTest extends TestCase
         $manager->addRecord('phlix.media', 'abc123', 'TXT', '"v=spf1 include:_spf.example.com ~all"');
 
         $zoneFile = $this->tmpDir . '/phlix.media.zone';
-        $content = file_get_contents($zoneFile);
+        $content = self::stringNode(file_get_contents($zoneFile));
         self::assertStringContainsString('IN A 192.0.2.1', $content);
         self::assertStringContainsString('IN AAAA 2001:db8::1', $content);
         self::assertStringContainsString('IN TXT', $content);
@@ -186,7 +190,7 @@ final class StaticZoneManagerTest extends TestCase
         $manager->removeRecord('phlix.media', 'abc123', 'A');
 
         $zoneFile = $this->tmpDir . '/phlix.media.zone';
-        self::assertStringNotContainsString('abc123.phlix.media', file_get_contents($zoneFile));
+        self::assertStringNotContainsString('abc123.phlix.media', self::stringNode(file_get_contents($zoneFile)));
     }
 
     public function testRemoveRecordHandlesNonExistentZone(): void
@@ -205,7 +209,10 @@ final class StaticZoneManagerTest extends TestCase
         $manager->addRecord('phlix.media', 'abc123', 'A', '192.0.2.1');
         // Should not throw and should leave the existing record untouched
         $manager->removeRecord('phlix.media', 'nonexistent', 'A');
-        self::assertStringContainsString('abc123.phlix.media', file_get_contents($this->tmpDir . '/phlix.media.zone'));
+        self::assertStringContainsString(
+            'abc123.phlix.media',
+            self::stringNode(file_get_contents($this->tmpDir . '/phlix.media.zone')),
+        );
     }
 
     public function testUpdateSoaUpdatesSerialInExistingZone(): void
@@ -220,7 +227,7 @@ ZONE;
         $manager = new StaticZoneManager($this->tmpDir);
         $manager->updateSoa('phlix.media');
 
-        $content = file_get_contents($zoneFile);
+        $content = self::stringNode(file_get_contents($zoneFile));
         self::assertStringContainsString('IN SOA', $content);
         // Serial should have been updated
         self::assertStringContainsString('2026', $content);
@@ -244,6 +251,6 @@ ZONE;
         $manager->updateSoa('phlix.media');
 
         // Should not throw, just leave content unchanged
-        self::assertStringContainsString('NS', file_get_contents($zoneFile));
+        self::assertStringContainsString('NS', self::stringNode(file_get_contents($zoneFile)));
     }
 }

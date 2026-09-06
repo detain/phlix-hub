@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
 final class LogControllerTest extends TestCase
 {
     use DecodedJsonAssertions;
+
     private string $dir;
 
     protected function setUp(): void
@@ -154,7 +155,8 @@ final class LogControllerTest extends TestCase
 
         $controller = new LogController($this->dir);
         $body = self::arrayNode(json_decode($controller->tailAll($this->req([]))->body, true));
-        $joined = implode("\n", array_map(static fn (mixed $l): string => self::stringNode($l), self::arrayNode($body['lines'])));
+        $rawLines = self::arrayNode($body['lines']);
+        $joined = implode("\n", array_map(static fn (mixed $l): string => self::stringNode($l), $rawLines));
 
         $this->assertLessThan(strpos($joined, 'second'), strpos($joined, 'first'));
         $this->assertLessThan(strpos($joined, 'third'), strpos($joined, 'second'));

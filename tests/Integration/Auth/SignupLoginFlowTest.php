@@ -10,6 +10,7 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 use Phlix\Shared\Auth\JwtClaims;
 
@@ -31,6 +32,8 @@ use Phlix\Shared\Auth\JwtClaims;
  */
 final class SignupLoginFlowTest extends RealDatabaseTestCase
 {
+    use DecodedJsonAssertions;
+
     private const SECRET = 'integration-test-secret-32-bytes-minimum';
 
     private AuthManager $auth;
@@ -120,10 +123,10 @@ final class SignupLoginFlowTest extends RealDatabaseTestCase
     public function testLogoutCompletesWithoutThrowing(): void
     {
         $result = $this->auth->register('carol', 'c@example.com', 'correct-horse-battery');
-        $userId = (string) ($result['user']['id'] ?? '');
+        $userId = self::stringNode(self::arrayNode($result['user'] ?? null)['id'] ?? '');
         $this->auth->logout($userId, 'session-1');
-        // Just assert no exception escaped.
-        self::assertTrue(true);
+        // Passing means no exception escaped: there is no observable state to assert.
+        self::addToAssertionCount(1);
     }
 
     public function testDuplicateEmailRejected(): void
