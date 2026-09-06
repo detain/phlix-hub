@@ -15,6 +15,7 @@ use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use ReflectionClassConstant;
 use ReflectionMethod;
 use ReflectionProperty;
@@ -116,10 +117,10 @@ final class TunnelThrottleRateSweepTest extends TestCase
     private const int MAX_FRAMES_PER_SLOT = 60;
 
     private FrameDecoder $codec;
-    private StructuredLogger $logger;
-    private StructuredLogger $clientLogger;
-    private RelaySessionManager $sessionManager;
-    private TcpConnection $serverWs;
+    private StructuredLogger&MockObject $logger;
+    private StructuredLogger&MockObject $clientLogger;
+    private RelaySessionManager&MockObject $sessionManager;
+    private TcpConnection&MockObject $serverWs;
 
     protected function setUp(): void
     {
@@ -190,7 +191,10 @@ final class TunnelThrottleRateSweepTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use ($meter): bool {
-                $meter->bytes += strlen((string) $data);
+                if (!is_string($data)) {
+                    self::fail('the throttled socket must only be sent string frames');
+                }
+                $meter->bytes += strlen($data);
                 $meter->frames++;
                 return true;
             },
@@ -335,7 +339,10 @@ final class TunnelThrottleRateSweepTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use ($meter): bool {
-                $meter->bytes += strlen((string) $data);
+                if (!is_string($data)) {
+                    self::fail('the throttled socket must only be sent string frames');
+                }
+                $meter->bytes += strlen($data);
                 $meter->frames++;
                 return true;
             },

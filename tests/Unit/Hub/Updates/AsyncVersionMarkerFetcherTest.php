@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Hub\Updates;
 
 use Phlix\Hub\Hub\Updates\AsyncVersionMarkerFetcher;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
+use Phlix\Hub\Tests\Support\Updates\RecordingVersionHttpClient;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -38,46 +39,9 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
      * Client double: records the URL and hands the registered callbacks back to
      * the test so it can drive success/error paths deterministically.
      */
-    private function client(): Client
+    private function client(): RecordingVersionHttpClient
     {
-        return new class extends Client {
-            public string $url = '';
-
-            /** @var callable|null */
-            public $success = null;
-
-            /** @var callable|null */
-            public $error = null;
-
-            /** @var \Throwable|null Thrown synchronously from request() when set. */
-            public ?\Throwable $throwOnGet = null;
-
-            /** @var list<string> Every HTTP method the fetcher asked for. */
-            public array $methods = [];
-
-            /** @psalm-suppress MissingParentConstructorCall Intentional: no connection pool in tests. */
-            public function __construct()
-            {
-            }
-
-            /**
-             * @param string               $url
-             * @param array<string, mixed> $options
-             */
-            public function request(string $url, array $options = []): mixed
-            {
-                $this->url       = $url;
-                $this->methods[] = is_string($options['method'] ?? null) ? (string) $options['method'] : '';
-                $this->success   = is_callable($options['success'] ?? null) ? $options['success'] : null;
-                $this->error     = is_callable($options['error'] ?? null) ? $options['error'] : null;
-
-                if ($this->throwOnGet !== null) {
-                    throw $this->throwOnGet;
-                }
-
-                return null;
-            }
-        };
+        return new RecordingVersionHttpClient();
     }
 
     /** A minimal PSR-7-ish response carrying `$body`. */
@@ -321,7 +285,7 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
             $seen[] = [$body, $error];
         });
 
-        self::assertSame([], $seen, 'the vendor defers the error — it must not arrive inside fetch()');
+        self::assertCount(0, $seen, 'the vendor defers the error — it must not arrive inside fetch()');
 
         $tasks = $this->pendingTimerTasks();
         self::assertNotSame([], $tasks, 'the vendor must have deferred an error callback onto a timer');

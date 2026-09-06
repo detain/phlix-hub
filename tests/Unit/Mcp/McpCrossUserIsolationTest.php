@@ -256,7 +256,7 @@ final class McpCrossUserIsolationTest extends TestCase
     // ------------------------------------------------------------------
 
     /**
-     * @return list<array{0: string, 1: array<string, mixed>}>
+     * @return array<string, array{0: string, 1: array<string, mixed>}>
      */
     public static function serverScopedToolProvider(): array
     {

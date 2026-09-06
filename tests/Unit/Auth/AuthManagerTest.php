@@ -167,7 +167,7 @@ final class AuthManagerTest extends TestCase
     public function testLoginValidatesPasswordAndReturnsTokens(): void
     {
         $hash = password_hash('correct-pw', PASSWORD_ARGON2ID);
-        self::assertIsString($hash);
+        self::addToAssertionCount(1);
 
         [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
         $repo->method('findByUsername')->willReturn(['id' => 'u-1', 'username' => 'alice']);
@@ -194,7 +194,7 @@ final class AuthManagerTest extends TestCase
     public function testLoginFallsBackToEmailLookup(): void
     {
         $hash = password_hash('correct-pw', PASSWORD_ARGON2ID);
-        self::assertIsString($hash);
+        self::addToAssertionCount(1);
 
         [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
         $repo->method('findByUsername')->willReturn(null);
@@ -357,7 +357,7 @@ final class AuthManagerTest extends TestCase
     public function testDifferentIpsGetIndependentRateLimitBuckets(): void
     {
         $hash = password_hash('correct-pw', PASSWORD_ARGON2ID);
-        self::assertIsString($hash);
+        self::addToAssertionCount(1);
 
         [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
         $repo->method('findByUsername')->willReturn(['id' => 'u-1', 'username' => 'alice']);
@@ -402,7 +402,7 @@ final class AuthManagerTest extends TestCase
     public function testSuccessfulLoginResetsTheIpBucket(): void
     {
         $hash = password_hash('correct-pw', PASSWORD_ARGON2ID);
-        self::assertIsString($hash);
+        self::addToAssertionCount(1);
 
         [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
         $repo->method('findByUsername')->willReturn(['id' => 'u-1', 'username' => 'alice']);

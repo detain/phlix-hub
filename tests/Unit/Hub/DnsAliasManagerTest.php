@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Hub\DnsAliasManager;
 use Phlix\Hub\Hub\Dns\StaticZoneManager;
 use Phlix\Hub\Hub\TlsCertificateManager;
@@ -14,9 +15,9 @@ use Workerman\MySQL\Connection;
 class DnsAliasManagerTest extends TestCase
 {
     private string $tmpDir;
-    private Connection $db;
+    private Connection&MockObject $db;
     private StaticZoneManager $zoneManager;
-    private TlsCertificateManager $certManager;
+    private TlsCertificateManager&MockObject $certManager;
     private StructuredLogger $logger;
     private DnsAliasManager $manager;
 
@@ -59,7 +60,7 @@ class DnsAliasManagerTest extends TestCase
         $serverId = 'server-123-uuid';
 
         $this->db->method('query')
-            ->willReturnCallback(function (string $sql, array $params) use ($serverId) {
+            ->willReturnCallback(function (string $sql, array $params) {
                 if (str_contains($sql, 'UPDATE servers SET subdomain')) {
                     return [];
                 }
@@ -79,7 +80,6 @@ class DnsAliasManagerTest extends TestCase
 
         $subdomain = $this->manager->allocateSubdomain($serverId);
 
-        $this->assertIsString($subdomain);
         $this->assertSame(8, strlen($subdomain));
         $this->assertMatchesRegularExpression('/^[a-f0-9]+$/', $subdomain);
     }
@@ -134,7 +134,6 @@ class DnsAliasManagerTest extends TestCase
 
         $subdomain = $this->manager->allocateSubdomain($serverId);
 
-        $this->assertIsString($subdomain);
         $this->assertSame(8, strlen($subdomain));
     }
 

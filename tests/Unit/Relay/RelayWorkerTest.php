@@ -327,7 +327,10 @@ final class RelayWorkerTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             function (mixed $data) use (&$received): bool {
-                $received .= (string) $data;
+                if (!is_string($data)) {
+                    self::fail('the relay socket must only be sent string frames');
+                }
+                $received .= $data;
                 return true;
             },
         );
@@ -391,13 +394,19 @@ final class RelayWorkerTest extends TestCase
         $recv1 = '';
         $clientWs1 = $this->createMock(TcpConnection::class);
         $clientWs1->method('send')->willReturnCallback(function (mixed $d) use (&$recv1): bool {
-            $recv1 .= (string) $d;
+            if (!is_string($d)) {
+                self::fail('the relay socket must only be sent string frames');
+            }
+            $recv1 .= $d;
             return true;
         });
         $recv2 = '';
         $clientWs2 = $this->createMock(TcpConnection::class);
         $clientWs2->method('send')->willReturnCallback(function (mixed $d) use (&$recv2): bool {
-            $recv2 .= (string) $d;
+            if (!is_string($d)) {
+                self::fail('the relay socket must only be sent string frames');
+            }
+            $recv2 .= $d;
             return true;
         });
 

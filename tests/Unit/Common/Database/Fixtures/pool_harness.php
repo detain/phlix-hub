@@ -28,13 +28,8 @@
 
 declare(strict_types=1);
 
-// Silence swoole's reactor/coroutine chatter so stdout carries only markers.
-if (\function_exists('swoole_async_set')) {
-    \swoole_async_set(['log_level' => 5 /* SWOOLE_LOG_ERROR */, 'trace_flags' => 0]);
-}
-
-require __DIR__ . '/../../../../../vendor/autoload.php';
-
+// PHPStan resolves `use` aliases only for statements that follow them, so the
+// import block sits above the executable bootstrap, not after the require.
 use Phlix\Hub\Common\Database\PooledMySQLConnection;
 use Phlix\Hub\Tests\Support\RecordingConnection;
 use Phlix\Hub\Tests\Support\SwooleShutdownIsolation;
@@ -43,6 +38,13 @@ use Swoole\Coroutine\Channel;
 use Workerman\MySQL\Connection;
 
 use function Swoole\Coroutine\run;
+
+// Silence swoole's reactor/coroutine chatter so stdout carries only markers.
+if (\function_exists('swoole_async_set')) {
+    \swoole_async_set(['log_level' => 5 /* SWOOLE_LOG_ERROR */, 'trace_flags' => 0]);
+}
+
+require __DIR__ . '/../../../../../vendor/autoload.php';
 
 $scenario = $argv[1] ?? '';
 
@@ -229,6 +231,10 @@ switch ($scenario) {
                 }
             });
             $result = $bDone->pop();
+            if (!is_string($result)) {
+                fwrite(STDERR, "harness: B arm returned a non-string marker\n");
+                exit(1);
+            }
             echo $result . "\n";
             $hold->push(true); // let A finish so run() can exit
         });
@@ -314,7 +320,12 @@ switch ($scenario) {
                 $inside = $read($pool);
                 $d->push([$inside, Coroutine::getCid()]);
             });
-            [$inside, $actualCid] = $d->pop();
+            $pair = $d->pop();
+            if (!is_array($pair)) {
+                fwrite(STDERR, "harness: cid arm returned a non-list marker\n");
+                exit(1);
+            }
+            [$inside, $actualCid] = $pair;
             echo 'inside_type=' . get_debug_type($inside) . "\ninside=" . var_export($inside, true) . "\n";
             // Pinned against the scheduler's own answer, so the assertion cannot
             // be satisfied by any hardcoded constant.

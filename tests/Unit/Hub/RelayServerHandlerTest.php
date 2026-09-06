@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\RelayServerHandler;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Tests\Support\Hub\CapturingCloseSessionManager;
 
 class RelayServerHandlerTest extends TestCase
 {
@@ -24,6 +25,7 @@ class RelayServerHandlerTest extends TestCase
     {
         if (is_dir($this->tmpDir)) {
             $files = glob($this->tmpDir . '/*');
+            self::assertIsArray($files);
             foreach ($files as $file) {
                 @unlink($file);
             }
@@ -102,20 +104,7 @@ class RelayServerHandlerTest extends TestCase
 
     public function testOnCloseDelegatesToSessionManager(): void
     {
-        $closeCallArgs = [];
-
-        $sessionManager = new class ($closeCallArgs) extends \Phlix\Hub\Hub\RelaySessionManager {
-            /** @var array<string, string> */
-            private array $closeArgsCapture;
-            public function __construct(array &$capture)
-            {
-                $this->closeArgsCapture = &$capture;
-            }
-            public function closeSession(string $sessionId, string $reason): void
-            {
-                $this->closeArgsCapture[] = ['sessionId' => $sessionId, 'reason' => $reason];
-            }
-        };
+        $sessionManager = new CapturingCloseSessionManager();
 
         $handler = new RelayServerHandler(
             $sessionManager,
@@ -126,27 +115,14 @@ class RelayServerHandlerTest extends TestCase
 
         $handler->onClose('session-abc', 'server_disconnect');
 
-        $this->assertCount(1, $closeCallArgs);
-        $this->assertSame('session-abc', $closeCallArgs[0]['sessionId']);
-        $this->assertSame('server_disconnect', $closeCallArgs[0]['reason']);
+        $this->assertCount(1, $sessionManager->closeCalls);
+        $this->assertSame('session-abc', $sessionManager->closeCalls[0]['sessionId']);
+        $this->assertSame('server_disconnect', $sessionManager->closeCalls[0]['reason']);
     }
 
     public function testOnCloseWithCustomReason(): void
     {
-        $closeCallArgs = [];
-
-        $sessionManager = new class ($closeCallArgs) extends \Phlix\Hub\Hub\RelaySessionManager {
-            /** @var array<string, string> */
-            private array $closeArgsCapture;
-            public function __construct(array &$capture)
-            {
-                $this->closeArgsCapture = &$capture;
-            }
-            public function closeSession(string $sessionId, string $reason): void
-            {
-                $this->closeArgsCapture[] = ['sessionId' => $sessionId, 'reason' => $reason];
-            }
-        };
+        $sessionManager = new CapturingCloseSessionManager();
 
         $handler = new RelayServerHandler(
             $sessionManager,
@@ -157,9 +133,9 @@ class RelayServerHandlerTest extends TestCase
 
         $handler->onClose('session-xyz', 'network_error');
 
-        $this->assertCount(1, $closeCallArgs);
-        $this->assertSame('session-xyz', $closeCallArgs[0]['sessionId']);
-        $this->assertSame('network_error', $closeCallArgs[0]['reason']);
+        $this->assertCount(1, $sessionManager->closeCalls);
+        $this->assertSame('session-xyz', $sessionManager->closeCalls[0]['sessionId']);
+        $this->assertSame('network_error', $sessionManager->closeCalls[0]['reason']);
     }
 
     private function createStubSessionManager(): \Phlix\Hub\Hub\RelaySessionManager

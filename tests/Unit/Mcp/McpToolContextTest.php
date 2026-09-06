@@ -184,7 +184,7 @@ final class McpToolContextTest extends TestCase
      * read back out of the tool classes — a check derived from its subject
      * self-adjusts with it and could never disagree.
      *
-     * @return list<array{0: string}>
+     * @return array<string, array{0: string}>
      */
     public static function shippedToolPathProvider(): array
     {

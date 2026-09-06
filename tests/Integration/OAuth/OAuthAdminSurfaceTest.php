@@ -567,11 +567,9 @@ final class OAuthAdminSurfaceTest extends RealDatabaseTestCase
      */
     private static function secretFromDisplay(string $display): string
     {
-        self::assertSame(
-            1,
-            preg_match('/client_secret:\s+([0-9a-f]{64})/', $display, $m),
-            'the command printed no client secret: ' . $display,
-        );
+        if (preg_match('/client_secret:\s+([0-9a-f]{64})/', $display, $m) !== 1) {
+            self::fail('the command printed no client secret: ' . $display);
+        }
 
         return $m[1];
     }
@@ -599,10 +597,10 @@ final class OAuthAdminSurfaceTest extends RealDatabaseTestCase
     {
         $screen = $this->authorize($clientId, $redirectUri, $scope);
         self::assertSame(200, $screen->statusCode, 'the consent screen did not render: ' . $screen->body);
-        self::assertSame(
-            1,
-            preg_match('/name="' . ConsentScreen::FIELD_TICKET . '" value="([a-f0-9]{64})"/', $screen->body, $m),
-        );
+        $ticketPattern = '/name="' . ConsentScreen::FIELD_TICKET . '" value="([a-f0-9]{64})"/';
+        if (preg_match($ticketPattern, $screen->body, $m) !== 1) {
+            self::fail('no consent ticket in the rendered screen');
+        }
 
         $consent         = new Request();
         $consent->method = 'POST';

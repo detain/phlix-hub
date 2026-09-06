@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Hub;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\InviteLink;
@@ -22,10 +23,10 @@ use Workerman\MySQL\Connection;
  */
 final class InviteLinkHandlerTest extends TestCase
 {
-    private Connection $db;
+    private Connection&MockObject $db;
     private JwtHandler $jwtHandler;
-    private LibrarySharingHandler $sharingHandler;
-    private StructuredLogger $logger;
+    private LibrarySharingHandler&MockObject $sharingHandler;
+    private StructuredLogger&MockObject $logger;
     private InviteLinkHandler $handler;
 
     protected function setUp(): void
@@ -180,7 +181,7 @@ final class InviteLinkHandlerTest extends TestCase
         });
 
         $this->handler->revokeInviteLink('owner-1', 'link-1');
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     public function testRevokeInviteLinkNotFoundThrows(): void

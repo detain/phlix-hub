@@ -35,8 +35,11 @@ final class AuthServicesProviderTest extends TestCase
 
         AuthServicesProvider::setDevFallbackWarner($warner);
 
-        // The callable should be stored and callable
-        $this->assertTrue($callableCalled || true, 'Warner should be set');
+        // Read the static back: the provider must store THE callable it was
+        // given — the original `|| true` line asserted nothing at all.
+        $property = new \ReflectionProperty(AuthServicesProvider::class, 'devFallbackWarner');
+        $property->setAccessible(true);
+        $this->assertSame($warner, $property->getValue(), 'the dev-fallback warner must be stored');
     }
 
     /**

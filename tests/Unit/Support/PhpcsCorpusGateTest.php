@@ -239,14 +239,16 @@ final class PhpcsCorpusGateTest extends TestCase
     {
         $source = (string) file_get_contents(self::SCRIPT);
 
-        preg_match("/const EXPECTED_PATHS = \[(.*?)\];/s", $source, $pathMatch);
-        self::assertArrayHasKey(1, $pathMatch, 'EXPECTED_PATHS not found in the gate script');
+        if (preg_match("/const EXPECTED_PATHS = \[(.*?)\];/s", $source, $pathMatch) !== 1) {
+            self::fail('EXPECTED_PATHS not found in the gate script');
+        }
         preg_match_all("/'([a-z]+)'/", $pathMatch[1], $paths);
         self::assertNotSame([], $paths[1], 'the EXPECTED_PATHS parser matched nothing');
         self::assertSame(self::EXPECTED_PATHS, $paths[1]);
 
-        preg_match('/const CORPUS_FLOORS = \[(.*?)\];/s', $source, $floorMatch);
-        self::assertArrayHasKey(1, $floorMatch, 'CORPUS_FLOORS not found in the gate script');
+        if (preg_match('/const CORPUS_FLOORS = \[(.*?)\];/s', $source, $floorMatch) !== 1) {
+            self::fail('CORPUS_FLOORS not found in the gate script');
+        }
         preg_match_all("/'([a-z]+)'\s*=>\s*(\d+)/", $floorMatch[1], $floors, PREG_SET_ORDER);
         self::assertNotSame([], $floors, 'the CORPUS_FLOORS parser matched nothing');
 

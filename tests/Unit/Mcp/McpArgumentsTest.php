@@ -33,7 +33,7 @@ final class McpArgumentsTest extends TestCase
     }
 
     /**
-     * @return list<array{0: mixed}>
+     * @return array<string, array{0: mixed}>
      */
     public static function unusableStringProvider(): array
     {
@@ -69,7 +69,7 @@ final class McpArgumentsTest extends TestCase
     }
 
     /**
-     * @return list<array{0: string}>
+     * @return array<string, array{0: string}>
      */
     public static function multiSegmentIdProvider(): array
     {
@@ -101,7 +101,7 @@ final class McpArgumentsTest extends TestCase
     }
 
     /**
-     * @return list<array{0: string}>
+     * @return array<string, array{0: string}>
      */
     public static function legitimateIdProvider(): array
     {

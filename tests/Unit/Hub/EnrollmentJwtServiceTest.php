@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Hub;
 
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\EnrollmentJwtService;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -15,6 +16,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class EnrollmentJwtServiceTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private string $tmpDir;
     private Ed25519KeyManager $keyManager;
     private EnrollmentJwtService $service;
@@ -33,6 +36,7 @@ final class EnrollmentJwtServiceTest extends TestCase
     {
         parent::tearDown();
         $files = glob($this->tmpDir . '/*');
+        self::assertIsArray($files);
         foreach ($files as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -47,7 +51,6 @@ final class EnrollmentJwtServiceTest extends TestCase
     {
         $token = $this->service->createEnrollmentJwt('server-uuid-123');
 
-        self::assertIsString($token);
         $parts = explode('.', $token);
         self::assertCount(3, $parts);
     }
@@ -100,12 +103,14 @@ final class EnrollmentJwtServiceTest extends TestCase
             'kid must be stable across reloads of the same key',
         );
 
-        $tokenKid = json_decode(
+        $decodedHeader = self::arrayNode(json_decode(
             (string) base64_decode(strtr(explode('.', $token)[0], '-_', '+/'), true),
             true,
-        )['kid'] ?? null;
+        ));
+        $tokenKid = $decodedHeader['kid'] ?? null;
+        self::assertIsString($tokenKid, 'the minted header must carry a kid');
 
-        $payload = $reloadedService->validateEnrollmentJwt($token, (string) $tokenKid);
+        $payload = $reloadedService->validateEnrollmentJwt($token, $tokenKid);
         self::assertNotNull($payload, 'token minted before reload must still validate after');
         self::assertSame('server-reload', $payload['server_id']);
     }
@@ -268,7 +273,11 @@ final class EnrollmentJwtServiceTest extends TestCase
         $h = $b64((string) json_encode($header));
         $p = $b64((string) json_encode($payload));
         $keyPair = $this->keyManager->getOrCreateKeyPair();
-        $sig = sodium_crypto_sign_detached("{$h}.{$p}", $keyPair['private']);
+        $privateKey = $keyPair['private'];
+        if ($privateKey === '') {
+            self::fail('the key manager must return a non-empty private key');
+        }
+        $sig = sodium_crypto_sign_detached("{$h}.{$p}", $privateKey);
         return "{$h}.{$p}." . $b64($sig);
     }
 }

@@ -35,6 +35,16 @@ final class InMemoryHubSettingsConnection extends Connection
     public array $statements = [];
 
     /**
+     * Clear the statement log so the next assertion measures only the I/O of
+     * the call under test. (A method, not a literal `= []` at the call site, so
+     * static analysis keeps the declared list<string> shape for later reads.)
+     */
+    public function resetStatementLog(): void
+    {
+        $this->statements = [];
+    }
+
+    /**
      * @psalm-suppress MissingParentConstructorCall Intentional: never open a socket.
      */
     public function __construct()

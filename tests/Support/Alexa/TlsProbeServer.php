@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Support\Alexa;
 
+use OpenSSLCertificateSigningRequest;
 use PHPUnit\Framework\Assert;
 use RuntimeException;
 
@@ -197,7 +198,7 @@ final class TlsProbeServer
             }
 
             $csr = openssl_csr_new(['commonName' => 'localhost'], $key, ['digest_alg' => 'sha256']);
-            if ($csr === false) {
+            if (!$csr instanceof OpenSSLCertificateSigningRequest) {
                 throw new RuntimeException('could not build the probe server CSR');
             }
 

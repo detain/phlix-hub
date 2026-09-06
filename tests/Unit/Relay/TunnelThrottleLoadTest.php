@@ -10,9 +10,11 @@ use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Relay\Tunnel;
+use Phlix\Hub\Tests\Support\Relay\ThrottleMeter;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use ReflectionClassConstant;
 use ReflectionMethod;
 use ReflectionProperty;
@@ -75,10 +77,10 @@ final class TunnelThrottleLoadTest extends TestCase
     private const int PAYLOAD_BYTES = 65_000;
 
     private FrameDecoder $codec;
-    private StructuredLogger $logger;
-    private StructuredLogger $clientLogger;
-    private RelaySessionManager $sessionManager;
-    private TcpConnection $serverWs;
+    private StructuredLogger&MockObject $logger;
+    private StructuredLogger&MockObject $clientLogger;
+    private RelaySessionManager&MockObject $sessionManager;
+    private TcpConnection&MockObject $serverWs;
 
     protected function setUp(): void
     {
@@ -335,8 +337,8 @@ final class TunnelThrottleLoadTest extends TestCase
      * `drainThrottled()` exactly as the shipped `Workerman\Timer` callback would;
      * (3) sample every channel's backlog depth.
      *
-     * @param list<array{channel:int,conn:ClientConnection,sent:object,frameBytes:int}> $clients
-     * @param array<int, float>                                                          $bytesPerSecond
+     * @param list<array{channel:int,conn:ClientConnection,sent:ThrottleMeter,frameBytes:int}> $clients
+     * @param array<int, int|float> $bytesPerSecond
      *
      * @return array<int, int> Offered bytes per channel.
      */
@@ -380,7 +382,7 @@ final class TunnelThrottleLoadTest extends TestCase
                         $client['sent']->queueHighWater,
                         count($this->pendingFor($tunnel, $channel)),
                     );
-                    if ($client['sent']->closed) {
+                    if ($client['sent']->isClosed()) {
                         $client['sent']->closedAtTick = $i;
                         // Mirror the relay worker: the client WS onClose handler
                         // detaches the channel from the tunnel.
@@ -391,7 +393,7 @@ final class TunnelThrottleLoadTest extends TestCase
             }
 
             foreach ($clients as $client) {
-                if ($client['sent']->closed || !$client['conn']->isThrottled()) {
+                if ($client['sent']->isClosed() || !$client['conn']->isThrottled()) {
                     continue;
                 }
                 $drain->invoke($tunnel, $client['conn'], $now);
@@ -472,22 +474,18 @@ final class TunnelThrottleLoadTest extends TestCase
     /**
      * @return array{channel:int,conn:ClientConnection,sent:object,frameBytes:int}
      */
+    /**
+     * @return array{channel: int, conn: ClientConnection, sent: ThrottleMeter, frameBytes: int}
+     */
     private function registerThrottled(Tunnel $tunnel, string $clientId, int $bps, float $base): array
     {
-        $meter = new class {
-            public int $bytes = 0;
-            public int $frames = 0;
-            public int $queueHighWater = 0;
-            public bool $closed = false;
-            public int $closedAtTick = 0;
-            public int $bytesAtPeerClose = 0;
-            public int $bytesAfterPeerClose = 0;
-        };
+        $meter = new ThrottleMeter();
 
         $ws = $this->createMock(TcpConnection::class);
         $ws->method('send')->willReturnCallback(static function (mixed $data) use ($meter): bool {
             // NUMERATOR: every byte handed to the socket, counted per call.
-            $meter->bytes += strlen((string) $data);
+            self::assertIsString($data, 'Tunnel must hand strings to the connection double');
+            $meter->bytes += strlen($data);
             $meter->frames++;
             return true;
         });

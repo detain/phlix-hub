@@ -286,7 +286,12 @@ final class S280ContractsRouteManifestParityTest extends TestCase
     {
         $decoded = self::decode(self::CONTRACTS_EXPORT_PATH, 'contracts route manifest export');
         $routes = $decoded['routes'] ?? null;
-        if (!is_array($routes) || !isset($decoded['provenance']['serverSha'], $decoded['provenance']['total'])) {
+        $provenance = $decoded['provenance'] ?? null;
+        if (
+            !is_array($routes)
+            || !is_array($provenance)
+            || !isset($provenance['serverSha'], $provenance['total'])
+        ) {
             throw new \RuntimeException(
                 'S280: the vendored contracts export is missing provenance.serverSha / provenance.total / '
                 . 'routes — re-vendor it verbatim from ../phlix-contracts/dist/server-route-manifest.json.',

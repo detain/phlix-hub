@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Federation;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Federation\FederationConnectionManager;
 use Workerman\Connection\ConnectionInterface;
@@ -204,14 +205,14 @@ final class FederationConnectionManagerTest extends TestCase
     /**
      * Create a mock connection with a specific object ID.
      */
-    private function createMockConnection(int $objectId): ConnectionInterface
+    private function createMockConnection(int $objectId): ConnectionInterface&MockObject
     {
         $conn = $this->createMock(ConnectionInterface::class);
         $conn->method('send')->willReturn(true);
 
         // Make spl_object_id return our desired ID
         $conn->method('send')->willReturnCallback(
-            function ($data = null, $opcode = null) use ($conn) {
+            function ($data = null, $opcode = null): bool {
                 return true;
             }
         );

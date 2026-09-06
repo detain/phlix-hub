@@ -17,6 +17,7 @@ use Phlix\Hub\Mcp\McpToolContext;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Mcp\Tools\PlaybackControlTool;
 use Phlix\Shared\Hub\ServerInfoDto;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 
 use function base64_decode;
@@ -47,6 +48,8 @@ use function strtolower;
  */
 final class PlaybackControlToolTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private const string USER_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     private const string SERVER_OF_A = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
@@ -230,7 +233,7 @@ final class PlaybackControlToolTest extends TestCase
         ], $this->context());
 
         self::assertIsArray($this->forwarded);
-        self::assertSame('', base64_decode((string) ($this->forwarded['body_b64'] ?? ''), true));
+        self::assertSame('', base64_decode(self::stringNode($this->forwarded['body_b64'] ?? ''), true));
     }
 
     // ------------------------------------------------------------------

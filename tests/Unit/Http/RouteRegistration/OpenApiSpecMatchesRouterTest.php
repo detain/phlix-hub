@@ -242,6 +242,15 @@ final class OpenApiSpecMatchesRouterTest extends RouteRegistrationTestCase
             foreach ($routes as $route) {
                 $chain = [];
                 foreach ($route['middleware'] as $middleware) {
+                    // The registrars wire container-resolved middleware objects; a closure
+                    // or string here would mean the manifest comparison silently changed
+                    // what it describes, so pin the shape instead of guessing at it.
+                    if (!is_object($middleware)) {
+                        self::fail(
+                            'route middleware must be an invokable instance, got '
+                            . get_debug_type($middleware),
+                        );
+                    }
                     $chain[] = (new \ReflectionClass($middleware))->getShortName();
                 }
                 $table[$method . ' ' . $route['path']] = $chain;
@@ -359,7 +368,10 @@ final class OpenApiSpecMatchesRouterTest extends RouteRegistrationTestCase
                     $verb,
                     sprintf('openapi.yaml line %d: x-phlix-middleware outside an operation.', $number + 1),
                 );
-                /** @var string $path */
+                self::assertNotNull(
+                    $path,
+                    sprintf('openapi.yaml line %d: x-phlix-middleware outside a path item.', $number + 1),
+                );
                 $chain = [];
                 foreach (explode(',', $m[1]) as $piece) {
                     $piece = trim($piece);
@@ -461,7 +473,6 @@ final class OpenApiSpecMatchesRouterTest extends RouteRegistrationTestCase
         $source = file_get_contents($path);
         self::assertTrue(is_string($source) && $source !== '', sprintf('%s could not be read.', $path));
 
-        /** @var string $source */
         return $source;
     }
 

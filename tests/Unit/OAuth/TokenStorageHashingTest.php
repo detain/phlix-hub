@@ -85,14 +85,12 @@ final class TokenStorageHashingTest extends TestCase
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
             static function (string $sql, array $params = []) use (&$captured): array {
-                unset($sql);
                 $captured[] = $params;
 
                 return [];
             },
         );
 
-        /** @var Connection $db */
         return $db;
     }
 

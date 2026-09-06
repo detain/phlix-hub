@@ -75,7 +75,7 @@ final class RouterTest extends TestCase
     public function testPostRouteIsRegistered(): void
     {
         $router = new Router();
-        $router->post('/api/v1/servers', static function (Request $r, array $p) use (&$router): Response {
+        $router->post('/api/v1/servers', static function (Request $r, array $p): Response {
             return (new Response())->status(201)->json(['created' => true]);
         });
 
@@ -149,21 +149,23 @@ final class RouterTest extends TestCase
 
     public function testGroupAppliesMiddlewareToChildRoutes(): void
     {
-        $middlewareCalled = false;
+        $middlewareState = new class {
+            public bool $called = false;
+        };
         $router = new Router();
         $router->group(
             '/api/v1',
-            static function (Router $r) use (&$middlewareCalled): void {
+            static function (Router $r): void {
                 $r->get('/servers', static fn (Request $r, array $p): Response => (new Response())->status(200));
             },
-            [static function (Request $req) use (&$middlewareCalled): ?Response {
-                $middlewareCalled = true;
+            [static function (Request $req) use ($middlewareState): ?Response {
+                $middlewareState->called = true;
                 return null;
             }]
         );
 
         $router->dispatch($this->request('GET', '/api/v1/servers'));
-        self::assertTrue($middlewareCalled);
+        self::assertTrue($middlewareState->called);
     }
 
     public function testGroupRestoresPrefixAfterCallback(): void
@@ -211,10 +213,10 @@ final class RouterTest extends TestCase
         $earlyResponse = (new Response())->status(401);
         $router->group(
             '/api',
-            static function (Router $r) use ($earlyResponse): void {
+            static function (Router $r): void {
                 $r->get('/protected', static fn (Request $r, array $p): Response => (new Response())->status(200));
             },
-            [static function (Request $req) use ($earlyResponse): ?Response {
+            [static function (Request $req) use ($earlyResponse): Response {
                 return $earlyResponse;
             }]
         );
@@ -227,17 +229,20 @@ final class RouterTest extends TestCase
 
     public function testMultipleParamsInPath(): void
     {
-        $captured = null;
+        $capturedState = new class {
+            /** @var array<array-key, mixed> */
+            public array $params = [];
+        };
         $router = new Router();
-        $router->get('/api/v1/{resource}/{id}', static function (Request $r, array $p) use (&$captured): Response {
-            $captured = $p;
+        $router->get('/api/v1/{resource}/{id}', static function (Request $r, array $p) use ($capturedState): Response {
+            $capturedState->params = $p;
             return (new Response())->status(200)->json($p);
         });
 
         $res = $router->dispatch($this->request('GET', '/api/v1/servers/123'));
         self::assertSame(200, $res->statusCode);
-        self::assertSame('servers', $captured['resource']);
-        self::assertSame('123', $captured['id']);
+        self::assertSame('servers', $capturedState->params['resource']);
+        self::assertSame('123', $capturedState->params['id']);
     }
 
     // --- Path params are passed to handler ---

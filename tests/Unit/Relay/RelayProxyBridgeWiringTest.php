@@ -109,6 +109,7 @@ final class RelayProxyBridgeWiringTest extends TestCase
         $c = $this->buildContainer();
 
         $bridge = $c->get(RelayProxyBridge::class);
+        self::assertInstanceOf(RelayProxyBridge::class, $bridge);
         $prop = new ReflectionProperty(RelayProxyBridge::class, 'metrics');
         $prop->setAccessible(true);
         $bridgeCollector = $prop->getValue($bridge);

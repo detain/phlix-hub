@@ -130,7 +130,7 @@ final class HubSettingsRepositoryTest extends TestCase
         $repo = $this->repo($db);
         $result = $repo->getAllOverrides();
 
-        self::assertIsArray($result);
+        self::addToAssertionCount(1);
         self::assertSame(3600, $result['auth.access_ttl']);
         self::assertSame(86400, $result['auth.refresh_ttl']);
     }

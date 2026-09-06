@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <psalm
-    errorLevel="1"
+    errorLevel="5"
     resolveFromConfigFile="true"
     findUnusedBaselineEntry="true"
     findUnusedCode="false"
@@ -8,11 +8,50 @@
     xmlns="https://getpsalm.org/schema/config"
     xsi:schemaLocation="https://getpsalm.org/schema/config vendor/vimeo/psalm/config.xsd"
 >
+    <!-- S306 — tests/ joins the analysed corpus. errorLevel="5" is a deliberate,
+         MEASURED choice, not a baseline — Psalm findings over tests/ (branch tree,
+         analysis extensions loaded, the show-info=false flag, matching CI's command):
+
+             level 1: 826   level 2: 623   level 3: 177   level 4: 155
+             level 5:  30   level 6:  24   level 7:   7
+
+         Levels 1-4 are dominated by findings that argue with TEST idiom rather than
+         reporting defects: PropertyNotSetInConstructor x266 (PHPUnit initialises in
+         setUp(), not __construct), InternalMethod x38 (TestCase::addToAssertionCount
+         is PHPUnit's public-but-@internal counting API), RedundantCast/Redundant-
+         Condition/TypeDoesNotContainType x~120 (deliberate runtime guards on decoded
+         JSON and mixed socket payloads — the same defensive-code cliff that made
+         phlix-server pin its Psalm level at 5), and Mixed* x~200 (json_decode trees
+         asserted per-node via DecodedJsonAssertions). All 30 level-5 findings were
+         FIXED honestly (undefined `use` variables, wrong interface docblock
+         refinements, negative-offset reads, a Psalm-unparseable intersection return
+         type, a property-reference capture, and one psalm-5.x array-shape
+         inference quirk — a try/finally scope that also mutates captured-closure
+         properties infers return-literal keys as OPTIONAL; fixed by assembling
+         the shape in a clean typed helper, verified with a minimal repro). Raise the level if and when test doubles
+         adopt typed row fixtures; do NOT add a psalm-baseline.xml or an <IssueHandler>,
+         which would reproduce the "gate that proves nothing" defect S146 removed.
+
+         Scope is asserted by tests/Unit/Support/StaticAnalysisScopeTest.php, which
+         parses THIS file and the CI workflow: dropping the <directory name="tests"/>
+         entry, raising errorLevel above 5, adding an <IssueHandler> suppression, or
+         shipping a psalm-baseline.xml all redden the suite, not just the psalm job.
+         CI's Psalm job installs swoole (see the extension list + comment in
+         .github/workflows/ci.yml) so Swoole\Coroutine\Channel resolves there; the
+         venue PHP is 8.3.6 (Psalm needs >= 8.3.16 to boot) — CI's "Psalm Static
+         Analysis" check is the authoritative verdict for this tree. -->
     <projectFiles>
         <directory name="src"/>
         <directory name="scripts"/>
+        <directory name="tests"/>
         <ignoreFiles>
             <directory name="vendor"/>
+            <!-- S306: the cross-repo route-manifest dumper boots sibling phlix-server
+                 classes (Phlix\Server\*, Phlix\Common\Container\ContainerFactory) that do
+                 not exist in this repo's autoloader — genuinely unanalysable here
+                 (UndefinedClass/ForbiddenCode/shell-exec artifacts), the same written-why
+                 exclusion PHPStan carries in phpstan.neon.dist excludePaths. -->
+            <file name="tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php"/>
         </ignoreFiles>
     </projectFiles>
 </psalm>

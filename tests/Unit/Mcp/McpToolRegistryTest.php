@@ -14,6 +14,7 @@ use Phlix\Hub\Mcp\Tools\GetPlaybackInfoTool;
 use Phlix\Hub\Mcp\Tools\ListLibrariesTool;
 use Phlix\Hub\Mcp\Tools\ListServersTool;
 use Phlix\Hub\Mcp\Tools\SearchMediaTool;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -46,6 +47,8 @@ use function count;
  */
 final class McpToolRegistryTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     /**
      * A duplicate name must be a wiring-time failure. `Router::addRoute()`
      * taught this repository what silent replacement costs: the later
@@ -114,7 +117,7 @@ final class McpToolRegistryTest extends TestCase
         foreach ($described as $tool) {
             self::assertNotSame('', $tool['description']);
             self::assertIsArray($tool['inputSchema']);
-            self::assertTrue(McpScopes::isKnown((string) $tool['x-phlix-scope']));
+            self::assertTrue(McpScopes::isKnown(self::stringNode($tool['x-phlix-scope'])));
         }
     }
 

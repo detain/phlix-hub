@@ -187,7 +187,6 @@ final class UserRepositoryTest extends TestCase
     public function testVerifyPasswordTrueWhenMatching(): void
     {
         $hash = password_hash('hunter2!!', PASSWORD_ARGON2ID);
-        self::assertIsString($hash);
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([['id' => 'u-1', 'password_hash' => $hash]]);
 
@@ -198,7 +197,6 @@ final class UserRepositoryTest extends TestCase
     public function testVerifyPasswordFalseWhenWrong(): void
     {
         $hash = password_hash('hunter2!!', PASSWORD_ARGON2ID);
-        self::assertIsString($hash);
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([['id' => 'u-1', 'password_hash' => $hash]]);
 

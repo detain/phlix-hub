@@ -157,6 +157,7 @@ final class PendingCommandChannelRoundTripTest extends TestCase
             . 'expected count below is not a fact about delivery',
         );
 
+        $published = [];
         $pusher = $this->wiredPusher($published);
 
         $delivered = $pusher->pushPlayMedia('u-1', 'srv-A', 'm-9', 'Inception');
@@ -516,6 +517,7 @@ final class PendingCommandChannelRoundTripTest extends TestCase
         $sink = [];
         $this->connectSyncPlayClient('/syncplay/srv-A', 'tok-1a', $sink);
 
+        $published = [];
         $pusher = $this->wiredPusher($published);
 
         // A reply for a request id that was never issued (or has long since been
@@ -771,10 +773,10 @@ final class PendingCommandChannelRoundTripTest extends TestCase
      * pusher's reply event, so a dispatcher that published on the wrong event
      * would show up as a timeout rather than being quietly accepted.
      *
-     * @param list<array{event: string, data: array<string, mixed>}>|null $published
+     * @param list<array{event: string, data: array<string, mixed>}> $published
      *        Receives every payload the pusher published, by reference.
      */
-    private function wiredPusher(?array &$published): ChannelPendingCommandPusher
+    private function wiredPusher(array &$published): ChannelPendingCommandPusher
     {
         $published = [];
 

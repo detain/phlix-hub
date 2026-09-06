@@ -1,10 +1,43 @@
+# S306 — the corpus is src + scripts + TESTS, at one uniform level 9, and the scope
+# is asserted three ways: tests/Unit/Support/StaticAnalysisScopeTest.php parses this
+# file AND the workflow, so silently dropping `tests` here (or adding a path/level to
+# the CI command line, which overrides `paths:` entirely) reddens the suite.
+#
+# ⚠ CI's PHPStan job installs NO swoole (see `.github/workflows/ci.yml`'s `phpstan:`
+# `extensions:` list). A local `[OK]` with ext-swoole loaded does NOT predict CI —
+# S128 measured that trap in phlix-server. Reproduce the CI condition with a private
+# ini scan dir (copy of /etc/php/8.3/cli/conf.d minus swoole — an EMPTY scan dir
+# strips phar support and PHPStan then dies on its own vendor phar):
+#
+#     PHP_INI_SCAN_DIR=/tmp/php-ci-scan-s306 vendor/bin/phpstan analyse --no-progress
+#
+# Both runs (with and without swoole) must be clean before this ships.
 parameters:
     level: 9
     paths:
         - src
         - scripts
+        - tests
     bootstrapFiles:
         - vendor/autoload.php
     stubFiles:
         - phpstan-stubs/ChannelClient.stub
     treatPhpDocTypesAsCertain: false
+    # One entry, allow-listed by StaticAnalysisScopeTest::testExcludePathsStayAllowListed().
+    #
+    # tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php is the
+    # S332 cross-repo regeneration tool: it requires the SIBLING phlix-server CHECKOUT's
+    # autoloader at run time and boots `Phlix\Server\Core\Application`, `Phlix\Server\Http\Router`
+    # and `Phlix\Server\WebPortal\WebPortalRouter` in-process to dump the route manifest
+    # fixture. Those symbols live in another repository — phlix-hub's CI clones ONE repo,
+    # so no stub, scanFile or type fix can make them resolvable here without vendoring
+    # server source into the hub (refused: it would recreate the staleness S332 exists
+    # to prevent). Every one of its 15 findings is a `class.notFound`/`method.notFound`
+    # for a server namespace. Currency of the fixture it regenerates is gated by the
+    # `Server Route Snapshot Currency` CI job, not by PHPStan.
+    excludePaths:
+        - tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php
+    # Empty, and it stays empty — StaticAnalysisScopeTest asserts this. A mute list is a
+    # baseline by another name; fix findings at the source (typed mock properties,
+    # DecodedJsonAssertions for json_decode shapes), never by suppression.
+    ignoreErrors: []

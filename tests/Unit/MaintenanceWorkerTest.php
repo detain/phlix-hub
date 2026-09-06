@@ -60,7 +60,7 @@ final class MaintenanceWorkerTest extends TestCase
         $worker->start($container);
 
         // If we got here without exception, the test passes
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     public function testStartDoesNotRequireSpecificContainer(): void
@@ -71,6 +71,6 @@ final class MaintenanceWorkerTest extends TestCase
         $worker = new MaintenanceWorker();
         $worker->start($container);
 
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 }

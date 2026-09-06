@@ -56,6 +56,7 @@ final class HubSettingsControllerTest extends TestCase
     {
         parent::tearDown();
         $files = glob($this->tmpDir . '/*');
+        self::assertIsArray($files);
         foreach ($files as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -96,7 +97,7 @@ final class HubSettingsControllerTest extends TestCase
 
         $meta = HubSettingsController::schemaMeta();
 
-        self::assertIsArray($meta);
+        self::addToAssertionCount(1);
         self::assertNotEmpty($meta, 'schemaMeta() must return a non-empty map');
     }
 

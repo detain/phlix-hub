@@ -29,8 +29,11 @@ use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
+use Phlix\Hub\Tests\Support\Relay\RecordingMountLimiter;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
+use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
 use Workerman\MySQL\Connection;
@@ -67,9 +70,9 @@ final class ClientRelayWorkerTest extends TestCase
     private const OWNER_USER_ID = 'user-owner-1';
 
     private string $tmpDir;
-    private RelaySessionManager $sessionManager;
+    private RelaySessionManager&MockObject $sessionManager;
     private RelayWireCodecInterface $codec;
-    private StructuredLogger $logger;
+    private StructuredLogger&MockObject $logger;
     private TunnelManager $tunnelManager;
     private ClientMountController $controller;
 
@@ -492,28 +495,9 @@ final class ClientRelayWorkerTest extends TestCase
      * to hit() and always reports not-limited, so the mount proceeds far enough
      * to record the key without needing a valid token / tunnel.
      */
-    private function recordingMountLimiter(): RateLimiterInterface
+    private function recordingMountLimiter(): RecordingMountLimiter
     {
-        return new class implements RateLimiterInterface {
-            /** @var list<string> */
-            public array $hits = [];
-
-            public function hit(string $key): RateLimitState
-            {
-                $this->hits[] = $key;
-
-                return new RateLimitState(1, 4, time() + 900, false, 5);
-            }
-
-            public function reset(string $key): void
-            {
-            }
-
-            public function peek(string $key): RateLimitState
-            {
-                return new RateLimitState(0, 5, 0, false, 5);
-            }
-        };
+        return new RecordingMountLimiter();
     }
 
     /**
@@ -656,8 +640,10 @@ final class ClientRelayWorkerTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use (&$delivered): bool {
+                if (!is_string($data)) {
+                    Assert::fail('the relay must only send string frames to the client');
+                }
                 $delivered++;
-                unset($data);
                 return true;
             },
         );
@@ -735,8 +721,10 @@ final class ClientRelayWorkerTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use (&$delivered): bool {
+                if (!is_string($data)) {
+                    Assert::fail('the relay must only send string frames to the client');
+                }
                 $delivered++;
-                unset($data);
                 return true;
             },
         );

@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use Phlix\Hub\Http\Controllers\LogController;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -15,6 +16,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class LogControllerTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private string $dir;
 
     protected function setUp(): void
@@ -51,13 +54,14 @@ final class LogControllerTest extends TestCase
     public function testIndexListsOnlyLogFiles(): void
     {
         $controller = new LogController($this->dir);
-        $body = json_decode($controller->index($this->req([]))->body, true);
+        $body = self::arrayNode(json_decode($controller->index($this->req([]))->body, true));
 
-        $names = array_map(static fn (array $f): string => $f['name'], $body['files']);
+        $files = self::arrayNode($body['files']);
+        $names = array_map(static fn (mixed $f): string => self::stringNode(self::arrayNode($f)['name']), $files);
         sort($names);
         $this->assertSame(['app.log', 'error.log'], $names); // notes.txt excluded
-        $this->assertArrayHasKey('size', $body['files'][0]);
-        $this->assertArrayHasKey('modified_at', $body['files'][0]);
+        $this->assertArrayHasKey('size', self::arrayNode($files[0]));
+        $this->assertArrayHasKey('modified_at', self::arrayNode($files[0]));
     }
 
     public function testTailReturnsLastNLines(): void
@@ -66,7 +70,7 @@ final class LogControllerTest extends TestCase
         $resp = $controller->tail($this->req(['file' => 'app.log', 'lines' => '2']));
 
         $this->assertSame(200, $resp->statusCode);
-        $body = json_decode($resp->body, true);
+        $body = self::arrayNode(json_decode($resp->body, true));
         $this->assertSame(['l4', 'l5'], $body['lines']);
         $this->assertSame('app.log', $body['file']);
     }
@@ -74,7 +78,7 @@ final class LogControllerTest extends TestCase
     public function testTailDefaultsAndReturnsAllWhenFewerLines(): void
     {
         $controller = new LogController($this->dir);
-        $body = json_decode($controller->tail($this->req(['file' => 'error.log']))->body, true);
+        $body = self::arrayNode(json_decode($controller->tail($this->req(['file' => 'error.log']))->body, true));
         $this->assertSame(['e1', 'e2'], $body['lines']);
     }
 
@@ -113,21 +117,23 @@ final class LogControllerTest extends TestCase
     public function testTailAllMergesEveryLogFileTaggedBySource(): void
     {
         $controller = new LogController($this->dir);
-        $body = json_decode($controller->tailAll($this->req([]))->body, true);
+        $body = self::arrayNode(json_decode($controller->tailAll($this->req([]))->body, true));
 
         // Lists every .log file that was merged (notes.txt excluded).
-        sort($body['files']);
-        $this->assertSame(['app.log', 'error.log'], $body['files']);
+        $mergedFiles = self::arrayNode($body['files']);
+        sort($mergedFiles);
+        $this->assertSame(['app.log', 'error.log'], $mergedFiles);
 
         // Every source line appears, each prefixed with its file name.
-        $joined = implode("\n", $body['lines']);
+        $lines = self::arrayNode($body['lines']);
+        $joined = implode("\n", array_map(static fn (mixed $l): string => self::stringNode($l), $lines));
         $this->assertStringContainsString('app.log', $joined);
         $this->assertStringContainsString('error.log', $joined);
         foreach (['l1', 'l5', 'e1', 'e2'] as $needle) {
             $this->assertStringContainsString($needle, $joined);
         }
         // app.log (5) + error.log (2) = 7 merged lines.
-        $this->assertCount(7, $body['lines']);
+        $this->assertCount(7, $lines);
         $this->assertFalse($body['truncated']);
         // Never leaks the non-.log file.
         $this->assertStringNotContainsString('secret', $joined);
@@ -148,8 +154,9 @@ final class LogControllerTest extends TestCase
         );
 
         $controller = new LogController($this->dir);
-        $body = json_decode($controller->tailAll($this->req([]))->body, true);
-        $joined = implode("\n", $body['lines']);
+        $body = self::arrayNode(json_decode($controller->tailAll($this->req([]))->body, true));
+        $rawLines = self::arrayNode($body['lines']);
+        $joined = implode("\n", array_map(static fn (mixed $l): string => self::stringNode($l), $rawLines));
 
         $this->assertLessThan(strpos($joined, 'second'), strpos($joined, 'first'));
         $this->assertLessThan(strpos($joined, 'third'), strpos($joined, 'second'));
@@ -160,16 +167,16 @@ final class LogControllerTest extends TestCase
     {
         $controller = new LogController($this->dir);
         // app.log has 5, error.log 2 → 7 total; cap at 3.
-        $body = json_decode($controller->tailAll($this->req(['lines' => '3']))->body, true);
+        $body = self::arrayNode(json_decode($controller->tailAll($this->req(['lines' => '3']))->body, true));
 
-        $this->assertCount(3, $body['lines']);
+        $this->assertCount(3, self::arrayNode($body['lines']));
         $this->assertTrue($body['truncated']);
     }
 
     public function testMissingLogDirYieldsEmptyListing(): void
     {
         $controller = new LogController('/nonexistent/phlix-hub/logs');
-        $body = json_decode($controller->index($this->req([]))->body, true);
+        $body = self::arrayNode(json_decode($controller->index($this->req([]))->body, true));
         $this->assertSame([], $body['files']);
     }
 }

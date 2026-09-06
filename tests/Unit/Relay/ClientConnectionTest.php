@@ -13,6 +13,7 @@ use Phlix\Hub\Relay\TunnelInterface;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\Connection\TcpConnection;
 
 /**
@@ -22,8 +23,8 @@ use Workerman\Connection\TcpConnection;
  */
 final class ClientConnectionTest extends TestCase
 {
-    private StructuredLogger $logger;
-    private TcpConnection $clientWs;
+    private StructuredLogger&MockObject $logger;
+    private TcpConnection&MockObject $clientWs;
 
     protected function setUp(): void
     {
@@ -157,7 +158,7 @@ final class ClientConnectionTest extends TestCase
         $client->onMessage("\x00\x01\x02", $decoder);
 
         // No exception means success
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     public function testOnMessageClosesConnectionOnFrameBufferOverflow(): void
@@ -180,7 +181,7 @@ final class ClientConnectionTest extends TestCase
         $client->onMessage(str_repeat("\x00", 140000), $decoder);
 
         // No exception escaped — the guard closed the connection instead.
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     public function testOnMessageWithNonDataFrameSendsErrorToClient(): void
@@ -238,7 +239,7 @@ final class ClientConnectionTest extends TestCase
         // Should not throw even though tunnel is null
         $client->onMessage($encoded, $decoder);
 
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     public function testOnMessageWithDataFrameWithRealTunnelForwardsToServer(): void

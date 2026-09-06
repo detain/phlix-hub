@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\E2E\Mcp;
 
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Tests\Support\Mcp\McpE2EProbeEnvironment;
 use PHPUnit\Framework\TestCase;
 
@@ -63,6 +64,8 @@ use const JSON_THROW_ON_ERROR;
  */
 final class McpClientSseE2ETest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     /** Env var naming the running hub's base URL (set by the CI job). */
     private const ENV_BASE_URL = 'HUB_MCP_E2E_BASE_URL';
 
@@ -71,8 +74,6 @@ final class McpClientSseE2ETest extends TestCase
 
     private string $baseUrl;
     private string $node;
-    /** @var array<string, string> */
-    private array $tokens;
 
     protected function setUp(): void
     {
@@ -112,9 +113,6 @@ final class McpClientSseE2ETest extends TestCase
 
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->node = $node;
-        /** @var array<string, string> $tokens */
-        $tokens = $decoded;
-        $this->tokens = $tokens;
     }
 
     // ------------------------------------------------------------------
@@ -127,8 +125,9 @@ final class McpClientSseE2ETest extends TestCase
 
         $this->assertProbeOk($result, 'initialize');
         $parsed = $result['parsed'];
-        $this->assertSame('phlix-hub', $parsed['serverInfo']['name'] ?? null, 'initialize must name the hub');
-        $this->assertNotEmpty($parsed['serverInfo']['version'] ?? '', 'initialize must carry a version');
+        $serverInfo = self::arrayNode($parsed['serverInfo'] ?? []);
+        $this->assertSame('phlix-hub', $serverInfo['name'] ?? null, 'initialize must name the hub');
+        $this->assertNotEmpty($serverInfo['version'] ?? '', 'initialize must carry a version');
         $this->assertSame(
             '2025-06-18',
             $parsed['protocolVersion'] ?? null,
@@ -156,11 +155,12 @@ final class McpClientSseE2ETest extends TestCase
         $result = $this->runProbe('call-tool');
 
         $this->assertProbeOk($result, 'call-tool');
+        $callResult = self::arrayNode($result['parsed']['result'] ?? []);
         $this->assertFalse(
-            $result['parsed']['result']['isError'] ?? true,
+            $callResult['isError'] ?? true,
             'list_servers with no servers must be a normal (non-error) result',
         );
-        $text = $result['parsed']['result']['text'] ?? '';
+        $text = self::stringNode($callResult['text'] ?? '');
         $this->assertStringContainsString('servers', $text, 'the call result must carry the server list');
     }
 
@@ -180,13 +180,14 @@ final class McpClientSseE2ETest extends TestCase
         $result = $this->runProbe('denied-scope');
 
         $this->assertProbeOk($result, 'denied-scope');
+        $deniedResult = self::arrayNode($result['parsed']['result'] ?? []);
         $this->assertTrue(
-            $result['parsed']['result']['isError'] ?? false,
+            $deniedResult['isError'] ?? false,
             'playback_control called with a token that lacks mcp:playback:control must come back isError',
         );
         $this->assertStringContainsString(
             'mcp.scope_denied',
-            $result['parsed']['result']['text'] ?? '',
+            self::stringNode($deniedResult['text'] ?? ''),
             'the denied result must name mcp.scope_denied — this case reds if the scope gate is ever emptied',
         );
     }
@@ -219,7 +220,7 @@ final class McpClientSseE2ETest extends TestCase
      * Run the SDK probe in `$mode` (optionally against another base URL, used
      * only by the broken-transport case).
      *
-     * @return array{exit: int, parsed: array<string, mixed>, raw: string}
+     * @return array{exit: int, parsed: array<array-key, mixed>, raw: string}
      */
     private function runProbe(string $mode, ?string $baseUrlOverride = null): array
     {
@@ -251,7 +252,7 @@ final class McpClientSseE2ETest extends TestCase
      * Assert a probe invocation reported success, with the raw output in the
      * failure message so a red log is self-explanatory.
      *
-     * @param array{exit: int, parsed: array<string, mixed>, raw: string} $result
+     * @param array{exit: int, parsed: array<array-key, mixed>, raw: string} $result
      */
     private function assertProbeOk(array $result, string $mode): void
     {

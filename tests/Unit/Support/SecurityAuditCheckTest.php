@@ -633,13 +633,13 @@ final class SecurityAuditCheckTest extends TestCase
     {
         $source = (string) file_get_contents(self::SCRIPT);
 
-        self::assertSame(
-            1,
-            preg_match('/const AUDIT_ARGUMENTS = \[(.*?)\];/s', $source, $matches),
-            'scripts/security-audit-check.php must declare AUDIT_ARGUMENTS — this test reads the '
-            . 'declared flags rather than pattern-matching prose, and an absent constant is a '
-            . 'silent pass otherwise.',
-        );
+        if (preg_match('/const AUDIT_ARGUMENTS = \[(.*?)\];/s', $source, $matches) !== 1) {
+            self::fail(
+                'scripts/security-audit-check.php must declare AUDIT_ARGUMENTS — this test reads the '
+                . 'declared flags rather than pattern-matching prose, and an absent constant is a '
+                . 'silent pass otherwise.',
+            );
+        }
 
         $flags = [];
 

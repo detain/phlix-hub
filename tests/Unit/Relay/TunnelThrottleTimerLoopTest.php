@@ -10,6 +10,7 @@ use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Relay\Tunnel;
+use Phlix\Hub\Tests\Support\Relay\TimedReleaseMeter;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use PHPUnit\Framework\TestCase;
@@ -362,17 +363,15 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         $tunnel->relaySessionId = 'session-loop';
         $tunnel->status = Tunnel::STATUS_ACTIVE;
 
-        $meter = new class {
-            public int $bytes = 0;
-            public int $frames = 0;
-            /** @var list<float> */
-            public array $sentAt = [];
-        };
+        $meter = new TimedReleaseMeter();
 
         $clientWs = $this->createMock(TcpConnection::class);
         $clientWs->method('send')->willReturnCallback(
             static function (mixed $data) use ($meter): bool {
-                $meter->bytes += strlen((string) $data);
+                if (!is_string($data)) {
+                    self::fail('the throttled socket must only be sent string frames');
+                }
+                $meter->bytes += strlen($data);
                 $meter->frames++;
                 $meter->sentAt[] = microtime(true);
                 return true;
@@ -482,7 +481,7 @@ final class TunnelThrottleTimerLoopTest extends TestCase
                 break;
             }
         }
-        $lastStart = $batchStartIndex === [] ? null : $batchStartIndex[$batches - 1];
+        $lastStart = $batches === 0 ? null : $batchStartIndex[$batches - 1];
 
         $batchWindow = 1.0e-6;
         $batchBytes = 0;
@@ -492,20 +491,71 @@ final class TunnelThrottleTimerLoopTest extends TestCase
         }
         $batchRealised = $batchBytes / $batchWindow;
 
+        return $this->windowResult(
+            $realised,
+            $realised / $capBytesPerSecond,
+            $window,
+            $meter->bytes,
+            $meter->frames,
+            $batches,
+            $meter->bytes - $bytesBeforeRun,
+            $meter->bytes / max($loopEnd - $t0, 1.0e-6),
+            $backlog,
+            $batchWindow,
+            $batchBytes,
+            $batchRealised,
+            $batchRealised / $capBytesPerSecond,
+            $maxBatchGap,
+        );
+    }
+
+    /**
+     * Assemble ONE window's measurement record.
+     *
+     * This is not decoration: psalm 5.x infers array-literal keys as OPTIONAL
+     * (`bytes?: int`) when the same function scope contains both a try/finally
+     * and properties mutated through a captured closure — the very shape of the
+     * timed harness above. Building the shape in this clean scope keeps the
+     * declared `array{...}` contract true for BOTH analysers without any
+     * suppression (S306: measured with a minimal repro, not guessed).
+     *
+     * @return array{
+     *     realised: float, ratio: float, window: float, bytes: int, frames: int,
+     *     batches: int, duringRun: int, loopRate: float, backlog: int,
+     *     batchWindow: float, batchBytes: int, batchRealised: float, batchRatio: float,
+     *     maxBatchGap: float
+     * }
+     */
+    private function windowResult(
+        float $realised,
+        float $ratio,
+        float $window,
+        int $bytes,
+        int $frames,
+        int $batches,
+        int $duringRun,
+        float $loopRate,
+        int $backlog,
+        float $batchWindow,
+        int $batchBytes,
+        float $batchRealised,
+        float $batchRatio,
+        float $maxBatchGap,
+    ): array {
         return [
             'realised' => $realised,
-            'ratio' => $realised / $capBytesPerSecond,
+            'ratio' => $ratio,
             'window' => $window,
-            'bytes' => $meter->bytes,
-            'frames' => $meter->frames,
+            'bytes' => $bytes,
+            'frames' => $frames,
             'batches' => $batches,
-            'duringRun' => $meter->bytes - $bytesBeforeRun,
-            'loopRate' => $meter->bytes / max($loopEnd - $t0, 1.0e-6),
+            'duringRun' => $duringRun,
+            'loopRate' => $loopRate,
             'backlog' => $backlog,
             'batchWindow' => $batchWindow,
             'batchBytes' => $batchBytes,
             'batchRealised' => $batchRealised,
-            'batchRatio' => $batchRealised / $capBytesPerSecond,
+            'batchRatio' => $batchRatio,
             'maxBatchGap' => $maxBatchGap,
         ];
     }
@@ -576,6 +626,7 @@ final class TunnelThrottleTimerLoopTest extends TestCase
             $mean += $ratio;
         }
         $mean /= max(count($ratios), 1);
+        self::assertNotEmpty($ratios, 'the cadence sample must contain at least one batch');
 
         fwrite(STDERR, sprintf(
             "  batch-to-batch ratio min=%.4f max=%.4f mean=%.4f spread=%.4f (n=%d)\n",

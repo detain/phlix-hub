@@ -69,7 +69,7 @@ final class RecordingConnection extends Connection
      * @param string                        $query
      * @param array<int|string, mixed>|null  $params
      * @param int                            $fetchmode
-     * @return mixed
+     * @return array<array-key, mixed>
      */
     public function row($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
     {
@@ -80,18 +80,18 @@ final class RecordingConnection extends Connection
     /**
      * @param string                        $query
      * @param array<int|string, mixed>|null  $params
-     * @return mixed
+     * @return string
      */
-    public function single($query = '', $params = null)
+    public function single($query = '', $params = null): string
     {
         $this->calls[] = 'single:' . $query;
-        return null;
+        return '';
     }
 
     /**
      * @param string                        $query
      * @param array<int|string, mixed>|null  $params
-     * @return mixed
+     * @return array<array-key, mixed>
      */
     public function column($query = '', $params = null)
     {

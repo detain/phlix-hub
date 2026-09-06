@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Hub;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\LibraryShare;
@@ -19,9 +20,9 @@ use Workerman\MySQL\Connection;
  */
 final class LibrarySharingHandlerTest extends TestCase
 {
-    private Connection $db;
-    private UserRepository $users;
-    private StructuredLogger $logger;
+    private Connection&MockObject $db;
+    private UserRepository&MockObject $users;
+    private StructuredLogger&MockObject $logger;
     private LibrarySharingHandler $handler;
 
     protected function setUp(): void
@@ -186,7 +187,7 @@ final class LibrarySharingHandlerTest extends TestCase
         });
 
         $this->handler->revokeShare('owner-1', 'share-1');
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     public function testRevokeShareThrowsWhenShareNotFound(): void
@@ -399,6 +400,6 @@ final class LibrarySharingHandlerTest extends TestCase
         });
 
         $this->handler->updateSharePermission('owner-1', 'share-1', LibraryShare::PERMISSION_READWRITE);
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 }

@@ -136,7 +136,7 @@ final class FederationFrameHandlerTest extends TestCase
         // Invalid frame type 9999 should be ignored
         $handler->handleBinaryFrame('hub-1', 'payload', 9999);
         // No exception means success - we're just verifying it doesn't crash
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 
     public function testHandleBinaryFrameDisconnectedIgnoresWhenNoConnection(): void
@@ -153,6 +153,6 @@ final class FederationFrameHandlerTest extends TestCase
         );
         // Should not throw - no connection to close
         $handler->handleBinaryFrame('hub-1', '', 7); // DISCONNECTED frame type value
-        self::assertTrue(true);
+        self::addToAssertionCount(1);
     }
 }

@@ -34,6 +34,7 @@ use Phlix\Hub\Tests\Support\RecordingMcpTool;
 use Phlix\Hub\Tests\Support\RecordingStreamTimers;
 use Phlix\Hub\Version;
 use Phlix\Shared\Hub\ServerInfoDto;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\Connection\TcpConnection;
@@ -62,6 +63,8 @@ use function str_repeat;
  */
 final class McpControllerTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     private const string USER_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     private const string GOOD_TOKEN = 'phlix-mcp-0123456789abcdef';
 
@@ -632,7 +635,7 @@ final class McpControllerTest extends TestCase
             /** @var array<string, mixed> $meta */
             $meta = $tool['_meta'] ?? [];
             $scope = $meta['phlix/scope'] ?? null;
-            self::assertIsString($scope, ((string) ($tool['name'] ?? '?')) . ' publishes no scope in _meta.');
+            self::assertIsString($scope, self::stringNode($tool['name'] ?? '?') . ' publishes no scope in _meta.');
             self::assertTrue(
                 McpScopes::isKnown($scope),
                 $scope . ' is not a scope McpScopes knows, so no token could ever hold it.',
@@ -756,7 +759,10 @@ final class McpControllerTest extends TestCase
         $connection = $this->createMock(TcpConnection::class);
         $connection->method('send')->willReturnCallback(
             static function (mixed $payload) use (&$written): bool {
-                $written .= (string) $payload;
+                if (!is_string($payload)) {
+                    self::fail('the SSE connection must only be sent string frames');
+                }
+                $written .= $payload;
                 return true;
             },
         );
