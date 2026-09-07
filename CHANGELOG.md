@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#24 currency cascade: route-snapshot re-pin to server `df6aa8e5` (2026-09-07)
+
+- **The hub route snapshot follows server master `bab33ff2` → `df6aa8e5`.**
+  The three server commits (S306/S161/S227 — Psalm L5 test split, `UNIQUE`
+  index detection by shape, `ThemeRegistry` dead-island deletion) are
+  route-content preserving: the S332-derived snapshot re-dumps in place —
+  `route_count` 400 and route-set sha256 `bd71a582…` UNCHANGED, the
+  provenance diff is the `source_sha` line alone — and the vendored contracts
+  fixture re-vendors byte-for-byte from `@phlix/contracts` master `59fd9b02`
+  (md5 `e8b23b9b` → `b6acafdf`). `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA`
+  and the S280 parity survival token advance
+  in lockstep. RED/GREEN proven locally: flipping one `source_sha` byte in the
+  hub fixture fails the S280 same-sha gate naming both pins AND the
+  generator's `--check` premerge gate; restoring it greens both again. This
+  clears the `Server Route Snapshot Currency` master red that server motion
+  re-armed.
+
 ### Changed — cs#23 currency cascade: route-snapshot re-pin to server `bab33ff2` (2026-09-06)
 
 - **The hub route snapshot follows server master `8a90e20e` → `bab33ff2`.**
