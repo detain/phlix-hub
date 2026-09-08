@@ -46,7 +46,7 @@ use const JSON_UNESCAPED_SLASHES;
  *  - `Fixtures/contracts-server-route-manifest.json` — the vendored
  *    `@phlix/contracts` export (`dist/server-route-manifest.json`), the same
  *    bytes mobile (#52) and roku (#49) vendored: the canonical UNION of the
- *    Application (364) and WebPortal (47) wire-path guard sets minus the 11
+ *    Application (365) and WebPortal (47) wire-path guard sets minus the 11
  *    shared tuples = 400 tuples.
  *
  * Before this gate the two copies could drift INDEPENDENTLY: the hub could
@@ -60,7 +60,7 @@ use const JSON_UNESCAPED_SLASHES;
  * pinned (S332/S350). The export is VENDORED, not imported: contracts'
  * `exports` map blocks subpath JSON access, and vendoring byte-identical
   * snapshots is the sanctioned cross-repo pattern (md5 at commit time:
-  * 4f4dc687047fa74d644068033a12377c).
+  * e364789971b271f8ffe2974164c8ce59).
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  */
@@ -75,14 +75,14 @@ final class S280ContractsRouteManifestParityTest extends TestCase
      * asserted absent from both vendored files (it identifies the GATE, not
      * the data). Bump the sha/count suffix in lockstep with the pins below.
      */
-    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@400-2746677e';
+    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@401-1e14b539';
 
     /**
      * The tuple count BOTH derivations must carry — the canonical contracts
-     * total (364 Application + 47 WebPortal − 11 shared), pinned positively
+     * total (365 Application + 47 WebPortal − 11 shared), pinned positively
      * so an empty or gutted scan can never pass.
      */
-    private const S280_EXPECTED_ROUTE_COUNT = 400;
+    private const S280_EXPECTED_ROUTE_COUNT = 401;
 
     /**
      * The vendored S332 snapshot and the vendored contracts export must be
