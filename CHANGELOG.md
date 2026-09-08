@@ -6,6 +6,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#26 currency cascade: route-snapshot re-pin to server `1e14b539` — NON-PURE, the fence MOVES (2026-09-08)
+
+- **The hub route snapshot follows server master `2746677e` → `1e14b539`** — and for the
+  first time in this cascade the route SET itself moves: S273 added the real route
+  `POST /api/v1/admin/updates/check`, so the S332-derived snapshot re-dumps with
+  `route_count` 400 → **401** and the route-set sha256 fence `bd71a582…` → **`f9716f1d…`**
+  (the fence moving IS the point: a genuine route add must not be laundered through a
+  held hash). The vendored contracts fixture re-vendors byte-for-byte from
+  `@phlix/contracts` master `97c87f27` (md5 `4f4dc687` → `e3647899`, provenance total
+  401). `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA`, the S280 parity
+  survival token (advance to `@401-1e14b539`) and `S280_EXPECTED_ROUTE_COUNT` move in
+  lockstep; historical `bd71a582…` entries above stay — they record the fence at THEIR
+  time. RED/GREEN proven locally: `--check` green, then a tuple-only edit of the hub
+  fixture fails the generator's `--check` with "stale or was hand-edited" (restored
+  md5-verified, green again); full phpunit green on BOTH test databases; the
+  `Server Route Snapshot Currency` master job this clears is the wave success criterion.
+  The planted-divergence and lockstep stories are exactly what the S280 both-same-sha
+  and tuple-exact parity gates exist to catch.
+
 ### Changed — cs#25 currency cascade: route-snapshot re-pin to server `2746677e` (2026-09-08)
 
 - **The hub route snapshot follows server master `df6aa8e5` → `2746677e`.**
