@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — cs#25 currency cascade: route-snapshot re-pin to server `2746677e` (2026-09-08)
+
+- **The hub route snapshot follows server master `df6aa8e5` → `2746677e`.**
+  The two server commits (S166/S112 — plugin composer `ClassLoader` leak on
+  disable/uninstall, `MediaItemShaper` URL-surface validation at emission) are
+  route-content preserving: the S332-derived snapshot re-dumps in place —
+  `route_count` 400 and route-set sha256 `bd71a582…` UNCHANGED, the
+  provenance diff is the `source_sha` line alone — and the vendored contracts
+  fixture re-vendors byte-for-byte from `@phlix/contracts` master `e837e31c`
+  (md5 `b6acafdf` → `4f4dc687`). `ServerProxyControllerTest::S332_EXPECTED_SERVER_SOURCE_SHA`
+  and the S280 parity survival token advance
+  in lockstep. RED/GREEN proven locally: corrupting one tuple byte in the hub
+  fixture fails the S280 parity gate (array-identical diff) AND the S332
+  sha256 pin ("the fixture has been hand-edited"); restoring it greens both
+  and the generator's `--check` premerge gate. This
+  clears the `Server Route Snapshot Currency` master red that server motion
+  re-armed.
+
 ### Changed — cs#24 currency cascade: route-snapshot re-pin to server `df6aa8e5` (2026-09-07)
 
 - **The hub route snapshot follows server master `bab33ff2` → `df6aa8e5`.**

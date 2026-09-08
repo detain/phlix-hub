@@ -3950,7 +3950,7 @@ final class ServerProxyControllerTest extends TestCase
      * `php tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php
      * [server-root]` and committing the regenerated fixture in the same commit.
      */
-    private const S332_EXPECTED_SERVER_SOURCE_SHA = 'df6aa8e5cf577fa4a6fa9d73bcad7e7ec7d4fc4a';
+    private const S332_EXPECTED_SERVER_SOURCE_SHA = '2746677eddf8f7a0847d2c6a687f2171b44c68c0';
 
     /**
      * Write routes under an allowlisted read prefix that are deliberately NOT
