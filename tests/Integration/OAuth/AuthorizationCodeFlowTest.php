@@ -22,11 +22,9 @@ use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
 
 use function hash;
-use function is_array;
 use function json_decode;
 use function parse_str;
 use function parse_url;
-use function str_contains;
 use function urldecode;
 
 use const PHP_URL_QUERY;

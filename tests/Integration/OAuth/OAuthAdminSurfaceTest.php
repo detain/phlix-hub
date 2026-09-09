@@ -27,14 +27,12 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
 use function bin2hex;
-use function is_array;
 use function is_string;
 use function json_decode;
 use function parse_str;
 use function parse_url;
 use function preg_match;
 use function random_bytes;
-use function str_contains;
 
 use const PHP_URL_QUERY;
 

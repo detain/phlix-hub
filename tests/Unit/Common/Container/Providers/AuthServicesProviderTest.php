@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Common\Container\Providers;
 
-use Phlix\Hub\Common\Container\MissingJwtSecretException;
 use Phlix\Hub\Common\Container\Providers\AuthServicesProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;

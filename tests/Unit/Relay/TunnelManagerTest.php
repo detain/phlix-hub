@@ -6,11 +6,8 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\FrameDecoder;
-use Phlix\Hub\Relay\FrameEncoder;
-use Phlix\Hub\Relay\RelayFrameType;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManager;
-use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;

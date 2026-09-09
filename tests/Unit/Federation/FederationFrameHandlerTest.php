@@ -11,7 +11,6 @@ use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Federation\FederationConnectionManager;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use PHPUnit\Framework\TestCase;
-use Workerman\Connection\ConnectionInterface;
 
 /**
  * Unit tests for {@see FederationFrameHandler}.

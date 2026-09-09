@@ -8,7 +8,6 @@ use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Federation\FederationAdminDelegationRepository;
-use Phlix\Hub\Federation\FederationHubConfig;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;

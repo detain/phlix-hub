@@ -13,15 +13,11 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Federation\FederationConnectionManager;
 use Phlix\Hub\Federation\FederationFrameHandler;
-use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Relay\FrameDecoder;
-use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
-use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\ConnectionInterface;
 
-use function is_string;
 use function json_decode;
 use function ord;
 use function spl_object_id;

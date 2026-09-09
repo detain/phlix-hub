@@ -8,7 +8,6 @@ use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Federation\FederationConnectionManager;
 use Workerman\Connection\ConnectionInterface;
-use Workerman\Connection\TcpConnection;
 
 /**
  * Unit tests for {@see FederationConnectionManager}.

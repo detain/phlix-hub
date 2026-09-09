@@ -8,7 +8,6 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\Ed25519KeyManager;
-use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Shared\Hub\ClaimRequest;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;

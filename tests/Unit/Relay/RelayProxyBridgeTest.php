@@ -20,8 +20,6 @@ use Workerman\Coroutine\Channel;
 use function array_filter;
 use function array_key_last;
 use function array_values;
-use function base64_decode;
-use function base64_encode;
 use function count;
 use function json_decode;
 

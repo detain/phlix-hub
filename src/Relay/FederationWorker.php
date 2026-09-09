@@ -13,8 +13,6 @@ namespace Phlix\Hub\Relay;
 
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
-use Phlix\Hub\Federation\FederationConnectionManager;
-use Phlix\Hub\Federation\FederationFrameHandler;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Http\Controllers\FederationRelayController;
 use Psr\Container\ContainerInterface;
@@ -24,7 +22,6 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Worker;
 
 use function count;
-use function is_string;
 use function preg_match;
 use function rawurldecode;
 use function spl_object_id;

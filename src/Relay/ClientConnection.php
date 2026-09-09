@@ -18,7 +18,6 @@ use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Workerman\Connection\TcpConnection;
 
-use function strlen;
 use function time;
 
 /**

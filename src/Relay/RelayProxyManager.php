@@ -26,7 +26,6 @@ use Throwable;
 use Workerman\Timer;
 
 use function base64_decode;
-use function base64_encode;
 use function is_array;
 use function is_numeric;
 use function is_string;

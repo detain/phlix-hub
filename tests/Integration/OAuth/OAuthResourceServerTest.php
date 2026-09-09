@@ -36,7 +36,6 @@ use ReflectionMethod;
 
 use function bin2hex;
 use function glob;
-use function is_array;
 use function is_string;
 use function json_decode;
 use function mkdir;

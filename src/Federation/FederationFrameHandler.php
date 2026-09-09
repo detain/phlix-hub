@@ -12,16 +12,13 @@ declare(strict_types=1);
 namespace Phlix\Hub\Federation;
 
 use Phlix\Hub\Common\Logger\AuditLogger;
-use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
-use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Throwable;
 use Workerman\Connection\ConnectionInterface;
 
 use function json_decode;
 use function json_encode;
-use function strlen;
 
 /**
  * Handles incoming HUB_* frames on the master hub.

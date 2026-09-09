@@ -19,7 +19,6 @@ use Phlix\Shared\Relay\RelayWireCodecInterface;
 
 use function chr;
 use function json_encode;
-use function ord;
 use function pack;
 use function strlen;
 use function unpack;

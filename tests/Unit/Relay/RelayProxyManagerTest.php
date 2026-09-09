@@ -24,12 +24,10 @@ use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use ReflectionProperty;
 use Workerman\Connection\TcpConnection;
-use Workerman\Events\EventInterface;
 use Workerman\Timer;
 
 use function array_key_last;
 use function array_sum;
-use function base64_decode;
 use function base64_encode;
 use function chr;
 use function count;

@@ -9,7 +9,6 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\RequestContext;
-use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 use support\Context;

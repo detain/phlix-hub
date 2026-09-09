@@ -18,7 +18,6 @@ use Swoole\Coroutine;
 use Throwable;
 use Workerman\Coroutine\Channel;
 
-use function base64_decode;
 use function base64_encode;
 use function bin2hex;
 use function getmypid;
