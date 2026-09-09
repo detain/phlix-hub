@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W49 (cs30): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
+
+- **cs#30 currency cascade, hub leg (wave closer).** PURE provenance re-pin; no route bytes move.
+  The span `e15d9543` → `32183f5b` is two server merges (S266 #747, S171 #748), re-proven route-zero
+  at the contracts leg (guard-test/`Router.php`/`Routes/`+`FastPath/` blobs and trees identical;
+  `WebPortalRouter.php` comment-only — strip-whitespace md5 equal; the deleted `public/index.php`
+  front controller carried zero route-wiring hits). `Fixtures/phlix-server-route-manifest.json`
+  re-dumped with `dump-phlix-server-route-manifest.php` against phlix-server master `32183f5b`
+  (live-registrar boot) — the only line that moves is `source_sha`; `route_count` stays **401** and
+  the route-content fence `sha256` **holds byte-for-byte** at `f9716f1d…` (`--check` OK) — the
+  one-line diff is itself the empirical proof the span carries no route delta.
+  `Fixtures/contracts-server-route-manifest.json` re-vendored byte-identical from `@phlix/contracts`
+  master `767146a8` (untagged regen #17; full-file md5 `27834ef4` → `cb53d53f`, blob identity
+  `9068173e` verified against the contracts dist artifact). Pins follow in the same commit:
+  `S280ContractsRouteManifestParityTest.php` (docblock md5, `S280_SURVIVAL_TOKEN` →
+  `…@401-32183f5b`, lane ritual token const replaced, length assert 16 → 19; `S280_EXPECTED_ROUTE_COUNT`
+  stays 401) and `ServerProxyControllerTest.php` (`S332_EXPECTED_SERVER_SOURCE_SHA` → `32183f5b…`).
+  Planted-divergence sanity GREEN→RED→GREEN in-lane on both named tests.
+  This leg clears the `Server Route Snapshot Currency` job on the next master push — the wave's point.
+
 ### Changed — W48 (cs29): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
 
 - **cs#29 currency cascade, hub leg (wave closer).** PURE provenance re-pin; no route bytes move.
