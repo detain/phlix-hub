@@ -6,6 +6,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W46 (cs27): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
+
+- **cs#27 currency cascade, hub leg (wave closer).** Both vendored manifests
+  move to the new canonical provenance in lockstep. `Fixtures/phlix-server-route-manifest.json`
+  regenerated with `dump-phlix-server-route-manifest.php` against phlix-server
+  master `afe54c7c` — seven route-zero server merges since `1e14b539`; the
+  only line that moves is `source_sha`, `route_count` stays **401** and the
+  route-content fence `sha256` **holds byte-for-byte** at `f9716f1d…`
+  (`--check` OK). `Fixtures/contracts-server-route-manifest.json` re-vendored
+  verbatim from `@phlix/contracts` master `28000fa4` (untagged regen; full-file
+  md5 `e3647899` → `5c06306c`, blob identity `81c56ea9` verified against the
+  contracts dist artifact). Pins follow in `S280ContractsRouteManifestParityTest.php`
+  (docblock md5, `S280_SURVIVAL_TOKEN` → `…@401-afe54c7c`, lane ritual token
+  const added; `S280_EXPECTED_ROUTE_COUNT` stays 401) and
+  `ServerProxyControllerTest.php` (`S332_EXPECTED_SERVER_SOURCE_SHA` →
+  `afe54c7c…`). Planted-divergence sanity re-proved: one corrupted tuple byte
+  reddened `testS280RouteSetsAreTupleIdenticalAcrossBothDerivations` and
+  `testS332ServerRouteManifestIsGenuineAndCurrent` by name; byte-exact restore
+  returned OK (6 tests, 21 assertions). No tags move; the `v0.4.6` contracts
+  pin law stands.
+
 ### Added — S61 CLI user-management commands with `--json` (2026-09-09)
 
 - Four new `bin/phlix` commands — `user:list`, `user:create`, `user:promote`
