@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W48 (cs29): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
+
+- **cs#29 currency cascade, hub leg (wave closer).** PURE provenance re-pin; no route bytes move.
+  The span `a5cde27e` → `e15d9543` is two server merges (S211 #745, S114 #746), re-proven route-zero
+  at the contracts leg (route-authority blobs/trees identical; zero route-wiring hunks in the moved
+  `Application.php`). `Fixtures/phlix-server-route-manifest.json` re-dumped with
+  `dump-phlix-server-route-manifest.php` against phlix-server master `e15d9543` (live-registrar boot)
+  — the only line that moves is `source_sha`; `route_count` stays **401** and the route-content fence
+  `sha256` **holds byte-for-byte** at `f9716f1d…` (`--check` OK) — the one-line diff is itself the
+  empirical proof the moved `Application.php` carries no route delta.
+  `Fixtures/contracts-server-route-manifest.json` re-vendored byte-identical from `@phlix/contracts`
+  master `8697c099` (untagged regen #16; full-file md5 `0331a2d8` → `27834ef4`, blob identity
+  `73b945aa` verified against the contracts dist artifact). Pins follow in the same commit:
+  `S280ContractsRouteManifestParityTest.php` (docblock md5, `S280_SURVIVAL_TOKEN` →
+  `…@401-e15d9543`, lane ritual token const replaced, length assert 19 → 16; `S280_EXPECTED_ROUTE_COUNT`
+  stays 401) and `ServerProxyControllerTest.php` (`S332_EXPECTED_SERVER_SOURCE_SHA` → `e15d9543…`).
+  This leg clears the `Server Route Snapshot Currency` job on the next master push — the wave's point.
+
 ### Changed — W47 (cs28): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
 
 - **cs#28 currency cascade, hub leg (wave closer).** PURE provenance re-pin; no route bytes move.
