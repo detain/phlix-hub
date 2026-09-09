@@ -19,6 +19,7 @@ declare(strict_types=1);
  * obtained inside the command's `execute()`.
  */
 
+use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\Database\MigrationRunner;
 use Phlix\Hub\Console\Commands\MigrateCommand;
@@ -26,6 +27,10 @@ use Phlix\Hub\Console\Commands\OAuthClientDisableCommand;
 use Phlix\Hub\Console\Commands\OAuthClientListCommand;
 use Phlix\Hub\Console\Commands\OAuthClientRegisterCommand;
 use Phlix\Hub\Console\Commands\SmokeJwtCommand;
+use Phlix\Hub\Console\Commands\UserCreateCommand;
+use Phlix\Hub\Console\Commands\UserDeleteCommand;
+use Phlix\Hub\Console\Commands\UserListCommand;
+use Phlix\Hub\Console\Commands\UserPromoteCommand;
 use Phlix\Hub\OAuth\OAuthClientRegistry;
 use Phlix\Hub\OAuth\OAuthTokenService;
 use Webman\Console\Command;
@@ -76,5 +81,17 @@ $cli->add(new OAuthClientDisableCommand(
     $registryFactory,
     static fn(): OAuthTokenService => new OAuthTokenService(ConnectionPool::getConnection('mysql')),
 ));
+
+// S61 — the user-management CLI. Same lazy-factory shape as `migrate` and the
+// OAuth commands: the closure is invoked inside execute(), so `php bin/phlix
+// list` opens no socket and these commands work with no database available.
+$userRepositoryFactory = static fn(): UserRepository => new UserRepository(
+    ConnectionPool::getConnection('mysql'),
+);
+
+$cli->add(new UserListCommand($userRepositoryFactory));
+$cli->add(new UserCreateCommand($userRepositoryFactory));
+$cli->add(new UserPromoteCommand($userRepositoryFactory));
+$cli->add(new UserDeleteCommand($userRepositoryFactory));
 
 exit($cli->run());

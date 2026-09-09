@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — S61 CLI user-management commands with `--json` (2026-09-09)
+
+- Four new `bin/phlix` commands — `user:list`, `user:create`, `user:promote`
+  (with `--revoke`) and `user:delete` (with `--force`) — bring the hub's account
+  administration to the command line, mirroring the `phlix-server` `user:*`
+  surface. Each accepts `--json` and renders the shared
+  `{"ok":true,"data":[...]}` / `{"ok":false,"error":"..."}` envelope so a script
+  driving the CLI branches on one shape regardless of which command produced the
+  line; the `--json` rendering helper is one copy per repo (deliberately NOT
+  pushed into the tagged `detain/phlix-shared` package, so neither CLI waits on a
+  package release to ship its contract). `user:promote --revoke` and `user:delete`
+  enforce the last-admin invariant by reading the repository's public
+  `countAdmins()` directly — the final administrator can never be demoted or
+  deleted, and `--force` bypasses only the interactive confirmation, never the
+  guard. `user:create` reuses the registration field rules (username 3–50
+  chars, valid email, non-empty password) before delegating to `UserRepository::create()`.
+  All four resolve their `UserRepository` through a lazy factory, so `bin/phlix
+  list` still opens no database connection. CLI-only: no HTTP route changes and
+  no migrations.
+
 ### Changed — cs#26 currency cascade: route-snapshot re-pin to server `1e14b539` — NON-PURE, the fence MOVES (2026-09-08)
 
 - **The hub route snapshot follows server master `2746677e` → `1e14b539`** — and for the
