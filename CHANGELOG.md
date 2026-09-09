@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W47 (cs28): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
+
+- **cs#28 currency cascade, hub leg (wave closer).** PURE provenance re-pin; no route bytes move.
+  `Fixtures/phlix-server-route-manifest.json` re-dumped with `dump-phlix-server-route-manifest.php`
+  against phlix-server master `a5cde27e` — the only line that moves is `source_sha`; `route_count`
+  stays **401** and the route-content fence `sha256` **holds byte-for-byte** at `f9716f1d…`
+  (`--check` OK). `Fixtures/contracts-server-route-manifest.json` re-vendored byte-identical from
+  `@phlix/contracts` master `a1ca39d8` (untagged regen; full-file md5 `5c06306c` → `0331a2d8`,
+  blob identity `a6048724` verified against the contracts dist artifact). Pins follow in the same
+  commit: `S280ContractsRouteManifestParityTest.php` (docblock md5, `S280_SURVIVAL_TOKEN` →
+  `…@401-a5cde27e`, lane ritual token const replaced; `S280_EXPECTED_ROUTE_COUNT` stays 401) and
+  `ServerProxyControllerTest.php` (`S332_EXPECTED_SERVER_SOURCE_SHA` → `a5cde27e…`).
+  Planted-divergence sanity re-proved: one corrupted route byte reddened
+  `testS332ServerRouteManifestIsGenuineAndCurrent` and one corrupted contracts tuple byte reddened
+  `testS280RouteSetsAreTupleIdenticalAcrossBothDerivations` by name; byte-exact restore returned
+  GREEN. No tags move; the `v0.4.6` contracts pin law stands.
+
 ### Changed — W46 (cs27): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
 
 - **cs#27 currency cascade, hub leg (wave closer).** Both vendored manifests
