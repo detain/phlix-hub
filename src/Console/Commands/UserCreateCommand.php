@@ -102,6 +102,7 @@ final class UserCreateCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        /** @var mixed $usernameArg */
         $usernameArg = $input->getArgument('username');
         $username = trim(is_string($usernameArg) ? $usernameArg : '');
         $email = trim(self::stringOption($input, 'email'));
@@ -199,6 +200,7 @@ final class UserCreateCommand extends Command
 
     private static function stringOption(InputInterface $input, string $name): string
     {
+        /** @var mixed $value */
         $value = $input->getOption($name);
 
         return is_string($value) ? $value : '';

@@ -173,6 +173,7 @@ final class UserDeleteCommand extends Command
 
     private static function stringArgument(InputInterface $input, string $name): string
     {
+        /** @var mixed $value */
         $value = $input->getArgument($name);
 
         return is_string($value) ? $value : '';
