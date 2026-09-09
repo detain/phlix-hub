@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W50 (cs30 era-2): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
+
+- **cs#30 re-cascade, hub leg (wave closer, era-2).** Server moved mid-wave `32183f5b` → `5986b61d`
+  (S210 #749 — docker boot-gate bounds only), re-proven route-zero (Router/Application/guard blobs
+  and the full `Routes/` + `FastPath/` trees byte-identical). `Fixtures/phlix-server-route-manifest.json`
+  re-dumped against server master `5986b61d` — source_sha-line-only diff; `route_count` stays **401**;
+  fence `sha256` **holds** at `f9716f1d…` (`--check` OK). `Fixtures/contracts-server-route-manifest.json`
+  re-vendored byte-identical from `@phlix/contracts` master `57a8528a` (era-2 regen; full-file md5
+  `cb53d53f` → `045c0984`, blob identity `dd0cbaca` verified). Pins advance in the same commit:
+  S280 docblock md5, `S280_SURVIVAL_TOKEN` → `…@401-5986b61d` (lane ritual token const UNCHANGED —
+  same wave), `S332_EXPECTED_SERVER_SOURCE_SHA` → `5986b61d…`; `S280_EXPECTED_ROUTE_COUNT` stays 401.
+  This leg clears `Server Route Snapshot Currency` on the next master push — the wave's point.
+
 ### Changed — W49 (cs30): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
 
 - **cs#30 currency cascade, hub leg (wave closer).** PURE provenance re-pin; no route bytes move.
