@@ -55,6 +55,10 @@ final class CliCommandRegistrationTest extends TestCase
         'oauth:client:register',
         'oauth:client:list',
         'oauth:client:disable',
+        'user:list',
+        'user:create',
+        'user:promote',
+        'user:delete',
     ];
 
     public function testBinPhlixRegistersEveryExpectedCommandWithoutADatabase(): void
