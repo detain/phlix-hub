@@ -15,7 +15,6 @@ use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
-use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Shared\Hub\ClaimRequest;
 use Phlix\Shared\Hub\ClaimResponse;
 use Workerman\MySQL\Connection;

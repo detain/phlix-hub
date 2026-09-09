@@ -25,7 +25,6 @@ use Phlix\Hub\Http\Response;
 use Phlix\Shared\Hub\ServerInfoDto;
 use Workerman\Connection\TcpConnection;
 
-use function base64_decode;
 use function count;
 use function explode;
 use function implode;

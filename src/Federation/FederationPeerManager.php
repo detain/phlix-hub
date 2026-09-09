@@ -18,11 +18,9 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
-use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
-use Workerman\Connection\ConnectionInterface;
 use Workerman\Timer;
 
 /**

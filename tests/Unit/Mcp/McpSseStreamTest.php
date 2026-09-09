@@ -10,7 +10,6 @@ use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Workerman\Connection\TcpConnection;
 
-use function count;
 use function json_decode;
 use function str_contains;
 use function str_starts_with;

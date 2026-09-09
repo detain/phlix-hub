@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Http;
 
-use BadMethodCallException;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;

@@ -17,28 +17,23 @@ use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Jwt\JwtHeader;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Relay\FrameDecoder;
-use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequestCodec;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use SplObjectStorage;
 use Throwable;
-use Workerman\Connection\ConnectionInterface;
 use Workerman\Connection\TcpConnection;
 use Workerman\Timer;
 
 use function array_shift;
-use function base64_decode;
 use function count;
-use function explode;
 use function is_array;
 use function is_string;
 use function json_decode;
 use function json_encode;
 use function microtime;
 use function strlen;
-use function strtr;
 use function time;
 
 /**

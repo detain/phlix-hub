@@ -7,7 +7,6 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\FrameDecoder;
-use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Shared\Relay\RelayFrame;

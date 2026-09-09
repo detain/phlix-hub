@@ -18,7 +18,6 @@ use ReflectionProperty;
 use Workerman\Timer;
 
 use function bin2hex;
-use function count;
 use function glob;
 use function hash;
 use function is_array;

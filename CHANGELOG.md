@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — W50 (S187 hub): unused-import guard (server detector ported) + whole-tree reflow — 66 imports / 43 files — 2026-09-09
+
+- **S187 hub leg (solo window; deliberately deferred at W46 close).** Port `tests/Unit/Support/UnusedImportGuardTest.php`
+  from the server precedent (`a5cde27e`, PR #744): zero-dependency `token_get_all` scan — option (b), **no** Slevomat,
+  **no** `composer.lock` churn — guarded roots `src,tests,scripts,config` (hub has no `examples`; hub `migrations/` is
+  SQL-only, so listing it would trip the guard's deliberate empty-root fail-fast), corpus floor 400 (measured 499).
+  Proofs ship with the test: planted unused imports red in **both** a real `src/` fixture and a real `tests/` fixture
+  (two-directory plant proof), docblock-only references count as used (server policy), an empty-tree scan **fails fast**.
+- **Whole-tree reflow:** removed all **66 unused imports across 43 files** (src 32 · tests 34 · scripts/config/top-level 0).
+  Pure line deletions — zero added lines, zero non-`use` removals (audited); content-neutral: byte-frozen route
+  fixtures untouched (md5s hold), `openapi.yaml`/`migrations/`/config ENUMs absent from the diff, era-2 currency pins
+  intact. Post-merge the guard scans **0** unused imports repo-wide; the test keeps that at zero permanently.
+
 ### Changed — W50 (cs30 era-2): PURE route-snapshot + contracts-export re-pin — 401 tuples unchanged — 2026-09-09
 
 - **cs#30 re-cascade, hub leg (wave closer, era-2).** Server moved mid-wave `32183f5b` → `5986b61d`

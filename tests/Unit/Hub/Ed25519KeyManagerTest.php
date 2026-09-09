@@ -7,7 +7,6 @@ namespace Phlix\Hub\Tests\Unit\Hub;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
-use RuntimeException;
 
 /**
  * Unit tests for {@see Ed25519KeyManager}.

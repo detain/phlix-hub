@@ -11,7 +11,6 @@ use function exec;
 use function file_get_contents;
 use function implode;
 use function preg_match;
-use function preg_quote;
 use function preg_split;
 use function sprintf;
 use function str_contains;

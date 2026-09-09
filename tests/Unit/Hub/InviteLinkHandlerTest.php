@@ -9,7 +9,6 @@ use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Common\Logger\StructuredLogger;
-use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Hub\LibrarySharingHandler;

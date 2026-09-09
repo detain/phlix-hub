@@ -17,8 +17,6 @@ use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 
 use function json_encode;
-use function pack;
-use function strlen;
 
 /**
  * Encodes RelayFrame objects into binary WebSocket frames.

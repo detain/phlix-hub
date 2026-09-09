@@ -58,7 +58,6 @@ use function strtolower;
 use function sys_get_temp_dir;
 use function tempnam;
 use function unlink;
-use function base64_encode;
 use function count;
 use function dechex;
 use function explode;

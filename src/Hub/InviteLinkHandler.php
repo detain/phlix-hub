@@ -13,7 +13,6 @@ namespace Phlix\Hub\Hub;
 
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
-use Phlix\Hub\Auth\JwtClaims;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;

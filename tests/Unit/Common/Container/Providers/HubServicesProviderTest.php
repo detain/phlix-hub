@@ -16,7 +16,6 @@ use Phlix\Hub\Tests\Support\Container\RecordingThrowingContainer;
 use Phlix\Hub\Tests\Support\Container\RecordingWrongTypeContainer;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
-use Psr\Container\ContainerInterface;
 
 /**
  * Covers the HB-2.6 DATA-LOCALITY split of the periodic reaper wiring:

@@ -21,7 +21,6 @@ use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
-use Throwable;
 
 /**
  * REST API controller for the federation management UI.

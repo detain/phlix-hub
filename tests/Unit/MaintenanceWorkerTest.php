@@ -7,8 +7,6 @@ namespace Phlix\Hub\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\MaintenanceWorker;
 use Phlix\Hub\Common\Logger\LoggerFactory;
-use Phlix\Hub\Common\Logger\StructuredLogger;
-use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Psr\Container\ContainerInterface;
 

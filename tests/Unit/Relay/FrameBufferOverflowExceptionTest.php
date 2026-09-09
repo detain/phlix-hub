@@ -6,7 +6,6 @@ namespace Phlix\Hub\Tests\Unit\Relay;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Relay\FrameBufferOverflowException;
-use Phlix\Hub\Relay\InvalidFrameTypeException;
 
 /**
  * Unit tests for {@see FrameBufferOverflowException}.

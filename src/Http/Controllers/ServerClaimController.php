@@ -12,13 +12,10 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Hub\ClaimRequestHandler;
-use Phlix\Hub\Hub\HubServicesProvider;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Hub\ClaimRequest;
-use Phlix\Shared\Hub\ClaimResponse;
-use Psr\Container\ContainerInterface;
 
 /**
  * Handles server claim endpoints.

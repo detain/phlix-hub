@@ -6,12 +6,10 @@ namespace Phlix\Hub\Tests\Unit\Console;
 
 use PHPUnit\Framework\TestCase;
 
-use function array_map;
 use function dirname;
 use function escapeshellarg;
 use function exec;
 use function implode;
-use function is_string;
 use function sprintf;
 use function str_contains;
 
