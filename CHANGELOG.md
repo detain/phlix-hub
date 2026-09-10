@@ -19,6 +19,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (renamed to this wave's identifier, code-resident only; asserted absent from both vendored JSON
   fixtures — verified zero hits). Clears the standing `Server Route Snapshot Currency` red the
   wave exists to resolve. Untagged wave: dependency tag pins stay put.
+### Added — S458 (hub): the PHPUnit job runs the suite in parallel buckets with a duration-packed scheduler — 2026-09-10
+
+- **`scripts/parallel/{ParallelTestRunner.php,run-parallel-tests.php,test-durations.json}`.** The
+  `PHPUnit Test Suite` job's `Run PHPUnit` step spent ~296s of its ~307s wall re-discovering the same
+  66.5s of Unit tests one process at a time. The runner now LPT-packs the 214 DB-free Unit files into
+  `cores-1` buckets from a committed, serial-profile-blessed duration cache and gives the 10
+  Integration files ONE exclusive bucket — every `RealDatabaseTestCase` shares the single
+  `phlix_hub_test` schema (drop-all + migrate + per-test truncate), so co-scheduling them would race
+  by design. Per-bucket `phpunit.xml` clones strip `<coverage>` (no worker clobbers the shared
+  report) and carry a unique `cacheDirectory`; a `proc_open` pool caps live workers; the per-bucket
+  juits merge into `--log-junit`'s path and the per-bucket `--coverage-php` parts merge via
+  `CodeCoverage::merge` into `--coverage-clover`'s, at the exact forwarded paths.
+- **The CI step still spells the canonical PHPUnit command.** `run-parallel-tests.php` receives the
+  verbatim argv after ` -- ` and fails loudly on anything it cannot account for — the S173
+  (`IntegrationDbCiWiringTest`) and S316 (`CoverageArtifactGateTest`) guards pin the literal
+  `vendor/bin/phpunit … --coverage-clover coverage.xml … --log-junit junit.xml` on one line, and this
+  PR edits neither guard. `coverage: xdebug` → `coverage: pcov`: the debugger was never used and
+  pcov measured the suite ~2.5× faster for identical collection.
+- **Measured on a 4-core cpu-set (GH topology):** 31.6s/31.7s wall across two full final-code
+  runs with coverage on (earlier iterations: 32.4s/34.7s), totals `OK (4364 tests, 39935 assertions)` — byte-identical to the
+  `ba264fe5` master-push serial baseline (Time 04:56) — 0 skipped, 112 real-DB cases, S173 and S316
+  green on the merged artifacts both times; zero flakes.
 
 ### Changed — W57 (cs33 hub · wave closer): snapshot re-dump + contracts re-vendor — PURE, 401 tuples, fence held — 2026-09-10
 

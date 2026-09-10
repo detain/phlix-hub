@@ -245,7 +245,11 @@ jobs:
           # "Assert every security-path extension is loaded" step below is what
           # turns an absence into a failure.
           extensions: json, pcntl, posix, swoole, openssl, curl, sodium, mbstring, hash, filter, ctype
-          coverage: xdebug
+          # S458: xdebug → pcov. The suite never needed xdebug's debugger/profiler;
+          # its line-coverage driver was the single biggest cost of this job
+          # (~235s step vs ~94s locally under pcov, same collection). pcov is the
+          # coverage-only driver PHPUnit recommends for CI and changes no assertion.
+          coverage: pcov
 
       # S258. Runs before `composer install` so a base image that lost an
       # extension fails in seconds, naming it, instead of surfacing later as a
@@ -292,7 +296,8 @@ jobs:
 
       - name: Run PHPUnit
         # Use php -d max_execution_time=0 to prevent PHP's default 30s timeout
-        # which causes SIGALRM (exit 142) in long-running test suites with Xdebug coverage.
+        # which causes SIGALRM (exit 142) in long-running test suites with
+        # code coverage.
         #
         # S173: HUB_TEST_DB_* is what every tests/Integration/** case gates on —
         # without it they skip and this job goes green having proven nothing about
@@ -322,13 +327,27 @@ jobs:
         # gate below would red the build. PHPUnit 10 takes ONE `--testsuite`
         # flag, so the two suites are comma-joined: `--testsuite Unit,Integration`
         # is the same set this job always ran, stated deliberately.
+        #
+        # S458: the command below is a PARALLEL run of exactly these suites —
+        # scripts/parallel/run-parallel-tests.php LPT-packs the 214 DB-free Unit
+        # files into cores-1 buckets and gives the 10 Integration files one
+        # exclusive bucket (they share the single phlix_hub_test schema), merges
+        # the per-bucket juits into --log-junit's path and the per-bucket
+        # --coverage-php parts into --coverage-clover's, then relays every
+        # bucket's phpunit exit status. The canonical PHPUnit argv is FORWARDED
+        # verbatim after ` -- ` on purpose: the S173 and S316 guard tests pin
+        # the literal `vendor/bin/phpunit … --coverage-clover coverage.xml`
+        # and `… --log-junit junit.xml` on one line, and those pins are the
+        # anti-tamper mechanism. Do not paraphrase the argv, split it across
+        # lines, or drop the runner — an unknown or unforwardable flag makes
+        # the runner exit 2 at its boundary rather than quietly prove less.
         env:
           HUB_TEST_DB_HOST: 127.0.0.1
           HUB_TEST_DB_PORT: '3306'
           HUB_TEST_DB_USER: root
           HUB_TEST_DB_PASSWORD: root
           HUB_TEST_DB_NAME: phlix_hub_test
-        run: php -d max_execution_time=0 ./vendor/bin/phpunit --testsuite Unit,Integration --colors=always --coverage-clover coverage.xml --log-junit junit.xml
+        run: php -d max_execution_time=0 scripts/parallel/run-parallel-tests.php -- ./vendor/bin/phpunit --testsuite Unit,Integration --colors=always --coverage-clover coverage.xml --log-junit junit.xml
 
       - name: Assert the integration tests actually ran (S173)
         # ADDITIVE gate. It fails the build when any test was SKIPPED, and when
