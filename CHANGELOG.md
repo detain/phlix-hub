@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W53 (cs31 hub · wave closer): snapshot re-dump + contracts re-vendor — PURE, 401 tuples, fence held — 2026-09-10
+
+- **cs#31 cascade closer (leg 7/7).** Re-dumped the server route snapshot against the current
+  phlix-server master tip — the fixture diff is exactly ONE line (`source_sha`), the route-set
+  sha256 fence and `route_count` 401 HOLD byte-identical, and the dumper's `--check` mode
+  byte-passes after the write. Re-vendored the contracts export fixture byte-for-byte from
+  `@phlix/contracts` master (fresh regen; provenance-stripped route-content md5 unchanged
+  old-vs-new — only provenance bytes moved). Gate pins advance in the same commit: S332
+  expected source-sha in `ServerProxyControllerTest.php`; in the S280 parity test the docblock
+  vendored-export md5, the survival-token sha/count suffix, and the lane ritual token constant
+  (code-resident only; asserted absent from both vendored JSON fixtures — verified zero hits).
+  Untagged wave: dependency tag pins stay put.
+
 ### Added — W50 (S187 hub): unused-import guard (server detector ported) + whole-tree reflow — 66 imports / 43 files — 2026-09-09
 
 - **S187 hub leg (solo window; deliberately deferred at W46 close).** Port `tests/Unit/Support/UnusedImportGuardTest.php`
