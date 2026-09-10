@@ -25,11 +25,8 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Timer;
 use Workerman\Worker;
 
-use function array_filter;
-use function array_map;
 use function count;
 use function explode;
-use function in_array;
 use function is_string;
 use function json_decode;
 use function spl_object_id;
@@ -59,6 +56,22 @@ final class SyncPlayRelayWorker
      * Default SyncPlay relay WS port.
      */
     public const DEFAULT_PORT = 8804;
+
+    /**
+     * The ONE subprotocol-id this hub speaks: the marker half of the S237
+     * `Sec-WebSocket-Protocol: bearer, <token>` carrier. The token that rides the
+     * same header is a credential, never a protocol, and is therefore never a
+     * selectable answer — see {@see self::negotiatedSubprotocolEcho()}.
+     */
+    private const BEARER_SUBPROTOCOL = 'bearer';
+
+    /**
+     * The exact 101 header line for {@see self::BEARER_SUBPROTOCOL}, ready for
+     * `$connection->headers` (Workerman appends entries verbatim and drops any
+     * carrying CR/LF, so this constant is deliberately a bare single line).
+     * Composed from the id above so the two can never drift apart.
+     */
+    private const BEARER_SUBPROTOCOL_ECHO = 'Sec-WebSocket-Protocol: ' . self::BEARER_SUBPROTOCOL;
 
     /**
      * Active SyncPlay client connections keyed by connection ID.
@@ -294,44 +307,40 @@ final class SyncPlayRelayWorker
         }
 
         // S355 — RFC 6455 §4.1/§4.2.2: a server that accepts a client's
-        // subprotocol MUST echo EXACTLY ONE of the offered protocols in the
-        // 101 response. Workerman composes the 101 from `$connection->headers`
-        // (appended after onWebSocketConnect returns), and without the echo a
-        // strict client — a browser or undici, exactly the S298 ui consumer's
-        // `new WebSocket(url, ['bearer', token])` — aborts the handshake (no
-        // open, 1006). `$token` is a non-empty string here: the guard above
-        // returns on every null/empty path.
+        // subprotocol offer answers by selecting AT MOST ONE of the offered
+        // protocol-ids and echoing it verbatim. A client that requested
+        // subprotocols and is given none back fails the connection outright
+        // (WHATWG §2.4 — the measured 1006 on the S298 ui carrier
+        // `new WebSocket(url, ['bearer', token])`). Workerman composes the 101
+        // from `$connection->headers` AFTER this callback returns, and that
+        // array is the only extension point on this path (its own
+        // Websocket::dealHandshake() appends the entries it finds there —
+        // vendor/workerman/workerman/src/Protocols/Websocket.php:437-456). The
+        // @internal/@deprecated tags on the property target the webman HTTP
+        // `$response` API, which does not exist here.
         //
-        // The echo is the TOKEN ALONE, not the comma-joined `bearer, <token>`
-        // carrier form: the ui consumer offers TWO protocols (`bearer` and
-        // `<token>`) and a strict client rejects a response protocol that is
-        // not one of the offered entries — echoing the joined form reproduces
-        // the very 1006 this fixes (probed against undici 7.29.0, the ui's
-        // pinned runtime). In the subprotocol-carrier shape the token is
-        // always an offered entry and carries the client's own credential.
-        // The echo is gated on the client HAVING offered the
-        // TOKEN as a subprotocol: echoing one to an `Authorization: Bearer`
-        // client — or to a both-carrier client whose subprotocol header does
-        // not contain the token — would answer a negotiation the client never
-        // made (RFC 6455 §4.1).
-        /** @var mixed $requestedProtocol */
-        $requestedProtocol = $request->header('sec-websocket-protocol');
-        if (is_string($requestedProtocol) && $requestedProtocol !== '') {
-            $offered = array_filter(
-                array_map('trim', explode(',', $requestedProtocol)),
-                static fn (string $protocol): bool => $protocol !== '',
-            );
-            if (in_array($token, $offered, true)) {
-                // `$connection->headers` is Workerman's ONLY 101-extension
-                // point: its own Websocket::dealHandshake() appends the array
-                // to the 101 after onWebSocketConnect returns
-                // (vendor/workerman/workerman/src/Protocols/Websocket.php:449).
-                // The @internal/@deprecated tags target the webman HTTP
-                // `$response` API, which does not exist on this handshake
-                // path — there is no other way to echo Sec-WebSocket-Protocol.
-                /** @psalm-suppress InternalProperty, DeprecatedProperty */
-                $connection->headers = ['Sec-WebSocket-Protocol: ' . $token];
-            }
+        // The selected protocol is `bearer` — the marker the S237 carrier is
+        // named for — and NEVER the token. Two independent reasons, both
+        // load-bearing:
+        //   (1) a credential is not a protocol-id. Echoing the token answers the
+        //       negotiation with a secret and re-publishes on the RESPONSE wire
+        //       the very credential S2b and S237 removed from the query string
+        //       to keep it out of access logs, proxy logs and `Referer` headers.
+        //   (2) §4.2.2 permits only a protocol the server supports; the hub
+        //       supports exactly one, `bearer`. Echoing the token would work
+        //       only because that client smuggled it into the offer list — it
+        //       is not a protocol the hub implements.
+        //
+        // The echo is therefore gated on the client HAVING OFFERED `bearer`:
+        // selecting a protocol the client never offered is itself the §4.1
+        // violation, so an `Authorization: Bearer` client that offers no
+        // subprotocol — the roku/mobile carrier — must keep receiving no echo.
+        // A client that offers `bearer` gets it, whichever carrier authenticated
+        // the connection, because that is a negotiation the client really made.
+        $subprotocolEcho = self::negotiatedSubprotocolEcho($request->header('sec-websocket-protocol'));
+        if ($subprotocolEcho !== null) {
+            /** @psalm-suppress InternalProperty, DeprecatedProperty */
+            $connection->headers = [$subprotocolEcho];
         }
 
         // Create client state with authenticated userId
@@ -349,6 +358,44 @@ final class SyncPlayRelayWorker
             'server_id' => $serverId,
             'user_id' => $userId,
         ]);
+    }
+
+    /**
+     * Decide the 101 `Sec-WebSocket-Protocol` answer for a raw request header.
+     *
+     * RFC 6455 §4.2.2 allows the server to select AT MOST ONE protocol-id from
+     * the client's offer list, and §4.1 makes any selection the client did not
+     * offer a connection the client must fail. This hub implements exactly one
+     * protocol — {@see self::BEARER_SUBPROTOCOL} — so it answers only when the
+     * client offered that id.
+     *
+     * The token sharing the header in the browser carrier is never a candidate.
+     * It is a credential, not a protocol, and echoing it would put a live relay
+     * token on the RESPONSE wire — the same exposure S2b and S237 removed from
+     * the query string so it stops landing in access logs, proxy logs and
+     * `Referer` headers.
+     *
+     * The offer is a comma-separated list with optional whitespace around each
+     * id (RFC 7230), so the match is per-entry: `chat, bearer` offers it,
+     * `bearer-chat` does not.
+     *
+     * @param mixed $offeredProtocols Raw `sec-websocket-protocol` header value.
+     *
+     * @return string|null The header line to append to the 101, or null for no echo.
+     */
+    private static function negotiatedSubprotocolEcho(mixed $offeredProtocols): ?string
+    {
+        if (!is_string($offeredProtocols) || $offeredProtocols === '') {
+            return null;
+        }
+
+        foreach (explode(',', $offeredProtocols) as $protocolId) {
+            if (trim($protocolId) === self::BEARER_SUBPROTOCOL) {
+                return self::BEARER_SUBPROTOCOL_ECHO;
+            }
+        }
+
+        return null;
     }
 
     /**
