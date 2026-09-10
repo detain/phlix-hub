@@ -688,8 +688,18 @@ jobs:
   # tree leave public/assets/app byte-identical (empty diff), and building from
   # the exact lockfile that produced a committed bundle reproduces it with
   # `git diff --exit-code` == 0 on node 24. So a strict byte-for-byte comparison
-  # is viable and NO weaker invariant is used (this mirrors the phlix-server
-  # S253 gate — keep the two jobs identical so both repos gate the same way).
+  # is viable and NO weaker invariant is used. This job is the hub half of the
+  # shared S253 gate: it mirrors the phlix-server web-ui job's verdict, corpus
+  # count and node pin so both repos gate the same build — it is not asserted to
+  # be byte-identical to a job this repo does not own.
+  #
+  # ⚠ KNOWN LIMIT (N4): the gate reproduces "the bundle npm builds from the
+  # committed lockfile TODAY". @phlix/ui is pulled as a GitHub ARCHIVE pinned by
+  # git ref (refs/tags/v…), not by an immutable registry integrity hash, so if a
+  # maintainer ever force-moves that tag the tag's bytes change under a constant
+  # lock and this gate would red on a green source pin. That is the honest scope
+  # of "byte-reproducible": it proves committed-bundle == build-of-this-lock, not
+  # that the tag's target is itself immutable.
   #
   # ⚠ THIS JOB DELIBERATELY HAS NO `paths:` FILTER, AND ci.yml MUST KEEP NO
   # TOP-LEVEL `on.push.paths:` / `on.pull_request.paths:`. GitHub reports a job
@@ -719,14 +729,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      # node 24 is pinned via setup-node (unlike the mcp-e2e job, which uses the
-      # runner's bundled node): this job's WHOLE VERDICT is "does a fresh build
-      # reproduce the committed bytes", so it must build on the exact major the
-      # reproducibility was proven for. `@v6` mirrors the server's web-ui gate.
-      - name: Setup Node (pinned to 24 — the reproducibility version)
+      # node is pinned to the EXACT patch (24.20.0), not just the major: this
+      # job's WHOLE VERDICT is "does a fresh build reproduce the committed
+      # bytes", so the toolchain is fixed to a single version rather than a
+      # moving major. The value is chosen to match the phlix-server S253 twin so
+      # both repos can gate on one build (this repo cannot assert what the
+      # server job's own pin currently is — keep them in step by convention).
+      # `@v6` also mirrors the server's web-ui gate. Unlike mcp-e2e, which
+      # deliberately floats the runner's bundled node.
+      - name: Setup Node (pinned to 24.20.0 — the reproducibility version)
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '24.20.0'
           cache: 'npm'
           cache-dependency-path: web-ui/package-lock.json
 
@@ -778,7 +792,6 @@ jobs:
           if [ "${status}" -ne 0 ]; then
             echo "::error::public/assets/app is STALE relative to web-ui/src + the committed @phlix/ui pin."
             echo "::error::Rebuild it — (cd web-ui && npm ci && npm run build) — and commit the result in THIS PR."
-            git diff --stat -- public/assets/app/ || true
             exit "${status}"
           fi
           echo "OK: committed bundle is byte-reproducible from the committed lockfile (${compared} files compared)."
