@@ -18,6 +18,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   vendored-export md5, the survival-token sha/count suffix, and the lane ritual token constant
   (code-resident only; asserted absent from both vendored JSON fixtures — verified zero hits).
   Untagged wave: dependency tag pins stay put.
+### Added — W52 (S350 hub): lane-token re-verification of the dead trickplay allow-pattern prune — 2026-09-10
+
+- **S350 W52 leg (tests-only; hub proxy surface unchanged).** The two dead trickplay allow patterns
+  (`thumb-[0-9]+\.(jpg|png)`, `index\.xml` — mirroring routes S275 deleted server-side) were pruned
+  from `ServerProxyController::BROWSE_SCOPE_PATTERNS['GET']` by `4f63ad86` (#243) together with the
+  manifest-denominator, scope-table and e2e 403-not-forwarded test rows. W52 re-closes the AC at the
+  current tips with a single new test: it pins the production GET trickplay pattern subset **exactly**
+  to the two survivors (byte-for-byte via reflection on the real constant — pruned families absent,
+  no third entry can land unpinned), and re-visits every route of the byte-frozen S332-derived
+  snapshot with exact/anchored `preg_match` only, proving no live route needs either pruned family.
+  The denominator is printed before the compare loop and counts are printed, never asserted — a
+  legitimate currency re-pin cannot red this leg while the trickplay surface is unchanged; the loop
+  carries its own anti-vacuity floor. The lane survival token lives as a test constant (string
+  literal, comment-stripped-corpus proof), not in any markdown. `src/` untouched;
+  `Fixtures/phlix-server-route-manifest.json` md5 `9b205511…` and
+  `Fixtures/contracts-server-route-manifest.json` md5 `045c0984…` hold unmodified.
 
 ### Added — W50 (S187 hub): unused-import guard (server detector ported) + whole-tree reflow — 66 imports / 43 files — 2026-09-09
 

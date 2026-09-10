@@ -5238,6 +5238,14 @@ final class ServerProxyControllerTest extends TestCase
     // -----------------------------------------------------------------------
 
     /**
+     * W52 lane survival token for S350 — code-resident by design: the merge
+     * ritual proves the prune leg survives rebase by finding this string in
+     * the COMMENT-STRIPPED PHP corpus (`premerge.sh --token`), never by
+     * grepping source a docblock could recreate.
+     */
+    private const S350_W52_TOKEN = 'S350PRUNEX7R3';
+
+    /**
      * The trickplay surface the hub admits, and the two families S350 pruned.
      *
      * @return iterable<string, array{0: string, 1: bool}>
@@ -5347,6 +5355,111 @@ final class ServerProxyControllerTest extends TestCase
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
         $this->assertSame('proxy.scope_denied', $body['code'] ?? null);
+    }
+
+    /**
+     * S350 · W52 — token-bearing re-verification of the prune at the current
+     * tips, closing the loop the AC demands in one place:
+     *
+     *  1. the lane token is well-formed and code-resident (this very const);
+     *  2. production's `BROWSE_SCOPE_PATTERNS['GET']` holds EXACTLY the two
+     *     surviving trickplay pattern literals — neither pruned family is
+     *     present and no third trickplay entry crept in (sorted subset,
+     *     compared byte for byte via assertSame on lists);
+     *  3. the vendored S332 route snapshot confirms NO live server route needs
+     *     either pruned family — exact/anchored `preg_match` only, every
+     *     manifest route visited, denominator printed (S345 lesson 3).
+     *
+     * This does not replace the S350 rows above; it re-states them with the
+     * W52 identity so the merge ritual has a survival assertion to pin on.
+     */
+    public function testS350W52PruneReverifiedWithLaneToken(): void
+    {
+        $this->assertSame(
+            13,
+            strlen(self::S350_W52_TOKEN),
+            'W52 lane token must be exactly S350 + 9 payload characters',
+        );
+        $this->assertSame(
+            1,
+            preg_match('/^S350[A-Z0-9]{9}$/', self::S350_W52_TOKEN),
+            'W52 lane token must be uppercase alphanumeric after the S350 step prefix',
+        );
+
+        $raw = (new ReflectionClass(ServerProxyController::class))
+            ->getConstant('BROWSE_SCOPE_PATTERNS');
+        $this->assertIsArray(
+            $raw,
+            'BROWSE_SCOPE_PATTERNS must still be an array constant — the W52 re-verification '
+            . 'reads production, not a copy, so a rename must red here loudly',
+        );
+        /** @var array<string, list<string>> $patterns */
+        $patterns = $raw;
+        $this->assertArrayHasKey('GET', $patterns, "BROWSE_SCOPE_PATTERNS['GET'] is missing");
+
+        $trickplay = array_values(array_filter(
+            $patterns['GET'],
+            static fn (string $pattern): bool => str_contains($pattern, 'trickplay'),
+        ));
+        sort($trickplay);
+        $this->assertSame(
+            [
+                '#^/trickplay/[^/]+/sprite\.(jpg|png)$#',
+                '#^/trickplay/[^/]+/timeline\.json$#',
+            ],
+            $trickplay,
+            'the GET trickplay subset must be EXACTLY the two survivors — the pruned '
+            . '`thumb-[0-9]+\\.(jpg|png)` and `index\\.xml` families must stay absent, and a '
+            . 'third trickplay entry may only land here deliberately (token ' . self::S350_W52_TOKEN . ')',
+        );
+
+        $prunedPatterns = [
+            '#^/trickplay/[^/]+/thumb-[0-9]+\.(jpg|png)$#',
+            '#^/trickplay/[^/]+/index\.xml$#',
+        ];
+        $manifest = self::s332ServerRouteManifest();
+        $routes = $manifest['routes'];
+        $visited = count($routes);
+        $trickplayRoutes = count(array_filter(
+            $routes,
+            static fn (array $route): bool => str_starts_with($route['path'], '/trickplay/'),
+        ));
+
+        // Denominator BEFORE the compare loop (the sibling S350 manifest test's own lesson):
+        // a RED run must still show the operator what this re-verification visited.
+        fwrite(STDERR, sprintf(
+            "S350 W52 re-verification (token %s): %d route(s) in the S332 snapshot (%d of them "
+            . "/trickplay/); GET trickplay subset holds %d survivor(s); counts are PRINTED, never asserted.\n",
+            self::S350_W52_TOKEN,
+            $visited,
+            $trickplayRoutes,
+            count($trickplay),
+        ));
+
+        // An anti-vacuity floor of its own: a gutted, emptied `routes` list must not make
+        // the per-route compare below trivially green (S345 lesson 3). PRINTED counts above
+        // stay re-pin-safe; this floor only demands the manifest is non-empty.
+        $this->assertGreaterThan(
+            0,
+            $visited,
+            'W52: the manifest loop would visit 0 route(s) — an empty scan is not a pass',
+        );
+
+        foreach ($routes as $route) {
+            foreach ($prunedPatterns as $pattern) {
+                $this->assertSame(
+                    0,
+                    preg_match($pattern, $route['path']),
+                    sprintf(
+                        'W52 re-verification: the pruned pattern %s must match NO live manifest '
+                        . 'path — it matched %s %s, which would mean S350 pruned surface a live route needs',
+                        $pattern,
+                        $route['method'],
+                        $route['path'],
+                    ),
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
