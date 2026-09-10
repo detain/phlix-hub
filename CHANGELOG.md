@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — W54 (S253 hub): the served SPA bundle now has a build-and-compare CI gate — 2026-09-10
+
+- **`ci.yml` gains a `spa-bundle` job.** `public/assets/app/` is a committed Vite artefact that
+  `ViteAssets.php` serves directly, yet until now nothing tied it to `web-ui/src` and the pinned
+  `@phlix/ui`: a repin or a source edit that skipped the rebuild was fully green and changed nothing
+  at runtime. The new job installs from the committed lockfile on a pinned Node 24 with the host
+  user-config neutralised, rebuilds (`vue-tsc --noEmit && vite build`), and fails on ANY difference —
+  modified, deleted, or uncommitted-new — between the build output and the committed bundle. The
+  reproducibility this strictness depends on was measured before the gate was written: two consecutive
+  builds of the same tree are byte-identical, and building from the exact lockfile that produced a
+  committed bundle reproduces it with a clean exit. The job lives in the always-on `ci.yml` and the
+  workflow deliberately carries NO path filter, so a commit touching only `public/assets/app/` (or the
+  lockfile) still runs it — a `web-ui/**`-only filter is the shape that hid this on the sibling repo.
+  The step prints the number of tracked files it compared and refuses to pass on an empty corpus.
+  Landing the gate also caught a live instance of the defect it exists to prevent: a recent
+  `@phlix/ui` minor repin had moved the lockfile without regenerating the bundle, so the served
+  artifact was one release behind its source. The bundle is now rebuilt from the current lockfile
+  under the new gate and committed, so the gate holds green — the first commit made mandatory by it.
 ### Changed — W53 (cs31 hub · wave closer): snapshot re-dump + contracts re-vendor — PURE, 401 tuples, fence held — 2026-09-10
 
 - **cs#31 cascade closer (leg 7/7).** Re-dumped the server route snapshot against the current

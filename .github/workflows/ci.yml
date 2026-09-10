@@ -672,3 +672,126 @@ jobs:
       # contract arms were read from real source on both sides and agree.
       - name: Assert hub and server path literals agree (S204)
         run: php scripts/assert-cross-repo-hub-paths.php ../phlix-server
+
+  # --------------------------------------------------------------------------
+  # S253 — the SERVED SPA bundle is a committed artefact; nothing used to tie
+  # it to its source. Both phlix-hub and phlix-server track the built Vite
+  # bundle under public/assets/app/, and ViteAssets.php serves exactly that
+  # directory — `web-ui/dist/` does not exist in the repo. Before this job, a
+  # repin of @phlix/ui or an edit to web-ui/src that skipped the rebuild was
+  # fully GREEN and changed nothing at runtime. This job makes that impossible:
+  # it installs from the committed lockfile, rebuilds, and fails on ANY
+  # difference between the build output and the committed bundle.
+  #
+  # REPRODUCIBILITY WAS MEASURED, NOT ASSUMED — the plan's blocking precondition
+  # (plan_updates.md:5385). Two consecutive `npm ci && npm run build` of the same
+  # tree leave public/assets/app byte-identical (empty diff), and building from
+  # the exact lockfile that produced a committed bundle reproduces it with
+  # `git diff --exit-code` == 0 on node 24. So a strict byte-for-byte comparison
+  # is viable and NO weaker invariant is used. This job is the hub half of the
+  # shared S253 gate: it mirrors the phlix-server web-ui job's verdict, corpus
+  # count and node pin so both repos gate the same build — it is not asserted to
+  # be byte-identical to a job this repo does not own.
+  #
+  # ⚠ KNOWN LIMIT (N4): the gate reproduces "the bundle npm builds from the
+  # committed lockfile TODAY". @phlix/ui is pulled as a GitHub ARCHIVE pinned by
+  # git ref (refs/tags/v…), not by an immutable registry integrity hash, so if a
+  # maintainer ever force-moves that tag the tag's bytes change under a constant
+  # lock and this gate would red on a green source pin. That is the honest scope
+  # of "byte-reproducible": it proves committed-bundle == build-of-this-lock, not
+  # that the tag's target is itself immutable.
+  #
+  # ⚠ THIS JOB DELIBERATELY HAS NO `paths:` FILTER, AND ci.yml MUST KEEP NO
+  # TOP-LEVEL `on.push.paths:` / `on.pull_request.paths:`. GitHub reports a job
+  # that never RAN as SUCCESS, so a `paths: [web-ui/**]` trigger — the exact
+  # shape that hid this defect on phlix-server, where a bundle-only commit
+  # started no job at all — would reproduce the hole here. Living in the
+  # always-on ci.yml, this gate fires on every push and every pull request,
+  # INCLUDING a commit that touches only public/assets/app/**, web-ui/src/**, or
+  # the lockfile — which is precisely the case that matters most. If any future
+  # edit adds a top-level path filter to this workflow, this job goes quiet
+  # exactly when drift appears; that is why the whole workflow stays unfiltered.
+  #
+  # A red here is NOT a licence to hand-edit the bundle. It means "rebuild it":
+  # (cd web-ui && npm ci && npm run build) and commit the result in the SAME PR.
+  # The gate only compares; it never writes to public/assets/app.
+  spa-bundle: # S253HUBGATEX7H9
+    name: SPA Bundle Build + Compare Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # A type-check + build + local diff needs no write scope and no secret, so
+    # it stays safe for fork PRs (e.g. a dependabot lockfile bump).
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # node is pinned to the EXACT patch (24.20.0), not just the major: this
+      # job's WHOLE VERDICT is "does a fresh build reproduce the committed
+      # bytes", so the toolchain is fixed to a single version rather than a
+      # moving major. The value is chosen to match the phlix-server S253 twin so
+      # both repos can gate on one build (this repo cannot assert what the
+      # server job's own pin currently is — keep them in step by convention).
+      # `@v6` also mirrors the server's web-ui gate. Unlike mcp-e2e, which
+      # deliberately floats the runner's bundled node.
+      - name: Setup Node (pinned to 24.20.0 — the reproducibility version)
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.20.0'
+          cache: 'npm'
+          cache-dependency-path: web-ui/package-lock.json
+
+      # NPM_CONFIG_USERCONFIG=/dev/null: a runner can carry a ~/.npmrc with a
+      # registry or auth override that changes dependency RESOLUTION versus the
+      # committed lockfile, which would change the bundle's content hashes and
+      # red this gate for a reason that has nothing to do with the diff. Pointing
+      # the user config at /dev/null makes the install — and therefore the build
+      # output — a pure function of package-lock.json.
+      - name: Install dependencies from the committed lockfile
+        working-directory: web-ui
+        env:
+          NPM_CONFIG_USERCONFIG: /dev/null
+        run: npm ci
+
+      # The `build` script is `vue-tsc --noEmit && vite build`, so a type error
+      # reddens HERE too (desired — a bundle cannot be trusted from a tree that
+      # does not type-check). vite writes to ../public/assets/app with
+      # emptyOutDir:true, i.e. it wipes the directory and re-emits the whole set.
+      - name: Build SPA (vue-tsc --noEmit && vite build)
+        working-directory: web-ui
+        env:
+          NPM_CONFIG_USERCONFIG: /dev/null
+        run: npm run build
+
+      - name: Assert the served bundle equals a fresh build (S253)
+        run: |
+          set -euo pipefail
+          compared="$(git ls-files -- public/assets/app | wc -l | tr -d ' ')"
+          echo "Compared ${compared} tracked file(s) under public/assets/app/ against a fresh build."
+          [ "${compared}" -gt 0 ] || {
+            echo "::error::the compared corpus is EMPTY — no file under public/assets/app is tracked. A gate that examines zero files is indistinguishable from one that passes (the S299 rule); if the bundle path ever moves, update this job rather than let it go green on nothing."
+            exit 1
+          }
+          status=0
+          # (1) Tracked content that changed or vanished. Because vite runs with
+          # emptyOutDir:true it deletes the whole tree first, so a committed file
+          # the current source no longer produces shows up as a deletion here.
+          git diff --exit-code -- public/assets/app/ || status=$?
+          # (2) Files the build emitted that were NEVER committed. `git diff` is
+          # blind to untracked files, yet a chunk the source now emits but the
+          # repo does not track means the served bundle is missing a real asset.
+          untracked="$(git ls-files --others --exclude-standard -- public/assets/app/ | wc -l | tr -d ' ')"
+          if [ "${untracked}" -ne 0 ]; then
+            echo "::error::the fresh build produced ${untracked} uncommitted file(s) under public/assets/app/:"
+            git ls-files --others --exclude-standard -- public/assets/app/ | sed 's/^/    /'
+            status=1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::public/assets/app is STALE relative to web-ui/src + the committed @phlix/ui pin."
+            echo "::error::Rebuild it — (cd web-ui && npm ci && npm run build) — and commit the result in THIS PR."
+            exit "${status}"
+          fi
+          echo "OK: committed bundle is byte-reproducible from the committed lockfile (${compared} files compared)."
