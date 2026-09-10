@@ -20,6 +20,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   workflow deliberately carries NO path filter, so a commit touching only `public/assets/app/` (or the
   lockfile) still runs it — a `web-ui/**`-only filter is the shape that hid this on the sibling repo.
   The step prints the number of tracked files it compared and refuses to pass on an empty corpus.
+  Landing the gate also caught a live instance of the defect it exists to prevent: a recent
+  `@phlix/ui` minor repin had moved the lockfile without regenerating the bundle, so the served
+  artifact was one release behind its source. The bundle is now rebuilt from the current lockfile
+  under the new gate and committed, so the gate holds green — the first commit made mandatory by it.
 ### Changed — W53 (cs31 hub · wave closer): snapshot re-dump + contracts re-vendor — PURE, 401 tuples, fence held — 2026-09-10
 
 - **cs#31 cascade closer (leg 7/7).** Re-dumped the server route snapshot against the current
