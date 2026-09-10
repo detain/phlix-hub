@@ -11,11 +11,14 @@ use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
+use stdClass;
 use Workerman\Connection\TcpConnection;
 use Workerman\MySQL\Connection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
+use Workerman\Protocols\Websocket;
 
 use function hash;
+use function implode;
 use function is_array;
 use function is_string;
 use function json_decode;
@@ -53,6 +56,14 @@ final class SyncPlayRelayWorkerTest extends TestCase
     // LoggerFactory's static $configPath/$loggers are process-global; the trait
     // snapshots them before setUp() and restores them after tearDown().
     use LoggerFactoryIsolation;
+
+    /**
+     * S355 — lane token, code-resident, and deliberately used AS the relay token
+     * in the negotiation proof below: it is the leak canary. If the hub ever puts
+     * the credential in its own 101 response, this exact string shows up in the
+     * raw response bytes that test captures, and the test says so out loud.
+     */
+    private const S355_NEGOTIATION_PROBE_TOKEN = 'S355SUBPROTOX7S6';
 
     private string $tmpDir;
 
@@ -218,28 +229,227 @@ final class SyncPlayRelayWorkerTest extends TestCase
     // ---- S355: the 101 must echo the negotiated subprotocol ---------------
 
     /**
-     * S355 — RFC 6455 §4.1/§4.2.2: a server that accepts a client's
-     * subprotocol MUST echo EXACTLY ONE of the offered protocols in the 101
-     * response. Workerman composes the 101 from `$connection->headers`
-     * (appended after `onWebSocketConnect` returns), and without the echo a
-     * strict client — a browser or undici, exactly the S298 ui consumer's
-     * `new WebSocket(url, ['bearer', token])` — aborts the handshake (no
-     * open, 1006). S237's tests proved token EXTRACTION only; this test
-     * covers the NEGOTIATION, i.e. that the 101 carries a protocol the client
-     * actually offered, back to the client.
+     * S355 — THE NEGOTIATION PROOF, against the REAL Workerman handshake path.
      *
-     * ⚠ The consumer offers TWO subprotocols — `bearer` and `<token>` — so
-     * the echo must be a SINGLE offered protocol. Echoing the comma-joined
-     * `bearer, <token>` as one value answers a negotiation the client never
-     * made: undici rejects it as not-in-offered-list and the handshake dies
-     * with the same 1006 the fix exists to cure (probed with undici 7.29.0,
-     * the ui's pinned runtime). The token is always one of the offered
-     * entries for EVERY shape `extractClientToken()` accepts, and it carries
-     * the client's own credential — so the echo is
-     * `Sec-WebSocket-Protocol: <token>`.
+     * The named blind spot this closes: S237 proved the hub could EXTRACT the
+     * token from the `Sec-WebSocket-Protocol: bearer, <token>` carrier, and the
+     * first S355 test proved the callback pokes a property — but nothing ever
+     * proved what the CLIENT actually receives on the wire. RFC 6455 negotiation
+     * is a wire behaviour, so it is pinned as one: this test feeds the raw
+     * upgrade bytes through Workerman's own `Websocket::dealHandshake()` — the
+     * exact function the live `websocket://` protocol calls — and asserts on the
+     * raw 101 that dealHandshake composes and writes to the socket
+     * (`send($handshakeMessage, true)`), after it has invoked the connect
+     * callback and appended `$connection->headers` to the response
+     * (vendor/workerman/workerman/src/Protocols/Websocket.php:437-456).
      *
-     * This FAILS against the pre-fix code (no headers are ever set on the
-     * connection), and PASSES after the fix.
+     * Two wire facts must hold for the S298 ui carrier
+     * `new WebSocket(url, ['bearer', token])` to open instead of aborting 1006:
+     *
+     *  1. the 101 carries `Sec-WebSocket-Protocol` naming ONE protocol-id the
+     *     client offered (RFC 6455 §4.1/§4.2.2 — the WHATWG WebSocket API fails
+     *     the connection outright when the client requested subprotocols and the
+     *     server selected none); the hub's protocol is `bearer`, so the echo is
+     *     verbatim `bearer`.
+     *  2. the 101 NEVER carries the relay token. A credential is not a
+     *     protocol-id: echoing it answers the negotiation with a secret, puts
+     *     that secret into every response log / middlebox on the path, and is
+     *     exactly what the S2b/S237 line of work removed from the QUERY string —
+     *     it must not reappear in a RESPONSE header.
+     *
+     * This FAILS against the pre-fix code, which echoes the token itself
+     * (`['Sec-WebSocket-Protocol: ' . $token]`): assertion 1 reddens because the
+     * 101 names `S355SUBPROTOX7S6` and not `bearer`, and assertion 2 reddens
+     * because the same string is the credential — the canary fires.
+     */
+    public function testRealHandshakeEchoesTheBearerProtocolIdAndNeverTheToken(): void
+    {
+        $this->grantToken(self::S355_NEGOTIATION_PROBE_TOKEN, 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $raw101 = $this->captureHandshakeBytes(
+            $worker,
+            "GET /syncplay/server-a HTTP/1.1\r\n"
+            . "Host: hub.example.com\r\n"
+            . "Upgrade: websocket\r\n"
+            . "Connection: Upgrade\r\n"
+            . "Sec-WebSocket-Version: 13\r\n"
+            . "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            . 'Sec-WebSocket-Protocol: bearer, ' . self::S355_NEGOTIATION_PROBE_TOKEN . "\r\n"
+            . "\r\n",
+        );
+
+        // Control: the negotiation ran on a real handshake, i.e. this is the 101
+        // a client would parse — not an empty capture passing by absence.
+        self::assertStringStartsWith(
+            "HTTP/1.1 101 Switching Protocol\r\n",
+            $raw101,
+            'S355: the Workerman handshake path did not write a 101 — the capture is not the wire.',
+        );
+        self::assertStringContainsString(
+            'Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=',
+            $raw101,
+            'S355: control — the 101 must carry the standard accept for the fixed sample key.',
+        );
+
+        // (1) the selected protocol-id, exactly as offered, on its own header line.
+        self::assertStringContainsString(
+            "Sec-WebSocket-Protocol: bearer\r\n",
+            $raw101,
+            "S355: the 101 did not echo the `bearer` protocol-id the client offered; a strict"
+            . " client aborts (1006). Raw 101 as sent to the socket:\n" . $raw101,
+        );
+
+        // (2) the credential never rides the response.
+        self::assertStringNotContainsString(
+            self::S355_NEGOTIATION_PROBE_TOKEN,
+            $raw101,
+            'S355: the 101 echoed the relay TOKEN as a protocol-id. A credential is not a'
+            . ' subprotocol (RFC 6455 §4.2.2) and must never appear in a hub response.'
+            . " Raw 101 as sent to the socket:\n" . $raw101,
+        );
+
+        // And the client still authenticated (the echo is not bought by rejecting).
+        self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
+    }
+
+    /**
+     * S355 — a client that authenticated via `Authorization: Bearer` while also
+     * offering the `bearer` protocol-id receives the echo: the client DID make
+     * that negotiation (the offer is on the upgrade request), so selecting it is
+     * legal and required — a WHATWG client that lists protocols and gets none
+     * back fails the connection whatever carried the credential.
+     */
+    public function testRealHandshakeEchoesBearerWhenOfferedAlongsideHeaderAuth(): void
+    {
+        $this->grantToken(self::S355_NEGOTIATION_PROBE_TOKEN, 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $raw101 = $this->captureHandshakeBytes(
+            $worker,
+            "GET /syncplay/server-a HTTP/1.1\r\n"
+            . "Host: hub.example.com\r\n"
+            . "Authorization: Bearer " . self::S355_NEGOTIATION_PROBE_TOKEN . "\r\n"
+            . "Upgrade: websocket\r\n"
+            . "Connection: Upgrade\r\n"
+            . "Sec-WebSocket-Version: 13\r\n"
+            . "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            . "Sec-WebSocket-Protocol: bearer\r\n"
+            . "\r\n",
+        );
+
+        self::assertStringContainsString("HTTP/1.1 101 Switching Protocol\r\n", $raw101);
+        self::assertStringContainsString(
+            "Sec-WebSocket-Protocol: bearer\r\n",
+            $raw101,
+            "S355: `bearer` was offered, so the 101 must select it. Raw 101:\n" . $raw101,
+        );
+        self::assertStringNotContainsString(
+            self::S355_NEGOTIATION_PROBE_TOKEN,
+            $raw101,
+            'S355: the credential must never ride the 101, whatever carrier authenticated it.'
+            . " Raw 101:\n" . $raw101,
+        );
+    }
+
+    /**
+     * S355 — the hub supports exactly one subprotocol. A client offering only
+     * protocols the hub does not speak must get NO echo: selecting a protocol-id
+     * the client never offered is an RFC 6455 §4.1 violation, and the strict
+     * client answers one with the very 1006 this step exists to remove. The
+     * connection itself stays up for tolerant clients (relay semantics
+     * unchanged); only the negotiation answer is withheld.
+     */
+    public function testRealHandshakeWithForeignSubprotocolOfferGetsNoEcho(): void
+    {
+        $this->grantToken(self::S355_NEGOTIATION_PROBE_TOKEN, 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $raw101 = $this->captureHandshakeBytes(
+            $worker,
+            "GET /syncplay/server-a HTTP/1.1\r\n"
+            . "Host: hub.example.com\r\n"
+            . "Authorization: Bearer " . self::S355_NEGOTIATION_PROBE_TOKEN . "\r\n"
+            . "Upgrade: websocket\r\n"
+            . "Connection: Upgrade\r\n"
+            . "Sec-WebSocket-Version: 13\r\n"
+            . "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            . "Sec-WebSocket-Protocol: chat, superchat\r\n"
+            . "\r\n",
+        );
+
+        self::assertStringContainsString("HTTP/1.1 101 Switching Protocol\r\n", $raw101);
+        self::assertStringNotContainsString(
+            'Sec-WebSocket-Protocol:',
+            $raw101,
+            'S355: the hub echoed a protocol the client never offered. Raw 101:\n' . $raw101,
+        );
+        self::assertStringNotContainsString(self::S355_NEGOTIATION_PROBE_TOKEN, $raw101);
+    }
+
+    /**
+     * S355 — drive the RAW upgrade bytes through Workerman's own handshake
+     * composer and return the exact bytes it writes to the socket.
+     *
+     * Nothing here re-implements the 101: `Websocket::dealHandshake()` is the
+     * public static entry the live `websocket://` protocol uses, so the callback
+     * fires with a real {@see WorkermanRequest} parsed from the same text, and
+     * the returned string is the response a browser would parse. The mock exists
+     * only to capture writes and to stand in for the socket the vendor path
+     * already validated elsewhere.
+     */
+    private function captureHandshakeBytes(SyncPlayRelayWorker $worker, string $rawUpgrade): string
+    {
+        $connection = $this->createMock(TcpConnection::class);
+
+        // What dealHandshake() requires of a live connection: the per-connection
+        // frame state it initialises (context) and the callback slot it invokes
+        // FIRST (the connection-level handler; the worker-level one is what
+        // SyncPlayRelayWorker::start() wires in production, and Application code
+        // paths here would only dereference $connection->worker, which the mock
+        // has none of).
+        $connection->context = new stdClass();
+        $relayConnect = static function (TcpConnection $conn, WorkermanRequest $request) use ($worker): void {
+            $worker->onWebSocketConnect($conn, $request);
+        };
+        $connection->onWebSocketConnect = $relayConnect;
+        $connection->onWebSocketConnected = static function (): void {
+        };
+
+        $written = '';
+        $connection->method('send')->willReturnCallback(
+            static function (mixed $data, bool $raw = false) use (&$written): bool {
+                if (is_string($data)) {
+                    $written .= $data;
+                }
+                return true;
+            },
+        );
+
+        Websocket::dealHandshake($rawUpgrade, $connection);
+
+        return $written;
+    }
+
+    /**
+     * S355 — the callback-level half of the negotiation: what the worker puts on
+     * `$connection->headers` is exactly the single header line Workerman appends
+     * to the 101. The wire-level proof is
+     * {@see testRealHandshakeEchoesTheBearerProtocolIdAndNeverTheToken()}, which
+     * drives `Websocket::dealHandshake()` itself; this one pins the value so a
+     * regression names the property, not just the bytes.
+     *
+     * ⚠ CORRECTED FROM THE FIRST S355 FIX. The prior implementation echoed the
+     * client's TOKEN (`Sec-WebSocket-Protocol: <token>`) and this test asserted
+     * it. That is wrong on its own terms: a credential is not a protocol-id, the
+     * hub implements no such protocol (§4.2.2 permits only one the server
+     * supports), and echoing it republishes a live relay token on the response
+     * wire — the exact exposure S2b/S237 removed from the query string. The AC's
+     * "single `bearer` token form" is the single RFC 7230 protocol-id `bearer`,
+     * not a bearer token. So the echo is `bearer`.
      */
     public function testAuthenticatedSubprotocolConnectEchoesTheNegotiatedSubprotocol(): void
     {
@@ -258,12 +468,17 @@ final class SyncPlayRelayWorkerTest extends TestCase
         // testTheSanctionedCarriersAuthenticate).
         self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
 
-        // And the 101 must echo ONE of the client's offered subprotocols —
-        // the client's token — the exact header Workerman appends to the 101.
+        // And the 101 must echo the ONE protocol-id the hub speaks and the
+        // client offered — never the credential that rode the same header.
         self::assertSame(
-            ['Sec-WebSocket-Protocol: token-a'],
+            ['Sec-WebSocket-Protocol: bearer'],
             $connection->headers,
-            'S355: the 101 must echo an offered subprotocol carrying the client\'s token',
+            'S355: the 101 must echo the offered `bearer` protocol-id, and only that.',
+        );
+        self::assertStringNotContainsString(
+            'token-a',
+            implode('|', $connection->headers),
+            'S355: the relay token must never be echoed as a subprotocol.',
         );
     }
 
@@ -321,11 +536,18 @@ final class SyncPlayRelayWorkerTest extends TestCase
 
     /**
      * S355 — a client that authenticated via `Authorization: Bearer` while
-     * ALSO offering a subprotocol that does not contain the token must not
-     * receive an echo: RFC 6455 §4.1 forbids selecting a protocol the client
-     * did not offer, and a strict client answers such an echo with the same
-     * 1006 this fix exists to cure. No current client combines the carriers —
-     * this pins the gate against the pathological shape.
+     * offering only protocols the hub does not speak must receive NO echo:
+     * RFC 6455 §4.1 forbids selecting a protocol-id the client did not offer,
+     * and a strict client answers such an echo with the very 1006 this fix
+     * removes.
+     *
+     * ⚠ CORRECTED FROM THE FIRST S355 FIX, which offered `bearer` here and
+     * asserted silence because the authenticated TOKEN was not in the offer
+     * list. The gate is not the token — it is whether the client offered the
+     * hub's protocol. `bearer` offered alongside header auth DOES get the echo
+     * (pinned at the wire level by
+     * {@see testRealHandshakeEchoesBearerWhenOfferedAlongsideHeaderAuth()}); a
+     * genuinely foreign list must not.
      */
     public function testAuthHeaderWithUnrelatedSubprotocolOfferGetsNoEcho(): void
     {
@@ -336,14 +558,14 @@ final class SyncPlayRelayWorkerTest extends TestCase
         $connection = $this->createMock(TcpConnection::class);
         $worker->onWebSocketConnect(
             $connection,
-            $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'header', 'bearer'),
+            $this->makeUpgradeRequest('/syncplay/server-a', 'token-a', 'header', 'chat, superchat'),
         );
 
         self::assertSame(1, SyncPlayRelayWorker::getActiveConnectionCount());
         self::assertSame(
             [],
             $connection->headers,
-            'S355: the authenticated token was not among the offered subprotocols, so none may be echoed',
+            'S355: the client offered no protocol the hub speaks, so none may be echoed',
         );
     }
 

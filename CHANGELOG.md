@@ -34,6 +34,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   literal, comment-stripped-corpus proof), not in any markdown. `src/` untouched;
   `Fixtures/phlix-server-route-manifest.json` md5 `9b205511…` and
   `Fixtures/contracts-server-route-manifest.json` md5 `045c0984…` hold unmodified.
+### Fixed — W52 (S355 hub): the `:8804` relay 101 now echoes the `bearer` subprotocol, never the credential — 2026-09-09
+
+- **Corrects the `4e618052` fix (PR #256), which echoed the relay TOKEN itself.** `SyncPlayRelayWorker::onWebSocketConnect`
+  answered the browser carrier `new WebSocket(url, ['bearer', token])` by writing `Sec-WebSocket-Protocol: <token>` into the
+  101. That is wrong on its own terms: a credential is not a protocol-id, the hub implements no protocol named by a token
+  (RFC 6455 §4.2.2 permits echoing only one the server actually supports), and echoing it re-published a live relay token on
+  the RESPONSE wire — the exact exposure S2b/S237 removed from the query string to keep it out of access/proxy logs and
+  `Referer` headers. The rewritten gate (`negotiatedSubprotocolEcho()`: per-entry comma split + whitespace trim) selects the
+  single protocol-id `bearer` **iff the client offered it**, and stays silent for a client that offers no protocol the hub
+  speaks (echoing an unoffered id is itself the §4.1 violation a strict client answers with 1006). Documented deviation: the
+  step block's literal example `["Sec-WebSocket-Protocol: bearer, <token>"]` joins two ids and carries the secret; the AC's
+  "single `bearer` token form" is the RFC 7230 token `bearer`, so the echo is `bearer` — following the AC + RFC over the example.
+- **Negotiation is now proven at the WIRE, not the property.** S237 tested token EXTRACTION only; the 101 response bytes were
+  never pinned — the named fixture blind spot. `testRealHandshakeEchoesTheBearerProtocolIdAndNeverTheToken` drives the real
+  `Workerman\Protocols\Websocket::dealHandshake()` and asserts on the exact bytes written to the socket: the 101 carries
+  `Sec-WebSocket-Protocol: bearer` AND must not carry the token (the token is used as a leak canary, so a regression that
+  re-published it reddens both the correctness and the security assertion). Proven RED against `4e618052` — the captured 101
+  literally shows `Sec-WebSocket-Protocol: <token>` — and GREEN post-fix. Two sibling wire cases pin header-auth+bearer-offered
+  (echo) and a foreign offer (`chat, superchat` — no echo). Hub suite 4353/39084 → **4356/39096** (+3 tests, +12 assertions).
 
 ### Added — W50 (S187 hub): unused-import guard (server detector ported) + whole-tree reflow — 66 imports / 43 files — 2026-09-09
 
