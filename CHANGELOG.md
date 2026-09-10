@@ -37,8 +37,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `vendor/bin/phpunit … --coverage-clover coverage.xml … --log-junit junit.xml` on one line, and this
   PR edits neither guard. `coverage: xdebug` → `coverage: pcov`: the debugger was never used and
   pcov measured the suite ~2.5× faster for identical collection.
-- **Measured on a 4-core cpu-set (GH topology):** 25.0s/34.7s and 31.6s/31.7s wall across two full
-  runs with coverage on, totals `OK (4364 tests, 39935 assertions)` — byte-identical to the
+- **Measured on a 4-core cpu-set (GH topology):** 31.6s/31.7s wall across two full final-code
+  runs with coverage on (earlier iterations: 32.4s/34.7s), totals `OK (4364 tests, 39935 assertions)` — byte-identical to the
   `ba264fe5` master-push serial baseline (Time 04:56) — 0 skipped, 112 real-DB cases, S173 and S316
   green on the merged artifacts both times; zero flakes.
 
