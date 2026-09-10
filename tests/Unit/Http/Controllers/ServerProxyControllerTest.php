@@ -5418,13 +5418,34 @@ final class ServerProxyControllerTest extends TestCase
             '#^/trickplay/[^/]+/index\.xml$#',
         ];
         $manifest = self::s332ServerRouteManifest();
-        $visited = 0;
-        $trickplayRoutes = 0;
-        foreach ($manifest['routes'] as $route) {
-            $visited++;
-            if (str_starts_with($route['path'], '/trickplay/')) {
-                $trickplayRoutes++;
-            }
+        $routes = $manifest['routes'];
+        $visited = count($routes);
+        $trickplayRoutes = count(array_filter(
+            $routes,
+            static fn (array $route): bool => str_starts_with($route['path'], '/trickplay/'),
+        ));
+
+        // Denominator BEFORE the compare loop (the sibling S350 manifest test's own lesson):
+        // a RED run must still show the operator what this re-verification visited.
+        fwrite(STDERR, sprintf(
+            "S350 W52 re-verification (token %s): %d route(s) in the S332 snapshot (%d of them "
+            . "/trickplay/); GET trickplay subset holds %d survivor(s); counts are PRINTED, never asserted.\n",
+            self::S350_W52_TOKEN,
+            $visited,
+            $trickplayRoutes,
+            count($trickplay),
+        ));
+
+        // An anti-vacuity floor of its own: a gutted, emptied `routes` list must not make
+        // the per-route compare below trivially green (S345 lesson 3). PRINTED counts above
+        // stay re-pin-safe; this floor only demands the manifest is non-empty.
+        $this->assertGreaterThan(
+            0,
+            $visited,
+            'W52: the manifest loop would visit 0 route(s) — an empty scan is not a pass',
+        );
+
+        foreach ($routes as $route) {
             foreach ($prunedPatterns as $pattern) {
                 $this->assertSame(
                     0,
@@ -5439,15 +5460,6 @@ final class ServerProxyControllerTest extends TestCase
                 );
             }
         }
-
-        fwrite(STDERR, sprintf(
-            "S350 W52 re-verification (token %s): GET trickplay subset holds %d survivor(s); "
-            . "%d route(s) visited in the S332 snapshot (%d of them /trickplay/), no pruned pattern matched any.\n",
-            self::S350_W52_TOKEN,
-            count($trickplay),
-            $visited,
-            $trickplayRoutes,
-        ));
     }
 
     // -----------------------------------------------------------------------
