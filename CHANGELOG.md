@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — S468 (s468hub · CI guard): the committed LPT duration cache is now suite-guarded against silent drift — 2026-09-11
+
+- `scripts/parallel/test-durations.json` is the packing input the parallel PHPUnit runner reads at CI
+  time; its own docblock says it "must track the suite", and a Unit file with no cache entry is packed
+  at cost 0.0 — yet nothing re-derived the inventory and compared it with the cache, so the input could
+  rot silently while CI stayed green. `tests/Unit/Support/DurationCacheTracksSuiteTest.php` closes the
+  window: it re-walks the Unit inventory with the exact phpunit.xml grammar (every `Test.php` under
+  `tests/`, excluding `tests/Integration` and `tests/E2E`) and fails on both directions of key-set
+  divergence — a file the suite runs with no duration entry, and a cache key with no file behind it,
+  which only a hand-edit or an unblessed deletion can create. Every drift failure prints the runner
+  docblock's regenerate incantation verbatim, and the incantation is pinned against the docblock in
+  both directions so a rewrite of the sanctioned repair reddens the guard instead of stranding it.
+  Duration skew and provenance recency are deferred deliberately and recorded as such in the guard:
+  a skew check needs a fresh serial profile (box-clock timings asserted inside the suite — the flake
+  class the estate refuses), and the provenance stamp is a short sha no default-depth CI checkout can
+  resolve for an ancestry test. Non-vacuity is proven in-suite (both classifiers mutate the real parsed
+  data and must report exactly the planted key; a transient on-disk probe test file must be seen by the
+  walk, missed by the cache and named by the classifier, then restored to an empty diff) — the
+  "nothing matched" defence carries its own guards. The new guard file's own cache entry was added with
+  bless's own per-file computation (junit `@time` sum, rounded), not a full-suite regen, so no foreign
+  duration was rewritten on this box's clock.
+
 ### Changed — W63 (cs37 hub · wave closer): pure currency re-pin — 402 tuples, fence held — 2026-09-11
 
 - **cs#37 cascade closer (leg 7/7).** This era the upstream span on phlix-server master is a
@@ -36,6 +58,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   frame and carries a planted-regression mutation control (revert any site to a bare install and the guard goes red).
   The bare `npm install` in the `SpaBundleCiWiringTest` / `McpE2ECiWiringTest` workflow prose is a deliberate
   counter-example and is left untouched. No behaviour change beyond the guidance text; no migration.
+
 
 ### Changed — W61 (cs36 hub · wave closer): pure currency re-pin — 402 tuples, fence held — 2026-09-11
 

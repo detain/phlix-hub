@@ -200,6 +200,7 @@
         "tests/Unit/Support/CoverageArtifactGateTest.php": 0.508,
         "tests/Unit/Support/CoverageMetadataPolicyTest.php": 0.227,
         "tests/Unit/Support/CrossRepoPathAssertCiWiringTest.php": 0.049,
+        "tests/Unit/Support/DurationCacheTracksSuiteTest.php": 0.019,
         "tests/Unit/Support/IntegrationDbCiWiringTest.php": 0.008,
         "tests/Unit/Support/McpE2ECiWiringTest.php": 0.007,
         "tests/Unit/Support/McpE2EGateTest.php": 0.526,
