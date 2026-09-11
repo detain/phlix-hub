@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — S467 (hub · code): runtime guidance strings now direct the CI npm-ci incantation instead of a bare `npm install` — 2026-09-11
+
+- The S466 finding, code half. Five operator-facing strings told a reader to run `cd web-ui && npm install &&
+  npm run build` when the SPA bundle is missing, but a bare install floats dependency resolution against the host
+  `~/.npmrc`; the CI law (the `SPA Bundle Build + Compare Gate` and this repo's documented build command) is
+  `NPM_CONFIG_USERCONFIG=/dev/null npm ci`. Aligned all five sites to that form, keeping each string's voice: the four
+  `503 — Shared UI not built` responses in `SharedUiController::shell()` (HTML-entity `&&` preserved) and the
+  `Vite manifest not found` exception in `ViteAssets::getEntryJsPath()` (backtick/literal `&&` preserved). Added
+  `tests/Unit/Support/RuntimeNpmGuidanceStringsTest`, which pins every one of the five to the exact CI-true command
+  frame and carries a planted-regression mutation control (revert any site to a bare install and the guard goes red).
+  The bare `npm install` in the `SpaBundleCiWiringTest` / `McpE2ECiWiringTest` workflow prose is a deliberate
+  counter-example and is left untouched. No behaviour change beyond the guidance text; no migration.
+
 ### Changed — W61 (cs36 hub · wave closer): pure currency re-pin — 402 tuples, fence held — 2026-09-11
 
 - **cs#36 cascade closer (leg 7/7).** This era the upstream span on phlix-server master is a

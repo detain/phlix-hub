@@ -206,6 +206,7 @@
         "tests/Unit/Support/ParallelRunnerPipeGuardWiringTest.php": 0.013,
         "tests/Unit/Support/PhpcsCorpusGateTest.php": 15.141,
         "tests/Unit/Support/RequiredPhpExtensionsTest.php": 0.101,
+        "tests/Unit/Support/RuntimeNpmGuidanceStringsTest.php": 0.009,
         "tests/Unit/Support/SecurityAuditCheckTest.php": 0.897,
         "tests/Unit/Support/SpaBundleCiWiringTest.php": 0.004,
         "tests/Unit/Support/StaticAnalysisScopeTest.php": 0.009,
