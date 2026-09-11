@@ -513,8 +513,10 @@ final class ParallelTestRunner
         if (!is_resource($process)) {
             return 4;
         }
-        $probe = (string) stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
+        $probe = is_resource($pipes[1]) ? (string) stream_get_contents($pipes[1]) : '';
+        if (is_resource($pipes[1])) {
+            fclose($pipes[1]);
+        }
         proc_close($process);
 
         $n = (int) trim($probe);
@@ -1068,7 +1070,7 @@ final class ParallelTestRunner
             $withCoverage ? 'on(merged)' : 'off',
         ));
         foreach ($finishedAt as $id => $t) {
-            fwrite(STDOUT, sprintf("  bucket #%d done @ %.1fs\n", $id, $t));
+            fwrite(STDOUT, sprintf("  bucket #%d done @ %.1fs\n", (int) $id, $t));
         }
         fwrite(STDOUT, sprintf(
             "merged totals: %d tests, %d assertions, %d skipped\n",
