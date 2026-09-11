@@ -17,9 +17,23 @@ use Phlix\Hub\Http\ViteAssets;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
+use function bin2hex;
 use function file_get_contents;
+use function file_put_contents;
+use function is_dir;
+use function is_file;
+use function is_link;
+use function mkdir;
+use function random_bytes;
+use function realpath;
+use function rmdir;
+use function scandir;
 use function str_replace;
+use function str_starts_with;
 use function substr_count;
+use function symlink;
+use function sys_get_temp_dir;
+use function unlink;
 
 /**
  * S467 — pin the five runtime guidance strings that tell an operator how to build
@@ -42,10 +56,12 @@ use function substr_count;
  *  - the *source* layer counts each command step per file, so it catches the case where
  *    one of the four identical 503 literals is reverted while its three siblings stay
  *    aligned — a single behavioural sample cannot see that;
- *  - the *behavioural* layer drives the real controller and the real exception and
- *    asserts the exact concatenated frame on the artefact that actually leaves the
- *    process, so a source that merely LOOKS right on paper cannot pass (S345 rule 2:
- *    assert the real artefact, not your idea of it).
+ *  - the *behavioural* layer drives the real controller through all four `not built`
+ *    branches (missing manifest, missing shell, shell outside the root, shell not a
+ *    file) and the real exception, asserting the exact concatenated frame on the artefact
+ *    that actually leaves the process, so a source that merely LOOKS right on paper cannot
+ *    pass (S345 rule 2: assert the real artefact, not your idea of it — and rule 1: every
+ *    exit path is exercised, not a representative one);
  *
  * | mutation                                             | this test |
  * | ---------------------------------------------------- | --------- |
@@ -53,6 +69,7 @@ use function substr_count;
  * | one 503 site edited, a sibling left behind           | RED       |
  * | the `cd web-ui` / `npm run build` frame dropped      | RED       |
  * | the emitted runtime frame altered                    | RED       |
+ * | any one of the four 503 branches' frame altered      | RED       |
  * | the survival token moved out of PHP code             | RED       |
  *
  * Scope: the bare `npm install` in {@see SpaBundleCiWiringTest} and
@@ -99,6 +116,76 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
      * php_strip_whitespace) finds it. Zero homes in any markdown.
      */
     public const SURVIVAL_TOKEN = 'S467RUNTIMEPNPX9K8';
+
+    /** @var list<string> ephemeral public-root trees built by a test, removed in tearDown(). */
+    private array $baseDirs = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->baseDirs as $baseDir) {
+            $this->removeTree($baseDir);
+        }
+        $this->baseDirs = [];
+
+        parent::tearDown();
+    }
+
+    /**
+     * Build an ephemeral `public/` whose Vite manifest is present, so {@see SharedUiController::shell()}
+     * clears the manifest guard (branch 1) and proceeds to the index.html checks. Returns the public
+     * root plus a real file that lives OUTSIDE that root, used to drive the symlink-escape branch.
+     *
+     * @return array{0: string, 1: string}  [publicRoot, outsideTarget]
+     */
+    private function makeBuiltRoot(): array
+    {
+        $base = sys_get_temp_dir() . '/phlix-hub-s467-' . bin2hex(random_bytes(6));
+        self::assertTrue(
+            mkdir($base . '/pub/assets/app/.vite', 0777, true),
+            'the ephemeral public root must be creatable'
+        );
+        // Canonicalise so a symlinked temp dir cannot confuse the controller's own realpath() checks.
+        $base = (string) (realpath($base) ?: $base);
+        $publicRoot = $base . '/pub';
+        file_put_contents(
+            $publicRoot . '/assets/app/.vite/manifest.json',
+            '{"src/main.ts":{"file":"assets/app/index.js","isEntry":true}}'
+        );
+        $outside = $base . '/outside.html';
+        file_put_contents($outside, '<html>built</html>');
+
+        $this->baseDirs[] = $base;
+
+        return [$publicRoot, $outside];
+    }
+
+    /**
+     * Delete a tree created by {@see makeBuiltRoot()} — scoped, by guard, to the system temp area.
+     */
+    private function removeTree(string $path): void
+    {
+        if ($path === '' || ! str_starts_with($path, sys_get_temp_dir())) {
+            return; // never reach outside the temp area
+        }
+        if (is_link($path)) {
+            unlink($path);
+
+            return;
+        }
+        if (is_dir($path)) {
+            foreach (scandir($path) ?: [] as $entry) {
+                if ($entry !== '.' && $entry !== '..') {
+                    $this->removeTree($path . DIRECTORY_SEPARATOR . $entry);
+                }
+            }
+            rmdir($path);
+
+            return;
+        }
+        if (is_file($path)) {
+            unlink($path);
+        }
+    }
 
     private function controllerSource(): string
     {
@@ -166,20 +253,63 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
 
     public function testTheRealControllerResponseCarriesTheCiTrueFrame(): void
     {
-        $response = (new SharedUiController(self::MISSING_ROOT))->shell(new Request(), []);
+        // A never-existent root: the manifest guard throws and branch 1 answers 503.
+        $this->assertShell503CarriesTheCiTrueFrame(self::MISSING_ROOT, 'missing Vite manifest');
+    }
 
-        self::assertSame(503, $response->statusCode, 'a missing bundle must answer 503');
+    /**
+     * Drive {@see SharedUiController::shell()} at a given public root and assert the artefact
+     * it actually returns is a 503 carrying the CI-true frame — reused for every `not built`
+     * branch so each of the four identical literals is proven on a real response, not read off
+     * the source.
+     */
+    private function assertShell503CarriesTheCiTrueFrame(string $publicRoot, string $branch): void
+    {
+        $response = (new SharedUiController($publicRoot))->shell(new Request(), []);
+
+        self::assertSame(503, $response->statusCode, $branch . ': a broken bundle must answer 503');
         self::assertStringContainsString(
             self::HTML_FRAME,
             $response->body,
-            'the emitted 503 body must contain the whole CI-true frame — this asserts the real '
-            . 'concatenated artefact, not a textual guess at it'
+            $branch . ': the emitted 503 body must contain the whole CI-true frame'
         );
         self::assertStringNotContainsString(
             self::LEGACY_INSTALL,
             $response->body,
-            'the emitted 503 body must not tell the operator to run a bare `npm install`'
+            $branch . ': the emitted 503 body must not direct a bare `npm install`'
         );
+    }
+
+    public function testTheMissingShellResponseCarriesTheCiTrueFrame(): void
+    {
+        // Manifest present so branch 1 is cleared; index.html absent so realpath() is false.
+        [$publicRoot] = $this->makeBuiltRoot();
+
+        $this->assertShell503CarriesTheCiTrueFrame($publicRoot, 'missing index.html');
+    }
+
+    public function testTheEscapedShellResponseCarriesTheCiTrueFrame(): void
+    {
+        // index.html is a symlink to a file outside the public root → the containment guard fires.
+        [$publicRoot, $outside] = $this->makeBuiltRoot();
+        self::assertTrue(
+            symlink($outside, $publicRoot . '/assets/app/index.html'),
+            'the escape symlink must be creatable for this branch'
+        );
+
+        $this->assertShell503CarriesTheCiTrueFrame($publicRoot, 'shell resolves outside the public root');
+    }
+
+    public function testTheNonFileShellResponseCarriesTheCiTrueFrame(): void
+    {
+        // index.html is a directory → passes the containment guard but fails the is_file() guard.
+        [$publicRoot] = $this->makeBuiltRoot();
+        self::assertTrue(
+            mkdir($publicRoot . '/assets/app/index.html'),
+            'the index.html directory must be creatable for this branch'
+        );
+
+        $this->assertShell503CarriesTheCiTrueFrame($publicRoot, 'shell path is a directory, not a file');
     }
 
     public function testTheRealViteExceptionCarriesTheCiTrueFrame(): void
