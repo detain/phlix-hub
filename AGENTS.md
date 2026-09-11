@@ -15,7 +15,7 @@ php bin/phlix oauth:client:register            # OAuth client admin (also oauth:
 php scripts/assert-phpcs-corpus.php            # S299: PSR-12 over src+scripts+tests, with an asserted file count
 composer validate --strict
 php scripts/security-audit-check.php          # S246: audits runtime AND require-dev, prints the corpus
-cd web-ui && npm install && npm run build     # Vite SPA -> public/assets/app/
+cd web-ui && NPM_CONFIG_USERCONFIG=/dev/null npm ci && npm run build   # Vite SPA -> public/assets/app/ (matches SPA Bundle CI gate)
 ```
 
 Container, provisioning, and CI:
