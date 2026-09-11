@@ -43,7 +43,7 @@ final class ViteAssets
         if (! file_exists($this->manifestPath)) {
             throw new RuntimeException(
                 "Vite manifest not found at {$this->manifestPath}. "
-                . 'Run `cd web-ui && npm install && npm run build` first.'
+                . 'Run `cd web-ui && NPM_CONFIG_USERCONFIG=/dev/null npm ci && npm run build` first.'
             );
         }
 

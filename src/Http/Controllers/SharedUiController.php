@@ -61,7 +61,8 @@ final class SharedUiController
                 ->html(
                     '<h1>503 — Shared UI not built</h1>'
                     . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
+                    . 'Run <code>cd web-ui &amp;&amp; NPM_CONFIG_USERCONFIG=/dev/null npm ci '
+                    . '&amp;&amp; npm run build</code>.</p>'
                 );
         }
 
@@ -74,7 +75,8 @@ final class SharedUiController
                 ->html(
                     '<h1>503 — Shared UI not built</h1>'
                     . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
+                    . 'Run <code>cd web-ui &amp;&amp; NPM_CONFIG_USERCONFIG=/dev/null npm ci '
+                    . '&amp;&amp; npm run build</code>.</p>'
                 );
         }
 
@@ -87,7 +89,8 @@ final class SharedUiController
                 ->html(
                     '<h1>503 — Shared UI not built</h1>'
                     . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
+                    . 'Run <code>cd web-ui &amp;&amp; NPM_CONFIG_USERCONFIG=/dev/null npm ci '
+                    . '&amp;&amp; npm run build</code>.</p>'
                 );
         }
 
@@ -97,7 +100,8 @@ final class SharedUiController
                 ->html(
                     '<h1>503 — Shared UI not built</h1>'
                     . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
+                    . 'Run <code>cd web-ui &amp;&amp; NPM_CONFIG_USERCONFIG=/dev/null npm ci '
+                    . '&amp;&amp; npm run build</code>.</p>'
                 );
         }
 
