@@ -6,6 +6,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — S466 (s466hub · docs-only): SPA build instructions aligned to the CI npm-ci law — 2026-09-11
+
+- Corrected `npm install` to `NPM_CONFIG_USERCONFIG=/dev/null npm ci` in the three places that instruct a
+  reader to run the web-ui/spa build the same way the `SPA Bundle Build + Compare Gate` job does
+  (`AGENTS.md`, `CLAUDE.md`, and the on-server Option B build step in `hub_deploy.md`, which follows a plain
+  `git pull` with a committed lockfile and must not mutate it). Genuinely-install prose was left as-is: the
+  Option A local flow in `hub_deploy.md` (a `@phlix/ui` version bump immediately before it requires lockfile
+  regeneration), the git-tag bump gotcha in `CALIBER_LEARNINGS.md`, and skill docs that add new dependencies
+  or install global tools. Lane token S466NPCIDOCSX9K7.
+
 ### Changed — W59 (cs35 hub · wave closer): full snapshot regen + contracts re-vendor — route added, 402 tuples, fence moved — 2026-09-11
 
 - **cs#35 cascade closer (leg 7/7).** Unlike the prior pure waves, a new upstream read route landed on

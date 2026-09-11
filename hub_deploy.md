@@ -111,7 +111,7 @@ git pull origin master
 ```bash
 source /etc/phlix-hub.env
 cd /opt/phlix-hub/web-ui
-npm install
+NPM_CONFIG_USERCONFIG=/dev/null npm ci
 npm run build
 ```
 
