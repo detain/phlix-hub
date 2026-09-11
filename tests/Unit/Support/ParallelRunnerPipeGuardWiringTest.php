@@ -5,14 +5,18 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Support;
 
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
+use function explode;
 use function file_get_contents;
 use function implode;
 use function is_array;
+use function preg_match;
 use function preg_match_all;
 use function preg_quote;
 use function sprintf;
 use function str_contains;
+use function str_repeat;
 use function str_replace;
 use function strlen;
 use function strpos;
@@ -167,11 +171,11 @@ final class ParallelRunnerPipeGuardWiringTest extends TestCase
         if ($reads === 0) {
             $violations[] = 'detectCores() no longer reads pipes[1] — pin lost its target';
         }
-        $guardedReads = preg_match_all(
+        $guardedReads = self::matchCount(
             '/is_resource\(\s*\$pipes\[1\]\s*\)\s*\?\s*\(string\)\s*stream_get_contents\(\s*\$pipes\[1\]\s*\)/',
             $body,
         );
-        if (is_int($guardedReads) && $guardedReads !== $reads) {
+        if ($guardedReads !== $reads) {
             $violations[] = sprintf(
                 'unguarded read of pipes[1] in detectCores(): %d read(s), %d inside the is_resource ternary',
                 $reads,
@@ -183,11 +187,11 @@ final class ParallelRunnerPipeGuardWiringTest extends TestCase
         if ($closes === 0) {
             $violations[] = 'detectCores() no longer closes pipes[1] — pin lost its target';
         }
-        $guardedCloses = preg_match_all(
+        $guardedCloses = self::matchCount(
             '/if\s*\(\s*is_resource\(\s*\$pipes\[1\]\s*\)\s*\)\s*\{\s*fclose\(\s*\$pipes\[1\]\s*\)\s*;/',
             $body,
         );
-        if (is_int($guardedCloses) && $guardedCloses !== $closes) {
+        if ($guardedCloses !== $closes) {
             $violations[] = sprintf(
                 'unguarded close of pipes[1] in detectCores(): %d fclose(s), %d inside the is_resource guard',
                 $closes,
@@ -255,7 +259,22 @@ final class ParallelRunnerPipeGuardWiringTest extends TestCase
 
     private static function countLiteral(string $haystack, string $needle): int
     {
-        return preg_match_all('/' . preg_quote($needle, '/') . '/', $haystack);
+        return self::matchCount('/' . preg_quote($needle, '/') . '/', $haystack);
+    }
+
+    /**
+     * preg_match_all whose failure mode is a loud exception, never a silently
+     * skipped check: a scanner that swallowed its own PCRE error would report
+     * "no violations" exactly when it stopped seeing anything (S345 rule 3).
+     */
+    private static function matchCount(string $pattern, string $subject): int
+    {
+        $count = preg_match_all($pattern, $subject);
+        if ($count === false) {
+            throw new RuntimeException("preg_match_all failed for pattern: {$pattern}");
+        }
+
+        return $count;
     }
 
     /**
