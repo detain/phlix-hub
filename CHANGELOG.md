@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W59 (cs35 hub · wave closer): full snapshot regen + contracts re-vendor — route added, 402 tuples, fence moved — 2026-09-11
+
+- **cs#35 cascade closer (leg 7/7).** Unlike the prior pure waves, a new upstream read route landed on
+  phlix-server master this era, so the server route snapshot is a genuine full re-dump, not a
+  source-line-only refresh: the route count advances to 402, the route-set sha256 fence moves with it,
+  and the dumper's `--check` mode byte-passes against a live server checkout after the write.
+  Re-vendored the contracts export fixture byte-for-byte from merged `@phlix/contracts` master
+  (untagged regen; its provenance now carries the same added route, so its tuple set matches the hub
+  snapshot exactly). Gate pins advance in the same commit: the S332 expected source-sha in
+  `ServerProxyControllerTest.php`; in the S280 parity test the docblock vendored-export md5, the
+  survival-token sha/count suffix, the canonical total (and its module-count breakdown comment), and
+  the lane ritual token constant (renamed to this wave's identifier, code-resident only; asserted
+  absent from both vendored JSON fixtures — verified zero hits). The per-module group sums and the
+  write-route deriving check were re-run against the regenerated fixtures and pass unchanged: the new
+  route is a read verb, so it adds no deny-pattern obligation. Clears the standing
+  `Server Route Snapshot Currency` red the wave exists to resolve. Untagged wave: dependency tag pins stay put.
+
 ### Changed — W58 (cs34 hub · wave closer): snapshot re-dump + contracts re-vendor — PURE, 401 tuples, fence held — 2026-09-10
 
 - **cs#34 cascade closer (leg 7/7).** Re-dumped the server route snapshot against the current
