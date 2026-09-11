@@ -1,7 +1,7 @@
 {
     "generator": "tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php",
     "source_repo": "detain/phlix-server",
-    "source_sha": "f9a237d2a2213465c48723833be618724c4a7d29",
+    "source_sha": "6293d85a81c94b9fbaf32e7df87e7a332acfe684",
     "route_count": 402,
     "sha256": "269dab902051d0f5e27800a5b59185dceb66dc4e517cde2e1bf5c72a11a05b30",
     "routes": [
