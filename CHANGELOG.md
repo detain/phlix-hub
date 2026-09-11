@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W63 (cs37 hub · wave closer): pure currency re-pin — 402 tuples, fence held — 2026-09-11
+
+- **cs#37 cascade closer (leg 7/7).** This era the upstream span on phlix-server master is a
+  test-and-CI-only change (workflow definitions, one CI prerequisite script, three test files — an
+  empty diff under the route-surface directories), so the route snapshot is a **pure provenance
+  refresh**, not a re-dump: the vendored server snapshot advances its recorded source-sha pin to the
+  current master tip while the route count stays at 402 and the route-set sha256 fence is
+  byte-for-byte identical to the previous wave — the dumper's `--check` mode confirms the committed
+  snapshot is current against a live server checkout. Re-vendored the contracts export fixture
+  byte-for-byte from merged `@phlix/contracts` master (untagged regen; its provenance now carries the
+  same server tip, so its tuple set still matches the hub snapshot exactly — the S280 parity gate
+  asserts the two fixtures pin the *same* server sha and will not stay green if they drift). Gate
+  pins advance in the same commit: the S332 expected source-sha in `ServerProxyControllerTest.php`;
+  in the S280 parity test the docblock vendored-export md5, the survival-token sha/count suffix, and
+  the lane ritual token constant (renamed to this wave's identifier, code-resident only; asserted
+  19-char, upper-alphanumeric, and absent from both vendored JSON files). No runtime behaviour
+  changes; the SPA bundle is untouched.
+
 ### Fixed — S467 (hub · code): runtime guidance strings now direct the CI npm-ci incantation instead of a bare `npm install` — 2026-09-11
 
 - The S466 finding, code half. Five operator-facing strings told a reader to run `cd web-ui && npm install &&
