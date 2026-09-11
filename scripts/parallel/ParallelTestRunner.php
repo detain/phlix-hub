@@ -513,8 +513,22 @@ final class ParallelTestRunner
         if (!is_resource($process)) {
             return 4;
         }
-        $probe = (string) stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
+        /**
+         * psalm models proc_open()'s pipes entries as always-resource, so it calls
+         * this guard redundant and the null-arm impossible; at runtime a descriptor
+         * that fails to open yields null in $pipes (partial-failure shape), and the
+         * guard keeps the probe fail-soft — a default core count — instead of a
+         * fatal TypeError in the middle of a CI run. Suppressing the static verdict,
+         * not the runtime concern.
+         *
+         * @psalm-suppress RedundantCondition
+         * @psalm-suppress TypeDoesNotContainType
+         */
+        $probe = is_resource($pipes[1]) ? (string) stream_get_contents($pipes[1]) : '';
+        /** @psalm-suppress RedundantCondition — guarded close, same partial-failure shape. */
+        if (is_resource($pipes[1])) {
+            fclose($pipes[1]);
+        }
         proc_close($process);
 
         $n = (int) trim($probe);
@@ -1068,7 +1082,8 @@ final class ParallelTestRunner
             $withCoverage ? 'on(merged)' : 'off',
         ));
         foreach ($finishedAt as $id => $t) {
-            fwrite(STDOUT, sprintf("  bucket #%d done @ %.1fs\n", $id, $t));
+            /** @psalm-suppress RedundantCastGivenDocblockType — the cast is deliberate at the %d boundary; psalm reads the array<int,float> docblock and calls it redundant. */
+            fwrite(STDOUT, sprintf("  bucket #%d done @ %.1fs\n", (int) $id, $t));
         }
         fwrite(STDOUT, sprintf(
             "merged totals: %d tests, %d assertions, %d skipped\n",

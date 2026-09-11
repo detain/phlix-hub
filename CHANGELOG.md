@@ -32,6 +32,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   regeneration), the git-tag bump gotcha in `CALIBER_LEARNINGS.md`, and skill docs that add new dependencies
   or install global tools. Lane token S466NPCIDOCSX9K7.
 
+### Fixed — S461 (hub): the parallel runner's `nproc` probe degrades to the documented default-cores fallback on a partial `proc_open` failure instead of a fatal TypeError — 2026-09-11
+
+- **`scripts/parallel/ParallelTestRunner.php` — the last real delta kept dirty in the s458 sandbox, harvested onto master, NOT a wholesale file copy:** master's newer
+  `elements()` DOMNodeList snapshot, `$load[$lightest]` LPT fix and `array_values()` return stayed. `detectCores()` now guards the nproc probe pipe —
+  `$probe = is_resource($pipes[1]) ? (string) stream_get_contents($pipes[1]) : '';` plus a conditional `fclose` — so a `proc_open` partial-failure (a descriptor that
+  fails to open yields null in `$pipes`) degrades to the documented default-cores fallback instead of a fatal TypeError under `strict_types`; and the bucket-done
+  report line casts its array key to `(int) $id` at the sprintf `%d` boundary.
+- **`psalm.xml` (main leg, `errorLevel 1`, no baseline) reported the shipped guard as `RedundantCondition`/`TypeDoesNotContainType` and the cast as
+  `RedundantCastGivenDocblockType`** — psalm models `proc_open` pipes as always-resource — so three statement-scoped inline `@psalm-suppress` comments with rationale
+  keep the leg green; the suppresses cover the static-model gap, not a runtime defect.
+- **New pin: `tests/Unit/Support/ParallelRunnerPipeGuardWiringTest` (7 tests, 21 assertions).** A behavioural null-pipe test is not honestly constructible
+  (`detectCores` is private static with a hardcoded `['nproc']`; Reflection cannot substitute a broken pipe into the function's own local), so the test pins the
+  shipped shape against the comment-stripped production source and carries mutation controls that revert each guarded shape and require the scanner to report it —
+  plus lost-target controls (renamed `detectCores` / deleted bucket-done line fail the gate rather than pass it vacuously).
+- **`scripts/parallel/test-durations.json` re-blessed via the runner's own `--bless-from-junit` from a full serial Unit,Integration pcov junit.** The runner exits 2
+  on a Unit file with no cached weight (by design), so the new test file required the documented regeneration flow — all weights refreshed together.
+- **Verified on the lane box (PHP 8.3.6, pcov; psalm via the psalm-s444 docker mirror with the repo vendor):** phpstan level 9 CI-faithful (swoole-stripped INI scan
+  dir), psalm main + psalm-tests configs green, S299 phpcs corpus 496 files 0 errors 0 warnings, `assert-required-extensions`, `security-audit-check`; and a REAL
+  execution of the modified runner end to end: `merged totals: 4371 tests, 39961 assertions, 0 skipped` with the S173 integration gate (112 real-DB cases) and the
+  S316 coverage gate (81.39%) green on the merged artefacts.
+
 ### Changed — W59 (cs35 hub · wave closer): full snapshot regen + contracts re-vendor — route added, 402 tuples, fence moved — 2026-09-11
 
 - **cs#35 cascade closer (leg 7/7).** Unlike the prior pure waves, a new upstream read route landed on
