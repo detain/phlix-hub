@@ -30,8 +30,8 @@ use function trim;
  *
  * ## What is pinned and why a source assertion is the honest venue
  *
- * scripts/parallel/ParallelTestRunner.php::detectCores() probes `nproc` through
- * proc_open. Two shapes are pinned here:
+ * scripts/parallel/ParallelTestRunner.php probes proc_open output through
+ * detectCores(). Three shapes are pinned here:
  *
  *  1. the read `$probe = is_resource($pipes[1]) ? (string) stream_get_contents($pipes[1]) : '';`
  *  2. the conditional close `if (is_resource($pipes[1])) { fclose($pipes[1]); }`
@@ -164,7 +164,7 @@ final class ParallelRunnerPipeGuardWiringTest extends TestCase
         if ($body === null) {
             $violations[] = 'detectCores() not found in the guarded file — pin lost its target';
 
-            return $violations + self::castViolations($strippedSource);
+            return array_merge($violations, self::castViolations($strippedSource));
         }
 
         $reads = self::countLiteral($body, 'stream_get_contents($pipes[1])');
@@ -199,7 +199,7 @@ final class ParallelRunnerPipeGuardWiringTest extends TestCase
             );
         }
 
-        return $violations + self::castViolations($strippedSource);
+        return array_merge($violations, self::castViolations($strippedSource));
     }
 
     /**
@@ -309,7 +309,7 @@ final class ParallelRunnerPipeGuardWiringTest extends TestCase
         $count = 0;
         $mutated = str_replace($search, $replace, $source, $count);
         if ($count !== 1) {
-            TestCase::fail(sprintf('mutation fixture applied %d times, expected exactly 1: %s', $count, $search));
+            self::fail(sprintf('mutation fixture applied %d times, expected exactly 1: %s', $count, $search));
         }
 
         return $mutated;
