@@ -1,6 +1,16 @@
 name: CI
 
 on:
+  # S181 adds a TIME trigger, not just a DIFF trigger. GitHub Actions triggers are
+  # workflow-level — there is no per-job `schedule:` — so the honest cost of making
+  # "UI Pin Skew" run nightly is one extra full CI pass per night, identical in
+  # every other respect to a push run. The trade is deliberate: consumer pins go
+  # stale on OTHER repositories' schedules (S181 measured the windows skew widening
+  # inside a single day with no push here at all), so a check that only runs when
+  # this repo moves is a check that misses its own defect class. The nightly run is
+  # posted against the master tip; nothing about push/PR behaviour changes.
+  schedule:
+    - cron: '17 3 * * *'
   push:
     branches: [master, main]
   pull_request:
@@ -691,6 +701,93 @@ jobs:
       # contract arms were read from real source on both sides and agree.
       - name: Assert hub and server path literals agree (S204)
         run: php scripts/assert-cross-repo-hub-paths.php ../phlix-server
+
+  # --------------------------------------------------------------------------
+  # S181 — four in-estate consumers pin @phlix/ui by TAG, on TWO different
+  # syntaxes, and until this job NOTHING in CI noticed when one went stale: the
+  # windows pin sat 17 minors behind with every gate green, and the skew WIDENED
+  # inside a single day while the rollout runbook — which can only see the
+  # tarball form — repinned the two tarball consumers. The reporting mechanism
+  # lives HERE, in hub CI, by owner ruling 2026-09-12: hub ci.yml already runs
+  # the cross-repo-paths job above (the estate's anonymous multi-repo-read
+  # precedent), and this workflow deliberately has NO path filters, so the job
+  # fires on every push, every pull request, and every scheduled run.
+  #
+  # The script computes skew against `git ls-remote --tags` LIVE at run time —
+  # it contains no version constant, because every skew figure written down in
+  # the step text rotted within weeks (the recorded failure class: a check
+  # derived from its own subject self-adjusts; a hardcoded stale constant
+  # rots the other way). Exit 0 means all four required pins were FOUND,
+  # CLASSIFIED (tarball or github:, discovered key-first so a third syntax is
+  # reported UNMATCHED instead of missed) and CURRENT. A STALE pin is red on
+  # purpose — this is a visibility gate, and today's live skew is zero, so red
+  # on merge day is not. The @phlix/contracts pins riding in the same files are
+  # enumerated on the same two syntaxes (the block's "cover both packages or
+  # say why not") and graded too; their absence in a consumer is an ABSENT row,
+  # reported but not required, because the estate has not declared contracts a
+  # four-consumer pin.
+  #
+  # All remote reads are ANONYMOUS (public repos, no token — same rule as the
+  # cross-repo-paths clone and the snapshot-currency ls-remote above), and a
+  # failed fetch reddens the JOB, not a skip: nothing may be compared, or in
+  # this case enumerated, from zero evidence. Do NOT add `needs:`, do NOT add
+  # `continue-on-error:`, do NOT add a `paths:` filter to the workflow: the
+  # schedule exists precisely because pins move on OTHER repositories' clocks;
+  # tests/Unit/Support/UiPinSkewCiWiringTest.php parses this file and reddens on
+  # each of those edits, and UiPinSkewReporterTest.php drives the script itself
+  # with planted synthetic skew, a planted third-syntax pin and a planted
+  # vanished pin to prove every failure mode is loud.
+  ui-pin-skew: # S181PINSKEWX9Q2
+    name: UI Pin Skew
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '8.3'
+
+      # Fetch happens in the SHELL, like the cross-repo-paths clone: the script
+      # then performs no network I/O in CI and every remote byte is attributable
+      # (URL + sha256 logged per file). `curl -f` exits non-zero on 4xx/5xx and
+      # `set -e` aborts the step, so an absent or renamed package.json is a red
+      # job, never a silently shortened table.
+      - name: Fetch consumer pins + live tag ladders (anonymous)
+        run: |
+          set -euo pipefail
+          D="${RUNNER_TEMP:?}/s181"
+          mkdir -p "$D"
+          fetch() {
+            curl -fsSL --max-time 30 "$2" -o "$D/$1-package.json" \
+              || { echo "::error::could not anonymously fetch $2 — S181 has nothing to enumerate for $1"; exit 1; }
+            echo "$1: $2 sha256=$(sha256sum "$D/$1-package.json" | cut -c1-16)"
+          }
+          fetch server https://raw.githubusercontent.com/detain/phlix-server/master/web-ui/package.json
+          fetch windows https://raw.githubusercontent.com/detain/phlix-windows-client/master/package.json
+          fetch tizen https://raw.githubusercontent.com/detain/phlix-tizen-client/master/package.json
+          GIT_TERMINAL_PROMPT=0 git ls-remote --tags https://github.com/detain/phlix-ui > "$D/ui-tags.txt" \
+            || { echo "::error::could not read the live phlix-ui tag ladder — no skew can be computed"; exit 1; }
+          GIT_TERMINAL_PROMPT=0 git ls-remote --tags https://github.com/detain/phlix-contracts > "$D/contracts-tags.txt" \
+            || { echo "::error::could not read the live phlix-contracts tag ladder — no skew can be computed"; exit 1; }
+          wc -l "$D/ui-tags.txt" "$D/contracts-tags.txt"
+
+      - name: Report @phlix/ui + @phlix/contracts pin skew (S181)
+        run: |
+          set -euo pipefail
+          D="${RUNNER_TEMP:?}/s181"
+          php scripts/report-ui-pin-skew.php \
+            --package-json="server=$D/server-package.json" \
+            --package-json="windows=$D/windows-package.json" \
+            --package-json="tizen=$D/tizen-package.json" \
+            --tags-file="$D/ui-tags.txt" \
+            --contracts-tags-file="$D/contracts-tags.txt"
 
   # --------------------------------------------------------------------------
   # S253 — the SERVED SPA bundle is a committed artefact; nothing used to tie
