@@ -28,6 +28,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   bless's own per-file computation (junit `@time` sum, rounded), not a full-suite regen, so no foreign
   duration was rewritten on this box's clock.
 
+### Changed — W72 (cs40 hub · wave closer): pure currency re-pin — 402 tuples, fence held — 2026-09-12
+
+- **cs#40 cascade closer (leg 7/7).** This era the upstream span on phlix-server master is three
+  merges confined to the test-teardown race guard, the parallel-runner verdict machinery and its
+  support test, the untracked-journal cleanup and changelog prose (an empty diff under the
+  route-surface directories), so the route snapshot is a **pure provenance refresh**, not a content
+  change: the vendored server snapshot advances its recorded source-sha pin to the current master
+  tip while the route count stays at 402 and the route-set sha256 fence is byte-for-byte identical
+  to the previous wave — the dumper was re-run against a live server checkout at the era tip and
+  reproduced the committed snapshot byte-identically apart from that one provenance line.
+  Re-vendored the contracts export fixture byte-for-byte from merged `@phlix/contracts` master
+  (untagged regen #27; its provenance now carries the same server tip, so its tuple set still
+  matches the hub snapshot exactly — the S280 parity gate asserts the two fixtures pin the *same*
+  server sha and will not stay green if they drift). Gate pins advance in the same commit: the S332
+  expected source-sha in `ServerProxyControllerTest.php`; in the S280 parity test the docblock
+  vendored-export md5, the survival-token sha/count suffix, and the lane ritual token constant
+  (renamed to this wave's identifier, code-resident only; asserted 19-char, upper-alphanumeric, and
+  absent from both vendored JSON files). No runtime behaviour changes; the SPA bundle is untouched.
+
 ### Changed — W70 (cs39 hub · wave closer): pure currency re-pin — 402 tuples, fence held — 2026-09-11
 
 - **cs#39 cascade closer (leg 7/7).** This era the upstream span on phlix-server master is one
