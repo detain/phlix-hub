@@ -60,7 +60,7 @@ use const JSON_UNESCAPED_SLASHES;
  * pinned (S332/S350). The export is VENDORED, not imported: contracts'
  * `exports` map blocks subpath JSON access, and vendoring byte-identical
    * snapshots is the sanctioned cross-repo pattern (md5 at commit time:
-   * 391e501dccc6f1e605d0a114aa828719).
+   * 6d184ef45018691c7529616dbd281748).
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  */
@@ -75,13 +75,13 @@ final class S280ContractsRouteManifestParityTest extends TestCase
      * asserted absent from both vendored files (it identifies the GATE, not
      * the data). Bump the sha/count suffix in lockstep with the pins below.
      */
-    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@402-9cbdb325';
+    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@402-ae401e7f';
 
     /**
-     * cs#41 lane ritual token: code-resident only, space-free, asserted
+     * cs#42 lane ritual token: code-resident only, space-free, asserted
      * present in this gate (tokenized corpus) and absent from the data.
      */
-    private const CS41_RITUAL_TOKEN = 'CS41CURRENCYPINX9W5';
+    private const CS42_RITUAL_TOKEN = 'CS42CURRENCYPINX9W6';
 
     /**
      * The tuple count BOTH derivations must carry — the canonical contracts
@@ -244,21 +244,21 @@ final class S280ContractsRouteManifestParityTest extends TestCase
      */
     public function testS280SurvivalTokenIsResidentInTheGateAndNotInTheData(): void
     {
-        $this->assertSame(19, strlen(self::CS41_RITUAL_TOKEN), 'cs#41 ritual token shape');
+        $this->assertSame(19, strlen(self::CS42_RITUAL_TOKEN), 'cs#42 ritual token shape');
         $this->assertSame(
-            self::CS41_RITUAL_TOKEN,
-            (string) preg_replace('/[^A-Z0-9]/', '', self::CS41_RITUAL_TOKEN),
-            'cs#41 ritual token must be upper-alphanumeric and space-free',
+            self::CS42_RITUAL_TOKEN,
+            (string) preg_replace('/[^A-Z0-9]/', '', self::CS42_RITUAL_TOKEN),
+            'cs#42 ritual token must be upper-alphanumeric and space-free',
         );
         $this->assertStringNotContainsString(
-            self::CS41_RITUAL_TOKEN,
+            self::CS42_RITUAL_TOKEN,
             (string) file_get_contents(self::HUB_FIXTURE_PATH),
-            'the cs#41 ritual token belongs to code, not to the vendored hub fixture',
+            'the cs#42 ritual token belongs to code, not to the vendored hub fixture',
         );
         $this->assertStringNotContainsString(
-            self::CS41_RITUAL_TOKEN,
+            self::CS42_RITUAL_TOKEN,
             (string) file_get_contents(self::CONTRACTS_EXPORT_PATH),
-            'the cs#41 ritual token belongs to code, not to the vendored contracts export',
+            'the cs#42 ritual token belongs to code, not to the vendored contracts export',
         );
         $this->assertStringNotContainsString(
             self::S280_SURVIVAL_TOKEN,
