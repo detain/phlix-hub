@@ -46,8 +46,8 @@ use const JSON_UNESCAPED_SLASHES;
  *  - `Fixtures/contracts-server-route-manifest.json` — the vendored
  *    `@phlix/contracts` export (`dist/server-route-manifest.json`), the same
  *    bytes mobile (#52) and roku (#49) vendored: the canonical UNION of the
- *    Application (365) and WebPortal (47) wire-path guard sets minus the 11
- *    shared tuples = 400 tuples.
+ *    Application (367) and WebPortal (48) wire-path guard sets minus the 11
+ *    shared tuples = 404 tuples.
  *
  * Before this gate the two copies could drift INDEPENDENTLY: the hub could
  * refresh its own snapshot while the vendored contracts copy aged (or the
@@ -60,7 +60,7 @@ use const JSON_UNESCAPED_SLASHES;
  * pinned (S332/S350). The export is VENDORED, not imported: contracts'
  * `exports` map blocks subpath JSON access, and vendoring byte-identical
    * snapshots is the sanctioned cross-repo pattern (md5 at commit time:
-   * 6d184ef45018691c7529616dbd281748).
+   * 86aa1f61bc9d6b0f277c57585b3ee1fa).
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  */
@@ -75,20 +75,20 @@ final class S280ContractsRouteManifestParityTest extends TestCase
      * asserted absent from both vendored files (it identifies the GATE, not
      * the data). Bump the sha/count suffix in lockstep with the pins below.
      */
-    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@402-ae401e7f';
+    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@404-e96f586d';
 
     /**
-     * cs#42 lane ritual token: code-resident only, space-free, asserted
+     * cs#43 lane ritual token: code-resident only, space-free, asserted
      * present in this gate (tokenized corpus) and absent from the data.
      */
-    private const CS42_RITUAL_TOKEN = 'CS42CURRENCYPINX9W6';
+    private const CS43_RITUAL_TOKEN = 'CS43CURRENCYPINX9W7';
 
     /**
      * The tuple count BOTH derivations must carry — the canonical contracts
-     * total (365 Application + 48 WebPortal − 11 shared), pinned positively
+     * total (367 Application + 48 WebPortal − 11 shared), pinned positively
      * so an empty or gutted scan can never pass.
      */
-    private const S280_EXPECTED_ROUTE_COUNT = 402;
+    private const S280_EXPECTED_ROUTE_COUNT = 404;
 
     /**
      * The vendored S332 snapshot and the vendored contracts export must be
@@ -244,21 +244,21 @@ final class S280ContractsRouteManifestParityTest extends TestCase
      */
     public function testS280SurvivalTokenIsResidentInTheGateAndNotInTheData(): void
     {
-        $this->assertSame(19, strlen(self::CS42_RITUAL_TOKEN), 'cs#42 ritual token shape');
+        $this->assertSame(19, strlen(self::CS43_RITUAL_TOKEN), 'cs#43 ritual token shape');
         $this->assertSame(
-            self::CS42_RITUAL_TOKEN,
-            (string) preg_replace('/[^A-Z0-9]/', '', self::CS42_RITUAL_TOKEN),
-            'cs#42 ritual token must be upper-alphanumeric and space-free',
+            self::CS43_RITUAL_TOKEN,
+            (string) preg_replace('/[^A-Z0-9]/', '', self::CS43_RITUAL_TOKEN),
+            'cs#43 ritual token must be upper-alphanumeric and space-free',
         );
         $this->assertStringNotContainsString(
-            self::CS42_RITUAL_TOKEN,
+            self::CS43_RITUAL_TOKEN,
             (string) file_get_contents(self::HUB_FIXTURE_PATH),
-            'the cs#42 ritual token belongs to code, not to the vendored hub fixture',
+            'the cs#43 ritual token belongs to code, not to the vendored hub fixture',
         );
         $this->assertStringNotContainsString(
-            self::CS42_RITUAL_TOKEN,
+            self::CS43_RITUAL_TOKEN,
             (string) file_get_contents(self::CONTRACTS_EXPORT_PATH),
-            'the cs#42 ritual token belongs to code, not to the vendored contracts export',
+            'the cs#43 ritual token belongs to code, not to the vendored contracts export',
         );
         $this->assertStringNotContainsString(
             self::S280_SURVIVAL_TOKEN,

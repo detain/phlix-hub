@@ -57,6 +57,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   bless's own per-file computation (junit `@time` sum, rounded), not a full-suite regen, so no foreign
   duration was rewritten on this box's clock.
 
+### Changed — W81 (cs43 hub · wave closer): route-manifest CONTENT regen — fence moves 402→404 — 2026-09-12
+
+- **cs#43 cascade closer (leg 7/7).** Contrast with cs#42 (a pure provenance re-pin where the fence
+  held): phlix-server S240 merged two **ADDITIVE** query-param rails — `GET /api/v1/music/artist?name=`
+  and `GET /api/v1/music/album?name=` — while keeping the legacy `/music/artists/{mbid}` +
+  `/music/albums/{mbid}` path rails served. The vendored route snapshot therefore **grows 402 → 404**
+  and the `sha256` fence **moves** (it is re-derived from the route list, so a real content change must
+  move it — a held fence here would itself be the alarm). Regenerated in-commit with the S332 dumper
+  booted against a live phlix-server checkout at the era tip (`e96f586d`): `route_count=404`,
+  `sha256=97d6e62ea523400583853dafe01e3003eaef2cadb834329db8189cf089e13e7e`, `source_sha=e96f586d…`.
+  Re-vendored the contracts export fixture byte-for-byte from merged `@phlix/contracts` master
+  (untagged regen #30; provenance carries the same server tip → S280 parity stays green). Gate pins
+  advance in the same commit: `S332_EXPECTED_SERVER_SOURCE_SHA` in `ServerProxyControllerTest.php`; in
+  the S280 parity test the docblock vendored-export md5, the Application/WebPortal breakdown counts
+  (now 367 + 48 − 11 = 404), the survival-token sha/count suffix (`@404-e96f586d`), and the lane ritual
+  token constant rotate to this wave's value (two code homes estate-wide, as ever). Hub request
+  surface unchanged; the S107 deny set is re-derived from the snapshot (15 of 404 routes meet the
+  inclusion criteria and stay asserted denied). Untagged wave.
+
 ### Changed — W79 (cs42 hub · wave closer): pure currency re-pin — 402 tuples, fence held — 2026-09-12
 
 - **cs#42 cascade closer (leg 7/7).** This era the upstream span on phlix-server master is four

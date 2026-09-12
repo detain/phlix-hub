@@ -1,9 +1,9 @@
 {
     "generator": "tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php",
     "source_repo": "detain/phlix-server",
-    "source_sha": "ae401e7f244366d8a1396397258acafe113240e6",
-    "route_count": 402,
-    "sha256": "269dab902051d0f5e27800a5b59185dceb66dc4e517cde2e1bf5c72a11a05b30",
+    "source_sha": "e96f586da884b45b06df10492fdc3f48919b47bb",
+    "route_count": 404,
+    "sha256": "97d6e62ea523400583853dafe01e3003eaef2cadb834329db8189cf089e13e7e",
     "routes": [
         {
             "method": "DELETE",
@@ -719,11 +719,19 @@
         },
         {
             "method": "GET",
+            "path": "/api/v1/music/album"
+        },
+        {
+            "method": "GET",
             "path": "/api/v1/music/albums"
         },
         {
             "method": "GET",
             "path": "/api/v1/music/albums/{mbid}"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/music/artist"
         },
         {
             "method": "GET",
