@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — S181 (s181hub · CI gate): the estate's `@phlix/ui` tag pins are now enumerated and skew-graded on every push and every night — 2026-09-12
+
+- Four consumers pin `@phlix/ui` by tag on TWO syntaxes (archive tarball URL in the server/hub `web-ui`,
+  `github:` shorthand in windows/tizen), and S181 measured the windows pin 17 minors behind with every
+  gate green — the skew then WIDENED inside a single day because every sweep and runbook to date could
+  only see one form. `scripts/report-ui-pin-skew.php` is the reporting mechanism the step asked for: one
+  command sweeps hub's own `web-ui/package.json` from disk plus the three sibling consumers' package.json
+  (anonymous raw fetches, no token — the cross-repo-paths doctrine), discovers pins KEY-first across all
+  four dependency sections with a value-based alias scan on top, classifies each into the two known
+  syntaxes, and grades every pin against `git ls-remote --tags` LIVE — a pin is STALE only relative to
+  what `phlix-ui` released today, never relative to a baked-in figure, because every version number
+  written into the step text rotted within weeks. The `@phlix/contracts` pins riding in the same files
+  are enumerated on the same syntaxes for free (the block's "cover both packages or say why not"); their
+  absence in a consumer prints a non-blocking ABSENT row so blind spots stay visible without gating a
+  shape the estate has not adopted. Nothing is ever silently 3-of-4: an unreadable source, an empty tag
+  ladder, a vanished required pin, a branch/prerelease ref, or a syntax the classifier does not know are
+  all red with `::error::` annotations — a reporter that cannot measure does not report green. Wired as
+  the `UI Pin Skew` job in `.github/workflows/ci.yml` on push+PR **and** a new workflow-level nightly
+  `schedule:` (GitHub triggers are workflow-level, so pins moving on OTHER repos' clocks are caught
+  between pushes here; the honest cost is one extra full CI pass per night). `UiPinSkewReporterTest`
+  drives the script by execution with planted fixtures — zero-skew green, planted v0.81.0 computed to
+  "4 release(s) behind" and red, a planted third-syntax fifth pin reported UNMATCHED not dropped, alias
+  keys named, vanished required pin loud; `UiPinSkewCiWiringTest` parses the workflow (comment-stripped)
+  and reddens on job deletion, check-name drift, dropped fetches, a severed fetch→script join,
+  `needs:`/`continue-on-error` neutering, loss of the schedule, or the re-introduction of a path filter.
+  Live skew measured ZERO at ship time (all four pins at the then-newest tag), so the check is green on
+  the day it lands and red-ability lives in the planted fixtures. No pin was bumped anywhere; unifying
+  the two syntaxes remains a PROPOSAL, not this change.
+
 ### Added — S468 (s468hub · CI guard): the committed LPT duration cache is now suite-guarded against silent drift — 2026-09-11
 
 - `scripts/parallel/test-durations.json` is the packing input the parallel PHPUnit runner reads at CI

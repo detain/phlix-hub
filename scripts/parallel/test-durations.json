@@ -212,6 +212,8 @@
         "tests/Unit/Support/SpaBundleCiWiringTest.php": 0.004,
         "tests/Unit/Support/StaticAnalysisScopeTest.php": 0.009,
         "tests/Unit/Support/SwooleFixtureProcessTest.php": 12.625,
+        "tests/Unit/Support/UiPinSkewCiWiringTest.php": 0.05,
+        "tests/Unit/Support/UiPinSkewReporterTest.php": 0.38,
         "tests/Unit/Support/UnusedImportGuardTest.php": 0.769,
         "tests/Unit/SyncPlay/PendingCommandChannelRoundTripTest.php": 0.06,
         "tests/Unit/SyncPlay/PendingCommandDeliveryTest.php": 0.01,
