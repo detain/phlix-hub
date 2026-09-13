@@ -2,8 +2,29 @@
 
 /**
  * S181 — enumerate every tag-pinned `@phlix/ui` (and, for free,
- * `@phlix/contracts`) dependency across the estate's four known consumers and
- * report version skew against the LIVE release-tag list, computed at run time.
+ * `@phlix/contracts`) dependency across the estate's consumers and report
+ * version skew against the LIVE release-tag list, computed at run time.
+ *
+ * ## S489 — the per-package CONSUMER SET is re-derived, never copied
+ *
+ * S181 shipped `CONSUMERS` as the hand-written four `@phlix/ui` pinners and the
+ * contracts sweep silently graded contracts inside exactly those same four
+ * files — so `phlix-mobile-client`, which pins `@phlix/contracts` and NOT
+ * `@phlix/ui`, was invisible to the gate, the precise shape of the drift that
+ * sat unwatched through the v0.4.5 era until S11-tail fixed it by hand. S489
+ * splits two notions that had been fused: a declared PROBE UNIVERSE (which
+ * package.json files to fetch — the same anonymous raw-fetch mechanism, now
+ * extended with the contract-only and self-referential consumers) and, per
+ * package, the CONSUMER SET re-derived on every run from what the fetched bytes
+ * actually carry (the key-first scan plus value-based alias scan below). The
+ * summary line the enumerator prints moves with the live data; a new pinner
+ * handed in through `--package-json` surfaces labelled `(extra)` and graded —
+ * loud, never dropped — and a consumer the sets EXPECT to pin (`required_in`)
+ * that stops doing so is a blocking MISSING row, while an absence the estate
+ * has not adopted stays a non-blocking ABSENT row. Token-based code search for
+ * the universe stays out (the estate clones anonymously; that was S177's
+ * mistake) — R9 decay of the probe list is instead met by red-on-unfetchable
+ * and by the deliberate-add doctrine documented at the universe below.
  *
  * ## The defect this closes, measured 2026-08-03 and re-measured 2026-09-12
  *
@@ -52,11 +73,14 @@
  *   php scripts/report-ui-pin-skew.php \
  *       --package-json=KEY=PATH [--package-json=KEY=PATH ...] \
  *       --tags-file=PATH --contracts-tags-file=PATH
- *       Test/CI seams. `KEY=PATH` replaces the named consumer's source with a
- *       local file — CI uses this after curling the files itself, so the
- *       script performs no network I/O there — or ADDS a labelled extra
- *       consumer when KEY is unknown (the scratch-file sweep). The tags files
- *       feed the same parser as the `git ls-remote --tags` output.
+ *       Test/CI seams. `KEY=PATH` replaces the named probe's source with a
+ *       local file — CI uses this for the four files it curls itself (S181
+ *       wiring, unchanged) — and ADDS a labelled extra consumer when KEY is
+ *       unknown (the scratch-file sweep, S489's red-on-unknown route). Probes
+ *       the seams do not cover (the S489 contract-only and self-referential
+ *       consumers) keep being fetched script-side, so no ci.yml change was
+ *       needed for S489. The tags files feed the same parser as the
+ *       `git ls-remote --tags` output.
  *
  * Exit 0 means: every required pin was found, classified, and matches the live
  * newest tag. Exit 1 means at least one `::error::` line was printed.
@@ -79,16 +103,29 @@ declare(strict_types=1);
 const STEP_STAMP = 'S181PINSKEWX9Q2';
 
 /**
+ * Provenance stamp of the S489 consumer-set re-derivation, carried by the
+ * enumerator's summary line. Same survival rule as STEP_STAMP: a string
+ * literal used in code, so `php -w` keeps it and a rewritten-out step
+ * identity leaves a trace.
+ */
+const ENUMERATOR_STAMP = 'S489PINSKEWCONEUX9Q8';
+
+/**
  * The packages this reporter enumerates, and where their live tags live.
  *
  * `required_in` is the positive control: every listed consumer MUST carry a
  * verifiable pin of this package on every run, and a vanished one is a loud
  * failure, not a shorter table. `@phlix/ui` is the block's four-consumer set;
- * `@phlix/contracts` is covered by the same two syntaxes for free (the block's
- * "cover both packages or say why not"), but no consumer is REQUIRED to pin it
- * today — an absent contracts pin prints a non-blocking ABSENT row so the
- * sweep's blind spots stay visible without gating a shape the estate has not
- * adopted.
+ * `@phlix/contracts` is covered by the same two syntaxes (the block's "cover
+ * both packages or say why not"). S489 sets its `required_in` to the estate
+ * CLIENT apps measured to pin it (windows, tizen, mobile): a client that drops
+ * the shared-DTO contract is the regression the mobile v0.4.5 era proved real.
+ * The distinction the S489 landmine demands — "absent and expected" versus
+ * "absent and a regression" — is exactly this list: a probe NOT required to
+ * pin a package still prints its ABSENT row (non-blocking, never silent), a
+ * probe on the list prints a blocking MISSING row instead. Self-referential
+ * repos (`phlix-ui`, `phlix-contracts` themselves) are probed so their pins
+ * are graded, but their absence is never a regression of this gate.
  *
  * @var array<string, array{repo: string, git_url: string, required_in: list<string>}>
  */
@@ -101,25 +138,45 @@ const TARGETS = [
     '@phlix/contracts' => [
         'repo' => 'detain/phlix-contracts',
         'git_url' => 'https://github.com/detain/phlix-contracts',
-        'required_in' => [],
+        'required_in' => ['windows', 'tizen', 'mobile'],
     ],
 ];
 
 /**
- * The four in-estate consumers, as key => [label, repo, path within repo,
- * URL or null for "this repository, read from disk"].
+ * The PROBE UNIVERSE — which package.json files this sweep fetches — as
+ * key => [label, repo, path within repo, URL or null for "this repository,
+ * read from disk"]. This is NOT a list of who pins what: the per-package
+ * consumer sets are RE-DERIVED from the fetched bytes on every run (see
+ * `$pins` and the derived-consumers summary in the body). S489 renamed this
+ * constant from `CONSUMERS` and extended it precisely because the old fused
+ * name hid the defect: the hand-written four `@phlix/ui` pinners were being
+ * reused as the contracts consumer set, blinding the gate to every
+ * contract-only pinner.
  *
- * The list is the block's measured set, deliberately DECLARED rather than
- * discovered: GitHub code-search from a CI job needs a token (the estate
- * clones anonymously) and would reintroduce S177's mistake of trusting one
- * syntax's search hits. What this script guarantees is that every declared
- * consumer is SWEPT and that a pin it cannot classify is escalated — see the
- * UNMATCHED contract in the header. A fifth consumer must be added to this
- * list deliberately, in the commit that adds the dependency.
+ * The universe itself stays deliberately DECLARED rather than discovered:
+ * GitHub code-search from a CI job needs a token (the estate clones
+ * anonymously) and would reintroduce S177's mistake of trusting one syntax's
+ * search hits; an anonymous org listing would trade S181's determinism for
+ * api.github.com rate-limit flakes. What this script guarantees instead:
+ * every probe is SWEPT or the run fails loudly (an unfetchable universe file
+ * is a $fail, never a shorter table), every pin it cannot classify is
+ * escalated (the UNMATCHED contract in the header), every consumer injected
+ * through the `--package-json` seam — known or unknown key — is swept and
+ * graded, an unknown key labelled `(extra)`. A new pinning repo joins the
+ * universe deliberately, in the commit that adds the dependency; until then
+ * the nightly gate sees it the moment CI or a test hands its file in, because
+ * membership is derived from file content, not from this list.
+ *
+ * The three S489 additions: `mobile` (the contract-only pinner whose drift
+ * this step exists to catch), and the two self-referential package repos —
+ * `phlix-ui` pins `@phlix/contracts` for real (measured in its root
+ * package.json) and `phlix-contracts` pins neither target; probing them
+ * grades their real pins and prints honest ABSENT rows for the rest, because
+ * a row is cheap and silence is the defect.
  *
  * @var array<string, array{label: string, repo: string, path: string, url: ?string}>
  */
-const CONSUMERS = [
+const CONSUMER_PROBES = [
     'hub' => [
         'label' => 'phlix-hub',
         'repo' => 'detain/phlix-hub',
@@ -143,6 +200,24 @@ const CONSUMERS = [
         'repo' => 'detain/phlix-tizen-client',
         'path' => 'package.json',
         'url' => 'https://raw.githubusercontent.com/detain/phlix-tizen-client/master/package.json',
+    ],
+    'mobile' => [
+        'label' => 'phlix-mobile-client',
+        'repo' => 'detain/phlix-mobile-client',
+        'path' => 'package.json',
+        'url' => 'https://raw.githubusercontent.com/detain/phlix-mobile-client/master/package.json',
+    ],
+    'ui-repo' => [
+        'label' => 'phlix-ui',
+        'repo' => 'detain/phlix-ui',
+        'path' => 'package.json',
+        'url' => 'https://raw.githubusercontent.com/detain/phlix-ui/master/package.json',
+    ],
+    'contracts-repo' => [
+        'label' => 'phlix-contracts',
+        'repo' => 'detain/phlix-contracts',
+        'path' => 'package.json',
+        'url' => 'https://raw.githubusercontent.com/detain/phlix-contracts/master/package.json',
     ],
 ];
 
@@ -554,15 +629,18 @@ $contractsTagsFile = $optionalPathOption($flags['scalars'], 'contracts-tags-file
 $hubRoot = dirname(__DIR__);
 
 /**
- * Resolve consumer sources: hub from this checkout's disk, the other three via
- * anonymous fetch, every one replaceable by --package-json (and extended by an
- * unknown KEY, which ADDS a labelled extra consumer — the scratch-file sweep).
+ * Resolve probe sources: hub from this checkout's disk, every other universe
+ * member via anonymous raw fetch, each one replaceable by --package-json (and
+ * extended by an unknown KEY, which ADDS a labelled extra consumer — the
+ * scratch-file sweep and S489's red-on-unknown route; CI uses the replace
+ * seam for the four files it curls itself).
  *
  * @var array<string, array{label: string, body: string}> $sources
  */
 $sources = [];
-$order = array_keys(CONSUMERS);
-foreach (CONSUMERS as $key => $spec) {
+$order = array_keys(CONSUMER_PROBES);
+$extraConsumers = 0;
+foreach (CONSUMER_PROBES as $key => $spec) {
     $override = $overrides[$key] ?? null;
     if ($override !== null) {
         $sources[$key] = [
@@ -593,11 +671,17 @@ foreach ($overrides as $key => $path) {
         'body' => $readLocalFile($path, sprintf('extra consumer "%s"', $key)),
     ];
     $order[] = $key;
+    ++$extraConsumers;
 }
 
 /**
- * First pass: collect pins per (consumer, package) BEFORE fetching any ladder,
- * so a contracts tag list nobody needs is never requested.
+ * First pass — THE ENUMERATOR: collect pins per (consumer, package) BEFORE
+ * fetching any ladder, so a contracts tag list nobody needs is never
+ * requested. Membership here is decided exclusively by the fetched bytes: the
+ * key-based hit (`$name === $package`) or the value-based alias hit
+ * (`$valueReferencesRepo`), across every probe AND every extra consumer the
+ * seams injected. This loop is what S489 means by a RE-DERIVED consumer set;
+ * no list of pinners is consulted here.
  *
  * @var array<string, array<string, list<array{key: string, section: string, value: string}>>> $pins
  */
@@ -621,6 +705,29 @@ foreach ($order as $consumerKey) {
     }
 }
 
+/**
+ * S489 — project the enumeration into one consumer set PER PACKAGE, straight
+ * from the bytes collected above. This is the structure the old code never
+ * had: `CONSUMERS` (now `CONSUMER_PROBES`) doubled as the contracts answer by
+ * construction, which is how a contract-only pinner stayed invisible. The sets
+ * below are rebuilt on every run; the summary line printed after the table
+ * makes their liveness visible.
+ *
+ * @var array<string, list<string>> $derivedConsumers
+ */
+$derivedConsumers = [];
+foreach (TARGETS as $package => $target) {
+    /** @var list<string> $pinners */
+    $pinners = [];
+    foreach ($order as $consumerKey) {
+        if (isset($pins[$consumerKey][$package])) {
+            $pinners[] = $consumerKey;
+        }
+    }
+
+    $derivedConsumers[$package] = $pinners;
+}
+
 /** @var array<string, list<array{raw: string, num: string}>> $tagSets */
 $tagSets = [];
 foreach (TARGETS as $package => $target) {
@@ -633,9 +740,15 @@ foreach (TARGETS as $package => $target) {
     }
 
     $seam = $package === '@phlix/ui' ? $uiTagsFile : $contractsTagsFile;
-    if (!$anyPin && $seam === null && $target['required_in'] === []) {
-        // Nobody pins it and nothing requires it: the ABSENT rows below carry
-        // that truth, and an unused network call proves nothing.
+    if (!$anyPin && $seam === null) {
+        // Nobody pins it and no ladder was handed in: the ABSENT/MISSING rows
+        // below carry that truth (a required consumer without a pin is still a
+        // blocking MISSING, so skipping never opens a silent-green path), and
+        // an unused network call proves nothing. S489 removed this branch's
+        // `required_in === []` clause — with the contracts positive control in
+        // place the clause had become provably dead for both current targets
+        // (phpstan level 9 said so); the guard now protects only a hypothetical
+        // future target nobody pins at all.
         $tagSets[$package] = [];
         continue;
     }
@@ -837,6 +950,20 @@ foreach ($rows as $row) {
         $row['note'] === '' ? '' : '← ' . $row['note'],
     )), "\n";
 }
+
+// S489 — the re-derivation made visible: what the sweep ACTUALLY found in the
+// fetched bytes, per package, every run. If this line ever prints a set that
+// the probes were not swept for, or a membership that no file carried, the
+// enumerator itself broke — and the guard tests read these exact figures.
+printf(
+    "%s consumer sets re-derived at run time: probes swept=%d (extras injected=%d); "
+    . "@phlix/ui pinners [%s]; @phlix/contracts pinners [%s].\n",
+    ENUMERATOR_STAMP,
+    count($order),
+    $extraConsumers,
+    implode(',', $derivedConsumers['@phlix/ui']),
+    implode(',', $derivedConsumers['@phlix/contracts']),
+);
 
 /** @var list<array{consumer: string, package: string, syntax: string, pin: string, latest: string,
  *     behind: string, verdict: string, blocking: bool, note: string}> $blocking */

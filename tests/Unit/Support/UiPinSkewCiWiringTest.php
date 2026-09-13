@@ -43,6 +43,8 @@ use function str_contains;
  * | remove the workflow `schedule:` trigger           | RED       |
  * | add a top-level `paths:` filter to the workflow   | RED       |
  * | delete or break the script the job points at      | RED       |
+ * | drop an S489 probe URL from the reporter (script-side fetch) | RED |
+ * | rewrite out the S489 enumerator stamp from CODE (php -w)      | RED |
  *
  * The `schedule:` row matters most here: pins move on OTHER repositories'
  * clocks, and GitHub Actions triggers are workflow-level — so the schedule
@@ -304,6 +306,66 @@ final class UiPinSkewCiWiringTest extends TestCase
             str_contains($source, "'S181PINSKEWX9Q2'"),
             'the provenance stamp must live in the script as a string literal, not only in prose — '
             . 'a rewritten-out stamp is a silent ownership loss (php -w strips comments; literals survive)',
+        );
+    }
+
+    public function testTheScriptProbesTheContractOnlyConsumerItself(): void
+    {
+        // S489 AC-1/AC-3 guard at the script (NOT at ci.yml — the block put CI
+        // wiring out of scope and the brief chose script-side self-fetch): the
+        // contract-only pinner and the two self-referential package repos must
+        // keep being fetched by the reporter, anonymously, by hard raw URL.
+        // Delete the mobile probe from the universe and this test goes red —
+        // exactly the silent re-blinding S489 exists to make impossible.
+        $source = (string) file_get_contents(self::SCRIPT);
+
+        foreach (
+            [
+                'https://raw.githubusercontent.com/detain/phlix-mobile-client/master/package.json',
+                'https://raw.githubusercontent.com/detain/phlix-ui/master/package.json',
+                'https://raw.githubusercontent.com/detain/phlix-contracts/master/package.json',
+            ] as $url
+        ) {
+            self::assertStringContainsString(
+                $url,
+                $source,
+                "the reporter itself must fetch $url — the CI job passes only the three files it curls "
+                . 'itself, so a probe the script dropped would be invisible to every run',
+            );
+        }
+    }
+
+    public function testTheEnumeratorStampSurvivesCommentStripping(): void
+    {
+        // Estate survival law, S489 edition: the consumer-set re-derivation's
+        // identity must be CODE — a const string literal, printed in the
+        // summary line — because the premerge corpus is `php_strip_whitespace`.
+        // Prove it by the very transformation: run `php -w` over the script and
+        // require the stamp in the STRIPPED bytes, not the source prose.
+        $output = [];
+        $exit = 0;
+        exec(
+            sprintf('%s -w %s 2>&1', escapeshellarg(PHP_BINARY), escapeshellarg(self::SCRIPT)),
+            $output,
+            $exit,
+        );
+
+        self::assertSame(0, $exit, 'php -w must be able to walk the script: ' . implode("\n", $output));
+        $stripped = implode("\n", $output);
+
+        self::assertTrue(
+            str_contains($stripped, "'S489PINSKEWCONEUX9Q8'"),
+            'the S489 enumerator stamp must be a string literal that survives comment stripping — '
+            . 'identity living only in prose is the recorded false-positive class',
+        );
+        self::assertTrue(
+            str_contains($stripped, 'ENUMERATOR_STAMP'),
+            'the stamp must be USED by code (the summary line), not merely declared — a dead const '
+            . 'is one careless refactor away from a silent erase',
+        );
+        self::assertTrue(
+            str_contains($stripped, "'S181PINSKEWX9Q2'"),
+            'S181\'s stamp must survive alongside — S489 extends the reporter, it does not orphan it',
         );
     }
 }
