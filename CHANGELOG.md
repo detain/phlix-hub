@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W83 (cs44 hub · wave closer): route-manifest PROVENANCE re-pin — fence HELD 404 + `@phlix/ui` web-ui pin advanced to v0.99.2 — 2026-09-13
+
+- **cs#44 cascade closer (leg 7/7) — a pure PROVENANCE re-pin, the mirror of cs#42
+  and the deliberate contrast with cs#43.** Contrast with the prior wave, where the
+  fence moved because S240 added rails: here the phlix-server span since the last
+  pin is **bundle-only** — no route-registration file and nothing under the server's
+  `include/` or `src/` moved (barrier-proven at dispatch: the two-dot diff over
+  those trees is empty). So the vendored route snapshot's `[method, path]` tuples are
+  byte-for-byte identical and the `sha256` fence **HELDS** — a held fence here is the
+  correct signal that no content moved (it is the cs#43 "a held fence would itself be
+  the alarm" rule read from the other direction). Only the embedded `source_sha`
+  provenance advances to the current phlix-server master tip; regenerated in-commit with
+  the S332 dumper booted against a live phlix-server checkout at the era tip
+  (`route_count=404`, fence unchanged, `source_sha` set to that tip). Re-vendored the
+  contracts export fixture byte-for-byte from merged `@phlix/contracts` master (untagged
+  regen #31; provenance carries the same server tip → S280 parity stays green). Gate
+  pins advance in the same commit: `S332_EXPECTED_SERVER_SOURCE_SHA` in
+  `ServerProxyControllerTest.php`; in the S280 parity test the docblock vendored-export
+  md5, the Application/WebPortal breakdown counts (367 + 48 − 11 = 404, HELD), the
+  survival-token sha/count suffix, and the lane ritual token constant (renamed to this
+  wave; two code homes estate-wide, as ever) rotate. Hub request surface unchanged.
+  **Carried in the same closer (coordinator ladder option (ii)): the hub `web-ui`
+  `@phlix/ui` archive tarball pin advances to the tag every other consumer already
+  names**, with its lockfile resolution/integrity refreshed and the committed
+  `public/assets/app/` SPA bundle rebuilt under the pinned node toolchain — the
+  standalone web-ui repin lane's consequence-ops folded into currency (cs20 precedent).
+  The `UI Pin Skew` grade and the `SPA Bundle Build + Compare Gate` both go green on this
+  tree as a result. No new migration appears this wave (cs legs add none).
+
 ### Added — S181 (s181hub · CI gate): the estate's `@phlix/ui` tag pins are now enumerated and skew-graded on every push and every night — 2026-09-12
 
 - Four consumers pin `@phlix/ui` by tag on TWO syntaxes (archive tarball URL in the server/hub `web-ui`,
@@ -65,13 +94,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `/music/albums/{mbid}` path rails served. The vendored route snapshot therefore **grows 402 → 404**
   and the `sha256` fence **moves** (it is re-derived from the route list, so a real content change must
   move it — a held fence here would itself be the alarm). Regenerated in-commit with the S332 dumper
-  booted against a live phlix-server checkout at the era tip (`e96f586d`): `route_count=404`,
-  `sha256=97d6e62ea523400583853dafe01e3003eaef2cadb834329db8189cf089e13e7e`, `source_sha=e96f586d…`.
+  booted against a live phlix-server checkout at the era tip: `route_count=404`,
+  `sha256=97d6e62ea523400583853dafe01e3003eaef2cadb834329db8189cf089e13e7e`, `source_sha` set to that era tip.
   Re-vendored the contracts export fixture byte-for-byte from merged `@phlix/contracts` master
   (untagged regen #30; provenance carries the same server tip → S280 parity stays green). Gate pins
   advance in the same commit: `S332_EXPECTED_SERVER_SOURCE_SHA` in `ServerProxyControllerTest.php`; in
   the S280 parity test the docblock vendored-export md5, the Application/WebPortal breakdown counts
-  (now 367 + 48 − 11 = 404), the survival-token sha/count suffix (`@404-e96f586d`), and the lane ritual
+   (now 367 + 48 − 11 = 404), the survival-token sha/count suffix (`@404-` plus the
+   era sha), and the lane ritual
   token constant rotate to this wave's value (two code homes estate-wide, as ever). Hub request
   surface unchanged; the S107 deny set is re-derived from the snapshot (15 of 404 routes meet the
   inclusion criteria and stay asserted denied). Untagged wave.
