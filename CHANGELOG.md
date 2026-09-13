@@ -6,6 +6,41 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W85 (cs45 hub · wave closer): route-manifest PROVENANCE re-pin — fence HELD 404 + `@phlix/ui` web-ui pin advanced to v0.99.3 — 2026-09-13
+
+- **cs#45 cascade closer (leg 7/7) — a pure PROVENANCE re-pin, the mirror of cs#44
+  and the deliberate contrast with cs#43.** The phlix-server span since the last pin
+  is **bundle-only** — no route-registration file and nothing under the server's
+  `include/` or `src/` moved (barrier-proven at dispatch: the two-dot diff over
+  those trees is empty; the span is a web-ui dependency re-pin). So the vendored
+  route snapshot's `[method, path]` tuples are byte-for-byte identical and the
+  `sha256` fence **HELDS** — a held fence here is the correct signal that no content
+  moved (the cs#43 rule read from the other direction). Only the embedded
+  `source_sha` provenance advances to the current phlix-server master tip;
+  regenerated in-commit with the S332 dumper booted against a live phlix-server
+  checkout at the era tip (`route_count=404`, fence unchanged, `source_sha` set to
+  that tip). Re-vendored the contracts export fixture byte-for-byte from merged
+  `@phlix/contracts` master (untagged regen #32; provenance carries the same server
+  tip → S280 parity stays green). Gate pins advance in the same commit:
+  `S332_EXPECTED_SERVER_SOURCE_SHA` in `ServerProxyControllerTest.php`; in the S280
+  parity test the docblock vendored-export md5, the Application/WebPortal breakdown
+  counts (367 + 48 − 11 = 404, HELD), the survival-token sha/count suffix, and the
+  lane ritual token constant (renamed to this wave; two code homes estate-wide, as
+  ever) rotate. Hub request surface unchanged.
+  **Carried in the same closer (coordinator ladder option (ii), subsuming the parked
+  standalone repin PR): the hub `web-ui` `@phlix/ui` archive tarball pin advances to
+  the tag every other consumer already names (v0.99.3)**, with the lockfile
+  `resolved`/`integrity` refreshed by `npm install --package-lock-only` under the
+  pinned node toolchain — the lock `version` field also legitimately moves to the
+  tarball's declared manifest version (this tarball declares it; the prior one did
+  not — the pinning law keys on `resolved`/`integrity`, never on that field). The
+  committed `public/assets/app/` SPA bundle was REBUILT under node 24.20.0 and the
+  rebuild measures byte-identical to the committed bundle (the upstream release was
+  version-field-only, drift-0), so the bundle is honestly NOT part of this commit —
+  two web-ui files moved, nothing more. The `UI Pin Skew` grade and the
+  `SPA Bundle Build + Compare Gate` both go green on this tree as a result. No new
+  migration appears this wave (cs legs add none).
+
 ### Changed — W83 (cs44 hub · wave closer): route-manifest PROVENANCE re-pin — fence HELD 404 + `@phlix/ui` web-ui pin advanced to v0.99.2 — 2026-09-13
 
 - **cs#44 cascade closer (leg 7/7) — a pure PROVENANCE re-pin, the mirror of cs#42
