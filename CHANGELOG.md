@@ -35,6 +35,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The `UI Pin Skew` grade and the `SPA Bundle Build + Compare Gate` both go green on this
   tree as a result. No new migration appears this wave (cs legs add none).
 
+### Fixed — S489 (s489hub · hardening): the pin-skew reporter now RE-DERIVES its per-package consumer sets — contract-only pinners are no longer invisible — 2026-09-13
+
+- S181 shipped `CONSUMERS` as the hand-written four `@phlix/ui` pinners and the `@phlix/contracts` sweep silently reused
+  exactly those four files, so `phlix-mobile-client` — which pins `@phlix/contracts` and no `@phlix/ui` at all — had no
+  verdict row: the live report measured 8 rows and could never see mobile drift stale, the precise shape of the v0.4.5
+  era that S11-tail once fixed by hand. The constant is now `CONSUMER_PROBES` — the declared fetch universe (the four,
+  plus `phlix-mobile-client` and the two self-referential package repos `phlix-ui`/`phlix-contracts`, all fetched by the
+  same anonymous raw mechanism, so `ci.yml` needed no edit) — and the per-package CONSUMER SET is re-derived from the
+  fetched bytes on every run by the existing key-first/alias-value enumerator. A summary line printed under the table
+  shows exactly what was derived; `@phlix/contracts.required_in` now names the estate client apps measured to pin it
+  (windows, tizen, mobile), so a pin that vanishes from a real consumer is a blocking MISSING row while hub/server and
+  the meta-repos keep their non-blocking ABSENT rows — the landmine's "absent and expected" vs "absent and a regression"
+  split. Red-on-unknown is carried by the `(extra)` override route, now proven for a planted CONTRACT-ONLY synthetic
+  pinner in both the UNMATCHED and the stale-graded shape; the `@phlix/ui` four's rows are byte-stable. Guard battery
+  18 → 26 methods; the positive control's moved denominators (3→6 `github:` classifications, explicit contracts-OK and
+  ABSENT row counts) were updated to the derived reality, never relaxed.
+- Coordinator add-on (W82 pin wave): `web-ui` repinned `@phlix/ui` v0.99.1 → v0.99.2; the committed bundle under
+  `public/assets/app/` was rebuilt from the refreshed lockfile (`npm ci && npm run build`, verified byte-reproducible
+  across consecutive builds on node 24.19.0 for the SPA gate). The lock refresh also had to force `@phlix/contracts`
+  to re-resolve: `npm install` had moved the nested spec to `#v0.4.6` while leaving the locked resolution at the stale
+  pre-S234-era commit — `npm update @phlix/contracts` pinned it to `97bcda06`, the peeled `v0.4.6` tag, matching the
+  mobile lock's recorded resolution.
+
 ### Added — S181 (s181hub · CI gate): the estate's `@phlix/ui` tag pins are now enumerated and skew-graded on every push and every night — 2026-09-12
 
 - Four consumers pin `@phlix/ui` by tag on TWO syntaxes (archive tarball URL in the server/hub `web-ui`,
