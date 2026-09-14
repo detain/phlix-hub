@@ -62,35 +62,51 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      # S332. The S107 deny enumeration is re-derived from a VENDORED snapshot
-      # of phlix-server's route table
+      # S332 / S492. The S107 deny enumeration is re-derived from a VENDORED
+      # snapshot of phlix-server's route table
       # (tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json).
       # The deriving tests can only see the routes the snapshot contains, so a
       # snapshot that outlives the server is the SAME silent decay S107
       # suffered — S284's `regenerate-assets` was invisible because the tests
-      # grew with the LIST, not with the ROUTES. This job is the drift
-      # tripwire: it compares the snapshot's recorded source_sha against
-      # phlix-server's live master and fails the build until the snapshot is
-      # regenerated and the S332_EXPECTED_SERVER_SOURCE_SHA pin is bumped in
-      # the SAME commit.
+      # grew with the LIST, not with the ROUTES. This job is the drift tripwire.
       #
-      # phlix-server is public, so no token is needed for git ls-remote. A
-      # network failure is a FAILURE, never a pass: a job that cannot measure
-      # the other side must not report success (same rule as the S204
-      # cross-repo check).
-      - name: Compare snapshot source_sha against phlix-server master
+      # S492 (owner ruling batch39 F2 option (b), 2026-09-14) changed WHAT the
+      # tripwire compares: from an exact source_sha string to route CONTENT. The
+      # snapshot's sha256 covers only the sorted-unique `METHOD path` corpus
+      # (dump-phlix-server-route-manifest.php :246 — provenance fields sit inside
+      # the fixture bytes but OUTSIDE the digest), and phlix-server commits that
+      # same corpus as two whole-list-guarded wire-manifest constants. So the
+      # verdict ladder is:
+      #   - content digest EQUAL   -> GREEN even when source_sha lags. A lag is a
+      #     provenance-only server merge (bundle/docs/CI, zero route change) and no
+      #     longer reddens every open hub PR (spawn case: #781 reddened PR #308);
+      #     it prints a loud NON-BLOCKING ::warning:: so the snapshot still cannot
+      #     rot silently.
+      #   - content digest DIFFERS -> RED: a real route drifted.
+      #   - the other side cannot be read -> RED: a network/measure failure is
+      #     never a pass (unchanged from the original ls-remote doctrine).
+      # The gate's faithfulness is INHERITED from phlix-server's own exact whole-list
+      # route guards (an unregistered-in-const route reddens server CI), not
+      # re-proven hub-side — which is exactly what makes the content compare IFF-clean
+      # where the sha compare was over-strict. Logic lives in
+      # scripts/check-route-snapshot-currency.php; tests/Unit/Support/
+      # SnapshotCurrencyCiWiringTest.php pins this wiring AND executes the lag/drift proof.
+      #
+      # phlix-server is public, so the fetch needs no token — this is the same
+      # anonymous HTTPS read cross-repo-paths (S204) already relies on below.
+      - name: Fetch phlix-server master source (anonymous)
         run: |
-          SERVER_SHA="$(git ls-remote https://github.com/detain/phlix-server.git refs/heads/master | cut -f1)"
-          FIXTURE_SHA="$(python3 -c 'import json; print(json.load(open("tests/Unit/Http/Controllers/Fixtures/phlix-server-route-manifest.json"))["source_sha"])')"
-          echo "phlix-server master : ${SERVER_SHA:-<unreadable>}"
-          echo "snapshot source_sha: $FIXTURE_SHA"
-          [ -n "$SERVER_SHA" ] || { echo "::error::could not read phlix-server master from GitHub — nothing was compared"; exit 1; }
-          [ "$SERVER_SHA" = "$FIXTURE_SHA" ] || {
-            echo "::error::phlix-server master ($SERVER_SHA) has moved past the vendored route snapshot ($FIXTURE_SHA)."
-            echo "::error::Regenerate the snapshot (php tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php <server-root>)"
-            echo "::error::and bump S332_EXPECTED_SERVER_SOURCE_SHA in the SAME commit."
-            exit 1
-          }
+          git clone --depth 1 https://github.com/detain/phlix-server.git ../phlix-server \
+            || { echo "::error::could not fetch phlix-server master — nothing was compared"; exit 1; }
+          echo "phlix-server master fetched at $(git -C ../phlix-server rev-parse HEAD)"
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '8.3'
+
+      - name: Compare snapshot source_sha against phlix-server master
+        run: php scripts/check-route-snapshot-currency.php ../phlix-server
 
   phpcs:
     name: PHP CodeSniffer (PSR-12)
