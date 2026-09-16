@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W111 (cs47 hub · leg 3): route-manifest CONTENT regen — fence MOVES 404→410 — 2026-09-16
+
+- **cs#47 cascade leg 3 (hub) — a CONTENT regen, the successor of cs#43 and the deliberate contrast
+  with the cs#44/cs#45 provenance pins.** The phlix-server span since the last pin carries S518's six
+  new routes (quick-connect initiate/status/token/approve plus the telemetry pair): the Application
+  wire-guard set grows 367 → 373, WebPortal holds 48, the shared rails hold 11, and the union grows
+  **404 → 410** — so the `sha256` fence **moves** (the cs#43 rule: a real content change must move it;
+  a held fence here would itself be the alarm). Regenerated in-commit with the S332 dumper booted
+  against a read-only phlix-server checkout at the era tip and verified with its `--check` gate
+  (byte-identical), then re-vendored the contracts export fixture byte-for-byte from merged
+  `@phlix/contracts` master (regen #34 — provenance carries the same server tip → S280 parity green).
+  Gate pins advance in the same commit: `S332_EXPECTED_SERVER_SOURCE_SHA` in `ServerProxyControllerTest.php`;
+  in the S280 parity test the docblock vendored-export md5, the Application/WebPortal breakdown counts
+  (now 373 + 48 − 11 = 410), the survival-token sha/count suffix, and the lane ritual token constant
+  (renamed to this wave; two code homes estate-wide, as ever) rotate. The consequence this leg exists
+  to retire: the `Server Route Snapshot Currency` job has been CONTENT-RED on hub since S518 merged
+  (live 410 vs vendored 404 — drift exactly S518's six routes, proven by REVIEW-1); it goes GREEN again
+  with the content digest equal and `source_sha` matching live master (no lag warning). The S107 deny
+  enumeration re-derives from the grown snapshot UNCHANGED — still 15 routes meet the four inclusion
+  criteria; none of the six new tuples is a write verb under an allowlisted GET read prefix. Hub request
+  surface unchanged. No new migration appears this wave (cs legs add none).
+
 ### Changed — W85 (cs45 hub · wave closer): route-manifest PROVENANCE re-pin — fence HELD 404 + `@phlix/ui` web-ui pin advanced to v0.99.3 — 2026-09-13
 
 - **cs#45 cascade closer (leg 7/7) — a pure PROVENANCE re-pin, the mirror of cs#44

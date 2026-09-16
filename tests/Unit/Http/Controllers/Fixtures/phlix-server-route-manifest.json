@@ -1,9 +1,9 @@
 {
     "generator": "tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php",
     "source_repo": "detain/phlix-server",
-    "source_sha": "c9c551e0506a742220c17a34022d4a2f497e6989",
-    "route_count": 404,
-    "sha256": "97d6e62ea523400583853dafe01e3003eaef2cadb834329db8189cf089e13e7e",
+    "source_sha": "730e55b7d3ad44a155f6b46374a9f6c463792840",
+    "route_count": 410,
+    "sha256": "a8d051475844fb8b9e51581b970b32264f78595c4bbb48e9ef886e1baa8db9b4",
     "routes": [
         {
             "method": "DELETE",
@@ -419,6 +419,10 @@
         },
         {
             "method": "GET",
+            "path": "/api/v1/admin/telemetry/clients"
+        },
+        {
+            "method": "GET",
             "path": "/api/v1/admin/transcoding/accelerators"
         },
         {
@@ -492,6 +496,10 @@
         {
             "method": "GET",
             "path": "/api/v1/auth/me"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/auth/quick-connect/{code}/status"
         },
         {
             "method": "GET",
@@ -1263,6 +1271,18 @@
         },
         {
             "method": "POST",
+            "path": "/api/v1/auth/quick-connect/initiate"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/quick-connect/{code}/approve"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/quick-connect/{code}/token"
+        },
+        {
+            "method": "POST",
             "path": "/api/v1/auth/refresh"
         },
         {
@@ -1488,6 +1508,10 @@
         {
             "method": "POST",
             "path": "/api/v1/syncplay/groups/{id}/leave"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/telemetry/heartbeat"
         },
         {
             "method": "POST",
