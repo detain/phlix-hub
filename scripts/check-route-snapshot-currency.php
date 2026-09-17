@@ -35,17 +35,17 @@
  * digest. That same corpus is what phlix-server commits as two wire-guard
  * constants:
  *
- *   - ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST   (367 entries)
+ *   - ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST   (373 entries)
  *   - WebPortalRouterWirePathGuardTest::ROUTE_MANIFEST     ( 48 entries)
  *
- * whose union minus shared rails is the 404-tuple snapshot. Both server CI jobs
+ * whose union minus shared rails is the 410-tuple snapshot. Both server CI jobs
  * compare their const against the FULL rendered production router table
  * VERBATIM, so an unregistered-in-const route reddens phlix-server itself. The
  * faithfulness of this gate is therefore INHERITED from phlix-server's guards,
  * not re-proven here — exactly what makes a content compare IFF-clean where the
  * sha compare was over-strict. The parse below is the concatenation-aware one
  * already proven by phlix-contracts/scripts/generate-server-route-manifest.mjs,
- * and it reproduces the pinned digest `97d6e62e…` byte-for-byte at the fixture's
+ * and it reproduces the pinned digest `a8d05147…` byte-for-byte at the fixture's
  * source_sha (see the S492 §5A fidelity transcript in the PR body).
  *
  * ## Why a script and not a test
