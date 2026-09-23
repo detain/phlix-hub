@@ -36,10 +36,12 @@ final class HubProtocolMiddleware
     {
         $header = $request->getHeader(self::HEADER_NAME);
         if ($header === null || $header !== self::REQUIRED_VERSION) {
-            return (new Response())->status(400)->json([
-                'error' => 'HUB_PROTOCOL_UNSUPPORTED',
-                'message' => 'Accept-Phlix-Protocol: v1 required',
-            ]);
+            return (new Response())->error(
+                400,
+                'hub.protocol_unsupported',
+                'HUB_PROTOCOL_UNSUPPORTED',
+                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+            );
         }
         return null;
     }

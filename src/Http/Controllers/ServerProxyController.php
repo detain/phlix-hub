@@ -952,10 +952,7 @@ final class ServerProxyController
             // HB-4.6b LANDMINE: unauthenticated floods take this cheap 401 —
             // NOT a limiter write. The proxy limiter is deliberately placed
             // AFTER this auth gate so an unauthed request never mints a bucket.
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'auth.required',
-            ]);
+            return (new Response())->error(401, 'auth.required', 'Unauthorized');
         }
 
         // HB-4.6b: rate limit AFTER the auth gate, keyed by the proven user id
@@ -978,17 +975,11 @@ final class ServerProxyController
         $serverId = $params['id'] ?? '';
         $owner = $this->serverInfo->getOwnerAndStatus($serverId);
         if ($owner === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'code' => 'server.not_found',
-            ]);
+            return (new Response())->error(404, 'server.not_found', 'Not Found');
         }
 
         if ($owner['userId'] !== $userId) {
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code' => 'server.not_owned',
-            ]);
+            return (new Response())->error(403, 'server.not_owned', 'Forbidden');
         }
 
         if (!$owner['relayActive']) {
@@ -1004,17 +995,16 @@ final class ServerProxyController
             // (the tunnel is the trust boundary and there is nothing to forward
             // to) — only the code/message differ so the UI can explain why.
             if ($owner['status'] === ServerInfoDto::STATUS_ONLINE) {
-                return (new Response())->status(503)->json([
-                    'error' => 'Relay tunnel unavailable',
-                    'code' => 'server.relay_unavailable',
-                    'message' => 'This server is online but its secure relay tunnel isn\'t connected. '
-                        . 'Browsing over the hub isn\'t available until the tunnel reconnects.',
-                ]);
+                return (new Response())->error(
+                    503,
+                    'server.relay_unavailable',
+                    'Relay tunnel unavailable',
+                    ['message' => 'This server is online but its secure relay tunnel isn\'t connected. '
+                        . 'Browsing over the hub isn\'t available until the tunnel reconnects.'],
+                );
             }
 
-            return (new Response())->status(503)->json([
-                'error' => 'Server offline',
-                'code' => 'server.offline',
+            return (new Response())->error(503, 'server.offline', 'Server offline', [
                 'message' => 'Server is offline.',
             ]);
         }
@@ -1138,9 +1128,7 @@ final class ServerProxyController
         );
 
         if ($reply === null) {
-            return (new Response())->status(504)->json([
-                'error' => 'Gateway Timeout',
-                'code' => 'gateway.timeout',
+            return (new Response())->error(504, 'gateway.timeout', 'Gateway Timeout', [
                 'message' => 'The server did not respond over the relay in time.',
             ]);
         }

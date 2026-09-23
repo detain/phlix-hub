@@ -6,6 +6,56 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — W3 emit-wave: error-code-first wire — registry codes on `code`, legacy SCREAMING parked in `error` text — 2026-09-23
+
+- **The hub now speaks the `@phlix/contracts` error-code vocabulary on the wire.** Doctrine:
+  registered stable codes in `code`, English text as debug fallback in `error`. This is the hub
+  half of the wave the registry's caveats named ("rides the error TEXT field today; promote to the
+  code channel") — every promoted frame keeps its legacy SCREAMING literal byte-identical in the
+  `error` TEXT field, so today's string-matching clients (mobile et al.) keep matching while
+  protocol-aware clients (ui) move to `code`.
+  - `ServerClaimController`: protocol gate 400 → `hub.protocol_unsupported`; the claim 401 flips
+    `UNAUTHENTICATED` from the `code` channel to the text channel and `code` carries the dotted
+    forward form `auth.unauthenticated` (registry dual-placement note); `mapError` arms gain
+    `claim.code_not_found` / `claim.code_expired` / `claim.code_already_claimed` /
+    `hub.protocol_unsupported` / `server.key_invalid` / `hub.internal_error` (default 500).
+  - `ServerController`: both protocol gates → `hub.protocol_unsupported`; the four "Server ID
+    mismatch" 403s → `auth.server_mismatch`; the info 404 and `mapError`'s `SERVER_NOT_FOUND` arm →
+    `server.not_found` (registered reuse-target twin); `mapError` gains `auth.enrollment_expired`
+    and `hub.internal_error`.
+  - `HubProtocolMiddleware` 400 → `hub.protocol_unsupported`.
+  - `EnrollmentJwtMiddleware::unauthorized()`: `ENROLLMENT_TOKEN_EXPIRED` moves from `code` to the
+    `error` text; `code` carries `auth.enrollment_expired`.
+  - `ServerProxyController`: its six already-dotted flat error frames now route through the shared
+    helper with byte-identical output; the two nested `error:{code,message}` shapes are untouched
+    wire forms, and bare-snake registered codes everywhere else stay exactly as-is (they ARE the
+    registry — no dot-ification of wire values).
+- **`Response::error(int $status, string $code, string $message, array $extra = [])`** and
+  **`Response::errorBody(string $code, string $message): string`** (compact, byte-compatible
+  relay-frame JSON) are promoted into `src/Http/Response.php` as the estate's single error-envelope
+  home; the duplicated private `errorBody()` in `RelayProxyManager`/`RelayProxyBridge` is deleted
+  and their four-plus-one call sites now use the shared helper.
+- **Vendored vocabulary + wire law.** `tests/fixtures/contracts/error-codes.json` is the byte copy
+  of `dist/error-codes.json` from the `@phlix/contracts` **v0.5.1** tag (202 codes / 37 domains;
+  tag peel `e3c14f07…`), pinned by `tests/fixtures/contracts/error-codes.PIN` + a hardcoded
+  lockstep constant — the mcp-scopes law reproduced (anti-vacuity floor ≥147 asserted BEFORE any
+  comparison, generator-marker fixture-honesty check). New `ErrorCodesContractTest` additionally
+  scans `src/` statically: every literal reaching a `code`/`error_code` wire field (array-entry,
+  `Response::error()` arg-2, `Response::errorBody()` arg-1) must exist in the fixture; the
+  documented whitelist is EMPTY, and a red-green self-proof points the scanner at a synthetic
+  planted unknown code so the gate can never rot into `assertSame([], [])`. Variable-passing sites
+  (`AlexaSignatureMiddleware::reject()`'s 14 `ALEXA_*` codes, JSON-RPC integers, OAuth `code`
+  values) are documented scan limits — the `alexa.*` flip is its own deferred wave per the
+  registry's note.
+- **OpenAPI enum pin.** `components.schemas.Error.code` now carries the full 202-member registry
+  enum; new `ErrorCodesOpenApiEnumContractTest` pins it whole-list/ordered/exact to the fixture
+  (the S260 McpScope precedent, same line-by-line YAML reader — no `yaml` ext in CI).
+- Deferred, named for the next wave: the Subdomain/Relay/ClientMount 401-gate `UNAUTHORIZED`/
+  `MISSING_SERVER_ID` text traps (registry lists them as *planned targets* needing per-message
+  mapping onto `auth.required`/`auth.enrollment_expired`/`auth.server_mismatch`/`missing_server_id`)
+  and the claim controller's bare `Bad Request` frames (no registry caveat names them).
+- `scripts/parallel/test-durations.json` re-blessed for the two new test files (S458 guard).
+
 ### Added — web-ui i18n seam: `@phlix/ui` messages wiring + v0.99.5 tag pin — 2026-09-23
 
 - **The `@phlix/ui` messages seam is now wired in the hub's `/app` SPA.** `web-ui` booted
