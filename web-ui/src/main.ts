@@ -1,8 +1,16 @@
 import { createPhlixApp, MyServersPage, ServerDetailPage, FederationPage, FederationSharesPage, ManageSharesPage, SharedWithMePage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, SecuritySettingsPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem } from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
+import { messagesForLocale, resolveLocale } from './i18n';
 
 const app = createPhlixApp({
+    // i18n seam (config-time, @phlix/ui R6.5c): resolve the boot locale ONCE at
+    // startup (VITE_PHLIX_LOCALE → navigator.language → 'en' — no runtime switcher
+    // per estate doctrine) and pass that locale's ui-catalog override map, which
+    // ui's mergeMessages lays OVER its English defaults. 'en' resolves to an
+    // EMPTY override, so English rendering is byte-identical to omitting the
+    // field entirely (see src/i18n/index.ts for the full law).
+    messages: messagesForLocale(resolveLocale()),
     app: 'hub',
     // The hub's home is its servers directory — never the media-server Browse page
     // (which calls server-only endpoints like /api/v1/libraries that 404 on the

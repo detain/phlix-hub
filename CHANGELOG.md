@@ -6,6 +6,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — web-ui i18n seam: `@phlix/ui` messages wiring + v0.99.5 tag pin — 2026-09-23
+
+- **The `@phlix/ui` messages seam is now wired in the hub's `/app` SPA.** `web-ui` booted
+  `createPhlixApp()` with no `messages` config — the config-time i18n seam was vendored but
+  unreachable from the hub's own portal (estate i18n audit finding). New `web-ui/src/i18n/`
+  mirrors the proven Tizen client: priority explicit → `VITE_PHLIX_LOCALE` → `navigator.language`
+  → `'en'`, BCP-47 parsing with the region-aware `pt*` → `pt_BR` rule, and a locale registry over
+  the six estate bundles (`es`/`fr`/`de`/`it`/`pt_BR`/`ja`) that `@phlix/ui` exports from its main
+  entry — nothing to re-vendor, so ui stays the catalog SSOT through the pin. `'en'` ships a
+  deliberately EMPTY override and ui's `mergeMessages` makes an empty override identical to an
+  absent one, so English rendering is unchanged (the `index.html` bundle diff is pure hashed-name
+  swaps); the locale resolves once at config time (no runtime switcher, per estate doctrine).
+  The `@phlix/ui` pin advances `v0.99.4` → the **`v0.99.5` release-tag tarball** — a tag, never a
+  raw sha, because S181's `ui-pin-skew` job grades only pins whose ref is a live release tag and
+  reddens anything else. The committed `public/assets/app` bundle is rebuilt with it and three
+  consecutive builds on the CI-pinned node 24.20.0 (npm 11.19.0) are byte-identical (S253 gate).
+  New `web-ui/tests/` suite runs under `node --test` with zero new dependencies: an end-to-end
+  proof against the real `@phlix/ui` bundle that a client override reaches rendered strings
+  (ZZZ-TEST pin, omitted-messages default pin, es-flip pin), the resolver table, merge-semantics
+  pins, and a registry-parity drift guard against future ui locale additions. No PHP changed.
+
 ### Changed — W111 (cs47 hub · leg 3): route-manifest CONTENT regen — fence MOVES 404→410 — 2026-09-16
 
 - **cs#47 cascade leg 3 (hub) — a CONTENT regen, the successor of cs#43 and the deliberate contrast
