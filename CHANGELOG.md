@@ -6,6 +6,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — web-ui repin: `@phlix/ui` v0.99.5 → v0.99.6 tag tarball + rebuilt committed bundle — 2026-09-24
+
+- **The `@phlix/ui` pin advances to the `v0.99.6` release-tag tarball** (tag object `7d0b71d1…`,
+  peeling to commit `98a5bf38…` — verified against the live tag ladder before the bump). What the
+  release carries, per its tag message: the W4 error catalog (202 codes × 7 locales), the
+  login/signup/fetchUser error-code consumers, the player's `AccessScheduled` legacy-text match,
+  and the internal re-pin of `@phlix/contracts` `#v0.5.0` → `#v0.5.1` (the W1b registry expansion).
+- **Minimal lock churn, as required.** `web-ui/package-lock.json` changes are the dependency-spec
+  string, the `node_modules/@phlix/ui` `resolved` + `integrity` pair, and the transitive
+  `@phlix/contracts` spec text the new tarball's manifest declares. The lock's `version` field
+  keeps the known `0.99.4` skew (the ui repo's package.json version literal never tracks its
+  release tags; the tag itself is the truth), and the `@phlix/contracts` RESOLVED entry is
+  unchanged — the declared-spec-vs-resolved-committish divergence predates this pin (v0.4.7 edge
+  over a `97bcda06` v0.4.6 resolution since #317) and `npm ci` installs the lock verbatim, so no
+  new drift class is introduced here; a future lane that wants v0.5.1 bytes in the bundle should
+  re-resolve deliberately.
+- **Committed bundle rebuilt CI-faithfully.** Three consecutive `npm ci && npm run build` runs on
+  the CI-pinned node 24.20.0 (npm 11.19.0, `NPM_CONFIG_USERCONFIG=/dev/null`) are byte-identical
+  (S253 gate honored); the `index.html` diff is pure hashed-name swaps and the tracked corpus under
+  `public/assets/app/` is 210 files, same as before the bump.
+- **`web-ui/tests` green on the new pin: 31/31** under `node --test` (`npm test`), including the
+  registry-parity drift guard — v0.99.6's locale set still matches the hub's `SUPPORTED_LOCALES`
+  minus `en`, so the i18n seam from #317 needs no follow-up here.
+- **S181 pin-skew posture.** Run before this PR (CI-faithful seams: the three external
+  `package.json`s curled from master + live `ls-remote` tag ladders): all four ui pinners
+  (hub/server/windows/tizen) STALE at v0.99.5 vs live newest v0.99.6; contracts rows OK where
+  pinned (windows/tizen/mobile/ui-repo at v0.5.1), hub's contracts row ABSENT-by-design. After the
+  bump the hub row goes OK; server/windows/tizen stay STALE until their own repin lanes land — the
+  known cascade shape, visible by design, never masked.
+- **Zero PHP changes** (`src/`, `tests/`, `scripts/`, `openapi.yaml` untouched); redocly surface and
+  route snapshot unchanged.
+
 ### Changed — W3 emit-wave: error-code-first wire — registry codes on `code`, legacy SCREAMING parked in `error` text — 2026-09-23
 
 - **The hub now speaks the `@phlix/contracts` error-code vocabulary on the wire.** Doctrine:
