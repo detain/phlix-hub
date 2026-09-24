@@ -179,7 +179,10 @@ final class AlexaRouteRegistrationTest extends RouteRegistrationTestCase
         self::assertSame(400, $response->statusCode);
         $decoded = json_decode($response->body, true);
         self::assertIsArray($decoded);
-        self::assertSame('ALEXA_MISSING_CERT_CHAIN_URL', $decoded['code'] ?? null);
+        // Post alexa emit-wave dual placement: dotted code, legacy literal in
+        // the error TEXT ({@see \Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware::REJECTION_CODE_MAP}).
+        self::assertSame('ALEXA_MISSING_CERT_CHAIN_URL', $decoded['error'] ?? null);
+        self::assertSame('alexa.missing_cert_chain_url', $decoded['code'] ?? null);
         self::assertSame(
             ['ALEXA_MISSING_CERT_CHAIN_URL'],
             $this->alexaAuditor->codes(),

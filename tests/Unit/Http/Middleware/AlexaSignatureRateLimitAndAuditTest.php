@@ -364,9 +364,12 @@ final class AlexaSignatureRateLimitAndAuditTest extends RouteRegistrationTestCas
         $response = $gate($this->proxied(self::CLIENT_A));
 
         self::assertSame(400, self::statusOf($response));
+        // Post-flip the precise legacy literal rides the error TEXT channel
+        // (dotted alexa.missing_cert_chain_url rides `code`); guard identity
+        // is asserted where the literal now lives.
         self::assertSame(
             'ALEXA_MISSING_CERT_CHAIN_URL',
-            self::decode($response)['code'] ?? null,
+            self::decode($response)['error'] ?? null,
             'a broken audit sink must not demote a precise rejection code to ALEXA_VERIFICATION_ERROR',
         );
     }
@@ -465,7 +468,7 @@ final class AlexaSignatureRateLimitAndAuditTest extends RouteRegistrationTestCas
         );
         self::assertSame(
             'ALEXA_MISSING_SIGNATURE_HEADER',
-            self::decode($refused)['code'] ?? null,
+            self::decode($refused)['error'] ?? null,
             'a different guard fired than the one under test',
         );
 

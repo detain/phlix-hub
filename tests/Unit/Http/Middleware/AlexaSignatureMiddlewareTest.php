@@ -670,8 +670,10 @@ final class AlexaSignatureMiddlewareTest extends TestCase
 
         self::assertNotNull($verdict, 'a malformed timestamp must never be allowed through');
         $decoded = self::decode($verdict);
+        // Post-flip the guard-identifying legacy literal rides the error TEXT
+        // channel ({@see AlexaSignatureMiddleware::REJECTION_CODE_MAP}).
         self::assertContains(
-            $decoded['code'] ?? null,
+            $decoded['error'] ?? null,
             ['ALEXA_TIMESTAMP_MALFORMED', 'ALEXA_TIMESTAMP_MISSING'],
             'rejection must come from the timestamp guard, not from somewhere earlier',
         );
@@ -916,12 +918,29 @@ final class AlexaSignatureMiddlewareTest extends TestCase
         return $decoded;
     }
 
-    private function assertRejected(?Response $response, string $expectedCode): void
+    /**
+     * Post alexa emit-wave, the 400 frame is dual-placement: `$expectedLegacy`
+     * (the SCREAMING literal) rides the `error` TEXT field and its registered
+     * dotted twin from {@see AlexaSignatureMiddleware::REJECTION_CODE_MAP}
+     * rides `code`. Whole-frame pins of the flip frames live in
+     * {@see AlexaRejectionCodeMapLawTest}; this helper proves WHICH guard
+     * fired, on both channels.
+     */
+    private function assertRejected(?Response $response, string $expectedLegacy): void
     {
         self::assertNotNull($response, 'expected a rejection, got an allow');
         self::assertSame(400, $response->statusCode);
 
         $decoded = self::decode($response);
-        self::assertSame($expectedCode, $decoded['code'] ?? null, 'a different guard fired than the one under test');
+        self::assertSame(
+            $expectedLegacy,
+            $decoded['error'] ?? null,
+            'a different guard fired than the one under test (legacy literal in error text)',
+        );
+        self::assertSame(
+            AlexaSignatureMiddleware::REJECTION_CODE_MAP[$expectedLegacy] ?? 'UNMAPPED-CODE',
+            $decoded['code'] ?? null,
+            'a different guard fired than the one under test (dotted wire code)',
+        );
     }
 }

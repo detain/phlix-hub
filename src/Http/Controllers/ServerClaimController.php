@@ -55,8 +55,11 @@ final class ServerClaimController
         try {
             $claimRequest = ClaimRequest::fromPayload($request->body);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
+            // ClaimRequest::fromPayload rejects present-but-malformed body
+            // fields (JWKS shape, key types) → registry invalid_payload:
+            // "a body field is present but not of the shape the endpoint
+            // parses". 'Bad Request' text kept byte-identical; code additive.
+            return (new Response())->error(400, 'invalid_payload', 'Bad Request', [
                 'message' => $e->getMessage(),
             ]);
         }
@@ -82,8 +85,8 @@ final class ServerClaimController
     {
         $claimId = $params['claimId'] ?? '';
         if ($claimId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
+            // Required part of the REQUEST missing → registry invalid_request.
+            return (new Response())->error(400, 'invalid_request', 'Bad Request', [
                 'message' => 'claim id is required',
             ]);
         }
@@ -109,8 +112,8 @@ final class ServerClaimController
 
         $claimCode = self::stringField($request, 'claim_code');
         if ($claimCode === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
+            // Required part of the REQUEST missing → registry invalid_request.
+            return (new Response())->error(400, 'invalid_request', 'Bad Request', [
                 'message' => 'claim_code is required',
             ]);
         }

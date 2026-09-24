@@ -23,6 +23,11 @@ use Phlix\Hub\Jwt\JwtHeader;
  *   - Perform HTTP/WebSocket upgrade to establish a persistent relay tunnel
  *   - The hub then multiplexes inbound client requests over this tunnel
  *
+ * Error wire codes follow the registry dual-placement emit of the #318
+ * follow-up wave — dotted `code` + legacy literal byte-identical in the
+ * `error` TEXT, written inline per site for wire-law visibility. See the
+ * class docblock of {@see SubdomainController}.
+ *
  * @package Phlix\Hub\Http\Controllers
  */
 final class RelayController
@@ -53,8 +58,7 @@ final class RelayController
         $serverId = $params['id'] ?? '';
 
         if ($serverId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'MISSING_SERVER_ID',
+            return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
                 'message' => 'Server ID is required',
             ]);
         }
@@ -69,8 +73,7 @@ final class RelayController
         // boundary does. See tests/Unit/Http/RawHeaderIndexGateTest.php.
         $authHeader = $request->getHeader('Authorization') ?? '';
         if (!str_starts_with($authHeader, 'Bearer ')) {
-            return (new Response())->status(401)->json([
-                'error' => 'UNAUTHORIZED',
+            return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
                 'message' => 'Missing or invalid Authorization header',
             ]);
         }
@@ -80,27 +83,34 @@ final class RelayController
         try {
             $kid = JwtHeader::kid($enrollmentJwt);
             if ($kid === null) {
-                return $this->unauthorized('Invalid token format');
+                return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
+                    'message' => 'Invalid token format',
+                ]);
             }
 
             $payload = $this->jwtService->validateEnrollmentJwt($enrollmentJwt, $kid);
             if ($payload === null) {
-                return $this->unauthorized('Invalid or expired enrollment token');
+                return (new Response())->error(401, 'auth.enrollment_expired', 'UNAUTHORIZED', [
+                    'message' => 'Invalid or expired enrollment token',
+                ]);
             }
 
             if (($payload['server_id'] ?? '') !== $serverId) {
-                return $this->unauthorized('Server ID mismatch');
+                return (new Response())->error(401, 'auth.server_mismatch', 'UNAUTHORIZED', [
+                    'message' => 'Server ID mismatch',
+                ]);
             }
         } catch (\InvalidArgumentException $e) {
-            return $this->unauthorized($e->getMessage());
+            return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
+                'message' => $e->getMessage(),
+            ]);
         }
 
         // Same normalisation caveat as the Authorization read above — the raw
         // bag only ever holds 'UPGRADE', so the literal 'Upgrade' never matched
         // and this branch fired for every caller, making the 501 below dead.
         if ($request->getHeader('Upgrade') !== 'websocket') {
-            return (new Response())->status(426)->json([
-                'error' => 'UPGRADE_REQUIRED',
+            return (new Response())->error(426, 'relay.ws_http_endpoint', 'UPGRADE_REQUIRED', [
                 'message' => 'This endpoint requires a WebSocket upgrade. Please connect via WSS.',
                 'upgrade' => 'websocket',
             ]);
@@ -129,20 +139,5 @@ final class RelayController
                 'protocol'    => 'See docs/dev/relay-protocol for the WS framing specification',
                 'docs'        => $docsUrl,
             ]);
-    }
-
-    /**
-     * Build a 401 Unauthorized response.
-     *
-     * @param string $message Error message.
-     *
-     * @return Response
-     */
-    private function unauthorized(string $message): Response
-    {
-        return (new Response())->status(401)->json([
-            'error' => 'UNAUTHORIZED',
-            'message' => $message,
-        ]);
     }
 }
