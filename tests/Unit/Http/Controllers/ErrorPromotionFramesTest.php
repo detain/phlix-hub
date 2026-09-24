@@ -450,6 +450,40 @@ final class ErrorPromotionFramesTest extends TestCase
         }
     }
 
+    /**
+     * The sanctioned reuse target (contracts #80): the subdomain-allocation 404
+     * rode the SCREAMING `SERVER_NOT_FOUND` as error TEXT only — the residual
+     * named in the #321 CHANGELOG. This frame pin proves the promotion: dotted
+     * `server.not_found` on the `code` channel, legacy text byte-identical in
+     * `error`, exception message threaded unchanged through `message`.
+     */
+    public function testSubdomainNotFoundFrameCarriesRegisteredTwinCode(): void
+    {
+        $passingService = $this->createMock(EnrollmentJwtService::class);
+        $passingService->method('validateEnrollmentJwt')->willReturn(['server_id' => 'srv-1']);
+        $missingServer = $this->createMock(DnsAliasManager::class);
+        $missingServer->method('allocateSubdomain')
+            ->willThrowException(new InvalidArgumentException('Server srv-1 not found'));
+
+        $controller = $this->makeSubdomainController($passingService, $missingServer);
+
+        $response = $controller->allocate(
+            $this->bearer($this->tokenWithKid('notfound-pin-kid')),
+            ['id' => 'srv-1'],
+        );
+
+        self::assertGateFrame(
+            404,
+            [
+                'error' => 'SERVER_NOT_FOUND',
+                'code' => 'server.not_found',
+                'message' => 'Server srv-1 not found',
+            ],
+            $response,
+            'SubdomainController::allocate SERVER_NOT_FOUND',
+        );
+    }
+
     public function testRelayGateFramesAreWholeFramePinned(): void
     {
         $expiredService = $this->createMock(EnrollmentJwtService::class);
@@ -604,10 +638,12 @@ final class ErrorPromotionFramesTest extends TestCase
         );
     }
 
-    private function makeSubdomainController(EnrollmentJwtService $jwtService): SubdomainController
-    {
+    private function makeSubdomainController(
+        EnrollmentJwtService $jwtService,
+        ?DnsAliasManager $dnsAliasManager = null,
+    ): SubdomainController {
         return new SubdomainController(
-            $this->createMock(DnsAliasManager::class),
+            $dnsAliasManager ?? $this->createMock(DnsAliasManager::class),
             $this->createMock(TlsCertificateManager::class),
             $jwtService,
         );
