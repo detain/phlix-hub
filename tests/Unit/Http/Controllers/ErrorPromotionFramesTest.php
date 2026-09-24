@@ -1,0 +1,266 @@
+<?php
+
+/**
+ * Phlix hub component: Tests.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MIT
+ */
+
+declare(strict_types=1);
+
+namespace Phlix\Hub\Tests\Unit\Http\Controllers;
+
+use InvalidArgumentException;
+use Phlix\Hub\Hub\ClaimRequestHandler;
+use Phlix\Hub\Hub\DeregisterHandler;
+use Phlix\Hub\Hub\HeartbeatHandler;
+use Phlix\Hub\Hub\RenewHandler;
+use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Http\Controllers\ServerClaimController;
+use Phlix\Hub\Http\Controllers\ServerController;
+use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\Response;
+use PHPUnit\Framework\TestCase;
+
+use function array_keys;
+use function json_decode;
+use function json_encode;
+
+use const JSON_THROW_ON_ERROR;
+
+/**
+ * Frame-contract pins for the W3 emit-wave: every promoted error frame must
+ * carry the registered dotted code in `code`, keep its legacy SCREAMING
+ * literal byte-identical in the `error` TEXT field, and preserve its status
+ * and human message. These are exact WHOLE-FRAME assertions (decoded assoc
+ * array + key order), not `assertStringContainsString` — the existing tests
+ * keep their substring assertions, this file is the shape proof.
+ *
+ * Also pins the shared helper contract: `Response::errorBody()` output must
+ * remain byte-compatible with the deleted relay-private `errorBody()`.
+ *
+ * @package Phlix\Hub\Tests\Unit\Http\Controllers
+ */
+final class ErrorPromotionFramesTest extends TestCase
+{
+    // ------------------------------------------------------------------
+    // ServerClaimController — claim family + hub.* + server.key_invalid
+    // ------------------------------------------------------------------
+
+    /**
+     * @return array<string, array{0:int,1:string,2:string,3:string}>
+     */
+    public static function claimMapErrorProvider(): array
+    {
+        return [
+            'code not found'   => [404, 'claim.code_not_found', 'CLAIM_CODE_NOT_FOUND', 'Claim code not found'],
+            'code expired'     => [410, 'claim.code_expired', 'CLAIM_CODE_EXPIRED', 'Claim code has expired'],
+            'already claimed'  => [
+                409, 'claim.code_already_claimed', 'CLAIM_CODE_ALREADY_CLAIMED',
+                'Claim code has already been used',
+            ],
+            'protocol'         => [
+                400, 'hub.protocol_unsupported', 'HUB_PROTOCOL_UNSUPPORTED',
+                'Accept-Phlix-Protocol: v1 required',
+            ],
+            'key invalid'      => [
+                400, 'server.key_invalid', 'SERVER_KEY_INVALID',
+                'Server key is malformed or not Ed25519',
+            ],
+            'default 500'      => [500, 'hub.internal_error', 'HUB_INTERNAL_ERROR', 'An unexpected error occurred'],
+        ];
+    }
+
+    /**
+     * @dataProvider claimMapErrorProvider
+     */
+    public function testClaimErrorFrameCarriesDottedCodeAndLegacyText(
+        int $status,
+        string $code,
+        string $legacy,
+        string $message,
+    ): void {
+        $handler = $this->createMock(ClaimRequestHandler::class);
+        $throw = $legacy === 'HUB_INTERNAL_ERROR' ? 'anything-else' : $legacy;
+        $handler->method('handleClaimCode')
+            ->willThrowException(new InvalidArgumentException($throw));
+        $controller = new ServerClaimController($handler);
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/server-claims/claim';
+        $request->userId = 'user-1';
+        $request->body = ['claim_code' => 'XXXX'];
+
+        $response = $controller->claim($request);
+
+        self::assertSame($status, $response->statusCode);
+        self::assertSame(
+            ['error' => $legacy, 'code' => $code, 'message' => $message],
+            json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
+            'promoted claim frame drifted from the contracted shape',
+        );
+    }
+
+    public function testClaimUnauthenticatedFrameFlipsLegacyLiteralToTextChannel(): void
+    {
+        $controller = new ServerClaimController($this->createMock(ClaimRequestHandler::class));
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/server-claims/claim';
+
+        $response = $controller->claim($request);
+
+        self::assertSame(401, $response->statusCode);
+        // The legacy literal MOVED from `code` to `error` text; `code` is the
+        // dotted forward form. Whole-frame proof, not substring.
+        self::assertSame(
+            ['error' => 'UNAUTHENTICATED', 'code' => 'auth.unauthenticated'],
+            json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // ServerController — server.not_found inline + mapError arms
+    // ------------------------------------------------------------------
+
+    public function testServerInfoNotFoundFrameCarriesRegisteredTwinCode(): void
+    {
+        $serverInfo = $this->createMock(ServerInfoHandler::class);
+        $serverInfo->method('getServerInfo')->willReturn(null);
+        $controller = new ServerController(
+            $this->createMock(HeartbeatHandler::class),
+            $serverInfo,
+            $this->createMock(DeregisterHandler::class),
+            $this->createMock(RenewHandler::class),
+        );
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/servers/srv-1';
+        $request->serverId = 'srv-1';
+
+        $response = $controller->info($request, ['id' => 'srv-1']);
+
+        self::assertSame(404, $response->statusCode);
+        self::assertSame(
+            ['error' => 'SERVER_NOT_FOUND', 'code' => 'server.not_found', 'message' => 'Server not found'],
+            json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    /**
+     * @return array<string, array{0:int,1:string,2:string,3:string}>
+     */
+    public static function serverMapErrorProvider(): array
+    {
+        return [
+            'enrollment expired' => [
+                401, 'auth.enrollment_expired', 'ENROLLMENT_TOKEN_EXPIRED',
+                'Enrollment token has expired',
+            ],
+            'server not found'   => [404, 'server.not_found', 'SERVER_NOT_FOUND', 'Server not found'],
+            'default 500'        => [500, 'hub.internal_error', 'HUB_INTERNAL_ERROR', 'An unexpected error occurred'],
+        ];
+    }
+
+    /**
+     * @dataProvider serverMapErrorProvider
+     */
+    public function testServerErrorFrameCarriesDottedCodeAndLegacyText(
+        int $status,
+        string $code,
+        string $legacy,
+        string $message,
+    ): void {
+        $deregister = $this->createMock(DeregisterHandler::class);
+        $throw = $legacy === 'HUB_INTERNAL_ERROR' ? 'anything-else' : $legacy;
+        $deregister->method('handle')
+            ->willThrowException(new InvalidArgumentException($throw));
+        $controller = new ServerController(
+            $this->createMock(HeartbeatHandler::class),
+            $this->createMock(ServerInfoHandler::class),
+            $deregister,
+            $this->createMock(RenewHandler::class),
+        );
+
+        $request = new Request();
+        $request->method = 'DELETE';
+        $request->path = '/api/v1/servers/srv-1';
+        $request->serverId = 'srv-1';
+        $request->bearerToken = 'jwt';
+
+        $response = $controller->disconnect($request, ['id' => 'srv-1']);
+
+        self::assertSame($status, $response->statusCode);
+        self::assertSame(
+            ['error' => $legacy, 'code' => $code, 'message' => $message],
+            json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    public function testServerMismatchFramesCarryAuthServerMismatchCode(): void
+    {
+        $controller = $this->makeServerController();
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/servers/srv-1/heartbeat';
+        $request->headers['Accept-Phlix-Protocol'] = 'v1';
+        $request->serverId = 'srv-2';
+        $request->body = [];
+
+        $response = $controller->heartbeat($request, ['id' => 'srv-1']);
+
+        self::assertSame(403, $response->statusCode);
+        self::assertSame(
+            ['error' => 'AUTHORIZATION_FAILED', 'code' => 'auth.server_mismatch', 'message' => 'Server ID mismatch'],
+            json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    private function makeServerController(): ServerController
+    {
+        return new ServerController(
+            $this->createMock(HeartbeatHandler::class),
+            $this->createMock(ServerInfoHandler::class),
+            $this->createMock(DeregisterHandler::class),
+            $this->createMock(RenewHandler::class),
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Response — shared helper contract
+    // ------------------------------------------------------------------
+
+    public function testErrorBodyStaysByteCompatibleWithTheDeletedRelayHelper(): void
+    {
+        self::assertSame(
+            '{"error":"No live relay tunnel for this server.","code":"server.no_tunnel"}',
+            Response::errorBody('server.no_tunnel', 'No live relay tunnel for this server.'),
+        );
+    }
+
+    public function testErrorBodyFallsBackWhenEncodingFails(): void
+    {
+        // Lone surrogate bytes make json_encode throw under JSON_THROW_ON_ERROR.
+        self::assertSame('{"error":"relay error"}', Response::errorBody('x.invalid', "\xB1\x31\x32\x34"));
+    }
+
+    public function testErrorHelperEmitsErrorThenCodeThenExtraInOrder(): void
+    {
+        $response = (new Response())->error(418, 'auth.required', 'Unauthorized', ['message' => 'm']);
+
+        self::assertSame(418, $response->statusCode);
+        $decoded = json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($decoded);
+        self::assertSame(['error', 'code', 'message'], array_keys($decoded));
+        self::assertSame(
+            ['error' => 'Unauthorized', 'code' => 'auth.required', 'message' => 'm'],
+            $decoded,
+        );
+        self::assertSame(json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), $response->body);
+    }
+}
