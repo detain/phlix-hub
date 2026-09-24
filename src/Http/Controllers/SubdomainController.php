@@ -26,17 +26,20 @@ use Phlix\Hub\Jwt\JwtHeader;
  *
  * ## Error wire codes (registry dual placement)
  *
- * Every gate below emits through {@see Response::error()}: the registered
+ * Every frame below emits through {@see Response::error()}: the registered
  * dotted `code` (@phlix/contracts v0.5.1 — `missing_server_id`, `auth.required`,
- * `auth.enrollment_expired`, `auth.server_mismatch`) on the code channel, with
- * the legacy SCREAMING literal (`MISSING_SERVER_ID`, `UNAUTHORIZED`) parked
- * byte-identical in the `error` TEXT field for clients that still string-match
- * it — the same shape the enrollment flip took in the #318 emit-wave
+ * `auth.enrollment_expired`, `auth.server_mismatch`, `server.not_found`) on the
+ * code channel, with the legacy SCREAMING literal (`MISSING_SERVER_ID`,
+ * `UNAUTHORIZED`, `SERVER_NOT_FOUND`) parked byte-identical in the `error` TEXT
+ * field for clients that still string-match it — the same shape the enrollment
+ * flip took in the #318 emit-wave
  * ({@see ServerClaimController::claim()}). The literals are written inline at
  * each site, never threaded through a helper, so the
  * {@see \Phlix\Hub\Tests\Unit\Contracts\ErrorCodesContractTest} wire-law scan can
- * see them. The 404 `SERVER_NOT_FOUND` frame has no registered twin yet and
- * intentionally stays text-only (residual, named in the CHANGELOG).
+ * see them. The 404 `SERVER_NOT_FOUND` allocation frame now carries its
+ * sanctioned registered twin `server.not_found` on the `code` channel
+ * (contracts reuse-target sanction, hub-side promotion of the named residual);
+ * registry coverage for this controller is complete.
  *
  * @package Phlix\Hub\Http\Controllers
  */
@@ -122,8 +125,7 @@ final class SubdomainController
         try {
             $subdomain = $this->dnsAliasManager->allocateSubdomain($serverIdFromPath);
         } catch (\InvalidArgumentException $e) {
-            return (new Response())->status(404)->json([
-                'error' => 'SERVER_NOT_FOUND',
+            return (new Response())->error(404, 'server.not_found', 'SERVER_NOT_FOUND', [
                 'message' => $e->getMessage(),
             ]);
         }

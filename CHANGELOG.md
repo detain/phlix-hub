@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — last named residual promoted: subdomain 404 `SERVER_NOT_FOUND` gains the `server.not_found` code channel — 2026-09-24
+
+- **Closes the residual named by the wave-2 entry below.** The registry lane ran first
+  (contract-first): `@phlix/contracts` PR #80 extended the `server.not_found` docblock coords to
+  name hub `SubdomainController.php:126` as the sanctioned reuse target, with the text-field
+  caveat. Wire vocabulary unchanged there — 202 codes, `dist/error-codes.json` byte-identical
+  (md5 `b919685d3816940fc76f2f67c9b9eee2`), no new tag, so this repo's fixture and PIN files are
+  untouched.
+- **Additive code attach in the #321 promotion idiom:** the allocation 404 now emits through
+  `Response->error(404, 'server.not_found', 'SERVER_NOT_FOUND', ['message' => …])` — the legacy
+  SCREAMING literal stays byte-identical in the `error` TEXT, the dotted twin rides `code`, and
+  the exception message threads through `message` unchanged. The wire-law scan sees the inline
+  literal; `ErrorCodesContractTest`, the vendored fixture, and the openapi `Error.code` enum
+  already covered the code — no spec or fixture edits needed.
+- **Whole-frame pin:** `ErrorPromotionFramesTest::testSubdomainNotFoundFrameCarriesRegisteredTwinCode`
+  asserts exact status + decoded key order + byte-exact serialized body. The
+  `SubdomainController` class docblock now states complete registry coverage (the stale
+  "stays text-only" sentence retired with the site's promotion).
+- **Consumers:** string-matching `SERVER_NOT_FOUND` in the `error` TEXT keeps working unchanged;
+  code-matching consumers may now match `server.not_found` — the same twin the ServerController
+  404s carry.
+
 ### Changed — wave-2 deferred emit: `alexa.*` flip, 401-gate promotions, claim `Bad Request` codes — 2026-09-24
 
 - **Completes every family #318 deferred.** Registry authority: `@phlix/contracts` v0.5.1 vendored
