@@ -6,6 +6,55 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — wave-2 deferred emit: `alexa.*` flip, 401-gate promotions, claim `Bad Request` codes — 2026-09-24
+
+- **Completes every family #318 deferred.** Registry authority: `@phlix/contracts` v0.5.1 vendored
+  fixture (202 codes) — no pin change, no registry gap; every emitted code was verified registered
+  before shipping, and the wire law now sees the whole promoted set.
+  - **Alexa flip (the registry caveat is now spent).** `AlexaSignatureMiddleware::reject()` no
+    longer puts the 14 `ALEXA_*` literals on the `code` channel: it maps them through the new
+    public `REJECTION_CODE_MAP` const and emits `{error:'ALEXA_X', code:'alexa.y'}` — the exact
+    enrollment-flip dual-placement shape from #318, key order unchanged. `ChainVerification` keeps
+    producing SCREAMING internally (it is an internal type, not a wire frame); log and audit rows
+    deliberately keep the SCREAMING form (historical value space), and the auditor interface's
+    docblock now names where each form lives. The variable-channel the wire law could not see is
+    covered by a dedicated law test.
+  - **401-gate promotions.** `SubdomainController` (13 frames: 3×`missing_server_id`, 2×header
+    `auth.required`, and the four per-message JWT arms ×2 — `auth.required` /
+    `auth.enrollment_expired` / `auth.server_mismatch` per the registry's planned-target wording),
+    `RelayController` (6 JWT/missing-id frames + the 426 `UPGRADE_REQUIRED` steer gains the
+    `relay.ws_http_endpoint` twin its ClientMount sibling has carried since #318), and
+    `ClientMountController` (`missing_server_id`). The dead `unauthorized()`/`errorResponse()`
+    helpers are deleted so every code rides an inline, scan-visible literal.
+  - **Claim `Bad Request` trio.** `ServerClaimController` newClaim's `ClaimRequest::fromPayload`
+    shape rejection gains `invalid_payload` (registry usage: body-document parse contract), the
+    two missing-required-part gates gain `invalid_request` (registry usage: route/field absent —
+    same shape as the existing InviteLink/QuickConnect precedents). Text kept byte-identical;
+    code additive.
+- **New law: `AlexaRejectionCodeMapLawTest`.** Four laws over the mapping table the literal wire-law
+  scan cannot see: (1) book-keeping pin that the map is EXACTLY the 14 registry-sanctioned pairs;
+  (2) every dotted twin is present in the vendored contracts fixture; (3) anti-drift — every
+  `'ALEXA_*'` string literal in `AlexaSignatureMiddleware.php` + `ChainVerification.php` is a map
+  key and every key is still produced (token-based scan, comments excluded); (4) representative
+  whole-frame pins (header-missing, SSRF-reject, empty-body, recorded-Amazon expiry, stale
+  timestamp, fail-closed catch arm) with exact status + decoded key order + byte-exact serialization.
+  `AlexaSignatureMiddlewareTest::assertRejected` now checks BOTH channels for all 14 guards.
+- **Whole-frame pins for every wave-2 promotion** added to `ErrorPromotionFramesTest`: all 13
+  Subdomain sites × arms, all 7 Relay frames (incl. the 426), the ClientMount 400, and the claim
+  trio — every frame asserted as exact decoded array + exact serialized body.
+- **Existing assertions re-anchored honestly, none weakened**: the three direct `$decoded['code']`
+  guard-identity checks in the Alexa suites now read the `error` TEXT channel (where the precise
+  literal lives post-flip); the auditor-side expectations stay SCREAMING unchanged; route-manifest
+  and rate-limit suites untouched and green.
+- **Residual, named:** `SubdomainController`'s 404 `SERVER_NOT_FOUND` frame stays text-only — the
+  registry carries no `server_not_found`-family code for that semantic (`server.not_found` is
+  server-directory-shaped and its docblock does not name this gate); inventing a mapping was not
+  honest, so the site waits for a registry lane. Alexa *audit/logger* vocabulary intentionally
+  unchanged (documented above). openapi `/alexa/skill` 400 description updated to the dual-placement
+  frame; the `Error.code` enum already covered every emitted code.
+- **Consumers:** the 14 dotted `alexa.*` codes were already IN the 202-code registry at v0.5.0/v0.5.1,
+  so the ui/tizen/windows catalogs need no change (verified: ui `errors.ts` carries all 14).
+
 ### Changed — web-ui repin: `@phlix/ui` v0.99.5 → v0.99.6 tag tarball + rebuilt committed bundle — 2026-09-24
 
 - **The `@phlix/ui` pin advances to the `v0.99.6` release-tag tarball** (tag object `7d0b71d1…`,

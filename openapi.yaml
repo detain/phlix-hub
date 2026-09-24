@@ -282,8 +282,9 @@ paths:
                 additionalProperties: true
         "400":
           description: >-
-            The signature gate refused the request (the body carries the machine-readable code and
-            never the detail), or the body was not a usable Alexa envelope
+            The signature gate refused the request (the body carries the registered dotted code in
+            `code` with the legacy `ALEXA_*` literal parked in the `error` text, and never the
+            detail), or the body was not a usable Alexa envelope
             (`alexa.malformed_envelope`).
           content:
             application/json:

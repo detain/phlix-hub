@@ -14,16 +14,22 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 use InvalidArgumentException;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\DeregisterHandler;
+use Phlix\Hub\Hub\DnsAliasManager;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RenewHandler;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Hub\TlsCertificateManager;
+use Phlix\Hub\Http\Controllers\ClientMountController;
+use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
+use Phlix\Hub\Http\Controllers\SubdomainController;
 use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
+use Psr\Container\ContainerInterface;
 
 use function array_keys;
 use function base64_encode;
@@ -31,7 +37,9 @@ use function json_decode;
 use function json_encode;
 use function strtr;
 
+use const JSON_PRETTY_PRINT;
 use const JSON_THROW_ON_ERROR;
+use const JSON_UNESCAPED_SLASHES;
 
 /**
  * Frame-contract pins for the W3 emit-wave: every promoted error frame must
@@ -43,13 +51,51 @@ use const JSON_THROW_ON_ERROR;
  *
  * Also pins every `EnrollmentJwtMiddleware` throw arm's flip frame (the
  * substring-only middleware test keeps its checks; this is the shape proof),
- * and the shared helper contract: `Response::errorBody()` output must remain
- * byte-compatible with the deleted relay-private `errorBody()`.
+ * the shared helper contract: `Response::errorBody()` output must remain
+ * byte-compatible with the deleted relay-private `errorBody()`, and — the
+ * wave-2 addendum below — every promoted 401/400/426 gate frame in
+ * {@see SubdomainController}, {@see RelayController}, {@see ClientMountController}
+ * and the {@see ServerClaimController} bare-'Bad Request' trio.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  */
 final class ErrorPromotionFramesTest extends TestCase
 {
+    /**
+     * Shared wave-2 gate frames (SubdomainController and RelayController speak
+     * the identical enrollment-gate vocabulary; each is pinned whole-frame by
+     * both controller tests — one source of truth per frame shape here).
+     */
+    private const FRAME_MISSING = [
+        'error' => 'MISSING_SERVER_ID',
+        'code' => 'missing_server_id',
+        'message' => 'Server ID is required',
+    ];
+
+    private const FRAME_HEADER = [
+        'error' => 'UNAUTHORIZED',
+        'code' => 'auth.required',
+        'message' => 'Missing or invalid Authorization header',
+    ];
+
+    private const FRAME_FORMAT = [
+        'error' => 'UNAUTHORIZED',
+        'code' => 'auth.required',
+        'message' => 'Invalid token format',
+    ];
+
+    private const FRAME_EXPIRED = [
+        'error' => 'UNAUTHORIZED',
+        'code' => 'auth.enrollment_expired',
+        'message' => 'Invalid or expired enrollment token',
+    ];
+
+    private const FRAME_MISMATCH = [
+        'error' => 'UNAUTHORIZED',
+        'code' => 'auth.server_mismatch',
+        'message' => 'Server ID mismatch',
+    ];
+
     // ------------------------------------------------------------------
     // ServerClaimController — claim family + hub.* + server.key_invalid
     // ------------------------------------------------------------------
@@ -344,5 +390,235 @@ final class ErrorPromotionFramesTest extends TestCase
             $decoded,
         );
         self::assertSame(json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), $response->body);
+    }
+
+    // ------------------------------------------------------------------
+    // Wave-2 gates — SubdomainController / RelayController / ClientMountController
+    // ------------------------------------------------------------------
+
+    public function testSubdomainGateFramesAreWholeFramePinned(): void
+    {
+        $catch = [
+            'error' => 'UNAUTHORIZED',
+            'code' => 'auth.required',
+            'message' => 'sub pin boom',
+        ];
+
+        $bare = $this->makeSubdomainController($this->createMock(EnrollmentJwtService::class));
+        foreach (['allocate', 'refreshCertificate', 'revoke'] as $action) {
+            self::assertGateFrame(
+                400,
+                self::FRAME_MISSING,
+                $bare->$action(new Request(), ['id' => '']),
+                "SubdomainController::$action MISSING_SERVER_ID",
+            );
+        }
+        foreach (['allocate', 'revoke'] as $action) {
+            self::assertGateFrame(
+                401,
+                self::FRAME_HEADER,
+                $bare->$action(new Request(), ['id' => 'srv-1']),
+                "SubdomainController::$action header gate",
+            );
+        }
+
+        $formatController = $this->makeSubdomainController($this->createMock(EnrollmentJwtService::class));
+        $throwingService = $this->createMock(EnrollmentJwtService::class);
+        $throwingService->method('validateEnrollmentJwt')
+            ->willThrowException(new InvalidArgumentException('sub pin boom'));
+        $expiredService = $this->createMock(EnrollmentJwtService::class);
+        $expiredService->method('validateEnrollmentJwt')->willReturn(null);
+        $mismatchService = $this->createMock(EnrollmentJwtService::class);
+        $mismatchService->method('validateEnrollmentJwt')->willReturn(['server_id' => 'srv-other']);
+
+        $authed = $this->bearer($this->tokenWithKid('gate-pin-kid'));
+        $arms = [
+            'token format' => [$formatController, $this->bearer('not-a-valid-jwt'), self::FRAME_FORMAT],
+            'expired' => [$this->makeSubdomainController($expiredService), $authed, self::FRAME_EXPIRED],
+            'mismatch' => [$this->makeSubdomainController($mismatchService), $authed, self::FRAME_MISMATCH],
+            'invalid-argument catch' => [$this->makeSubdomainController($throwingService), $authed, $catch],
+        ];
+        foreach ($arms as $label => [$controller, $request, $frame]) {
+            foreach (['allocate', 'revoke'] as $action) {
+                self::assertGateFrame(
+                    401,
+                    $frame,
+                    $controller->$action($request, ['id' => 'srv-1']),
+                    "SubdomainController::$action — $label",
+                );
+            }
+        }
+    }
+
+    public function testRelayGateFramesAreWholeFramePinned(): void
+    {
+        $expiredService = $this->createMock(EnrollmentJwtService::class);
+        $expiredService->method('validateEnrollmentJwt')->willReturn(null);
+        $mismatchService = $this->createMock(EnrollmentJwtService::class);
+        $mismatchService->method('validateEnrollmentJwt')->willReturn(['server_id' => 'srv-other']);
+        $throwingService = $this->createMock(EnrollmentJwtService::class);
+        $throwingService->method('validateEnrollmentJwt')
+            ->willThrowException(new InvalidArgumentException('relay pin boom'));
+        $passingService = $this->createMock(EnrollmentJwtService::class);
+        $passingService->method('validateEnrollmentJwt')->willReturn(['server_id' => 'srv-1']);
+
+        $catch = [
+            'error' => 'UNAUTHORIZED',
+            'code' => 'auth.required',
+            'message' => 'relay pin boom',
+        ];
+
+        $gate = new RelayController($this->createMock(EnrollmentJwtService::class));
+        self::assertGateFrame(
+            400,
+            self::FRAME_MISSING,
+            $gate->handle(new Request(), ['id' => '']),
+            'RelayController MISSING_SERVER_ID',
+        );
+        self::assertGateFrame(
+            401,
+            self::FRAME_HEADER,
+            $gate->handle(new Request(), ['id' => 'srv-1']),
+            'RelayController header gate',
+        );
+        self::assertGateFrame(
+            401,
+            self::FRAME_FORMAT,
+            $gate->handle($this->bearer('not-a-valid-jwt'), ['id' => 'srv-1']),
+            'RelayController token format',
+        );
+        $authed = $this->bearer($this->tokenWithKid('gate-pin-kid'));
+        self::assertGateFrame(
+            401,
+            self::FRAME_EXPIRED,
+            (new RelayController($expiredService))->handle($authed, ['id' => 'srv-1']),
+            'RelayController expired enrollment token',
+        );
+        self::assertGateFrame(
+            401,
+            self::FRAME_MISMATCH,
+            (new RelayController($mismatchService))->handle($authed, ['id' => 'srv-1']),
+            'RelayController server mismatch',
+        );
+        self::assertGateFrame(
+            401,
+            $catch,
+            (new RelayController($throwingService))->handle($authed, ['id' => 'srv-1']),
+            'RelayController invalid-argument catch',
+        );
+
+        // 426 steer: authenticated, but no WebSocket upgrade. Wave-2 promotion
+        // attaches the registry twin of the ClientMount 426's client_ws_endpoint.
+        self::assertGateFrame(
+            426,
+            [
+                'error' => 'UPGRADE_REQUIRED',
+                'code' => 'relay.ws_http_endpoint',
+                'message' => 'This endpoint requires a WebSocket upgrade. Please connect via WSS.',
+                'upgrade' => 'websocket',
+            ],
+            (new RelayController($passingService))->handle($authed, ['id' => 'srv-1']),
+            'RelayController 426 UPGRADE_REQUIRED',
+        );
+    }
+
+    public function testClientMountMissingServerIdFrameIsWholeFramePinned(): void
+    {
+        $controller = new ClientMountController($this->createMock(ContainerInterface::class));
+
+        self::assertGateFrame(
+            400,
+            ['error' => 'MISSING_SERVER_ID', 'code' => 'missing_server_id', 'message' => 'Server ID is required'],
+            $controller->handle(new Request(), ['server_id' => '']),
+            'ClientMountController MISSING_SERVER_ID',
+        );
+    }
+
+    public function testServerClaimBadRequestTrioFramesAreWholeFramePinned(): void
+    {
+        $controller = new ServerClaimController($this->createMock(ClaimRequestHandler::class));
+
+        // newClaim: body present-but-malformed (ClaimRequest::fromPayload shape
+        // rejection) → invalid_payload.
+        $protocolRequest = new Request();
+        $protocolRequest->method = 'POST';
+        $protocolRequest->path = '/api/v1/server-claims/new';
+        $protocolRequest->headers['Accept-Phlix-Protocol'] = 'v1';
+        $protocolRequest->body = [];
+
+        self::assertGateFrame(
+            400,
+            [
+                'error' => 'Bad Request',
+                'code' => 'invalid_payload',
+                'message' => 'ClaimRequest "serverName" is required.',
+            ],
+            $controller->newClaim($protocolRequest),
+            'ServerClaimController newClaim payload-shape',
+        );
+
+        self::assertGateFrame(
+            400,
+            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'claim id is required'],
+            $controller->status(new Request(), ['claimId' => '']),
+            'ServerClaimController status claim-id gate',
+        );
+
+        $claimRequest = new Request();
+        $claimRequest->method = 'POST';
+        $claimRequest->path = '/api/v1/server-claims/claim';
+        $claimRequest->userId = 'user-1';
+        $claimRequest->body = [];
+
+        self::assertGateFrame(
+            400,
+            ['error' => 'Bad Request', 'code' => 'invalid_request', 'message' => 'claim_code is required'],
+            $controller->claim($claimRequest),
+            'ServerClaimController claim_code gate',
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Wave-2 helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Exact WHOLE-FRAME gate assertion: status, exact decoded key set AND
+     * order, and byte-exact serialized body. Legacy literal stays in `error`
+     * TEXT; the registered dotted code rides `code`.
+     *
+     * @param array<string, string> $expected
+     */
+    private static function assertGateFrame(int $status, array $expected, Response $response, string $site): void
+    {
+        self::assertSame($status, $response->statusCode, $site . ': status drifted');
+        self::assertSame(
+            $expected,
+            json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
+            $site . ': frame drifted from the contracted shape',
+        );
+        self::assertSame(
+            json_encode($expected, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
+            $response->body,
+            $site . ': serialization drifted',
+        );
+    }
+
+    private function makeSubdomainController(EnrollmentJwtService $jwtService): SubdomainController
+    {
+        return new SubdomainController(
+            $this->createMock(DnsAliasManager::class),
+            $this->createMock(TlsCertificateManager::class),
+            $jwtService,
+        );
+    }
+
+    private function bearer(string $token): Request
+    {
+        $request = new Request();
+        $request->method = 'POST';
+        $request->headers['Authorization'] = 'Bearer ' . $token;
+
+        return $request;
     }
 }

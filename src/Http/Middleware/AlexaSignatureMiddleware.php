@@ -180,6 +180,49 @@ final class AlexaSignatureMiddleware
     public const MAX_AUDITED_REQUEST_ID_CHARS = 128;
 
     /**
+     * Legacy SCREAMING rejection literal → registered dotted wire code.
+     *
+     * The registry ({@see https://github.com/detain/phlix-contracts contracts
+     * v0.5.1, `alexa` domain}) sanctions flipping this surface's code channel
+     * from the `ALEXA_*` literals to the dotted `alexa.*` forward form, and
+     * parking each legacy literal byte-identical in the `error` TEXT field for
+     * clients that still string-match it — the same dual-placement shape the
+     * enrollment gates took in the #318 emit-wave ({@see
+     * \Phlix\Hub\Http\Controllers\ServerClaimController::claim()}).
+     *
+     * Keys are every `ALEXA_*` literal this class and {@see
+     * \Phlix\Hub\Alexa\ChainVerification} can hand to {@see reject()}; an
+     * unmapped code throws (fail-fast) and is still refused, because the throw
+     * lands in {@see __invoke()}'s fail-closed `catch`. The pair set, its
+     * dotted-membership in the registry fixture, and the source-literal⊆keys
+     * anti-drift invariant are pinned by
+     * {@see \Phlix\Hub\Tests\Unit\Http\Middleware\AlexaRejectionCodeMapLawTest}
+     * — the wire-law scan cannot see this channel because {@see reject()}
+     * receives the code through a variable.
+     *
+     * Log and audit rows deliberately keep the SCREAMING form: it is the
+     * operator vocabulary and the historical audit record's value space.
+     *
+     * @var array<string, string>
+     */
+    public const REJECTION_CODE_MAP = [
+        'ALEXA_VERIFICATION_ERROR' => 'alexa.verification_error',
+        'ALEXA_MISSING_CERT_CHAIN_URL' => 'alexa.missing_cert_chain_url',
+        'ALEXA_MISSING_SIGNATURE_HEADER' => 'alexa.missing_signature_header',
+        'ALEXA_EMPTY_BODY' => 'alexa.empty_body',
+        'ALEXA_CERT_URL_REJECTED' => 'alexa.cert_url_rejected',
+        'ALEXA_CERT_FETCH_FAILED' => 'alexa.cert_fetch_failed',
+        'ALEXA_CERT_CHAIN_MALFORMED' => 'alexa.cert_chain_malformed',
+        'ALEXA_SIGNATURE_INVALID' => 'alexa.signature_invalid',
+        'ALEXA_CERT_EXPIRED' => 'alexa.cert_expired',
+        'ALEXA_CERT_SAN_MISMATCH' => 'alexa.cert_san_mismatch',
+        'ALEXA_CERT_CHAIN_UNTRUSTED' => 'alexa.cert_chain_untrusted',
+        'ALEXA_TIMESTAMP_MALFORMED' => 'alexa.timestamp_malformed',
+        'ALEXA_TIMESTAMP_MISSING' => 'alexa.timestamp_missing',
+        'ALEXA_TIMESTAMP_STALE' => 'alexa.timestamp_stale',
+    ];
+
+    /**
      * Verified chains, keyed by the validated cert URL, in insertion order so
      * `array_key_first()` names the eviction victim.
      *
@@ -682,10 +725,12 @@ final class AlexaSignatureMiddleware
     /**
      * Build the 400 rejection and record why.
      *
-     * The response body carries the machine-readable code but NOT the detail:
-     * the detail goes to the log and the audit row only, so probing this endpoint
-     * does not hand an attacker a description of which specific rule they
-     * tripped.
+     * The response body carries the registered dotted wire code (via {@see
+     * REJECTION_CODE_MAP}) with the legacy `ALEXA_*` literal parked byte-identical
+     * in the `error` TEXT field — dual placement, mirroring the #318 enrollment
+     * flip — and NOT the detail: the detail goes to the log and the audit row
+     * only, so probing this endpoint does not hand an attacker a description of
+     * which specific rule they tripped beyond the rejection literal itself.
      *
      * The audited client IP is re-derived from the request rather than threaded
      * down from {@see __invoke()}. {@see Request::getTrustedClientIp()} is a pure
@@ -699,6 +744,13 @@ final class AlexaSignatureMiddleware
      */
     private function reject(Request $request, string $code, string $detail = ''): Response
     {
+        // Fail-fast on an unmapped code: a new ALEXA_* literal without a
+        // registry twin is a programming error, and the throw still refuses the
+        // request because __invoke()'s fail-closed catch relabels it as
+        // ALEXA_VERIFICATION_ERROR → alexa.verification_error.
+        $wireCode = self::REJECTION_CODE_MAP[$code]
+            ?? throw new \LogicException('Unmapped Alexa rejection code: ' . $code);
+
         $this->logger->warning('Alexa request signature rejected', [
             'code' => $code,
             'detail' => $detail,
@@ -712,10 +764,10 @@ final class AlexaSignatureMiddleware
             self::auditableRequestId($request->rawBody),
         );
 
-        return (new Response())->status(400)->json([
-            'error' => 'Bad Request',
-            'code' => $code,
-        ]);
+        // Dual placement: dotted code on the wire-code channel, legacy literal
+        // byte-identical in the error TEXT (Response::error puts $message into
+        // `error`). Key order error,code is unchanged from the pre-flip frame.
+        return (new Response())->error(400, $wireCode, $code);
     }
 
     /**

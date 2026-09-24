@@ -49,7 +49,12 @@ interface AlexaRejectionAuditorInterface
      * generic verification error.
      *
      * @param string      $code      The machine-readable rejection code, e.g.
-     *        `ALEXA_SIGNATURE_INVALID`. Same value the 400 body carries.
+     *        `ALEXA_SIGNATURE_INVALID`. Same legacy literal the 400 body parks
+     *        in its `error` TEXT field; the wire `code` channel carries the
+     *        dotted `alexa.*` twin (see
+     *        \Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware::REJECTION_CODE_MAP).
+     *        Audit rows deliberately keep this SCREAMING form — it is the
+     *        historical value space.
      * @param string      $detail    Human-readable detail. Never returned to the
      *        caller — it exists so an operator can tell WHICH rule fired without
      *        the endpoint handing that information to whoever is probing it.

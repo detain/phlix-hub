@@ -67,11 +67,16 @@ use const JSON_UNESCAPED_SLASHES;
  *
  * Sites that pass a code through a VARIABLE (`'code' => $code`) are invisible
  * to a literal scan and are verified by registry reference instead: the 14
- * `ALEXA_*` rejections (`AlexaSignatureMiddleware::reject()` — its own
- * deferred emit-wave per the registry's `alexa.*` note), and JSON-RPC /
- * OAuth-authorization-code `code` fields, which are NOT members of this
- * vocabulary at all (RFC 6749/6750 values and integer JSON-RPC codes are
- * registry-excluded by design).
+ * `ALEXA_*` rejections (`AlexaSignatureMiddleware::reject()`, whose code now
+ * flows through `REJECTION_CODE_MAP` — the deferred emit-wave landed, and the
+ * map plus its whole-frame shape are pinned by
+ * {@see \Phlix\Hub\Tests\Unit\Http\Middleware\AlexaRejectionCodeMapLawTest}),
+ * and JSON-RPC / OAuth-authorization-code `code` fields, which are NOT members
+ * of this vocabulary at all (RFC 6749/6750 values and integer JSON-RPC codes
+ * are registry-excluded by design). The former text-only gate sites
+ * (`MISSING_SERVER_ID` / `UNAUTHORIZED` / the bare-`Bad Request` claim trio)
+ * that the wave-2 emit promoted are inline `Response::error()` literals and
+ * ARE visible to this scan.
  *
  * ## The failure this file must never become
  *

@@ -83,7 +83,12 @@ final class ClientMountController
         $serverId = $params['server_id'] ?? '';
 
         if ($serverId === '') {
-            return $this->errorResponse(400, 'MISSING_SERVER_ID', 'Server ID is required');
+            // Registry dual-placement emit: dotted code + legacy literal
+            // byte-identical in `error` TEXT (see SubdomainController's class
+            // docblock); inline literal for wire-law visibility.
+            return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
+                'message' => 'Server ID is required',
+            ]);
         }
 
         // The relay tunnel is established over the dedicated client WS worker
@@ -259,23 +264,6 @@ final class ClientMountController
             self::$connClients[$connId]->onClose();
             unset(self::$connClients[$connId], self::$connDecoders[$connId]);
         }
-    }
-
-    /**
-     * Build an error response.
-     *
-     * @param int    $status HTTP status code.
-     * @param string $error  Error code.
-     * @param string $message Error message.
-     *
-     * @return Response
-     */
-    private function errorResponse(int $status, string $error, string $message): Response
-    {
-        return (new Response())->status($status)->json([
-            'error' => $error,
-            'message' => $message,
-        ]);
     }
 
     /**

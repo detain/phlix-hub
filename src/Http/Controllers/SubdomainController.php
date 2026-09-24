@@ -24,6 +24,20 @@ use Phlix\Hub\Jwt\JwtHeader;
  * POST   /api/v1/servers/{id}/subdomain  — allocate or retrieve subdomain
  * DELETE /api/v1/servers/{id}/subdomain  — revoke subdomain
  *
+ * ## Error wire codes (registry dual placement)
+ *
+ * Every gate below emits through {@see Response::error()}: the registered
+ * dotted `code` (@phlix/contracts v0.5.1 — `missing_server_id`, `auth.required`,
+ * `auth.enrollment_expired`, `auth.server_mismatch`) on the code channel, with
+ * the legacy SCREAMING literal (`MISSING_SERVER_ID`, `UNAUTHORIZED`) parked
+ * byte-identical in the `error` TEXT field for clients that still string-match
+ * it — the same shape the enrollment flip took in the #318 emit-wave
+ * ({@see ServerClaimController::claim()}). The literals are written inline at
+ * each site, never threaded through a helper, so the
+ * {@see \Phlix\Hub\Tests\Unit\Contracts\ErrorCodesContractTest} wire-law scan can
+ * see them. The 404 `SERVER_NOT_FOUND` frame has no registered twin yet and
+ * intentionally stays text-only (residual, named in the CHANGELOG).
+ *
  * @package Phlix\Hub\Http\Controllers
  */
 final class SubdomainController
@@ -57,8 +71,7 @@ final class SubdomainController
         $serverIdFromPath = $params['id'] ?? '';
 
         if ($serverIdFromPath === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'MISSING_SERVER_ID',
+            return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
                 'message' => 'Server ID is required',
             ]);
         }
@@ -73,8 +86,7 @@ final class SubdomainController
         // boundary does. See tests/Unit/Http/RawHeaderIndexGateTest.php.
         $authHeader = $request->getHeader('Authorization') ?? '';
         if (!str_starts_with($authHeader, 'Bearer ')) {
-            return (new Response())->status(401)->json([
-                'error' => 'UNAUTHORIZED',
+            return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
                 'message' => 'Missing or invalid Authorization header',
             ]);
         }
@@ -84,19 +96,27 @@ final class SubdomainController
         try {
             $kid = JwtHeader::kid($enrollmentJwt);
             if ($kid === null) {
-                return $this->unauthorized('Invalid token format');
+                return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
+                    'message' => 'Invalid token format',
+                ]);
             }
 
             $payload = $this->jwtService->validateEnrollmentJwt($enrollmentJwt, $kid);
             if ($payload === null) {
-                return $this->unauthorized('Invalid or expired enrollment token');
+                return (new Response())->error(401, 'auth.enrollment_expired', 'UNAUTHORIZED', [
+                    'message' => 'Invalid or expired enrollment token',
+                ]);
             }
 
             if (($payload['server_id'] ?? '') !== $serverIdFromPath) {
-                return $this->unauthorized('Server ID mismatch');
+                return (new Response())->error(401, 'auth.server_mismatch', 'UNAUTHORIZED', [
+                    'message' => 'Server ID mismatch',
+                ]);
             }
         } catch (\InvalidArgumentException $e) {
-            return $this->unauthorized($e->getMessage());
+            return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
+                'message' => $e->getMessage(),
+            ]);
         }
 
         try {
@@ -148,8 +168,7 @@ final class SubdomainController
         $serverIdFromPath = $params['id'] ?? '';
 
         if ($serverIdFromPath === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'MISSING_SERVER_ID',
+            return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
                 'message' => 'Server ID is required',
             ]);
         }
@@ -185,8 +204,7 @@ final class SubdomainController
         $serverIdFromPath = $params['id'] ?? '';
 
         if ($serverIdFromPath === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'MISSING_SERVER_ID',
+            return (new Response())->error(400, 'missing_server_id', 'MISSING_SERVER_ID', [
                 'message' => 'Server ID is required',
             ]);
         }
@@ -196,8 +214,7 @@ final class SubdomainController
         // literal read here rejected every real revocation request.
         $authHeader = $request->getHeader('Authorization') ?? '';
         if (!str_starts_with($authHeader, 'Bearer ')) {
-            return (new Response())->status(401)->json([
-                'error' => 'UNAUTHORIZED',
+            return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
                 'message' => 'Missing or invalid Authorization header',
             ]);
         }
@@ -207,38 +224,31 @@ final class SubdomainController
         try {
             $kid = JwtHeader::kid($enrollmentJwt);
             if ($kid === null) {
-                return $this->unauthorized('Invalid token format');
+                return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
+                    'message' => 'Invalid token format',
+                ]);
             }
 
             $payload = $this->jwtService->validateEnrollmentJwt($enrollmentJwt, $kid);
             if ($payload === null) {
-                return $this->unauthorized('Invalid or expired enrollment token');
+                return (new Response())->error(401, 'auth.enrollment_expired', 'UNAUTHORIZED', [
+                    'message' => 'Invalid or expired enrollment token',
+                ]);
             }
 
             if (($payload['server_id'] ?? '') !== $serverIdFromPath) {
-                return $this->unauthorized('Server ID mismatch');
+                return (new Response())->error(401, 'auth.server_mismatch', 'UNAUTHORIZED', [
+                    'message' => 'Server ID mismatch',
+                ]);
             }
         } catch (\InvalidArgumentException $e) {
-            return $this->unauthorized($e->getMessage());
+            return (new Response())->error(401, 'auth.required', 'UNAUTHORIZED', [
+                'message' => $e->getMessage(),
+            ]);
         }
 
         $this->dnsAliasManager->revokeSubdomain($serverIdFromPath);
 
         return (new Response())->status(204);
-    }
-
-    /**
-     * Build a 401 Unauthorized response.
-     *
-     * @param string $message Error message.
-     *
-     * @return Response
-     */
-    private function unauthorized(string $message): Response
-    {
-        return (new Response())->status(401)->json([
-            'error' => 'UNAUTHORIZED',
-            'message' => $message,
-        ]);
     }
 }
