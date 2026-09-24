@@ -65,12 +65,14 @@ final class EnrollmentJwtMiddleware
 
     /**
      * Build a 401 JSON response.
+     *
+     * W3 emit-wave: the SCREAMING `ENROLLMENT_TOKEN_EXPIRED` literal moves
+     * from the `code` channel to the `error` TEXT field (byte-identical, for
+     * clients that string-match it today); `code` carries the registered
+     * dotted twin `auth.enrollment_expired` (@phlix/contracts).
      */
     private function unauthorized(string $code): Response
     {
-        return (new Response())->status(401)->json([
-            'error' => 'Unauthorized',
-            'code' => $code,
-        ]);
+        return (new Response())->error(401, 'auth.enrollment_expired', $code);
     }
 }

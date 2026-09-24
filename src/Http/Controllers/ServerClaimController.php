@@ -44,10 +44,12 @@ final class ServerClaimController
     {
         $protocolHeader = $request->getHeader(HubProtocolMiddleware::HEADER_NAME);
         if ($protocolHeader !== HubProtocolMiddleware::REQUIRED_VERSION) {
-            return (new Response())->status(400)->json([
-                'error' => 'HUB_PROTOCOL_UNSUPPORTED',
-                'message' => 'Accept-Phlix-Protocol: v1 required',
-            ]);
+            return (new Response())->error(
+                400,
+                'hub.protocol_unsupported',
+                'HUB_PROTOCOL_UNSUPPORTED',
+                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+            );
         }
 
         try {
@@ -98,10 +100,11 @@ final class ServerClaimController
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'UNAUTHENTICATED',
-            ]);
+            // Registry dual-placement note: `auth.unauthenticated` rode `code`
+            // in SCREAMING form; this emit-wave flips the site to the dotted
+            // forward form and parks the legacy literal byte-identical in the
+            // `error` TEXT field for clients that still string-match it.
+            return (new Response())->error(401, 'auth.unauthenticated', 'UNAUTHENTICATED');
         }
 
         $claimCode = self::stringField($request, 'claim_code');
@@ -129,31 +132,46 @@ final class ServerClaimController
      */
     private function mapError(string $code): Response
     {
+        // W3 emit-wave: every arm carries its registered dotted `code`
+        // (@phlix/contracts claim.*/hub.*/server.key_invalid) while the legacy
+        // SCREAMING literal rides the `error` TEXT field byte-identical.
         return match ($code) {
-            'CLAIM_CODE_NOT_FOUND' => (new Response())->status(404)->json([
-                'error' => 'CLAIM_CODE_NOT_FOUND',
-                'message' => 'Claim code not found',
-            ]),
-            'CLAIM_CODE_EXPIRED' => (new Response())->status(410)->json([
-                'error' => 'CLAIM_CODE_EXPIRED',
-                'message' => 'Claim code has expired',
-            ]),
-            'CLAIM_CODE_ALREADY_CLAIMED' => (new Response())->status(409)->json([
-                'error' => 'CLAIM_CODE_ALREADY_CLAIMED',
-                'message' => 'Claim code has already been used',
-            ]),
-            'HUB_PROTOCOL_UNSUPPORTED' => (new Response())->status(400)->json([
-                'error' => 'HUB_PROTOCOL_UNSUPPORTED',
-                'message' => 'Accept-Phlix-Protocol: v1 required',
-            ]),
-            'SERVER_KEY_INVALID' => (new Response())->status(400)->json([
-                'error' => 'SERVER_KEY_INVALID',
-                'message' => 'Server key is malformed or not Ed25519',
-            ]),
-            default => (new Response())->status(500)->json([
-                'error' => 'HUB_INTERNAL_ERROR',
-                'message' => 'An unexpected error occurred',
-            ]),
+            'CLAIM_CODE_NOT_FOUND' => (new Response())->error(
+                404,
+                'claim.code_not_found',
+                'CLAIM_CODE_NOT_FOUND',
+                ['message' => 'Claim code not found'],
+            ),
+            'CLAIM_CODE_EXPIRED' => (new Response())->error(
+                410,
+                'claim.code_expired',
+                'CLAIM_CODE_EXPIRED',
+                ['message' => 'Claim code has expired'],
+            ),
+            'CLAIM_CODE_ALREADY_CLAIMED' => (new Response())->error(
+                409,
+                'claim.code_already_claimed',
+                'CLAIM_CODE_ALREADY_CLAIMED',
+                ['message' => 'Claim code has already been used'],
+            ),
+            'HUB_PROTOCOL_UNSUPPORTED' => (new Response())->error(
+                400,
+                'hub.protocol_unsupported',
+                'HUB_PROTOCOL_UNSUPPORTED',
+                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+            ),
+            'SERVER_KEY_INVALID' => (new Response())->error(
+                400,
+                'server.key_invalid',
+                'SERVER_KEY_INVALID',
+                ['message' => 'Server key is malformed or not Ed25519'],
+            ),
+            default => (new Response())->error(
+                500,
+                'hub.internal_error',
+                'HUB_INTERNAL_ERROR',
+                ['message' => 'An unexpected error occurred'],
+            ),
         };
     }
 

@@ -134,6 +134,54 @@ class Response
     }
 
     /**
+     * Build a standard error frame: `{error, code}` (+ any `$extra` keys).
+     *
+     * The single shared home for the hub's JSON error envelope (promoted from
+     * the private `errorBody()` helpers in the relay classes). `$code` MUST be
+     * a stable machine code registered in the `@phlix/contracts` error-code
+     * vocabulary (`src/errors.ts` / `dist/error-codes.json`) — enforced on the
+     * wire literals by {@see \Phlix\Hub\Tests\Unit\Contracts\ErrorCodesContractTest}.
+     * `$message` is the human/debug text that rides the `error` field.
+     *
+     * @param int                  $status  HTTP status code.
+     * @param string               $code    Registered stable machine code.
+     * @param string               $message Human-readable error text.
+     * @param array<string, mixed> $extra   Additional top-level keys (e.g. a
+     *                                      legacy `message` field) merged after
+     *                                      `error`/`code`.
+     *
+     * @return self
+     *
+     * @throws \JsonException If encoding fails.
+     */
+    public function error(int $status, string $code, string $message, array $extra = []): self
+    {
+        return $this->json(['error' => $message, 'code' => $code] + $extra, $status);
+    }
+
+    /**
+     * Encode a compact (non-pretty) relay error body.
+     *
+     * Byte-compatible with the historical `RelayProxyManager::errorBody()` /
+     * `RelayProxyBridge::errorBody()` output — these bodies travel inside
+     * relay frames, not HTTP responses, so they stay compact JSON. Falls back
+     * to a fixed minimal body if encoding ever throws.
+     *
+     * @param string $code    Registered stable machine code.
+     * @param string $message Human-readable error text.
+     *
+     * @return string JSON `{"error":...,"code":...}`.
+     */
+    public static function errorBody(string $code, string $message): string
+    {
+        try {
+            return json_encode(['error' => $message, 'code' => $code], JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return '{"error":"relay error"}';
+        }
+    }
+
+    /**
      * HTML response shortcut.
      *
      * @param string   $html       HTML body.

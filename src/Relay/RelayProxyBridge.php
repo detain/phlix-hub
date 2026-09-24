@@ -13,6 +13,7 @@ namespace Phlix\Hub\Relay;
 
 use Channel\Client as ChannelClient;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Http\Response;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Swoole\Coroutine;
 use Throwable;
@@ -24,10 +25,7 @@ use function getmypid;
 use function is_array;
 use function is_int;
 use function is_string;
-use function json_encode;
 use function random_bytes;
-
-use const JSON_THROW_ON_ERROR;
 
 /**
  * HTTP-worker side of the cross-process relay proxy.
@@ -311,7 +309,7 @@ final class RelayProxyBridge
                     if (!$headSent) {
                         $sink->head(504, ['Content-Type' => 'application/json']);
                         $headSent = true;
-                        $sink->body($this->errorBody(
+                        $sink->body(Response::errorBody(
                             'gateway.timeout',
                             'The server did not respond over the relay in time.',
                         ));
@@ -465,23 +463,6 @@ final class RelayProxyBridge
             return '';
         }
         return $body;
-    }
-
-    /**
-     * Build a JSON error body.
-     *
-     * @param string $code    Machine error code.
-     * @param string $message Human-readable message.
-     *
-     * @return string JSON.
-     */
-    private function errorBody(string $code, string $message): string
-    {
-        try {
-            return json_encode(['error' => $message, 'code' => $code], JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            return '{"error":"relay error"}';
-        }
     }
 
     /**

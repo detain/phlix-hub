@@ -13,6 +13,7 @@ namespace Phlix\Hub\Relay;
 
 use Channel\Client as ChannelClient;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Http\Response;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
@@ -29,12 +30,9 @@ use function base64_decode;
 use function is_array;
 use function is_numeric;
 use function is_string;
-use function json_encode;
 use function microtime;
 use function strlen;
 use function time;
-
-use const JSON_THROW_ON_ERROR;
 
 /**
  * Relay-ws-worker side of the cross-process HTTP proxy.
@@ -230,7 +228,7 @@ final class RelayProxyManager
                 $clientRequestId,
                 503,
                 [],
-                $this->errorBody('server.no_tunnel', 'No live relay tunnel for this server.'),
+                Response::errorBody('server.no_tunnel', 'No live relay tunnel for this server.'),
             );
             return;
         }
@@ -257,7 +255,7 @@ final class RelayProxyManager
                 $clientRequestId,
                 500,
                 [],
-                $this->errorBody('relay.encode_error', $e->getMessage()),
+                Response::errorBody('relay.encode_error', $e->getMessage()),
             );
             return;
         }
@@ -479,7 +477,7 @@ final class RelayProxyManager
                 $entry['request_id'],
                 503,
                 [],
-                $this->errorBody('server.offline', 'The relay tunnel closed before the response completed.'),
+                Response::errorBody('server.offline', 'The relay tunnel closed before the response completed.'),
             );
         }
         $this->metrics?->setRelayPendingRequests(count($this->pending));
@@ -621,7 +619,7 @@ final class RelayProxyManager
             $entry['request_id'],
             504,
             [],
-            $this->errorBody('gateway.timeout', 'The server did not respond in time.'),
+            Response::errorBody('gateway.timeout', 'The server did not respond in time.'),
         );
     }
 
@@ -749,23 +747,6 @@ final class RelayProxyManager
             'headers' => $headers,
             'body' => $body,
         ]);
-    }
-
-    /**
-     * Build a JSON error body.
-     *
-     * @param string $code    Machine error code.
-     * @param string $message Human-readable message.
-     *
-     * @return string JSON.
-     */
-    private function errorBody(string $code, string $message): string
-    {
-        try {
-            return json_encode(['error' => $message, 'code' => $code], JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            return '{"error":"relay error"}';
-        }
     }
 
     /**

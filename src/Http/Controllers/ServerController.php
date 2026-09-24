@@ -59,20 +59,24 @@ final class ServerController
     {
         $protocolHeader = $request->getHeader(HubProtocolMiddleware::HEADER_NAME);
         if ($protocolHeader !== HubProtocolMiddleware::REQUIRED_VERSION) {
-            return (new Response())->status(400)->json([
-                'error' => 'HUB_PROTOCOL_UNSUPPORTED',
-                'message' => 'Accept-Phlix-Protocol: v1 required',
-            ]);
+            return (new Response())->error(
+                400,
+                'hub.protocol_unsupported',
+                'HUB_PROTOCOL_UNSUPPORTED',
+                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+            );
         }
 
         $serverIdFromPath = $params['id'] ?? '';
         $serverIdFromToken = $request->serverId ?? '';
 
         if ($serverIdFromPath !== $serverIdFromToken) {
-            return (new Response())->status(403)->json([
-                'error' => 'AUTHORIZATION_FAILED',
-                'message' => 'Server ID mismatch',
-            ]);
+            return (new Response())->error(
+                403,
+                'auth.server_mismatch',
+                'AUTHORIZATION_FAILED',
+                ['message' => 'Server ID mismatch'],
+            );
         }
 
         try {
@@ -117,20 +121,24 @@ final class ServerController
     {
         $protocolHeader = $request->getHeader(HubProtocolMiddleware::HEADER_NAME);
         if ($protocolHeader !== HubProtocolMiddleware::REQUIRED_VERSION) {
-            return (new Response())->status(400)->json([
-                'error' => 'HUB_PROTOCOL_UNSUPPORTED',
-                'message' => 'Accept-Phlix-Protocol: v1 required',
-            ]);
+            return (new Response())->error(
+                400,
+                'hub.protocol_unsupported',
+                'HUB_PROTOCOL_UNSUPPORTED',
+                ['message' => 'Accept-Phlix-Protocol: v1 required'],
+            );
         }
 
         $serverIdFromPath = $params['id'] ?? '';
         $serverIdFromToken = $request->serverId ?? '';
 
         if ($serverIdFromPath !== $serverIdFromToken) {
-            return (new Response())->status(403)->json([
-                'error' => 'AUTHORIZATION_FAILED',
-                'message' => 'Server ID mismatch',
-            ]);
+            return (new Response())->error(
+                403,
+                'auth.server_mismatch',
+                'AUTHORIZATION_FAILED',
+                ['message' => 'Server ID mismatch'],
+            );
         }
 
         $token = $request->bearerToken ?? '';
@@ -160,18 +168,22 @@ final class ServerController
         $serverIdFromToken = $request->serverId ?? '';
 
         if ($serverId !== $serverIdFromToken) {
-            return (new Response())->status(403)->json([
-                'error' => 'AUTHORIZATION_FAILED',
-                'message' => 'Server ID mismatch',
-            ]);
+            return (new Response())->error(
+                403,
+                'auth.server_mismatch',
+                'AUTHORIZATION_FAILED',
+                ['message' => 'Server ID mismatch'],
+            );
         }
 
         $info = $this->serverInfoHandler->getServerInfo($serverId);
         if ($info === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'SERVER_NOT_FOUND',
-                'message' => 'Server not found',
-            ]);
+            return (new Response())->error(
+                404,
+                'server.not_found',
+                'SERVER_NOT_FOUND',
+                ['message' => 'Server not found'],
+            );
         }
 
         return (new Response())->json($info->toPayload());
@@ -191,10 +203,12 @@ final class ServerController
         $serverIdFromToken = $request->serverId ?? '';
 
         if ($serverIdFromPath !== $serverIdFromToken) {
-            return (new Response())->status(403)->json([
-                'error' => 'AUTHORIZATION_FAILED',
-                'message' => 'Server ID mismatch',
-            ]);
+            return (new Response())->error(
+                403,
+                'auth.server_mismatch',
+                'AUTHORIZATION_FAILED',
+                ['message' => 'Server ID mismatch'],
+            );
         }
 
         $token = $request->bearerToken ?? '';
@@ -212,19 +226,27 @@ final class ServerController
      */
     private function mapError(string $code): Response
     {
+        // W3 emit-wave: registered dotted `code` + legacy SCREAMING literal
+        // preserved byte-identical in the `error` TEXT field.
         return match ($code) {
-            'ENROLLMENT_TOKEN_EXPIRED' => (new Response())->status(401)->json([
-                'error' => 'ENROLLMENT_TOKEN_EXPIRED',
-                'message' => 'Enrollment token has expired',
-            ]),
-            'SERVER_NOT_FOUND' => (new Response())->status(404)->json([
-                'error' => 'SERVER_NOT_FOUND',
-                'message' => 'Server not found',
-            ]),
-            default => (new Response())->status(500)->json([
-                'error' => 'HUB_INTERNAL_ERROR',
-                'message' => 'An unexpected error occurred',
-            ]),
+            'ENROLLMENT_TOKEN_EXPIRED' => (new Response())->error(
+                401,
+                'auth.enrollment_expired',
+                'ENROLLMENT_TOKEN_EXPIRED',
+                ['message' => 'Enrollment token has expired'],
+            ),
+            'SERVER_NOT_FOUND' => (new Response())->error(
+                404,
+                'server.not_found',
+                'SERVER_NOT_FOUND',
+                ['message' => 'Server not found'],
+            ),
+            default => (new Response())->error(
+                500,
+                'hub.internal_error',
+                'HUB_INTERNAL_ERROR',
+                ['message' => 'An unexpected error occurred'],
+            ),
         };
     }
 }
