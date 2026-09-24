@@ -14,18 +14,22 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 use InvalidArgumentException;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\DeregisterHandler;
+use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\HeartbeatHandler;
 use Phlix\Hub\Hub\RenewHandler;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Http\Controllers\ServerClaimController;
 use Phlix\Hub\Http\Controllers\ServerController;
+use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
 
 use function array_keys;
+use function base64_encode;
 use function json_decode;
 use function json_encode;
+use function strtr;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -37,8 +41,10 @@ use const JSON_THROW_ON_ERROR;
  * array + key order), not `assertStringContainsString` — the existing tests
  * keep their substring assertions, this file is the shape proof.
  *
- * Also pins the shared helper contract: `Response::errorBody()` output must
- * remain byte-compatible with the deleted relay-private `errorBody()`.
+ * Also pins every `EnrollmentJwtMiddleware` throw arm's flip frame (the
+ * substring-only middleware test keeps its checks; this is the shape proof),
+ * and the shared helper contract: `Response::errorBody()` output must remain
+ * byte-compatible with the deleted relay-private `errorBody()`.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  */
@@ -229,6 +235,82 @@ final class ErrorPromotionFramesTest extends TestCase
             $this->createMock(DeregisterHandler::class),
             $this->createMock(RenewHandler::class),
         );
+    }
+
+    // ------------------------------------------------------------------
+    // EnrollmentJwtMiddleware — enrollment flip, every throw arm
+    // ------------------------------------------------------------------
+
+    public function testEnrollmentMiddlewareMissingTokenFrameIsWholeFramePinned(): void
+    {
+        $service = $this->createMock(EnrollmentJwtService::class);
+        $service->expects(self::never())->method('validateEnrollmentJwt');
+        $middleware = new EnrollmentJwtMiddleware($service);
+
+        $request = new Request();
+
+        $this->assertEnrollmentFlipFrame($middleware($request));
+    }
+
+    public function testEnrollmentMiddlewareUnparseableKidFrameIsWholeFramePinned(): void
+    {
+        $service = $this->createMock(EnrollmentJwtService::class);
+        $service->expects(self::never())->method('validateEnrollmentJwt');
+        $middleware = new EnrollmentJwtMiddleware($service);
+
+        $request = new Request();
+        $request->bearerToken = 'not-a-valid-jwt';
+
+        $this->assertEnrollmentFlipFrame($middleware($request));
+    }
+
+    public function testEnrollmentMiddlewareFailedValidationFrameIsWholeFramePinned(): void
+    {
+        $service = $this->createMock(EnrollmentJwtService::class);
+        $service->method('validateEnrollmentJwt')->willReturn(null);
+        $middleware = new EnrollmentJwtMiddleware($service);
+
+        $request = new Request();
+        $request->bearerToken = $this->tokenWithKid('enrollment-pin-kid');
+
+        $this->assertEnrollmentFlipFrame($middleware($request));
+    }
+
+    /**
+     * Whole-frame pin shared by every {@see EnrollmentJwtMiddleware} throw
+     * arm (missing token :46, unparseable kid :51, failed validation :56 —
+     * all funnel through the same `unauthorized()` frame): exact key set and
+     * order via decoded-assoc `assertSame`, status, and the byte-exact
+     * serialized body including the pretty-print/unescaped-slashes flags.
+     * Reordering or merging keys here goes red; the sibling middleware test's
+     * substring check alone cannot catch that.
+     */
+    private function assertEnrollmentFlipFrame(?Response $response): void
+    {
+        self::assertNotNull($response);
+        self::assertSame(401, $response->statusCode);
+        self::assertSame(
+            ['error' => 'ENROLLMENT_TOKEN_EXPIRED', 'code' => 'auth.enrollment_expired'],
+            json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
+            'enrollment flip frame drifted from the contracted shape',
+        );
+        self::assertSame(
+            "{\n    \"error\": \"ENROLLMENT_TOKEN_EXPIRED\",\n    \"code\": \"auth.enrollment_expired\"\n}",
+            $response->body,
+            'enrollment flip body drifted from JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES serialization',
+        );
+    }
+
+    /**
+     * JWT-shaped string whose header segment carries a `kid`, enough for
+     * `Phlix\Hub\Jwt\JwtHeader::kid()` to return non-null so the middleware
+     * reaches its validation arm. Signature/payload bytes are never parsed.
+     */
+    private function tokenWithKid(string $kid): string
+    {
+        $header = json_encode(['alg' => 'EdDSA', 'kid' => $kid], JSON_THROW_ON_ERROR);
+
+        return strtr(base64_encode($header), '+/', '-_') . '.c2ln.cGF5bG9hZA';
     }
 
     // ------------------------------------------------------------------
