@@ -1,0 +1,21 @@
+# Enforce LF line endings in the working tree on every platform.
+#
+# WHY: this repo commits byte-faithful artifacts that other laws hash or
+# re-derive from served bytes:
+#   - tests/fixtures/contracts/{error-codes.json,mcp-scopes.json} vendored
+#     verbatim from @phlix/contracts, tag-pinned by error-codes.PIN / PIN and
+#     equality-checked by tests/Unit/Contracts/* and the McpScopes law tests;
+#   - public/assets/app/... — the vendored phlix-ui webui bundle (~210 files)
+#     served verbatim, validated byte-for-byte against the pinned UI tag
+#     (S181 "bundle byte-ident" precedent, scripts/report-ui-pin-skew.php);
+#   - the server route-manifest snapshots under
+#     tests/Unit/Http/Controllers/Fixtures/ (S280 parity, md5 recorded at
+#     commit time).
+# A checkout that silently rewrites LF to CRLF (git core.autocrlf=true on a
+# windows runner) would perturb those bytes and poison every pin — the exact
+# failure class fixed in phlix-windows-client PR #46.
+#
+# Census at adoption (master b83639fa): 900 tracked blobs; CR bytes present
+# only in the 3 .woff2 font files below (expected binary), zero text-class CR.
+* text=auto eol=lf
+*.woff2 binary
