@@ -6,6 +6,42 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — web-ui repin: `@phlix/ui` v0.99.6 → v0.99.7 tag tarball — rebuilt bundle verifies byte-identical — 2026-09-25
+
+- **The `@phlix/ui` pin advances to the `v0.99.7` release-tag tarball** (tag object `da9f1625…`,
+  peeling to commit `bc1d29bf…` — verified against the live tag ladder before the bump; fetched
+  bytes `sha256 c7c3970c…5888f1`, stable across two independent downloads). What the release
+  carries, per its tag range (ui #427 + #428): the internal re-pin of `@phlix/contracts`
+  `#v0.5.1` → `#v0.5.2` (the registry docblock-coordinate/verify:cites lane — registry JSON held
+  byte-identical at 202 codes), the version-literal bump `0.99.4` → `0.99.7`, a `.gitattributes`
+  LF shield added upstream, and docblock/test-file refreshes only.
+- **Lock churn is six lines, five of them the known #320 set.** `web-ui/package-lock.json` changes:
+  the dependency-spec string, the `node_modules/@phlix/ui` `resolved` + `integrity` pair, and the
+  transitive `@phlix/contracts` spec text the new tarball's manifest declares. The sixth line is
+  the lock's `@phlix/ui` `version` field `0.99.4` → `0.99.7`: the known version-literal skew is
+  RETIRED by the release itself — v0.99.7 is the first ui tag whose package.json finally tracks its
+  tag, and the lock now matches the installed manifest instead of inheriting the stale literal.
+  The `@phlix/contracts` RESOLVED entry stays untouched (`97bcda06` v0.4.6-committish, divergence
+  pre-#317): `npm ci` installs the lock verbatim, the installed contracts bytes are unchanged by
+  this bump, and a deliberate re-resolve remains a future lane's call.
+- **The rebuilt bundle is byte-identical to the committed one.** Three consecutive
+  `npm ci && npm run build` runs on the CI-pinned node 24.20.0 (npm 11.19.0,
+  `NPM_CONFIG_USERCONFIG=/dev/null`) are byte-identical to each other (S253 gate honored) and —
+  measured, not assumed — identical to the committed `public/assets/app/` corpus: 210 tracked files
+  before and after, zero renames, zero content diffs. Explanation verified by direct tarball
+  comparison: the whole `dist/` delta between tags is one `.d.ts` docblock string
+  (`routeGateServer.d.ts`, v0.5.1→v0.5.2 wording), which type-checks but never enters the bundle.
+  The served SPA therefore changes not one byte at this pin — the pin advance is provenance, the
+  lock is the record.
+- **`web-ui/tests` green on the new pin: 31/31** under `node --test` (`npm test`), including the
+  registry-parity drift guard.
+- **S181 pin-skew posture.** This bump lands the hub row at the live newest `@phlix/ui` tag
+  (STALE → OK). Windows/tizen/mobile/ui-repo already carry the newest `@phlix/contracts` `v0.5.2`;
+  server/windows/tizen stay STALE on ui at v0.99.6 until their own repin lanes land — the known
+  cascade shape, visible by design, never masked.
+- **Zero PHP changes** (`src/`, `tests/`, `scripts/`, `openapi.yaml` untouched); redocly surface and
+  route snapshot unchanged.
+
 ### Changed — last named residual promoted: subdomain 404 `SERVER_NOT_FOUND` gains the `server.not_found` code channel — 2026-09-24
 
 - **Closes the residual named by the wave-2 entry below.** The registry lane ran first
