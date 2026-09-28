@@ -114,6 +114,15 @@ final class PendingCommandDispatcher
         }
 
         try {
+            // UNIT NOTE (audit L-2, deliberate): `issued_at` is UNIX SECONDS,
+            // pinned twice — the openapi `:8804` pending_command description
+            // documents it as "issued_at (unix seconds)", and the only live
+            // consumer (@phlix/ui `src/api/hubRelay.ts`, S298) parses it as
+            // seconds. It is a delivery-metadata stamp, NOT a syncplay transport
+            // timestamp, so the SPEC.md §2 "milliseconds" clock law does not
+            // reach it — unlike the hub-stamped `timestamp`/`server_time` fields
+            // in SyncPlayRelayWorker, which ARE ms. Do not harmonise this to ms
+            // without retyping the consumer first.
             $frameJson = json_encode([
                 'type' => PendingCommandProtocol::FRAME_TYPE,
                 'command' => PendingCommandProtocol::COMMAND_PLAY_MEDIA,

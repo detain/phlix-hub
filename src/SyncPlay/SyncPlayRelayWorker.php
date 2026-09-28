@@ -19,6 +19,7 @@ use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\RelayProxyProtocol;
+use Phlix\Hub\Relay\TokenBucket;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -27,10 +28,13 @@ use Workerman\Worker;
 
 use function count;
 use function explode;
+use function is_numeric;
 use function is_string;
 use function json_decode;
+use function microtime;
+use function round;
 use function spl_object_id;
-use function time;
+use function strlen;
 use function trim;
 
 /**
@@ -74,11 +78,52 @@ final class SyncPlayRelayWorker
     private const BEARER_SUBPROTOCOL_ECHO = 'Sec-WebSocket-Protocol: ' . self::BEARER_SUBPROTOCOL;
 
     /**
+     * Sustained inbound budget per `:8804` client, in bytes/sec (audit M-3).
+     *
+     * SyncPlay control frames are small JSON (`group_join`, `playback_*`,
+     * `time_sync`); a well-behaved client sends a handful per second — hundreds
+     * of bytes. 128 KiB/sec leaves three orders of magnitude of headroom while
+     * capping what ONE socket can force the worker — and, through the verbatim
+     * relay of unknown types, EVERY member of its room — to parse and fan out.
+     * The limiter is a {@see TokenBucket}, so the excess degrades to dropped
+     * frames, never a disconnect: a briefly-over-eager client recovers as the
+     * bucket refills.
+     */
+    public const INBOUND_RATE_BYTES_PER_SECOND = 131072.0;
+
+    /**
+     * Inbound burst budget per `:8804` client, in bytes (audit M-3) — two
+     * seconds' sustained rate, enough for a reconnect-time state exchange,
+     * negligible against a flood. The bucket starts FULL (TokenBucket
+     * semantics), so the very first frame of a connection is never throttled.
+     */
+    public const INBOUND_BURST_BYTES = 262144.0;
+
+    /**
      * Active SyncPlay client connections keyed by connection ID.
      *
      * @var array<int, SyncPlayClient>
      */
     private static array $clients = [];
+
+    /**
+     * Last playback anchor per scoped room — the distilled, bounded snapshot of
+     * the most recent `playback_*` frame the room relayed (see
+     * {@see self::playbackAnchor()}), or absent when the room has never played
+     * anything.
+     *
+     * This is what makes the documented `room_state` contract ("the room's
+     * members AND current playback state", openapi + docs/websockets.md)
+     * actually true: a client joining mid-movie gets the position/state anchor
+     * instead of sitting dark until the next control frame. Keyed by the SAME
+     * scoped key as {@see self::$rooms} and swept with it (leave-to-empty and
+     * the 60s timer), so a resident worker never accumulates anchors of dead
+     * rooms.
+     *
+     * @var array<string, array{type: string, from_client_id: string, timestamp: int,
+     *      position?: float, media_id?: string}>
+     */
+    private static array $roomPlayback = [];
 
     /**
      * Map of SCOPED room key => [client_id => SyncPlayClient].
@@ -101,10 +146,16 @@ final class SyncPlayRelayWorker
      *        Defaults to the SAME broker the relay proxy uses
      *        ({@see RelayProxyProtocol::DEFAULT_CHANNEL_PORT}) — there is one
      *        broker per hub process tree, not one per feature.
+     * @param float              $inboundRateBytesPerSecond Per-client sustained
+     *        inbound budget (audit M-3); see {@see self::INBOUND_RATE_BYTES_PER_SECOND}.
+     * @param float              $inboundBurstBytes         Per-client inbound burst
+     *        capacity; see {@see self::INBOUND_BURST_BYTES}. A non-positive value
+     *        disables the per-client budget entirely (diagnostics only).
      *
-     * Both channel parameters are TRAILING and DEFAULTED on purpose: every
-     * existing call site (`Application::run()`, the unit suite) constructs this
-     * worker with three arguments and must keep compiling unchanged.
+     * The channel and inbound-budget parameters are TRAILING and DEFAULTED on
+     * purpose: every existing call site (`Application::run()`, the unit suite)
+     * constructs this worker positionally with three to five arguments and must
+     * keep compiling unchanged.
      */
     public function __construct(
         private readonly int $port,
@@ -112,6 +163,8 @@ final class SyncPlayRelayWorker
         private readonly ContainerInterface $container,
         private readonly string $channelHost = '127.0.0.1',
         private readonly int $channelPort = RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
+        private readonly float $inboundRateBytesPerSecond = self::INBOUND_RATE_BYTES_PER_SECOND,
+        private readonly float $inboundBurstBytes = self::INBOUND_BURST_BYTES,
     ) {
     }
 
@@ -157,11 +210,14 @@ final class SyncPlayRelayWorker
      */
     public function onWorkerStart(): void
     {
-        // Clean up empty rooms every 60 seconds
+        // Clean up empty rooms every 60 seconds. The playback anchor belongs to
+        // the room, so a swept room loses its anchor in the same step — an
+        // orphaned anchor is exactly the unbounded static growth a resident
+        // worker must never accumulate.
         Timer::add(60, static function (): void {
             foreach (self::$rooms as $roomName => $clients) {
                 if (count($clients) === 0) {
-                    unset(self::$rooms[$roomName]);
+                    unset(self::$rooms[$roomName], self::$roomPlayback[$roomName]);
                 }
             }
         });
@@ -221,7 +277,14 @@ final class SyncPlayRelayWorker
      * @param string $serverId Server the media id belongs to.
      * @param string $frame    The JSON frame to write.
      *
-     * @return int Number of sockets actually written to.
+     * @return int Number of sockets actually written to. A `send()` that returns
+     *         false — a connection already closing or with a full write buffer —
+     *         is NOT a delivery and does not count: the count is the ceiling on
+     *         what the Alexa skill is allowed to claim, so an attempted write to
+     *         a dead socket must never push it over reality (audit M-1; the
+     *         contract {@see PendingCommandPusherInterface::pushPlayMedia()} and
+     *         the openapi `:8804` delivery-gate note both promise "actually
+     *         written", not "attempted").
      *
      * @since S93
      */
@@ -239,8 +302,7 @@ final class SyncPlayRelayWorker
             if ($client->userId !== $userId || $client->serverId !== $serverId) {
                 continue;
             }
-            $client->connection->send($frame);
-            $delivered++;
+            $delivered += $client->connection->send($frame) ? 1 : 0;
         }
 
         return $delivered;
@@ -350,6 +412,21 @@ final class SyncPlayRelayWorker
             $clientId,
             $userId,
         );
+
+        // Audit M-3: every :8804 socket carries its own inbound byte budget from
+        // birth. :8802/:8803 grew CONNECT limiters long ago but this surface
+        // never bounded frames on an ESTABLISHED socket, so one client could
+        // force the worker — and, via the verbatim relay, its whole room — to
+        // process and fan out frames at wire speed. The bucket lives on the
+        // CLIENT (not a static map) so it is GC'd the moment the socket is
+        // dropped. A non-positive injected budget disables the bucket (null =
+        // unbudgeted; the onMessage guard treats null as "diagnostics, allow").
+        if ($this->inboundRateBytesPerSecond > 0.0 && $this->inboundBurstBytes > 0.0) {
+            $client->inboundBucket = new TokenBucket(
+                $this->inboundRateBytesPerSecond,
+                $this->inboundBurstBytes,
+            );
+        }
 
         self::$clients[$connId] = $client;
 
@@ -473,6 +550,20 @@ final class SyncPlayRelayWorker
             return;
         }
 
+        // Audit M-3: charge the frame to the client's inbound budget BEFORE any
+        // parsing or relay work, so junk costs the sender the same budget as
+        // protocol and an over-budget client is refused the expensive path. The
+        // balance may go negative (TokenBucket's oversized-frame rule: the debt
+        // is paid off by later refills, a single large frame never deadlocks the
+        // stream). Null bucket = disabled budget (diagnostics).
+        $bucket = $client->inboundBucket;
+        if ($bucket !== null && !$bucket->canSpend()) {
+            $this->logInboundThrottleOnce($client);
+
+            return;
+        }
+        $bucket?->spend((float) strlen($data));
+
         // Parse SyncPlay JSON message
         /** @var array<string, mixed>|null $message */
         $message = json_decode($data, true);
@@ -481,8 +572,20 @@ final class SyncPlayRelayWorker
         }
 
         /** @var mixed $messageType */
-        $messageType = $message['type'];
+        $messageType = $message['type'] ?? null;
         $type = is_string($messageType) ? $messageType : null;
+
+        // Audit M-3: a frame with NO usable string `type` is malformed, not an
+        // extension. Dropping it here is load-bearing twice over: the unchecked
+        // array access used to emit an E_WARNING on every keyless frame (log
+        // noise a client can dial up at wire speed), and a null `$type` fell
+        // THROUGH the switch default and got relayed VERBATIM to every member of
+        // the sender's room — turning one junk frame into N. The catalog relay
+        // exists for NAMED types the hub does not know (the catalog is a floor),
+        // never for typeless payloads.
+        if ($type === null) {
+            return;
+        }
 
         switch ($type) {
             case 'group_join':
@@ -492,7 +595,6 @@ final class SyncPlayRelayWorker
             case 'playback_play':
             case 'playback_pause':
             case 'playback_seek':
-                /** @var string $type */
                 $this->handlePlayback($client, $message, $type);
                 break;
 
@@ -505,11 +607,41 @@ final class SyncPlayRelayWorker
                 break;
 
             default:
-                // Unknown message type - relay to room if in one
+                // Unrecognised but properly-typed message — the documented
+                // extension seam: relay verbatim to the REST of the room (the
+                // sender already holds the frame; echoing it back buys noise).
                 if ($client->room !== null) {
                     $this->broadcastToRoom($client->room, $data, $client->clientId);
                 }
         }
+    }
+
+    /**
+     * Warn about an inbound-budget breach at most once per connection.
+     *
+     * The drop itself must stay silent-cheap — logging every refused frame
+     * would hand a flooding client a log-noise amplifier, the very failure
+     * class the budget exists to remove. The latch lives on the client, so it
+     * costs nothing after the first trip and disappears with the socket.
+     *
+     * @param SyncPlayClient $client The throttled client.
+     *
+     * @return void
+     */
+    private function logInboundThrottleOnce(SyncPlayClient $client): void
+    {
+        if ($client->inboundThrottleLogged) {
+            return;
+        }
+
+        $client->inboundThrottleLogged = true;
+
+        LoggerFactory::get(LogChannels::RELAY)->warning('SyncPlay: inbound rate limit exceeded, dropping frames', [
+            'client_id' => $client->clientId,
+            'server_id' => $client->serverId,
+            'rate_bytes_per_second' => $this->inboundRateBytesPerSecond,
+            'burst_bytes' => $this->inboundBurstBytes,
+        ]);
     }
 
     /**
@@ -596,16 +728,26 @@ final class SyncPlayRelayWorker
         }
         self::$rooms[$scopedRoom][$client->clientId] = $client;
 
-        // Send current room state to joining client (echo the FRIENDLY name back)
-        $roomState = $this->getRoomState($scopedRoom);
+        // Send current room state to the joining client (echo the FRIENDLY name
+        // back). `playback` carries the room's current playback anchor — the
+        // last relayed control frame, or null in a room that has never played —
+        // which is the second half of the documented contract ("members AND
+        // current playback state"): without it a client joining mid-movie got no
+        // position anchor and sat dark until the next control frame (audit M-2).
         $stateMessage = [
             'type' => 'room_state',
             'room' => $clientRoom,
-            'clients' => $roomState,
+            'clients' => $this->getRoomState($scopedRoom),
+            'playback' => self::$roomPlayback[$scopedRoom] ?? null,
         ];
         $client->connection->send(json_encode($stateMessage, JSON_THROW_ON_ERROR));
 
-        // Notify other clients in the (scoped) room about the new joiner
+        // Notify the OTHER members about the new joiner. The joiner is EXCLUDED
+        // on purpose (audit L-1): both docs promise "Another client joined the
+        // room", and the old call passed an exclude-id while asking for
+        // self-inclusion — the flag won and the sender received its own
+        // client_joined, making the sentence a lie. The joiner learns membership
+        // from its own room_state above, so the echo was never information.
         $joinNotification = [
             'type' => 'client_joined',
             'client_id' => $client->clientId,
@@ -615,7 +757,6 @@ final class SyncPlayRelayWorker
             $scopedRoom,
             json_encode($joinNotification, JSON_THROW_ON_ERROR),
             $client->clientId,
-            true,
         );
 
         $logger->info('SyncPlay: client joined room', [
@@ -644,12 +785,24 @@ final class SyncPlayRelayWorker
         unset(self::$rooms[$room][$clientId]);
         $client->room = null;
 
-        // Notify room about departure
+        // Last member out: the room's playback anchor dies with the session, so
+        // a room re-formed before the sweep starts from a truthful
+        // `room_state.playback: null` instead of inheriting a dead session's
+        // position. The emptied member bucket KEEPS its existing lifecycle — the
+        // 60s sweep reaps it (pinned by the round-trip suite's timer proof),
+        // and the anchor unset here is idempotent with that sweep.
+        if (self::$rooms[$room] === []) {
+            unset(self::$roomPlayback[$room]);
+        }
+
+        // Notify the REMAINING members about the departure. The leaver is
+        // excluded (it is already out of the map; the explicit exclusion keeps
+        // the call honest even if that ordering ever changes).
         $leaveNotification = [
             'type' => 'client_left',
             'client_id' => $clientId,
         ];
-        $this->broadcastToRoom($room, json_encode($leaveNotification, JSON_THROW_ON_ERROR), $clientId, true);
+        $this->broadcastToRoom($room, json_encode($leaveNotification, JSON_THROW_ON_ERROR), $clientId);
     }
 
     /**
@@ -663,17 +816,36 @@ final class SyncPlayRelayWorker
      */
     private function handlePlayback(SyncPlayClient $client, array $message, string $type): void
     {
-        if ($client->room === null) {
+        $room = $client->room;
+        if ($room === null) {
             return;
         }
 
-        // Enrich message with sender info and broadcast
+        // Enrich with server-authoritative sender identity and hub clock. The
+        // `from_client_id` overwrite is the SPEC-§9 discipline: whatever the
+        // sender claimed about who it is, the connection's identity wins.
+        // `timestamp` is UNIX MILLISECONDS (audit L-2) — the syncplay transport
+        // clock contract (phlix-syncplay/SPEC.md §2: "timestamp … in
+        // milliseconds") — so a client feeding this into its NTP/position math
+        // never mixes a 1000x-scaled value with the ms positions it carries.
+        $timestamp = self::nowMs();
         $message['type'] = $type;
         $message['from_client_id'] = $client->clientId;
-        $message['timestamp'] = time();
+        $message['timestamp'] = $timestamp;
 
-        // Broadcast to all other clients in the room (not the sender)
-        $this->broadcastToRoom($client->room, json_encode($message, JSON_THROW_ON_ERROR), $client->clientId, true);
+        // Remember the distilled anchor BEFORE the broadcast: a client joining
+        // later must be able to reconstruct "what is this room playing right
+        // now" from its room_state alone (audit M-2).
+        self::$roomPlayback[$room] = self::playbackAnchor($type, $client->clientId, $timestamp, $message);
+
+        // Broadcast to EVERY member of the room, the sender included. This is a
+        // deliberate contract, not the old comment's lie (audit L-1): the openapi
+        // `:8804` direction says "broadcast to every client in the same room",
+        // and a sender that sees its own control come back is how a client
+        // confirms the hub accepted the frame. One parameter — exclusion by id,
+        // null for none — because the previous (exclude-id, include-self) pair
+        // let callers pass contradictory arguments and the comment drifted.
+        $this->broadcastToRoom($room, json_encode($message, JSON_THROW_ON_ERROR), null);
     }
 
     /**
@@ -686,10 +858,15 @@ final class SyncPlayRelayWorker
       */
     private function handleTimeSync(SyncPlayClient $client, array $message): void
     {
-        // Respond with time sync reply containing server timestamp
+        // Respond with the server clock in UNIX MILLISECONDS (audit L-2): the
+        // syncplay NTP model (SPEC.md §5) computes offsets and RTT from ms-scaled
+        // quads, and a seconds-scale `server_time` would silently produce
+        // offsets 1000x off. `client_time` is echoed back untouched — whatever
+        // scale the client probes with is the scale it reads the echo against;
+        // only the server-stamped fields are ms by contract.
         $reply = [
             'type' => 'time_sync_reply',
-            'server_time' => time(),
+            'server_time' => self::nowMs(),
             'client_time' => $message['client_time'] ?? null,
         ];
 
@@ -697,28 +874,89 @@ final class SyncPlayRelayWorker
     }
 
     /**
-     * Broadcast a message to all clients in a room.
+     * Broadcast a message to the clients of a room.
      *
-     * @param string $room         Scoped room key (see {@see scopedRoomKey()}).
-     * @param string $message     JSON message to send.
-     * @param string $excludeId   Client ID to exclude (optional).
-     * @param bool   $includeSelf Include sender in broadcast (default false).
+     * @param string      $room            Scoped room key (see {@see scopedRoomKey()}).
+     * @param string      $message         JSON message to send.
+     * @param string|null $excludeClientId Member to skip, or null to reach EVERY
+     *        member including the sender. One parameter on purpose: the previous
+     *        ($excludeId, $includeSelf) pair could contradict itself — callers
+     *        passed an id to exclude AND asked for self-inclusion, the flag won,
+     *        and the "other clients" comments on those calls became lies
+     *        (audit L-1). Illegal state now has no representation.
      *
      * @return void
      */
     private function broadcastToRoom(
         string $room,
         string $message,
-        string $excludeId = '',
-        bool $includeSelf = false,
+        ?string $excludeClientId = null,
     ): void {
         $clients = self::$rooms[$room] ?? [];
         foreach ($clients as $client) {
-            if (!$includeSelf && $client->clientId === $excludeId) {
+            if ($excludeClientId !== null && $client->clientId === $excludeClientId) {
                 continue;
             }
             $client->connection->send($message);
         }
+    }
+
+    /**
+     * Current wall clock in UNIX MILLISECONDS.
+     *
+     * The syncplay transport clock contract (phlix-syncplay/SPEC.md §2): every
+     * `timestamp`/`server_time` this worker STAMPS on the `:8804` wire is
+     * ms-scaled. Rounded rather than truncated so sub-millisecond jitter can
+     * never report a value a whole millisecond low.
+     *
+     * The one deliberate seconds-scaled sibling is the S93 `pending_command`
+     * `issued_at`, pinned to unix seconds by openapi AND by its only consumer
+     * (@phlix/ui hubRelay.ts) — see PendingCommandDispatcher. Different frame
+     * family, different pinned unit; do not "harmonise" one without its
+     * consumer.
+     */
+    private static function nowMs(): int
+    {
+        return (int) round(microtime(true) * 1000);
+    }
+
+    /**
+     * Distil the joiner-facing playback anchor out of an enriched playback frame.
+     *
+     * Parse, don't hoard: the ROOM receives the sender's full payload verbatim,
+     * but the per-room copy must not grow with whatever a client chooses to
+     * attach, so only the fields a joining client needs to anchor survive —
+     * type/state, sender, hub clock, and a numeric position (`to_position` on a
+     * seek) or string media id when the sender supplied one.
+     *
+     * @param string               $type      Playback type as relayed.
+     * @param string               $clientId  Authoritative sender client id.
+     * @param int                  $timestamp Hub clock (ms) stamped on the frame.
+     * @param array<string, mixed> $message   The enriched message being broadcast.
+     *
+     * @return array{type: string, from_client_id: string, timestamp: int, position?: float, media_id?: string}
+     */
+    private static function playbackAnchor(string $type, string $clientId, int $timestamp, array $message): array
+    {
+        $anchor = [
+            'type' => $type,
+            'from_client_id' => $clientId,
+            'timestamp' => $timestamp,
+        ];
+
+        /** @var mixed $position */
+        $position = $message['position'] ?? $message['to_position'] ?? null;
+        if (is_numeric($position)) {
+            $anchor['position'] = (float) $position;
+        }
+
+        /** @var mixed $mediaId */
+        $mediaId = $message['media_id'] ?? null;
+        if (is_string($mediaId) && $mediaId !== '') {
+            $anchor['media_id'] = $mediaId;
+        }
+
+        return $anchor;
     }
 
     /**
@@ -826,5 +1064,6 @@ final class SyncPlayRelayWorker
     {
         self::$clients = [];
         self::$rooms = [];
+        self::$roomPlayback = [];
     }
 }

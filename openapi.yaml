@@ -3958,14 +3958,30 @@ x-phlix-websockets:
       was always null and EVERY :8804 connect was rejected. A client still sending `?token=` here
       was never authenticating and must move the token to a header or the bearer subprotocol.
     encoding: "JSON text frames"
+    timestamps: >-
+      Every timestamp this hub STAMPS on this surface is UNIX MILLISECONDS, matching the
+      syncplay transport clock contract (phlix-syncplay/SPEC.md §2): the `timestamp` on
+      relayed playback_* frames and `server_time` on time_sync_reply. `client_time` is
+      echoed untouched. The sole seconds-scaled field is the S93 pending_command `issued_at`
+      below — delivery metadata, pinned to unix seconds by this spec AND by its only
+      consumer (@phlix/ui hubRelay.ts, S298).
     messages:
       - "client→hub group_join — join a room; the room key is scoped to (server_id, owner)"
       - "client→hub group_leave — leave the current room"
-      - "client→hub playback_play / playback_pause / playback_seek — broadcast playback control"
+      - >-
+        client→hub playback_play / playback_pause / playback_seek — relay playback control
+        to EVERY member including the sender, stamped with authoritative `from_client_id`
+        and `timestamp` (unix ms); the sender's echo is the hub's acceptance signal
       - "client→hub time_sync — clock probe"
-      - "hub→client room_state — the room's members and current playback state after a join"
-      - "hub→client client_joined / client_left — membership change"
-      - "hub→client time_sync_reply — clock probe answer"
+      - >-
+        hub→client room_state — to the joiner: `clients` (member map) AND `playback`, the
+        room's last relayed anchor {type, from_client_id, timestamp, position?, media_id?}
+        or null in a room that never played — a mid-session joiner is anchored by this
+        frame alone
+      - >-
+        hub→client client_joined / client_left — membership change, to the OTHER members
+        only; client_joined is never echoed to the joiner (its own room_state names it)
+      - "hub→client time_sync_reply — clock probe answer; server_time in unix milliseconds"
       - >-
         hub→client pending_command — SERVER-ORIGINATED (S93). Not a room broadcast and not a
         reply to anything the client sent: it is addressed to a USER'S OPEN APP. Fields:
@@ -3977,23 +3993,33 @@ x-phlix-websockets:
         cannot be played by an app talking to server B.
     notes: >-
       Any message type not in the list above is relayed verbatim to the rest of the room, so the
-      catalog is a floor, not a closed set.
+      catalog is a floor, not a closed set. A frame that is not a JSON object, or whose `type`
+      is missing or not a string, is MALFORMED: it is dropped, never relayed — the passthrough
+      exists for named extensions, not for junk that one socket could fan out to a whole room.
+
+
+      Every connection carries an inbound byte budget (Phlix\Hub\Relay\TokenBucket; sustained
+      SyncPlayRelayWorker::INBOUND_RATE_BYTES_PER_SECOND — 128 KiB/s — with a 256 KiB burst that
+      starts full, so a connection's first frames are never throttled). Over-budget frames are
+      DROPPED, not disconnected — a briefly over-eager client recovers as the bucket refills,
+      and the drop is logged at most once per connection so the limiter cannot be turned into
+      log noise.
 
 
       pending_command (S93) is produced by Phlix\Hub\SyncPlay\PendingCommandDispatcher, which
       this worker subscribes to the workerman/channel broker in onWorkerStart: an Alexa
       utterance is handled on an HTTP worker, but the client sockets live only in this process.
-      The dispatcher publishes the REAL number of sockets written back to the HTTP worker, and
+      The dispatcher publishes the REAL number of sockets WRITTEN (a send() that returns false
+      — closing socket, full buffer — does not count; audit M-1) back to the HTTP worker, and
       the Alexa skill speaks its confirmation only on a count >= 1 — a confirmation for a
       command nobody received is exactly the dishonesty that gate exists to prevent.
 
 
-      ⚠ As of 2026-08-08 NO client consumes this frame, and no client connects to :8804 at all
-      (every live client SyncPlay socket points at phlix-server's own :8097, speaks a
-      `syncplay_`-prefixed vocabulary, and carries its token in the query string, which this
-      worker refuses since S237). So the delivered count is 0 today and the skill answers "you
-      do not have the Phlix app open". That is the intended degradation: the feature turns on by
-      itself once a client implements the consumer.
+      Update since S298: @phlix/ui's hubRelay consumer (`src/api/hubRelay.ts`, booted from
+      createPhlixApp) now connects to :8804 and consumes pending_command with the sanctioned
+      bearer-subprotocol carrier, so the delivered count is no longer structurally 0. The
+      room/playback frames above still have no client consumer in the estate; the :8097 socket
+      remains a different transport with the SPEC.md `syncplay_*` vocabulary.
   - name: "Hub federation"
     repo: phlix-hub
     port: 8805
@@ -4038,13 +4064,16 @@ x-phlix-websockets:
       - "auth_request / auth_success / auth_failure"
       - "session_start / session_end / session_join / session_leave"
       - "playback_start / playback_pause / playback_stop / playback_progress / playback_seek"
-      - "syncplay_create_group / syncplay_join_group / syncplay_leave_group"
-      - "syncplay_sync_state / syncplay_sync_request"
+      - "syncplay_group_create / syncplay_group_join / syncplay_group_leave"
+      - "syncplay_playback_sync / syncplay_time_ping / syncplay_time_pong"
       - "subscribe_dashboard / dashboard_now_playing"
       - "library_updated / notification / error / ping / pong"
     notes: >-
       Documented here for completeness because a hub client reaches this socket through the relay.
-      It belongs to phlix-server and is NOT verified by this repository's tests.
+      It belongs to phlix-server and is NOT verified by this repository's tests. SyncPlay names
+      are the canonical wire strings of phlix-syncplay/SPEC.md §3 (audit L-8 corrected this list
+      from the pre-SPEC spellings syncplay_create_group / join_group / leave_group / sync_state /
+      sync_request).
 
 components:
   securitySchemes:

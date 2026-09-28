@@ -13,6 +13,7 @@ use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\SyncPlay\RegistersSyncPlayClients;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 use function abs;
@@ -277,6 +278,91 @@ final class PendingCommandDeliveryTest extends TestCase
         self::assertSame(2, $delivered, 'two open apps must produce a delivered count of 2, not 1');
         self::assertSame([self::FRAME], $laptop, 'the first open app did not receive the frame');
         self::assertSame([self::FRAME], $tv, 'the second open app did not receive the frame');
+    }
+
+    // ==================================================================
+    // 1b. Audit M-1: the count is WRITES, not attempts
+    // ==================================================================
+
+    /**
+     * `TcpConnection::send()` returns false when the connection is closing or
+     * its write buffer is full — the frame reaches nobody. Counting the attempt
+     * anyway inflates exactly the number the Alexa skill is gated on: with every
+     * matched send failing, the old code still returned >= 1 and the skill
+     * confirmed a command no socket ever saw.
+     */
+    public function testDeliveredCountExcludesSocketsWhoseSendFailed(): void
+    {
+        $this->grantToken('tok-live', 'u-1', 'srv-A');
+        $this->grantToken('tok-dead', 'u-1', 'srv-A');
+        $this->setServerOwner('srv-A', 'u-1');
+
+        $live = [];
+        $this->connectSyncPlayClient('/syncplay/srv-A', 'tok-live', $live);
+
+        // A second legitimately-authenticated socket whose WRITE fails. Built
+        // through the same production connect path as every other client here —
+        // only the socket's send() answer differs.
+        $dead = $this->createMock(TcpConnection::class);
+        $dead->method('send')->willReturn(false);
+        $this->syncPlayWorker()->onWebSocketConnect(
+            $dead,
+            self::makeSyncPlayUpgradeRequest('/syncplay/srv-A', 'tok-dead'),
+        );
+
+        self::assertSame(
+            2,
+            SyncPlayRelayWorker::getActiveConnectionCount(),
+            'control: both sockets must be registered, or the count below measures an empty map',
+        );
+
+        self::assertSame(
+            1,
+            SyncPlayRelayWorker::deliverToUser('u-1', 'srv-A', self::FRAME),
+            'M-1: the delivered count must exclude the socket whose send() returned false — '
+            . 'two attempts, one actual write',
+        );
+        self::assertSame([self::FRAME], $live, 'the healthy socket did not receive the frame');
+    }
+
+    /**
+     * The whole point of M-1: when EVERY matched write fails, the count is 0 —
+     * the same value the skill refuses to speak a confirmation on. Paired with
+     * a succeeding control on the same map so a globally-broken deliverToUser()
+     * cannot wear this test as a disguise.
+     */
+    public function testDeliveredCountIsZeroWhenEveryMatchedWriteFails(): void
+    {
+        $this->grantToken('tok-dead', 'u-1', 'srv-A');
+        $this->grantToken('tok-live', 'u-2', 'srv-C');
+        $this->setServerOwner('srv-A', 'u-1');
+        $this->setServerOwner('srv-C', 'u-2');
+
+        $dead = $this->createMock(TcpConnection::class);
+        $dead->method('send')->willReturn(false);
+        $this->syncPlayWorker()->onWebSocketConnect(
+            $dead,
+            self::makeSyncPlayUpgradeRequest('/syncplay/srv-A', 'tok-dead'),
+        );
+
+        $live = [];
+        $this->connectSyncPlayClient('/syncplay/srv-C', 'tok-live', $live);
+
+        self::assertSame(2, SyncPlayRelayWorker::getActiveConnectionCount(), 'control: two sockets registered');
+
+        self::assertSame(
+            0,
+            SyncPlayRelayWorker::deliverToUser('u-1', 'srv-A', self::FRAME),
+            'M-1: every write to the addressed sockets failed — the skill must hear 0 and stay silent, '
+            . 'never confirm "playing on your Phlix" into zero listening sockets.',
+        );
+
+        self::assertSame(
+            1,
+            SyncPlayRelayWorker::deliverToUser('u-2', 'srv-C', self::FRAME),
+            'control: a healthy socket on the same map still counts 1 — the zero above is failure, not breakage',
+        );
+        self::assertSame([self::FRAME], $live, 'control: the healthy addressed socket received nothing');
     }
 
     // ==================================================================

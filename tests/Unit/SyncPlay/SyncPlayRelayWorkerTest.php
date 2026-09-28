@@ -17,12 +17,19 @@ use Workerman\MySQL\Connection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Protocols\Websocket;
 
+use function array_key_first;
+use function array_keys;
+use function array_reverse;
+use function count;
 use function hash;
 use function implode;
 use function is_array;
+use function is_int;
 use function is_string;
 use function json_decode;
 use function json_encode;
+use function microtime;
+use function round;
 
 /**
  * Unit tests for {@see SyncPlayRelayWorker} — the SyncPlay relay path (:8804).
@@ -655,6 +662,368 @@ final class SyncPlayRelayWorkerTest extends TestCase
         );
     }
 
+    // ---- Audit L-1: includeSelf semantics are the documented ones ---------
+
+    /**
+     * Audit L-1 — `client_joined` describes "Another client joined the room"
+     * (docs/websockets.md) and must therefore NEVER be echoed to the joiner.
+     * The old call site passed an exclude-id together with includeSelf=true and
+     * the flag won: the joiner received its own join back as news. Membership
+     * for the joiner is `room_state`, nothing else.
+     */
+    public function testClientJoinedIsNeverEchoedToTheJoiner(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->grantToken('token-c', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $sinkC = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $connC = $this->makeRecordingConnection($sinkC);
+
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+        $this->connect($worker, $connC, '/syncplay/server-a', 'token-c');
+
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+        $worker->onMessage($connC, $this->joinFrame('movie-night', 'Carol'));
+
+        // The joiner's ONLY room traffic is its own room_state — no client_joined
+        // describing itself.
+        self::assertSame(
+            [],
+            $this->sinkFramesOfType($sinkC, 'client_joined'),
+            'L-1: the joiner received its own client_joined; the frame means "another client joined".',
+        );
+
+        // Control on the OTHER side: the already-present member must get exactly
+        // one client_joined, naming the joiner — so C's empty sink above means
+        // "exclusion works", not "notification is broken".
+        $joined = $this->sinkFramesOfType($sinkA, 'client_joined');
+        self::assertCount(1, $joined, 'the present member was not notified of the join');
+        $joinerId = $joined[0]['client_id'] ?? null;
+        self::assertIsString($joinerId);
+        self::assertSame('Carol', $joined[0]['display_name'] ?? null);
+
+        $stateC = $this->firstSinkFrameOfType($sinkC, 'room_state');
+        self::assertIsArray($stateC);
+        self::assertIsArray($stateC['clients'] ?? null);
+        self::assertArrayHasKey(
+            $joinerId,
+            $stateC['clients'],
+            'the joiner is not in its own room_state — the id in the control frame above is wrong',
+        );
+    }
+
+    /**
+     * Audit L-1 — `playback_*` DOES reach the sender, deliberately: the openapi
+     * `:8804` direction contract is "broadcast to every client in the same
+     * room", so the sender's own frame coming back is the hub's acceptance
+     * echo. The pre-fix comment claimed "not the sender" while the flag made it
+     * reach everyone; this pins the CHOSEN behaviour, not the old accident.
+     */
+    public function testPlaybackIsBroadcastToEveryMemberIncludingTheSender(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->grantToken('token-c', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $sinkC = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $connC = $this->makeRecordingConnection($sinkC);
+
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+
+        $stateA = $this->firstSinkFrameOfType($sinkA, 'room_state');
+        self::assertIsArray($stateA);
+        $senderId = (string) array_key_first((array) $stateA['clients']);
+
+        $this->connect($worker, $connC, '/syncplay/server-a', 'token-c');
+        $worker->onMessage($connC, $this->joinFrame('movie-night', 'Carol'));
+
+        $worker->onMessage($connA, $this->playFrame());
+
+        $echoA = $this->firstSinkFrameOfType($sinkA, 'playback_play');
+        $echoC = $this->firstSinkFrameOfType($sinkC, 'playback_play');
+
+        self::assertIsArray($echoA, 'L-1: the sender did not receive its own playback broadcast');
+        self::assertIsArray($echoC, 'the other member did not receive the playback broadcast');
+        self::assertSame($senderId, $echoC['from_client_id'] ?? null, 'server-authoritative sender id missing');
+    }
+
+    /**
+     * Audit M-2 — `room_state` must carry the room's CURRENT PLAYBACK STATE, not
+     * only the member list: the joining client gets the last anchor the room
+     * relayed so it can synchronise immediately. A room that has never played
+     * anything says so honestly with null.
+     */
+    public function testRoomStateCarriesNullPlaybackForAFreshRoomAndTheAnchorAfterPlayback(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->grantToken('token-c', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $sinkC = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $connC = $this->makeRecordingConnection($sinkC);
+
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+
+        $fresh = $this->firstSinkFrameOfType($sinkA, 'room_state');
+        self::assertIsArray($fresh);
+        self::assertArrayHasKey('playback', $fresh, 'M-2: room_state omitted the playback field entirely');
+        self::assertNull($fresh['playback'], 'a room that never played must report playback: null, not a fake');
+
+        // A plays something with a position and a media id.
+        $worker->onMessage($connA, (string) json_encode([
+            'type' => 'playback_play',
+            'position' => 42.5,
+            'media_id' => 'm-7',
+        ]));
+
+        // C joins late — its room_state must carry the anchor A just set.
+        $this->connect($worker, $connC, '/syncplay/server-a', 'token-c');
+        $worker->onMessage($connC, $this->joinFrame('movie-night', 'Carol'));
+
+        $late = $this->firstSinkFrameOfType($sinkC, 'room_state');
+        self::assertIsArray($late);
+        $anchor = $late['playback'] ?? null;
+        self::assertIsArray($anchor, 'M-2: late joiner received no playback anchor');
+        self::assertSame('playback_play', $anchor['type'] ?? null);
+        self::assertSame(42.5, $anchor['position'] ?? null);
+        self::assertSame('m-7', $anchor['media_id'] ?? null);
+        $anchorTime = $anchor['timestamp'] ?? null;
+        self::assertIsInt($anchorTime, 'M-2/L-2: anchor timestamp must be an int ms count');
+        self::assertGreaterThanOrEqual(1_000_000_000_000, $anchorTime, 'M-2/L-2: anchor timestamp is seconds-scaled');
+
+        // The anchor's sender must be a member the joiner can see.
+        $memberIds = array_keys((array) ($late['clients'] ?? []));
+        self::assertContains($anchor['from_client_id'] ?? null, $memberIds);
+    }
+
+    /**
+     * Audit M-2 — the anchor belongs to the ROOM: when the last member leaves,
+     * the room (and its anchor) is gone; a re-formed room must not inherit a
+     * dead session's position.
+     */
+    public function testPlaybackAnchorIsClearedWhenTheLastMemberLeaves(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+        $worker->onMessage($connA, $this->playFrame());
+        $worker->onMessage($connA, (string) json_encode(['type' => 'group_leave']));
+
+        $sinkABeforeRejoin = count($sinkA);
+
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+
+        self::assertGreaterThan($sinkABeforeRejoin, count($sinkA), 'control: rejoin answered with a fresh room_state');
+        $latest = null;
+        foreach (array_reverse($sinkA) as $raw) {
+            $decoded = json_decode((string) $raw, true);
+            if (is_array($decoded) && ($decoded['type'] ?? null) === 'room_state') {
+                $latest = $decoded;
+                break;
+            }
+        }
+        self::assertIsArray($latest);
+        // NOTE: deliberately not `$latest['playback'] ?? 'fail'` — `??` cannot
+        // tell a missing key from a present-and-null one, and present-and-null
+        // IS the contract here.
+        self::assertArrayHasKey('playback', $latest, 'M-2: rejoin room_state omitted the playback field');
+        self::assertNull(
+            $latest['playback'],
+            'M-2: a re-formed room inherited the anchor of the session that ended',
+        );
+    }
+
+    /**
+     * Audit M-3 — a frame with a MISSING `type` key must be dropped, never
+     * relayed. Pre-fix, the keyless lookup emitted an E_WARNING and the null
+     * type fell through the switch default into a VERBATIM room relay — free
+     * log noise and a frame fan-out amplifier driven by pure junk.
+     */
+    public function testKeylessAndNonStringTypeFramesAreDroppedNeverRelayed(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->grantToken('token-c', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $sinkC = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $connC = $this->makeRecordingConnection($sinkC);
+
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+        $this->connect($worker, $connC, '/syncplay/server-a', 'token-c');
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+        $worker->onMessage($connC, $this->joinFrame('movie-night', 'Carol'));
+
+        $before = [count($sinkA), count($sinkC)];
+
+        $worker->onMessage($connA, '{"junk":true}');
+        $worker->onMessage($connA, '{"type":123}');
+        $worker->onMessage($connA, '[1,2,3]');
+        $worker->onMessage($connA, 'not json at all');
+
+        self::assertSame(
+            $before,
+            [count($sinkA), count($sinkC)],
+            'M-3: a malformed (keyless / non-string-type / non-object) frame was relayed to the room',
+        );
+
+        // Control in the SAME test: a genuinely unknown NAMED type still relays
+        // (the catalog is a floor) — so the silence above is rejection of junk,
+        // not a dead relay path.
+        $worker->onMessage($connA, '{"type":"future_extension","x":1}');
+        self::assertSame(1, count($sinkC) - $before[1], 'the extension-seam relay stopped working');
+    }
+
+    /**
+     * Audit M-3 — per-client INBOUND byte budget: frames past the injected budget
+     * are dropped before any parse or relay work. The tight injected budget
+     * (burst 8 bytes against ~60-byte frames) makes exhaustion deterministic:
+     * every legitimate frame is admitted from the FULL burst, then the balance
+     * is deep negative and the 1 B/s refill cannot rescue a mid-test flood.
+     */
+    public function testInboundBudgetDropsFramesOnceTheClientExhaustsIt(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->grantToken('token-c', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(
+            SyncPlayRelayWorker::DEFAULT_PORT,
+            1,
+            $this->buildContainer(),
+            inboundRateBytesPerSecond: 1.0,
+            inboundBurstBytes: 8.0,
+        );
+
+        $sinkA = [];
+        $sinkC = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $connC = $this->makeRecordingConnection($sinkC);
+
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+        $this->connect($worker, $connC, '/syncplay/server-a', 'token-c');
+
+        // Each client's FIRST frame is admitted from the full burst (the
+        // no-first-frame-starved property), proven by the room_state replies.
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+        self::assertTrue($this->sinkHasType($sinkA, 'room_state'), 'first frame was throttled — burst must start full');
+
+        // A's bucket is now deeply negative: every further inbound frame from A
+        // is refused, and NONE of it fans out to C.
+        $framesAtC = count($sinkC);
+        for ($i = 0; $i < 25; $i++) {
+            $worker->onMessage($connA, $this->playFrame());
+        }
+
+        self::assertSame(
+            0,
+            count($this->sinkFramesOfType($sinkC, 'playback_play')),
+            'M-3: an over-budget client still forced frames into its room — the inbound limiter is not applied',
+        );
+        self::assertSame($framesAtC, count($sinkC), 'over-budget frames changed anything at C at all');
+
+        // Control: the SAME frames from a client WITH budget (C's own first
+        // frames were admitted above; C's join reached A as client_joined) — so
+        // the drops above are about A's exhausted bucket, not a broken relay.
+        $worker->onMessage($connC, $this->joinFrame('movie-night', 'Carol'));
+        self::assertTrue($this->sinkHasType($sinkA, 'client_joined'), 'control: in-budget delivery still works');
+    }
+
+    /**
+     * Audit L-2 — the hub-stamped `timestamp` on relayed playback is UNIX
+     * MILLISECONDS, per the syncplay transport clock contract
+     * (phlix-syncplay/SPEC.md §2). A seconds-scaled stamp silently corrupts any
+     * client position math by 1000x; the unit must be pinned, not folklore.
+     */
+    public function testPlaybackTimestampIsUnixMilliseconds(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->grantToken('token-c', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $sinkC = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $connC = $this->makeRecordingConnection($sinkC);
+
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+        $this->connect($worker, $connC, '/syncplay/server-a', 'token-c');
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+        $worker->onMessage($connC, $this->joinFrame('movie-night', 'Carol'));
+
+        $beforeMs = (int) round(microtime(true) * 1000);
+        $worker->onMessage($connA, $this->playFrame());
+        $afterMs = (int) round(microtime(true) * 1000);
+
+        $frame = $this->firstSinkFrameOfType($sinkC, 'playback_play');
+        self::assertIsArray($frame);
+        $timestamp = $frame['timestamp'] ?? null;
+        self::assertIsInt($timestamp, 'L-2: playback timestamp must be an integer millisecond count');
+        self::assertGreaterThanOrEqual(1_000_000_000_000, $timestamp, 'L-2: timestamp is seconds-scaled (< 1e12)');
+        self::assertGreaterThanOrEqual($beforeMs - 2000, $timestamp);
+        self::assertLessThanOrEqual($afterMs + 2000, $timestamp);
+    }
+
+    /**
+     * Audit L-2 — `time_sync_reply.server_time` is likewise UNIX MILLISECONDS
+     * (SPEC.md §5 feeds these quads into NTP offset math; a seconds-scale
+     * `server_time` produces offsets 1000x off) while `client_time` is echoed
+     * back byte-for-byte so a client can probe with any clock it owns.
+     */
+    public function testTimeSyncReplyServerTimeIsUnixMillisecondsAndEchoesClientTime(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+
+        $probe = 1_700_000_000_123; // a client's own ms stamp — echoed untouched
+        $worker->onMessage($connA, (string) json_encode(['type' => 'time_sync', 'client_time' => $probe]));
+
+        $reply = $this->firstSinkFrameOfType($sinkA, 'time_sync_reply');
+        self::assertIsArray($reply);
+
+        $serverTime = $reply['server_time'] ?? null;
+        self::assertIsInt($serverTime);
+        self::assertGreaterThanOrEqual(1_000_000_000_000, $serverTime, 'L-2: server_time is seconds-scaled (< 1e12)');
+        $nowMs = (int) round(microtime(true) * 1000);
+        self::assertGreaterThanOrEqual($nowMs - 5000, $serverTime);
+        self::assertLessThanOrEqual($nowMs + 5000, $serverTime);
+
+        self::assertSame($probe, $reply['client_time'] ?? null, 'the probe echo must come back untouched');
+    }
+
     public function testGroupLeaveEmptiesTheScopedRoomAndCleansUp(): void
     {
         $this->grantToken('token-a', 'user-a', 'server-a');
@@ -716,6 +1085,35 @@ final class SyncPlayRelayWorkerTest extends TestCase
             }
         }
         return false;
+    }
+
+    /**
+     * Every decoded frame of $type that landed in $sink, in arrival order.
+     *
+     * @param list<string> $sink
+     * @return list<array<string, mixed>>
+     */
+    private function sinkFramesOfType(array $sink, string $type): array
+    {
+        $frames = [];
+        foreach ($sink as $raw) {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded) && ($decoded['type'] ?? null) === $type) {
+                $frames[] = $decoded;
+            }
+        }
+        return $frames;
+    }
+
+    /**
+     * The first decoded frame of $type in $sink, or null when absent.
+     *
+     * @param list<string> $sink
+     * @return array<string, mixed>|null
+     */
+    private function firstSinkFrameOfType(array $sink, string $type): ?array
+    {
+        return $this->sinkFramesOfType($sink, $type)[0] ?? null;
     }
 
     private function grantToken(string $token, string $userId, string $serverId): void

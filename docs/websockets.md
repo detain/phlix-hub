@@ -210,25 +210,54 @@ Client → hub:
 
 | `type` | Meaning |
 | --- | --- |
-| `group_join` | Join a room. Answered with `room_state`; other members get `client_joined`. |
-| `group_leave` | Leave the current room. Other members get `client_left`. |
-| `playback_play` | Broadcast "play" to the room. |
-| `playback_pause` | Broadcast "pause" to the room. |
-| `playback_seek` | Broadcast a seek position to the room. |
+| `group_join` | Join a room. Answered with `room_state`; the *other* members get `client_joined` — never the joiner. |
+| `group_leave` | Leave the current room. Remaining members get `client_left`. |
+| `playback_play` | Relay "play" to the room. |
+| `playback_pause` | Relay "pause" to the room. |
+| `playback_seek` | Relay a seek position to the room. |
 | `time_sync` | Clock probe. Answered with `time_sync_reply`. |
 
 Hub → client:
 
 | `type` | Meaning |
 | --- | --- |
-| `room_state` | The room's members and current playback state, sent on join. |
-| `client_joined` | Another client joined the room. |
+| `room_state` | Sent to the joiner: `clients` (member map) **and** `playback` — the room's last relayed playback anchor (`{type, from_client_id, timestamp, position?, media_id?}`) or `null` in a room that has never played. A client joining mid-session gets the position anchor from this frame alone. |
+| `client_joined` | Another client joined the room. Deliberately never echoed to the joiner — that sentence is the contract. |
 | `client_left` | Another client left the room (explicitly or by disconnect). |
-| `time_sync_reply` | Answer to a `time_sync` probe. |
+| `time_sync_reply` | Answer to a `time_sync` probe. `server_time` is stamped by the hub in **unix milliseconds**; `client_time` is echoed back untouched, whatever scale the client probed with. |
+
+**Timestamps: milliseconds, and only where the hub stamps them.** `playback_*`
+frames relayed by the hub carry `timestamp` in **unix milliseconds**, and
+`time_sync_reply.server_time` is likewise ms — this matches the syncplay
+transport clock contract (`phlix-syncplay/SPEC.md` §2: "timestamp … in
+milliseconds") so client NTP/position math never mixes a 1000x-scaled value.
+The one deliberate seconds-scaled field on this surface is the S93
+`pending_command.issued_at`, pinned to unix seconds by `openapi.yaml` **and**
+by its only consumer (`@phlix/ui` `src/api/hubRelay.ts`, S298); it is
+delivery metadata, not a transport timestamp.
+
+**Playback relays reach every member, sender included.** The `:8804` direction
+contract is "broadcast to every client in the same room", so a sender's own
+`playback_*` frame comes back with the hub's authoritative `from_client_id` and
+`timestamp` stamped on it — the echo is the hub's acceptance signal. (Contrast
+the media server's `:8097`, where play/pause/seek exclude the sender —
+separate transports, deliberately separate echo semantics.)
 
 **The catalog above is a floor, not a closed set.** `SyncPlayRelayWorker::onMessage()`
-relays any *unrecognised* `type` verbatim to the rest of the room, so clients can
-agree on extra message types without the hub knowing about them.
+relays any *unrecognised but properly-named* `type` verbatim to the rest of the
+room, so clients can agree on extra message types without the hub knowing about
+them. A frame that is not a JSON object, or carries a missing or non-string
+`type`, is **malformed and dropped** — never relayed. Junk must not become
+fan-out.
+
+**Every connection carries an inbound byte budget** (`TokenBucket`, sized per
+process from `SyncPlayRelayWorker::INBOUND_RATE_BYTES_PER_SECOND` /
+`INBOUND_BURST_BYTES` — 128 KiB/s sustained, 256 KiB burst by default). The
+bucket starts full, so a connection's first frames are never throttled; past
+the budget, inbound frames are dropped (logged once per connection, silently
+thereafter) rather than the socket being killed — an over-eager client
+recovers as the bucket refills. This bounds what one socket can force the
+worker — and, through the verbatim relay, its whole room — to process.
 
 Empty rooms are swept by a 60-second timer in `onWorkerStart()`.
 
@@ -324,7 +353,7 @@ connection. A per-surface connect limiter (30 per 60s, in-memory; the worker is
 | Authentication | `auth_request`, `auth_success`, `auth_failure` |
 | Session | `session_start`, `session_end`, `session_join`, `session_leave` |
 | Playback | `playback_start`, `playback_pause`, `playback_stop`, `playback_progress`, `playback_seek` |
-| SyncPlay | `syncplay_create_group`, `syncplay_join_group`, `syncplay_leave_group`, `syncplay_sync_state`, `syncplay_sync_request` |
+| SyncPlay | `syncplay_group_create`, `syncplay_group_join`, `syncplay_group_leave`, `syncplay_playback_sync`, `syncplay_time_ping` / `syncplay_time_pong` |
 | Dashboard | `subscribe_dashboard`, `dashboard_now_playing` |
 | Misc | `library_updated`, `notification`, `error`, `ping`, `pong` |
 
@@ -332,7 +361,14 @@ Public (pre-auth) events: `ping`, `pong`, `auth_request`, `connected`.
 Privileged events: the whole Session, Playback and Dashboard groups, plus every
 `syncplay_*` type.
 
+> The SyncPlay names above are the **canonical** wire strings of
+> `phlix-syncplay/SPEC.md` §3 — that spec is the single source of truth for
+> this vocabulary (see §1: underscore-prefixed `syncplay_group_create`, never
+> the pre-SPEC spellings `syncplay_create_group` / `syncplay_join_group` /
+> `syncplay_leave_group` / `syncplay_sync_state` / `syncplay_sync_request`,
+> which this document listed until audit L-8 corrected it).
+>
 > The two SyncPlay vocabularies are **different**. The hub's `:8804` relay speaks
 > `group_join` / `playback_play` / `time_sync`; the media server's `:8097` socket
-> speaks `syncplay_join_group` / `syncplay_sync_state`. They are separate
+> speaks `syncplay_group_join` / `syncplay_playback_sync`. They are separate
 > transports for the same feature, not two names for one protocol.
