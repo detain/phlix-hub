@@ -210,7 +210,17 @@ class FederationLibraryShareRepository
      * Handle an incoming share offer from a master peer.
      * Upserts by peer_id + library_id to avoid duplicates.
      *
-     * @param array<string, mixed> $offer Offer data with keys: id, peer_id, library_id, library_name, permission.
+     * M-5: the ON DUPLICATE clause must NOT reset `status` — re-pushing an
+     * offer the local admin already accepted/rejected used to flip it back to
+     * 'pending' on every reconnect, silently revoking (or un-deciding) local
+     * decisions. Re-pushes refresh descriptive metadata only; removals travel
+     * as explicit revocations via {@see deleteIncomingOffer()}.
+     *
+     * @param array<array-key, mixed> $offer Offer data with keys: id, peer_id,
+     *                                       library_id, library_name,
+     *                                       permission. Keys are parsed
+     *                                       defensively below — callers may
+     *                                       pass JSON-decoded maps directly.
      *
      * @return void
      */
@@ -243,8 +253,7 @@ class FederationLibraryShareRepository
              VALUES (:id, :peer_id, :library_id, :library_name, :permission)
              ON DUPLICATE KEY UPDATE
                library_name = VALUES(library_name),
-               permission = VALUES(permission),
-               status = VALUES(status)',
+               permission = VALUES(permission)',
             [
                 'id' => $id,
                 'peer_id' => $peerId,
@@ -252,6 +261,29 @@ class FederationLibraryShareRepository
                 'library_name' => $libraryName,
                 'permission' => $permission,
             ],
+        );
+    }
+
+    /**
+     * Drop an incoming offer whose source share was revoked on the remote hub.
+     *
+     * M-5 revocation path: the `status` enum has no 'revoked' member, and a
+     * revoked share is no longer an offer awaiting a decision — so the row is
+     * deleted rather than re-labelled.
+     *
+     * @param string $id Offer UUID (the share row id as minted by the origin hub).
+     *
+     * @return void
+     */
+    public function deleteIncomingOffer(string $id): void
+    {
+        if ($id === '') {
+            return;
+        }
+
+        $this->db->query(
+            'DELETE FROM federation_incoming_share_offers WHERE id = :id',
+            ['id' => $id],
         );
     }
 }

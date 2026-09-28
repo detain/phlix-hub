@@ -154,24 +154,6 @@ final class FederationRelayController
     }
 
     /**
-     * Handle a federation connection close.
-     *
-     * @param ConnectionInterface $connection WS connection that closed.
-     *
-     * @return void
-     */
-    public function onClose(ConnectionInterface $connection): void
-    {
-        $connId = spl_object_id($connection);
-        $hubId = self::$connHubIds[$connId] ?? null;
-
-        if ($hubId !== null) {
-            $this->connMgr->removeConnection($hubId);
-            unset(self::$connHubIds[$connId], self::$connDecoders[$connId]);
-        }
-    }
-
-    /**
      * Determine whether an incoming frame payload is a text (JSON) frame.
      *
      * Text frames are JSON strings (UTF-8) that start with '{' or '['.
@@ -210,15 +192,26 @@ final class FederationRelayController
     }
 
     /**
-     * Clear static connection maps.
+     * Handle a federation connection close.
      *
-     * Intended for test isolation only.
+     * M-6: removal goes through the frame handler's IDENTITY-checked path
+     * (the closing object must still be the registered one) so a late close
+     * from a superseded connection neither unmaps the new link nor marks the
+     * peer disconnected; live session rows are closed and the peer is marked
+     * 'disconnected' so DB state converges with the socket state.
+     *
+     * @param ConnectionInterface $connection WS connection that closed.
      *
      * @return void
      */
-    public static function reset(): void
+    public function onClose(ConnectionInterface $connection): void
     {
-        self::$connHubIds = [];
-        self::$connDecoders = [];
+        $connId = spl_object_id($connection);
+        $hubId = self::$connHubIds[$connId] ?? null;
+
+        if ($hubId !== null) {
+            $this->frameHandler->handleConnectionClosed($hubId, $connection);
+            unset(self::$connHubIds[$connId], self::$connDecoders[$connId]);
+        }
     }
 }

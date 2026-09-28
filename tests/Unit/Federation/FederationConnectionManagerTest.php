@@ -92,9 +92,31 @@ final class FederationConnectionManagerTest extends TestCase
         $conn = $this->createMockConnection(999);
 
         // Should not throw
-        $manager->removeConnectionByConn($conn);
+        self::assertFalse($manager->removeConnectionByConn($conn), 'unknown conn cannot evict state');
 
         self::assertSame(0, $manager->connectionCount());
+    }
+
+    /**
+     * M-6 race regression: the SUPERSEDED connection's late close must be a
+     * no-op — it may neither unmap the new registration nor report success
+     * (callers rely on that bool to decide whether to touch session/peer).
+     */
+    public function testRemoveConnectionByConnIgnoresSupersededConnection(): void
+    {
+        $manager = new FederationConnectionManager();
+        $stale = $this->createMockConnection(1);
+        $current = $this->createMockConnection(2);
+
+        $manager->addConnection('hub-1', $stale);
+        $manager->addConnection('hub-1', $current); // replaces (and closes) stale
+
+        self::assertFalse($manager->removeConnectionByConn($stale));
+        self::assertTrue($manager->isConnected('hub-1'));
+        self::assertSame($current, $manager->getConnection('hub-1'));
+
+        self::assertTrue($manager->removeConnectionByConn($current));
+        self::assertFalse($manager->isConnected('hub-1'));
     }
 
     public function testGetConnectionReturnsNullForNonExistent(): void
@@ -159,12 +181,12 @@ final class FederationConnectionManagerTest extends TestCase
         $conn1 = $this->createMockConnection(1);
         $conn2 = $this->createMockConnection(2);
 
-        $conn1->expects(self::once())->method('send')->with('data', 0);
-        $conn2->expects(self::once())->method('send')->with('data', 0);
+        $conn1->expects(self::once())->method('send')->with('data');
+        $conn2->expects(self::once())->method('send')->with('data');
 
         $manager->addConnection('hub-1', $conn1);
         $manager->addConnection('hub-2', $conn2);
-        $manager->broadcastToAll('data', 0);
+        $manager->broadcastToAll('data');
     }
 
     public function testSendToReturnsTrueAndSends(): void
@@ -172,10 +194,10 @@ final class FederationConnectionManagerTest extends TestCase
         $manager = new FederationConnectionManager();
         $conn = $this->createMockConnection(1);
 
-        $conn->expects(self::once())->method('send')->with('data', 0);
+        $conn->expects(self::once())->method('send')->with('data');
 
         $manager->addConnection('hub-1', $conn);
-        $result = $manager->sendTo('hub-1', 'data', 0);
+        $result = $manager->sendTo('hub-1', 'data');
 
         self::assertTrue($result);
     }
@@ -184,7 +206,7 @@ final class FederationConnectionManagerTest extends TestCase
     {
         $manager = new FederationConnectionManager();
 
-        $result = $manager->sendTo('non-existent', 'data', 0);
+        $result = $manager->sendTo('non-existent', 'data');
 
         self::assertFalse($result);
     }
@@ -197,7 +219,7 @@ final class FederationConnectionManagerTest extends TestCase
         $manager->addConnection('hub-1', $this->createMockConnection(1));
 
         // getConnection returns the mock, send should work
-        $result = $manager->sendTo('hub-1', 'data', 0);
+        $result = $manager->sendTo('hub-1', 'data');
         self::assertTrue($result);
     }
 

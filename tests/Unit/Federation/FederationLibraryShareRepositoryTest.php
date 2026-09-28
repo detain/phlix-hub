@@ -299,4 +299,62 @@ final class FederationLibraryShareRepositoryTest extends TestCase
             // permission missing - should default to 'read'
         ]);
     }
+
+    /**
+     * M-5 regression: re-pushing an offer on every reconnect must NOT reset
+     * an accepted/rejected decision back to 'pending'. The upsert used to
+     * carry `status = VALUES(status)` (which evaluated to the column default
+     * 'pending' since status is not in the INSERT column list).
+     */
+    public function testHandleIncomingOfferUpsertPreservesLocalDecision(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $capturedSql = '';
+        $db->expects(self::once())
+            ->method('query')
+            ->willReturnCallback(function (string $sql, array $params) use (&$capturedSql): array {
+                $capturedSql = $sql;
+                return [];
+            });
+
+        $repo = new FederationLibraryShareRepository($db);
+        $repo->handleIncomingOffer([
+            'id' => 'offer-dup',
+            'peer_id' => 'peer-offer',
+            'library_id' => 'lib-offer',
+            'library_name' => 'Library',
+            'permission' => 'read',
+        ]);
+
+        self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
+        self::assertStringNotContainsString('status = VALUES(status)', $capturedSql);
+        self::assertStringNotContainsString('status', $capturedSql);
+    }
+
+    public function testDeleteIncomingOfferRemovesRowById(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::stringContains('DELETE FROM federation_incoming_share_offers WHERE id = :id'),
+                ['id' => 'offer-gone'],
+            )
+            ->willReturn([]);
+
+        $repo = new FederationLibraryShareRepository($db);
+        $repo->deleteIncomingOffer('offer-gone');
+    }
+
+    public function testDeleteIncomingOfferIgnoresEmptyId(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $db->expects(self::never())->method('query');
+
+        $repo = new FederationLibraryShareRepository($db);
+        $repo->deleteIncomingOffer('');
+    }
 }

@@ -175,6 +175,100 @@ final class FederationHubRepositoryTest extends TestCase
         self::assertNull($peer);
     }
 
+    /**
+     * C-1(3) regression: getPeerById must resolve BOTH id spaces — the local
+     * row UUID and the peer-bound leaf_hub_id — so a leaf dialing
+     * /relay/federation/{own federation_hubs.id} passes the master's gate.
+     */
+    public function testGetPeerByIdMatchesEitherIdSpace(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $expectedPeer = ['id' => 'peer-1', 'leaf_hub_id' => 'leaf-own-hub-id'];
+
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::logicalAnd(
+                    self::stringContains('WHERE id = :id'),
+                    self::stringContains('OR leaf_hub_id = :id'),
+                ),
+                ['id' => 'leaf-own-hub-id'],
+            )
+            ->willReturn([$expectedPeer]);
+
+        $repo = new FederationHubRepository($db);
+
+        self::assertSame($expectedPeer, $repo->getPeerById('leaf-own-hub-id'));
+    }
+
+    /**
+     * C-1(3): binding a peer to the hub-identity it reports for itself.
+     */
+    public function testSetPeerLeafHubIdUpdatesTheRow(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::stringContains('SET leaf_hub_id = :leaf_hub_id WHERE id = :id'),
+                ['leaf_hub_id' => 'leaf-own-hub-id', 'id' => 'peer-1'],
+            )
+            ->willReturn([]);
+
+        $repo = new FederationHubRepository($db);
+        $repo->setPeerLeafHubId('peer-1', 'leaf-own-hub-id');
+    }
+
+    /**
+     * C-1(1) regression: the dial loop iterates ELIGIBLE peers (everything
+     * but 'suspended'), not 'connected' ones — 'connected' is written only
+     * after a HELLO-ACK over an already-dialed link, so a pending fresh peer
+     * could never bootstrap and a disconnected peer never came back.
+     */
+    public function testGetDialablePeersExcludesOnlySuspended(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $peers = [
+            ['id' => 'peer-1', 'status' => 'pending'],
+            ['id' => 'peer-2', 'status' => 'disconnected'],
+            ['id' => 'peer-3', 'status' => 'connected'],
+        ];
+
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::stringContains("WHERE status <> :suspended"),
+                ['suspended' => 'suspended'],
+            )
+            ->willReturn($peers);
+
+        $repo = new FederationHubRepository($db);
+
+        self::assertSame($peers, $repo->getDialablePeers());
+    }
+
+    /**
+     * C-1(3): createPeer accepts an optional pre-bound remote hub identity
+     * so first-contact dials already resolve at the master's gate.
+     */
+    public function testCreatePeerPersistsOptionalLeafHubId(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::stringContains('INSERT INTO federation_peers (id, name, url, public_key, leaf_hub_id)'),
+                self::callback(static fn (array $p): bool => $p['leaf_hub_id'] === 'prebound-hub-id'
+                    && $p['id'] === 'peer-new'),
+            )
+            ->willReturn([]);
+
+        $repo = new FederationHubRepository($db);
+        $repo->createPeer('peer-new', 'New', 'https://new.example.com', 'pk', 'prebound-hub-id');
+    }
+
     public function testGetPeerByUrlReturnsPeerWhenFound(): void
     {
         $db = $this->createMock(Connection::class);

@@ -27,18 +27,34 @@ use Workerman\Timer;
  * Manages the persistent WebSocket connection from a leaf hub to the master hub.
  *
  * On leaf hubs this class:
- *   1. Connects to master hub's WS endpoint at `wss://master-url/relay/federation/{leaf_hub_id}`
+ *   1. Connects to master hub's WS endpoint at
+ *      `{scheme}://{master-host}[:{port}]/relay/federation/{leaf_hub_id}` —
+ *      scheme and port come from the configured peer URL (M-8).
  *   2. Sends HUB_HELLO JSON frame on connect
- *   3. Handles HUB_HELLO_ACK response (validates master key, stores session)
+ *   3. Handles HUB_HELLO_ACK (stores session; cross-checks the reported
+ *      `master_hub_id` against the master peer's bound identity when one is
+ *      known, binding it on first use). NOTE: there is NO cryptographic
+ *      master-key validation of the ack in this build — first contact is
+ *      trusted-on-use; signature enforcement is owned by a later step.
  *   4. Sends HUB_HEARTBEAT binary frame every 15 seconds
- *   5. Handles incoming LIBRARY_SHARE_UPDATE, ADMIN_DELEGATION, HUB_DISCONNECTED frames
- *   6. Auto-reconnects with exponential backoff on disconnect
+ *   5. Handles incoming LIBRARY_SHARE_UPDATE (DATA), ADMIN_DELEGATION,
+ *      HUB_DISCONNECTED frames
+ *   6. Auto-reconnects with exponential backoff on disconnect — never after
+ *      a deliberate disconnectFromMaster() (M-7)
  *   7. Pushes local library share changes to master when connected
  *
  * @package Phlix\Hub\Federation
  */
 class FederationPeerManager
 {
+    /**
+     * Seconds to wait for HELLO_ACK after TCP connect before declaring the
+     * link a zombie and dropping it so the reconnect path re-runs the
+     * handshake (M-6 — previously isConnected() was true forever while the
+     * master silently ignored a half-registered leaf).
+     */
+    private const int HELLO_ACK_TIMEOUT_SECONDS = 10;
+
     /**
      * Leaf-side connection to master hub (null when disconnected).
      *
@@ -59,6 +75,16 @@ class FederationPeerManager
      * @var bool
      */
     private bool $reconnectScheduled = false;
+
+    /**
+     * True between a deliberate disconnectFromMaster() and the next explicit
+     * connectToMaster(). scheduleReconnect() refuses to arm while set — the
+     * close it performs fires its own onClose, which used to resurrect the
+     * link the operator just dropped (M-7).
+     *
+     * @var bool
+     */
+    private bool $intentionalDisconnect = false;
 
     /**
      * Frame decoder for incoming binary frames.
@@ -89,6 +115,32 @@ class FederationPeerManager
     private ?string $sessionId = null;
 
     /**
+     * Active reconnect timer ID (Workerman) — deleted on deliberate
+     * disconnect instead of being orphaned until it fires (M-7).
+     *
+     * @var int|null
+     */
+    private ?int $reconnectTimerId = null;
+
+    /**
+     * Active HELLO_ACK timeout timer ID (Workerman).
+     *
+     * @var int|null
+     */
+    private ?int $ackTimeoutTimerId = null;
+
+    /**
+     * Local federation_peers row id of the master peer being dialed
+     * (captured at dial time). Sessions, heartbeats and incoming offers are
+     * addressed through this id — never re-derived from liveness status,
+     * which is exactly what silently dropped leaf-side session bookkeeping
+     * before (C-1(1)/H-2).
+     *
+     * @var string
+     */
+    private string $masterPeerId = '';
+
+    /**
      * @param FederationHubRepository            $hubRepo       Hub + peer repository.
      * @param FederationSessionManager           $sessions      Federation session manager.
      * @param FederationLibraryShareRepository $libraryShares Library shares repository.
@@ -111,7 +163,8 @@ class FederationPeerManager
      *
      * Only operates when this hub is configured as a leaf hub with an
      * active relay-enabled peer (the master). Idempotent — if already
-     * connected this is a no-op.
+     * connected this is a no-op. An explicit call re-arms auto-reconnect
+     * after a deliberate disconnect.
      *
      * @return void
      */
@@ -131,39 +184,104 @@ class FederationPeerManager
             return;
         }
 
-        $peers = $this->hubRepo->getConnectedPeers();
+        // Explicit dial intent re-enables the auto-reconnect loop.
+        $this->intentionalDisconnect = false;
+
+        // C-1(1): dial ELIGIBLE peers (pending/connected/disconnected), not
+        // 'connected' ones — status 'connected' only ever appears AFTER a
+        // successful HELLO-ACK, so filtering on it could never bootstrap or
+        // recover a link.
+        $peers = $this->hubRepo->getDialablePeers();
         if ($peers === []) {
             return;
         }
 
-        // Get the first connected peer — assumes it is the master hub
+        if (count($peers) > 1) {
+            // M-8 fail-safe posture: the leaf protocol supports exactly one
+            // master. Multiple non-suspended peers is an operator ambiguity;
+            // the first (by name) is dialed, loudly.
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: multiple dialable peers, dialing first as master',
+                ['peer_count' => count($peers), 'selected' => $peers[0]['id'] ?? null],
+            );
+        }
+
         /** @var array<string, mixed> $masterPeer */
         $masterPeer = $peers[0];
-        $masterUrl = is_string($masterPeer['url'] ?? null) ? (string) $masterPeer['url'] : '';
+        /** @var string $masterPeerId */
+        $masterPeerId = is_string($masterPeer['id'] ?? null) ? $masterPeer['id'] : '';
+        /** @var string $masterUrl */
+        $masterUrl = is_string($masterPeer['url'] ?? null) ? $masterPeer['url'] : '';
 
-        if ($masterUrl === '') {
+        if ($masterPeerId === '' || $masterUrl === '') {
             return;
         }
 
-        // Build the WSS URL: wss://master-host/relay/federation/{this_hub_id}
         /** @var string $leafHubId */
         $leafHubId = is_string($hubConfig['id'] ?? null) ? $hubConfig['id'] : '';
-        $parsedHost = parse_url($masterUrl, PHP_URL_HOST);
-        /** @var string $masterHost */
-        $masterHost = is_string($parsedHost) ? $parsedHost : $masterUrl;
-        $wsUrl = 'wss://' . $masterHost . '/relay/federation/' . urlencode($leafHubId);
+        if ($leafHubId === '') {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'FederationPeerManager: refusing to dial — this hub has no configured id',
+            );
+            return;
+        }
 
-        $this->establishConnection($wsUrl, $hubConfig);
+        $this->masterPeerId = $masterPeerId;
+        $this->establishConnection($this->buildMasterWsUrl($masterUrl, $leafHubId), $hubConfig);
+    }
+
+    /**
+     * Build the master dial URL from the configured peer URL (M-8).
+     *
+     * Honors the configured scheme (http → ws, anything else → wss) and the
+     * configured port; the old code hard-coded 'wss://' + bare host, so a
+     * peer URL like `https://master.example:8443` silently dialed the wrong
+     * endpoint.
+     *
+     * @param string $masterUrl Configured peer URL (e.g. https://host:port).
+     * @param string $leafHubId This hub's own federation_hubs.id.
+     *
+     * @return string Fully-qualified WebSocket dial URL.
+     */
+    private function buildMasterWsUrl(string $masterUrl, string $leafHubId): string
+    {
+        $scheme = parse_url($masterUrl, PHP_URL_SCHEME);
+        $scheme = is_string($scheme) ? strtolower($scheme) : '';
+        $wsScheme = $scheme === 'http' ? 'ws' : 'wss';
+
+        $host = parse_url($masterUrl, PHP_URL_HOST);
+        $masterHost = is_string($host) && $host !== '' ? $host : $masterUrl;
+
+        $port = parse_url($masterUrl, PHP_URL_PORT);
+        $portSuffix = is_numeric($port) ? ':' . $port : '';
+
+        return $wsScheme . '://' . $masterHost . $portSuffix
+            . '/relay/federation/' . rawurlencode($leafHubId);
     }
 
     /**
      * Actively disconnect from the master hub and cancel timers.
      *
+     * Deliberate: the flag is set BEFORE the close so the connection's own
+     * onClose callback cannot schedule a reconnect, and any already-armed
+     * reconnect timer is deleted rather than left to fire (M-7).
+     *
      * @return void
      */
     public function disconnectFromMaster(): void
     {
+        $this->intentionalDisconnect = true;
         $this->cancelHeartbeatTimer();
+        $this->cancelAckTimeoutTimer();
+
+        if ($this->reconnectTimerId !== null) {
+            try {
+                Timer::del($this->reconnectTimerId);
+            } catch (Throwable) {
+                // Already fired or invalid.
+            }
+            $this->reconnectTimerId = null;
+        }
 
         if ($this->masterConnection !== null) {
             try {
@@ -175,6 +293,7 @@ class FederationPeerManager
         }
 
         $this->sessionId = null;
+        $this->masterPeerId = '';
         $this->reconnectScheduled = false;
         $this->reconnectDelaySeconds = 5;
     }
@@ -199,10 +318,28 @@ class FederationPeerManager
             return;
         }
 
+        // M-5: every offer carries `peer_id` = THIS hub's own
+        // federation_hubs.id (the originating identity). The master rewrites
+        // it to its local peer-row FK before persisting; a local row id from
+        // this database would be meaningless — and FK-dangerous — over there.
+        $hubConfig = $this->hubRepo->getHubConfig();
+        /** @var string $originHubId */
+        $originHubId = is_array($hubConfig) && is_string($hubConfig['id'] ?? null)
+            ? $hubConfig['id']
+            : '';
+        if ($originHubId === '') {
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: cannot push share without a configured hub id',
+                ['share_id' => $shareId],
+            );
+            return;
+        }
+
         $payload = json_encode([
             'shares' => [
                 [
                     'id' => $shareId,
+                    'peer_id' => $originHubId,
                     'library_id' => $libraryId,
                     'library_name' => $libraryName,
                     'permission' => $permission,
@@ -324,7 +461,59 @@ class FederationPeerManager
             ]);
             $this->masterConnection = null;
             $this->scheduleReconnect();
+            return;
         }
+
+        // M-6: TCP up ≠ handshake done. If no HELLO_ACK lands within the
+        // timeout the link is a zombie (isConnected() true, session absent,
+        // master already moved on) — drop it so onClose re-runs the handshake.
+        $connForTimeout = $this->masterConnection;
+        $selfRef = $this;
+        $this->ackTimeoutTimerId = Timer::add(
+            self::HELLO_ACK_TIMEOUT_SECONDS,
+            static function () use ($selfRef, $connForTimeout): void {
+                $selfRef->clearAckTimeoutTimerId();
+                $selfRef->failHelloTimeout($connForTimeout);
+            },
+            [],
+            false,
+        );
+    }
+
+    /**
+     * HELLO_ACK timeout fired: log and close the half-open connection.
+     *
+     * @param AsyncTcpConnection $conn Connection that failed to complete the handshake.
+     *
+     * @internal Visible for tests; not part of the public dial API.
+     */
+    public function failHelloTimeout(AsyncTcpConnection $conn): void
+    {
+        if ($this->sessionId !== null || $this->masterConnection !== $conn) {
+            return; // Handshake completed (or connection already replaced).
+        }
+
+        LoggerFactory::get(LogChannels::RELAY)->warning(
+            'FederationPeerManager: HELLO_ACK timeout — dropping half-open connection',
+            ['timeout_seconds' => self::HELLO_ACK_TIMEOUT_SECONDS],
+        );
+
+        try {
+            $conn->close();
+        } catch (Throwable) {
+            $this->masterConnection = null;
+            $this->scheduleReconnect();
+        }
+    }
+
+    /**
+     * Clear the ack-timeout timer id slot once the one-shot fires.
+     *
+     * @internal
+     */
+    public function clearAckTimeoutTimerId(): void
+    {
+        $this->ackTimeoutTimerId = null;
     }
 
     /**
@@ -408,45 +597,121 @@ class FederationPeerManager
     /**
      * Handle HUB_HELLO_ACK — session established, start heartbeat timer.
      *
+     * M-8: the ack's `master_hub_id` is cross-checked against the master
+     * peer's bound identity (`leaf_hub_id`, migration 046). A mismatch means
+     * we are talking to a hub that is not the one this peer row represents —
+     * the link is refused, never silently adopted. Unbound → bind on first
+     * use. There is no signature validation of the ack in this build (see
+     * class docblock); the bound id is an integrity anchor, not an auth key.
+     *
      * @param array<string, mixed> $msg Decoded JSON payload.
      *
      * @return void
      */
     private function handleHelloAck(array $msg): void
     {
+        $this->cancelAckTimeoutTimer();
+
         /** @var mixed $sessionIdRaw */
         $sessionIdRaw = $msg['session_id'] ?? null;
-        $this->sessionId = is_string($sessionIdRaw) ? $sessionIdRaw : null;
+        $sessionId = is_string($sessionIdRaw) ? $sessionIdRaw : null;
+
+        /** @var mixed $rawMasterHubId */
+        $rawMasterHubId = $msg['master_hub_id'] ?? null;
+        $ackHubId = is_string($rawMasterHubId) ? $rawMasterHubId : '';
 
         $hubConfig = $this->hubRepo->getHubConfig();
-        if ($hubConfig !== null) {
-            /** @var string $hubId */
-            $hubId = is_string($hubConfig['id'] ?? null) ? $hubConfig['id'] : '';
-            /** @var string $peerName */
-            $peerName = is_string($msg['master_hub_id'] ?? null) ? $msg['master_hub_id'] : 'master';
+        if ($hubConfig === null) {
+            return;
+        }
 
-            // Register session
-            if ($this->sessionId !== null) {
-                $peers = $this->hubRepo->getConnectedPeers();
-                if ($peers !== []) {
-                    /** @var array<string, mixed> $masterPeer */
-                    $masterPeer = $peers[0];
-                    /** @var string $peerId */
-                    $peerId = is_string($masterPeer['id'] ?? null) ? $masterPeer['id'] : '';
-                    if ($peerId !== '') {
-                        $this->sessions->registerSession($peerId);
-                    }
-                }
+        /** @var string $hubId */
+        $hubId = is_string($hubConfig['id'] ?? null) ? $hubConfig['id'] : '';
+
+        if ($this->masterPeerId === '') {
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: HELLO_ACK without a dialed peer — ignored',
+            );
+            $this->audit->logHubConnect($hubId, 'master', $ackHubId, false);
+            return;
+        }
+
+        $masterPeer = $this->hubRepo->getPeerById($this->masterPeerId);
+        if ($masterPeer === null) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'FederationPeerManager: HELLO_ACK for unknown peer — closing',
+                ['master_peer_id' => $this->masterPeerId],
+            );
+            $this->closeLinkAndReschedule();
+            return;
+        }
+
+        /** @var string $boundHubId */
+        $boundHubId = is_string($masterPeer['leaf_hub_id'] ?? null) ? $masterPeer['leaf_hub_id'] : '';
+        /** @var string $peerName */
+        $peerName = is_string($masterPeer['name'] ?? null) ? $masterPeer['name'] : 'master';
+
+        if ($boundHubId !== '' && $ackHubId !== '' && $boundHubId !== $ackHubId) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'FederationPeerManager: HELLO_ACK master_hub_id does not match bound identity — refusing link',
+                [
+                    'peer_id' => $this->masterPeerId,
+                    'bound_hub_id' => $boundHubId,
+                    'ack_hub_id' => $ackHubId,
+                ],
+            );
+            $this->audit->logHubConnect($hubId, $peerName, $ackHubId, false);
+            $this->closeLinkAndReschedule();
+            return;
+        }
+
+        if ($boundHubId === '' && $ackHubId !== '') {
+            $this->hubRepo->setPeerLeafHubId($this->masterPeerId, $ackHubId);
+        }
+
+        $this->sessionId = $sessionId;
+
+        // Register the LOCAL mirror session row under the dialed peer id.
+        // (The old code re-read getConnectedPeers() — empty for a 'pending'
+        // master row at first ack — so leaf-side session bookkeeping never
+        // existed at bootstrap. H-2/C-1(1).)
+        if ($sessionId !== null) {
+            $this->sessions->registerSession($this->masterPeerId);
+        }
+
+        $this->audit->logHubConnect($hubId, $peerName, $ackHubId, true);
+
+        // Reset backoff on successful handshake
+        $this->reconnectDelaySeconds = 5;
+        $this->reconnectScheduled = false;
+
+        // Start heartbeat timer
+        $this->startHeartbeatTimer();
+    }
+
+    /**
+     * Close the current leaf→master link and let the reconnect path retry
+     * (used by the ack identity refusal and the HELLO_ACK timeout).
+     *
+     * @return void
+     */
+    private function closeLinkAndReschedule(): void
+    {
+        $this->cancelAckTimeoutTimer();
+        $this->cancelHeartbeatTimer();
+
+        if ($this->masterConnection !== null) {
+            $conn = $this->masterConnection;
+            $this->masterConnection = null;
+            try {
+                $conn->close();
+            } catch (Throwable) {
+                // Already gone.
             }
-
-            $this->audit->logHubConnect($hubId, $peerName, '', true);
-
-            // Reset backoff on successful handshake
-            $this->reconnectDelaySeconds = 5;
-            $this->reconnectScheduled = false;
-
-            // Start heartbeat timer
-            $this->startHeartbeatTimer();
+            // onClose may or may not have fired depending on where the close
+            // happened in the lifecycle — schedule defensively; the
+            // reconnectScheduled flag keeps it single-shot.
+            $this->scheduleReconnect();
         }
     }
 
@@ -509,10 +774,12 @@ class FederationPeerManager
         $frame = $this->encoder->encode(RelayFrameType::HEARTBEAT, 0, '');
         $this->masterConnection->send($frame);
 
-        // Touch the session heartbeat in DB
-        if ($this->sessionId !== null) {
+        // H-2: the LOCAL mirror session row is addressed by peer id — the
+        // master's session UUID (kept in $this->sessionId for diagnostics)
+        // is a row id in the MASTER's database and matches nothing here.
+        if ($this->masterPeerId !== '') {
             try {
-                $this->sessions->touchHeartbeat($this->sessionId);
+                $this->sessions->touchHeartbeatByPeerId($this->masterPeerId);
             } catch (Throwable) {
                 // Session not found — ignore
             }
@@ -588,14 +855,20 @@ class FederationPeerManager
             return;
         }
 
-        // Handle library share updates (incoming offers from master)
+        // Handle library share updates (incoming offers from master).
         if (isset($data['shares']) && is_array($data['shares'])) {
             /** @var mixed $share */
             foreach ($data['shares'] as $share) {
-                if (is_array($share)) {
-                    /** @var array<string, mixed> $share */
-                    $this->libraryShares->handleIncomingOffer($share);
+                if (!is_array($share)) {
+                    continue;
                 }
+
+                $offer = $this->rebaseOfferIdentity($share);
+                if ($offer === null) {
+                    continue;
+                }
+
+                $this->libraryShares->handleIncomingOffer($offer);
             }
         }
 
@@ -611,7 +884,61 @@ class FederationPeerManager
     }
 
     /**
+     * Rewrite a master-pushed offer's wire `peer_id` to this database's
+     * local FK (the master peer row we dialed) — M-5.
+     *
+     * The wire value is the master's OWN hub id; it is used only to
+     * cross-check against the bound identity from HELLO_ACK. A mismatch is
+     * refused loudly instead of writing an offer against the wrong peer row.
+     *
+     * @param array<array-key, mixed> $offer Offer as received (JSON-decoded,
+     *                                      so keys are array-key until the
+     *                                      repository re-parses each field).
+     *
+     * @return array<array-key, mixed>|null Rebasing offer, or null to drop it.
+     */
+    private function rebaseOfferIdentity(array $offer): ?array
+    {
+        if ($this->masterPeerId === '') {
+            return null;
+        }
+
+        $masterPeer = $this->hubRepo->getPeerById($this->masterPeerId);
+        if ($masterPeer === null) {
+            return null;
+        }
+
+        /** @var string $boundHubId */
+        $boundHubId = is_string($masterPeer['leaf_hub_id'] ?? null) ? $masterPeer['leaf_hub_id'] : '';
+        /** @var mixed $wirePeerId */
+        $wirePeerId = $offer['peer_id'] ?? null;
+
+        if (is_string($wirePeerId) && $boundHubId !== '' && $wirePeerId !== $boundHubId) {
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: share offer skipped — peer_id mismatch',
+                [
+                    'peer_id' => $this->masterPeerId,
+                    'bound_hub_id' => $boundHubId,
+                    'wire_peer_id' => $wirePeerId,
+                ],
+            );
+            return null;
+        }
+
+        // Stamp the local FK before returning — never forward the wire value
+        // (M-5). The repository parses every field defensively, so the map
+        // keeps its array-key shape through this boundary.
+        $offer['peer_id'] = $this->masterPeerId;
+
+        return $offer;
+    }
+
+    /**
      * Handle an incoming library share revoked notification from master.
+     *
+     * M-5: the master's outgoing-share row id IS the offer id it pushed to
+     * us, so revocation drops the local offer row outright (the pending/
+     * accepted/rejected enum has no 'revoked' state to degrade into).
      *
      * @param string $shareId Share UUID that was revoked.
      *
@@ -619,11 +946,7 @@ class FederationPeerManager
      */
     private function handleLibraryShareRevoked(string $shareId): void
     {
-        // Mark the incoming offer as rejected if we have it
-        $offer = $this->libraryShares->getIncomingOfferById($shareId);
-        if ($offer !== null) {
-            // Already handled — the share was removed
-        }
+        $this->libraryShares->deleteIncomingOffer($shareId);
     }
 
     /**
@@ -697,9 +1020,12 @@ class FederationPeerManager
         $frame = $this->encoder->encode(RelayFrameType::HEARTBEAT, 0, '');
         $this->masterConnection->send($frame);
 
-        if ($this->sessionId !== null) {
+        // H-2: refresh the LOCAL mirror session row by peer id (see
+        // handleHeartbeat for why the master's session UUID matches nothing
+        // in this database).
+        if ($this->masterPeerId !== '') {
             try {
-                $this->sessions->touchHeartbeat($this->sessionId);
+                $this->sessions->touchHeartbeatByPeerId($this->masterPeerId);
             } catch (Throwable) {
                 // Ignore
             }
@@ -724,14 +1050,40 @@ class FederationPeerManager
     }
 
     /**
+     * Cancel the armed HELLO_ACK timeout (handshake completed or link gone).
+     *
+     * @return void
+     */
+    private function cancelAckTimeoutTimer(): void
+    {
+        if ($this->ackTimeoutTimerId !== null) {
+            try {
+                Timer::del($this->ackTimeoutTimerId);
+            } catch (Throwable) {
+                // One-shot already fired or invalid.
+            }
+            $this->ackTimeoutTimerId = null;
+        }
+    }
+
+    /**
      * Schedule a reconnection attempt with exponential backoff.
      *
      * Backoff sequence: 5, 10, 20, 40, max 60 seconds.
+     *
+     * M-7: a DELIBERATE disconnectFromMaster() closes the socket, which fires
+     * this path through onClose — while the intentional flag is set, no
+     * reconnect may be armed, and any already-armed one-shot is cancelled
+     * when it finally fires.
      *
      * @return void
      */
     private function scheduleReconnect(): void
     {
+        if ($this->intentionalDisconnect) {
+            return;
+        }
+
         // Prevent duplicate scheduling
         if ($this->reconnectScheduled) {
             return;
@@ -739,6 +1091,7 @@ class FederationPeerManager
 
         $this->reconnectScheduled = true;
         $this->cancelHeartbeatTimer();
+        $this->cancelAckTimeoutTimer();
 
         // Clean up existing connection
         if ($this->masterConnection !== null) {
@@ -755,13 +1108,21 @@ class FederationPeerManager
         $delay = $this->reconnectDelaySeconds;
         $self = $this;
 
-        Timer::add(
+        $this->reconnectTimerId = Timer::add(
             $delay,
             static function () use ($self, $delay): void {
+                $self->reconnectTimerId = null;
                 $self->reconnectScheduled = false;
                 $self->reconnectDelaySeconds = min($delay * 2, 60);
+
+                if ($self->intentionalDisconnect) {
+                    return; // Operator dropped the link while we were waiting.
+                }
+
                 $self->connectToMaster();
             },
+            [],
+            false,
         );
     }
 

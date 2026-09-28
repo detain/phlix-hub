@@ -68,6 +68,12 @@ final class FederationConnectionManager
     /**
      * Remove a leaf hub connection.
      *
+     * Prefer {@see removeConnectionByConn()} whenever the closing connection
+     * object is known: removing by hubId alone lets a SUPERSEDED connection's
+     * late onClose unmap the NEW connection registered under the same hubId
+     * (M-6 race). This variant stays for hub-keyed cleanup without an object
+     * at hand (e.g. explicit admin disconnect).
+     *
      * @param string $hubId Leaf hub UUID.
      *
      * @return void
@@ -84,20 +90,29 @@ final class FederationConnectionManager
     }
 
     /**
-     * Remove a connection by its Workerman connection instance.
+     * Remove a connection by its Workerman connection instance (identity-safe).
+     *
+     * The mapping is dropped only when the reverse map STILL points at this
+     * exact object, so a stale close event from a replaced connection is a
+     * no-op instead of evicting the live registration.
      *
      * @param ConnectionInterface $conn Workerman WS connection.
      *
-     * @return void
+     * @return bool True when this connection was the registered one and was
+     *              unmapped; false when it was already superseded or absent.
      */
-    public function removeConnectionByConn(ConnectionInterface $conn): void
+    public function removeConnectionByConn(ConnectionInterface $conn): bool
     {
         $connId = spl_object_id($conn);
         $hubId = $this->reverseMap[$connId] ?? null;
 
-        if ($hubId !== null) {
-            unset($this->connections[$hubId], $this->reverseMap[$connId]);
+        if ($hubId === null) {
+            return false;
         }
+
+        unset($this->connections[$hubId], $this->reverseMap[$connId]);
+
+        return true;
     }
 
     /**
@@ -127,12 +142,15 @@ final class FederationConnectionManager
     /**
      * Broadcast a frame to all connected leaf hubs.
      *
-     * @param string $data     Serialised frame bytes.
-     * @param int    $frameType Workerman WebSocket frame type constant.
+     * The bytes are a fully-encoded relay/text payload; the WS frame class is
+     * decided by Workerman from the payload type, so no frame-type parameter
+     * is needed (L-7: the old `int $frameType` was never read).
+     *
+     * @param string $data Serialised frame bytes.
      *
      * @return void
      */
-    public function broadcastToAll(string $data, int $frameType): void
+    public function broadcastToAll(string $data): void
     {
         foreach ($this->connections as $conn) {
             $conn->send($data);
@@ -142,13 +160,12 @@ final class FederationConnectionManager
     /**
      * Send a frame to a specific leaf hub.
      *
-     * @param string $hubId    Leaf hub UUID.
-     * @param string $data     Serialised frame bytes.
-     * @param int    $frameType Workerman WebSocket frame type constant.
+     * @param string $hubId Leaf hub UUID.
+     * @param string $data  Serialised frame bytes.
      *
      * @return bool True if the hub was connected and the frame was sent.
      */
-    public function sendTo(string $hubId, string $data, int $frameType): bool
+    public function sendTo(string $hubId, string $data): bool
     {
         $conn = $this->connections[$hubId] ?? null;
         if ($conn === null) {

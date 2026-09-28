@@ -37,6 +37,10 @@ class FederationSessionManager
     /**
      * Register a new federation session for a connected peer.
      *
+     * Any previously-live session row for the same peer is marked dead first:
+     * a re-hello after a crash must not leave the old row `alive = 1`
+     * forever (L-6 hygiene — orphan live sessions masked the real state).
+     *
      * @param string $peerId Peer UUID.
      *
      * @return string The session UUID.
@@ -44,6 +48,11 @@ class FederationSessionManager
     public function registerSession(string $peerId): string
     {
         $sessionId = $this->generateUuid();
+
+        $this->db->query(
+            'UPDATE federation_sessions SET alive = 0 WHERE peer_id = :peer_id AND alive = 1',
+            ['peer_id' => $peerId],
+        );
 
         $this->db->query(
             'INSERT INTO federation_sessions (id, peer_id)
@@ -88,6 +97,40 @@ class FederationSessionManager
              WHERE id = :id',
             ['id' => $sessionId],
         );
+    }
+
+    /**
+     * Touch the heartbeat of the peer's LIVE session, addressed by peer.
+     *
+     * H-2: callers on the frame paths only know the PEER identity (the WS
+     * route/HELLO carries hub UUIDs, never the session UUID minted by
+     * registerSession). The old code fed a hub UUID to touchHeartbeat(),
+     * whose WHERE clause is `id = :id`, so every heartbeat updated 0 rows
+     * and the reaper killed live links after 60s.
+     *
+     * @param string $peerId Peer UUID whose alive session should be refreshed.
+     *
+     * @return bool True when a live session row was refreshed.
+     */
+    public function touchHeartbeatByPeerId(string $peerId): bool
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT id FROM federation_sessions
+             WHERE peer_id = :peer_id AND alive = 1
+             ORDER BY established_at DESC
+             LIMIT 1',
+            ['peer_id' => $peerId],
+        );
+
+        $rawSessionId = $rows[0]['id'] ?? null;
+        if (!is_string($rawSessionId) || $rawSessionId === '') {
+            return false;
+        }
+
+        $this->touchHeartbeat($rawSessionId);
+
+        return true;
     }
 
     /**

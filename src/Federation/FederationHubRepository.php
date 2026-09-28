@@ -116,9 +116,24 @@ class FederationHubRepository
     }
 
     /**
-     * Get a peer by its UUID.
+     * Resolve a peer from EITHER federation id space (C-1(3) reconciliation).
      *
-     * @param string $id Peer UUID.
+     * Two UUIDs can name the same remote hub:
+     *   1. `id`         — the row's primary key, minted by the LOCAL hub when
+     *                     the peer was added via the admin API.
+     *   2. `leaf_hub_id` — the peer's OWN `federation_hubs.id`, learned from
+     *                     the peer itself (HUB_HELLO's `hub_id` on the master,
+     *                     HELLO_ACK's `master_hub_id` on the leaf; see
+     *                     {@see FederationFrameHandler::handleHubHello()} and
+     *                     {@see FederationPeerManager::handleHelloAck()}).
+     *
+     * A leaf dials `/relay/federation/{its own federation_hubs.id}`, and the
+     * WS-upgrade gate (FederationWorker) resolves that path segment here, so
+     * the lookup must accept both forms. Bootstrapping a brand-new peer still
+     * requires its `leaf_hub_id` to be recorded up-front — pass it to
+     * {@see createPeer()} or bind it later with {@see setPeerLeafHubId()}.
+     *
+     * @param string $id Peer row UUID or the peer's own hub UUID.
      *
      * @return array<string, mixed>|null Peer row or null.
      */
@@ -126,7 +141,7 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_peers WHERE id = :id LIMIT 1',
+            'SELECT * FROM federation_peers WHERE id = :id OR leaf_hub_id = :id LIMIT 1',
             ['id' => $id],
         );
 
@@ -205,25 +220,82 @@ class FederationHubRepository
     }
 
     /**
-     * Create a new peer record.
+     * Get all peers the leaf hub may dial — everything except an operator-
+     * suspended peer.
      *
-     * @param string $id        Peer UUID.
-     * @param string $name      Human-readable peer name.
-     * @param string $url       Public-facing peer URL.
-     * @param string $publicKey Base64-encoded Ed25519 public key.
+     * C-1(1): dialing only 'connected' peers was self-contradictory because
+     * 'connected' is written only AFTER a HELLO-ACK over an already-dialed
+     * connection, so a freshly created ('pending') peer was never dialed and
+     * a dropped ('disconnected') peer never came back. Liveness is tracked by
+     * the session layer; the dial loop iterates eligibility.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getDialablePeers(): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            "SELECT * FROM federation_peers WHERE status <> :suspended ORDER BY name",
+            ['suspended' => 'suspended'],
+        );
+
+        return $rows;
+    }
+
+    /**
+     * Bind a peer to the hub-identity UUID it reports for itself (migration
+     * 046). Called from HUB_HELLO handling on the master and from HELLO_ACK
+     * handling on the leaf; also the seam for a future pairing API to
+     * pre-bind an identity before the first dial.
+     *
+     * @param string $peerId    Local peer row UUID.
+     * @param string $leafHubId The remote hub's own federation_hubs.id.
      *
      * @return void
      */
-    public function createPeer(string $id, string $name, string $url, string $publicKey): void
+    public function setPeerLeafHubId(string $peerId, string $leafHubId): void
     {
         $this->db->query(
-            'INSERT INTO federation_peers (id, name, url, public_key)
-             VALUES (:id, :name, :url, :public_key)',
+            'UPDATE federation_peers SET leaf_hub_id = :leaf_hub_id WHERE id = :id',
+            [
+                'leaf_hub_id' => $leafHubId,
+                'id' => $peerId,
+            ],
+        );
+    }
+
+
+    /**
+     * Create a new peer record.
+     *
+     * @param string      $id        Peer UUID.
+     * @param string      $name      Human-readable peer name.
+     * @param string      $url       Public-facing peer URL.
+     * @param string      $publicKey Base64-encoded Ed25519 public key.
+     * @param string|null $leafHubId Optional pre-bound remote hub identity
+     *                               (the peer's own federation_hubs.id) so a
+     *                               leaf can already dial `/relay/federation/
+     *                               {own id}` on the very first connect —
+     *                               see {@see getPeerById()} (C-1(3)).
+     *
+     * @return void
+     */
+    public function createPeer(
+        string $id,
+        string $name,
+        string $url,
+        string $publicKey,
+        ?string $leafHubId = null,
+    ): void {
+        $this->db->query(
+            'INSERT INTO federation_peers (id, name, url, public_key, leaf_hub_id)
+             VALUES (:id, :name, :url, :public_key, :leaf_hub_id)',
             [
                 'id' => $id,
                 'name' => $name,
                 'url' => $url,
                 'public_key' => $publicKey,
+                'leaf_hub_id' => $leafHubId,
             ],
         );
     }

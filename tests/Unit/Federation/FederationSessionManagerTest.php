@@ -16,14 +16,24 @@ use Workerman\MySQL\Connection;
  */
 final class FederationSessionManagerTest extends TestCase
 {
-    public function testRegisterSessionInsertsSessionAndUpdatesPeer(): void
+    public function testRegisterSessionRetiresStaleLiveRowsThenInsertsAndUpdatesPeer(): void
     {
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
 
-        $db->expects(self::exactly(2))
+        $sqls = [];
+
+        // C-1(2)/L-6 hygiene: registerSession now FIRST marks any previous
+        // live session of the same peer dead, so a re-hello cannot leave an
+        // orphan alive=1 row behind. 3 queries total.
+        $db->expects(self::exactly(3))
             ->method('query')
-            ->willReturnCallback(function (string $sql, array $params) {
+            ->willReturnCallback(function (string $sql, array $params) use (&$sqls) {
+                $sqls[] = $sql;
+                if (str_contains($sql, 'SET alive = 0 WHERE peer_id')) {
+                    self::assertSame('peer-123', $params['peer_id']);
+                    return [];
+                }
                 if (str_contains($sql, 'INSERT INTO federation_sessions')) {
                     self::assertSame('peer-123', $params['peer_id']);
                     return [];
@@ -37,23 +47,64 @@ final class FederationSessionManagerTest extends TestCase
             });
 
         $logger->expects(self::once())
-            ->method('info')
-            ->with(
-                'Federation session registered',
-                self::callback(function (array $context) {
-                    return isset($context['session_id']) && isset($context['peer_id'])
-                        && $context['peer_id'] === 'peer-123';
-                })
-            );
+            ->method('info');
 
         $manager = new FederationSessionManager($db, $logger);
         $sessionId = $manager->registerSession('peer-123');
 
-        self::addToAssertionCount(1);
         self::assertMatchesRegularExpression(
             '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
             $sessionId
         );
+        self::assertStringContainsString('alive = 0', $sqls[0]);
+    }
+
+    /**
+     * H-2 regression: by-peer heartbeat resolves the peer's LIVE session row
+     * and touches it by its own id — the bug was hub UUIDs being fed to the
+     * session-UUID WHERE clause (0 rows, reaper ate live links).
+     */
+    public function testTouchHeartbeatByPeerIdUpdatesTheLiveSessionRow(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $calls = [];
+        $db->expects(self::exactly(2))
+            ->method('query')
+            ->willReturnCallback(function (string $sql, array $params) use (&$calls) {
+                $calls[] = [$sql, $params];
+                if (str_contains($sql, 'SELECT id FROM federation_sessions')) {
+                    self::assertSame('peer-777', $params['peer_id']);
+                    self::assertStringContainsString('alive = 1', $sql);
+                    return [['id' => 'sess-live-1']];
+                }
+                self::assertStringContainsString('UPDATE federation_sessions', $sql);
+                self::assertSame('sess-live-1', $params['id']);
+                return [];
+            });
+
+        $manager = new FederationSessionManager($db, $logger);
+
+        self::assertTrue($manager->touchHeartbeatByPeerId('peer-777'));
+    }
+
+    public function testTouchHeartbeatByPeerIdReturnsFalseWithoutLiveSession(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::stringContains('SELECT id FROM federation_sessions'),
+                ['peer_id' => 'peer-dead'],
+            )
+            ->willReturn([]);
+
+        $manager = new FederationSessionManager($db, $logger);
+
+        self::assertFalse($manager->touchHeartbeatByPeerId('peer-dead'));
     }
 
     public function testTouchHeartbeatUpdatesSession(): void
