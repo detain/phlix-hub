@@ -186,13 +186,26 @@ final class TunnelManager implements TunnelManagerInterface
     /**
      * Get the tunnel for a given server ID.
      *
+     * A CLOSED tunnel is never handed out: every caller of this method routes
+     * live traffic (client mounts, proxy forwards, cancels), and a tunnel whose
+     * server connection is gone can only stall or drop what it is given. The
+     * close path ({@see RelayWorker::onClose()}) already evicts closed tunnels;
+     * this guard makes the dead state unobservable even inside the tiny window
+     * between `Tunnel::close()` and the Workerman close callback.
+     *
      * @param string $serverId Server UUID.
      *
-     * @return Tunnel|null The tunnel if found and active, null otherwise.
+     * @return Tunnel|null The tunnel if found and not closed, null otherwise.
      */
     public function getTunnelForServer(string $serverId): ?Tunnel
     {
-        return $this->tunnels[$serverId] ?? null;
+        $tunnel = $this->tunnels[$serverId] ?? null;
+
+        if ($tunnel !== null && $tunnel->status === Tunnel::STATUS_CLOSED) {
+            return null;
+        }
+
+        return $tunnel;
     }
 
     /**
@@ -419,6 +432,12 @@ final class TunnelManager implements TunnelManagerInterface
      * Used by heartbeat timer and idle reaper to iterate without modifying
      * the underlying array during iteration.
      *
+     * ⚠ This view is ACTIVE-ONLY by design, so it deliberately does NOT show
+     * CLOSED/dying tunnels — which is why dead-entry eviction must NOT depend
+     * on it (H-1). Eviction lives in {@see removeTunnel()} (close path, via
+     * {@see \Phlix\Hub\Relay\RelayWorker::onClose()}) and
+     * {@see pruneDeadTunnels()} (raw-map safety net).
+     *
      * @return Generator<string, Tunnel>
      */
     public function allTunnels(): Generator
@@ -462,12 +481,89 @@ final class TunnelManager implements TunnelManagerInterface
     /**
      * Remove a tunnel from the manager (called after cleanup).
      *
-     * @param string $serverId Server UUID.
+     * When a {@see Tunnel} instance is passed, removal is IDENTITY-GATED: the
+     * entry is dropped only while the map still holds THAT tunnel. This is what
+     * makes close-path eviction safe for reconnects — the old connection's
+     * deferred `onClose` (which Workerman fires after the promoted tunnel is
+     * already routing) can never evict the replacement that took its slot.
+     *
+     * The identity check covers BOTH maps: the routing map and the parked
+     * pre-validation pending map, so a dead tunnel can never linger in either
+     * (H-1: dead tunnels used to grow the resident relay worker forever —
+     * {@see allTunnels()} yields ACTIVE-only, so the reaper could not see the
+     * CLOSED ones). Eviction here is deliberately INDEPENDENT of status: a
+     * tunnel being removed by identity is already being torn down.
+     *
+     * @param string      $serverId Server UUID.
+     * @param Tunnel|null $tunnel   When non-null, only remove if the map entry
+     *                              IS this exact tunnel (identity, not equality).
      *
      * @return void
      */
-    public function removeTunnel(string $serverId): void
+    public function removeTunnel(string $serverId, ?Tunnel $tunnel = null): void
     {
-        unset($this->tunnels[$serverId]);
+        $removedRouting = false;
+        if (isset($this->tunnels[$serverId])
+            && ($tunnel === null || $this->tunnels[$serverId] === $tunnel)
+        ) {
+            unset($this->tunnels[$serverId]);
+            $removedRouting = true;
+        }
+
+        if ($tunnel !== null && ($this->pendingTunnels[$serverId] ?? null) === $tunnel) {
+            unset($this->pendingTunnels[$serverId]);
+            $this->logger->debug('Relay: pending tunnel evicted on close', [
+                'server_id' => $serverId,
+                'tunnel_id' => $tunnel->tunnelId,
+            ]);
+        }
+
+        if ($removedRouting) {
+            $this->logger->debug('Relay: tunnel evicted from routing map', [
+                'server_id' => $serverId,
+                'tunnel_id' => $tunnel?->tunnelId,
+            ]);
+        }
+    }
+
+    /**
+     * Sweep status-independent garbage from both tunnel maps (defence-in-depth
+     * for H-1).
+     *
+     * The close path ({@see RelayWorker::onClose()} → {@see removeTunnel()}) is
+     * the primary eviction; this periodic pass is the safety net that catches
+     * any CLOSED tunnel left in the routing or pending map by a path that never
+     * reached the WS close callback. Unlike {@see allTunnels()} (ACTIVE-only,
+     * by design, for the heartbeat/reaper scan), this sweep reads the raw maps
+     * so dead entries — which are exactly what the ACTIVE filter hides — become
+     * visible and removable.
+     *
+     * @return int Number of CLOSED tunnels dropped from either map.
+     */
+    public function pruneDeadTunnels(): int
+    {
+        $pruned = 0;
+
+        foreach ($this->tunnels as $serverId => $tunnel) {
+            if ($tunnel->status === Tunnel::STATUS_CLOSED) {
+                unset($this->tunnels[$serverId]);
+                $pruned++;
+            }
+        }
+
+        foreach ($this->pendingTunnels as $serverId => $tunnel) {
+            if ($tunnel->status === Tunnel::STATUS_CLOSED) {
+                unset($this->pendingTunnels[$serverId]);
+                $pruned++;
+            }
+        }
+
+        if ($pruned > 0) {
+            $this->logger->info('Relay: pruned dead tunnels missed by the close path', [
+                'pruned_count' => $pruned,
+            ]);
+        }
+
+        return $pruned;
     }
 }

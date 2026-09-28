@@ -214,6 +214,118 @@ final class ClientConnectionTest extends TestCase
         $decoded = $decoder->decode($sentData);
         $this->assertInstanceOf(RelayFrame::class, $decoded);
         $this->assertSame(RelayFrameType::ERROR, $decoded->type);
+
+        // L-3b: the payload must use the canonical FrameEncoder::error shape
+        // {code, message} — NOT the old ad-hoc {error} literal.
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($decoded->payload, true, 4, JSON_THROW_ON_ERROR);
+        $this->assertIsArray($payload);
+        $this->assertSame('invalid_frame_type', $payload['code'] ?? null);
+        $this->assertArrayNotHasKey('error', $payload);
+        $this->assertIsString($payload['message'] ?? null);
+    }
+
+    public function testOnMessageForwardsEveryFrameOfABatchedMessage(): void
+    {
+        // L-3 regression: a peer that packs MULTIPLE relay frames into one WS
+        // message must not stall — every complete frame is processed, not just
+        // the first.
+        $serverWs = $this->createMock(TcpConnection::class);
+        $sessionManager = $this->createMock(\Phlix\Hub\Hub\RelaySessionManager::class);
+        $codec = new FrameDecoder();
+
+        $sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $serverWs,
+            $sessionManager,
+            $codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = 'session-123';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $client = new ClientConnection(
+            $this->clientWs,
+            'server-123',
+            'client-456',
+            $this->logger,
+        );
+        $client->tunnel = $tunnel;
+
+        $forwarded = [];
+        $serverWs
+            ->expects($this->exactly(2))
+            ->method('send')
+            ->willReturnCallback(function (mixed $data) use (&$forwarded): bool {
+                $this->assertIsString($data);
+                $forwarded[] = $data;
+                return true;
+            });
+
+        $encoder = new FrameEncoder();
+        $batch = $encoder->encode(RelayFrameType::DATA, 1, 'first')
+            . $encoder->encode(RelayFrameType::DATA, 1, 'second');
+
+        $client->onMessage($batch, new FrameDecoder());
+
+        $this->assertCount(2, $forwarded, 'both batched DATA frames must be forwarded');
+        $this->assertSame('first', (new FrameDecoder())->decode($forwarded[0])?->payload);
+        $this->assertSame('second', (new FrameDecoder())->decode($forwarded[1])?->payload);
+    }
+
+    public function testOnMessageKeepsPartialTailBufferedAcrossBatchedMessages(): void
+    {
+        // L-3 regression: when a batched message ends mid-frame, the complete
+        // frames still flow and the partial tail stays buffered for the next
+        // message (which completes it).
+        $serverWs = $this->createMock(TcpConnection::class);
+        $sessionManager = $this->createMock(\Phlix\Hub\Hub\RelaySessionManager::class);
+        $codec = new FrameDecoder();
+
+        $sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel = new Tunnel(
+            'server-123',
+            $serverWs,
+            $sessionManager,
+            $codec,
+            $this->logger,
+        );
+        $tunnel->relaySessionId = 'session-123';
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $client = new ClientConnection(
+            $this->clientWs,
+            'server-123',
+            'client-456',
+            $this->logger,
+        );
+        $client->tunnel = $tunnel;
+
+        $forwarded = [];
+        $serverWs
+            ->method('send')
+            ->willReturnCallback(function (mixed $data) use (&$forwarded): bool {
+                $this->assertIsString($data);
+                $forwarded[] = $data;
+                return true;
+            });
+
+        $encoder = new FrameEncoder();
+        $complete = $encoder->encode(RelayFrameType::DATA, 1, 'one');
+        $tail = $encoder->encode(RelayFrameType::DATA, 1, 'two');
+
+        $decoder = new FrameDecoder();
+        // Message 1: one complete frame + the first 5 bytes of the next.
+        $client->onMessage($complete . substr($tail, 0, 5), $decoder);
+        $this->assertCount(1, $forwarded, 'the complete frame must flow immediately');
+
+        // Message 2: the remaining bytes finish the second frame.
+        $client->onMessage(substr($tail, 5), $decoder);
+        $this->assertCount(2, $forwarded, 'the completed tail frame must flow next');
+        $this->assertSame('two', (new FrameDecoder())->decode($forwarded[1])?->payload);
     }
 
     public function testOnMessageWithDataFrameWithoutTunnelDoesNothing(): void

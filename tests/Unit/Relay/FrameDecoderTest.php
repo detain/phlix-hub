@@ -321,4 +321,67 @@ class FrameDecoderTest extends TestCase
         // Oversized buffer is dropped rather than kept resident.
         $this->assertSame(0, $decoder->getBufferSize());
     }
+
+    public function testDecodeAllReturnsEveryCompleteFrameFromOneMessage(): void
+    {
+        // L-3 regression: the old one-frame-per-message behaviour silently left
+        // every frame after the first stuck in the buffer. decodeAll() must
+        // drain ALL complete frames.
+        $batch = $this->encodeFrame(RelayFrameType::DATA, 1, 'one')
+            . $this->encodeFrame(RelayFrameType::HEARTBEAT, 2, '')
+            . $this->encodeFrame(RelayFrameType::DATA, 3, 'three');
+
+        $frames = $this->decoder->decodeAll($batch);
+
+        $this->assertCount(3, $frames);
+        $this->assertSame(RelayFrameType::DATA, $frames[0]->type);
+        $this->assertSame('one', $frames[0]->payload);
+        $this->assertSame(RelayFrameType::HEARTBEAT, $frames[1]->type);
+        $this->assertSame(RelayFrameType::DATA, $frames[2]->type);
+        $this->assertSame('three', $frames[2]->payload);
+        $this->assertSame(0, $this->decoder->getBufferSize(), 'buffer fully drained');
+    }
+
+    public function testDecodeAllKeepsPartialTailBufferedForNextMessage(): void
+    {
+        $complete = $this->encodeFrame(RelayFrameType::DATA, 1, 'a');
+        $tail = $this->encodeFrame(RelayFrameType::DATA, 2, 'b');
+
+        $frames = $this->decoder->decodeAll($complete . substr($tail, 0, 5));
+        $this->assertCount(1, $frames);
+        $this->assertGreaterThan(0, $this->decoder->getBufferSize());
+
+        $rest = $this->decoder->decodeAll(substr($tail, 5));
+        $this->assertCount(1, $rest);
+        $this->assertSame('b', $rest[0]->payload);
+        $this->assertSame(0, $this->decoder->getBufferSize());
+    }
+
+    public function testDecodeAllThrowsWhenPeerBatchesBeyondTheFrameCap(): void
+    {
+        // L-3: a peer packing more complete frames into ONE message than
+        // MAX_FRAMES_PER_MESSAGE violates the encoder's one-frame-per-message
+        // invariant — fail loud through the same exception family the tunnel
+        // close paths already handle.
+        $emptyFrame = pack('N', 1) . chr(RelayFrameType::DATA->value) . pack('n', 0);
+        $batch = str_repeat($emptyFrame, FrameDecoder::MAX_FRAMES_PER_MESSAGE + 1);
+
+        $this->expectException(InvalidFrameTypeException::class);
+        $this->expectExceptionMessageMatches('/batched/i');
+
+        $this->decoder->decodeAll($batch);
+    }
+
+    public function testDecodeAllAllowsExactlyTheFrameCap(): void
+    {
+        // The cap is exclusive: exactly MAX_FRAMES_PER_MESSAGE complete frames
+        // (with nothing further buffered) must decode cleanly, not throw.
+        $emptyFrame = pack('N', 1) . chr(RelayFrameType::DATA->value) . pack('n', 0);
+        $batch = str_repeat($emptyFrame, FrameDecoder::MAX_FRAMES_PER_MESSAGE);
+
+        $frames = $this->decoder->decodeAll($batch);
+
+        $this->assertCount(FrameDecoder::MAX_FRAMES_PER_MESSAGE, $frames);
+        $this->assertSame(0, $this->decoder->getBufferSize());
+    }
 }

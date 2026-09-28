@@ -334,8 +334,9 @@ final class ClientRelayWorker
                 ]);
                 // WS≠HTTP: no HTTP 429 envelope after the upgrade hook — reject by
                 // closing with WS code 1013 (try again later). The 429 mapping
-                // (HB-4.6g) is HTTP-only. Mirror the rejectUnauthorized pattern.
-                $connection->close((string) self::CLOSE_TRY_AGAIN_LATER, true);
+                // (HB-4.6g) is HTTP-only. Real close frame via rejectUnauthorized's
+                // pattern (L-4) so the client observes the code.
+                WebSocketCloseFrame::reject($connection, self::CLOSE_TRY_AGAIN_LATER);
                 return;
             }
         }
@@ -674,16 +675,20 @@ final class ClientRelayWorker
     /**
      * Reject a connection with the application "unauthorized" close code.
      *
+     * L-4: goes through {@see WebSocketCloseFrame::reject()} so the peer
+     * actually observes WS code 4401. The old
+     * `$connection->close((string) 4401, true)` wrote the literal ASCII digits
+     * "4401" onto a socket still mid-HTTP-handshake (`onWebSocketConnect` runs
+     * before Workerman emits the `101`), which suppressed the upgrade and gave
+     * the client an unparseable response — never a real close code.
+     *
      * @param TcpConnection $connection Connection to close.
      *
      * @return void
      */
     private function rejectUnauthorized(TcpConnection $connection): void
     {
-        // The WS handshake has not completed yet at onWebSocketConnect time,
-        // so closing here aborts before upgrade. The 4401 code is recorded for
-        // observability / parity with the HTTP 401 contract.
-        $connection->close((string) self::CLOSE_UNAUTHORIZED, true);
+        WebSocketCloseFrame::reject($connection, self::CLOSE_UNAUTHORIZED);
     }
 
     /**

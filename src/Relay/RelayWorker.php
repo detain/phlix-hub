@@ -390,10 +390,10 @@ final class RelayWorker
                     ['remote_ip' => $ip, 'reset_at' => $state->resetAt],
                 );
                 // WS≠HTTP: there is no HTTP 429 envelope after the upgrade hook —
-                // reject by closing the connection with WS code 1013 (try again
-                // later). The 429 mapping (HB-4.6g) is HTTP-only. Mirror the
-                // ClientRelayWorker::rejectUnauthorized close pattern.
-                $connection->close((string) self::CLOSE_TRY_AGAIN_LATER, true);
+                // reject with a real WS close frame carrying code 1013 (try again
+                // later) so the peer observes the code (L-4). The 429 mapping
+                // (HB-4.6g) is HTTP-only.
+                WebSocketCloseFrame::reject($connection, self::CLOSE_TRY_AGAIN_LATER);
                 return;
             }
         }
@@ -556,6 +556,39 @@ final class RelayWorker
 
             $tunnel->onServerClose();
             unset(self::$connTunnels[$connId]);
+
+            // H-1: evict the dead tunnel from the manager's routing AND pending
+            // maps. Without this the CLOSED tunnel lingers forever — the idle
+            // reaper cannot see it (allTunnels() yields ACTIVE-only by design)
+            // and nothing else removes it, so the resident relay worker's maps
+            // grew unbounded with every disconnect. The identity check means a
+            // promoted replacement is never evicted by the old connection's
+            // deferred close landing after the swap.
+            $this->evictTunnel($tunnel);
+        }
+    }
+
+    /**
+     * Remove a (now dead) tunnel from the TunnelManager maps, by identity.
+     *
+     * Best-effort: a container hiccup must never break the WS close path, and
+     * the periodic {@see IdleReaper::tick()} prune pass is the safety net that
+     * catches anything this misses.
+     *
+     * @param Tunnel $tunnel The tunnel whose connection just closed.
+     *
+     * @return void
+     */
+    private function evictTunnel(Tunnel $tunnel): void
+    {
+        try {
+            $tunnelManager = $this->container->get(TunnelManagerInterface::class);
+            if ($tunnelManager instanceof TunnelManagerInterface) {
+                $tunnelManager->removeTunnel($tunnel->serverId, $tunnel);
+            }
+        } catch (Throwable) {
+            // Swallowed by design: eviction is pure in-memory cleanup, and the
+            // reaper's prune pass reclaims the entry on the next tick.
         }
     }
 

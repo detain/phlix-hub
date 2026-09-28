@@ -253,6 +253,11 @@ final class IdleReaper
      */
     public function tick(): int
     {
+        // H-1 safety net: drop any CLOSED tunnels the WS close-path eviction
+        // missed. The ACTIVE-only allTunnels() scan below can NEVER see them —
+        // that is exactly why they leaked — so the prune reads the raw maps.
+        $this->tunnelManager->pruneDeadTunnels();
+
         $reapedCount = 0;
 
         // Collect stale tunnels first to avoid concurrent modification

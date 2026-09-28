@@ -155,7 +155,10 @@ final class ClientConnection
         $this->lastFrameAt = time();
 
         try {
-            $frame = $decoder->decode($data);
+            // L-3: drain every complete frame batched into this WS message —
+            // a single decode() per message left residual frames stranded in
+            // the buffer until the next one arrived.
+            $frames = $decoder->decodeAll($data);
         } catch (InvalidFrameTypeException $e) {
             // Undecodable frame or a buffer-overflow attack from the client
             // (H-R7: a dribbling / oversized-length client can otherwise grow the
@@ -171,21 +174,18 @@ final class ClientConnection
             return;
         }
 
-        if ($frame === null) {
-            // Incomplete frame — continue buffering
-            return;
-        }
+        foreach ($frames as $frame) {
+            // Only TYPE_DATA frames are forwarded to the server
+            if ($frame->type !== RelayFrameType::DATA) {
+                $this->onNonDataFrame($frame);
+                continue;
+            }
 
-        // Only TYPE_DATA frames are forwarded to the server
-        if ($frame->type !== RelayFrameType::DATA) {
-            $this->onNonDataFrame($frame);
-            return;
-        }
-
-        // Forward DATA frames to the server via the tunnel, tagged with this
-        // client's channel id so the server routes them to the right local conn.
-        if ($this->tunnel !== null) {
-            $this->tunnel->sendClientData($this, $frame);
+            // Forward DATA frames to the server via the tunnel, tagged with this
+            // client's channel id so the server routes them to the right local conn.
+            if ($this->tunnel !== null) {
+                $this->tunnel->sendClientData($this, $frame);
+            }
         }
     }
 
@@ -209,11 +209,11 @@ final class ClientConnection
             'seq' => $frame->seq,
         ]);
 
-        // Send TYPE_ERROR back to the client
-        $errorPayload = json_encode(['error' => 'Unexpected frame type'], JSON_THROW_ON_ERROR);
-        $errorFrame = new RelayFrame(RelayFrameType::ERROR, 0, $errorPayload);
-        $encoder = new FrameEncoder();
-        $this->send($errorFrame, $encoder);
+        // Send TYPE_ERROR back to the client. L-3: use FrameEncoder::error so
+        // the payload carries the wire-standard {code,message} shape — the old
+        // ad-hoc {"error": msg} shape desynced any client parsing error frames
+        // uniformly across the relay protocol.
+        $this->sendRaw(FrameEncoder::error(0, 'invalid_frame_type', 'Unexpected frame type: ' . $frame->type->label()));
     }
 
     /**

@@ -228,7 +228,9 @@ final class RelayProxyBridge
      * response as phased channel messages (`head` → `body`* → `end`) instead of
      * reassembling and publishing one buffered blob. Each phase is delivered to
      * the given {@see RelayResponseSink} — {@see RelayResponseSink::head()} once,
-     * then {@see RelayResponseSink::body()} per fragment (base64-decoded here),
+     * then {@see RelayResponseSink::body()} per fragment (raw bytes — the response
+     * path carries NO base64: only the REQUEST direction uses `body_b64`, decoded
+     * once by the relay worker in {@see RelayProxyManager::onRequest()}),
      * then {@see RelayResponseSink::end()}.
      *
      * A non-phased reply is still handled: relay-worker error replies

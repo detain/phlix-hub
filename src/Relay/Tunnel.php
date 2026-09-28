@@ -369,7 +369,12 @@ final class Tunnel implements TunnelInterface
         }
 
         try {
-            $frame = $this->serverDecoder->decode($data);
+            // L-3: drain EVERY complete frame batched into this WS message.
+            // decode() yields at most one frame per call, so any residual frame
+            // sat in the buffer until the next message arrived — a silent stall
+            // that was safe only while the encoder happened to emit exactly one
+            // frame per message.
+            $frames = $this->serverDecoder->decodeAll($data);
         } catch (FrameBufferOverflowException $e) {
             // A dribbling / oversized-length server grew the decode buffer past
             // the 128 KB hard cap without completing a frame (H-R7). Left
@@ -403,12 +408,15 @@ final class Tunnel implements TunnelInterface
             return;
         }
 
-        if ($frame === null) {
-            // Incomplete frame — continue buffering
-            return;
-        }
+        foreach ($frames as $frame) {
+            if ($this->status === self::STATUS_CLOSED) {
+                // An earlier frame in this batch tore the tunnel down (invalid
+                // framing, overflow, server close) — drop the remainder.
+                return;
+            }
 
-        $this->handleBinaryFrame($frame);
+            $this->handleBinaryFrame($frame);
+        }
     }
 
     /**
@@ -871,7 +879,12 @@ final class Tunnel implements TunnelInterface
      */
     public function sendToServer(RelayFrame $frame): void
     {
-        if ($this->status !== self::STATUS_ACTIVE) {
+        // M-4: a CLOSING tunnel may legitimately be DRAINING (H-R6): its server
+        // connection is still open and completing in-flight traffic — forwarded
+        // client request bytes, CLIENT_DISCONNECTs for departing clients — is
+        // the whole purpose of the grace window. PENDING (never authorised) and
+        // CLOSED (connection gone) tunnels still refuse every send.
+        if ($this->status !== self::STATUS_ACTIVE && $this->status !== self::STATUS_CLOSING) {
             $this->logger->warning('Relay: attempt to send to inactive tunnel', [
                 'server_id' => $this->serverId,
                 'tunnel_id' => $this->tunnelId,
@@ -972,7 +985,11 @@ final class Tunnel implements TunnelInterface
      */
     public function sendToClient(int $channelId, RelayFrame $frame): void
     {
-        if ($this->status !== self::STATUS_ACTIVE) {
+        // M-4: a DRAINING (CLOSING) tunnel keeps delivering server→client bytes —
+        // finishing in-flight responses is the entire point of the reconnect
+        // drain (H-R6). Only PENDING (no clients can exist yet) and CLOSED
+        // (connections torn down) tunnels drop delivery.
+        if ($this->status !== self::STATUS_ACTIVE && $this->status !== self::STATUS_CLOSING) {
             return;
         }
 
@@ -1308,7 +1325,10 @@ final class Tunnel implements TunnelInterface
         // (cancelling its timers + tearing down connections). Do not re-arm
         // backpressure — a stale pauseRecv/timer on a discarded tunnel is
         // exactly what fix-2's episode-scoped timers exist to prevent.
-        if ($this->status !== self::STATUS_ACTIVE) {
+        // M-4: CLOSING (draining) tunnels DO keep flowing, so their congested
+        // clients still need the pause + safety timer or drain delivery stalls
+        // forever (close() resumes the server before tearing it down).
+        if ($this->status !== self::STATUS_ACTIVE && $this->status !== self::STATUS_CLOSING) {
             return;
         }
 
@@ -1459,7 +1479,9 @@ final class Tunnel implements TunnelInterface
         // (cancelling its timers + tearing down connections). Do not re-arm
         // backpressure — a stale pauseRecv/timer on a discarded tunnel is
         // exactly what fix-2's episode-scoped timers exist to prevent.
-        if ($this->status !== self::STATUS_ACTIVE) {
+        // M-4: draining (CLOSING) tunnels keep sending, so they keep the full
+        // backpressure machinery while their server connection is alive.
+        if ($this->status !== self::STATUS_ACTIVE && $this->status !== self::STATUS_CLOSING) {
             return;
         }
 
@@ -1599,7 +1621,11 @@ final class Tunnel implements TunnelInterface
      */
     public function sendClientData(ClientConnection $client, RelayFrame $frame): void
     {
-        if ($this->status !== self::STATUS_ACTIVE) {
+        // M-4: CLOSING (draining) tunnels still forward client→server bytes —
+        // the tunnel's server connection is deliberately kept open during the
+        // reconnect drain, so in-flight request bodies must keep flowing or the
+        // drain completes nothing.
+        if ($this->status !== self::STATUS_ACTIVE && $this->status !== self::STATUS_CLOSING) {
             return;
         }
 
@@ -1721,7 +1747,11 @@ final class Tunnel implements TunnelInterface
 
         // Send CLIENT_DISCONNECT notification to the server, tagged with the
         // client's channel id so the server closes the matching local conn.
-        if ($this->status === self::STATUS_ACTIVE && $channelId > 0) {
+        // M-4: a draining (CLOSING) tunnel still owns a live server connection,
+        // so tell the server about clients departing mid-drain as well.
+        if (($this->status === self::STATUS_ACTIVE || $this->status === self::STATUS_CLOSING)
+            && $channelId > 0
+        ) {
             $payload = json_encode([
                 'client_id' => $client->clientId,
             ], JSON_THROW_ON_ERROR);
@@ -1874,6 +1904,30 @@ final class Tunnel implements TunnelInterface
      * {@see failServer()} does not also kill the newly promoted tunnel's
      * requests. Any of this tunnel's own stragglers that have not completed by
      * grace end fall back to their per-request relay timeout.
+     *
+     * ## M-4: what a draining tunnel does and does not accept
+     *
+     * Client WRITES stay allowed for the whole drain (this is the point of it):
+     * {@see sendToClient()} and {@see sendClientData()} deliver on ACTIVE *and*
+     * CLOSING, and the backpressure machinery keeps working during the drain.
+     * Before the M-4 fix both early-returned on any non-ACTIVE status, so a
+     * draining tunnel silently dropped every frame — mounted clients stalled
+     * mid-response and were only ever "finished" by the grace-expiry
+     * DISCONNECTED, defeating H-R6 entirely.
+     *
+     * NEW mounts are still refused while draining: both
+     * {@see TunnelManager::acceptClient()} and {@see registerClient()} demand
+     * ACTIVE status, which is correct — a new client belongs on the promoted
+     * tunnel and must not be attached to one about to die.
+     *
+     * Mounted clients are deliberately NOT migrated onto the promoted tunnel at
+     * swap time. A channel is not just a hub-side id: it names a concrete
+     * server-side local connection on THIS tunnel's TCP stream. The promoted
+     * tunnel's paired server connection has no knowledge of those channels, and
+     * the in-flight byte sequences (partial responses, keep-alive pipelines)
+     * cannot be re-established there without breaking upstream state. Draining
+     * clients therefore finish on this tunnel, get DISCONNECTED at grace expiry,
+     * and reconnect onto the promoted tunnel — the documented H-R6 behaviour.
      *
      * @param float  $graceSeconds Grace window in seconds. `<= 0` displaces
      *                            immediately (drain disabled).

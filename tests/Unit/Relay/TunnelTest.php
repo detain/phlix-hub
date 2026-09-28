@@ -968,6 +968,101 @@ class TunnelTest extends TestCase
     }
 
     /**
+     * M-4 regression: while a tunnel DRAINS (H-R6 grace after a validated
+     * reconnect), server→client DATA must keep reaching mounted clients. The
+     * old `status !== ACTIVE` early-return silently dropped every drained
+     * frame — clients stalled mid-response until the grace-expiry DISCONNECTED.
+     */
+    public function testDrainingTunnelStillDeliversServerDataToMountedClients(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(true);
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        /** @var list<string> $delivered */
+        $delivered = [];
+        $clientWs->method('send')->willReturnCallback(
+            function (mixed $data) use (&$delivered): bool {
+                $this->assertIsString($data);
+                $delivered[] = $data;
+                return true;
+            }
+        );
+
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client); // channel assigned while ACTIVE
+
+        // Enter the drain window.
+        $tunnel->beginDrain(5.0, 'server_replaced');
+        $this->assertSame(Tunnel::STATUS_CLOSING, $tunnel->status);
+
+        // Server→client DATA arriving mid-drain must be DELIVERED, not dropped.
+        $tunnel->onServerMessage($this->codec->encode(RelayFrameType::DATA, $client->channelId, 'DRAIN-DELIVERED'));
+
+        $this->assertCount(1, $delivered, 'mid-drain DATA must reach the mounted client');
+        $decoded = $this->codec->decode($delivered[0]);
+        $this->assertInstanceOf(RelayFrame::class, $decoded);
+        $this->assertSame('DRAIN-DELIVERED', $decoded->payload);
+        $this->assertSame($client->channelId, $decoded->channelId());
+    }
+
+    /**
+     * M-4 regression: client→server request bytes must keep flowing while the
+     * incumbent drains — its server connection is deliberately still open, so
+     * refusing the forward (the old sendToServer/sendClientData guards) would
+     * stall in-flight uploads the drain exists to finish.
+     */
+    public function testDrainingTunnelStillForwardsClientDataToServer(): void
+    {
+        $tunnel = $this->activeTunnel();
+        /** @var list<string> $toServer */
+        $toServer = [];
+        $this->serverWs->method('send')->willReturnCallback(
+            function (mixed $data) use (&$toServer): bool {
+                $this->assertIsString($data);
+                $toServer[] = $data;
+                return true;
+            }
+        );
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $clientWs->method('send')->willReturn(true);
+
+        $client = new ClientConnection($clientWs, 'server-123', 'client-1', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        $tunnel->beginDrain(5.0, 'server_replaced');
+        $this->assertSame(Tunnel::STATUS_CLOSING, $tunnel->status);
+
+        $before = count($toServer); // CLIENT_CONNECT already sent while ACTIVE
+        $tunnel->sendClientData($client, new RelayFrame(RelayFrameType::DATA, 0, 'UPLOAD-CHUNK'));
+
+        $this->assertCount($before + 1, $toServer, 'mid-drain client bytes must reach the server');
+        $decoded = $this->codec->decode($toServer[$before]);
+        $this->assertInstanceOf(RelayFrame::class, $decoded);
+        $this->assertSame('UPLOAD-CHUNK', $decoded->payload);
+    }
+
+    /**
+     * M-4 boundary: draining tunnels DELIVER but never ACCEPT new mounts —
+     * a new client belongs on the promoted tunnel, not one about to die.
+     */
+    public function testDrainingTunnelRefusesNewClientRegistration(): void
+    {
+        $tunnel = $this->activeTunnel();
+        $this->serverWs->method('send')->willReturn(true);
+
+        $tunnel->beginDrain(5.0, 'server_replaced');
+
+        $clientWs = $this->createMock(TcpConnection::class);
+        $client = new ClientConnection($clientWs, 'server-123', 'client-late', $this->clientLogger, '');
+        $tunnel->registerClient($client);
+
+        $this->assertCount(0, $tunnel->clientConnections, 'no mounts accepted while draining');
+        $this->assertSame(0, $client->channelId, 'channel never assigned');
+    }
+
+    /**
      * A rejected tunnel that never activated (no relay session) must NOT fail the
      * server's in-flight requests when it closes — otherwise a bad HELLO would
      * 503 the legitimate incumbent's requests (HB-2.2 residual DoS via

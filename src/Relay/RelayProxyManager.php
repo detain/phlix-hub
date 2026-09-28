@@ -91,6 +91,21 @@ final class RelayProxyManager
     private const SWEEP_INTERVAL_SECONDS = 2.0;
 
     /**
+     * H-3: default ceiling (bytes) for a buffered (stream=false) response body.
+     *
+     * Buffered reassembly holds the WHOLE body in resident relay-worker memory
+     * (`$entry['body'] .= $chunk->body` on every HTTP_RESPONSE BODY chunk).
+     * Without a cap, a paired server streaming endless chunks on one request_id
+     * grows that string until the worker OOMs — the stream-path ceilings
+     * ({@see self::MAX_STREAM_DURATION_SECONDS}, the sweep's inactivity check)
+     * deliberately only guard `stream=true` entries, and the inactivity timeout
+     * is refreshed by every frame, so a steadily-dripping server never trips it.
+     * 50 MB comfortably covers legitimate API payloads while bounding the worst
+     * case per in-flight request; configurable via the constructor.
+     */
+    public const DEFAULT_MAX_BUFFERED_RESPONSE_BYTES = 50 * 1024 * 1024;
+
+    /**
      * @var int Next request id to allocate.
      */
     private int $nextRequestId = self::FIRST_REQUEST_ID;
@@ -161,6 +176,10 @@ final class RelayProxyManager
      *        (defaults to {@see ChannelClient::publish()}; overridable for tests).
      * @param MetricsCollector|null                               $metrics       Relay metrics collector
      *        (optional; no-op when null).
+     * @param int                                                 $maxBufferedResponseBytes
+     *        H-3: per-request ceiling for buffered (stream=false) response bodies
+     *        in bytes. Beyond it the request fails with 502 and the server is
+     *        cancelled. {@see self::DEFAULT_MAX_BUFFERED_RESPONSE_BYTES}.
      */
     public function __construct(
         private readonly TunnelManagerInterface $tunnelManager,
@@ -168,6 +187,7 @@ final class RelayProxyManager
         private readonly int $timeoutSeconds = RelayProxyProtocol::DEFAULT_TIMEOUT_SECONDS,
         ?callable $publisher = null,
         ?MetricsCollector $metrics = null,
+        private readonly int $maxBufferedResponseBytes = self::DEFAULT_MAX_BUFFERED_RESPONSE_BYTES,
     ) {
         $this->publisher = $publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
@@ -419,6 +439,14 @@ final class RelayProxyManager
                 return;
             }
             $this->pending[$requestId]['body'] .= $chunk->body;
+            // H-3: hard bound on buffered reassembly. Each appended chunk is an
+            // O(n) copy already; letting the string grow without limit lets a
+            // paired server OOM this resident worker. Fail the request — the
+            // pending entry disappears so any further chunks (including END)
+            // drop at the unknown-request guard above.
+            if (strlen($this->pending[$requestId]['body']) > $this->maxBufferedResponseBytes) {
+                $this->failBufferedOverflow($requestId);
+            }
             return;
         }
 
@@ -447,6 +475,52 @@ final class RelayProxyManager
             'status' => $status,
             'body_len' => strlen($entry['body']),
         ]);
+    }
+
+    /**
+     * H-3: fail a buffered request whose reassembled body exceeded the cap.
+     *
+     * Drops the pending entry (so later chunks of the same response are
+     * discarded), tells the server to stop transferring via a cancel frame when
+     * its tunnel is still ACTIVE, counts a 502 relay error, and answers the
+     * waiting HTTP worker with an error reply. Mirrors {@see cancelRequest()}'s
+     * teardown shape but reports the overflow to the client instead of treating
+     * it as a client-side abandonment.
+     *
+     * @param int $requestId The relay request id whose buffer overflows.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function failBufferedOverflow(int $requestId): void
+    {
+        $entry = $this->pending[$requestId];
+        unset($this->pending[$requestId], $this->clientToRelayRequestId[$entry['request_id']]);
+        $this->metrics?->setRelayPendingRequests(count($this->pending));
+        $this->metrics?->recordRelayError(502);
+
+        $tunnel = $this->tunnelManager->getTunnelForServer($entry['server_id']);
+        if ($tunnel !== null && $tunnel->getStatus() === Tunnel::STATUS_ACTIVE) {
+            $tunnel->sendCancel($requestId);
+        }
+
+        $this->logger->warning('Relay proxy: buffered response exceeded size cap, failing request', [
+            'request_id' => $requestId,
+            'server_id' => $entry['server_id'],
+            'limit_bytes' => $this->maxBufferedResponseBytes,
+        ]);
+
+        $this->reply(
+            $entry['reply_event'],
+            $entry['request_id'],
+            502,
+            [],
+            Response::errorBody(
+                'server.relay_unavailable',
+                'The relay refused to buffer a response larger than its configured limit.',
+            ),
+        );
     }
 
     /**

@@ -38,7 +38,7 @@ interface TunnelManagerInterface
      *
      * @param string $serverId Server UUID.
      *
-     * @return Tunnel|null The tunnel if found and active, null otherwise.
+     * @return Tunnel|null The tunnel if found and not closed, null otherwise.
      */
     public function getTunnelForServer(string $serverId): ?Tunnel;
 
@@ -102,11 +102,25 @@ interface TunnelManagerInterface
     /**
      * Remove a tunnel from the manager.
      *
-     * @param string $serverId Server UUID.
+     * When a tunnel instance is supplied, removal is identity-gated: the map
+     * entries (routing + pending) are dropped only while they still hold THAT
+     * tunnel, so a displaced tunnel's deferred close can never evict a
+     * promoted replacement (H-1).
+     *
+     * @param string      $serverId Server UUID.
+     * @param Tunnel|null $tunnel   Optional identity guard.
      *
      * @return void
      */
-    public function removeTunnel(string $serverId): void;
+    public function removeTunnel(string $serverId, ?Tunnel $tunnel = null): void;
+
+    /**
+     * Sweep CLOSED tunnels from all internal maps, independent of the
+     * ACTIVE-only {@see allTunnels()} view (H-1 safety net).
+     *
+     * @return int Number of dead tunnels removed.
+     */
+    public function pruneDeadTunnels(): int;
 
     /**
      * Promote a validated tunnel and displace any incumbent.

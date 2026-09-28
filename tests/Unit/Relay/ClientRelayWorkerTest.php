@@ -21,6 +21,7 @@ use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
+use Phlix\Hub\Relay\WebSocketCloseFrame;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
@@ -325,11 +326,9 @@ final class ClientRelayWorkerTest extends TestCase
         $request = $this->makeUpgradeRequest('/client/server-uuid-aaa');
 
         $connection = $this->createMock(TcpConnection::class);
-        $connection->expects($this->once())
-            ->method('close')
-            ->with((string) ClientRelayWorker::CLOSE_UNAUTHORIZED, true);
-
+        // L-4: real WS close frame with code 4401 after the 101 completes.
         $worker->onWebSocketConnect($connection, $request);
+        $this->assertRejectedWithCloseFrame($connection, ClientRelayWorker::CLOSE_UNAUTHORIZED);
     }
 
     public function testOnWebSocketConnectRejectsEnrollmentJwtOnly(): void
@@ -345,11 +344,9 @@ final class ClientRelayWorkerTest extends TestCase
         ]);
 
         $connection = $this->createMock(TcpConnection::class);
-        $connection->expects($this->once())
-            ->method('close')
-            ->with((string) ClientRelayWorker::CLOSE_UNAUTHORIZED, true);
-
+        // L-4: 4401 delivered as a real WS close frame post-101.
         $worker->onWebSocketConnect($connection, $request);
+        $this->assertRejectedWithCloseFrame($connection, ClientRelayWorker::CLOSE_UNAUTHORIZED);
     }
 
     public function testOnWebSocketConnectRejectsNonOwnedServer(): void
@@ -365,11 +362,9 @@ final class ClientRelayWorkerTest extends TestCase
         ]);
 
         $connection = $this->createMock(TcpConnection::class);
-        $connection->expects($this->once())
-            ->method('close')
-            ->with((string) ClientRelayWorker::CLOSE_UNAUTHORIZED, true);
-
+        // L-4: 4401 delivered as a real WS close frame post-101.
         $worker->onWebSocketConnect($connection, $request);
+        $this->assertRejectedWithCloseFrame($connection, ClientRelayWorker::CLOSE_UNAUTHORIZED);
     }
 
     public function testOnWebSocketConnectClosesWhenNoTunnelAvailable(): void
@@ -384,13 +379,12 @@ final class ClientRelayWorkerTest extends TestCase
             'Authorization' => 'Bearer ' . $token,
         ]);
 
-        // No tunnel registered for this server_id → controller closes the conn.
+        // No tunnel registered for this server_id → controller rejects with a
+        // real WS close frame (L-4): 1013 Try Again Later, not the old literal
+        // 'server_offline' text.
         $connection = $this->createMock(TcpConnection::class);
-        $connection->expects($this->once())
-            ->method('close')
-            ->with('server_offline');
-
         $worker->onWebSocketConnect($connection, $request);
+        $this->assertRejectedWithCloseFrame($connection, ClientMountController::CLOSE_TRY_AGAIN_LATER);
     }
 
     // ---- HB-4.6f: client-mount rate limit (WS close 1013) ---------------
@@ -434,14 +428,13 @@ final class ClientRelayWorkerTest extends TestCase
         }
         self::assertCount(2, $tunnel->clientConnections, 'the two under-limit mounts must bind');
 
-        // The 3rd mount from the same IP trips the limiter → WS close 1013, and
-        // NO tunnel bind occurs (the mount is rejected before binding).
+        // The 3rd mount from the same IP trips the limiter → real WS close frame
+        // 1013 (L-4), and NO tunnel bind occurs (the mount is rejected before
+        // binding).
         $limited = $this->createMock(TcpConnection::class);
         $limited->method('getRemoteIp')->willReturn('198.51.100.5');
-        $limited->expects($this->once())
-            ->method('close')
-            ->with((string) ClientRelayWorker::CLOSE_TRY_AGAIN_LATER, true);
         $worker->onWebSocketConnect($limited, $request);
+        $this->assertRejectedWithCloseFrame($limited, ClientRelayWorker::CLOSE_TRY_AGAIN_LATER);
         self::assertCount(2, $tunnel->clientConnections, 'a rate-limited mount must not bind');
 
         // After the window resets, a legit reconnect from the same IP passes.
@@ -479,12 +472,10 @@ final class ClientRelayWorkerTest extends TestCase
 
         $connection = $this->createMock(TcpConnection::class);
         $connection->method('getRemoteIp')->willReturn('198.51.100.9');
-        // 1013 (rate-limited), NOT 4401 (missing token) — proves ordering.
-        $connection->expects($this->once())
-            ->method('close')
-            ->with((string) ClientRelayWorker::CLOSE_TRY_AGAIN_LATER, true);
-
         $worker->onWebSocketConnect($connection, $request);
+        // 1013 (rate-limited), NOT 4401 (missing token) — proves ordering.
+        // L-4: asserted via the real close frame delivered post-handshake.
+        $this->assertRejectedWithCloseFrame($connection, ClientRelayWorker::CLOSE_TRY_AGAIN_LATER);
     }
 
     // ---- Trusted-proxy client-mount keying (mirrors SV-4.15) -------------
@@ -970,6 +961,31 @@ final class ClientRelayWorkerTest extends TestCase
     }
 
     // ---- Helpers ---------------------------------------------------------
+
+    /**
+     * L-4: assert a pre-upgrade rejection delivered a REAL WS close frame.
+     *
+     * The mocked TcpConnection has no completed handshake (`context` is null),
+     * so {@see WebSocketCloseFrame::reject()} must have armed
+     * `onWebSocketConnected` instead of closing early. Simulate Workerman
+     * finishing the `101` by invoking that callback, and assert the connection
+     * is then closed with the encoded close frame (raw).
+     */
+    private function assertRejectedWithCloseFrame(TcpConnection&MockObject $connection, int $code): void
+    {
+        $armed = $connection->onWebSocketConnected ?? null;
+        self::assertInstanceOf(
+            \Closure::class,
+            $armed,
+            'pre-upgrade rejection must arm onWebSocketConnected for a real close frame',
+        );
+
+        $connection->expects($this->once())
+            ->method('close')
+            ->with(WebSocketCloseFrame::bytes($code), true);
+
+        $armed($connection);
+    }
 
     /**
      * Mark a plaintext token as ACTIVE and bound to (userId, serverId) in the

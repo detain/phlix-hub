@@ -495,6 +495,114 @@ final class RelayProxyManagerTest extends TestCase
     }
 
     /**
+     * H-3: a paired server must NOT be able to OOM the resident relay worker
+     * through a buffered (stream=false) response. Body reassembly is bounded by
+     * the injected `maxBufferedResponseBytes`; beyond it the request fails fast
+     * with a 502 carrying the registered `server.relay_unavailable` code, the
+     * pending entry is dropped, and an HTTP_CANCEL frame tells the server to
+     * stop transferring. A late END after the failure must not double-reply.
+     */
+    public function testBufferedResponseBeyondByteCapFails502CancelsAndClearsPending(): void
+    {
+        $sent = [];
+        $serverWs = $this->capturingServerWs($sent);
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+            null,
+            100,
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-cap',
+            'reply_event' => 'reply.cap',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/api/v1/large',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+        ]);
+
+        // Recover the relay request id the manager allocated (HTTP_REQUEST seq).
+        $reqFrame = (new FrameDecoder())->decode($sent[count($sent) - 1]);
+        $this->assertNotNull($reqFrame);
+        $requestId = $reqFrame->seq;
+
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, [], 120)),
+        ));
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody(str_repeat('A', 60)),
+        ));
+        $this->assertCount(0, $this->published, 'within the cap nothing is replied yet');
+
+        // 60 + 60 = 120 > 100-byte cap → overflow fires on THIS frame.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody(str_repeat('B', 60)),
+        ));
+
+        $this->assertCount(1, $this->published, 'overflow must publish exactly one failure reply');
+        $reply = $this->published[0];
+        $this->assertSame('reply.cap', $reply['event']);
+        $this->assertSame(502, $reply['data']['status']);
+        $this->assertSame('req-cap', $reply['data']['request_id']);
+        $body = $reply['data']['body'];
+        $this->assertIsString($body);
+        /** @var array<string, mixed> $decodedBody */
+        $decodedBody = json_decode($body, true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('server.relay_unavailable', $decodedBody['code'] ?? null);
+
+        // Both lookup maps are fully cleared — nothing resident survives.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pending = $pendingProp->getValue($manager);
+        $this->assertIsArray($pending);
+        $this->assertSame([], $pending);
+        $clientToRelayProp = new ReflectionProperty(RelayProxyManager::class, 'clientToRelayRequestId');
+        $clientMap = $clientToRelayProp->getValue($manager);
+        $this->assertIsArray($clientMap);
+        $this->assertArrayNotHasKey('req-cap', $clientMap);
+
+        // An HTTP_CANCEL frame for the failed request reached the server so the
+        // origin stops transferring bytes into a dead entry. (The captured send
+        // list also holds the HELLO_ACK JSON text from the tunnel handshake —
+        // undecodable as a binary frame, so skip anything that will not parse.)
+        $cancelSeen = false;
+        foreach ($sent as $wire) {
+            try {
+                $frame = (new FrameDecoder())->decode($wire);
+            } catch (\Phlix\Hub\Relay\InvalidFrameTypeException) {
+                continue;
+            }
+            if ($frame !== null && $frame->type === RelayFrameType::HTTP_CANCEL && $frame->seq === $requestId) {
+                $cancelSeen = true;
+            }
+        }
+        $this->assertTrue($cancelSeen, 'overflow must cancel the request on the tunnel');
+
+        // The origin still sends its END — it must be dropped (unknown request),
+        // never turned into a second reply for the same request id.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ));
+        $this->assertCount(1, $this->published, 'no double-reply after the overflow failure');
+    }
+
+    /**
      * HB-0.3 anti-stall (buffered HEAD): the paired server's `withFile()` HEAD
      * route emits, over the tunnel, exactly a head frame (carrying
      * Content-Length) followed by a zero-body END — a body frame is NEVER sent.

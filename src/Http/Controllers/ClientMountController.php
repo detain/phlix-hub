@@ -19,6 +19,7 @@ use Phlix\Hub\Http\Response;
 use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Relay\FrameDecoder;
+use Phlix\Hub\Relay\WebSocketCloseFrame;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
@@ -39,6 +40,18 @@ use function spl_object_id;
  */
 final class ClientMountController
 {
+    /**
+     * RFC 6455 §7.4.1 — "Unexpected Condition": server aborted (mount errors,
+     * unknown connection state). L-4: delivered as a real WS close frame.
+     */
+    public const CLOSE_INTERNAL_ERROR = 1011;
+
+    /**
+     * RFC 6455 §7.4.1 — "Try Again Later": no live server tunnel right now;
+     * the client should retry. Mirrors ClientRelayWorker::CLOSE_TRY_AGAIN_LATER.
+     */
+    public const CLOSE_TRY_AGAIN_LATER = 1013;
+
     /**
      * Map of connection ID => ClientConnection for active client connections.
      *
@@ -172,7 +185,8 @@ final class ClientMountController
         try {
             $tunnelManager = $this->container->get(TunnelManagerInterface::class);
             if (!$tunnelManager instanceof TunnelManagerInterface) {
-                $connection->close('internal_error');
+                // L-4: real close frame, 1011 (unexpected server condition).
+                WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL_ERROR);
                 return;
             }
 
@@ -192,13 +206,14 @@ final class ClientMountController
 
             if ($client === null) {
                 // No active server tunnel for this server_id — reject.
-                // RFC 6455 close: 1011 (server error) is the closest match for
-                // "upstream not available"; the client should retry later.
+                // L-4: 1013 (Try Again Later) is the exact RFC 6455 code for
+                // "upstream not available, retry" — sent as a real close frame
+                // so the client's close event carries it.
                 $logger->info('Relay: client WS closed, no active server tunnel', [
                     'server_id' => $serverId,
                     'client_id' => $clientId,
                 ]);
-                $connection->close('server_offline');
+                WebSocketCloseFrame::reject($connection, self::CLOSE_TRY_AGAIN_LATER);
                 return;
             }
 
@@ -222,7 +237,8 @@ final class ClientMountController
                 'server_id' => $serverId,
                 'error' => $e->getMessage(),
             ]);
-            $connection->close('internal_error');
+            // L-4: real close frame with 1011 (unexpected condition).
+            WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL_ERROR);
         }
     }
 
@@ -242,7 +258,9 @@ final class ClientMountController
         $decoder = self::$connDecoders[$connId] ?? null;
 
         if ($client === null || $decoder === null) {
-            $connection->close('unknown_connection');
+            // L-4: post-handshake path — real 1011 close frame (the bookkeeping
+            // for this connection vanished; nothing sensible left to serve).
+            WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL_ERROR);
             return;
         }
 

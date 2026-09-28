@@ -603,4 +603,105 @@ class TunnelManagerTest extends TestCase
 
         $this->assertFalse($manager->hasTunnel('server-abc'));
     }
+
+    public function testRemoveTunnelWithIdentityGuardKeepsReplacementTunnel(): void
+    {
+        // H-1: a displaced tunnel's deferred close must not evict the tunnel
+        // that was promoted into its routing slot while the old one drained.
+        $manager = new TunnelManager($this->sessionManager, $this->codec, $this->logger);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel = $manager->acceptServer('server-abc', $this->createMock(TcpConnection::class));
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        $impostor = $manager->acceptServer('server-other', $this->createMock(TcpConnection::class));
+
+        // Wrong identity for 'server-abc' → routing entry untouched.
+        $manager->removeTunnel('server-abc', $impostor);
+        $this->assertSame($tunnel, $manager->getTunnelForServer('server-abc'));
+
+        // Matching identity → removed.
+        $manager->removeTunnel('server-abc', $tunnel);
+        $this->assertNull($manager->getTunnelForServer('server-abc'));
+    }
+
+    public function testRemoveTunnelWithIdentityEvictsParkedPendingTunnel(): void
+    {
+        // H-1: parked pre-validation tunnels must be removable by identity —
+        // previously nothing ever evicted them until the next HELLO superseded
+        // them, so a disconnecting reconnect attempt leaked the parked tunnel.
+        $manager = new TunnelManager($this->sessionManager, $this->codec, $this->logger);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $incumbent = $manager->acceptServer('server-abc', $this->createMock(TcpConnection::class));
+        $incumbent->status = Tunnel::STATUS_ACTIVE;
+
+        $parked = $manager->acceptServer('server-abc', $this->createMock(TcpConnection::class));
+        // Parked, not promoted: routing still serves the incumbent.
+        $this->assertSame($incumbent, $manager->getTunnelForServer('server-abc'));
+
+        // Evicting the parked tunnel by identity must not touch the routing map.
+        $manager->removeTunnel('server-abc', $parked);
+        $this->assertSame($incumbent, $manager->getTunnelForServer('server-abc'));
+
+        // And the parking slot is genuinely gone: finalizing finds no pending
+        // tunnel to promote, so a later validation cannot displace the
+        // incumbent with the evicted tunnel.
+        $manager->finalizeServerConnection('server-abc');
+        $this->assertSame($incumbent, $manager->getTunnelForServer('server-abc'));
+    }
+
+    public function testGetTunnelForServerHidesClosedTunnels(): void
+    {
+        // H-1: a CLOSED tunnel sitting in the raw routing map (close-path race
+        // window) must never be handed to traffic-routing callers.
+        $manager = new TunnelManager($this->sessionManager, $this->codec, $this->logger);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $tunnel = $manager->acceptServer('server-abc', $serverWs);
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+
+        // Force CLOSED without going through closeTunnel() (which also unsets)
+        // to simulate the tiny window between Tunnel::close() and eviction.
+        $tunnel->status = Tunnel::STATUS_CLOSED;
+
+        $this->assertNull($manager->getTunnelForServer('server-abc'));
+    }
+
+    public function testPruneDeadTunnelsSweepsBothMapsAndKeepsLiveOnes(): void
+    {
+        // H-1 safety net: CLOSED entries in BOTH the routing and pending maps
+        // are swept; live entries (ACTIVE routing, PENDING parked) survive.
+        $manager = new TunnelManager($this->sessionManager, $this->codec, $this->logger);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $dead = $manager->acceptServer('server-dead', $this->createMock(TcpConnection::class));
+        $dead->status = Tunnel::STATUS_ACTIVE;
+        $dead->close('test'); // leaves the CLOSED tunnel in the raw routing map
+
+        $live = $manager->acceptServer('server-live', $this->createMock(TcpConnection::class));
+        $live->status = Tunnel::STATUS_ACTIVE;
+
+        // Parked incumbent setup, then kill the parked tunnel:
+        $parkingWs = $this->createMock(TcpConnection::class);
+        $manager->acceptServer('server-reconnect', $parkingWs);
+        $reconnectIncumbent = $manager->getTunnelForServer('server-reconnect');
+        self::assertInstanceOf(Tunnel::class, $reconnectIncumbent);
+        $reconnectIncumbent->status = Tunnel::STATUS_ACTIVE;
+        $parked = $manager->acceptServer('server-reconnect', $this->createMock(TcpConnection::class));
+        $parked->status = Tunnel::STATUS_CLOSED; // dead while still parked
+
+        $pruned = $manager->pruneDeadTunnels();
+
+        $this->assertSame(2, $pruned, 'one dead routing entry + one dead pending entry');
+        $this->assertSame($live, $manager->getTunnelForServer('server-live'));
+        $this->assertNull($manager->getTunnelForServer('server-dead'));
+
+        // The evicted parked tunnel can no longer be promoted; the live
+        // incumbent for that server survives.
+        $manager->finalizeServerConnection('server-reconnect');
+        $this->assertSame($reconnectIncumbent, $manager->getTunnelForServer('server-reconnect'));
+        $this->assertSame(Tunnel::STATUS_ACTIVE, $reconnectIncumbent->status);
+    }
 }

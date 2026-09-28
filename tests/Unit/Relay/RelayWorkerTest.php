@@ -17,10 +17,12 @@ use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
+use Phlix\Hub\Relay\WebSocketCloseFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Workerman\Connection\TcpConnection;
@@ -441,9 +443,58 @@ final class RelayWorkerTest extends TestCase
 
         $relay->onMessage($serverWs, $this->encodeServerHello('server-close'));
         self::assertSame(1, RelayWorker::getActiveConnectionCount());
+        self::assertNotNull(
+            $this->tunnelManager->getTunnelForServer('server-close'),
+            'precondition: tunnel registered while the connection is live',
+        );
 
         $relay->onClose($serverWs);
         self::assertSame(0, RelayWorker::getActiveConnectionCount());
+
+        // H-1: the close path must ALSO evict the dead tunnel from the manager
+        // registry — the ACTIVE-only reaper scan can never see it again.
+        self::assertNull(
+            $this->tunnelManager->getTunnelForServer('server-close'),
+            'dead tunnel must be evicted from the routing map on server close (H-1)',
+        );
+    }
+
+    public function testOnCloseOfDrainedIncumbentNeverEvictsPromotedReplacement(): void
+    {
+        // H-1 identity guard: reconnect promotes tunnel B into the routing map
+        // and drains incumbent A. A's deferred WS close must NOT remove B.
+        $relay = new RelayWorker($this->buildContainer(), 0);
+
+        $wsA = $this->createMock(TcpConnection::class);
+        $wsA->method('send')->willReturn(true);
+        $relay->onMessage($wsA, $this->encodeServerHello('server-swap'));
+        $tunnelA = $this->tunnelManager->getTunnelForServer('server-swap');
+        self::assertInstanceOf(Tunnel::class, $tunnelA);
+
+        // Second HELLO on a NEW connection: parked pending, validated (no JWT
+        // service in tests = bypass), promoted by finalizeServerConnection;
+        // incumbent A moves to CLOSING drain.
+        $wsB = $this->createMock(TcpConnection::class);
+        $wsB->method('send')->willReturn(true);
+        $relay->onMessage($wsB, $this->encodeServerHello('server-swap'));
+        $tunnelB = $this->tunnelManager->getTunnelForServer('server-swap');
+        self::assertInstanceOf(Tunnel::class, $tunnelB);
+        self::assertNotSame($tunnelA, $tunnelB, 'precondition: replacement promoted into routing map');
+        self::assertSame(Tunnel::STATUS_CLOSING, $tunnelA->status, 'precondition: incumbent draining');
+
+        // The old connection's close event lands AFTER the swap (deferred).
+        $relay->onClose($wsA);
+
+        self::assertSame(
+            $tunnelB,
+            $this->tunnelManager->getTunnelForServer('server-swap'),
+            'identity-gated eviction must never drop the promoted replacement (H-1)',
+        );
+        self::assertSame(Tunnel::STATUS_ACTIVE, $tunnelB->getStatus());
+
+        // And when B's own connection closes, B IS evicted.
+        $relay->onClose($wsB);
+        self::assertNull($this->tunnelManager->getTunnelForServer('server-swap'));
     }
 
     // ---- Startup reconciliation (Step B7) ---------------------------------
@@ -532,13 +583,12 @@ final class RelayWorkerTest extends TestCase
         }
 
         // The 3rd connect from the same IP trips the limiter (count >= max) → the
-        // handshake is closed with WS code 1013 before any HELLO processing.
+        // handshake is rejected with a real WS close frame carrying code 1013
+        // (L-4) before any HELLO processing.
         $limited = $this->createMock(TcpConnection::class);
         $limited->method('getRemoteIp')->willReturn('192.0.2.10');
-        $limited->expects($this->once())
-            ->method('close')
-            ->with((string) RelayWorker::CLOSE_TRY_AGAIN_LATER, true);
         $relay->onWebSocketConnect($limited, $this->makeUpgradeRequest());
+        $this->assertRejectedWithCloseFrame($limited, RelayWorker::CLOSE_TRY_AGAIN_LATER);
 
         // After the window resets, a legit reconnect from the same IP passes.
         $now += 61;
@@ -565,10 +615,8 @@ final class RelayWorkerTest extends TestCase
 
         $a2 = $this->createMock(TcpConnection::class);
         $a2->method('getRemoteIp')->willReturn('192.0.2.1');
-        $a2->expects($this->once())
-            ->method('close')
-            ->with((string) RelayWorker::CLOSE_TRY_AGAIN_LATER, true);
         $relay->onWebSocketConnect($a2, $this->makeUpgradeRequest());
+        $this->assertRejectedWithCloseFrame($a2, RelayWorker::CLOSE_TRY_AGAIN_LATER);
 
         // IP B has its OWN bucket: its first connect passes even though IP A is
         // already tripped (a shared global counter would have closed this too).
@@ -579,6 +627,30 @@ final class RelayWorkerTest extends TestCase
     }
 
     // ---- Helpers ----------------------------------------------------------
+
+    /**
+     * L-4: assert a pre-upgrade rejection armed a real WS close-frame delivery.
+     *
+     * The mocked TcpConnection has no completed handshake (`context` null), so
+     * {@see WebSocketCloseFrame::reject()} arms `onWebSocketConnected`; invoke
+     * it to simulate Workerman finishing the `101` and assert the raw close
+     * frame carrying $code is then delivered via close().
+     */
+    private function assertRejectedWithCloseFrame(TcpConnection&MockObject $connection, int $code): void
+    {
+        $armed = $connection->onWebSocketConnected ?? null;
+        self::assertInstanceOf(
+            \Closure::class,
+            $armed,
+            'pre-upgrade rejection must arm onWebSocketConnected for a real close frame',
+        );
+
+        $connection->expects($this->once())
+            ->method('close')
+            ->with(WebSocketCloseFrame::bytes($code), true);
+
+        $armed($connection);
+    }
 
     /**
      * Build a minimal Workerman WS-upgrade Request. RelayWorker does not read the
