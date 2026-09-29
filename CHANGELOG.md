@@ -6,6 +6,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — Dependency lane: `detain/phlix-shared` pin advanced to `^0.49.0` (lock `v0.49.1`) — estate parity with phlix-server — 2026-09-29
+
+- **A 21-release span that lands purely additively — proven, not assumed.** The hub
+  pinned `^0.28.0` while phlix-server pinned `^0.49.0`; the constraint style mirrors
+  server's exactly and the lock source reference now matches server's `v0.49.1`
+  byte-for-byte (`653a755f…`, packagist dist both sides). Census against the pre-bump
+  vendor tree: ZERO files removed, 16 added (the `src/Subtitle/*` family, package-side
+  tests, `scripts/security-audit-check.php`), and inside `src/` the ONLY modified file
+  is `Version.php` (constant `0.27.0` → `0.49.1`) — consumed solely by `HealthController`
+  and its test, which reference `SharedVersion::VERSION` dynamically, so no version
+  string is pinned anywhere. Every other shared class hub imports is byte-identical
+  across the span. `composer update` moved exactly one package; the lock diff is
+  content-hash plus the `detain/phlix-shared` block.
+- **Settings schema: unchanged, so the SUPPLEMENTAL_META bridge stays load-bearing.**
+  `hub-settings.schema.json` is byte-identical (md5 `daf7919a…`) — the shared lane's
+  `auth.signups_disabled` addition (6395c97) has NOT shipped as of `v0.49.1`, so the key
+  is still rendered solely by `HubSettingsController::SUPPLEMENTAL_META`: exactly one
+  admin row, no duplicate, and the upstream-wins guard (`array_key_exists`) stands armed
+  for the release that does ship it. `manifest.schema.json` and
+  `server-settings.schema.json` updated in-package but have zero hub consumers
+  (no reference in src/, tests/, or scripts/).
+- **Gates, all green on the bumped tree:** phpunit `Unit,Integration` via the S458
+  parallel runner — 4663 tests, 41901 assertions, 0 skipped, with 117 real-database
+  Integration cases (S173 floor 31); full phpstan 0 errors; S299 phpcs corpus
+  521 files 0 errors/0 warnings; both psalm configs clean in the CI-faithful
+  `php:8.3`-based sim image (host PHP 8.3.6 sits below psalm's ≥8.3.16 platform floor —
+  environment, not code); `scripts/security-audit-check.php` audited all 97 locked
+  packages with no advisories; `composer validate --strict`; openapi.yaml +
+  redocly.yaml parse; ErrorCodes contract fixtures byte-clean.
+
 ### Security — H-4: federation peer auth is now a mutual Ed25519 proof-of-key handshake, and the wire spec matches the shipped envelope law — 2026-09-29
 
 - **Knowledge of the `hub_id` no longer buys a federation channel.** The upgrade gate stayed

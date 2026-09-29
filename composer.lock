@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "2f1ff2a7f0e922fbdb0576ccabe51dc3",
+    "content-hash": "28f660eb2853a6d3c44f0a3334b6d349",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -284,16 +284,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.28.0",
+            "version": "v0.49.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "735b3a9e9163dc839388478b5b22bd5a1e4be77d"
+                "reference": "653a755fc7b0888f43068ceddf3628f79fe2b427"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/735b3a9e9163dc839388478b5b22bd5a1e4be77d",
-                "reference": "735b3a9e9163dc839388478b5b22bd5a1e4be77d",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/653a755fc7b0888f43068ceddf3628f79fe2b427",
+                "reference": "653a755fc7b0888f43068ceddf3628f79fe2b427",
                 "shasum": ""
             },
             "require": {
@@ -327,9 +327,9 @@
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
             "support": {
                 "issues": "https://github.com/detain/phlix-shared/issues",
-                "source": "https://github.com/detain/phlix-shared/tree/v0.28.0"
+                "source": "https://github.com/detain/phlix-shared/tree/v0.49.1"
             },
-            "time": "2026-07-21T03:18:53+00:00"
+            "time": "2026-08-12T19:24:49+00:00"
         },
         {
             "name": "doctrine/inflector",
