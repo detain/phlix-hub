@@ -82,7 +82,7 @@ class AuthManager
      *                                                          registry consulted by
      *                                                          `refresh()` and written by
      *                                                          `logout()` (migration 047).
-     * @param callable|null                     $signupsDisabledResolver Optional LIVE
+     * @param (callable(): ?bool)|null          $signupsDisabledResolver Optional LIVE
      *                                                          gate consulted BEFORE the
      *                                                          boot-time `$signupsEnabled`
      *                                                          flag: returns `?bool` —

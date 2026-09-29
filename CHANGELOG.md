@@ -77,7 +77,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed — platform-edge audit bundle: opaque invite tokens, MySQL deregister delete, share reactivation, request-status filters, transport hardening — 2026-09-29
 
-- **Invite links are opaque bearer-less tokens** (`779fc7f`, F8/F9): creation used to hand out a
+- **Invite links are opaque bearer tokens** (`779fc7f`, F8/F9): creation used to hand out a
   full owner access JWT (1 h, non-revocable) inside the link — anyone holding the URL owned the
   account — while redeem hashed the JWT string that was never the stored hash, so create→redeem
   could never succeed. Tokens are single-use opaque secrets matched against the stored SHA-256,

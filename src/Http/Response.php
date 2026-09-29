@@ -354,7 +354,7 @@ class Response
         $present = [];
         $contentType = '';
         foreach ($headers as $name => $value) {
-            $lower = strtolower((string) $name);
+            $lower = strtolower($name);
             $present[$lower] = true;
             if ($lower === 'content-type') {
                 $contentType = strtolower($value);

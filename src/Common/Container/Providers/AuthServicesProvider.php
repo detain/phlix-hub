@@ -245,6 +245,7 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 $repository = new HubSettingsRepository(ConnectionPool::getConnection('mysql'));
             }
 
+            /** @var mixed $value */
             $value = $repository->getEffective('auth.signups_disabled');
 
             return is_bool($value) ? $value : null;
