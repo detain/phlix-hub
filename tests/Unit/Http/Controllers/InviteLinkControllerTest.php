@@ -82,6 +82,7 @@ final class InviteLinkControllerTest extends TestCase
             expiresAt: time() + 604800,
             createdAt: time(),
             url: 'https://hub.example.com/invite/token123',
+            token: 'token123',
         );
 
         $this->handler->method('createInviteLink')->willReturn($link);
@@ -101,6 +102,14 @@ final class InviteLinkControllerTest extends TestCase
         $response = $this->controller->createInviteLink($request);
 
         self::assertSame(201, $response->statusCode);
+
+        // Spec law: the create response carries the opaque token + its URL so the
+        // sharee can actually redeem (this was missing before the F9 fix).
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('token123', $decoded['token']);
+        self::assertSame('https://hub.example.com/invite/token123', $decoded['url']);
+        self::assertSame('link-1', $decoded['id']);
     }
 
     public function testCreateInviteLinkReturns403WhenNotServerOwner(): void

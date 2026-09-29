@@ -13,7 +13,6 @@ namespace Phlix\Hub\Hub;
 
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
-use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
@@ -28,14 +27,12 @@ class InviteLinkHandler
 
     /**
      * @param Connection            $db             MySQL connection.
-     * @param JwtHandler            $jwtHandler     JWT handler for signing/verifying invite tokens.
      * @param LibrarySharingHandler $sharingHandler Library sharing handler for redeeming links.
      * @param StructuredLogger     $logger         Application logger.
      * @param string               $hubBaseUrl     Base URL of the hub for building invite URLs.
      */
     public function __construct(
         private readonly Connection $db,
-        private readonly JwtHandler $jwtHandler,
         private readonly LibrarySharingHandler $sharingHandler,
         private readonly StructuredLogger $logger,
         string $hubBaseUrl = 'http://localhost:8800',
@@ -84,12 +81,6 @@ class InviteLinkHandler
         /** @var string $inviteId */
         $inviteId = $this->generateUuid();
 
-        $jwtToken = $this->jwtHandler->createAccessToken(
-            userId: $ownerId,
-            scope: ['invite_link'],
-            serverId: $serverId,
-        );
-
         $this->db->query(
             'INSERT INTO invite_links
                 (id, owner_user_id, server_id, library_id, permission, token_hash,
@@ -111,7 +102,10 @@ class InviteLinkHandler
             ],
         );
 
-        $inviteUrl = sprintf('%s/invite/%s', $this->hubBaseUrl, $jwtToken);
+        // The URL carries the OPAQUE token only. It is never a session-grade
+        // credential: holding the URL grants exactly one invite redemption,
+        // bounded by max_uses/expiry, and revocable via revokeInviteLink().
+        $inviteUrl = sprintf('%s/invite/%s', $this->hubBaseUrl, $token);
 
         $this->logger->info('Invite link created', [
             'invite_id' => $inviteId,
@@ -134,41 +128,35 @@ class InviteLinkHandler
             expiresAt: $expiresAt,
             createdAt: $now,
             url: $inviteUrl,
+            token: $token,
         );
     }
 
     /**
      * Redeem an invite link.
      *
-     * @param string $token          The invite link token (signed JWT).
+     * @param string $token          The opaque invite token from the invite URL.
      * @param string $redeemerUserId The user UUID redeeming the link.
      *
      * @return LibraryShare The created library share.
      *
-     * @throws InvalidArgumentException When token is invalid (400), expired (410),
+     * @throws InvalidArgumentException When token is malformed (400), expired (410),
      *                                   exhausted (410), or not found (404).
      */
     public function redeemInviteLink(string $token, string $redeemerUserId): LibraryShare
     {
-        $claims = $this->jwtHandler->validateAccessToken($token);
-        if ($claims === null) {
-            throw new InvalidArgumentException('Invalid or expired invite token', 400);
-        }
-
-        /** @var array<string, mixed> $claimsData */
-        $claimsData = $claims->toPayload();
-        /** @var mixed $inviteTokenRaw */
-        $inviteTokenRaw = $claimsData['token'] ?? null;
-
-        // The opaque invite token (whose sha256 is stored as `token_hash`) is the
-        // `token` claim when the JWT carries one; otherwise the redeem argument is
-        // itself the opaque token. Either way it must be a non-empty string.
-        $inviteToken = is_string($inviteTokenRaw) && $inviteTokenRaw !== '' ? $inviteTokenRaw : $token;
-        if ($inviteToken === '') {
+        // Parse, don't validate: the only redeemable shape is the 64-hex opaque
+        // token minted by createInviteLink(). Anything else (including legacy
+        // JWT URLs minted before this fix) can never match a stored hash, so
+        // reject it up front instead of hashing junk at the database.
+        if (preg_match('/\A[0-9a-f]{64}\z/', $token) !== 1) {
             throw new InvalidArgumentException('Malformed invite token', 400);
         }
 
-        $tokenHash = hash('sha256', $inviteToken);
+        // Hashed lookup: the row is keyed by sha256(token), so a stolen DB dump
+        // yields no usable tokens, and the comparison itself never touches the
+        // plaintext beyond this one-way derivation.
+        $tokenHash = hash('sha256', $token);
 
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
@@ -183,10 +171,8 @@ class InviteLinkHandler
         $row = $rows[0];
 
         // The invite_links row is the authoritative record for ownership, target
-        // and permission — token claims only mirror it. Read them from the row so
-        // the conditional UPDATE below and the resulting share both agree with the
-        // persisted invite (token claims may legitimately omit these; the row
-        // never does).
+        // and permission — read them from the row so the conditional UPDATE below
+        // and the resulting share both agree with the persisted invite.
         $ownerId = is_string($row['owner_user_id'] ?? null) ? (string) $row['owner_user_id'] : '';
         $serverId = is_string($row['server_id'] ?? null) ? (string) $row['server_id'] : '';
         $libraryId = is_string($row['library_id'] ?? null) ? (string) $row['library_id'] : null;
@@ -268,6 +254,10 @@ class InviteLinkHandler
     /**
      * List all invite links for an owner.
      *
+     * Listed links carry NO shareable URL: the plaintext token is shown once at
+     * creation and only its sha256 is stored, so a usable URL cannot (and by
+     * design never again will) be rebuilt from the row.
+     *
      * @param string $ownerId User UUID.
      *
      * @return array<int, InviteLink>
@@ -282,12 +272,7 @@ class InviteLinkHandler
 
         $links = [];
         foreach ($rows as $row) {
-            /** @var string $tokenHash */
-            $tokenHash = is_string($row['token_hash'] ?? null) ? $row['token_hash'] : '';
-            /** @var string $serverId */
-            $serverId = is_string($row['server_id'] ?? null) ? $row['server_id'] : '';
-            $url = $this->buildInviteUrlFromHash($tokenHash, $ownerId, $serverId);
-            $links[] = InviteLink::fromRow($row, $url);
+            $links[] = InviteLink::fromRow($row, null);
         }
         return $links;
     }
@@ -390,25 +375,6 @@ class InviteLinkHandler
         /** @var string $email */
         $email = is_string($rows[0]['email'] ?? null) ? $rows[0]['email'] : null;
         return $email;
-    }
-
-    /**
-     * Build invite URL from token hash (for listing).
-     */
-    private function buildInviteUrlFromHash(string $tokenHash, string $ownerId, string $serverId): string
-    {
-        $payload = [
-            'token_hash' => $tokenHash,
-            'owner_id' => $ownerId,
-            'server_id' => $serverId,
-        ];
-
-        $encoded = json_encode($payload);
-        if ($encoded === false) {
-            $encoded = '{}';
-        }
-
-        return sprintf('%s/invite/%s', $this->hubBaseUrl, base64_encode($encoded));
     }
 
     /**

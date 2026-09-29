@@ -30,7 +30,12 @@ final class InviteLink
      * @param int         $useCount       Current use count.
      * @param int|null    $expiresAt       UNIX timestamp when the link expires, or null.
      * @param int         $createdAt       UNIX timestamp when the link was created.
-     * @param string      $url             Full invite URL.
+     * @param string|null $url             Full invite URL, or null when the link is listed
+     *                                      after creation (the plaintext token is only ever
+     *                                      shown once, at creation).
+     * @param string|null $token           Opaque bearer token in plaintext — present ONLY on
+     *                                      the freshly-created link; the DB stores just its
+     *                                      sha256, so it is unrecoverable for listed links.
      */
     public function __construct(
         public readonly string $id,
@@ -42,7 +47,8 @@ final class InviteLink
         public readonly int $useCount,
         public readonly ?int $expiresAt,
         public readonly int $createdAt,
-        public readonly string $url,
+        public readonly ?string $url,
+        public readonly ?string $token = null,
     ) {
     }
 
@@ -88,7 +94,7 @@ final class InviteLink
      */
     public function toPayload(): array
     {
-        return [
+        $payload = [
             'id' => $this->id,
             'owner_user_id' => $this->ownerUserId,
             'server_id' => $this->serverId,
@@ -100,15 +106,24 @@ final class InviteLink
             'created_at' => $this->createdAt,
             'url' => $this->url,
         ];
+
+        // The plaintext token is only ever carried by a freshly-created link;
+        // listed links omit it entirely (the DB stores just its sha256).
+        if ($this->token !== null) {
+            $payload['token'] = $this->token;
+        }
+
+        return $payload;
     }
 
     /**
      * Create from a database row.
      *
      * @param array<string, mixed> $row
-     * @param string $url Full invite URL to include in the DTO.
+     * @param string|null $url Full invite URL, or null when it cannot be rebuilt from the
+     *                         row (the token hash is one-way — see InviteLinkHandler).
      */
-    public static function fromRow(array $row, string $url): self
+    public static function fromRow(array $row, ?string $url): self
     {
         $expiresAt = null;
         if (isset($row['expires_at']) && is_numeric($row['expires_at'])) {

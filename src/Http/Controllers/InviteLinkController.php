@@ -89,6 +89,9 @@ final class InviteLinkController
 
             return (new Response())->status(201)->json([
                 'url' => $link->url,
+                // Plaintext opaque token — returned EXACTLY ONCE, here. Listed
+                // links only ever expose its one-way hash, server-side.
+                'token' => $link->token,
                 'expires_at' => $link->expiresAt,
                 'id' => $link->id,
             ]);
@@ -232,6 +235,15 @@ final class InviteLinkController
                     'error' => 'Gone',
                     'code' => 'invite_expired_or_exhausted',
                     'message' => $e->getMessage(),
+                ]);
+            }
+            if ($code === 409) {
+                // Redeemer already holds an active share for this exact tuple
+                // (multi-use invite redeemed twice) — a conflict, not a 500.
+                return (new Response())->status(409)->json([
+                    'error' => 'Conflict',
+                    'code' => 'share_exists',
+                    'message' => 'This library is already shared with you',
                 ]);
             }
 

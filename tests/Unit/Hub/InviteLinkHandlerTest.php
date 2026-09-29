@@ -7,7 +7,6 @@ namespace Phlix\Hub\Tests\Unit\Hub;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
-use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
@@ -23,7 +22,6 @@ use Workerman\MySQL\Connection;
 final class InviteLinkHandlerTest extends TestCase
 {
     private Connection&MockObject $db;
-    private JwtHandler $jwtHandler;
     private LibrarySharingHandler&MockObject $sharingHandler;
     private StructuredLogger&MockObject $logger;
     private InviteLinkHandler $handler;
@@ -33,13 +31,11 @@ final class InviteLinkHandlerTest extends TestCase
         parent::setUp();
 
         $this->db = $this->createMock(Connection::class);
-        $this->jwtHandler = new JwtHandler('test-secret-key-that-is-at-least-32-bytes-long');
         $this->sharingHandler = $this->createMock(LibrarySharingHandler::class);
         $this->logger = $this->createMock(StructuredLogger::class);
 
         $this->handler = new InviteLinkHandler(
             $this->db,
-            $this->jwtHandler,
             $this->sharingHandler,
             $this->logger,
             'http://localhost:8800',
@@ -50,12 +46,16 @@ final class InviteLinkHandlerTest extends TestCase
     {
         $this->sharingHandler->method('isServerOwnedByUser')->willReturn(true);
 
-        $this->db->method('query')->willReturnCallback(function (string $sql) {
-            if (str_contains($sql, 'INSERT INTO invite_links')) {
+        /** @var list<array{sql: string, params: array<string, mixed>}> $recorded */
+        $recorded = [];
+        $this->db->method('query')->willReturnCallback(
+            static function (string $sql, $params = null) use (&$recorded): array {
+                /** @var array<string, mixed> $bind */
+                $bind = is_array($params) ? $params : [];
+                $recorded[] = ['sql' => $sql, 'params' => $bind];
                 return [];
-            }
-            return [];
-        });
+            },
+        );
 
         $link = $this->handler->createInviteLink(
             ownerId: 'owner-1',
@@ -72,7 +72,17 @@ final class InviteLinkHandlerTest extends TestCase
         self::assertSame('read', $link->permission);
         self::assertSame(1, $link->maxUses);
         self::assertSame(0, $link->useCount);
-        self::assertStringContainsString('http://localhost:8800/invite/', $link->url);
+
+        // F8/F9 wire law: the URL carries ONLY the opaque 64-hex token — never a
+        // signed JWT (a JWT URL would hand the holder the owner's session).
+        self::assertIsString($link->token);
+        self::assertSame(1, preg_match('/\A[0-9a-f]{64}\z/', (string) $link->token));
+        self::assertSame('http://localhost:8800/invite/' . $link->token, $link->url);
+
+        // Exactly one INSERT, persisting only the sha256 of the token.
+        self::assertCount(1, $recorded);
+        self::assertStringContainsString('INSERT INTO invite_links', $recorded[0]['sql']);
+        self::assertSame(hash('sha256', (string) $link->token), $recorded[0]['params']['token_hash']);
     }
 
     public function testCreateInviteLinkNotOwnerThrows(): void
@@ -155,6 +165,13 @@ final class InviteLinkHandlerTest extends TestCase
 
         self::assertCount(1, $result);
         self::assertSame('link-1', $result[0]->id);
+        // F9: listed links never rebuild a URL (no token-hash leakage into
+        // base64 pseudo-URLs); the plaintext token is creation-time only.
+        self::assertNull($result[0]->url);
+        self::assertNull($result[0]->token);
+        $payload = $result[0]->toPayload();
+        self::assertArrayNotHasKey('token', $payload);
+        self::assertStringNotContainsString('abc123', json_encode($payload) ?: '');
     }
 
     public function testRevokeInviteLinkSuccess(): void
@@ -225,13 +242,10 @@ final class InviteLinkHandlerTest extends TestCase
 
     /**
      * Build a handler wired to a {@see SingleUseInviteConnection} double and a
-     * real {@see JwtHandler} (so the JWT auth gate is exercised for real), with
-     * the sharing handler stubbed to echo a share.
+     * stubbed sharing handler that echoes a share.
      */
     private function handlerWith(SingleUseInviteConnection $db): InviteLinkHandler
     {
-        $jwt = new JwtHandler('test-secret-key-that-is-at-least-32-bytes-long');
-
         $sharing = $this->createMock(LibrarySharingHandler::class);
         $sharing->method('shareLibrary')->willReturnCallback(
             static fn (
@@ -255,18 +269,16 @@ final class InviteLinkHandlerTest extends TestCase
 
         return new InviteLinkHandler(
             $db,
-            $jwt,
             $sharing,
             $this->createMock(StructuredLogger::class),
             'http://localhost:8800',
         );
     }
 
-    /** A valid JWT the redeem auth-gate accepts. */
-    private function validInviteJwt(string $ownerId = 'owner-1'): string
+    /** A well-formed opaque invite token (64 lowercase hex chars). */
+    private function opaqueInviteToken(): string
     {
-        return (new JwtHandler('test-secret-key-that-is-at-least-32-bytes-long'))
-            ->createAccessToken($ownerId, ['invite_link'], 'server-1');
+        return bin2hex(random_bytes(32));
     }
 
     /**
@@ -279,7 +291,7 @@ final class InviteLinkHandlerTest extends TestCase
     {
         $db = new SingleUseInviteConnection(maxUses: 1, useCount: 0);
         $handler = $this->handlerWith($db);
-        $token = $this->validInviteJwt();
+        $token = $this->opaqueInviteToken();
 
         $successes = 0;
         $exhausted = 0;
@@ -312,7 +324,7 @@ final class InviteLinkHandlerTest extends TestCase
         $db = new SingleUseInviteConnection(maxUses: 1, useCount: 0);
         $handler = $this->handlerWith($db);
 
-        $handler->redeemInviteLink($this->validInviteJwt(), 'redeemer-1');
+        $handler->redeemInviteLink($this->opaqueInviteToken(), 'redeemer-1');
 
         $updates = array_values(array_filter(
             $db->calls,
@@ -339,7 +351,7 @@ final class InviteLinkHandlerTest extends TestCase
         $this->expectExceptionCode(410);
         $this->expectExceptionMessage('Invite link has been exhausted');
 
-        $handler->redeemInviteLink($this->validInviteJwt(), 'redeemer-1');
+        $handler->redeemInviteLink($this->opaqueInviteToken(), 'redeemer-1');
     }
 
     /** A multi-use invite still allows up to max_uses distinct redemptions. */
@@ -347,7 +359,7 @@ final class InviteLinkHandlerTest extends TestCase
     {
         $db = new SingleUseInviteConnection(maxUses: 3, useCount: 0);
         $handler = $this->handlerWith($db);
-        $token = $this->validInviteJwt();
+        $token = $this->opaqueInviteToken();
 
         $successes = 0;
         $exhausted = 0;
@@ -380,7 +392,7 @@ final class InviteLinkHandlerTest extends TestCase
         $this->expectExceptionCode(410);
         $this->expectExceptionMessage('Invite link has expired');
 
-        $handler->redeemInviteLink($this->validInviteJwt(), 'redeemer-1');
+        $handler->redeemInviteLink($this->opaqueInviteToken(), 'redeemer-1');
     }
 
     /** Unknown token hash is still rejected with the existing 404 error. */
@@ -392,7 +404,7 @@ final class InviteLinkHandlerTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionCode(404);
 
-        $handler->redeemInviteLink($this->validInviteJwt(), 'redeemer-1');
+        $handler->redeemInviteLink($this->opaqueInviteToken(), 'redeemer-1');
     }
 
     /** The owner cannot redeem their own invite (existing 400 error). */
@@ -406,10 +418,10 @@ final class InviteLinkHandlerTest extends TestCase
         $this->expectExceptionMessage('Cannot redeem your own invite link');
 
         // redeemer == the invite row's owner_user_id
-        $handler->redeemInviteLink($this->validInviteJwt(), 'owner-1');
+        $handler->redeemInviteLink($this->opaqueInviteToken(), 'owner-1');
     }
 
-    /** An invalid JWT is rejected before any DB work (existing 400 error). */
+    /** A malformed token is rejected before any DB work (existing 400 error). */
     public function testRedemptionRejectedWhenTokenInvalid(): void
     {
         $db = new SingleUseInviteConnection();
@@ -417,8 +429,9 @@ final class InviteLinkHandlerTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionCode(400);
+        $this->expectExceptionMessage('Malformed invite token');
 
-        $handler->redeemInviteLink('not-a-valid-jwt', 'redeemer-1');
+        $handler->redeemInviteLink('not-a-valid-opaque-token', 'redeemer-1');
 
         self::assertSame([], $db->calls);
     }

@@ -503,7 +503,20 @@ paths:
       operationId: "get_api_v1_admin_requests"
       tags: ["Media Requests"]
       summary: "List all media requests"
+      description: |-
+        Admin queue. `?status=` selects the rows returned; unknown values fall
+        back to `pending` (the default). `all` returns every request regardless
+        of status.
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "status"
+          in: query
+          required: false
+          description: "Status filter applied to the admin queue."
+          schema:
+            type: string
+            enum: ["pending", "approved", "available", "rejected", "all"]
+            default: "pending"
       security:
         - bearerAuth: []
       responses:
@@ -1825,10 +1838,28 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+        "400":
+          description: "Malformed invite token (`invalid_invite`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: "Redeemer already holds an active share for this tuple (`share_exists`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "410":
+          description: "Invite expired or exhausted (`invite_expired_or_exhausted`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/me/libraries":
@@ -5057,6 +5088,13 @@ components:
           $ref: "#/components/schemas/Uuid"
         token:
           type: string
+          description: |-
+            Opaque 64-hex bearer token. Present ONLY on the freshly-created link (POST response);
+            the hub stores just sha256(token), so listed links omit it. This is the redeem secret
+            carried by `GET /invite/{token}`.
+        url:
+          type: [string, "null"]
+          description: "Full invite URL `{hubBaseUrl}/invite/{token}`; null for listed links (token unrecoverable from its hash)."
         expires_at:
           type: string
         max_uses:

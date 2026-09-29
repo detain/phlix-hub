@@ -925,18 +925,15 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             InviteLinkHandler::class => factory(static function (
                 Connection $db,
-                JwtHandler $jwtHandler,
                 LibrarySharingHandler $sharingHandler,
             ) use ($hubBaseUrl): InviteLinkHandler {
                 return new InviteLinkHandler(
                     $db,
-                    $jwtHandler,
                     $sharingHandler,
                     LoggerFactory::get(LogChannels::HUB),
                     $hubBaseUrl,
                 );
             })->parameter('db', get(Connection::class))
-                ->parameter('jwtHandler', get(JwtHandler::class))
                 ->parameter('sharingHandler', get(LibrarySharingHandler::class)),
 
             InviteLinkController::class => factory(static function (
