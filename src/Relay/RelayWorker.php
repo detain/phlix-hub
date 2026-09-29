@@ -582,6 +582,7 @@ final class RelayWorker
     private function evictTunnel(Tunnel $tunnel): void
     {
         try {
+            /** @var mixed $tunnelManager */
             $tunnelManager = $this->container->get(TunnelManagerInterface::class);
             if ($tunnelManager instanceof TunnelManagerInterface) {
                 $tunnelManager->removeTunnel($tunnel->serverId, $tunnel);

@@ -409,7 +409,10 @@ final class Tunnel implements TunnelInterface
         }
 
         foreach ($frames as $frame) {
-            if ($this->status === self::STATUS_CLOSED) {
+            // Read through getStatus() so the check re-samples the mutable
+            // property: handleBinaryFrame() can tear the tunnel down mid-batch,
+            // a mutation static analysis cannot see from the entry guard above.
+            if ($this->getStatus() === self::STATUS_CLOSED) {
                 // An earlier frame in this batch tore the tunnel down (invalid
                 // framing, overflow, server close) — drop the remainder.
                 return;
