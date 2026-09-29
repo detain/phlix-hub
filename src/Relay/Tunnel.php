@@ -1749,7 +1749,8 @@ final class Tunnel implements TunnelInterface
         // client's channel id so the server closes the matching local conn.
         // M-4: a draining (CLOSING) tunnel still owns a live server connection,
         // so tell the server about clients departing mid-drain as well.
-        if (($this->status === self::STATUS_ACTIVE || $this->status === self::STATUS_CLOSING)
+        if (
+            ($this->status === self::STATUS_ACTIVE || $this->status === self::STATUS_CLOSING)
             && $channelId > 0
         ) {
             $payload = json_encode([

@@ -503,7 +503,8 @@ final class TunnelManager implements TunnelManagerInterface
     public function removeTunnel(string $serverId, ?Tunnel $tunnel = null): void
     {
         $removedRouting = false;
-        if (isset($this->tunnels[$serverId])
+        if (
+            isset($this->tunnels[$serverId])
             && ($tunnel === null || $this->tunnels[$serverId] === $tunnel)
         ) {
             unset($this->tunnels[$serverId]);

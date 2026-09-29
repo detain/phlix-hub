@@ -67,7 +67,12 @@ final class WebSocketCloseFrame
     {
         if ($code < self::MIN_CLOSE_CODE || $code > self::MAX_CLOSE_CODE) {
             throw new InvalidArgumentException(
-                sprintf('WebSocket close code %d out of range %d..%d', $code, self::MIN_CLOSE_CODE, self::MAX_CLOSE_CODE),
+                sprintf(
+                    'WebSocket close code %d out of range %d..%d',
+                    $code,
+                    self::MIN_CLOSE_CODE,
+                    self::MAX_CLOSE_CODE,
+                ),
             );
         }
 
