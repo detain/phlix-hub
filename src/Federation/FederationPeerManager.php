@@ -1134,7 +1134,14 @@ class FederationPeerManager
     }
 
     /**
-     * Send a HUB_HEARTBEAT binary frame to the master hub.
+     * Send a generic HEARTBEAT (0x06) binary frame to the master hub.
+     *
+     * Liveness on the federation link rides the envelope-neutral HEARTBEAT
+     * frame, not the retired HUB_HEARTBEAT (0x0B) type — see the envelope
+     * law in docs/websockets.md (`Federation wire types 0x09-0x0F —
+     * RETIRED`; HEARTBEAT 0x06 carries liveness for every surface, line 64
+     * of the frame-type table) and the @deprecated annotations on
+     * RelayFrameType::HUB_HEARTBEAT in phlix-shared.
      *
      * @return void
      */
