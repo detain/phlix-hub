@@ -733,6 +733,10 @@ final class RouteManifest
                     'url' => '/api/v1/me/federation/peers/p-1', 'gate' => self::GATE_ADMIN,
                 ],
                 [
+                    'method' => 'PUT', 'path' => '/api/v1/me/federation/peers/{id}/leaf-hub-id',
+                    'url' => '/api/v1/me/federation/peers/p-1/leaf-hub-id', 'gate' => self::GATE_ADMIN,
+                ],
+                [
                     'method' => 'PUT', 'path' => '/api/v1/me/federation/peers/{id}/relay',
                     'url' => '/api/v1/me/federation/peers/p-1/relay', 'gate' => self::GATE_ADMIN,
                 ],

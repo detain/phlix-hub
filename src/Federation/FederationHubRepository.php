@@ -139,9 +139,18 @@ class FederationHubRepository
      */
     public function getPeerById(string $id): ?array
     {
+        // Deterministic tie-break: if one hub's row PK equals ANOTHER peer's
+        // bound leaf_hub_id (astronomically unlikely for v4 UUIDs, but the
+        // dual-address query would then match two rows), the exact PK hit wins
+        // — callers that hold a row id must always get that row back. The
+        // repeated :id placeholder is safe: Workerman's bindMore() substitutes
+        // every occurrence of the named parameter.
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_peers WHERE id = :id OR leaf_hub_id = :id LIMIT 1',
+            'SELECT * FROM federation_peers
+             WHERE id = :id OR leaf_hub_id = :id
+             ORDER BY id = :id DESC
+             LIMIT 1',
             ['id' => $id],
         );
 

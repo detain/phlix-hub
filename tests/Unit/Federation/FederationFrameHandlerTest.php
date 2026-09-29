@@ -253,7 +253,7 @@ final class FederationFrameHandlerTest extends TestCase
         $sessions->method('registerSession')->willReturn('session-uuid-1');
 
         $shares = $this->createMock(FederationLibraryShareRepository::class);
-        $shares->method('getActiveOutgoingShares')->willReturn([]);
+        $shares->method('getActiveOutgoingSharesForPeer')->willReturn([]);
 
         $audit = $this->createMock(AuditLogger::class);
         $audit->expects(self::once())->method('logHubConnect');
@@ -483,19 +483,23 @@ final class FederationFrameHandlerTest extends TestCase
         $sessions->method('registerSession')->willReturn('sess-1');
 
         $shares = $this->createMock(FederationLibraryShareRepository::class);
-        $shares->method('getActiveOutgoingShares')->willReturn([
-            [
-                'id' => 'share-1',
-                'peer_id' => 'LOCAL-LEAF-ROW-ID',
-                'library_id' => 'lib-1',
-                'library_name' => 'Movies',
-                'permission' => 'read',
-                'status' => 'active',
-            ],
-        ]);
+        $shares->method('getActiveOutgoingSharesForPeer')->willReturnCallback(
+            static fn (string $peerId): array => $peerId === 'peer-1'
+                ? [
+                    [
+                        'id' => 'share-1',
+                        'peer_id' => 'LOCAL-LEAF-ROW-ID',
+                        'library_id' => 'lib-1',
+                        'library_name' => 'Movies',
+                        'permission' => 'read',
+                        'status' => 'active',
+                    ],
+                ]
+                : [],
+        );
 
         $conn = $this->createMock(ConnectionInterface::class);
-        $binaryPush = null;
+        $binaryPush = '';
         $conn->method('send')->willReturnCallback(
             static function (string $data) use (&$binaryPush): void {
                 if (!str_starts_with($data, '{')) {
@@ -508,10 +512,9 @@ final class FederationFrameHandlerTest extends TestCase
         $handler = $this->handler($hubRepo, $sessions, $shares);
         self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloJson()));
 
-        self::assertNotNull($binaryPush, 'A binary DATA frame must be pushed');
-        if (!is_string($binaryPush)) {
-            self::fail('Captured push must be a string frame');
-        }
+        // The captured push is typed `string` from the sentinel onward — no
+        // nullable narrowing dance needed; empty means "never sent".
+        self::assertNotSame('', $binaryPush, 'A binary DATA frame must be pushed');
         // Frame payload sits behind the wire header; search the raw bytes for
         // the JSON identity rather than decoding the full frame here.
         self::assertStringContainsString('master-hub-uuid', $binaryPush);
@@ -520,6 +523,54 @@ final class FederationFrameHandlerTest extends TestCase
             $binaryPush,
             'The master must not leak its local row ids as the wire peer_id',
         );
+    }
+
+    /**
+     * Multi-leaf misdelivery regression: an active share targeted at peer A
+     * must never be pushed to leaf B on B's hello. The repo is consulted with
+     * the connecting peer's LOCAL row id, so B's query returns nothing.
+     */
+    public function testHelloPushNeverDeliversAnotherPeersShares(): void
+    {
+        $peerB = [
+            'id' => 'peer-2',
+            'name' => 'Leaf B',
+            'url' => 'https://b.example.com',
+            'status' => 'pending',
+            'leaf_hub_id' => 'leaf-hub-2',
+        ];
+
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->method('getPeerByPublicKey')->willReturn($peerB);
+        $hubRepo->method('getHubConfig')->willReturn(['id' => 'master-hub-uuid']);
+
+        $sessions = $this->createMock(FederationSessionManager::class);
+        $sessions->method('registerSession')->willReturn('sess-2');
+
+        // share-for-A is the active row targeted at peer-1 ('peer-A' scope):
+        $shares = $this->createMock(FederationLibraryShareRepository::class);
+        $shares->expects(self::once())
+            ->method('getActiveOutgoingSharesForPeer')
+            ->with('peer-2')
+            ->willReturn([]);
+
+        $connB = $this->createMock(ConnectionInterface::class);
+        $binaryToB = '';
+        $connB->method('send')->willReturnCallback(
+            static function (string $data) use (&$binaryToB): void {
+                if (!str_starts_with($data, '{')) {
+                    $binaryToB = $data;
+                }
+            },
+        );
+        $this->realConnMgr->addConnection('leaf-hub-2', $connB);
+
+        $handler = $this->handler($hubRepo, $sessions, $shares);
+        $helloB = '{"type":"hub_hello","public_key":"valid_key","hub_id":"leaf-hub-2","hub_name":"Leaf B"}';
+
+        self::assertNull($handler->handleTextFrame('leaf-hub-2', $helloB));
+        self::assertSame('', $binaryToB, 'Leaf B must receive no share DATA frame');
+        self::assertStringNotContainsString('share-for-A', $binaryToB);
     }
 
     public function testHandleTextFrameHubHelloAckIsNoOpOnMaster(): void

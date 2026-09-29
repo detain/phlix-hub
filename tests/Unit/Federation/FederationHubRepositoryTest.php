@@ -150,7 +150,11 @@ final class FederationHubRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('SELECT * FROM federation_peers WHERE id'),
+                self::callback(function (string $sql) {
+                    return str_contains($sql, 'SELECT * FROM federation_peers')
+                        && str_contains($sql, 'WHERE id = :id OR leaf_hub_id = :id')
+                        && str_contains($sql, 'ORDER BY id = :id DESC');
+                }),
                 ['id' => 'peer-1']
             )
             ->willReturn([$expectedPeer]);

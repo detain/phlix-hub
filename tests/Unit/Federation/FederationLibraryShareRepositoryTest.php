@@ -28,7 +28,10 @@ final class FederationLibraryShareRepositoryTest extends TestCase
                         && $params['library_id'] === 'lib-123'
                         && $params['library_name'] === 'My Library'
                         && $params['peer_id'] === 'peer-abc'
-                        && $params['permission'] === 'read';
+                        && $params['permission'] === 'read'
+                        // Shares must land 'active' — the hello-time push only
+                        // queries active rows, 'pending' would never converge.
+                        && $params['status'] === 'active';
                 })
             )
             ->willReturn([]);
@@ -89,7 +92,7 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         self::assertNull($result);
     }
 
-    public function testGetActiveOutgoingSharesReturnsOnlyActive(): void
+    public function testGetActiveOutgoingSharesForPeerFiltersByPeer(): void
     {
         $db = $this->createMock(Connection::class);
         $activeShares = [
@@ -99,15 +102,29 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains("WHERE status = :status"),
-                ['status' => 'active']
+                self::callback(function (string $sql) {
+                    return str_contains($sql, 'WHERE status = :status')
+                        && str_contains($sql, 'AND peer_id = :peer_id');
+                }),
+                ['status' => 'active', 'peer_id' => 'peer-1']
             )
             ->willReturn($activeShares);
 
         $repo = new FederationLibraryShareRepository($db);
-        $result = $repo->getActiveOutgoingShares();
+        $result = $repo->getActiveOutgoingSharesForPeer('peer-1');
 
         self::assertSame($activeShares, $result);
+    }
+
+    public function testGetActiveOutgoingSharesForPeerIgnoresEmptyPeerId(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $db->expects(self::never())->method('query');
+
+        $repo = new FederationLibraryShareRepository($db);
+
+        self::assertSame([], $repo->getActiveOutgoingSharesForPeer(''));
     }
 
     public function testRevokeOutgoingShareUpdatesStatus(): void
@@ -332,20 +349,23 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         self::assertStringNotContainsString('status', $capturedSql);
     }
 
-    public function testDeleteIncomingOfferRemovesRowById(): void
+    public function testDeleteIncomingOfferRemovesRowScopedByPeer(): void
     {
         $db = $this->createMock(Connection::class);
 
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('DELETE FROM federation_incoming_share_offers WHERE id = :id'),
-                ['id' => 'offer-gone'],
+                self::callback(function (string $sql) {
+                    return str_contains($sql, 'DELETE FROM federation_incoming_share_offers WHERE id = :id')
+                        && str_contains($sql, 'AND peer_id = :peer_id');
+                }),
+                ['id' => 'offer-gone', 'peer_id' => 'peer-1'],
             )
             ->willReturn([]);
 
         $repo = new FederationLibraryShareRepository($db);
-        $repo->deleteIncomingOffer('offer-gone');
+        $repo->deleteIncomingOffer('offer-gone', 'peer-1');
     }
 
     public function testDeleteIncomingOfferIgnoresEmptyId(): void
@@ -355,6 +375,7 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         $db->expects(self::never())->method('query');
 
         $repo = new FederationLibraryShareRepository($db);
-        $repo->deleteIncomingOffer('');
+        $repo->deleteIncomingOffer('', 'peer-1');
+        $repo->deleteIncomingOffer('offer-x', '');
     }
 }

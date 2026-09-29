@@ -946,7 +946,10 @@ class FederationPeerManager
      */
     private function handleLibraryShareRevoked(string $shareId): void
     {
-        $this->libraryShares->deleteIncomingOffer($shareId);
+        // Scoped to the master's local peer row — offers from the master are
+        // stamped with it at rebase time (:931), and a wire id from any OTHER
+        // peer's row space must never delete this hub's offer rows.
+        $this->libraryShares->deleteIncomingOffer($shareId, $this->masterPeerId);
     }
 
     /**

@@ -10,6 +10,7 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Federation\FederationAdminDelegationRepository;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
+use Phlix\Hub\Federation\FederationMasterPusher;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Http\Controllers\FederationController;
@@ -31,6 +32,7 @@ final class FederationControllerTest extends TestCase
     private FederationAdminDelegationRepository&MockObject $adminDel;
     private FederationPeerManager&MockObject $peerManager;
     private AuditLogger&MockObject $audit;
+    private FederationMasterPusher&MockObject $masterPusher;
     private FederationController $controller;
 
     protected function setUp(): void
@@ -43,6 +45,7 @@ final class FederationControllerTest extends TestCase
         $this->adminDel = $this->createMock(FederationAdminDelegationRepository::class);
         $this->peerManager = $this->createMock(FederationPeerManager::class);
         $this->audit = $this->createMock(AuditLogger::class);
+        $this->masterPusher = $this->createMock(FederationMasterPusher::class);
 
         $this->controller = new FederationController(
             $this->hubRepo,
@@ -51,6 +54,7 @@ final class FederationControllerTest extends TestCase
             $this->adminDel,
             $this->peerManager,
             $this->audit,
+            $this->masterPusher,
         );
     }
 
@@ -687,5 +691,271 @@ final class FederationControllerTest extends TestCase
         $response = $this->controller->deleteAdminDelegation($request, ['id' => 'nonexistent']);
 
         self::assertSame(404, $response->statusCode);
+    }
+
+    // ------------------------------------------------- peer bootstrap binding
+
+    public function testCreatePeerPassesValidLeafHubIdToRepository(): void
+    {
+        $this->hubRepo->method('getPeerByUrl')->willReturn(null);
+        $this->hubRepo->method('getPeerByPublicKey')->willReturn(null);
+        $this->hubRepo->expects(self::once())
+            ->method('createPeer')
+            ->with(
+                self::isType('string'),
+                'New Peer Hub',
+                'https://new-peer.example.com',
+                'new-peer-key',
+                'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+            );
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/peers';
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'url' => 'https://new-peer.example.com',
+            'public_key' => 'new-peer-key',
+            'name' => 'New Peer Hub',
+            'leaf_hub_id' => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        ];
+
+        $response = $this->controller->createPeer($request);
+
+        self::assertSame(201, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', $body['leaf_hub_id']);
+    }
+
+    public function testCreatePeerRejectsMalformedLeafHubId(): void
+    {
+        $this->hubRepo->expects(self::never())->method('createPeer');
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/peers';
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'url' => 'https://new-peer.example.com',
+            'public_key' => 'new-peer-key',
+            'name' => 'New Peer Hub',
+            'leaf_hub_id' => 'not-a-uuid',
+        ];
+
+        $response = $this->controller->createPeer($request);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_leaf_hub_id', $body['code']);
+    }
+
+    public function testBindPeerLeafHubIdSetsBindingOnUnboundPeer(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'name' => 'Peer',
+            'leaf_hub_id' => '',
+        ]);
+        $this->hubRepo->expects(self::once())
+            ->method('setPeerLeafHubId')
+            ->with('peer-1', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/peers/peer-1/leaf-hub-id';
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['leaf_hub_id' => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'];
+
+        $response = $this->controller->bindPeerLeafHubId($request, ['id' => 'peer-1']);
+
+        self::assertSame(200, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', $body['leaf_hub_id']);
+    }
+
+    public function testBindPeerLeafHubIdIsIdempotentForSameValue(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'name' => 'Peer',
+            'leaf_hub_id' => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        ]);
+        $this->hubRepo->expects(self::once())->method('setPeerLeafHubId');
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['leaf_hub_id' => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'];
+
+        $response = $this->controller->bindPeerLeafHubId($request, ['id' => 'peer-1']);
+
+        self::assertSame(200, $response->statusCode);
+    }
+
+    public function testBindPeerLeafHubIdReturns409WhenBoundToDifferentPeer(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'name' => 'Peer',
+            'leaf_hub_id' => '11111111-2222-3333-4444-555555555555',
+        ]);
+        $this->hubRepo->expects(self::never())->method('setPeerLeafHubId');
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['leaf_hub_id' => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'];
+
+        $response = $this->controller->bindPeerLeafHubId($request, ['id' => 'peer-1']);
+
+        self::assertSame(409, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        // Registered conflict generic per the contracts wire law (the
+        // specific condition rides in error/reason, not a new code literal).
+        self::assertSame('invalid_request', $body['code']);
+        self::assertStringContainsString('already bound', $body['reason']);
+    }
+
+    public function testBindPeerLeafHubIdReturns404ForUnknownPeer(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn(null);
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['leaf_hub_id' => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'];
+
+        $response = $this->controller->bindPeerLeafHubId($request, ['id' => 'ghost']);
+
+        self::assertSame(404, $response->statusCode);
+    }
+
+    public function testBindPeerLeafHubIdRejectsMalformedUuid(): void
+    {
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['leaf_hub_id' => 'nope'];
+
+        $response = $this->controller->bindPeerLeafHubId($request, ['id' => 'peer-1']);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_leaf_hub_id', $body['code']);
+    }
+
+    // ------------------------------------------------ master-side share push
+
+    private function asMaster(): void
+    {
+        $this->hubRepo->method('getHubConfig')->willReturn([
+            'id' => 'master-hub-uuid',
+            'is_master' => 1,
+        ]);
+    }
+
+    public function testMasterCreateOutgoingSharePushesOfferDownToLeaf(): void
+    {
+        $this->asMaster();
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'name' => 'Leaf',
+            'leaf_hub_id' => 'leaf-own-uuid',
+        ]);
+        $this->libraryShares->method('getOutgoingShareById')->willReturn([
+            'id' => 'share-x',
+            'peer_id' => 'peer-1',
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'permission' => 'read',
+            'status' => 'active',
+        ]);
+
+        $this->masterPusher->expects(self::once())
+            ->method('pushOffer')
+            ->with('peer-1', self::callback(
+                static fn (array $row): bool => $row['id'] === 'share-x'
+                    && $row['library_id'] === 'lib-1'
+            ));
+        // Leaf-side push must NOT run on a master (masterConnection is null there).
+        $this->peerManager->expects(self::never())->method('pushLibraryShare');
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'peer_id' => 'peer-1',
+            'permission' => 'read',
+        ];
+
+        $response = $this->controller->createOutgoingShare($request);
+
+        self::assertSame(201, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('active', $body['status']);
+    }
+
+    public function testLeafCreateOutgoingShareStillPushesUpToMaster(): void
+    {
+        // getHubConfig null → leaf path (mirrors unconfigured/leaf deployments).
+        $this->hubRepo->method('getHubConfig')->willReturn(null);
+        $this->hubRepo->method('getPeerById')->willReturn(['id' => 'peer-1']);
+
+        $this->masterPusher->expects(self::never())->method('pushOffer');
+        $this->peerManager->expects(self::once())->method('pushLibraryShare');
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'peer_id' => 'peer-1',
+            'permission' => 'read',
+        ];
+
+        self::assertSame(201, $this->controller->createOutgoingShare($request)->statusCode);
+    }
+
+    public function testMasterRevokeOutgoingSharePushesRevocationDownToLeaf(): void
+    {
+        $this->asMaster();
+        $this->libraryShares->method('getOutgoingShareById')->willReturn([
+            'id' => 'share-1',
+            'peer_id' => 'peer-1',
+            'library_id' => 'lib-1',
+            'permission' => 'read',
+        ]);
+
+        $this->masterPusher->expects(self::once())
+            ->method('pushRevocation')
+            ->with('peer-1', 'share-1');
+        $this->peerManager->expects(self::never())->method('pushLibraryShareRevoked');
+
+        $request = new Request();
+        $request->method = 'DELETE';
+        $request->userId = 'admin-1';
+
+        self::assertSame(204, $this->controller->revokeOutgoingShare($request, ['id' => 'share-1'])->statusCode);
+    }
+
+    public function testDeletePeerClosesLiveFederationConnection(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'name' => 'Peer',
+            'status' => 'connected',
+        ]);
+        $this->masterPusher->expects(self::once())
+            ->method('closePeerConnection')
+            ->with('peer-1');
+
+        $request = new Request();
+        $request->method = 'DELETE';
+        $request->userId = 'admin-1';
+
+        self::assertSame(204, $this->controller->deletePeer($request, ['id' => 'peer-1'])->statusCode);
     }
 }

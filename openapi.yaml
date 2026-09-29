@@ -1536,6 +1536,56 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/federation/peers/{id}/leaf-hub-id":
+    put:
+      operationId: "put_api_v1_me_federation_peers_id_leaf_hub_id"
+      tags: ["Federation"]
+      summary: "Bind a peer's own hub uuid"
+      description: |-
+        Pre-binds a peer row to the leaf hub's own uuid so its first dial to
+        `/relay/federation/{uuid}` resolves at the WS-upgrade gate (bootstrap).
+        The body carries `{leaf_hub_id}` (UUID); rebinding a different value over
+        an existing binding conflicts (409).
+      x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
+      parameters:
+        - name: "id"
+          in: path
+          required: true
+          description: "Resource id (8-4-4-4-12 hex UUID)."
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: "leaf_hub_id missing or not a UUID."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "Peer is already bound to a different leaf hub id."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/me/federation/peers/{id}/admin-delegation":
     put:
       operationId: "put_api_v1_me_federation_peers_id_admin_delegation"

@@ -1683,6 +1683,7 @@ final class Application
      *  - GET    /api/v1/me/federation/peers
      *  - POST   /api/v1/me/federation/peers
      *  - DELETE /api/v1/me/federation/peers/{id}
+     *  - PUT    /api/v1/me/federation/peers/{id}/leaf-hub-id
      *  - PUT    /api/v1/me/federation/peers/{id}/relay
      *  - PUT    /api/v1/me/federation/peers/{id}/admin-delegation
      *  - GET    /api/v1/me/federation/library-shares/outgoing
@@ -1714,6 +1715,14 @@ final class Application
                 $typedParams = $params;
                 return $controller->deletePeer($req, $typedParams);
             });
+            $r->put(
+                '/peers/{id}/leaf-hub-id',
+                static function (Request $req, array $params) use ($controller): Response {
+                    /** @var array<string, string> $typedParams */
+                    $typedParams = $params;
+                    return $controller->bindPeerLeafHubId($req, $typedParams);
+                },
+            );
             $r->put(
                 '/peers/{id}/relay',
                 static function (Request $req, array $params) use ($controller): Response {

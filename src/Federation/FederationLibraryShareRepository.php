@@ -46,16 +46,21 @@ class FederationLibraryShareRepository
         string $peerId,
         string $permission,
     ): void {
+        // Status is stamped 'active' at creation: the ENUM default 'pending'
+        // left rows invisible to every active-share push (HELLO sync and
+        // live create-push alike) and nothing ever flipped them — a share
+        // could never converge. Revocation moves the row to 'revoked'.
         $this->db->query(
             'INSERT INTO federation_library_shares
-             (id, library_id, library_name, peer_id, permission)
-             VALUES (:id, :library_id, :library_name, :peer_id, :permission)',
+             (id, library_id, library_name, peer_id, permission, status)
+             VALUES (:id, :library_id, :library_name, :peer_id, :permission, :status)',
             [
                 'id' => $id,
                 'library_id' => $libraryId,
                 'library_name' => $libraryName,
                 'peer_id' => $peerId,
                 'permission' => $permission,
+                'status' => 'active',
             ],
         );
     }
@@ -94,16 +99,33 @@ class FederationLibraryShareRepository
     }
 
     /**
-     * Get all active (non-revoked) outgoing shares.
+     * Get the active (non-revoked) outgoing shares targeted at ONE peer.
+     *
+     * Misdelivery guard: an unfiltered variant used to feed every connecting
+     * leaf the shares meant for all other peers. `peer_id` stores the LOCAL
+     * federation_peers.id the share was created for (FK, indexed by
+     * idx_peer_status), so the connecting leaf's resolved row id is the
+     * exact filter.
+     *
+     * @param string $peerId Local federation_peers.id of the target peer.
      *
      * @return array<int, array<string, mixed>>
      */
-    public function getActiveOutgoingShares(): array
+    public function getActiveOutgoingSharesForPeer(string $peerId): array
     {
+        if ($peerId === '') {
+            return [];
+        }
+
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_library_shares WHERE status = :status ORDER BY shared_at DESC',
-            ['status' => 'active'],
+            'SELECT * FROM federation_library_shares
+             WHERE status = :status AND peer_id = :peer_id
+             ORDER BY shared_at DESC',
+            [
+                'status' => 'active',
+                'peer_id' => $peerId,
+            ],
         );
 
         return $rows;
@@ -271,19 +293,27 @@ class FederationLibraryShareRepository
      * revoked share is no longer an offer awaiting a decision — so the row is
      * deleted rather than re-labelled.
      *
-     * @param string $id Offer UUID (the share row id as minted by the origin hub).
+     * Scoped by the LOCAL peer FK, not just the wire offer id: share ids are
+     * minted by each origin hub's row space, so two peers could theoretically
+     * collide on an id — a revocation from B must never delete A's offer.
+     *
+     * @param string $id     Offer UUID (the share row id as minted by the origin hub).
+     * @param string $peerId Local federation_peers.id of the offering peer.
      *
      * @return void
      */
-    public function deleteIncomingOffer(string $id): void
+    public function deleteIncomingOffer(string $id, string $peerId): void
     {
-        if ($id === '') {
+        if ($id === '' || $peerId === '') {
             return;
         }
 
         $this->db->query(
-            'DELETE FROM federation_incoming_share_offers WHERE id = :id',
-            ['id' => $id],
+            'DELETE FROM federation_incoming_share_offers WHERE id = :id AND peer_id = :peer_id',
+            [
+                'id' => $id,
+                'peer_id' => $peerId,
+            ],
         );
     }
 }

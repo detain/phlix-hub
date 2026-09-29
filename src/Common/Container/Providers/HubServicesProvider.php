@@ -23,6 +23,7 @@ use Phlix\Hub\Federation\FederationConnectionManager;
 use Phlix\Hub\Federation\FederationFrameHandler;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
+use Phlix\Hub\Federation\FederationMasterPusher;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Health\MaintenanceHeartbeat;
@@ -1209,6 +1210,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new FederationConnectionManager();
             }),
 
+            FederationMasterPusher::class => factory(static function (
+                FederationHubRepository $hubRepo,
+                FederationConnectionManager $connMgr,
+            ): FederationMasterPusher {
+                return new FederationMasterPusher($hubRepo, $connMgr);
+            })->parameter('hubRepo', get(FederationHubRepository::class))
+                ->parameter('connMgr', get(FederationConnectionManager::class)),
+
             FederationFrameHandler::class => factory(static function (
                 FederationHubRepository $hubRepo,
                 FederationSessionManager $sessions,
@@ -1244,6 +1253,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 FederationAdminDelegationRepository $adminDel,
                 FederationPeerManager $peerManager,
                 AuditLogger $audit,
+                FederationMasterPusher $masterPusher,
             ): FederationController {
                 return new FederationController(
                     $hubRepo,
@@ -1252,13 +1262,15 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $adminDel,
                     $peerManager,
                     $audit,
+                    $masterPusher,
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))
                 ->parameter('sessions', get(FederationSessionManager::class))
                 ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
                 ->parameter('adminDel', get(FederationAdminDelegationRepository::class))
                 ->parameter('peerManager', get(FederationPeerManager::class))
-                ->parameter('audit', get(AuditLogger::class)),
+                ->parameter('audit', get(AuditLogger::class))
+                ->parameter('masterPusher', get(FederationMasterPusher::class)),
 
             FederationPeerManager::class => factory(static function (
                 FederationHubRepository $hubRepo,

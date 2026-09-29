@@ -234,8 +234,8 @@ final class FederationFrameHandler
         // Send HELLO_ACK
         $this->sendHelloAck($conn, $sessionId, $masterHubId, ['library_shares', 'relay', 'admin_delegation']);
 
-        // Push all active library shares to the newly connected leaf
-        $this->pushLibrarySharesToLeaf($conn, $masterHubId);
+        // Push this leaf's active library shares to the newly connected peer
+        $this->pushLibrarySharesToLeaf($conn, $masterHubId, $peerId);
 
         // Audit log
         $this->audit->logHubConnect($peerId, $peerName, $peerUrl, true);
@@ -451,21 +451,28 @@ final class FederationFrameHandler
     }
 
     /**
-     * Push all active library shares to a connected leaf hub over its WS.
+     * Push the active library shares TARGETED AT one peer to its leaf WS.
      *
      * M-5: each offer carries `peer_id` = THIS hub's own federation_hubs.id
      * (the offering identity). The leaf rewrites it to its LOCAL peer row id
      * of the master before persisting — a wire id from one hub's row space is
      * meaningless as a foreign key in the other's.
      *
-     * @param ConnectionInterface $conn         Leaf WS connection.
-     * @param string              $originHubId  This (master) hub's own UUID.
+     * Misdelivery guard: the query filters on the LOCAL peer row this
+     * connection resolved to at HELLO. An unfiltered push used to broadcast
+     * every leaf's shares to every connecting peer, rewriting each offer's
+     * identity to the wrong target — shares meant for A landing in B's
+     * offer inbox.
+     *
+     * @param ConnectionInterface $conn          Leaf WS connection.
+     * @param string              $originHubId   This (master) hub's own UUID.
+     * @param string              $targetPeerId  Local federation_peers.id of the connecting leaf.
      *
      * @return void
      */
-    private function pushLibrarySharesToLeaf(ConnectionInterface $conn, string $originHubId): void
+    private function pushLibrarySharesToLeaf(ConnectionInterface $conn, string $originHubId, string $targetPeerId): void
     {
-        $activeShares = $this->libraryShares->getActiveOutgoingShares();
+        $activeShares = $this->libraryShares->getActiveOutgoingSharesForPeer($targetPeerId);
         if ($activeShares === []) {
             return;
         }
@@ -559,8 +566,10 @@ final class FederationFrameHandler
         }
 
         // Leaf revoked one of its outgoing shares → drop the local offer row.
+        // Scoped by the transport-resolved local peer FK: a wire share id is
+        // only unique per offering peer, never globally (item: hardening).
         if (isset($data['share_id']) && is_string($data['share_id'])) {
-            $this->libraryShares->deleteIncomingOffer($data['share_id']);
+            $this->libraryShares->deleteIncomingOffer($data['share_id'], $peerId);
         }
     }
 
