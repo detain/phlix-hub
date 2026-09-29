@@ -143,8 +143,15 @@ class FederationHubRepository
         // bound leaf_hub_id (astronomically unlikely for v4 UUIDs, but the
         // dual-address query would then match two rows), the exact PK hit wins
         // — callers that hold a row id must always get that row back. The
-        // repeated :id placeholder is safe: Workerman's bindMore() substitutes
-        // every occurrence of the named parameter.
+        // repeated :id placeholder is safe because of the PDO layer, NOT
+        // Workerman's: bindMore() only collects `:name => value` pairs (no
+        // textual substitution), and the vendor Connection::connect() actually
+        // sets ATTR_EMULATE_PREPARES=false (native). What makes reuse work is
+        // PhlixMySQLConnection::connect(), which FORCES ATTR_EMULATE_PREPARES
+        // back to true after the parent connects — PDO then inlines the bound
+        // value at EVERY occurrence of :id client-side. Every query through
+        // this repository lands on that subclass (ConnectionPool leases it;
+        // the pool-disabled fallback constructs it), so the semantics hold.
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
             'SELECT * FROM federation_peers

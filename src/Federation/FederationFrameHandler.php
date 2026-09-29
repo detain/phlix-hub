@@ -15,6 +15,7 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Shared\Relay\RelayFrameType;
 use Throwable;
@@ -35,6 +36,17 @@ use function json_encode;
  * the connection's transport identity always maps to exactly one local
  * peer row. Frame handlers address sessions/shares by that resolved LOCAL
  * row id — never by the raw path value.
+ *
+ * H-4 mutual proof-of-key: knowing a peer's public_key/identifiers is NOT
+ * authentication — anyone can replay them. The handshake is now a signed
+ * ceremony: HELLO_ACK carries a fresh session nonce plus an Ed25519
+ * signature over the canonical ACK string made with THIS hub's keypair, and
+ * the leaf must answer with HELLO_AUTH signing {session_id, nonce,
+ * leaf_hub_id} with the private key belonging to its REGISTERED public_key.
+ * Only after that proof verifies does the channel flip to VERIFIED in the
+ * connection manager; until then every DATA payload (offers, shares,
+ * admin-delegation) is dropped and audited. Canonical byte strings live in
+ * {@see FederationHandshake} so both roles sign/verify the exact same form.
  *
  * @package Phlix\Hub\Federation
  */
@@ -58,6 +70,7 @@ final class FederationFrameHandler
      * @param FederationLibraryShareRepository $libraryShares  Library shares repository.
      * @param FederationConnectionManager      $connMgr        Connection manager for active WS connections.
      * @param AuditLogger                      $audit          Audit logger for federation events.
+     * @param Ed25519KeyManager                $keyManager     This hub's Ed25519 keypair (master ACK signing).
      */
     public function __construct(
         private readonly FederationHubRepository $hubRepo,
@@ -65,6 +78,7 @@ final class FederationFrameHandler
         private readonly FederationLibraryShareRepository $libraryShares,
         private readonly FederationConnectionManager $connMgr,
         private readonly AuditLogger $audit,
+        private readonly Ed25519KeyManager $keyManager,
     ) {
         $this->encoder = new FrameEncoder();
     }
@@ -102,6 +116,7 @@ final class FederationFrameHandler
         return match ($type) {
             'hub_hello' => $this->handleHubHello($hubId, $decoded),
             'hub_hello_ack' => $this->handleHubHelloAck($hubId, $decoded),
+            'hub_hello_auth' => $this->handleHelloAuth($hubId, $decoded),
             default => null, // Unknown text frames are ignored
         };
     }
@@ -137,9 +152,11 @@ final class FederationFrameHandler
     /**
      * Handle HUB_HELLO from a connecting (or reconnecting) leaf hub.
      *
-     * Validates the public key, cross-checks/binds the reported hub
-     * identity, registers the session, sends HELLO_ACK, updates peer
-     * status and pushes active library shares to the leaf.
+     * Validates the peer key lookup, cross-checks/binds the reported hub
+     * identity, registers the session, and answers with a SIGNED HELLO_ACK
+     * carrying a fresh single-use nonce (H-4). Share pushes and the
+     * connect-audit are deferred to {@see handleHelloAuth()} — the channel
+     * is transport-only until the leaf proves possession of its key.
      *
      * @param string               $leafHubId Peer hub UUID (from route).
      * @param array<string, mixed> $decoded   Decoded JSON payload.
@@ -150,8 +167,6 @@ final class FederationFrameHandler
     {
         /** @var mixed $rawPublicKey */
         $rawPublicKey = $decoded['public_key'] ?? null;
-        /** @var mixed $rawHubName */
-        $rawHubName = $decoded['hub_name'] ?? null;
         /** @var mixed $rawHubId */
         $rawHubId = $decoded['hub_id'] ?? null;
 
@@ -175,12 +190,6 @@ final class FederationFrameHandler
 
         /** @var string $peerId */
         $peerId = $peer['id'];
-        /** @var string $fallbackName */
-        $fallbackName = is_string($peer['name'] ?? null) ? $peer['name'] : 'unknown';
-        /** @var string $peerName */
-        $peerName = is_string($rawHubName) ? $rawHubName : $fallbackName;
-        /** @var string $peerUrl */
-        $peerUrl = is_string($peer['url'] ?? null) ? $peer['url'] : '';
         /** @var string $peerStatus */
         $peerStatus = is_string($peer['status'] ?? null) ? $peer['status'] : 'pending';
 
@@ -231,16 +240,143 @@ final class FederationFrameHandler
             ? (is_string($hubConfig['id'] ?? null) ? $hubConfig['id'] : '')
             : '';
 
-        // Send HELLO_ACK
-        $this->sendHelloAck($conn, $sessionId, $masterHubId, ['library_shares', 'relay', 'admin_delegation']);
+        // H-4: mint a fresh single-use nonce for this ceremony. The leaf
+        // signs it back in HELLO_AUTH; consumeHandshake() retires it, so a
+        // replayed proof can never re-verify. registerSession above already
+        // abandoned any handshake pending for this peer.
+        $nonce = FederationHandshake::newNonce();
+        $this->sessions->beginHandshake($sessionId, $peerId, $nonce);
 
-        // Push this leaf's active library shares to the newly connected peer
+        // Send SIGNED HELLO_ACK (master's proof of key possession).
+        $this->sendHelloAck(
+            $conn,
+            $sessionId,
+            $masterHubId,
+            $nonce,
+            ['library_shares', 'relay', 'admin_delegation'],
+        );
+
+        // Shares/audit wait for the leaf's HELLO_AUTH proof — until the
+        // channel flips VERIFIED the link is inert (handleDataFrame drops).
+        return null;
+    }
+
+    /**
+     * Handle HELLO_AUTH from a leaf — the leaf half of the H-4 ceremony.
+     *
+     * The leaf proves possession of the private key belonging to its
+     * REGISTERED public key by signing the canonical
+     * {session_id, nonce, leaf_hub_id} string. The nonce must still be
+     * pending (single-use: a second proof over the same session is refused),
+     * must belong to THIS peer's ceremony, and the claimed identity must
+     * match the bound one. Success flips the connection to VERIFIED, pushes
+     * pending shares, and audits the connect; any failure closes the link
+     * with an audited refusal.
+     *
+     * @param string               $hubId   Peer hub UUID (from route).
+     * @param array<string, mixed> $decoded Decoded JSON payload.
+     *
+     * @return string|null Error message to reject, or null to accept.
+     */
+    private function handleHelloAuth(string $hubId, array $decoded): ?string
+    {
+        /** @var mixed $rawSessionId */
+        $rawSessionId = $decoded['session_id'] ?? null;
+        /** @var mixed $rawSignature */
+        $rawSignature = $decoded['signature'] ?? null;
+        /** @var mixed $rawLeafHubId */
+        $rawLeafHubId = $decoded['leaf_hub_id'] ?? null;
+
+        if (
+            !is_string($rawSessionId) || $rawSessionId === ''
+            || !is_string($rawSignature) || $rawSignature === ''
+            || !is_string($rawLeafHubId) || $rawLeafHubId === ''
+        ) {
+            return 'Invalid hello_auth payload';
+        }
+
+        $peer = $this->hubRepo->getPeerById($hubId);
+        if ($peer === null) {
+            return 'Unknown peer';
+        }
+
+        /** @var string $peerId */
+        $peerId = $peer['id'];
+        /** @var string $peerName */
+        $peerName = is_string($peer['name'] ?? null) ? $peer['name'] : 'unknown';
+        /** @var string $peerUrl */
+        $peerUrl = is_string($peer['url'] ?? null) ? $peer['url'] : '';
+        /** @var string $peerPublicKey */
+        $peerPublicKey = is_string($peer['public_key'] ?? null) ? $peer['public_key'] : '';
+        /** @var string $boundHubId */
+        $boundHubId = is_string($peer['leaf_hub_id'] ?? null) ? $peer['leaf_hub_id'] : '';
+
+        $conn = $this->connMgr->getConnection($hubId);
+        if ($conn === null) {
+            return 'Connection not registered';
+        }
+
+        // Single-use nonce burn: unknown/expired session or an already
+        // consumed nonce both land here (replay of a valid proof included).
+        $pending = $this->sessions->consumeHandshake($rawSessionId);
+        if ($pending === null || $pending['peer_id'] !== $peerId) {
+            $this->refuseHelloAuth($peerId, $peerName, $peerUrl, 'handshake_unknown_or_replayed');
+            return 'HELLO_AUTH refused: no pending handshake for this session';
+        }
+
+        // Identity binding: the proof must vouch for the bound hub id.
+        if ($boundHubId === '' || $boundHubId !== $rawLeafHubId) {
+            $this->refuseHelloAuth($peerId, $peerName, $peerUrl, 'handshake_identity_mismatch');
+            return 'HELLO_AUTH refused: leaf_hub_id does not match the bound identity';
+        }
+
+        $canonical = FederationHandshake::helloAuthCanonical($rawSessionId, $pending['nonce'], $rawLeafHubId);
+        if (!FederationHandshake::verify($canonical, $rawSignature, $peerPublicKey)) {
+            $this->refuseHelloAuth($peerId, $peerName, $peerUrl, 'handshake_proof_failed');
+            return 'HELLO_AUTH verification failed';
+        }
+
+        if (!$this->connMgr->markVerified($hubId, $conn)) {
+            // Socket was replaced mid-ceremony; this proof vouches for a dead
+            // connection and must not mark the successor verified.
+            $this->refuseHelloAuth($peerId, $peerName, $peerUrl, 'handshake_connection_superseded');
+            return 'HELLO_AUTH refused: connection superseded during handshake';
+        }
+
+        $this->log()->info('Federation channel verified', [
+            'peer_id' => $peerId,
+            'route_hub_id' => $hubId,
+        ]);
+
+        // Channel is live AND authenticated — release the deferred work.
+        $hubConfig = $this->hubRepo->getHubConfig();
+        /** @var string $masterHubId */
+        $masterHubId = is_array($hubConfig)
+            ? (is_string($hubConfig['id'] ?? null) ? $hubConfig['id'] : '')
+            : '';
         $this->pushLibrarySharesToLeaf($conn, $masterHubId, $peerId);
 
-        // Audit log
         $this->audit->logHubConnect($peerId, $peerName, $peerUrl, true);
 
         return null;
+    }
+
+    /**
+     * One loud, audited refusal path for failed HELLO_AUTH proofs.
+     *
+     * @param string $peerId Local federation_peers.id.
+     * @param string $peerName Peer display name.
+     * @param string $peerUrl  Peer URL.
+     * @param string $reason   Machine-readable refusal reason.
+     */
+    private function refuseHelloAuth(string $peerId, string $peerName, string $peerUrl, string $reason): void
+    {
+        $this->log()->error('Federation HELLO_AUTH refused', [
+            'peer_id' => $peerId,
+            'reason' => $reason,
+        ]);
+        $this->audit->logHubConnect($peerId, $peerName, $peerUrl, false, $reason);
+        $this->audit->logFailedAuth('federation_handshake_' . $reason, ['peer_id' => $peerId]);
     }
 
     /**
@@ -424,11 +560,18 @@ final class FederationFrameHandler
     }
 
     /**
-     * Send HELLO_ACK to a newly connected leaf hub.
+     * Send a SIGNED HELLO_ACK to a newly connected leaf hub (H-4 master leg).
+     *
+     * The signature is an Ed25519 detached signature (base64) over the
+     * canonical ACK string {@see FederationHandshake::helloAckCanonical()},
+     * made with this hub's keypair. The leaf verifies it against the master
+     * peer row's registered public key before trusting anything the ACK
+     * asserts — an unsigned or foreignly-signed ACK is refused with backoff.
      *
      * @param ConnectionInterface $conn          Leaf WS connection.
      * @param string              $sessionId     Federation session UUID.
      * @param string              $masterHubId   This hub's UUID ('' when unconfigured).
+     * @param string              $nonce         Fresh single-use handshake nonce.
      * @param array<string>       $capabilities  Supported federation features.
      *
      * @return void
@@ -437,14 +580,23 @@ final class FederationFrameHandler
         ConnectionInterface $conn,
         string $sessionId,
         string $masterHubId,
+        string $nonce,
         array $capabilities,
     ): void {
+        $keyPair = $this->keyManager->getOrCreateKeyPair();
+        $signature = FederationHandshake::sign(
+            FederationHandshake::helloAckCanonical($sessionId, $masterHubId, $nonce),
+            $keyPair['private'],
+        );
+
         $payload = json_encode([
             'type' => 'hub_hello_ack',
             'session_id' => $sessionId,
             'master_hub_id' => $masterHubId,
             'role' => 'master',
             'capabilities' => $capabilities,
+            'nonce' => $nonce,
+            'signature' => $signature,
         ], JSON_THROW_ON_ERROR);
 
         $conn->send($payload);
@@ -512,6 +664,10 @@ final class FederationFrameHandler
      * FK — the wire `peer_id` is treated only as a cross-check against the
      * bound `leaf_hub_id`, never trusted as a row reference.
      *
+     * H-4 unverified-channel gate: offers/shares/admin payloads are dropped
+     * (and audited) until this socket completed the mutual proof ceremony —
+     * transport liveness alone authorises nothing.
+     *
      * @param string $hubId   Peer hub UUID (route).
      * @param string $payload Raw JSON payload.
      *
@@ -519,6 +675,16 @@ final class FederationFrameHandler
      */
     private function handleDataFrame(string $hubId, string $payload): void
     {
+        if (!$this->connMgr->isVerified($hubId)) {
+            $this->log()->warning('Federation DATA frame dropped: channel not yet verified', [
+                'route_hub_id' => $hubId,
+            ]);
+            $this->audit->logFailedAuth('federation_data_frame_before_verification', [
+                'route_hub_id' => $hubId,
+            ]);
+            return;
+        }
+
         try {
             /** @var array<string, mixed>|null $data */
             $data = json_decode($payload, true, 4, JSON_THROW_ON_ERROR);

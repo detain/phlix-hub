@@ -23,11 +23,27 @@ use Workerman\MySQL\Connection;
  *   - Track heartbeats and bytes sent/received per session
  *   - Close sessions gracefully
  *   - Reap stale dead sessions
+ *   - Hold the single-use HELLO_ACK nonce of each pending handshake (H-4):
+ *     the master mints a fresh nonce per session at HELLO, and consumes it
+ *     exactly once when verifying the leaf's HELLO_AUTH proof. A replayed
+ *     proof therefore has no live nonce left to satisfy.
  *
  * @package Phlix\Hub\Federation
  */
 class FederationSessionManager
 {
+    /**
+     * session UUID → pending handshake state, in-process (master side only).
+     *
+     * Lives here — not in the frame handler — because the handshake is
+     * session-scoped state, and this manager is the session lifecycle owner.
+     * Bounded: at most one entry per peer (beginHandshake prunes the peer's
+     * earlier attempts), and every teardown path abandons the peer's entry.
+     *
+     * @var array<string, array{peer_id: string, nonce: string}>
+     */
+    private array $pendingHandshakes = [];
+
     public function __construct(
         private readonly Connection $db,
         private readonly StructuredLogger $logger,
@@ -48,6 +64,11 @@ class FederationSessionManager
     public function registerSession(string $peerId): string
     {
         $sessionId = $this->generateUuid();
+
+        // A fresh session supersedes any handshake still pending under an
+        // older attempt for this peer (re-hello without the old conn having
+        // been closed out yet).
+        $this->abandonHandshakesForPeer($peerId);
 
         $this->db->query(
             'UPDATE federation_sessions SET alive = 0 WHERE peer_id = :peer_id AND alive = 1',
@@ -204,10 +225,73 @@ class FederationSessionManager
             );
         }
 
+        // The session is gone — its single-use handshake nonce goes with it.
+        unset($this->pendingHandshakes[$sessionId]);
+
         $this->logger->info('Federation session closed', [
             'session_id' => $sessionId,
             'peer_id' => $peerId,
         ]);
+    }
+
+    /**
+     * Record the single-use HELLO_ACK nonce minted for a fresh handshake (H-4).
+     *
+     * Called by the master immediately before sending the signed HELLO_ACK;
+     * the nonce lives in the pending-handshake state until {@see consumeHandshake()}
+     * verifies the leaf's HELLO_AUTH proof exactly once.
+     *
+     * @param string $sessionId Session UUID this handshake belongs to.
+     * @param string $peerId    Local peer row UUID the session addresses.
+     * @param string $nonce     Fresh nonce embedded in the signed HELLO_ACK.
+     *
+     * @return void
+     */
+    public function beginHandshake(string $sessionId, string $peerId, string $nonce): void
+    {
+        $this->abandonHandshakesForPeer($peerId);
+
+        $this->pendingHandshakes[$sessionId] = [
+            'peer_id' => $peerId,
+            'nonce' => $nonce,
+        ];
+    }
+
+    /**
+     * Consume a session's pending handshake exactly once (H-4).
+     *
+     * The entry is removed whether or not the caller's proof later verifies,
+     * which is what makes a replayed HELLO_AUTH fail: there is no second read
+     * of a live nonce.
+     *
+     * @param string $sessionId Session UUID carried by the leaf's HELLO_AUTH.
+     *
+     * @return array{peer_id: string, nonce: string}|null Pending state, or null
+     *                                                     when no handshake is pending.
+     */
+    public function consumeHandshake(string $sessionId): ?array
+    {
+        $pending = $this->pendingHandshakes[$sessionId] ?? null;
+
+        unset($this->pendingHandshakes[$sessionId]);
+
+        return $pending;
+    }
+
+    /**
+     * Drop every pending handshake belonging to a peer (teardown / supersede).
+     *
+     * @param string $peerId Local peer row UUID.
+     *
+     * @return void
+     */
+    public function abandonHandshakesForPeer(string $peerId): void
+    {
+        foreach ($this->pendingHandshakes as $sessionId => $state) {
+            if ($state['peer_id'] === $peerId) {
+                unset($this->pendingHandshakes[$sessionId]);
+            }
+        }
     }
 
     /**

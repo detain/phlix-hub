@@ -7,25 +7,34 @@ namespace Phlix\Hub\Tests\Unit\Federation;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Federation\FederationAdminDelegationRepository;
+use Phlix\Hub\Federation\FederationHandshake;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
+use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Tests\Support\FederationFrameAssertions;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use ReflectionProperty;
+use Workerman\Connection\AsyncTcpConnection;
 
 /**
  * Unit tests for {@see FederationPeerManager} leaf-side logic that can be
- * exercised without sockets: dial-URL construction (M-8), HELLO_ACK identity
- * handling (C-1(3)), incoming-offer rebasing (M-5), and the deliberate-
- * disconnect guard (M-7).
+ * exercised without sockets: dial-URL construction (M-8), the H-4 signed
+ * HELLO_ACK verification + HELLO_AUTH proof, incoming-offer rebasing (M-5),
+ * the pre-verification DATA gate, and the deliberate-disconnect guard (M-7).
+ *
+ * H-4 ack tests run on REAL sodium keypairs: a master keypair signs the ack
+ * (its public half is stored on the master peer row), and this leaf's real
+ * Ed25519KeyManager produces the outbound proof.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
  */
 final class FederationPeerManagerTest extends TestCase
 {
+    use FederationFrameAssertions;
     use WorkermanTimerRuntimeControl;
 
     /**
@@ -44,6 +53,11 @@ final class FederationPeerManagerTest extends TestCase
     private $libraryShares;
 
     /**
+     * @var FederationAdminDelegationRepository&\PHPUnit\Framework\MockObject\MockObject
+     */
+    private $adminDel;
+
+    /**
      * @var AuditLogger&\PHPUnit\Framework\MockObject\MockObject
      */
     private $audit;
@@ -52,6 +66,19 @@ final class FederationPeerManagerTest extends TestCase
 
     private ?string $loggerTmp = null;
 
+    private ?string $keyDir = null;
+
+    private Ed25519KeyManager $leafKeyManager;
+
+    /**
+     * Test-side "master" keypair (sodium_crypto_sign_keypair output): the
+     * private half signs the acks, the public half is stored on the master
+     * peer row exactly as an operator would register it.
+     *
+     * @var non-empty-string
+     */
+    private string $masterKp;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -59,15 +86,21 @@ final class FederationPeerManagerTest extends TestCase
         $this->hubRepo = $this->createMock(FederationHubRepository::class);
         $this->sessions = $this->createMock(FederationSessionManager::class);
         $this->libraryShares = $this->createMock(FederationLibraryShareRepository::class);
-        $adminDel = $this->createMock(FederationAdminDelegationRepository::class);
+        $this->adminDel = $this->createMock(FederationAdminDelegationRepository::class);
         $this->audit = $this->createMock(AuditLogger::class);
+
+        $this->keyDir = sys_get_temp_dir() . '/phlix-hub-fed-peer-keys-' . bin2hex(random_bytes(6));
+        mkdir($this->keyDir, 0700, true);
+        $this->leafKeyManager = new Ed25519KeyManager($this->keyDir . '/leaf-ed25519.pem');
+        $this->masterKp = sodium_crypto_sign_keypair();
 
         $this->manager = new FederationPeerManager(
             $this->hubRepo,
             $this->sessions,
             $this->libraryShares,
-            $adminDel,
+            $this->adminDel,
             $this->audit,
+            $this->leafKeyManager,
         );
 
         // Ack/rebase paths log through LoggerFactory::get(RELAY).
@@ -96,6 +129,15 @@ final class FederationPeerManagerTest extends TestCase
             rmdir($this->loggerTmp);
         }
         $this->loggerTmp = null;
+        if ($this->keyDir !== null) {
+            foreach (glob($this->keyDir . '/*') ?: [] as $file) {
+                if (is_file($file)) {
+                    unlink($file);
+                }
+            }
+            @rmdir($this->keyDir);
+        }
+        $this->keyDir = null;
         parent::tearDown();
     }
 
@@ -142,7 +184,7 @@ final class FederationPeerManagerTest extends TestCase
         return $method->invoke($this->manager, $configured, $leafHubId);
     }
 
-    // ----------------------------------------------- HELLO_ACK identity (M-8)
+    // ---------------------------- HELLO_ACK verification (M-8 + H-4)
 
     public function testHelloAckWithoutDialedPeerAuditsFailure(): void
     {
@@ -151,38 +193,95 @@ final class FederationPeerManagerTest extends TestCase
             ->method('logHubConnect')
             ->with(self::identicalTo('own-leaf-id'), self::identicalTo('master'), self::anything(), false);
 
-        $this->invokeHandleHelloAck(['session_id' => 's1', 'master_hub_id' => 'master-uuid']);
+        $ack = $this->signedAck(sodium_crypto_sign_secretkey($this->masterKp), 's1', 'master-uuid');
+        $this->invokeHandleHelloAck($ack);
+
+        self::assertNull($this->readProperty('sessionId'));
+    }
+
+    /**
+     * H-4: an ack signed by a key the master peer row does NOT vouch for is
+     * not the master's word — refused BEFORE any of its claims (identity
+     * binding included) touch state, with audit-fail and backoff.
+     */
+    public function testHelloAckForgedByForeignKeyIsRefused(): void
+    {
+        $foreignKp = sodium_crypto_sign_keypair();
+        $this->setMasterPeerId('peer-master-1');
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
+        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn($this->masterPeerRow(
+            base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+            '',
+        ));
+        $this->hubRepo->expects(self::never())->method('setPeerLeafHubId');
+        $this->sessions->expects(self::never())->method('registerSession');
+        $this->audit->expects(self::once())
+            ->method('logHubConnect')
+            ->with(self::anything(), self::anything(), self::anything(), false, 'hello_ack_signature_invalid');
+
+        $this->invokeHandleHelloAck($this->signedAck(
+            sodium_crypto_sign_secretkey($foreignKp),
+            's1',
+            'claimed-master-uuid',
+        ));
+
+        self::assertNull($this->readProperty('sessionId'));
+        self::assertFalse((bool) $this->readProperty('channelVerified'));
+    }
+
+    /**
+     * H-4: the ceremony is mandatory — a legacy UNSIGNED ack (no nonce /
+     * signature fields) is refused outright, never grandfathered.
+     */
+    public function testHelloAckWithoutProofFieldsIsRefused(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
+        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn($this->masterPeerRow(
+            base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+            'the-real-master-uuid',
+        ));
+        $this->sessions->expects(self::never())->method('registerSession');
+        $this->audit->expects(self::once())
+            ->method('logHubConnect')
+            ->with(self::anything(), self::anything(), self::anything(), false, 'hello_ack_missing_proof_fields');
+
+        $this->invokeHandleHelloAck(['session_id' => 's1', 'master_hub_id' => 'the-real-master-uuid']);
 
         self::assertNull($this->readProperty('sessionId'));
     }
 
     /**
      * M-8: the ack's master_hub_id must match the peer's BOUND identity.
-     * A contradicting ack is refused — never silently adopted.
+     * A contradicting (but properly signed) ack is refused — never silently
+     * adopted.
      */
     public function testHelloAckRejectsContradictingMasterIdentity(): void
     {
         $this->setMasterPeerId('peer-master-1');
         $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
-        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn([
-            'id' => 'peer-master-1',
-            'name' => 'Master',
-            'leaf_hub_id' => 'the-real-master-uuid',
-        ]);
+        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn($this->masterPeerRow(
+            base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+            'the-real-master-uuid',
+        ));
         $this->hubRepo->expects(self::never())->method('setPeerLeafHubId');
         $this->sessions->expects(self::never())->method('registerSession');
         $this->audit->expects(self::once())
             ->method('logHubConnect')
-            ->with(self::anything(), self::anything(), self::anything(), false);
+            ->with(self::anything(), self::anything(), self::anything(), false, 'hello_ack_identity_mismatch');
 
-        $this->invokeHandleHelloAck(['session_id' => 's1', 'master_hub_id' => 'IMPOSTOR-uuid']);
+        $this->invokeHandleHelloAck($this->signedAck(
+            sodium_crypto_sign_secretkey($this->masterKp),
+            's1',
+            'IMPOSTOR-uuid',
+        ));
 
         self::assertNull($this->readProperty('sessionId'), 'Refused ack must not adopt the session');
     }
 
     /**
-     * M-8: first successful ack binds the reported master identity and the
-     * leaf registers its local mirror session under the DIALED peer id —
+     * M-8 + H-4: a VALID signed ack binds the reported master identity and
+     * the leaf registers its local mirror session under the DIALED peer id —
      * not via the old getConnectedPeers()[0] probe that found nothing while
      * the master row was still 'pending' (C-1(1)/H-2 bootstrap breakage).
      */
@@ -190,11 +289,10 @@ final class FederationPeerManagerTest extends TestCase
     {
         $this->setMasterPeerId('peer-master-1');
         $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
-        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn([
-            'id' => 'peer-master-1',
-            'name' => 'Master',
-            'leaf_hub_id' => null,
-        ]);
+        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn($this->masterPeerRow(
+            base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+            null,
+        ));
         $this->hubRepo->expects(self::once())
             ->method('setPeerLeafHubId')
             ->with('peer-master-1', 'master-uuid-77');
@@ -206,11 +304,115 @@ final class FederationPeerManagerTest extends TestCase
             ->method('logHubConnect')
             ->with(self::anything(), self::anything(), self::anything(), true);
 
-        $this->invokeHandleHelloAck(['session_id' => 'master-sess-9', 'master_hub_id' => 'master-uuid-77']);
+        $this->invokeHandleHelloAck($this->signedAck(
+            sodium_crypto_sign_secretkey($this->masterKp),
+            'master-sess-9',
+            'master-uuid-77',
+        ));
 
         self::assertSame('master-sess-9', $this->readProperty('sessionId'));
         // Tear down the heartbeat timer the ack armed, so it cannot leak.
         $this->manager->disconnectFromMaster();
+    }
+
+    /**
+     * H-4 leaf leg: after a verified ack the leaf must immediately answer
+     * with HELLO_AUTH proving possession of ITS registered key over the
+     * canonical {session_id, nonce, leaf_hub_id} string.
+     */
+    public function testVerifiedAckTriggersHelloAuthProofFromRegisteredKey(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
+        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn($this->masterPeerRow(
+            base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+            'master-uuid-77',
+        ));
+        $this->sessions->method('registerSession')->willReturn('local-sess-1');
+
+        // Fake socket that records what the leaf sends.
+        $sent = [];
+        $conn = $this->createMock(AsyncTcpConnection::class);
+        $conn->method('send')->willReturnCallback(
+            static function (string $data) use (&$sent): bool {
+                $sent[] = $data;
+                return true;
+            },
+        );
+        $property = new ReflectionProperty($this->manager, 'masterConnection');
+        $property->setAccessible(true);
+        $property->setValue($this->manager, $conn);
+
+        $ack = $this->signedAck(sodium_crypto_sign_secretkey($this->masterKp), 'master-sess-9', 'master-uuid-77');
+        $this->invokeHandleHelloAck($ack);
+
+        self::assertCount(1, $sent, 'Exactly one HELLO_AUTH frame expected');
+        /** @var array<string, mixed> $auth */
+        $auth = json_decode($sent[0], true, 4, JSON_THROW_ON_ERROR);
+        self::assertSame('hub_hello_auth', $auth['type']);
+        self::assertSame('own-leaf-id', $auth['leaf_hub_id']);
+        self::assertSame('master-sess-9', $auth['session_id']);
+
+        $leafPub = $this->leafKeyManager->getOrCreateKeyPair()['public'];
+        self::assertTrue(FederationHandshake::verify(
+            FederationHandshake::helloAuthCanonical(
+                'master-sess-9',
+                self::frameStringField($ack, 'nonce'),
+                'own-leaf-id',
+            ),
+            self::frameStringField($auth, 'signature'),
+            base64_encode($leafPub),
+        ), 'The proof must verify against the registered public key of this leaf');
+
+        self::assertTrue((bool) $this->readProperty('channelVerified'));
+        $this->manager->disconnectFromMaster();
+    }
+
+    // -------------------------------------- pre-verification DATA gate (H-4)
+
+    /**
+     * H-4 (leaf side): offers/revocations/admin-delegation payloads arriving
+     * before the channel is verified are dropped and audited — admin
+     * delegation in particular must NEVER grant from an unauthenticated
+     * source.
+     */
+    public function testDataFrameBeforeVerificationIsRefused(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->adminDel->expects(self::never())->method('revoke');
+        $this->libraryShares->expects(self::never())->method('handleIncomingOffer');
+        $this->audit->expects(self::once())
+            ->method('logFailedAuth')
+            ->with('federation_data_frame_before_verification', self::anything());
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'peer-master-1',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * Gate-off control: with the channel verified, the same admin-delegation
+     * payload is processed normally.
+     */
+    public function testDataFrameAfterVerificationIsProcessed(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $property = new ReflectionProperty($this->manager, 'channelVerified');
+        $property->setAccessible(true);
+        $property->setValue($this->manager, true);
+
+        $this->adminDel->expects(self::once())->method('grant')
+            ->with(self::anything(), 'peer-master-1', 'u-1');
+        $this->audit->expects(self::never())->method('logFailedAuth');
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'peer-master-1',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
     }
 
     // --------------------------------------------------- offer rebasing (M-5)
@@ -281,6 +483,42 @@ final class FederationPeerManagerTest extends TestCase
 
     // ---------------------------------------------------------------- helpers
 
+    /**
+     * @return array<string, mixed>
+     */
+    private function masterPeerRow(string $publicKeyB64, ?string $leafHubId): array
+    {
+        return [
+            'id' => 'peer-master-1',
+            'name' => 'Master',
+            'leaf_hub_id' => $leafHubId,
+            'public_key' => $publicKeyB64,
+        ];
+    }
+
+    /**
+     * Build a HELLO_ACK array whose signature is made over the canonical
+     * string with $secret64 — pass a foreign secret to forge.
+     *
+     * @return array<string, mixed>
+     */
+    private function signedAck(string $secret64, string $sessionId, string $masterHubId): array
+    {
+        $nonce = FederationHandshake::newNonce();
+
+        return [
+            'type' => 'hub_hello_ack',
+            'session_id' => $sessionId,
+            'master_hub_id' => $masterHubId,
+            'role' => 'master',
+            'nonce' => $nonce,
+            'signature' => FederationHandshake::sign(
+                FederationHandshake::helloAckCanonical($sessionId, $masterHubId, $nonce),
+                $secret64,
+            ),
+        ];
+    }
+
     private function setMasterPeerId(string $peerId): void
     {
         $property = new ReflectionProperty($this->manager, 'masterPeerId');
@@ -304,5 +542,12 @@ final class FederationPeerManagerTest extends TestCase
         $method = new ReflectionMethod($this->manager, 'handleHelloAck');
         $method->setAccessible(true);
         $method->invoke($this->manager, $msg);
+    }
+
+    private function invokeHandleDataFrame(string $payload): void
+    {
+        $method = new ReflectionMethod($this->manager, 'handleDataFrame');
+        $method->setAccessible(true);
+        $method->invoke($this->manager, $payload);
     }
 }

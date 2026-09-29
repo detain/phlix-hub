@@ -95,6 +95,38 @@ final class FederationMasterPusherTest extends TestCase
         $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'master-hub-uuid']);
         $this->hubRepo->method('getPeerById')->willReturn($this->boundPeer($leafHubId));
         $this->connMgr->addConnection($leafHubId, $conn);
+        // H-4: pushes only flow on VERIFIED channels — happy paths stand up
+        // a completed handshake via the same stamp production uses.
+        $this->connMgr->markVerified($leafHubId, $conn);
+    }
+
+    /**
+     * H-4 gate (master push path): a live socket alone is not authority —
+     * an offer pushed over a not-yet-verified channel is refused outright.
+     */
+    public function testPushOfferRefusedOnUnverifiedChannel(): void
+    {
+        $conn = $this->createMock(ConnectionInterface::class);
+        $conn->expects(self::never())->method('send');
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'master-hub-uuid']);
+        $this->hubRepo->method('getPeerById')->willReturn($this->boundPeer('leaf-own-uuid'));
+        $this->connMgr->addConnection('leaf-own-uuid', $conn); // connected, NOT verified
+
+        self::assertFalse($this->pusher->pushOffer('peer-1', $this->shareRow()));
+    }
+
+    /**
+     * H-4 gate (master push path): revocations obey the same law.
+     */
+    public function testPushRevocationRefusedOnUnverifiedChannel(): void
+    {
+        $conn = $this->createMock(ConnectionInterface::class);
+        $conn->expects(self::never())->method('send');
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'master-hub-uuid']);
+        $this->hubRepo->method('getPeerById')->willReturn($this->boundPeer('leaf-own-uuid'));
+        $this->connMgr->addConnection('leaf-own-uuid', $conn);
+
+        self::assertFalse($this->pusher->pushRevocation('peer-1', 'share-1'));
     }
 
     public function testPushOfferWritesDataFrameToTargetLeafConnection(): void

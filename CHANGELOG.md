@@ -6,6 +6,43 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security — H-4: federation peer auth is now a mutual Ed25519 proof-of-key handshake, and the wire spec matches the shipped envelope law — 2026-09-29
+
+- **Knowledge of the `hub_id` no longer buys a federation channel.** The upgrade gate stayed
+  existence-only (routing hint), but trust now comes from signatures: the master's `HELLO_ACK`
+  carries a fresh single-use `nonce` plus an Ed25519 `signature` over
+  `phlix-federation/hello-ack/v1\n{session_id}\n{master_hub_id}\n{nonce}` (master hub keypair), the
+  leaf verifies it against the master's registered public key BEFORE honoring any identity binding,
+  then answers with `HELLO_AUTH` proving possession of its registered key over
+  `phlix-federation/hello-auth/v1\n{session_id}\n{nonce}\n{leaf_hub_id}`. Both canonicals live in one
+  shared helper (`FederationHandshake`) so the ends cannot drift; no new key material —
+  `Ed25519KeyManager` is reused.
+- **Verified-channel gate on both roles.** The connection flips to verified only after both proofs;
+  until then every DATA payload — offers, revocations, admin delegations — is dropped and audited
+  (`federation_data_frame_before_verification`), and master-side pushes refuse on unverified
+  channels. Replay refused: the nonce is consumed exactly once per session
+  (`FederationSessionManager::consumeHandshake`); forged/wrong-key proofs close the link with an
+  audit-fail and (leaf-side) the reconnect backoff. `closePeerConnection` teardown stays exempt.
+- **The spec was lying about the wire.** `0x09`–`0x0F` were declared as binary federation frame
+  types, but all real traffic (including the shipped `FederationMasterPusher`) rides JSON TEXT
+  handshake frames plus generic `DATA` (`0x05`) envelopes with JSON discriminators and
+  `HEARTBEAT`/`DISCONNECTED`. `openapi.yaml` and `docs/websockets.md` now state the shipped
+  envelope law and mark the hub-specific codes RETIRED (the vendored `RelayFrameType` enum is
+  untouched); a spec-conformant peer's `0x0C`–`0x0E` frames previously vanished silently — now the
+  docs say why nothing listens for them.
+- **d483f295 review rework:** typed extraction in `FederationMasterPusher::strField` (psalm
+  MixedAssignment), the honest process-local docblock on `FederationConnectionManager`/`send()`
+  (:8800 HTTP worker vs :8805 FederationWorker hold separate maps — live `sendTo` no-ops
+  cross-process until a channel bridge exists; `send()` is that seam), and the `getPeerById`
+  comment corrected to credit `PhlixMySQLConnection::connect()` forcing
+  `PDO::ATTR_EMULATE_PREPARES=true` for repeated-`:id` safety — not workerman's `bindMore()`,
+  which only collects parameters.
+- **Tests:** `FederationHandshakeTest` (canonical pinning, encoding matrix, fail-closed paths), a
+  cross-role `FederationHandshakeCeremonyTest` running the full ceremony on real sodium keys in both
+  directions with replay refusal, and per-role ceremony/gate units — forged ACK refused leaf-side,
+  wrong-key leaf refused master-side, pre-verification admin delegation dropped on the leaf,
+  unverified-channel push refusals.
+
 ### Fixed — auth spec debt consumed: bearer-only AUTH paths in openapi + the live `auth.signups_disabled` hub setting — 2026-09-29
 
 - **The spec caught up with the bearer-only rework.** `/api/v1/auth/logout` still promised

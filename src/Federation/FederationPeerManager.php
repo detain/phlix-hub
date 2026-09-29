@@ -15,6 +15,7 @@ use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
@@ -33,12 +34,19 @@ use Workerman\Timer;
  *   2. Sends HUB_HELLO JSON frame on connect
  *   3. Handles HUB_HELLO_ACK (stores session; cross-checks the reported
  *      `master_hub_id` against the master peer's bound identity when one is
- *      known, binding it on first use). NOTE: there is NO cryptographic
- *      master-key validation of the ack in this build — first contact is
- *      trusted-on-use; signature enforcement is owned by a later step.
- *   4. Sends HUB_HEARTBEAT binary frame every 15 seconds
- *   5. Handles incoming LIBRARY_SHARE_UPDATE (DATA), ADMIN_DELEGATION,
- *      HUB_DISCONNECTED frames
+ *      known, binding it on first use). H-4: the ack is CRYPTOGRAPHICALLY
+ *      verified first — its Ed25519 signature over the canonical
+ *      {session_id, master_hub_id, nonce} string must check against the
+ *      master peer row's registered public key before ANY of its claims are
+ *      trusted; a forged/unsigned ack closes the link with backoff. On
+ *      acceptance the leaf answers with HELLO_AUTH, proving possession of
+ *      THIS hub's registered private key over {session_id, nonce,
+ *      leaf_hub_id} (canonicals shared with the master via
+ *      {@see FederationHandshake}).
+ *   4. Sends HEARTBEAT (generic binary) every 15 seconds once verified
+ *   5. Handles incoming DATA envelopes (library-share offers/revocations,
+ *      ADMIN_DELEGATION payloads) — all refused before the channel is
+ *      verified (H-4 leaf-side gate)
  *   6. Auto-reconnects with exponential backoff on disconnect — never after
  *      a deliberate disconnectFromMaster() (M-7)
  *   7. Pushes local library share changes to master when connected
@@ -141,11 +149,23 @@ class FederationPeerManager
     private string $masterPeerId = '';
 
     /**
+     * H-4 leaf-side channel gate: true only after a SIGNED HELLO_ACK verified
+     * against the master peer's registered key AND this leaf's HELLO_AUTH proof
+     * was sent. Every inbound DATA payload (offers, shares, admin-delegation)
+     * is refused while false — transport liveness authorises nothing. Reset at
+     * the start of every ceremony and on any link teardown.
+     *
+     * @var bool
+     */
+    private bool $channelVerified = false;
+
+    /**
      * @param FederationHubRepository            $hubRepo       Hub + peer repository.
      * @param FederationSessionManager           $sessions      Federation session manager.
      * @param FederationLibraryShareRepository $libraryShares Library shares repository.
      * @param FederationAdminDelegationRepository $adminDel     Admin delegation repository.
      * @param AuditLogger                       $audit         Audit logger.
+     * @param Ed25519KeyManager                 $keyManager    This leaf's Ed25519 keypair (HELLO_AUTH proof).
      */
     public function __construct(
         private readonly FederationHubRepository $hubRepo,
@@ -153,6 +173,7 @@ class FederationPeerManager
         private readonly FederationLibraryShareRepository $libraryShares,
         private readonly FederationAdminDelegationRepository $adminDel,
         private readonly AuditLogger $audit,
+        private readonly Ed25519KeyManager $keyManager,
     ) {
         $this->decoder = new FrameDecoder();
         $this->encoder = new FrameEncoder();
@@ -294,6 +315,7 @@ class FederationPeerManager
 
         $this->sessionId = null;
         $this->masterPeerId = '';
+        $this->channelVerified = false;
         $this->reconnectScheduled = false;
         $this->reconnectDelaySeconds = 5;
     }
@@ -529,6 +551,10 @@ class FederationPeerManager
             return;
         }
 
+        // A new ceremony starts untrusted (H-4): nothing carried over from
+        // the previous handshake — especially its verified stamp.
+        $this->channelVerified = false;
+
         /** @var string $hubId */
         $hubId = is_string($hubConfig['id'] ?? null) ? $hubConfig['id'] : '';
         /** @var string $hubName */
@@ -595,14 +621,20 @@ class FederationPeerManager
     }
 
     /**
-     * Handle HUB_HELLO_ACK — session established, start heartbeat timer.
+     * Handle HUB_HELLO_ACK — verify the master's signature, then establish
+     * the session, answer with our own HELLO_AUTH proof, start heartbeat.
      *
      * M-8: the ack's `master_hub_id` is cross-checked against the master
      * peer's bound identity (`leaf_hub_id`, migration 046). A mismatch means
      * we are talking to a hub that is not the one this peer row represents —
      * the link is refused, never silently adopted. Unbound → bind on first
-     * use. There is no signature validation of the ack in this build (see
-     * class docblock); the bound id is an integrity anchor, not an auth key.
+     * use.
+     *
+     * H-4: the ack is trusted ONLY after its Ed25519 `signature` verifies
+     * over the canonical {session_id, master_hub_id, nonce} string against
+     * the master peer row's registered public key. Unsigned, malformed or
+     * foreignly-signed acks are refused before any of the ack's claims
+     * (identity binding included) touch state — close + audit-fail + backoff.
      *
      * @param array<string, mixed> $msg Decoded JSON payload.
      *
@@ -619,6 +651,14 @@ class FederationPeerManager
         /** @var mixed $rawMasterHubId */
         $rawMasterHubId = $msg['master_hub_id'] ?? null;
         $ackHubId = is_string($rawMasterHubId) ? $rawMasterHubId : '';
+
+        /** @var mixed $rawNonce */
+        $rawNonce = $msg['nonce'] ?? null;
+        $nonce = is_string($rawNonce) ? $rawNonce : '';
+
+        /** @var mixed $rawSignature */
+        $rawSignature = $msg['signature'] ?? null;
+        $signature = is_string($rawSignature) ? $rawSignature : '';
 
         $hubConfig = $this->hubRepo->getHubConfig();
         if ($hubConfig === null) {
@@ -650,18 +690,25 @@ class FederationPeerManager
         $boundHubId = is_string($masterPeer['leaf_hub_id'] ?? null) ? $masterPeer['leaf_hub_id'] : '';
         /** @var string $peerName */
         $peerName = is_string($masterPeer['name'] ?? null) ? $masterPeer['name'] : 'master';
+        /** @var string $masterPublicKey */
+        $masterPublicKey = is_string($masterPeer['public_key'] ?? null) ? $masterPeer['public_key'] : '';
+
+        // H-4: proof before claims. A signed handshake is the ONLY thing that
+        // makes this ack the master's word — until it verifies, not one of
+        // its assertions (identity binding included) may mutate state.
+        if ($sessionId === null || $sessionId === '' || $nonce === '' || $signature === '') {
+            $this->refuseHelloAck($hubId, $peerName, $ackHubId, 'hello_ack_missing_proof_fields');
+            return;
+        }
+
+        $canonical = FederationHandshake::helloAckCanonical($sessionId, $ackHubId, $nonce);
+        if (!FederationHandshake::verify($canonical, $signature, $masterPublicKey)) {
+            $this->refuseHelloAck($hubId, $peerName, $ackHubId, 'hello_ack_signature_invalid');
+            return;
+        }
 
         if ($boundHubId !== '' && $ackHubId !== '' && $boundHubId !== $ackHubId) {
-            LoggerFactory::get(LogChannels::RELAY)->error(
-                'FederationPeerManager: HELLO_ACK master_hub_id does not match bound identity — refusing link',
-                [
-                    'peer_id' => $this->masterPeerId,
-                    'bound_hub_id' => $boundHubId,
-                    'ack_hub_id' => $ackHubId,
-                ],
-            );
-            $this->audit->logHubConnect($hubId, $peerName, $ackHubId, false);
-            $this->closeLinkAndReschedule();
+            $this->refuseHelloAck($hubId, $peerName, $ackHubId, 'hello_ack_identity_mismatch');
             return;
         }
 
@@ -675,9 +722,7 @@ class FederationPeerManager
         // (The old code re-read getConnectedPeers() — empty for a 'pending'
         // master row at first ack — so leaf-side session bookkeeping never
         // existed at bootstrap. H-2/C-1(1).)
-        if ($sessionId !== null) {
-            $this->sessions->registerSession($this->masterPeerId);
-        }
+        $this->sessions->registerSession($this->masterPeerId);
 
         $this->audit->logHubConnect($hubId, $peerName, $ackHubId, true);
 
@@ -685,8 +730,71 @@ class FederationPeerManager
         $this->reconnectDelaySeconds = 5;
         $this->reconnectScheduled = false;
 
+        // H-4 leaf leg: prove possession of THIS hub's registered private key
+        // over the same session nonce, then open the channel for payloads.
+        $this->sendHelloAuth($hubId, $sessionId, $nonce);
+        $this->channelVerified = true;
+
         // Start heartbeat timer
         $this->startHeartbeatTimer();
+    }
+
+    /**
+     * Loud, audited refusal of a HELLO_ACK that failed the H-4 proof or the
+     * M-8 identity cross-check — drops the link and arms exponential backoff.
+     *
+     * @param string $hubId    This leaf's hub UUID.
+     * @param string $peerName Master peer display name.
+     * @param string $ackHubId Master hub id claimed by the ack.
+     * @param string $reason   Machine-readable refusal reason.
+     */
+    private function refuseHelloAck(string $hubId, string $peerName, string $ackHubId, string $reason): void
+    {
+        LoggerFactory::get(LogChannels::RELAY)->error(
+            'FederationPeerManager: HELLO_ACK refused — ' . $reason,
+            [
+                'peer_id' => $this->masterPeerId,
+                'ack_hub_id' => $ackHubId,
+            ],
+        );
+        $this->audit->logHubConnect($hubId, $peerName, $ackHubId, false, $reason);
+        $this->closeLinkAndReschedule();
+    }
+
+    /**
+     * Send HELLO_AUTH — the leaf's proof-of-key over the canonical
+     * {session_id, nonce, leaf_hub_id} string (H-4 ceremony, leaf leg).
+     *
+     * The master verifies this against OUR public key as registered on its
+     * peer row; only then does it flip the channel to VERIFIED and release
+     * share pushes. Signing the SAME canonical bytes the master reconstructs
+     * is guaranteed by the shared {@see FederationHandshake} helper — the two
+     * ends cannot drift their wire formats.
+     *
+     * @param string $ownHubId  This leaf's hub UUID.
+     * @param string $sessionId Session UUID from the verified ack.
+     * @param string $nonce     Nonce from the verified ack (echoed in proof).
+     */
+    private function sendHelloAuth(string $ownHubId, string $sessionId, string $nonce): void
+    {
+        if ($this->masterConnection === null) {
+            return;
+        }
+
+        $keyPair = $this->keyManager->getOrCreateKeyPair();
+        $signature = FederationHandshake::sign(
+            FederationHandshake::helloAuthCanonical($sessionId, $nonce, $ownHubId),
+            $keyPair['private'],
+        );
+
+        $payload = json_encode([
+            'type' => 'hub_hello_auth',
+            'leaf_hub_id' => $ownHubId,
+            'session_id' => $sessionId,
+            'signature' => $signature,
+        ], JSON_THROW_ON_ERROR);
+
+        $this->masterConnection->send($payload);
     }
 
     /**
@@ -699,6 +807,7 @@ class FederationPeerManager
     {
         $this->cancelAckTimeoutTimer();
         $this->cancelHeartbeatTimer();
+        $this->channelVerified = false;
 
         if ($this->masterConnection !== null) {
             $conn = $this->masterConnection;
@@ -822,6 +931,7 @@ class FederationPeerManager
         }
 
         $this->sessionId = null;
+        $this->channelVerified = false;
         $this->scheduleReconnect();
 
         // Audit log
@@ -844,6 +954,20 @@ class FederationPeerManager
      */
     private function handleDataFrame(string $payload): void
     {
+        // H-4 unverified-channel gate (leaf side): a live socket alone proves
+        // nothing — offers, revocations and admin-delegation payloads are all
+        // dropped until the signed handshake ceremony completes.
+        if (!$this->channelVerified) {
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: DATA frame dropped — channel not yet verified',
+                ['peer_id' => $this->masterPeerId],
+            );
+            $this->audit->logFailedAuth('federation_data_frame_before_verification', [
+                'peer_id' => $this->masterPeerId,
+            ]);
+            return;
+        }
+
         try {
             /** @var array<string, mixed>|null $data */
             $data = json_decode($payload, true, 4, JSON_THROW_ON_ERROR);
@@ -1107,6 +1231,7 @@ class FederationPeerManager
         }
 
         $this->sessionId = null;
+        $this->channelVerified = false;
 
         $delay = $this->reconnectDelaySeconds;
         $self = $this;

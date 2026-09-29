@@ -41,6 +41,14 @@ use function json_encode;
  * Connections are keyed by the leaf's OWN hub uuid (its `leaf_hub_id`
  * binding), never the local peer row id — resolve() translates.
  *
+ * H-4: pushes require the target channel to be VERIFIED (mutual Ed25519
+ * handshake completed in FederationFrameHandler/FederationWorker) — an
+ * unverified socket gets nothing but a refused, logged push. Note also that
+ * FederationConnectionManager is process-local: the :8800 HTTP worker and
+ * the :8805 FederationWorker hold separate connection maps, so a live send
+ * from here no-ops cross-process until a channel bridge exists — see the
+ * send() seam docblock.
+ *
  * @package Phlix\Hub\Federation
  */
 // Not final: the controller test-suite mocks this seam, same as
@@ -73,6 +81,13 @@ class FederationMasterPusher
 
         $leafHubId = $this->resolve($targetPeerRowId, 'push share offer');
         if ($leafHubId === null) {
+            return false;
+        }
+
+        if (!$this->connMgr->isVerified($leafHubId)) {
+            $this->log()->warning('Federation master offer push skipped: channel not verified', [
+                'peer_id' => $targetPeerRowId,
+            ]);
             return false;
         }
 
@@ -120,6 +135,13 @@ class FederationMasterPusher
 
         $leafHubId = $this->resolve($targetPeerRowId, 'push share revocation');
         if ($leafHubId === null) {
+            return false;
+        }
+
+        if (!$this->connMgr->isVerified($leafHubId)) {
+            $this->log()->warning('Federation master revocation push skipped: channel not verified', [
+                'peer_id' => $targetPeerRowId,
+            ]);
             return false;
         }
 
@@ -229,6 +251,16 @@ class FederationMasterPusher
     /**
      * Encode one binary relay frame and write it to a leaf connection.
      *
+     * CROSS-PROCESS CAVEAT: FederationConnectionManager is PROCESS-LOCAL.
+     * This pusher is typically invoked from an HTTP worker process (:8800
+     * controller), while the leaf's WS socket is registered in the
+     * FederationWorker process (:8805) container — a different instance with
+     * a different map. There the sendTo() below finds no connection and
+     * returns false (a no-op), and the leaf only converges on its next
+     * hello-time share replay. This method is the single seam where a future
+     * inter-process channel bridge (worker-to-worker frame forwarding) must
+     * hook in to make live master pushes work across processes.
+     *
      * @param string          $leafHubId Connection key (leaf's own hub uuid).
      * @param RelayFrameType  $type      Frame type.
      * @param string          $payload   JSON payload.
@@ -251,6 +283,7 @@ class FederationMasterPusher
      */
     private function strField(array $row, string $key, string $fallback): string
     {
+        /** @var mixed $value */
         $value = $row[$key] ?? null;
 
         return is_string($value) ? $value : $fallback;

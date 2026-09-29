@@ -1221,6 +1221,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 FederationLibraryShareRepository $libraryShares,
                 FederationConnectionManager $connMgr,
                 AuditLogger $audit,
+                Ed25519KeyManager $keyManager,
             ): FederationFrameHandler {
                 return new FederationFrameHandler(
                     $hubRepo,
@@ -1228,12 +1229,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $libraryShares,
                     $connMgr,
                     $audit,
+                    $keyManager,
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))
                 ->parameter('sessions', get(FederationSessionManager::class))
                 ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
                 ->parameter('connMgr', get(FederationConnectionManager::class))
-                ->parameter('audit', get(AuditLogger::class)),
+                ->parameter('audit', get(AuditLogger::class))
+                ->parameter('keyManager', get(Ed25519KeyManager::class)),
 
             FederationRelayController::class => factory(static function (
                 FederationFrameHandler $frameHandler,
@@ -1275,6 +1278,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 FederationLibraryShareRepository $libraryShares,
                 FederationAdminDelegationRepository $adminDel,
                 AuditLogger $audit,
+                Ed25519KeyManager $keyManager,
             ): FederationPeerManager {
                 return new FederationPeerManager(
                     $hubRepo,
@@ -1282,12 +1286,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $libraryShares,
                     $adminDel,
                     $audit,
+                    $keyManager,
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))
                 ->parameter('sessions', get(FederationSessionManager::class))
                 ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
                 ->parameter('adminDel', get(FederationAdminDelegationRepository::class))
-                ->parameter('audit', get(AuditLogger::class)),
+                ->parameter('audit', get(AuditLogger::class))
+                ->parameter('keyManager', get(Ed25519KeyManager::class)),
 
             // Metrics API controller (S4). Read by Application::registerMetricsRoutes().
             MetricsController::class => factory(static function (

@@ -9,7 +9,7 @@ WebSocket surfaces across two repositories.
 | `8802` | Server relay tunnel | `phlix-hub` | `Phlix\Hub\Relay\RelayWorker` | JSON handshake, then binary `RelayFrame` |
 | `8803` | Client mount | `phlix-hub` | `Phlix\Hub\Relay\ClientRelayWorker` | binary `RelayFrame` |
 | `8804` | SyncPlay relay | `phlix-hub` | `Phlix\Hub\SyncPlay\SyncPlayRelayWorker` | JSON text |
-| `8805` | Hub federation | `phlix-hub` | `Phlix\Hub\Relay\FederationWorker` | JSON handshake, then binary `RelayFrame` |
+| `8805` | Hub federation | `phlix-hub` | `Phlix\Hub\Relay\FederationWorker` | signed JSON handshake, then binary `DATA` envelopes |
 | `8097` | Media server events + SyncPlay | `phlix-server` | `Phlix\Server\WebSocket\WebSocketServer` | JSON text |
 
 The four hub surfaces are also declared under the `x-phlix-websockets` extension
@@ -59,13 +59,13 @@ single reliable WS/TCP stream, so the field is used for multiplexing instead:
 | `0x06` | `HEARTBEAT` | either → either | 0 | keep-alive probe / ack |
 | `0x07` | `DISCONNECTED` | hub → client | 0 | server tunnel closed; client should reconnect |
 | `0x08` | `ERROR` | hub ↔ any | 0 | error condition |
-| `0x09` | `HUB_HELLO` | leaf → master | 0 | JSON text, federation handshake |
-| `0x0A` | `HUB_HELLO_ACK` | master → leaf | 0 | JSON text |
-| `0x0B` | `HUB_HEARTBEAT` | both → both | 0 | keep-alive |
-| `0x0C` | `LIBRARY_SHARE_UPDATE` | master → leaf | 0 | JSON |
-| `0x0D` | `LIBRARY_SHARE_REVOKED` | master → leaf | 0 | JSON |
-| `0x0E` | `ADMIN_DELEGATION` | master → leaf | 0 | JSON |
-| `0x0F` | `HUB_DISCONNECTED` | both → both | 0 | clean close |
+| `0x09` | `HUB_HELLO` | — | 0 | **RETIRED** — reserved in the vendored `RelayFrameType` enum, never emitted; the federation handshake rides JSON **text** frames (`hub_hello`) instead |
+| `0x0A` | `HUB_HELLO_ACK` | — | 0 | **RETIRED** — never emitted; signed ack rides a JSON text frame (`hub_hello_ack`) |
+| `0x0B` | `HUB_HEARTBEAT` | — | 0 | **RETIRED** — never emitted; federation liveness rides the generic `HEARTBEAT` (`0x06`) |
+| `0x0C` | `LIBRARY_SHARE_UPDATE` | — | 0 | **RETIRED** — never emitted; share payloads ride `DATA` (`0x05`) envelopes with a JSON discriminator |
+| `0x0D` | `LIBRARY_SHARE_REVOKED` | — | 0 | **RETIRED** — never emitted; revocation payloads ride `DATA` (`0x05`) envelopes |
+| `0x0E` | `ADMIN_DELEGATION` | — | 0 | **RETIRED** — never emitted; delegation payloads ride `DATA` (`0x05`) envelopes |
+| `0x0F` | `HUB_DISCONNECTED` | — | 0 | **RETIRED** — never emitted; federation goodbye rides the generic `DISCONNECTED` (`0x07`) |
 | `0x10` | `HTTP_REQUEST` | hub → server | request id | `RelayHttpRequest` JSON |
 | `0x11` | `HTTP_RESPONSE` | server → hub | request id | tagged `HEAD` / `BODY` / `END` chunk (`RelayHttpResponseCodec`) |
 | `0x12` | `HTTP_CANCEL` | hub → server | request id | empty — the client abandoned the request |
@@ -75,6 +75,15 @@ operations in `openapi.yaml`: the hub turns an authenticated HTTP call into a
 frame, the server answers with a stream of tagged chunks, and the hub streams
 those back to the caller through `ConnectionResponseSink` (which also applies the
 per-user `TokenBucket` throttle).
+
+**Federation envelope law.** The `0x09`–`0x0F` codes are retired wire types: they
+remain reserved in the vendored `Phlix\Shared\Relay\RelayFrameType` enum, but no
+hub implementation ever emits them, and receivers ignore frames carrying them.
+All federation traffic rides either JSON **text** WebSocket frames (the signed
+handshake) or generic `DATA` (`0x05`) envelopes carrying a JSON payload with a
+discriminator key (`shares` / `share_id` / `user_id` + `action`), plus the
+generic `HEARTBEAT` (`0x06`) and `DISCONNECTED` (`0x07`) frames. See
+`:8805 — hub federation` below.
 
 ---
 
@@ -289,19 +298,62 @@ other three.
 3. On success the connection is handed to `FederationRelayController::onConnect()`;
    later frames go to `onMessage()` and `onClose()`.
 
-### Message catalog
+### Signed handshake (JSON text frames)
 
-Handshake and control use the shared binary frame format, on the hub-specific
-frame types: `HUB_HELLO` (`0x09`), `HUB_HELLO_ACK` (`0x0A`), `HUB_HEARTBEAT`
-(`0x0B`), `HUB_DISCONNECTED` (`0x0F`).
+The federation channel is authenticated by a **mutual Ed25519 proof-of-key
+ceremony** (H-4). Knowledge of the `hub_id` is only a routing hint — it proves
+nothing. All three handshake messages ride JSON **text** WebSocket frames (never
+binary `0x09`/`0x0A`, which are retired wire types):
 
-Payload frames, all master → leaf, all JSON on channel 0:
+1. **`hub_hello`** — leaf → master:
+   `{"type":"hub_hello","hub_id":...,"hub_name":...,"public_key":...,"role":"leaf","capabilities":[...]}`.
+   The master resolves `hub_id` to a peer row and replies; the leaf's
+   self-declared `public_key` is never trusted as proof.
+2. **`hub_hello_ack`** — master → leaf:
+   `{"type":"hub_hello_ack","session_id":...,"master_hub_id":...,"role":"master","capabilities":[...],"nonce":...,"signature":...}`.
+   `nonce` is fresh per session (base64url, 32 random bytes). `signature` is
+   base64 Ed25519 over the canonical string
+   `phlix-federation/hello-ack/v1\n{session_id}\n{master_hub_id}\n{nonce}`,
+   signed with the **master hub's** keypair (`Ed25519KeyManager`). The leaf
+   verifies against the master's `public_key` it holds for that peer and
+   cross-checks the identity bindings; verification failure closes the link and
+   arms the reconnect backoff.
+3. **`hub_hello_auth`** — leaf → master:
+   `{"type":"hub_hello_auth","leaf_hub_id":...,"session_id":...,"signature":...}`.
+   `signature` is base64 Ed25519 over
+   `phlix-federation/hello-auth/v1\n{session_id}\n{nonce}\n{leaf_hub_id}` — the
+   exact `nonce` from the ack, proving the leaf saw the genuine (signed) ack —
+   signed with the **leaf hub's** keypair whose public half is registered on the
+   master's peer row. The `nonce` is single-use: a replayed proof is refused.
 
-| Code | Name | Meaning |
-| --- | --- | --- |
-| `0x0C` | `LIBRARY_SHARE_UPDATE` | A federated library offer was created or changed. Surfaces at `GET /api/v1/me/federation/library-shares/incoming`. |
-| `0x0D` | `LIBRARY_SHARE_REVOKED` | An offer was withdrawn. |
-| `0x0E` | `ADMIN_DELEGATION` | An admin delegation was granted or revoked. |
+Both ends derive the canonical strings from the one shared helper,
+`Phlix\Hub\Federation\FederationHandshake`, so the two sides cannot drift.
+
+### Verified-channel gate
+
+The connection is marked **verified** only after both proofs succeed. Until
+then, every sync payload — offers, revocations, admin delegations — is **dropped
+and audited** on both roles (`logFailedAuth('federation_data_frame_before_verification')`).
+Master-side pushes (`FederationMasterPusher::pushOffer` / `pushRevocation`)
+refuse to send on an unverified channel. The only unverified-path exemption is
+teardown (`closePeerConnection`, which sends `DISCONNECTED` and closes).
+
+### Sync payloads (binary `DATA` envelopes, JSON discriminator)
+
+Post-verification traffic uses the shared binary frame format on the **generic**
+frame types — there are no federation-specific binary types in use:
+
+| Envelope | Direction | JSON payload | Meaning |
+| --- | --- | --- | --- |
+| `DATA` (`0x05`) ch 0 | master → leaf | `{"shares":[{"id","peer_id","library_id","library_name","permission","status"}]}` | Federated library offers created/changed. Surfaces at `GET /api/v1/me/federation/library-shares/incoming`. |
+| `DATA` (`0x05`) ch 0 | master → leaf | `{"share_id":...}` | An offer was withdrawn. |
+| `DATA` (`0x05`) ch 0 | master → leaf | `{"user_id":...,"peer_id":...,"action":"grant"|"revoke"}` | An admin delegation was granted or revoked. |
+| `HEARTBEAT` (`0x06`) ch 0 | both → both | empty | keep-alive every 15 s once verified |
+| `DISCONNECTED` (`0x07`) ch 0 | either → either | `{"reason":...}` | clean close (e.g. `peer_deleted`) |
+
+The dedicated `0x09`–`0x0F` codes are **retired wire types**: reserved in the
+vendored `RelayFrameType` enum for compatibility, never emitted, ignored on
+receipt.
 
 ---
 

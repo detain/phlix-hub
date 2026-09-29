@@ -335,4 +335,86 @@ final class FederationSessionManagerTest extends TestCase
 
         self::assertSame(0, $count);
     }
+
+    // --------------------------------- H-4 single-use handshake nonce state
+
+    public function testBeginAndConsumeHandshakeReturnsStateOnce(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        // Pure in-process state: no DB writes for begin/consume.
+        $db->expects(self::never())->method('query');
+
+        $manager = new FederationSessionManager($db, $logger);
+        $manager->beginHandshake('sess-1', 'peer-1', 'nonce-abc');
+
+        self::assertSame(['peer_id' => 'peer-1', 'nonce' => 'nonce-abc'], $manager->consumeHandshake('sess-1'));
+        // Single-use: a second read (the replay vector) finds nothing.
+        self::assertNull($manager->consumeHandshake('sess-1'), 'handshake nonce must be consumed exactly once');
+    }
+
+    public function testConsumeHandshakeUnknownSessionIsNull(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        $db->expects(self::never())->method('query');
+
+        $manager = new FederationSessionManager($db, $logger);
+
+        self::assertNull($manager->consumeHandshake('never-begun'));
+    }
+
+    public function testBeginHandshakeSupersedesPriorHandshakeForSamePeer(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        $db->expects(self::never())->method('query');
+
+        $manager = new FederationSessionManager($db, $logger);
+        $manager->beginHandshake('sess-old', 'peer-1', 'nonce-old');
+        // A re-hello mints a fresh ceremony; the old session's nonce is gone.
+        $manager->beginHandshake('sess-new', 'peer-1', 'nonce-new');
+
+        self::assertNull($manager->consumeHandshake('sess-old'), 'stale handshake must be abandoned');
+        self::assertSame(
+            ['peer_id' => 'peer-1', 'nonce' => 'nonce-new'],
+            $manager->consumeHandshake('sess-new'),
+        );
+    }
+
+    public function testAbandonHandshakesForPeerClearsOnlyThatPeer(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        $db->expects(self::never())->method('query');
+
+        $manager = new FederationSessionManager($db, $logger);
+        $manager->beginHandshake('sess-a', 'peer-a', 'n-a');
+        $manager->beginHandshake('sess-b', 'peer-b', 'n-b');
+
+        $manager->abandonHandshakesForPeer('peer-a');
+
+        self::assertNull($manager->consumeHandshake('sess-a'));
+        self::assertNotNull($manager->consumeHandshake('sess-b'), 'other peers are untouched');
+    }
+
+    public function testCloseSessionDropsPendingHandshakeForThatSession(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $db->method('query')->willReturnCallback(static function (string $sql): array {
+            if (str_contains($sql, 'SELECT peer_id FROM federation_sessions')) {
+                return [['peer_id' => 'peer-1']];
+            }
+            return [];
+        });
+
+        $manager = new FederationSessionManager($db, $logger);
+        $manager->beginHandshake('sess-1', 'peer-1', 'nonce-1');
+
+        $manager->closeSession('sess-1');
+
+        self::assertNull($manager->consumeHandshake('sess-1'), 'closing a session must burn its handshake');
+    }
 }

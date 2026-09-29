@@ -223,6 +223,69 @@ final class FederationConnectionManagerTest extends TestCase
         self::assertTrue($result);
     }
 
+    // ------------------------------------------- H-4 verified-channel stamp
+
+    public function testMarkVerifiedAndIsVerifiedRoundTrip(): void
+    {
+        $manager = new FederationConnectionManager();
+        $conn = $this->createMockConnection(1);
+        $manager->addConnection('hub-1', $conn);
+
+        self::assertFalse($manager->isVerified('hub-1'), 'A fresh socket is NOT verified (H-4)');
+        self::assertTrue($manager->markVerified('hub-1', $conn));
+        self::assertTrue($manager->isVerified('hub-1'));
+    }
+
+    public function testMarkVerifiedRefusesNonCurrentConnection(): void
+    {
+        $manager = new FederationConnectionManager();
+        $current = $this->createMockConnection(1);
+        $stranger = $this->createMockConnection(2);
+        $manager->addConnection('hub-1', $current);
+
+        self::assertFalse($manager->markVerified('hub-1', $stranger));
+        self::assertFalse($manager->isVerified('hub-1'));
+    }
+
+    public function testReplacementConnectionResetsVerifiedStamp(): void
+    {
+        $manager = new FederationConnectionManager();
+        $old = $this->createMock(ConnectionInterface::class);
+        $old->method('close');
+        $manager->addConnection('hub-1', $old);
+        $manager->markVerified('hub-1', $old);
+
+        $new = $this->createMockConnection(2);
+        $manager->addConnection('hub-1', $new);
+
+        self::assertFalse($manager->isVerified('hub-1'), 'Successor socket must re-run the ceremony');
+    }
+
+    public function testRemoveConnectionDropsVerifiedStamp(): void
+    {
+        $manager = new FederationConnectionManager();
+        $conn = $this->createMockConnection(1);
+        $manager->addConnection('hub-1', $conn);
+        $manager->markVerified('hub-1', $conn);
+
+        $manager->removeConnection('hub-1');
+        self::assertFalse($manager->isVerified('hub-1'));
+
+        // Same again via the identity-safe removal path.
+        $conn2 = $this->createMockConnection(2);
+        $manager->addConnection('hub-1', $conn2);
+        $manager->markVerified('hub-1', $conn2);
+        self::assertTrue($manager->removeConnectionByConn($conn2));
+        self::assertFalse($manager->isVerified('hub-1'));
+    }
+
+    public function testIsVerifiedUnknownHubIsFalse(): void
+    {
+        $manager = new FederationConnectionManager();
+
+        self::assertFalse($manager->isVerified('ghost'));
+    }
+
     /**
      * Create a mock connection with a specific object ID.
      */
