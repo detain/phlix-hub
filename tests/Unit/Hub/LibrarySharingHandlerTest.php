@@ -150,6 +150,72 @@ final class LibrarySharingHandlerTest extends TestCase
         );
     }
 
+    /**
+     * F10: the (owner, collaborator, library) UNIQUE tuple survives a soft
+     * revoke — re-sharing must UPDATE-reactivate the row, never INSERT (which
+     * duplicate-keyed with 500 forever).
+     */
+    public function testShareLibraryReactivatesRevokedShare(): void
+    {
+        $this->users->method('findByEmail')->willReturn(['id' => 'collab-1', 'email' => 'friend@example.com']);
+
+        $revokedRow = [
+            'id' => 'old-share',
+            'owner_user_id' => 'owner-1',
+            'collaborator_user_id' => 'collab-1',
+            'server_id' => 'server-1',
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'permission_level' => 'read',
+            'granted_by' => 'owner-1',
+            'created_at' => time() - 86400,
+            'expires_at' => null,
+            'revoked_at' => time() - 3600,
+        ];
+
+        /** @var list<string> $sqls */
+        $sqls = [];
+        $this->db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use ($revokedRow, &$sqls) {
+                $sqls[] = $sql;
+                if (str_contains($sql, 'SELECT id FROM servers')) {
+                    return [['id' => 'server-1']];
+                }
+                if (str_contains($sql, 'SELECT * FROM library_shares')) {
+                    return [$revokedRow];
+                }
+                if (str_contains($sql, 'UPDATE library_shares') && str_contains($sql, 'revoked_at = NULL')) {
+                    return 1; // affected-row count
+                }
+                return [];
+            },
+        );
+
+        $share = $this->handler->shareLibrary(
+            ownerId: 'owner-1',
+            collaboratorEmail: 'friend@example.com',
+            serverId: 'server-1',
+            libraryId: 'lib-1',
+            libraryName: 'My Movies',
+            permission: LibraryShare::PERMISSION_READWRITE,
+            expiresAt: time() + 604800,
+        );
+
+        self::assertSame('old-share', $share->id, 'reactivation must reuse the existing row');
+        self::assertNull($share->revokedAt);
+        self::assertSame(LibraryShare::PERMISSION_READWRITE, $share->permissionLevel);
+        self::assertTrue($share->canWrite());
+
+        $inserted = array_filter($sqls, static fn (string $s): bool => str_contains($s, 'INSERT INTO library_shares'));
+        self::assertCount(0, $inserted, 'revoked tuple must be UPDATEd, never INSERTed');
+        $reactivates = array_filter(
+            $sqls,
+            static fn (string $s): bool => str_contains($s, 'UPDATE library_shares')
+                && str_contains($s, 'revoked_at = NULL'),
+        );
+        self::assertCount(1, $reactivates);
+    }
+
     public function testShareLibraryThrowsWhenSharingWithSelf(): void
     {
         $this->users->method('findByEmail')->willReturn(['id' => 'owner-1', 'email' => 'me@example.com']);

@@ -121,6 +121,13 @@ class RequestManager
     /**
      * Approve a pending request. Triggers Sonarr/Radarr to start fetching.
      *
+     * The `pending -> approved` transition is CLAIMED with a conditional
+     * UPDATE before the (slow) arr round-trip so two concurrent approvals of
+     * the same request can never both fire `addMovie`/`addSeries`: exactly one
+     * caller flips the row (affected-rows 1); the loser sees 0 and returns
+     * false. If the arr call then fails the claim is released by reverting the
+     * row to `pending` — best-effort, guarded on our own claim.
+     *
      * @param string $requestId Request UUID to approve.
      *
      * @return bool True when the arr client accepted the add and the row was updated.
@@ -132,17 +139,18 @@ class RequestManager
             return false;
         }
 
+        if (!$this->transitionStatus($requestId, from: 'pending', to: 'approved')) {
+            return false;
+        }
+
         $success = match ($request['type']) {
             'movie'  => $this->approveMovieRequest($request),
             'series' => $this->approveSeriesRequest($request),
             default  => false,
         };
 
-        if ($success) {
-            $this->db->query(
-                'UPDATE requests SET status = \'approved\' WHERE id = :id',
-                ['id' => $requestId]
-            );
+        if (!$success) {
+            $this->transitionStatus($requestId, from: 'approved', to: 'pending');
         }
 
         return $success;
@@ -154,21 +162,43 @@ class RequestManager
      * @param string $requestId Request UUID to reject.
      * @param string $reason    Optional rejection reason.
      *
-     * @return bool True when the row was updated.
+     * @return bool True when the row transitioned from `pending`.
      */
     public function rejectRequest(string $requestId, string $reason = ''): bool
     {
-        $request = $this->getRequestById($requestId);
-        if ($request === null || $request['status'] !== 'pending') {
-            return false;
-        }
-
-        $this->db->query(
-            'UPDATE requests SET status = \'rejected\', rejection_reason = :reason WHERE id = :id',
+        /** @var mixed $result */
+        $result = $this->db->query(
+            'UPDATE requests SET status = \'rejected\', rejection_reason = :reason
+             WHERE id = :id AND status = \'pending\'',
             ['reason' => $reason, 'id' => $requestId]
         );
 
-        return true;
+        return self::affectedRows($result) === 1;
+    }
+
+    /**
+     * Flip a request's status atomically: UPDATE guarded on the expected
+     * current status, reporting whether this caller won the transition.
+     */
+    private function transitionStatus(string $requestId, string $from, string $to): bool
+    {
+        /** @var mixed $result */
+        $result = $this->db->query(
+            'UPDATE requests SET status = :to WHERE id = :id AND status = :from',
+            ['to' => $to, 'id' => $requestId, 'from' => $from]
+        );
+
+        return self::affectedRows($result) === 1;
+    }
+
+    /**
+     * Narrow a DML result from the connection to an affected-rows int.
+     *
+     * @param mixed $result Value returned by {@see Connection::query()} for an UPDATE/DELETE.
+     */
+    private static function affectedRows(mixed $result): int
+    {
+        return is_numeric($result) ? (int) $result : 0;
     }
 
     /**
@@ -228,6 +258,35 @@ class RequestManager
     }
 
     /**
+     * List requests filtered by an explicit admin status.
+     *
+     * Parse-don't-validate: the status is resolved against the whitelist at
+     * this boundary, so the SQL below only ever interpolates a trusted literal
+     * and the caller cannot inject an arbitrary predicate.
+     *
+     * @param string $status One of 'pending', 'approved', 'available',
+     *                       'rejected', or 'all' (no status filter).
+     *
+     * @return list<RequestRow>
+     *
+     * @throws \InvalidArgumentException On an unknown status value.
+     */
+    public function listRequestsByStatus(string $status): array
+    {
+        $where = match ($status) {
+            'pending', 'approved', 'available', 'rejected' => " WHERE status = '" . $status . "'",
+            'all' => '',
+            default => throw new \InvalidArgumentException('Unknown request status filter: ' . $status),
+        };
+
+        /** @var mixed $rows */
+        $rows = $this->db->query(
+            'SELECT * FROM requests' . $where . ' ORDER BY created_at DESC'
+        );
+        return $this->hydrateRequests($rows);
+    }
+
+    /**
      * List every request belonging to a single user, regardless of status.
      *
      * @param string $userId User UUID.
@@ -267,17 +326,19 @@ class RequestManager
     /**
      * Delete a request unconditionally.
      *
+     * A single guarded DELETE (no check-then-delete window): the affected-rows
+     * count tells the caller whether the row was still there.
+     *
      * @param string $requestId Request UUID.
      *
      * @return bool True if the row existed and was removed.
      */
     public function deleteRequest(string $requestId): bool
     {
-        if ($this->getRequestById($requestId) === null) {
-            return false;
-        }
-        $this->db->query('DELETE FROM requests WHERE id = :id', ['id' => $requestId]);
-        return true;
+        /** @var mixed $result */
+        $result = $this->db->query('DELETE FROM requests WHERE id = :id', ['id' => $requestId]);
+
+        return self::affectedRows($result) === 1;
     }
 
     /**
@@ -290,12 +351,7 @@ class RequestManager
      */
     public function markAvailable(string $requestId): bool
     {
-        $request = $this->getRequestById($requestId);
-        if ($request === null || $request['status'] !== 'approved') {
-            return false;
-        }
-        $this->db->query('UPDATE requests SET status = \'available\' WHERE id = :id', ['id' => $requestId]);
-        return true;
+        return $this->transitionStatus($requestId, from: 'approved', to: 'available');
     }
 
     /**

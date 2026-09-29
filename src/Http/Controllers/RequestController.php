@@ -247,10 +247,13 @@ final class RequestController
         $statusRaw = $request->query['status'] ?? 'pending';
         $status = is_string($statusRaw) ? $statusRaw : 'pending';
 
+        // Honour the advertised filter set: unknown values fall back to the
+        // documented default (pending), every other value is executed truthfully
+        // by the manager's whitelisted status lister.
         $requests = match ($status) {
             'pending'   => $this->manager->listPendingRequests(),
             'available' => $this->manager->listAvailableRequests(),
-            'all'       => $this->manager->listPendingRequests(),
+            'approved', 'rejected', 'all' => $this->manager->listRequestsByStatus($status),
             default     => $this->manager->listPendingRequests(),
         };
 

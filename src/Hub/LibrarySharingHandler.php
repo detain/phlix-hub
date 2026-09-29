@@ -82,12 +82,31 @@ class LibrarySharingHandler
             throw new InvalidArgumentException('Invalid permission level', 400);
         }
 
-        $existingShare = $this->findExistingShare($ownerId, $collaboratorId, $libraryId);
+        // uk_library_share is a PERMANENT UNIQUE on
+        // (owner_user_id, collaborator_user_id, library_id), and revoke is a
+        // soft-delete. So a revoked row still occupies the tuple: re-sharing
+        // after revoke must UPDATE-reactivate it, never INSERT (which would
+        // hit a duplicate-key 500 forever). Look the tuple up across ALL
+        // states, then branch on the row's revocation.
+        $existingShare = $this->findAnyShareByTuple($ownerId, $collaboratorId, $libraryId);
         if ($existingShare !== null && !$existingShare->isRevoked()) {
             throw new InvalidArgumentException('Share already exists', 409);
         }
 
         $now = time();
+
+        if ($existingShare !== null) {
+            return $this->reactivateShare(
+                $existingShare,
+                $serverId,
+                $libraryName,
+                $permission,
+                $expiresAt,
+                $ownerId,
+                $now,
+            );
+        }
+
         /** @var string $shareId */
         $shareId = $this->generateUuid();
 
@@ -445,7 +464,7 @@ class LibrarySharingHandler
     /**
      * Find an existing non-revoked share for the given tuple.
      */
-    private function findExistingShare(string $ownerId, string $collaboratorId, string $libraryId): ?LibraryShare
+    private function findAnyShareByTuple(string $ownerId, string $collaboratorId, string $libraryId): ?LibraryShare
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
@@ -453,7 +472,6 @@ class LibrarySharingHandler
              WHERE owner_user_id = :owner_id
                AND collaborator_user_id = :collaborator_id
                AND library_id = :library_id
-               AND revoked_at IS NULL
              LIMIT 1',
             [
                 'owner_id' => $ownerId,
@@ -467,6 +485,77 @@ class LibrarySharingHandler
         }
 
         return LibraryShare::fromRow($rows[0]);
+    }
+
+    /**
+     * Re-activate a revoked share row in place (the unique tuple is already
+     * taken; a fresh INSERT would duplicate-key).
+     *
+     * @param LibraryShare $revoked      The revoked row occupying the tuple.
+     * @param string       $serverId     Server UUID (re-granted target).
+     * @param string       $libraryName  Human-readable library name.
+     * @param string       $permission   Permission level for the new grant.
+     * @param int|null     $expiresAt    Optional expiry UNIX timestamp.
+     * @param string       $grantedBy    Granting owner UUID.
+     * @param int          $now          Grant timestamp.
+     */
+    private function reactivateShare(
+        LibraryShare $revoked,
+        string $serverId,
+        string $libraryName,
+        string $permission,
+        ?int $expiresAt,
+        string $grantedBy,
+        int $now,
+    ): LibraryShare {
+        /** @var mixed $affected */
+        $affected = $this->db->query(
+            'UPDATE library_shares
+                SET revoked_at = NULL,
+                    server_id = :server_id,
+                    library_name = :library_name,
+                    permission_level = :permission_level,
+                    granted_by = :granted_by,
+                    created_at = :created_at,
+                    expires_at = :expires_at
+              WHERE id = :id
+                AND revoked_at IS NOT NULL',
+            [
+                'server_id' => $serverId,
+                'library_name' => $libraryName,
+                'permission_level' => $permission,
+                'granted_by' => $grantedBy,
+                'created_at' => $now,
+                'expires_at' => $expiresAt,
+                'id' => $revoked->id,
+            ],
+        );
+
+        // Fail loud on a lost race (e.g. the row was hard-deleted concurrently):
+        // the caller must not receive a share it does not own on the wire.
+        if ((is_numeric($affected) ? (int) $affected : 0) !== 1) {
+            throw new InvalidArgumentException('Share changed concurrently — retry', 409);
+        }
+
+        $this->logger->info('Library share reactivated', [
+            'share_id' => $revoked->id,
+            'owner_id' => $revoked->ownerUserId,
+            'collaborator_id' => $revoked->collaboratorUserId,
+            'library_id' => $revoked->libraryId,
+            'permission' => $permission,
+        ]);
+
+        return new LibraryShare(
+            id: $revoked->id,
+            ownerUserId: $revoked->ownerUserId,
+            collaboratorUserId: $revoked->collaboratorUserId,
+            serverId: $serverId,
+            libraryId: $revoked->libraryId,
+            libraryName: $libraryName,
+            permissionLevel: $permission,
+            createdAt: $now,
+            expiresAt: $expiresAt,
+        );
     }
 
     /**

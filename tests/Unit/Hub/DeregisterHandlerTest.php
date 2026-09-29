@@ -47,12 +47,18 @@ final class DeregisterHandlerTest extends TestCase
         $serverId = 'server-to-delete';
 
         $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturnCallback(function (string $sql) use ($serverId) {
-            if (str_contains($sql, 'RETURNING')) {
-                return [['id' => $serverId]];
-            }
-            return [];
-        });
+        // MySQL dialect: plain DELETE, decision by affected-row count (int),
+        // never `DELETE ... RETURNING` (PostgreSQL-only — raised ERROR 1064).
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::logicalAnd(
+                    self::stringStartsWith('DELETE FROM servers'),
+                    self::logicalNot(self::stringContains('RETURNING')),
+                ),
+                ['id' => $serverId],
+            )
+            ->willReturn(1);
 
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
         $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
@@ -62,6 +68,25 @@ final class DeregisterHandlerTest extends TestCase
         $token = $jwtService->createEnrollmentJwt($serverId);
         $handler->handle($serverId, $token);
         self::addToAssertionCount(1);
+    }
+
+    public function testDeregisterThrowsWhenDeleteAffectsNoRows(): void
+    {
+        $serverId = 'server-already-gone';
+
+        $db = $this->createMock(Connection::class);
+        // Row vanished between JWT check and DELETE → rowCount 0 → 404 path.
+        $db->method('query')->willReturn(0);
+
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
+        $logger = $this->createMock(StructuredLogger::class);
+        $handler = new DeregisterHandler($db, $jwtService, $logger);
+
+        $token = $jwtService->createEnrollmentJwt($serverId);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('SERVER_NOT_FOUND');
+        $handler->handle($serverId, $token);
     }
 
     public function testDeregisterThrowsOnInvalidToken(): void
@@ -79,7 +104,7 @@ final class DeregisterHandlerTest extends TestCase
     public function testDeregisterThrowsOnUnknownServer(): void
     {
         $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturn([]);
+        $db->method('query')->willReturn(0);
 
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
         $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');

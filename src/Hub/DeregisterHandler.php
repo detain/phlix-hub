@@ -55,13 +55,18 @@ class DeregisterHandler
             throw new InvalidArgumentException('SERVER_NOT_FOUND');
         }
 
-        /** @var list<array<string, mixed>> $rows */
-        $rows = $this->db->query(
-            'DELETE FROM servers WHERE id = :id RETURNING id',
+        // MySQL has no `DELETE ... RETURNING` (that is PostgreSQL syntax and
+        // would raise ERROR 1064, surfacing as a 500 with the SQL echoed under
+        // the outer catch). Run a plain DELETE and decide from the affected-row
+        // count: workerman's Connection::query() returns the PDOStatement
+        // rowCount (an int) for DELETE statements.
+        /** @var mixed $affected */
+        $affected = $this->db->query(
+            'DELETE FROM servers WHERE id = :id',
             ['id' => $serverId],
         );
 
-        if (empty($rows)) {
+        if ((is_numeric($affected) ? (int) $affected : 0) !== 1) {
             throw new InvalidArgumentException('SERVER_NOT_FOUND');
         }
 

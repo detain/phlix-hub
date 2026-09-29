@@ -100,11 +100,14 @@ final class RequestManagerTest extends TestCase
 
     public function testRejectRequestSetsStatusToRejected(): void
     {
-        $this->db->expects(self::exactly(2))
+        $this->db->expects(self::exactly(1))
             ->method('query')
             ->willReturnCallback(static function (string $sql) {
-                if (str_contains($sql, 'SELECT * FROM requests WHERE id')) {
-                    return [self::row(['id' => 'test-id', 'status' => 'pending'])];
+                if (
+                    str_contains($sql, "UPDATE requests SET status = 'rejected'")
+                    && str_contains($sql, "AND status = 'pending'")
+                ) {
+                    return 1;
                 }
                 return [];
             });
@@ -205,11 +208,11 @@ final class RequestManagerTest extends TestCase
 
     public function testDeleteRequest(): void
     {
-        $this->db->expects(self::exactly(2))
+        $this->db->expects(self::exactly(1))
             ->method('query')
             ->willReturnCallback(static function (string $sql) {
-                if (str_contains($sql, 'SELECT * FROM requests WHERE id')) {
-                    return [self::row(['id' => 'test-id', 'status' => 'pending'])];
+                if (str_contains($sql, 'DELETE FROM requests WHERE id')) {
+                    return 1;
                 }
                 return [];
             });
@@ -250,15 +253,92 @@ final class RequestManagerTest extends TestCase
 
     public function testMarkAvailable(): void
     {
-        $this->db->expects(self::exactly(2))
+        $this->db->expects(self::exactly(1))
             ->method('query')
             ->willReturnCallback(static function (string $sql) {
-                if (str_contains($sql, 'SELECT * FROM requests WHERE id')) {
-                    return [self::row(['id' => 'test-id', 'status' => 'approved'])];
+                if (
+                    str_contains($sql, "UPDATE requests SET status = :to")
+                    && str_contains($sql, "AND status = :from")
+                ) {
+                    return 1;
                 }
                 return [];
             });
         self::assertTrue($this->manager->markAvailable('test-id'));
+    }
+
+    /**
+     * F6: approval claims the row (pending -> approved) BEFORE the arr call, so
+     * two concurrent approvals cannot both fire addMovie/addSeries. When the
+     * (unconfigured here) arr path fails, the claim is released by reverting.
+     */
+    public function testApproveRequestClaimsThenRevertsWhenArrFails(): void
+    {
+        /** @var list<string> $executed */
+        $executed = [];
+        $this->db->method('query')
+            ->willReturnCallback(static function (string $sql) use (&$executed) {
+                $executed[] = $sql;
+                if (str_contains($sql, 'SELECT * FROM requests WHERE id')) {
+                    return [self::row(['id' => 'test-id', 'type' => 'movie', 'status' => 'pending'])];
+                }
+                if (str_contains($sql, 'UPDATE requests SET status = :to')) {
+                    return 1;
+                }
+                return [];
+            });
+
+        // ArrClientFactory([]) has no Radarr configured -> approve returns false
+        // after the claim, so the revert UPDATE must be the LAST statement run.
+        self::assertFalse($this->manager->approveRequest('test-id'));
+
+        self::assertCount(3, $executed);
+        self::assertStringContainsString('SELECT * FROM requests WHERE id', $executed[0]);
+        self::assertStringContainsString("WHERE id = :id AND status = :from", $executed[1]);
+        self::assertStringContainsString('UPDATE requests SET status = :to', $executed[1]);
+        self::assertStringContainsString('UPDATE requests SET status = :to', $executed[2]);
+    }
+
+    public function testApproveRequestReturnsFalseWhenClaimLost(): void
+    {
+        $claimRan = false;
+        $this->db->method('query')
+            ->willReturnCallback(static function (string $sql) use (&$claimRan) {
+                if (str_contains($sql, 'SELECT * FROM requests WHERE id')) {
+                    return [self::row(['id' => 'test-id', 'type' => 'movie', 'status' => 'pending'])];
+                }
+                if (str_contains($sql, 'UPDATE requests SET status = :to')) {
+                    $claimRan = true;
+                    return 0; // another admin already claimed it
+                }
+                return [];
+            });
+
+        self::assertFalse($this->manager->approveRequest('test-id'));
+        self::assertTrue($claimRan);
+    }
+
+    public function testListRequestsByStatusBuildsWhitelistedQueries(): void
+    {
+        /** @var list<string> $executed */
+        $executed = [];
+        $this->db->method('query')
+            ->willReturnCallback(static function (string $sql) use (&$executed) {
+                $executed[] = $sql;
+                return [];
+            });
+
+        self::assertSame([], $this->manager->listRequestsByStatus('rejected'));
+        self::assertSame([], $this->manager->listRequestsByStatus('all'));
+        self::assertStringContainsString("WHERE status = 'rejected'", $executed[0]);
+        self::assertStringNotContainsString('WHERE', $executed[1]);
+    }
+
+    public function testListRequestsByStatusRejectsUnknownFilter(): void
+    {
+        $this->db->expects(self::never())->method('query');
+        $this->expectException(\InvalidArgumentException::class);
+        $this->manager->listRequestsByStatus("bogus' OR 1=1 --");
     }
 
     public function testMarkAvailableReturnsFalseForNonApproved(): void
