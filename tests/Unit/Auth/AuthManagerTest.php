@@ -579,7 +579,9 @@ final class AuthManagerTest extends TestCase
         $deps[0]->expects(self::never())->method('create');
         $mgr = $this->managerWithResolver(
             false,
-            static fn(): bool => throw new RuntimeException('db is down'),
+            static function (): bool {
+                throw new RuntimeException('db is down');
+            },
             $deps,
         );
 
@@ -593,7 +595,9 @@ final class AuthManagerTest extends TestCase
         $this->stubOpenSignupRepo($deps[0]);
         $mgr = $this->managerWithResolver(
             true,
-            static fn(): bool => throw new RuntimeException('db is down'),
+            static function (): bool {
+                throw new RuntimeException('db is down');
+            },
             $deps,
         );
 
