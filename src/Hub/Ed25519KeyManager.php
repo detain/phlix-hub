@@ -88,6 +88,13 @@ final class Ed25519KeyManager
     /**
      * Get or create the keypair, loading from disk on subsequent calls.
      *
+     * The read-from-disk fast path is lock-free. Only the cold "the file is
+     * not there yet" branch takes an exclusive lock, so concurrent hub workers
+     * booting for the first time cannot each generate a DIFFERENT keypair and
+     * clobber one another: the loser of the lock re-reads the winner's file
+     * instead of minting its own (which would invalidate every JWT signed by
+     * the first process the moment a second one overwrote the key).
+     *
      * @return array{private: string, public: string}
      *
      * @throws RuntimeException When key loading or generation fails.
@@ -95,25 +102,121 @@ final class Ed25519KeyManager
     public function getOrCreateKeyPair(): array
     {
         if ($this->privateKey !== null) {
-            /** @var array{private: string, public: string} */
-            return ['private' => $this->privateKey, 'public' => $this->publicKey];
+            return $this->cachedKeyPair();
         }
 
-        if (is_file($this->keyPath)) {
-            $pem = file_get_contents($this->keyPath);
-            if ($pem === false) {
+        if (is_file($this->keyPath) && $this->loadStoredKeyPair() === true) {
+            return $this->cachedKeyPair();
+        }
+
+        return $this->generateKeyPairLocked();
+    }
+
+    /**
+     * Snapshot the in-memory cache as the documented key-pair shape.
+     *
+     * Every caller populates both halves before returning here; a one-sided
+     * cache would be an internal invariant violation, so it fails loud rather
+     * than minting a half-typed array.
+     *
+     * @return array{private: string, public: string}
+     *
+     * @throws RuntimeException When the cache is not fully populated.
+     */
+    private function cachedKeyPair(): array
+    {
+        if (!is_string($this->privateKey) || !is_string($this->publicKey)) {
+            throw new RuntimeException('Ed25519 key pair cache is not populated');
+        }
+
+        return ['private' => $this->privateKey, 'public' => $this->publicKey];
+    }
+
+    /**
+     * Read + parse the on-disk PEM into the in-memory cache.
+     *
+     * Returns false only when the file vanished mid-read (a benign race with a
+     * pruning/rotating sibling). A file that exists but cannot be READ is a
+     * hard failure — silently regenerating over an unreadable signing key
+     * would invalidate every outstanding enrollment JWT.
+     *
+     * @throws RuntimeException When the key file is present but unreadable.
+     */
+    private function loadStoredKeyPair(): bool
+    {
+        $existed = is_file($this->keyPath);
+        $pem = @file_get_contents($this->keyPath);
+        if ($pem === false) {
+            if ($existed) {
                 throw new RuntimeException('Failed to read Ed25519 key file: ' . $this->keyPath);
             }
-            $keyPair = $this->extractKeyPair($pem);
-            $this->privateKey = $keyPair['private'];
-            $this->publicKey = $keyPair['public'];
-            /** @var array{private: string, public: string} */
-            return ['private' => $this->privateKey, 'public' => $this->publicKey];
+            return false;
         }
 
-        $this->generateAndStore();
-        /** @var array{private: string, public: string} */
-        return ['private' => $this->privateKey, 'public' => $this->publicKey];
+        $keyPair = $this->extractKeyPair($pem);
+        $this->privateKey = $keyPair['private'];
+        $this->publicKey = $keyPair['public'];
+        $this->kid = null;
+
+        return true;
+    }
+
+    /**
+     * Cold path: generate the keypair under an exclusive file lock, re-checking
+     * for a file another process may have created while this one waited on the
+     * lock before writing its own.
+     *
+     * @return array{private: string, public: string}
+     */
+    private function generateKeyPairLocked(): array
+    {
+        // The directory must exist before the lock file can live in it.
+        $this->ensureDirectory(dirname($this->keyPath));
+        // Sibling of the key file (and deliberately not a dotfile): teardown in
+        // tests globs the directory, and a hidden name would survive it.
+        $lockPath = $this->keyPath . '.lock';
+
+        $lock = @fopen($lockPath, 'c');
+        if ($lock === false) {
+            // No lock file (read-only fs edge) — generate anyway; this is the
+            // historical single-process behavior and must not hard-fail boot.
+            $this->generateAndStore();
+            return $this->cachedKeyPair();
+        }
+
+        if (@flock($lock, LOCK_EX) === false) {
+            @fclose($lock);
+            $this->generateAndStore();
+            return $this->cachedKeyPair();
+        }
+
+        try {
+            // Another process won the race while we blocked on the lock: adopt
+            // its key rather than overwriting it.
+            if (is_file($this->keyPath) && $this->loadStoredKeyPair() === true) {
+                return $this->cachedKeyPair();
+            }
+
+            $this->generateAndStore();
+            return $this->cachedKeyPair();
+        } finally {
+            @flock($lock, LOCK_UN);
+            @fclose($lock);
+        }
+    }
+
+    /**
+     * Ensure $dir exists (0700, private) and return its realpath.
+     *
+     * @throws RuntimeException When the directory cannot be created.
+     */
+    private function ensureDirectory(string $dir): string
+    {
+        if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
+            throw new RuntimeException('Failed to create key directory: ' . $dir);
+        }
+
+        return $dir;
     }
 
     /**
@@ -245,20 +348,52 @@ final class Ed25519KeyManager
             . $this->base64Encode($secretKey) . "\n"
             . "-----END ED25519 PRIVATE KEY-----\n";
 
-        $dir = dirname($this->keyPath);
-        if (!is_dir($dir)) {
-            if (!mkdir($dir, 0700, true) && !is_dir($dir)) {
-                throw new RuntimeException('Failed to create key directory: ' . $dir);
-            }
-        }
-
-        if (file_put_contents($this->keyPath, $pem, LOCK_EX) === false) {
-            throw new RuntimeException('Failed to write Ed25519 key file: ' . $this->keyPath);
-        }
-        chmod($this->keyPath, 0600);
+        $dir = $this->ensureDirectory(dirname($this->keyPath));
+        $this->writeSecretAtomically($pem, $this->keyPath, $dir);
 
         $this->privateKey = $secretKey;
         $this->publicKey = $publicKey;
+        $this->kid = null;
+    }
+
+    /**
+     * Write secret bytes through a 0600-from-birth temp file, then rename it
+     * into place.
+     *
+     * `tempnam()` creates the file with mode 0600 regardless of the process
+     * umask (PHP has no O_CREAT-mode stream context for regular files), and
+     * `rename()` is atomic within a filesystem — so the secret is never
+     * world-readable in a write-then-chmod window and a crash can never leave
+     * a half-written key at the final path. Mirrors the estate fix in
+     * phlix-server c9d546d0.
+     *
+     * @param string $bytes Contents to write.
+     * @param string $path  Final destination path.
+     * @param string $dir   Directory of the final path (the temp file must
+     *                      live on the SAME filesystem for rename() to be atomic).
+     *
+     * @throws RuntimeException If the temp file cannot be created, written, or moved.
+     */
+    private function writeSecretAtomically(string $bytes, string $path, string $dir): void
+    {
+        $tmp = @tempnam($dir, 'ed25519-');
+        if ($tmp === false) {
+            throw new RuntimeException('Failed to create temp key file in: ' . $dir);
+        }
+
+        if (@file_put_contents($tmp, $bytes) === false) {
+            @unlink($tmp);
+            throw new RuntimeException('Failed to write key file: ' . $path);
+        }
+
+        // Belt-and-suspenders: tempnam is already 0600; chmod keeps the
+        // guarantee explicit if that ever changes.
+        @chmod($tmp, 0600);
+
+        if (!@rename($tmp, $path)) {
+            @unlink($tmp);
+            throw new RuntimeException('Failed to move key file into place: ' . $path);
+        }
     }
 
     /**
@@ -349,17 +484,8 @@ final class Ed25519KeyManager
         ], JSON_THROW_ON_ERROR);
 
         $path = $this->previousKeyPath();
-        $dir = dirname($path);
-        if (!is_dir($dir)) {
-            if (!mkdir($dir, 0700, true) && !is_dir($dir)) {
-                throw new RuntimeException('Failed to create key directory: ' . $dir);
-            }
-        }
-
-        if (file_put_contents($path, $payload, LOCK_EX) === false) {
-            throw new RuntimeException('Failed to write previous-key file: ' . $path);
-        }
-        chmod($path, 0600);
+        $dir = $this->ensureDirectory(dirname($path));
+        $this->writeSecretAtomically($payload, $path, $dir);
     }
 
     /**

@@ -218,6 +218,23 @@ final class ConnectionResponseSinkTest extends TestCase
         $this->assertFalse($connection->closeCalled);
     }
 
+    public function testEndForceClosesAShortResponseWithLowercaseContentLength(): void
+    {
+        // F1: header names are case-insensitive (RFC 9110 §5). A relay that
+        // emits `content-length` (all lowercase) must STILL arm the
+        // short-body force-close safeguard — the old exact-case extraction
+        // read `$filtered['Content-Length']`, missed the lowercase value, set
+        // declaredLength = -1, and silently disarmed the safeguard.
+        $connection = $this->connection();
+        $sink = new ConnectionResponseSink($connection);
+
+        $sink->head(200, ['content-type' => 'video/mp2t', 'content-length' => '6']);
+        $sink->body('abc'); // only half the declared 6 bytes
+        $sink->end();
+
+        $this->assertTrue($connection->closeCalled);
+    }
+
     public function testBodyParksOnBufferFullAndResumesOnceDrained(): void
     {
         // Regression for finding 5: proves the onBufferFull -> resume->pop() ->

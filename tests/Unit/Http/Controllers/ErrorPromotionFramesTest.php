@@ -295,7 +295,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
         $request = new Request();
 
-        $this->assertEnrollmentFlipFrame($middleware($request));
+        $this->assertEnrollmentInvalidFrame($middleware($request));
     }
 
     public function testEnrollmentMiddlewareUnparseableKidFrameIsWholeFramePinned(): void
@@ -307,13 +307,27 @@ final class ErrorPromotionFramesTest extends TestCase
         $request = new Request();
         $request->bearerToken = 'not-a-valid-jwt';
 
-        $this->assertEnrollmentFlipFrame($middleware($request));
+        $this->assertEnrollmentInvalidFrame($middleware($request));
     }
 
     public function testEnrollmentMiddlewareFailedValidationFrameIsWholeFramePinned(): void
     {
         $service = $this->createMock(EnrollmentJwtService::class);
         $service->method('validateEnrollmentJwt')->willReturn(null);
+        $service->method('classifyEnrollmentJwt')->willReturn('bad_signature');
+        $middleware = new EnrollmentJwtMiddleware($service);
+
+        $request = new Request();
+        $request->bearerToken = $this->tokenWithKid('enrollment-pin-kid');
+
+        $this->assertEnrollmentInvalidFrame($middleware($request));
+    }
+
+    public function testEnrollmentMiddlewareExpiredFrameIsWholeFramePinned(): void
+    {
+        $service = $this->createMock(EnrollmentJwtService::class);
+        $service->method('validateEnrollmentJwt')->willReturn(null);
+        $service->method('classifyEnrollmentJwt')->willReturn('expired');
         $middleware = new EnrollmentJwtMiddleware($service);
 
         $request = new Request();
@@ -323,13 +337,9 @@ final class ErrorPromotionFramesTest extends TestCase
     }
 
     /**
-     * Whole-frame pin shared by every {@see EnrollmentJwtMiddleware} throw
-     * arm (missing token :46, unparseable kid :51, failed validation :56 —
-     * all funnel through the same `unauthorized()` frame): exact key set and
-     * order via decoded-assoc `assertSame`, status, and the byte-exact
-     * serialized body including the pretty-print/unescaped-slashes flags.
-     * Reordering or merging keys here goes red; the sibling middleware test's
-     * substring check alone cannot catch that.
+     * Whole-frame pin for the true-expiry arm: only a token that actually
+     * aged out keeps the historical EXPIRED frame (byte-identical to the
+     * W3 emit-wave pin).
      */
     private function assertEnrollmentFlipFrame(?Response $response): void
     {
@@ -344,6 +354,27 @@ final class ErrorPromotionFramesTest extends TestCase
             "{\n    \"error\": \"ENROLLMENT_TOKEN_EXPIRED\",\n    \"code\": \"auth.enrollment_expired\"\n}",
             $response->body,
             'enrollment flip body drifted from JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES serialization',
+        );
+    }
+
+    /**
+     * Whole-frame pin for the non-expiry rejection arms (missing token,
+     * unparseable kid, unknown kid, bad signature, malformed): the audit
+     * fix labels them truthfully as invalid, not expired.
+     */
+    private function assertEnrollmentInvalidFrame(?Response $response): void
+    {
+        self::assertNotNull($response);
+        self::assertSame(401, $response->statusCode);
+        self::assertSame(
+            ['error' => 'ENROLLMENT_TOKEN_INVALID', 'code' => 'auth.invalid_token'],
+            json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR),
+            'enrollment invalid frame drifted from the contracted shape',
+        );
+        self::assertSame(
+            "{\n    \"error\": \"ENROLLMENT_TOKEN_INVALID\",\n    \"code\": \"auth.invalid_token\"\n}",
+            $response->body,
+            'enrollment invalid body drifted from JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES serialization',
         );
     }
 

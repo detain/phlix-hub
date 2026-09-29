@@ -15,10 +15,13 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Console\Commands\Concerns\JsonOutput;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Helper\QuestionHelper;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Input\StreamableInputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Question\Question;
 use Throwable;
 
 use function filter_var;
@@ -81,8 +84,9 @@ final class UserCreateCommand extends Command
             ->addOption(
                 'password',
                 null,
-                InputOption::VALUE_REQUIRED,
-                'The plain password to set (required; hashed at rest)',
+                InputOption::VALUE_OPTIONAL,
+                'The plain password to set (hashed at rest). Omit to be prompted '
+                . '(interactive) or pipe the password on a single stdin line (scripted).',
             )
             ->addOption(
                 'display-name',
@@ -106,7 +110,7 @@ final class UserCreateCommand extends Command
         $usernameArg = $input->getArgument('username');
         $username = trim(is_string($usernameArg) ? $usernameArg : '');
         $email = trim(self::stringOption($input, 'email'));
-        $password = self::stringOption($input, 'password');
+        $password = $this->resolvePassword($input, $output);
         $displayNameOption = self::stringOption($input, 'display-name');
         $displayName = $displayNameOption !== '' ? $displayNameOption : null;
 
@@ -154,6 +158,67 @@ final class UserCreateCommand extends Command
     }
 
     /**
+     * Resolve the plain password without forcing it onto the command line.
+     *
+     * `--password=` keeps working, but a value passed that way is visible in
+     * the process table and shell history, so an OMITTED option now falls back
+     * to a hidden interactive prompt, or — when not interactive (piped
+     * CI/scripting) — to a single line read from stdin. An explicitly empty
+     * `--password=` stays an immediate validation failure (the operator asked
+     * for the empty value on purpose; never block a script on a prompt).
+     */
+    private function resolvePassword(InputInterface $input, OutputInterface $output): string
+    {
+        /** @var mixed $raw */
+        $raw = $input->getOption('password');
+        if (is_string($raw)) {
+            return $raw;
+        }
+
+        if ($input->isInteractive()) {
+            /** @var QuestionHelper $helper */
+            $helper = $this->getHelper('question');
+            $question = new Question('Password (input hidden): ');
+            $question->setHidden(true);
+            // Terminals without stty support degrade to a visible prompt
+            // rather than failing — operator still controls what is echoed.
+            $question->setHiddenFallback(true);
+
+            /** @var mixed $answered */
+            $answered = $helper->ask($input, $output, $question);
+
+            return is_string($answered) ? $answered : '';
+        }
+
+        return $this->readPasswordLine($input);
+    }
+
+    /**
+     * Read one password line from the input stream (or straight from stdin
+     * when no stream was attached to the input object).
+     */
+    private function readPasswordLine(InputInterface $input): string
+    {
+        $stream = $input instanceof StreamableInputInterface ? $input->getStream() : null;
+        $openedHere = false;
+        if ($stream === null) {
+            $handle = fopen('php://stdin', 'r');
+            $stream = $handle === false ? null : $handle;
+            $openedHere = true;
+        }
+        if (!is_resource($stream)) {
+            return '';
+        }
+
+        $line = fgets($stream);
+        if ($openedHere) {
+            fclose($stream);
+        }
+
+        return $line === false ? '' : rtrim($line, "\r\n");
+    }
+
+    /**
      * Enforce the shared field contract. Returns a non-null exit code to abort.
      */
     private function validate(
@@ -178,7 +243,12 @@ final class UserCreateCommand extends Command
             return $this->fail($input, $output, 'Invalid email format.', Command::INVALID);
         }
         if ($password === '') {
-            return $this->fail($input, $output, 'A --password is required.', Command::INVALID);
+            return $this->fail(
+                $input,
+                $output,
+                'A password is required (--password, the interactive prompt, or one stdin line).',
+                Command::INVALID,
+            );
         }
 
         return null;

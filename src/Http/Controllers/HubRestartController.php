@@ -138,11 +138,13 @@ class HubRestartController
                 'success' => true,
                 'message' => 'Restart signal sent.',
             ]);
-        } catch (Throwable $e) {
+        } catch (Throwable) {
+            // Constant wire message: raw exception text can carry pid-file paths
+            // and environment detail. Operators get the detail from the log.
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error'   => 'restart_failed',
-                'message' => $e->getMessage(),
+                'message' => 'Restart could not be scheduled',
             ]);
         }
     }

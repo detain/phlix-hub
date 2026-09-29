@@ -43,17 +43,23 @@ final class EnrollmentJwtMiddleware
     {
         $token = $request->bearerToken;
         if ($token === null || $token === '') {
-            return $this->unauthorized('ENROLLMENT_TOKEN_EXPIRED');
+            return $this->invalidToken();
         }
 
         $kid = JwtHeader::kid($token);
         if ($kid === null) {
-            return $this->unauthorized('ENROLLMENT_TOKEN_EXPIRED');
+            return $this->invalidToken();
         }
 
         $payload = $this->jwtService->validateEnrollmentJwt($token, $kid);
         if ($payload === null) {
-            return $this->unauthorized('ENROLLMENT_TOKEN_EXPIRED');
+            // Truthful failure label: only a token that actually aged out is
+            // reported as expired. Unknown kid, forgery, and malformed tokens
+            // are `auth.invalid_token` so operators (and clients, if they ever
+            // branch on it) are not sent down a renew path for a bad signature.
+            return $this->jwtService->classifyEnrollmentJwt($token, $kid) === 'expired'
+                ? $this->expired()
+                : $this->invalidToken();
         }
 
         /** @var string|null */
@@ -64,15 +70,25 @@ final class EnrollmentJwtMiddleware
     }
 
     /**
-     * Build a 401 JSON response.
+     * 401 for a token that is well-formed, correctly signed, and simply past
+     * its `exp`.
      *
      * W3 emit-wave: the SCREAMING `ENROLLMENT_TOKEN_EXPIRED` literal moves
      * from the `code` channel to the `error` TEXT field (byte-identical, for
      * clients that string-match it today); `code` carries the registered
      * dotted twin `auth.enrollment_expired` (@phlix/contracts).
      */
-    private function unauthorized(string $code): Response
+    private function expired(): Response
     {
-        return (new Response())->error(401, 'auth.enrollment_expired', $code);
+        return (new Response())->error(401, 'auth.enrollment_expired', 'ENROLLMENT_TOKEN_EXPIRED');
+    }
+
+    /**
+     * 401 for everything that is not a genuine expiry: missing/malformed
+     * token, unknown kid, or failed signature.
+     */
+    private function invalidToken(): Response
+    {
+        return (new Response())->error(401, 'auth.invalid_token', 'ENROLLMENT_TOKEN_INVALID');
     }
 }

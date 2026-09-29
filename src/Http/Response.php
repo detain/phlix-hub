@@ -311,9 +311,10 @@ class Response
      */
     public function toWorkermanResponse(): WorkermanResponse
     {
+        $headers = $this->withDefaultSecurityHeaders($this->headers);
         $response = $this->headOnly
-            ? new BodylessResponse($this->statusCode, $this->headers, $this->body)
-            : new WorkermanResponse($this->statusCode, $this->headers, $this->body);
+            ? new BodylessResponse($this->statusCode, $headers, $this->body)
+            : new WorkermanResponse($this->statusCode, $headers, $this->body);
         foreach ($this->cookies as $cookie) {
             $response->cookie(
                 $cookie['name'],
@@ -327,5 +328,52 @@ class Response
             );
         }
         return $response;
+    }
+
+    /**
+     * Baseline security headers for every hub-emitted response (F3).
+     *
+     *  - `X-Content-Type-Options: nosniff` everywhere: stops browsers
+     *    re-sniffing a mislabelled body into script/executable territory.
+     *  - `X-Frame-Options: DENY` + CSP `frame-ancestors 'none'` on HTML:
+     *    hub pages (SPA shell, OAuth consent, error screens) must never be
+     *    click-jacked inside an attacker frame. Same pairing the consent
+     *    screen applies manually in `OAuthController::secure()`.
+     *
+     * Explicitly-set headers always win — each default is applied only when
+     * the field is absent (case-insensitively, per RFC 9110 §5), so callers
+     * with stricter or looser bespoke values are never overwritten or
+     * duplicated.
+     *
+     * @param array<string, string> $headers
+     *
+     * @return array<string, string>
+     */
+    private function withDefaultSecurityHeaders(array $headers): array
+    {
+        $present = [];
+        $contentType = '';
+        foreach ($headers as $name => $value) {
+            $lower = strtolower((string) $name);
+            $present[$lower] = true;
+            if ($lower === 'content-type') {
+                $contentType = strtolower($value);
+            }
+        }
+
+        if (!isset($present['x-content-type-options'])) {
+            $headers['X-Content-Type-Options'] = 'nosniff';
+        }
+
+        if (str_starts_with($contentType, 'text/html')) {
+            if (!isset($present['x-frame-options'])) {
+                $headers['X-Frame-Options'] = 'DENY';
+            }
+            if (!isset($present['content-security-policy'])) {
+                $headers['Content-Security-Policy'] = "frame-ancestors 'none'";
+            }
+        }
+
+        return $headers;
     }
 }

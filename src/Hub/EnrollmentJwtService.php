@@ -147,16 +147,42 @@ class EnrollmentJwtService
      */
     public function validateEnrollmentJwt(string $token, string $expectedKid): ?array
     {
+        return $this->inspectEnrollmentJwt($token, $expectedKid)['payload'];
+    }
+
+    /**
+     * Classify WHY an enrollment JWT fails validation, without the payload.
+     *
+     * Wire-facing callers use this to answer with the truthful reason instead
+     * of labelling every rejection "expired": a forged signature, a malformed
+     * token, and an unknown kid are operationally distinct from a token that
+     * simply aged out.
+     *
+     * @return string One of 'valid', 'unknown_kid', 'malformed', 'bad_signature', 'expired'.
+     */
+    public function classifyEnrollmentJwt(string $token, string $expectedKid): string
+    {
+        return $this->inspectEnrollmentJwt($token, $expectedKid)['reason'];
+    }
+
+    /**
+     * Verify + decode an enrollment JWT, reporting both the payload (only on
+     * success) and a machine-readable failure reason.
+     *
+     * @return array{payload: array<string, mixed>|null, reason: string}
+     */
+    private function inspectEnrollmentJwt(string $token, string $expectedKid): array
+    {
         // Resolve the kid to one of the hub's currently-active public keys
         // (current or non-expired previous). An unknown/expired kid is rejected.
         $publicKey = $this->keyManager->getPublicKeyForKid($expectedKid);
         if ($publicKey === null || $publicKey === '') {
-            return null;
+            return ['payload' => null, 'reason' => 'unknown_kid'];
         }
 
         $parts = explode('.', $token);
         if (count($parts) !== 3) {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
 
         [$headerEncoded, $payloadEncoded, $signatureEncoded] = $parts;
@@ -169,52 +195,52 @@ class EnrollmentJwtService
             /** @var mixed $header */
             $header = json_decode($this->base64UrlDecode($headerEncoded), true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
         if (!is_array($header)) {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
         if (($header['alg'] ?? null) !== self::ALGORITHM) {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
         if (isset($header['typ']) && $header['typ'] !== 'JWT') {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
         // The header kid must match the kid we resolved the key under, so an
         // attacker can't present a token signed under key A while passing kid B.
         if (($header['kid'] ?? null) !== $expectedKid) {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
 
         $signature = $this->base64UrlDecode($signatureEncoded);
 
         if ($signature === '') {
-            return null;
+            return ['payload' => null, 'reason' => 'bad_signature'];
         }
 
         $message = "{$headerEncoded}.{$payloadEncoded}";
         if (!sodium_crypto_sign_verify_detached($signature, $message, $publicKey)) {
-            return null;
+            return ['payload' => null, 'reason' => 'bad_signature'];
         }
 
         try {
             /** @var array<string, mixed> $payload */
             $payload = json_decode($this->base64UrlDecode($payloadEncoded), true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
 
         if (($payload['iss'] ?? '') !== self::ISSUER) {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
         if (($payload['aud'] ?? '') !== self::AUDIENCE) {
-            return null;
+            return ['payload' => null, 'reason' => 'malformed'];
         }
         if (($payload['exp'] ?? 0) < time()) {
-            return null;
+            return ['payload' => null, 'reason' => 'expired'];
         }
 
-        return $payload;
+        return ['payload' => $payload, 'reason' => 'valid'];
     }
 
     /**

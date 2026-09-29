@@ -154,7 +154,7 @@ class AuditLogger
             event: 'signup',
             userId: $userId,
             resource: $username,
-            action: $email,
+            context: ['email' => $email],
         );
     }
 

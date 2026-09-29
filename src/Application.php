@@ -233,13 +233,22 @@ final class Application
         ?string $ifNoneMatch,
         ?string $ifModifiedSince,
     ): array {
+        // Baseline security headers on the static path (F3) — this route bypasses
+        // the Response builder, so `nosniff` (and frame protection for HTML) is
+        // applied here to match `Response::toWorkermanResponse()`.
+        $security = ['X-Content-Type-Options' => 'nosniff'];
+        if (str_starts_with(strtolower($mime), 'text/html')) {
+            $security['X-Frame-Options'] = 'DENY';
+            $security['Content-Security-Policy'] = "frame-ancestors 'none'";
+        }
+
         if ($isHashedAsset) {
             return [
                 'status' => 200,
                 'headers' => [
                     'Content-Type' => $mime,
                     'Cache-Control' => 'public, max-age=31536000, immutable',
-                ],
+                ] + $security,
             ];
         }
 
@@ -254,10 +263,10 @@ final class Application
 
         if (self::isStaticAssetNotModified($etag, $mtime, $ifNoneMatch, $ifModifiedSince)) {
             // 304: validators only, no Content-Type, no body.
-            return ['status' => 304, 'headers' => $validators];
+            return ['status' => 304, 'headers' => $validators + $security];
         }
 
-        return ['status' => 200, 'headers' => ['Content-Type' => $mime] + $validators];
+        return ['status' => 200, 'headers' => ['Content-Type' => $mime] + $validators + $security];
     }
 
     /**
@@ -608,7 +617,7 @@ final class Application
         // hub (hubby.md H1.2). Same HubSettingsController, same auth + admin gate.
         $this->registerAdminSettingsRoutes();
 
-        // Phase 10: graceful hub restart — POST /api/v1/admin/restart (SIGUSR1).
+        // Phase 10: graceful hub restart — POST /api/v1/admin/restart (SIGUSR2).
         $this->registerAdminRestartRoutes();
 
         // Core update check (S75 / updates.md #48) — read the update status the
@@ -1522,8 +1531,9 @@ final class Application
 
     /**
      * Wire the graceful hub restart endpoint (admin-only) under
-     * `POST /api/v1/admin/restart`. Sends SIGUSR1 to the hub master process
-     * via the pid_file (config/server.php: worker.pid_file), mirroring the
+     * `POST /api/v1/admin/restart`. Sends SIGUSR2 (graceful reload) to the
+     * hub master process via the pid_file (config/server.php:
+     * worker.pid_file), mirroring the
      * phlix-server restart surface so the shared @phlix/ui admin Settings page
      * can trigger a hub restart when settings require it.
      */
@@ -2173,9 +2183,12 @@ final class Application
                     'file' => $e->getFile(),
                     'line' => $e->getLine(),
                 ]);
+                // Never echo $e->getMessage() to the client: driver exceptions
+                // carry SQL fragments, file paths, and hostnames. The operator
+                // detail lives in the log line above; the wire gets a constant.
                 $error = (new Response())
                     ->status(500)
-                    ->json(['error' => 'Internal Server Error', 'message' => $e->getMessage()]);
+                    ->json(['error' => 'Internal Server Error']);
                 $connection->send($error->toWorkermanResponse());
             } finally {
                 // Record the request on EVERY path (success, static file, early

@@ -61,11 +61,16 @@ final class ResponseHeadWiringTest extends TestCase
     /**
      * The complete, correct HEAD reply for a direct-play probe: the paired
      * server's `Content-Length` and nothing after the head terminator.
+     *
+     * `X-Content-Type-Options: nosniff` is the F3 baseline header that
+     * `toWorkermanResponse()` adds to every hub-emitted response (the
+     * content here is a video type, so the HTML-only framing headers stay off).
      */
     private const HEAD_WIRE = "HTTP/1.1 200 OK\r\n"
         . "Content-Type: video/x-matroska\r\n"
         . "Content-Length: 362807\r\n"
         . "Accept-Ranges: bytes\r\n"
+        . "X-Content-Type-Options: nosniff\r\n"
         . "Connection: keep-alive\r\n"
         . "\r\n";
 
@@ -82,6 +87,7 @@ final class ResponseHeadWiringTest extends TestCase
         . "Content-Type: video/x-matroska\r\n"
         . "Content-Length: 362807\r\n"
         . "Accept-Ranges: bytes\r\n"
+        . "X-Content-Type-Options: nosniff\r\n"
         . "Connection: keep-alive\r\n"
         . "Content-Length: 0\r\n"
         . "\r\n";
@@ -226,6 +232,7 @@ final class ResponseHeadWiringTest extends TestCase
             "HTTP/1.1 200 OK\r\n"
             . "Content-Length: 4096\r\n"
             . "Content-Type: video/mp4\r\n"
+            . "X-Content-Type-Options: nosniff\r\n"
             . "Set-Cookie: sid=abc; Max-Age=3600; Path=/; Secure; HttpOnly; SameSite=Lax\r\n"
             . "Set-Cookie: t=z; Max-Age=0; Path=/; SameSite=Strict\r\n"
             . "Connection: keep-alive\r\n"

@@ -16,8 +16,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * ungated. Each case below drives a concrete URL into the router the real
  * `Application::register*Routes()` method built and asserts the production
  * outcome for a caller with NO credentials — 401 on the JSON surface, a 302 to
- * `/app/login` on the SSR page paths, 401 `ENROLLMENT_TOKEN_EXPIRED` on the
- * server-facing enrollment-JWT routes, 400 `HUB_PROTOCOL_UNSUPPORTED` on the
+ * `/app/login` on the SSR page paths, 401 `ENROLLMENT_TOKEN_INVALID` on the
+ * server-facing enrollment-JWT routes (missing credential), 400 `HUB_PROTOCOL_UNSUPPORTED` on the
  * protocol-gated claim routes. Admin routes get a second pass with a REAL,
  * valid HS256 token for a non-admin user, which must be refused 403.
  *
@@ -139,7 +139,9 @@ final class RegistrarAuthGateTest extends RouteRegistrationTestCase
                     $response->statusCode,
                     RouteManifest::key($route) . ' must require an enrollment JWT',
                 );
-                self::assertStringContainsString('ENROLLMENT_TOKEN_EXPIRED', $response->body);
+                // An ABSENT credential is an invalid-token refusal, not an
+                // expiry — the middleware labels the two arms distinctly.
+                self::assertStringContainsString('ENROLLMENT_TOKEN_INVALID', $response->body);
                 break;
 
             case RouteManifest::GATE_HUB_PROTOCOL:

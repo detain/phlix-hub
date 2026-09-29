@@ -238,6 +238,7 @@ final class ConnectionResponseSink implements RelayResponseSink
 
         $filtered = [];
         $hasContentLength = false;
+        $rawLength = '';
         foreach ($headers as $name => $value) {
             $lower = strtolower($name);
             if (in_array($lower, self::STRIPPED_HEADERS, true)) {
@@ -249,6 +250,12 @@ final class ConnectionResponseSink implements RelayResponseSink
             }
             if ($lower === 'content-length') {
                 $hasContentLength = true;
+                // Capture the VALUE on the same case-insensitive match used for
+                // detection: an upstream relaying `content-length` (lowercase,
+                // legal per RFC 9110 §5 — field names are case-insensitive)
+                // must not fall through to an exact-case lookup and silently
+                // disarm the short-body force-close safeguard below.
+                $rawLength = $value;
             }
             $filtered[$name] = $value;
         }
@@ -268,7 +275,6 @@ final class ConnectionResponseSink implements RelayResponseSink
             // Fixed-length framing: preserve Content-Length / Content-Range / 206
             // verbatim and stream raw body bytes after the head.
             $this->chunked = false;
-            $rawLength = $filtered['Content-Length'] ?? '';
             $this->declaredLength = is_numeric($rawLength) ? (int) $rawLength : -1;
             $this->connection->send($this->buildFixedLengthHead($status, $filtered), true);
             return;

@@ -10,6 +10,8 @@ use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Console\Output\BufferedOutput;
 use Symfony\Component\Console\Tester\CommandTester;
 
 /**
@@ -25,10 +27,15 @@ final class UserCreateCommandTest extends TestCase
 {
     private function tester(UserRepository $repository): CommandTester
     {
+        return new CommandTester($this->command($repository));
+    }
+
+    private function command(UserRepository $repository): Command
+    {
         $application = new Application();
         $application->add(new UserCreateCommand(static fn(): UserRepository => $repository));
 
-        return new CommandTester($application->find('user:create'));
+        return $application->find('user:create');
     }
 
     public function testCreatesAccountAndPrintsHumanConfirmation(): void
@@ -141,7 +148,56 @@ final class UserCreateCommandTest extends TestCase
         ]);
 
         self::assertSame(Command::INVALID, $exitCode);
-        self::assertStringContainsString('A --password is required', $tester->getDisplay());
+        self::assertStringContainsString('A password is required', $tester->getDisplay());
+    }
+
+    /**
+     * F-LOW: an OMITTED --password in a scripted (non-interactive) run reads
+     * exactly one line from the input stream instead of demanding the secret
+     * on the command line (process table / shell history exposure).
+     */
+    public function testOmittedPasswordReadsOneLineFromStream(): void
+    {
+        $repository = $this->createMock(UserRepository::class);
+        $repository->method('usernameExists')->willReturn(false);
+        $repository->method('emailExists')->willReturn(false);
+        $repository->expects(self::once())
+            ->method('create')
+            ->with(self::callback(static fn (array $data): bool => $data['password'] === 'piped-secret'))
+            ->willReturn('new-id');
+
+        $command = $this->command($repository);
+        $input = new ArrayInput(
+            ['username' => 'bob', '--email' => 'bob@example.com'],
+            $command->getDefinition(),
+        );
+        $input->setInteractive(false);
+        $stream = fopen('data://text/plain,piped-secret' . "\n" . 'trailing-ignored', 'r');
+        self::assertIsResource($stream);
+        $input->setStream($stream);
+
+        self::assertSame(Command::SUCCESS, $command->run($input, new BufferedOutput()));
+    }
+
+    public function testOmittedPasswordWithoutStreamFailsValidation(): void
+    {
+        $repository = $this->createMock(UserRepository::class);
+        $repository->expects(self::never())->method('create');
+
+        $command = $this->command($repository);
+        $input = new ArrayInput(
+            ['username' => 'bob', '--email' => 'bob@example.com'],
+            $command->getDefinition(),
+        );
+        $input->setInteractive(false);
+        // Empty stream: fgets returns false immediately -> no password.
+        $emptyStream = fopen('data://text/plain,', 'r');
+        self::assertIsResource($emptyStream);
+        $input->setStream($emptyStream);
+        $output = new BufferedOutput();
+
+        self::assertSame(Command::INVALID, $command->run($input, $output));
+        self::assertStringContainsString('A password is required', $output->fetch());
     }
 
     public function testUsernameCollisionExitsInvalid(): void
