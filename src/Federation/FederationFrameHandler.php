@@ -46,7 +46,10 @@ use function json_encode;
  * Only after that proof verifies does the channel flip to VERIFIED in the
  * connection manager; until then every DATA payload (offers, shares,
  * admin-delegation) is dropped and audited. Canonical byte strings live in
- * {@see FederationHandshake} so both roles sign/verify the exact same form.
+ * {@see FederationHandshake} so both roles sign/verify the exact same form —
+ * and the leaf's proof must arrive on the very socket still registered for
+ * that peer: a late HELLO_AUTH replayed over a superseded connection is
+ * refused ('handshake_stale_connection'), never stamped onto the replacement.
  *
  * @package Phlix\Hub\Federation
  */
@@ -89,12 +92,18 @@ final class FederationFrameHandler
      * Returns null to keep the connection open, or a string error message
      * to send back and close the connection.
      *
-     * @param string $hubId       Peer hub UUID (from route param).
-     * @param string $jsonPayload Raw JSON text frame payload.
+     * The ARRIVING connection object is threaded through: the H-4 HELLO_AUTH
+     * proof is bound to its carrier socket (identity-of-proof-carrier), so
+     * the handler must know WHICH connection delivered the bytes instead of
+     * re-resolving by hubId and stamping whatever is registered now.
+     *
+     * @param string              $hubId       Peer hub UUID (from route param).
+     * @param string              $jsonPayload Raw JSON text frame payload.
+     * @param ConnectionInterface $connection  The Workerman WS connection the frame arrived on.
      *
      * @return string|null Error message if the connection should be rejected, null otherwise.
      */
-    public function handleTextFrame(string $hubId, string $jsonPayload): ?string
+    public function handleTextFrame(string $hubId, string $jsonPayload, ConnectionInterface $connection): ?string
     {
         try {
             /** @var array<string, mixed>|null $decoded */
@@ -116,7 +125,7 @@ final class FederationFrameHandler
         return match ($type) {
             'hub_hello' => $this->handleHubHello($hubId, $decoded),
             'hub_hello_ack' => $this->handleHubHelloAck($hubId, $decoded),
-            'hub_hello_auth' => $this->handleHelloAuth($hubId, $decoded),
+            'hub_hello_auth' => $this->handleHelloAuth($hubId, $decoded, $connection),
             default => null, // Unknown text frames are ignored
         };
     }
@@ -269,16 +278,20 @@ final class FederationFrameHandler
      * {session_id, nonce, leaf_hub_id} string. The nonce must still be
      * pending (single-use: a second proof over the same session is refused),
      * must belong to THIS peer's ceremony, and the claimed identity must
-     * match the bound one. Success flips the connection to VERIFIED, pushes
-     * pending shares, and audits the connect; any failure closes the link
-     * with an audited refusal.
+     * match the bound one. The proof is additionally bound to its CARRIER:
+     * the bytes must arrive on the socket that is still the registered
+     * connection for this hub, so a late AUTH replayed over a superseded
+     * socket can never vouch for its replacement. Success flips the
+     * connection to VERIFIED, pushes pending shares, and audits the connect;
+     * any failure closes the link with an audited refusal.
      *
-     * @param string               $hubId   Peer hub UUID (from route).
-     * @param array<string, mixed> $decoded Decoded JSON payload.
+     * @param string               $hubId      Peer hub UUID (from route).
+     * @param array<string, mixed> $decoded    Decoded JSON payload.
+     * @param ConnectionInterface  $connection The socket the AUTH bytes arrived on.
      *
      * @return string|null Error message to reject, or null to accept.
      */
-    private function handleHelloAuth(string $hubId, array $decoded): ?string
+    private function handleHelloAuth(string $hubId, array $decoded, ConnectionInterface $connection): ?string
     {
         /** @var mixed $rawSessionId */
         $rawSessionId = $decoded['session_id'] ?? null;
@@ -314,6 +327,21 @@ final class FederationFrameHandler
         $conn = $this->connMgr->getConnection($hubId);
         if ($conn === null) {
             return 'Connection not registered';
+        }
+
+        // Identity-of-proof-carrier (H-4 defense-in-depth): the AUTH bytes
+        // must arrive on the very socket that is STILL registered for this
+        // hub. Resolving the stamp target by hubId alone would let a late
+        // proof delivered over a SUPERSEDED socket verify its replacement.
+        // Like the relay flow-control arms (phlix-server RelayConsumer), the
+        // law is capture-the-object and compare by identity — a stale
+        // carrier is inert. Checked BEFORE the nonce burn so a stale frame
+        // cannot burn the live ceremony's proof, and markVerified's own
+        // superseded-guard stays as the last line. Workerman's single-threaded
+        // loop makes this check→stamp window atomic within the process.
+        if ($conn !== $connection) {
+            $this->refuseHelloAuth($peerId, $peerName, $peerUrl, 'handshake_stale_connection');
+            return 'HELLO_AUTH refused: proof arrived on a superseded connection';
         }
 
         // Single-use nonce burn: unknown/expired session or an already

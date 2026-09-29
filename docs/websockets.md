@@ -325,6 +325,10 @@ binary `0x09`/`0x0A`, which are retired wire types):
    exact `nonce` from the ack, proving the leaf saw the genuine (signed) ack —
    signed with the **leaf hub's** keypair whose public half is registered on the
    master's peer row. The `nonce` is single-use: a replayed proof is refused.
+   The proof is also bound to its **carrier socket**: a late AUTH delivered
+   over a connection the master already superseded is refused as
+   `handshake_stale_connection` — before the nonce burn — and can never verify
+   the replacement link.
 
 Both ends derive the canonical strings from the one shared helper,
 `Phlix\Hub\Federation\FederationHandshake`, so the two sides cannot drift.
@@ -345,9 +349,9 @@ frame types — there are no federation-specific binary types in use:
 
 | Envelope | Direction | JSON payload | Meaning |
 | --- | --- | --- | --- |
-| `DATA` (`0x05`) ch 0 | master → leaf | `{"shares":[{"id","peer_id","library_id","library_name","permission","status"}]}` | Federated library offers created/changed. Surfaces at `GET /api/v1/me/federation/library-shares/incoming`. |
-| `DATA` (`0x05`) ch 0 | master → leaf | `{"share_id":...}` | An offer was withdrawn. |
-| `DATA` (`0x05`) ch 0 | master → leaf | `{"user_id":...,"peer_id":...,"action":"grant"|"revoke"}` | An admin delegation was granted or revoked. |
+| `DATA` (`0x05`) ch 0 | both → both | `{"shares":[{"id","peer_id","library_id","library_name","permission","status"}]}` | Federated library offers created/changed. **Emitted and accepted in BOTH directions**: the master pushes its offers down (`FederationMasterPusher::pushOffer`, plus the post-hello replay) and the leaf pushes its own up (`FederationPeerManager::pushLibraryShare`); each receiver surfaces them at `GET /api/v1/me/federation/library-shares/incoming`. |
+| `DATA` (`0x05`) ch 0 | both → both | `{"share_id":...}` | An offer was withdrawn — emitted by either side (`pushRevocation` downstream, `pushLibraryShareRevoked` upstream), accepted by both handlers. |
+| `DATA` (`0x05`) ch 0 | reserved: master → leaf | `{"user_id":...,"peer_id":...,"action":"grant"|"revoke"}` | An admin delegation grant/revoke. **Receive-only forward-compat path**: the leaf consumer is implemented and verified-gated (`FederationPeerManager::handleAdminDelegation`), but the master-side producer is NOT implemented — `createAdminDelegation` writes only the DB row and audit — so this envelope is never emitted today. |
 | `HEARTBEAT` (`0x06`) ch 0 | both → both | empty | keep-alive every 15 s once verified |
 | `DISCONNECTED` (`0x07`) ch 0 | either → either | `{"reason":...}` | clean close (e.g. `peer_deleted`) |
 

@@ -4228,7 +4228,7 @@ x-phlix-websockets:
     path: "/relay/federation/{hub_id}"
     pathPattern: "~^/relay/federation/([^/?#]+)/?(?:[?#].*)?$~"
     worker: "Phlix\\Hub\\Relay\\FederationWorker"
-    direction: "leaf hub → master hub"
+    direction: "leaf hub ↔ master hub (leaf dials; handshake and DATA payloads flow both directions)"
     auth: >-
       The hub_id in the path must already be a known peer in `federation_peers`; an unknown id is
       closed with reason "Unknown hub". Path knowledge is only a routing hint — real authentication
@@ -4247,10 +4247,10 @@ x-phlix-websockets:
     messages:
       - "text hub_hello — leaf→master: {type,hub_id,hub_name,public_key,role:'leaf',capabilities}"
       - "text hub_hello_ack — master→leaf: {type,session_id,master_hub_id,role:'master',capabilities,nonce,signature}; signature = Ed25519 over 'phlix-federation/hello-ack/v1\\n{session_id}\\n{master_hub_id}\\n{nonce}' by the master hub key"
-      - "text hub_hello_auth — leaf→master: {type,leaf_hub_id,session_id,signature}; signature = Ed25519 over 'phlix-federation/hello-auth/v1\\n{session_id}\\n{nonce}\\n{leaf_hub_id}' by the leaf hub key registered on the peer row; nonce is single-use"
-      - "0x05 DATA envelope, JSON payload {shares:[{id,peer_id,library_id,library_name,permission,status}]} — master→leaf, federated library offers; refused pre-verification"
-      - "0x05 DATA envelope, JSON payload {share_id} — master→leaf, offer revoked; refused pre-verification"
-      - "0x05 DATA envelope, JSON payload {user_id,peer_id,action:'grant'|'revoke'} — master→leaf, admin delegation; refused pre-verification"
+      - "text hub_hello_auth — leaf→master: {type,leaf_hub_id,session_id,signature}; signature = Ed25519 over 'phlix-federation/hello-auth/v1\\n{session_id}\\n{nonce}\\n{leaf_hub_id}' by the leaf hub key registered on the peer row; nonce is single-use, and the proof is bound to its carrier socket — a replay over a superseded connection is refused ('handshake_stale_connection') without burning the live ceremony's nonce"
+      - "0x05 DATA envelope, JSON payload {shares:[{id,peer_id,library_id,library_name,permission,status}]} — leaf↔master (emitted AND accepted in BOTH directions: the master pushes its offers down via FederationMasterPusher::pushOffer and the post-hello replay; the leaf pushes its offers up via FederationPeerManager::pushLibraryShare); refused pre-verification on both roles"
+      - "0x05 DATA envelope, JSON payload {share_id} — leaf↔master, offer revoked (emitted by either side: pushRevocation downstream, FederationPeerManager::pushLibraryShareRevoked upstream; accepted by both handlers); refused pre-verification"
+      - "0x05 DATA envelope, JSON payload {user_id,peer_id,action:'grant'|'revoke'} — RESERVED: master→leaf admin delegation. The leaf consumer is implemented and verified-channel-gated (FederationPeerManager::handleAdminDelegation), but the master-side producer is NOT implemented — createAdminDelegation writes only the DB row plus audit (FederationMasterPusher has no delegation push) — so this envelope never appears on the wire today"
       - "0x06 HEARTBEAT — either direction, keep-alive, channel 0 (federation liveness rides the generic type; 0x0B is retired)"
       - "0x07 DISCONNECTED — either direction, clean close, JSON {reason} (0x0F is retired)"
       - "RETIRED: 0x09 HUB_HELLO, 0x0A HUB_HELLO_ACK, 0x0B HUB_HEARTBEAT, 0x0C LIBRARY_SHARE_UPDATE, 0x0D LIBRARY_SHARE_REVOKED, 0x0E ADMIN_DELEGATION, 0x0F HUB_DISCONNECTED — reserved enum values only, never emitted on the wire"

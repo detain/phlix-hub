@@ -113,7 +113,7 @@ final class FederationFrameHandlerTest extends TestCase
     public function testHandleTextFrameRejectsInvalidJson(): void
     {
         $handler = $this->handler();
-        $result = $handler->handleTextFrame('hub-1', 'not valid json {');
+        $result = $handler->handleTextFrame('hub-1', 'not valid json {', $this->recordingConnection());
 
         self::assertSame('Invalid JSON payload', $result);
     }
@@ -121,7 +121,7 @@ final class FederationFrameHandlerTest extends TestCase
     public function testHandleTextFrameRejectsNonArrayPayload(): void
     {
         $handler = $this->handler();
-        $result = $handler->handleTextFrame('hub-1', '"just a string"');
+        $result = $handler->handleTextFrame('hub-1', '"just a string"', $this->recordingConnection());
 
         self::assertSame('Invalid frame payload', $result);
     }
@@ -129,7 +129,7 @@ final class FederationFrameHandlerTest extends TestCase
     public function testHandleTextFrameRejectsMissingType(): void
     {
         $handler = $this->handler();
-        $result = $handler->handleTextFrame('hub-1', '{"foo":"bar"}');
+        $result = $handler->handleTextFrame('hub-1', '{"foo":"bar"}', $this->recordingConnection());
 
         self::assertSame('Missing frame type', $result);
     }
@@ -140,7 +140,7 @@ final class FederationFrameHandlerTest extends TestCase
         $hubRepo->expects(self::never())->method('getPeerByPublicKey');
 
         $handler = $this->handler($hubRepo);
-        $result = $handler->handleTextFrame('hub-1', '{"type":"unknown_type"}');
+        $result = $handler->handleTextFrame('hub-1', '{"type":"unknown_type"}', $this->recordingConnection());
 
         self::assertNull($result);
     }
@@ -148,7 +148,11 @@ final class FederationFrameHandlerTest extends TestCase
     public function testHandleTextFrameHubHelloRejectsEmptyPublicKey(): void
     {
         $handler = $this->handler();
-        $result = $handler->handleTextFrame('hub-1', '{"type":"hub_hello","public_key":""}');
+        $result = $handler->handleTextFrame(
+            'hub-1',
+            '{"type":"hub_hello","public_key":""}',
+            $this->recordingConnection(),
+        );
 
         self::assertSame('Invalid peer key', $result);
     }
@@ -159,7 +163,11 @@ final class FederationFrameHandlerTest extends TestCase
         $hubRepo->method('getPeerByPublicKey')->willReturn(null);
 
         $handler = $this->handler($hubRepo);
-        $result = $handler->handleTextFrame('hub-1', '{"type":"hub_hello","public_key":"unknown_key"}');
+        $result = $handler->handleTextFrame(
+            'hub-1',
+            '{"type":"hub_hello","public_key":"unknown_key"}',
+            $this->recordingConnection(),
+        );
 
         self::assertSame('Invalid peer key', $result);
     }
@@ -196,7 +204,7 @@ final class FederationFrameHandlerTest extends TestCase
         $sessions->expects(self::never())->method('registerSession');
 
         $handler = $this->handler($hubRepo, $sessions);
-        $result = $handler->handleTextFrame('leaf-hub-1', $this->helloJson());
+        $result = $handler->handleTextFrame('leaf-hub-1', $this->helloJson(), $this->recordingConnection());
 
         self::assertSame('Peer suspended', $result);
     }
@@ -216,7 +224,7 @@ final class FederationFrameHandlerTest extends TestCase
 
         // No addConnection() on realConnMgr → getConnection() is null.
         $handler = $this->handler($hubRepo, $sessions);
-        $result = $handler->handleTextFrame('hub-unknown', $this->helloJson());
+        $result = $handler->handleTextFrame('hub-unknown', $this->helloJson(), $this->recordingConnection());
 
         self::assertSame('Connection not registered', $result);
     }
@@ -237,7 +245,7 @@ final class FederationFrameHandlerTest extends TestCase
         $this->realConnMgr->addConnection('leaf-hub-1', $conn);
 
         $handler = $this->handler($hubRepo);
-        $result = $handler->handleTextFrame('leaf-hub-1', $this->helloJson());
+        $result = $handler->handleTextFrame('leaf-hub-1', $this->helloJson(), $conn);
 
         self::assertNull($result);
     }
@@ -258,6 +266,7 @@ final class FederationFrameHandlerTest extends TestCase
         $result = $handler->handleTextFrame(
             'leaf-hub-1',
             '{"type":"hub_hello","public_key":"valid_key","hub_id":"OTHER-hub","hub_name":"L"}',
+            $this->recordingConnection(),
         );
 
         self::assertSame('Peer hub_id mismatch', $result);
@@ -363,7 +372,7 @@ final class FederationFrameHandlerTest extends TestCase
         $this->realConnMgr->addConnection('leaf-hub-1', $conn);
 
         $handler = $this->handler($hubRepo, $sessions, $shares, $audit);
-        $result = $handler->handleTextFrame('leaf-hub-1', $this->helloJson());
+        $result = $handler->handleTextFrame('leaf-hub-1', $this->helloJson(), $conn);
 
         self::assertNull($result, "HELLO from a '{$status}' peer must be accepted");
 
@@ -541,7 +550,7 @@ final class FederationFrameHandlerTest extends TestCase
         $handler = $this->handlerForPeer($peer, $pending, $shares, $audit);
 
         // Leg 1: HELLO — accepted, but NOTHING sensitive happens yet.
-        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer)));
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer), $conn));
         self::assertFalse($this->realConnMgr->isVerified('leaf-hub-1'));
         self::assertSame([], $this->binaryFramesOf($conn));
 
@@ -553,7 +562,7 @@ final class FederationFrameHandlerTest extends TestCase
             'leaf-hub-1',
             sodium_crypto_sign_secretkey($leafKp),
         );
-        self::assertNull($handler->handleTextFrame('leaf-hub-1', $auth));
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $auth, $conn));
 
         self::assertTrue($this->realConnMgr->isVerified('leaf-hub-1'), 'Ceremony must verify the channel');
 
@@ -598,7 +607,7 @@ final class FederationFrameHandlerTest extends TestCase
         $this->realConnMgr->addConnection('leaf-hub-2', $connB);
 
         $handler = $this->handlerForPeer($peerB, $pending, $shares);
-        self::assertNull($handler->handleTextFrame('leaf-hub-2', $this->helloText($peerB)));
+        self::assertNull($handler->handleTextFrame('leaf-hub-2', $this->helloText($peerB), $connB));
         self::assertSame([], $this->binaryFramesOf($connB), 'No push before verification (H-4)');
 
         $ack = $this->lastAckOf($connB);
@@ -607,7 +616,7 @@ final class FederationFrameHandlerTest extends TestCase
             self::frameStringField($ack, 'nonce'),
             'leaf-hub-2',
             sodium_crypto_sign_secretkey($leafBKp),
-        )));
+        ), $connB));
 
         self::assertSame([], $this->binaryFramesOf($connB), 'Leaf B must receive no share DATA frame');
     }
@@ -635,7 +644,7 @@ final class FederationFrameHandlerTest extends TestCase
         $this->realConnMgr->addConnection('leaf-hub-1', $conn);
 
         $handler = $this->handlerForPeer($peer, $pending, audit: $audit);
-        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer)));
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer), $conn));
 
         $ack = $this->lastAckOf($conn);
         $result = $handler->handleTextFrame('leaf-hub-1', $this->helloAuthJson(
@@ -643,7 +652,7 @@ final class FederationFrameHandlerTest extends TestCase
             self::frameStringField($ack, 'nonce'),
             'leaf-hub-1',
             sodium_crypto_sign_secretkey($attacker),
-        ));
+        ), $conn);
 
         self::assertSame('HELLO_AUTH verification failed', $result);
         self::assertFalse($this->realConnMgr->isVerified('leaf-hub-1'));
@@ -665,7 +674,7 @@ final class FederationFrameHandlerTest extends TestCase
         $this->realConnMgr->addConnection('leaf-hub-1', $conn);
 
         $handler = $this->handlerForPeer($peer, $pending);
-        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer)));
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer), $conn));
 
         $ack = $this->lastAckOf($conn);
         $auth = $this->helloAuthJson(
@@ -675,12 +684,12 @@ final class FederationFrameHandlerTest extends TestCase
             sodium_crypto_sign_secretkey($leafKp),
         );
 
-        self::assertNull($handler->handleTextFrame('leaf-hub-1', $auth), 'First proof accepted');
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $auth, $conn), 'First proof accepted');
         self::assertTrue($this->realConnMgr->isVerified('leaf-hub-1'));
 
         $replayRoute = 'leaf-hub-1';
         $replayProof = $auth;
-        $again = $handler->handleTextFrame($replayRoute, $replayProof);
+        $again = $handler->handleTextFrame($replayRoute, $replayProof, $conn);
         self::assertIsString($again);
         self::assertStringContainsString('no pending handshake', $again);
     }
@@ -712,7 +721,7 @@ final class FederationFrameHandlerTest extends TestCase
             'signature' => 'AAAA',
         ], JSON_THROW_ON_ERROR);
 
-        $result = $handler->handleTextFrame('leaf-hub-1', $forged);
+        $result = $handler->handleTextFrame('leaf-hub-1', $forged, $conn);
         self::assertIsString($result);
         self::assertStringContainsString('no pending handshake', (string) $result);
     }
@@ -737,7 +746,7 @@ final class FederationFrameHandlerTest extends TestCase
             ->with('peer-1', 'Test Peer', 'https://peer.example.com', false, 'handshake_identity_mismatch');
 
         $handler = $this->handlerForPeer($peer, $pending, audit: $audit);
-        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer)));
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer), $conn));
 
         $ack = $this->lastAckOf($conn);
         $result = $handler->handleTextFrame('leaf-hub-1', $this->helloAuthJson(
@@ -745,7 +754,7 @@ final class FederationFrameHandlerTest extends TestCase
             self::frameStringField($ack, 'nonce'),
             'IMPOSTOR-hub',
             sodium_crypto_sign_secretkey($leafKp),
-        ));
+        ), $conn);
 
         self::assertIsString($result);
         self::assertStringContainsString('does not match the bound identity', (string) $result);
@@ -767,7 +776,10 @@ final class FederationFrameHandlerTest extends TestCase
             '{"type":"hub_hello_auth","session_id":"","signature":"x","leaf_hub_id":"y"}',
             ] as $bad
         ) {
-            self::assertSame('Invalid hello_auth payload', $handler->handleTextFrame('leaf-hub-1', $bad));
+            self::assertSame(
+                'Invalid hello_auth payload',
+                $handler->handleTextFrame('leaf-hub-1', $bad, $this->recordingConnection()),
+            );
         }
     }
 
@@ -823,6 +835,114 @@ final class FederationFrameHandlerTest extends TestCase
         $this->realConnMgr->addConnection('leaf-hub-1', $new);
 
         self::assertFalse($this->realConnMgr->isVerified('leaf-hub-1'));
+    }
+
+    /**
+     * Review residual (e) hardening of the H-4 law: the leaf's proof is bound
+     * to its CARRIER socket. A genuine leaf-signed HELLO_AUTH delivered over a
+     * SUPERSEDED connection must be refused ('handshake_stale_connection') —
+     * it neither burns the pending nonce nor verifies the replacement — and
+     * the successor socket must complete its OWN ceremony before any DATA is
+     * accepted. The control leg proves the current carrier still verifies.
+     */
+    public function testHelloAuthOverStaleConnectionIsRefusedAndCurrentStillMustProve(): void
+    {
+        $leafKp = sodium_crypto_sign_keypair();
+        $peer = $this->ceremonyPeer(sodium_crypto_sign_publickey($leafKp));
+
+        /** @var array<string, array{peer_id:string,nonce:string}> $pending */
+        $pending = [];
+
+        /** @var list<array{success:bool,reason:?string}> $connectAudits */
+        $connectAudits = [];
+        /** @var list<string> $failedAuths */
+        $failedAuths = [];
+
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->method('logHubConnect')->willReturnCallback(
+            static function (mixed ...$args) use (&$connectAudits): void {
+                $connectAudits[] = [
+                    'success' => (bool) ($args[3] ?? false),
+                    'reason' => isset($args[4]) && is_string($args[4]) ? $args[4] : null,
+                ];
+            },
+        );
+        $audit->method('logFailedAuth')->willReturnCallback(
+            static function (string $reason) use (&$failedAuths): void {
+                $failedAuths[] = $reason;
+            },
+        );
+
+        $shares = $this->createMock(FederationLibraryShareRepository::class);
+        $shares->method('getActiveOutgoingSharesForPeer')->willReturn([]);
+        $shares->expects(self::never())->method('handleIncomingOffer');
+
+        $stale = $this->recordingConnection();
+        $this->realConnMgr->addConnection('leaf-hub-1', $stale);
+
+        $handler = $this->handlerForPeer($peer, $pending, $shares, $audit);
+
+        // The ceremony starts on the FIRST socket.
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer), $stale));
+        $ack = $this->lastAckOf($stale);
+        $auth = $this->helloAuthJson(
+            self::frameStringField($ack, 'session_id'),
+            self::frameStringField($ack, 'nonce'),
+            'leaf-hub-1',
+            sodium_crypto_sign_secretkey($leafKp),
+        );
+
+        // The socket is replaced under the same hub id (addConnection supersedes).
+        $current = $this->recordingConnection();
+        $this->realConnMgr->addConnection('leaf-hub-1', $current);
+
+        // The GENUINE proof, carried by the STALE socket: refused by identity.
+        $result = $handler->handleTextFrame('leaf-hub-1', $auth, $stale);
+        self::assertIsString($result);
+        self::assertStringContainsString('superseded connection', $result);
+        self::assertFalse(
+            $this->realConnMgr->isVerified('leaf-hub-1'),
+            'A stale carrier must never verify the successor socket',
+        );
+        self::assertSame([], $this->binaryFramesOf($current), 'Nothing may be pushed to the successor');
+
+        // Placed BEFORE the nonce burn: the live ceremony survives the stale frame.
+        self::assertArrayHasKey('sess-peer-1', $pending, 'Stale AUTH must not consume the handshake');
+
+        // The unverified gate still drops DATA while the successor proves nothing.
+        $handler->handleBinaryFrame(
+            'leaf-hub-1',
+            '{"shares":[{"id":"o","peer_id":"leaf-hub-1","library_id":"l"}]}',
+            5,
+        );
+
+        // Control: the CURRENT socket completes its own ceremony and verifies.
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloText($peer), $current));
+        $newAck = $this->lastAckOf($current);
+        self::assertNull($handler->handleTextFrame('leaf-hub-1', $this->helloAuthJson(
+            self::frameStringField($newAck, 'session_id'),
+            self::frameStringField($newAck, 'nonce'),
+            'leaf-hub-1',
+            sodium_crypto_sign_secretkey($leafKp),
+        ), $current));
+        self::assertTrue($this->realConnMgr->isVerified('leaf-hub-1'));
+
+        self::assertSame(
+            [
+                ['success' => false, 'reason' => 'handshake_stale_connection'],
+                ['success' => true, 'reason' => null],
+            ],
+            $connectAudits,
+            'Exactly the stale refusal then the control success must audit',
+        );
+        self::assertSame(
+            [
+                'federation_handshake_handshake_stale_connection',
+                'federation_data_frame_before_verification',
+            ],
+            $failedAuths,
+            'Stale refusal + pre-verification DATA drop are the only failed-auth audits',
+        );
     }
 
     // ---------------------------------------------------- heartbeat / reaping
@@ -1028,7 +1148,11 @@ final class FederationFrameHandlerTest extends TestCase
         $hubRepo->expects(self::never())->method('getPeerByPublicKey');
 
         $handler = $this->handler($hubRepo);
-        $result = $handler->handleTextFrame('hub-1', '{"type":"hub_hello_ack","session_id":"sess-1"}');
+        $result = $handler->handleTextFrame(
+            'hub-1',
+            '{"type":"hub_hello_ack","session_id":"sess-1"}',
+            $this->recordingConnection(),
+        );
 
         // Master hub ignores HELLO_ACK from other hubs
         self::assertNull($result);

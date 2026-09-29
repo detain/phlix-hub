@@ -191,7 +191,7 @@ final class FederationHandshakeCeremonyTest extends TestCase
             'public_key' => $leafPubB64,
             'role' => 'leaf',
         ], JSON_THROW_ON_ERROR);
-        self::assertNull($frameHandler->handleTextFrame('leaf-hub-1', $hello));
+        self::assertNull($frameHandler->handleTextFrame('leaf-hub-1', $hello, $leafSocket));
         self::assertFalse($connMgr->isVerified('leaf-hub-1'));
 
         $ackJson = $this->lastTextFrame($masterSent, 'hub_hello_ack');
@@ -211,13 +211,13 @@ final class FederationHandshakeCeremonyTest extends TestCase
         self::assertNotNull($authJson, 'Leaf must answer a verified ACK with HELLO_AUTH');
 
         // ---- Leg 3: master verifies the REAL proof and flips to VERIFIED -------
-        self::assertNull($frameHandler->handleTextFrame('leaf-hub-1', (string) $authJson));
+        self::assertNull($frameHandler->handleTextFrame('leaf-hub-1', (string) $authJson, $leafSocket));
         self::assertTrue($connMgr->isVerified('leaf-hub-1'), 'Channel must be VERIFIED after the ceremony');
 
         // ---- Negative cross-check: replayed proof is refused -------------------
         $replayRoute = 'leaf-hub-1';
         $replayProof = (string) $authJson;
-        $replay = $frameHandler->handleTextFrame($replayRoute, $replayProof);
+        $replay = $frameHandler->handleTextFrame($replayRoute, $replayProof, $leafSocket);
         self::assertIsString($replay, 'A replayed HELLO_AUTH must be refused');
     }
 

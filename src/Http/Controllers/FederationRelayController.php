@@ -105,7 +105,10 @@ final class FederationRelayController
         // Binary relay frames: first byte is \x00 (the encoded seq number starts with 0x00 often)
         // More precisely: check if the payload is valid UTF-8 JSON starting with '{'
         if ($this->isTextFrame($data)) {
-            $error = $this->frameHandler->handleTextFrame($hubId, $data);
+            // The arriving connection object rides along: the H-4 HELLO_AUTH
+            // proof is bound to its carrier socket, so the handler can refuse
+            // a proof delivered over a superseded connection.
+            $error = $this->frameHandler->handleTextFrame($hubId, $data, $connection);
             if ($error !== null) {
                 $connection->close($error);
             }
