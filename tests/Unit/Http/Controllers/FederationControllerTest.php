@@ -813,7 +813,7 @@ final class FederationControllerTest extends TestCase
         // Registered conflict generic per the contracts wire law (the
         // specific condition rides in error/reason, not a new code literal).
         self::assertSame('invalid_request', $body['code']);
-        self::assertStringContainsString('already bound', $body['reason']);
+        self::assertStringContainsString('already bound', self::stringNode($body['reason']));
     }
 
     public function testBindPeerLeafHubIdReturns404ForUnknownPeer(): void
