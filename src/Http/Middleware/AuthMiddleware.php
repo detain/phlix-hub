@@ -22,11 +22,18 @@ use function count;
 use function time;
 
 /**
- * Hub-side bearer/cookie auth middleware.
+ * Hub-side BEARER-ONLY auth middleware.
  *
- * Reads the access JWT from either the `Authorization: Bearer …` header
- * (the API surface) or a `phlix_hub_token` cookie (the SSR pages), then
- * hydrates {@see Request::$userId} when the token validates. When the
+ * Reads the access JWT from the `Authorization: Bearer …` header — the
+ * session-cookie path was deleted as dead code: nothing in the hub ever
+ * SETS a `phlix_hub_token`/`phlix_hub_refresh` cookie (login/refresh
+ * respond with tokens in the JSON body and the Vue SPA carries the
+ * bearer header), so the cookie-read branch was unreachable legacy left
+ * over from the retired SSR form UI. Removing it also removes the
+ * cookie-CSRF consideration from this surface entirely: bearer headers
+ * are not attached cross-origin.
+ *
+ * Hydrates {@see Request::$userId} when the token validates. When the
  * token is missing or invalid:
  *
  *  - JSON routes (`Accept: application/json` or path under `/api/`)
@@ -47,9 +54,6 @@ use function time;
  */
 final class AuthMiddleware
 {
-    public const COOKIE_ACCESS = 'phlix_hub_token';
-    public const COOKIE_REFRESH = 'phlix_hub_refresh';
-
     /**
      * Short-TTL in-worker cache for user-existence probes.
      *
@@ -144,54 +148,17 @@ final class AuthMiddleware
     }
 
     /**
-     * Pull a token from the Authorization header first, then a cookie.
+     * Pull the token from the `Authorization: Bearer …` header.
      *
-     * The cookie path is honoured only for SSR/GET-style requests. For a
-     * MUTATING request on the JSON `/api/v1` surface (POST/PUT/PATCH/DELETE)
-     * the session cookie is deliberately ignored: those requests must carry
-     * an explicit `Authorization: Bearer` header. This closes the
-     * cookie-based CSRF vector on the API (a cross-site form/fetch can ride
-     * the cookie but cannot set an Authorization header). The legacy SSR
-     * forms and their double-submit CSRF guard have been retired.
+     * Bearer-only by design — see the class docblock for why the legacy
+     * cookie read was deleted.
      */
     private function extractToken(Request $request): ?string
     {
         if ($request->bearerToken !== null && $request->bearerToken !== '') {
             return $request->bearerToken;
         }
-        if (self::isMutatingApiRequest($request)) {
-            // Bearer-only on the mutating API surface; do not fall back to
-            // the cookie.
-            return null;
-        }
-        $cookieHeader = $request->getHeader('Cookie');
-        if ($cookieHeader === null) {
-            return null;
-        }
-        foreach (explode(';', $cookieHeader) as $part) {
-            $kv = explode('=', trim($part), 2);
-            if (count($kv) === 2 && $kv[0] === self::COOKIE_ACCESS) {
-                $value = trim($kv[1]);
-                return $value === '' ? null : $value;
-            }
-        }
         return null;
-    }
-
-    /**
-     * True when the request is a mutating call on the JSON `/api/v1`
-     * surface (POST/PUT/PATCH/DELETE under `/api/`). Such requests are
-     * Bearer-only — the session cookie is not accepted as authentication.
-     */
-    private static function isMutatingApiRequest(Request $request): bool
-    {
-        if (!str_starts_with($request->path, '/api/')) {
-            return false;
-        }
-        return match (strtoupper($request->method)) {
-            'POST', 'PUT', 'PATCH', 'DELETE' => true,
-            default => false,
-        };
     }
 
     /**

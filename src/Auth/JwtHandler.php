@@ -154,8 +154,10 @@ final class JwtHandler
 
     /**
      * Mint a signed refresh token for a user. Refresh tokens carry a `jti`
-     * so server-side revocation can be added later; the hub itself
-     * does not track refresh JTIs.
+     * precisely so revocation can be checked by id — {@see
+     * \Phlix\Hub\Auth\RefreshTokenRevocationService} now records cut jtis and
+     * {@see \Phlix\Hub\Auth\AuthManager::refresh()} consults it, so a logout
+     * genuinely ends the token lineage instead of merely auditing it.
      *
      * @param string $userId Subject — the user UUID.
      *
@@ -186,6 +188,9 @@ final class JwtHandler
      * - the issuer does not match this handler's configured `$issuer`,
      * - the audience does not match this handler's configured `$audience`,
      * - the token is expired (`exp` < now),
+     * - the token is not yet valid (`nbf` > now — minting side never sets
+     *   `nbf`, but a hand-forged or clock-shifted payload must not slip
+     *   through the one gate the vendored claims object left implicit),
      * - or the payload cannot be coerced into a {@see JwtClaims}.
      *
      * @param string $token Encoded JWT.
@@ -213,6 +218,9 @@ final class JwtHandler
             return null;
         }
         if ($claims->isExpired()) {
+            return null;
+        }
+        if ($claims->nbf !== null && $claims->nbf > time()) {
             return null;
         }
 

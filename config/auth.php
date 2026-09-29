@@ -13,6 +13,11 @@ declare(strict_types=1);
  * Optional env:
  *   HUB_JWT_ACCESS_TTL   — access token TTL in seconds (default 3600).
  *   HUB_JWT_REFRESH_TTL  — refresh token TTL in seconds (default 604800).
+ *   HUB_SIGNUPS_ENABLED  — "false"/"0"/"no"/"off" closes self-service
+ *                          registration (auth audit fix 3); default true.
+ *                          When false, POST /api/v1/auth/{register,signup}
+ *                          answers 403 auth.signups_disabled BEFORE any
+ *                          hashing work.
  *
  * @package Phlix\Hub
  */
@@ -39,4 +44,12 @@ return [
     'audience'    => 'hub',
     'access_ttl'  => (int) (getenv('HUB_JWT_ACCESS_TTL') ?: 3600),
     'refresh_ttl' => (int) (getenv('HUB_JWT_REFRESH_TTL') ?: 604800),
+    // Load-bearing for the same reason as the TTL keys above:
+    // AuthServicesProvider reads this key verbatim and defaults to TRUE when
+    // absent — a rename here silently disables HUB_SIGNUPS_ENABLED.
+    'signups_enabled' => !in_array(
+        strtolower(trim((string) (getenv('HUB_SIGNUPS_ENABLED') ?: 'true'))),
+        ['0', 'false', 'no', 'off'],
+        true,
+    ),
 ];

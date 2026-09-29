@@ -8,6 +8,8 @@ use InvalidArgumentException;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Auth\RefreshTokenRevocationService;
+use Phlix\Hub\Auth\SignupsDisabledException;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
@@ -295,13 +297,6 @@ final class AuthManagerTest extends TestCase
         self::assertNull($mgr->getCurrentUser('nobody'));
     }
 
-    public function testJwtAccessorReturnsHandler(): void
-    {
-        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
-        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl);
-        self::assertSame($jwt, $mgr->jwt());
-    }
-
     public function testCreatedClaimsArePresentInResponse(): void
     {
         [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
@@ -444,5 +439,148 @@ final class AuthManagerTest extends TestCase
         // failures) does lockout trip, proving the counter restarted at 0.
         $this->expectException(RateLimitException::class);
         $mgr->login('alice', 'wrong-pw', '192.0.2.5', 'dev');
+    }
+
+    // ------------------------------------------------------------------
+    // Auth audit fixes (2026-09-28): regression guards.
+    // ------------------------------------------------------------------
+
+    public function testRegisterRejectsOverlongPassword(): void
+    {
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('at most 4096');
+        $mgr->register('alice', 'a@example.com', str_repeat('x', 4097));
+    }
+
+    public function testRegisterThrowsSignupsDisabledBeforeAnyWork(): void
+    {
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        // Nothing on the repo may be touched while signups are closed.
+        $repo->expects(self::never())->method('usernameExists');
+        $repo->expects(self::never())->method('create');
+
+        $mgr = new AuthManager(
+            $repo,
+            $jwt,
+            $audit,
+            $logger,
+            $rl,
+            null,
+            null,
+            null,
+            false,
+        );
+
+        $this->expectException(SignupsDisabledException::class);
+        $mgr->register('alice', 'a@example.com', 'longenough-pw');
+    }
+
+    public function testSignupRateLimiterCountsEveryAttemptAndTrips(): void
+    {
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->method('countUsers')->willReturn(5);
+        $repo->method('create')->willReturn('u-s');
+        $repo->method('findById')->willReturn(['id' => 'u-s', 'username' => 's']);
+
+        // RateLimiter reports limited once count >= max, so with a budget of
+        // 2 the SECOND attempt is already refused.
+        $signupLimiter = new RateLimiter(windowSeconds: 3600, maxAttempts: 2, cap: 100);
+        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl, null, null, $signupLimiter);
+
+        $mgr->register('alice', 'a@example.com', 'longenough-pw', '198.51.100.7');
+
+        $this->expectException(RateLimitException::class);
+        $mgr->register('bob', 'b@example.com', 'longenough-pw', '198.51.100.7');
+    }
+
+    public function testRefreshRejectsDeletedUser(): void
+    {
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        // Token still verifies cryptographically, but the account is gone.
+        $repo->method('findById')->willReturn(null);
+
+        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid or expired refresh token');
+        $mgr->refresh($jwt->createRefreshToken('u-gone'));
+    }
+
+    public function testRefreshRejectsRevokedJti(): void
+    {
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        $repo->method('findById')->willReturn(['id' => 'u-r', 'username' => 'erin']);
+
+        $claims = $jwt->validateRefreshToken($token = $jwt->createRefreshToken('u-r'));
+        self::assertNotNull($claims);
+
+        $revocations = $this->createMock(RefreshTokenRevocationService::class);
+        $revocations->expects(self::once())
+            ->method('isRevoked')
+            ->with($claims->jti)
+            ->willReturn(true);
+
+        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl, null, null, null, true, $revocations);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid or expired refresh token');
+        $mgr->refresh($token);
+    }
+
+    public function testLogoutWithRefreshTokenRevokesItsJtiAndAuditsSignedSubject(): void
+    {
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        $claims = $jwt->validateRefreshToken($token = $jwt->createRefreshToken('u-cut'));
+        self::assertNotNull($claims);
+
+        $revocations = $this->createMock(RefreshTokenRevocationService::class);
+        $revocations->expects(self::once())
+            ->method('revoke')
+            ->with($claims->jti, 'u-cut', $claims->exp)
+            ->willReturn(true);
+
+        // The signed sub wins even though the caller passed an empty userId
+        // (the logout route runs unauthenticated — see AuthController).
+        $audit->expects(self::once())->method('logLogout')->with('u-cut', 'ip-1');
+
+        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl, null, null, null, true, $revocations);
+        $mgr->logout('', 'ip-1', UserLoggedOut::REASON_EXPLICIT, $token);
+    }
+
+    public function testLogoutWithGarbageTokenIsFriendlyNoOp(): void
+    {
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        $revocations = $this->createMock(RefreshTokenRevocationService::class);
+        $revocations->expects(self::never())->method('revoke');
+        $audit->expects(self::once())->method('logLogout')->with('u-1', 'session-1');
+
+        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl, null, null, null, true, $revocations);
+        $mgr->logout('u-1', 'session-1', UserLoggedOut::REASON_EXPLICIT, 'not-a-jwt');
+    }
+
+    public function testUnknownUserLoginStillPaysOnePasswordVerify(): void
+    {
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        $repo->method('findByUsername')->willReturn(null);
+        $repo->method('findByEmail')->willReturn(null);
+        // The real verifyPassword must NOT run (no user row); the timing
+        // equalisation happens against the dummy hash instead.
+        $repo->expects(self::never())->method('verifyPassword');
+
+        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl);
+        try {
+            $mgr->login('ghost', 'some-password', '203.0.113.7');
+            self::fail('expected InvalidArgumentException');
+        } catch (InvalidArgumentException) {
+            // expected
+        }
+
+        // Proof that the dummy-hash burn ran: the lazy property is populated.
+        $prop = new \ReflectionProperty(AuthManager::class, 'dummyPasswordHash');
+        self::assertIsString($prop->getValue($mgr), 'unknown-user path must burn one Argon2id verify');
     }
 }

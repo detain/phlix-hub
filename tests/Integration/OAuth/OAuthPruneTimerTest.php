@@ -306,6 +306,51 @@ final class OAuthPruneTimerTest extends RealDatabaseTestCase
         self::assertSame(0, $this->countRow('oauth_tokens', $ancient), 'a 2-day-expired token was kept');
     }
 
+    /**
+     * Finding 1 regression (OAuth 2.0 Security BCP §4.14.2): a JUST-revoked
+     * refresh row must SURVIVE the 60-second prune sweep, because
+     * `revokedLineageFor()` — the rotation-reuse detector — answers only from
+     * `revoked_at IS NOT NULL` rows. Before the fix the prune deleted revoked
+     * rows immediately, so the legitimate client's re-presented token was
+     * always met by an empty table and the family-cut never fired.
+     */
+    public function testRecentlyRevokedTokensSurviveForReuseDetection(): void
+    {
+        // code_id is CHAR(36) — a plain UUID lineage handle.
+        $codeId = Ids::uuidV4();
+        $tokenId = Ids::uuidV4();
+        $this->db->query(
+            'INSERT INTO oauth_tokens (id, token_hash, kind, client_id, user_id, scopes, code_id,'
+            . ' expires_at, revoked_at)'
+            . ' VALUES (:id, :hash, :kind, :client, :user, :scopes, :code_id,'
+            . ' NOW() + INTERVAL 1 HOUR, NOW() - INTERVAL 60 SECOND)',
+            [
+                'id'      => $tokenId,
+                'hash'    => hash('sha256', 'reuse-presented-' . $tokenId),
+                'kind'    => 'refresh',
+                'client'  => 's286-client',
+                'user'    => Ids::uuidV4(),
+                'scopes'  => 'phlix:profile:read',
+                'code_id' => $codeId,
+            ],
+        );
+
+        $this->containerReaper()->reapDbMaintenance();
+
+        self::assertSame(
+            1,
+            $this->countRow('oauth_tokens', $tokenId),
+            'the prune deleted a revoked row inside the 1-day reuse-detection window — §4.14.2 is dead again',
+        );
+
+        $tokens = new \Phlix\Hub\OAuth\OAuthTokenService($this->db);
+        self::assertSame(
+            $codeId,
+            $tokens->revokedLineageFor('reuse-presented-' . $tokenId),
+            'revokedLineageFor must still answer for a row the sweep just passed over',
+        );
+    }
+
     // =====================================================================
     // Helpers
     // =====================================================================
@@ -392,8 +437,14 @@ final class OAuthPruneTimerTest extends RealDatabaseTestCase
      */
     private function plantPrunableRows(): array
     {
+        // Revoked TWO DAYS ago: under the auth-audit retention fix a revoked
+        // row only becomes prunable once the 1-day §4.14.2 reuse-detection
+        // window has passed — a RECENTLY revoked row must survive (pinned by
+        // testRecentlyRevokedTokensSurviveForReuseDetection below). Expiry is
+        // left in the future so this row is prunable ONLY through the revoked
+        // arm of the predicate, keeping that arm's coverage honest.
         $tokenId = Ids::uuidV4();
-        $this->insertToken($tokenId, 'access', 'NOW() + INTERVAL 1 HOUR', 'NOW() - INTERVAL 1 MINUTE');
+        $this->insertToken($tokenId, 'access', 'NOW() + INTERVAL 1 HOUR', 'NOW() - INTERVAL 2 DAY');
 
         $codeId = Ids::uuidV4();
         $this->db->query(

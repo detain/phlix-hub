@@ -14,6 +14,7 @@ namespace Phlix\Hub\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
+use Phlix\Hub\Auth\RefreshTokenRevocationService;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Container\MissingJwtSecretException;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
@@ -23,6 +24,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\HubSettingsRepository;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -41,9 +43,14 @@ use function DI\get;
  *  - {@see AuditLogger} → singleton bound to {@see LogChannels::AUDIT} AND to
  *    the {@see AuditLogRepository} registered by {@see HubServicesProvider},
  *    so every event reaches both the log channel and the `audit_logs` table.
- *  - {@see AuthManager} → autowired with the {@see RateLimiterInterface}
- *    (login attempt limiter, registered by {@see CommonServicesProvider})
- *    injected and the dispatcher optional.
+ *  - {@see AuthManager} → built from the repo/jwt/audit/logger plus THREE
+ *    container-pinned collaborators: the shared DB-backed login limiter
+ *    (`rate_limiter.login`), the shared DB-backed signup limiter
+ *    (`rate_limiter.signup`, auth audit fix 3) — both pinned BY NAME because
+ *    they share the {@see RateLimiterInterface} type — and the optional
+ *    dispatcher. It also receives the 'txn' {@see Connection} (first-admin
+ *    election transaction) and a {@see RefreshTokenRevocationService} so
+ *    logout can genuinely invalidate refresh tokens.
  *
  * @package Phlix\Hub\Common\Container\Providers
  */
@@ -94,6 +101,10 @@ final class AuthServicesProvider implements ServiceProviderInterface
         $refreshTtl = self::intOr($authConfig, 'refresh_ttl', 604800);
         $issuer = self::stringOr($authConfig, 'issuer', 'phlix-hub');
         $audience = self::stringOr($authConfig, 'audience', 'hub');
+        // ⚠ Same load-bearing-name caveat as the TTL keys: absent key defaults
+        // to TRUE (signups open), so a rename in config/auth.php silently
+        // disables HUB_SIGNUPS_ENABLED rather than failing loudly.
+        $signupsEnabled = (bool) ($authConfig['signups_enabled'] ?? true);
 
         $builder->addDefinitions([
             JwtHandler::class => factory(static function () use (
@@ -158,11 +169,23 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 StructuredLogger $logger,
                 RateLimiterInterface $rateLimiter,
                 ?EventDispatcherInterface $dispatcher,
-            ): AuthManager {
+                RateLimiterInterface $signupRateLimiter,
+            ) use ($signupsEnabled): AuthManager {
                 // Dedicated 'txn' connection: AuthManager wraps login/register in
-                // an explicit transaction, so isolate it from the cid<0
-                // maintenance reapers on 'mysql' that would otherwise trip 2014 /
-                // "already active transaction" (see config/database.php).
+                // an explicit transaction (and now the first-admin election guard
+                // insert), so isolate it from the cid<0 maintenance reapers on
+                // 'mysql' that would otherwise trip 2014 / "already active
+                // transaction" (see config/database.php). The SAME handle backs
+                // the refresh-revocation registry: every statement on it is a
+                // single-statement autocommit write/read, exactly like the
+                // DbRateLimiter's use of 'mysql'.
+                //
+                // Both limiter closures are pinned BY NAME: two parameters share
+                // the RateLimiterInterface type, so type autowiring alone cannot
+                // tell the login bucket from the signup bucket (the bare
+                // interface alias resolves to LOGIN).
+                $txn = ConnectionPool::getConnection('txn');
+
                 return new AuthManager(
                     $repo,
                     $jwt,
@@ -170,10 +193,15 @@ final class AuthServicesProvider implements ServiceProviderInterface
                     $logger,
                     $rateLimiter,
                     $dispatcher,
-                    ConnectionPool::getConnection('txn'),
+                    $txn,
+                    $signupRateLimiter,
+                    $signupsEnabled,
+                    new RefreshTokenRevocationService($txn),
                 );
             })->parameter('logger', get('logger.' . LogChannels::AUTH))
-                ->parameter('dispatcher', null),
+                ->parameter('dispatcher', null)
+                ->parameter('rateLimiter', get(RateLimitProfiles::LOGIN))
+                ->parameter('signupRateLimiter', get(RateLimitProfiles::SIGNUP)),
         ]);
     }
 

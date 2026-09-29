@@ -54,16 +54,22 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.alexa', RateLimitProfiles::ALEXA);
     }
 
-    public function testDefaultsReturnsAllEightProfiles(): void
+    public function testSignupProfileExists(): void
+    {
+        self::assertSame('rate_limiter.signup', RateLimitProfiles::SIGNUP);
+    }
+
+    public function testDefaultsReturnsAllNineProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
-        // Eight since S91 added `alexa` (seven since S62 added `mcp`). This count
+        // Nine since the auth audit added `signup` (eight since S91 added
+        // `alexa`, seven since S62 added `mcp`). This count
         // is the whole reason the test exists: it turns "a profile was added but
         // never given a config key or a default" into a red, so bumping the
         // number without adding the matching `testDefaultsContains…Profile` below
         // defeats it.
-        self::assertCount(8, $defaults);
+        self::assertCount(9, $defaults);
     }
 
     public function testDefaultsContainsLoginProfile(): void
@@ -144,6 +150,49 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('alexa', $defaults[RateLimitProfiles::ALEXA]['key']);
         self::assertSame(60, $defaults[RateLimitProfiles::ALEXA]['max']);
         self::assertSame(60, $defaults[RateLimitProfiles::ALEXA]['window']);
+    }
+
+    public function testDefaultsContainsSignupProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::SIGNUP, $defaults);
+        self::assertSame('signup', $defaults[RateLimitProfiles::SIGNUP]['key']);
+        self::assertSame(3, $defaults[RateLimitProfiles::SIGNUP]['max']);
+        self::assertSame(3600, $defaults[RateLimitProfiles::SIGNUP]['window']);
+    }
+
+    /**
+     * The auth audit fix: signup is the third DB-backed GLOBAL surface, so its
+     * budget must stay anonymous-abuse-grade — tighter than login per window,
+     * because unlike login EVERY attempt (including successes) is counted and
+     * a self-hosted household legitimately creates at most a couple of
+     * accounts an hour.
+     */
+    /**
+     * The auth audit fix: signup is the third DB-backed GLOBAL surface, and its
+     * budget must stay anonymous-abuse-grade — normalised to attempts per hour
+     * it is strictly tighter than login's. Login tolerates 5/900s = 20/h of
+     * FAILURES (successes reset the bucket); signup caps 3/3600s = 3/h of
+     * EVERYTHING including successes, because creating the account is itself
+     * the abuse being bounded (and each attempt costs an Argon2id hash).
+     */
+    public function testTheSignupBudgetIsTighterThanLogin(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        $signup = $defaults[RateLimitProfiles::SIGNUP];
+        $login = $defaults[RateLimitProfiles::LOGIN];
+
+        $loginPerHour = $login['max'] * (3600 / $login['window']);
+        $signupPerHour = $signup['max'] * (3600 / $signup['window']);
+
+        self::assertLessThan(
+            $loginPerHour,
+            $signupPerHour,
+            'account creation must stay rarer per hour than a failed-login budget — '
+            . 'someone widened signup past login without re-reading the audit finding.',
+        );
     }
 
     /**

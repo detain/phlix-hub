@@ -227,11 +227,20 @@ final class TokenStorageHashingTest extends TestCase
         // two would let a refresh token be presented as a bearer credential.
         self::assertNotSame(OAuthTokenService::KIND_ACCESS, OAuthTokenService::KIND_REFRESH);
         self::assertNotSame(OAuthTokenService::ACCESS_TOKEN_PREFIX, OAuthTokenService::REFRESH_TOKEN_PREFIX);
-        self::assertFalse(
-            OAuthTokenService::looksLikeAccessToken(OAuthTokenService::REFRESH_TOKEN_PREFIX . 'abc'),
+        // The dead `looksLikeAccessToken()` discriminator was removed with the
+        // auth audit (zero production callers); the prefixes it keyed on stay
+        // load-bearing as mint-time labels, so pin what the deletion must not
+        // have disturbed: each prefix is non-empty and a token string starts
+        // with its own kind's prefix, never the other's.
+        self::assertNotSame('', OAuthTokenService::ACCESS_TOKEN_PREFIX);
+        self::assertNotSame('', OAuthTokenService::REFRESH_TOKEN_PREFIX);
+        self::assertStringStartsWith(
+            OAuthTokenService::ACCESS_TOKEN_PREFIX,
+            OAuthTokenService::ACCESS_TOKEN_PREFIX . 'abc',
         );
-        self::assertTrue(
-            OAuthTokenService::looksLikeAccessToken(OAuthTokenService::ACCESS_TOKEN_PREFIX . 'abc'),
+        self::assertStringStartsNotWith(
+            OAuthTokenService::REFRESH_TOKEN_PREFIX,
+            OAuthTokenService::ACCESS_TOKEN_PREFIX . 'abc',
         );
     }
 }

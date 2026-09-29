@@ -14,7 +14,7 @@ namespace Phlix\Hub\Http\Controllers;
 use InvalidArgumentException;
 use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\RateLimitException;
-use Phlix\Hub\Http\Middleware\AuthMiddleware;
+use Phlix\Hub\Auth\SignupsDisabledException;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Events\Auth\UserLoggedOut;
@@ -24,6 +24,13 @@ use Phlix\Shared\Events\Auth\UserLoggedOut;
  * (register/signup, login, logout, refresh). The legacy form-driven SSR
  * routes (`POST /signup|/login|/logout`) have been retired with the Smarty
  * UI — the Vue SPA posts to these JSON endpoints.
+ *
+ * Every failure frame carries the machine-readable `code` field on the
+ * contract-registered vocabulary (`auth.missing_credentials`,
+ * `auth.invalid_credentials`, `auth.invalid_token`, `auth.signups_disabled`,
+ * `validation_failed`, `rate_limited`) via {@see Response::error()}, while
+ * the pre-existing human text is kept in both `error` and the legacy
+ * `message` key so no current reader loses its string.
  *
  * Decision: this class is invokable as a dispatcher-style controller —
  * it inspects {@see Request::$method} and {@see Request::$path} so the
@@ -63,14 +70,30 @@ final class AuthController
 
     /**
      * JSON signup endpoint. Body: `{username, email, password}`.
+     *
+     * Failure mapping: absent fields → 400 `auth.missing_credentials`;
+     * registrations closed → 403 `auth.signups_disabled`; over the signup
+     * budget → 429 `rate_limited`; everything the domain rejected (length,
+     * format, already-taken) → 400 `validation_failed`.
      */
     public function signupJson(Request $request): Response
     {
+        $username = self::stringField($request, 'username');
+        $email = self::stringField($request, 'email');
+        $password = self::stringField($request, 'password');
+        if ($username === '' || $email === '' || $password === '') {
+            return self::errorFrame(400, 'auth.missing_credentials', 'username, email and password are required');
+        }
+
         try {
             $result = $this->auth->register(
-                self::stringField($request, 'username'),
-                self::stringField($request, 'email'),
-                self::stringField($request, 'password'),
+                $username,
+                $email,
+                $password,
+                // Trusted-proxy-aware real client IP — the signup limiter
+                // buckets on it exactly like the login limiter does (never
+                // the raw HAProxy loopback peer).
+                $request->getTrustedClientIp() ?: 'unknown',
             );
             return (new Response())->json([
                 'access_token'  => $result['access_token'],
@@ -80,27 +103,39 @@ final class AuthController
                 'user'          => $result['user'],
                 'claims'        => $result['claims'],
             ], 201);
+        } catch (SignupsDisabledException $e) {
+            return self::errorFrame(403, 'auth.signups_disabled', $e->getMessage());
+        } catch (RateLimitException $e) {
+            // Before InvalidArgumentException: a budget trip is 429, not 400.
+            return self::rateLimited($e);
         } catch (InvalidArgumentException $e) {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'message' => $e->getMessage(),
-            ]);
+            return self::errorFrame(400, 'validation_failed', $e->getMessage());
         }
     }
 
     /**
      * JSON login endpoint. Body: `{username|email, password}`.
+     *
+     * Failure mapping: absent fields → 400 `auth.missing_credentials`;
+     * over the login budget → 429 `rate_limited`; credentials that simply do
+     * not match (unknown account, wrong password — indistinguishable by
+     * design) → 401 `auth.invalid_credentials`.
      */
     public function loginJson(Request $request): Response
     {
+        $identifier = self::stringField($request, 'username');
+        if ($identifier === '') {
+            $identifier = self::stringField($request, 'email');
+        }
+        $password = self::stringField($request, 'password');
+        if ($identifier === '' || $password === '') {
+            return self::errorFrame(400, 'auth.missing_credentials', 'username (or email) and password are required');
+        }
+
         try {
-            $identifier = self::stringField($request, 'username');
-            if ($identifier === '') {
-                $identifier = self::stringField($request, 'email');
-            }
             $result = $this->auth->login(
                 $identifier,
-                self::stringField($request, 'password'),
+                $password,
                 // Trusted-proxy-aware real client IP — NOT the raw peer, which is
                 // the HAProxy loopback address for every login and would collapse
                 // the limiter into one global bucket (mirrors SV-4.15).
@@ -120,18 +155,26 @@ final class AuthController
             // to 429 + Retry-After rather than a misleading 401.
             return self::rateLimited($e);
         } catch (InvalidArgumentException $e) {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'message' => $e->getMessage(),
-            ]);
+            return self::errorFrame(401, 'auth.invalid_credentials', $e->getMessage());
         }
+    }
+
+    /**
+     * The house error frame: `{error, code}` from {@see Response::error()}
+     * plus the legacy top-level `message` key carrying the same human text,
+     * so readers written against the pre-code envelope keep working while
+     * the machine `code` becomes available to new ones.
+     */
+    private static function errorFrame(int $status, string $code, string $message): Response
+    {
+        return (new Response())->error($status, $code, $message, ['message' => $message]);
     }
 
     /**
      * Build the shared 429 rate-limit envelope (status + `Retry-After` header
      * + `code: 'rate_limited'`), matching the central mapping in
-     * {@see \Phlix\Hub\Application}. Kept local so login trips never fall
-     * through to the generic 401/500 paths above.
+     * {@see \Phlix\Hub\Application}. Kept local so auth trips never fall
+     * through to the generic 401/400/500 paths above.
      */
     private static function rateLimited(RateLimitException $e): Response
     {
@@ -143,38 +186,46 @@ final class AuthController
 
     /**
      * JSON logout endpoint. Always 204 No Content.
+     *
+     * The auth routes run WITHOUT {@see AuthMiddleware} (a logged-out client
+     * must be able to call it), so `$request->userId` is normally empty here —
+     * the refresh JWT in the body is what identifies the lineage being cut.
+     * When the caller presents one, {@see AuthManager::logout()} validates it,
+     * revokes its `jti`, and uses the signed `sub` for the audit trail; this
+     * finally makes the spec's "invalidates the refresh token" promise true.
+     * There are no cookies to clear: nothing in the hub ever set them (the
+     * legacy cookie surface was deleted as unreachable code).
      */
     public function logoutJson(Request $request): Response
     {
         $userId = $request->userId ?? '';
-        if ($userId !== '') {
-            $this->auth->logout($userId, $request->remoteIp ?: 'unknown', UserLoggedOut::REASON_EXPLICIT);
+        $refreshToken = self::stringField($request, 'refresh_token');
+        if ($userId !== '' || $refreshToken !== '') {
+            $this->auth->logout(
+                $userId,
+                $request->remoteIp ?: 'unknown',
+                UserLoggedOut::REASON_EXPLICIT,
+                $refreshToken,
+            );
         }
-        return $this->withClearedCookies((new Response())->status(204));
+        return (new Response())->status(204);
     }
 
     /**
-     * JSON refresh endpoint. Body: `{refresh_token}` OR cookie.
+     * JSON refresh endpoint. Body: `{refresh_token}` (bearer-token surface
+     * only — the cookie fallback was deleted along with the dead cookie
+     * surface; no code path ever set it).
+     *
+     * Failure mapping: absent token → 400 `auth.missing_credentials`;
+     * a token that fails any of the three refresh gates (cryptographic,
+     * revoked, user-gone) → 401 `auth.invalid_token`, deliberately not
+     * distinguishing which gate fired.
      */
     public function refreshJson(Request $request): Response
     {
         $token = self::stringField($request, 'refresh_token');
         if ($token === '') {
-            // Fall back to cookie.
-            $cookie = $request->getHeader('Cookie') ?? '';
-            foreach (explode(';', $cookie) as $part) {
-                $kv = explode('=', trim($part), 2);
-                if (count($kv) === 2 && $kv[0] === AuthMiddleware::COOKIE_REFRESH) {
-                    $token = urldecode(trim($kv[1]));
-                    break;
-                }
-            }
-        }
-        if ($token === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'message' => 'refresh_token is required',
-            ]);
+            return self::errorFrame(400, 'auth.missing_credentials', 'refresh_token is required');
         }
         try {
             $result = $this->auth->refresh($token);
@@ -187,21 +238,8 @@ final class AuthController
                 'claims'        => $result['claims'],
             ], 200);
         } catch (InvalidArgumentException $e) {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'message' => $e->getMessage(),
-            ]);
+            return self::errorFrame(401, 'auth.invalid_token', $e->getMessage());
         }
-    }
-
-    /**
-     * Decorate a response with empty/expired session cookies (logout).
-     */
-    private function withClearedCookies(Response $response): Response
-    {
-        return $response
-            ->cookie(AuthMiddleware::COOKIE_ACCESS, '', 0, '/', true, null, 'Strict')
-            ->cookie(AuthMiddleware::COOKIE_REFRESH, '', 0, '/', true, null, 'Strict');
     }
 
     /**

@@ -1176,10 +1176,12 @@ final class AuthorizationCodeFlowTest extends RealDatabaseTestCase
     {
         $live = self::json($this->controller->token($this->tokenRequest($this->obtainCode())));
 
-        // A second, fully-spent grant.
+        // A second, fully-spent grant, back-dated past the revoke-retention
+        // grace (audit fix 1: revoked rows now survive 1 DAY so §4.14.2
+        // reuse-detection can answer for them; only older cuts are pruned).
         $spent = self::json($this->controller->token($this->tokenRequest($this->obtainCode())));
         $this->db->query(
-            'UPDATE oauth_tokens SET revoked_at = NOW() WHERE token_hash = :h',
+            'UPDATE oauth_tokens SET revoked_at = NOW() - INTERVAL 2 DAY WHERE token_hash = :h',
             ['h' => hash('sha256', self::stringNode($spent['access_token']))],
         );
 

@@ -18,7 +18,6 @@ use function hash;
 use function is_array;
 use function is_numeric;
 use function is_string;
-use function str_starts_with;
 use function time;
 
 /**
@@ -97,20 +96,6 @@ final class OAuthTokenService
     ) {
         $this->accessTtl  = $accessTtl > 0 ? $accessTtl : self::ACCESS_TTL_SECONDS;
         $this->refreshTtl = $refreshTtl > 0 ? $refreshTtl : self::REFRESH_TTL_SECONDS;
-    }
-
-    /**
-     * Whether a presented string looks like an access token this server issued.
-     *
-     * A cheap discriminator for a future resource-server middleware that has to
-     * tell an OAuth access token apart from an HS256 session JWT and an MCP PAT
-     * on the same `Authorization` header. Not an authorisation decision.
-     *
-     * @param string $token Presented bearer credential.
-     */
-    public static function looksLikeAccessToken(string $token): bool
-    {
-        return str_starts_with($token, self::ACCESS_TOKEN_PREFIX);
     }
 
     /**
@@ -435,12 +420,20 @@ final class OAuthTokenService
     }
 
     /**
-     * Delete tokens that expired more than a day ago, OR were revoked.
+     * Delete tokens that expired more than a day ago, or were revoked more
+     * than a day ago.
      *
-     * Note the operator is OR, not AND: with AND only tokens that were BOTH
-     * long-expired AND revoked would go, leaving the common
-     * expired-never-revoked rows to accumulate forever. Same reasoning, and the
-     * same predicate, as `ClientRelayTokenService::pruneExpiredTokens()`.
+     * Note the operator is OR-with-a-grace, not `OR revoked`: revocation alone
+     * used to delete the row IMMEDIATELY, which silently killed the rotation-
+     * reuse detection of OAuth 2.0 Security BCP §4.14.2 — {@see revokedLineageFor()}
+     * answers only from `revoked_at IS NOT NULL` rows, and with the reaper
+     * sweeping every 60 seconds the burned row the legitimate client will
+     * re-present was always already gone, so the stolen-refresh-token family
+     * cut could never fire. Revoked rows are therefore kept for the same
+     * 1-day window as expired ones — the exact retained-row pattern
+     * {@see AuthorizationCodeService::pruneExpired()} documents for replay
+     * detection. The 1-day arm of the expiry predicate is the SAME grace for
+     * the same reason: a code rotated moments ago must still be answerable.
      *
      * @return int Rows deleted.
      */
@@ -448,7 +441,8 @@ final class OAuthTokenService
     {
         /** @var mixed $result */
         $result = $this->db->query(
-            'DELETE FROM oauth_tokens WHERE expires_at < NOW() - INTERVAL 1 DAY OR revoked_at IS NOT NULL',
+            'DELETE FROM oauth_tokens WHERE expires_at < NOW() - INTERVAL 1 DAY'
+                . ' OR (revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL 1 DAY)',
         );
 
         return is_numeric($result) ? (int) $result : 0;

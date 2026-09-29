@@ -40,7 +40,9 @@ use function DI\get;
  * DB-backed {@see DbRateLimiter} (migration 040 `login_rate_limit`) so the
  * brute-force counter is unified across all `HUB_WORKERS` HTTP workers
  * (HB-4.6 Option B) — the per-worker in-memory limiter left the effective
- * login budget at ~`max × HUB_WORKERS`. The other five surfaces stay on the
+ * login budget at ~`max × HUB_WORKERS`. Signup joined that set with the auth
+ * audit fix (3): an anonymous 64 MiB-Argon2id surface must not get
+ * `max × HUB_WORKERS` tries either. The remaining six surfaces stay on the
  * worker-local in-memory {@see RateLimiter} (per-worker weakening is
  * acceptable there).
  *
@@ -95,22 +97,29 @@ final class CommonServicesProvider implements ServiceProviderInterface
             $max = self::intOr($surface, 'max', $spec['max']);
             $window = self::intOr($surface, 'window', $spec['window']);
 
-            if ($id === RateLimitProfiles::LOGIN || $id === RateLimitProfiles::MCP) {
-                // HB-4.6 (Option B) + S62: the two bearer-CREDENTIAL-GUESSING
-                // surfaces — password login and MCP personal-access-token auth —
-                // are the ones where per-worker weakening (~max × HUB_WORKERS) is
-                // a real brute-force concern, so both are backed by the shared,
+            if (
+                $id === RateLimitProfiles::LOGIN
+                || $id === RateLimitProfiles::MCP
+                || $id === RateLimitProfiles::SIGNUP
+            ) {
+                // HB-4.6 (Option B) + S62 + auth-audit fix 3: the three
+                // bearer-CREDENTIAL / ANONYMOUS-ABUSE surfaces — password login,
+                // MCP personal-access-token auth, and account signup — are the
+                // ones where per-worker weakening (~max × HUB_WORKERS) is a real
+                // concern, so all three are backed by the shared,
                 // DB-backed limiter (migration 040 `login_rate_limit`, whose
                 // `rate_key` column is an OPAQUE bucket key, not an IP, precisely
                 // so more than one surface can share the store) that unifies the
                 // counter across every HTTP worker. They keep SEPARATE profiles
-                // (`rate_limit.login` vs `rate_limit.mcp`) so an operator can tune
-                // them apart; the mechanism is one, not two. The Connection is the
+                // (`rate_limit.login` vs `rate_limit.mcp` vs `rate_limit.signup`)
+                // so an operator can tune them apart; the mechanism is one, not
+                // three. The Connection is the
                 // pooled 'mysql' one (autowired via Connection::class — bound to
                 // ConnectionPool::getConnection('mysql') in CoreServicesProvider),
                 // NOT the dedicated 'txn' connection: these are single-statement
-                // reads/writes, not a multi-statement transaction. The other five
-                // surfaces stay worker-local in-memory below.
+                // reads/writes, not a multi-statement transaction. The other six
+                // (non-abuse-amplifying) surfaces stay worker-local in-memory
+                // below.
                 $definitions[$id] = factory(
                     static fn (Connection $db): DbRateLimiter => new DbRateLimiter($db, $window, $max)
                 );

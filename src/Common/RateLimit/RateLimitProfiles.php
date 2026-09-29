@@ -16,24 +16,27 @@ namespace Phlix\Hub\Common\RateLimit;
  * per-worker default thresholds.
  *
  * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount /
- * mcp / alexa) gets its OWN limiter instance registered under the matching
+ * mcp / alexa / signup) gets its OWN limiter instance registered under the matching
  * `rate_limiter.<surface>` container id — a single shared login-grade limiter
  * is wrong for everything but login (HB-4.6). {@see defaults()} maps each
  * container id to the `config/server.php` `rate_limit.<key>` override key plus
  * the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER for six of the eight surfaces. `proxy`, `heartbeat`,
+ * Thresholds are PER-WORKER for six of the nine surfaces. `proxy`, `heartbeat`,
  * `jwks` and `alexa` are enforced on the `HUB_WORKERS` HTTP workers, so each
  * keeps an INDEPENDENT per-worker counter and the effective soft-global limit is
  * roughly `max × HUB_WORKERS` (mirrors HB-3.4); `relay_connect` (the :8802
  * `RelayWorker`) and `client_mount` (the :8803 `ClientRelayWorker`) run on
  * count=1 surfaces where per-worker == global.
  *
- * ✅ `login` and `mcp` are the EXCEPTIONS — both are genuinely global; both are
+ * ✅ `login`, `mcp` and `signup` are the EXCEPTIONS — all genuinely global; all
  * bound to the shared DB-backed {@see DbRateLimiter}. The `login` reasoning
  * follows; `mcp` (S62) is the same threat (guessing a bearer credential) reached
  * through {@see \Phlix\Hub\Http\Controllers\McpController} and keyed
- * `mcp:auth:<ip>`.
+ * `mcp:auth:<ip>`; `signup` (auth audit fix 3) caps the ANONYMOUS account-
+ * creation surface — every attempt costs a 64 MiB Argon2id hash, so a
+ * per-worker multiplier would multiply both the account-farm budget and the
+ * DoS amplification.
  *
  * `login` is enforced in
  * {@see \Phlix\Hub\Auth\AuthManager} (keyed `auth:login:<ip>`) on the HTTP
@@ -43,9 +46,9 @@ namespace Phlix\Hub\Common\RateLimit;
  * `040_login_rate_limit`), so ALL workers share one counter per key and the
  * 5 / 900 budget is ACTUALLY 5 / 900 — not the ~`5 × HUB_WORKERS` / 900 it was
  * (e.g. ~20 / 900 with 4 workers, first 429 near attempt ~9) while every surface
- * used the worker-local {@see RateLimiter} (HB-4.6 "Option B"). This closes the
+ * used the worker-local {@see RateLimiter} (HB-4.6 "Option B"). This closed the
  * one surface where per-worker weakening was a genuine brute-force concern; the
- * other five stay worker-local (soft-global) by design.
+ * other six stay worker-local (soft-global) by design.
  *
  * @package Phlix\Hub\Common\RateLimit
  */
@@ -108,6 +111,22 @@ final class RateLimitProfiles
     public const string ALEXA = 'rate_limiter.alexa';
 
     /**
+     * Container id for the account-signup limiter.
+     *
+     * ✅ The THIRD genuinely global surface, bound to the shared DB-backed
+     * {@see DbRateLimiter} for the same reason as {@see LOGIN} / {@see MCP}:
+     * self-service registration is an ANONYMOUS surface where every accepted
+     * attempt costs the server a 64 MiB Argon2id hash, so an uncapped (or
+     * per-worker-multiplied) budget is simultaneously an unbounded account-
+     * creation farm and a cheap DoS amplifier. Keyed `auth:signup:<ip>` and —
+     * unlike login, which counts only failures — EVERY attempt is counted,
+     * because a successfully created account is exactly the event being
+     * bounded. 3 / 3600s: enough for a real human behind a CGNAT edge to
+     * recover from typos, far too little to farm accounts.
+     */
+    public const string SIGNUP = 'rate_limiter.signup';
+
+    /**
      * Map of `container id => {config key, default max, default window}`.
      *
      * `key` is the sub-key under `config/server.php`'s `rate_limit` section;
@@ -127,6 +146,7 @@ final class RateLimitProfiles
             self::CLIENT_MOUNT  => ['key' => 'client_mount',  'max' => 30,  'window' => 60],
             self::MCP           => ['key' => 'mcp',           'max' => 10,  'window' => 900],
             self::ALEXA         => ['key' => 'alexa',         'max' => 60,  'window' => 60],
+            self::SIGNUP        => ['key' => 'signup',        'max' => 3,   'window' => 3600],
         ];
     }
 }

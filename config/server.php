@@ -198,11 +198,11 @@ return [
     // workers, so each keeps an independent per-worker counter and the soft-global
     // limit is ~max × HUB_WORKERS (mirrors HB-3.4); relay_connect (:8802) and
     // client_mount (:8803) run on count=1 surfaces (per-worker == global).
-    // ✅ login is the EXCEPTION — genuinely global: its binding is repointed to
-    // the shared DB-backed DbRateLimiter (table login_rate_limit, migration
-    // 040_login_rate_limit), so ALL workers share one counter and the 5/900
-    // budget is ACTUALLY 5/900, not ~5×HUB_WORKERS/900 as before (HB-4.6
-    // "Option B"). Any surface's `max`/`window` — and the shared `cap` (key-count
+    // ✅ login, mcp and signup are the EXCEPTIONS — genuinely global: their
+    // bindings are repointed to the shared DB-backed DbRateLimiter (table
+    // login_rate_limit, migration 040_login_rate_limit), so ALL workers share
+    // one counter per bucket and the budgets are ACTUAL, not
+    // ~max×HUB_WORKERS as they were (HB-4.6 "Option B"). Any surface's `max`/`window` — and the shared `cap` (key-count
     // ceiling) — is env-overridable; absent keys fall back to the
     // RateLimitProfiles defaults.
     'rate_limit' => (static function (): array {
@@ -262,6 +262,18 @@ return [
             'alexa'         => [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_ALEXA_MAX', 60),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_ALEXA_WINDOW', 60),
+            ],
+            // Account signup (auth audit fix 3): 3 attempts / hour, keyed
+            // `auth:signup:<ip>` in AuthManager. Shared DB-backed (DbRateLimiter,
+            // same store as login) so the budget is global across HTTP workers —
+            // this anonymous surface costs a 64 MiB Argon2id hash per ACCEPTED
+            // attempt and creates persistent state, so unlike login it counts
+            // every attempt, successes included: bounding account creation is
+            // the point. Typos by a real human fit comfortably inside 3/hour;
+            // an account farm does not.
+            'signup'        => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_SIGNUP_MAX', 3),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_SIGNUP_WINDOW', 3600),
             ],
         ];
     })(),

@@ -68,6 +68,7 @@ final class MigrationFileTest extends TestCase
             '044_mcp_tokens.sql',
             '045_oauth_authorization_server.sql',
             '046_federation_peer_leaf_hub_id.sql',
+            '047_auth_admin_election_and_refresh_revocation.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
