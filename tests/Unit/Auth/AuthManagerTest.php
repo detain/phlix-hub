@@ -20,6 +20,7 @@ use Phlix\Shared\Events\Auth\UserLoggedIn;
 use Phlix\Shared\Events\Auth\UserLoggedOut;
 use PHPUnit\Framework\TestCase;
 use Psr\EventDispatcher\EventDispatcherInterface;
+use RuntimeException;
 
 /**
  * Unit tests for {@see AuthManager}.
@@ -476,6 +477,127 @@ final class AuthManagerTest extends TestCase
 
         $this->expectException(SignupsDisabledException::class);
         $mgr->register('alice', 'a@example.com', 'longenough-pw');
+    }
+
+    /**
+     * Wire the manager with an explicit live-gate resolver, leaving every
+     * other optional collaborator at its default.
+     *
+     * @param (callable(): ?bool)|null  $resolver
+     * @param array{
+     *     0: UserRepository&\PHPUnit\Framework\MockObject\MockObject,
+     *     1: JwtHandler,
+     *     2: AuditLogger&\PHPUnit\Framework\MockObject\MockObject,
+     *     3: StructuredLogger&\PHPUnit\Framework\MockObject\MockObject,
+     *     4: RateLimiter
+     * } $deps
+     */
+    private function managerWithResolver(
+        bool $bootEnabled,
+        ?callable $resolver,
+        array $deps,
+    ): AuthManager {
+        [$repo, $jwt, $audit, $logger, $rl] = $deps;
+        return new AuthManager(
+            $repo,
+            $jwt,
+            $audit,
+            $logger,
+            $rl,
+            null,
+            null,
+            null,
+            $bootEnabled,
+            null,
+            $resolver,
+        );
+    }
+
+    /**
+     * Stub the repo so a register() call would SUCCEED if the gate opens.
+     */
+    private function stubOpenSignupRepo(
+        UserRepository&\PHPUnit\Framework\MockObject\MockObject $repo,
+    ): void {
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->method('countUsers')->willReturn(2);
+        $repo->method('create')->willReturn('u-live');
+        $repo->method('findById')->willReturn([
+            'id'            => 'u-live',
+            'username'      => 'live',
+            'email'         => 'l@example.com',
+            'password_hash' => 'secret',
+        ]);
+    }
+
+    public function testLiveResolverClosesSignupsEvenWhenBootFlagIsOpen(): void
+    {
+        $deps = $this->deps();
+        $deps[0]->expects(self::never())->method('usernameExists');
+        $deps[0]->expects(self::never())->method('create');
+
+        $mgr = $this->managerWithResolver(true, static fn(): bool => true, $deps);
+
+        $this->expectException(SignupsDisabledException::class);
+        $mgr->register('alice', 'a@example.com', 'longenough-pw');
+    }
+
+    public function testLiveResolverOpensSignupsEvenWhenBootFlagIsClosed(): void
+    {
+        $deps = $this->deps();
+        $this->stubOpenSignupRepo($deps[0]);
+
+        // The admin setting (resolver → false = not disabled) overrides the
+        // closed HUB_SIGNUPS_ENABLED boot flag — live re-open, no restart.
+        $mgr = $this->managerWithResolver(false, static fn(): bool => false, $deps);
+
+        $result = $mgr->register('alice', 'a@example.com', 'longenough-pw');
+        self::assertArrayHasKey('access_token', $result);
+    }
+
+    public function testResolverReturningNullDefersToBootFlag(): void
+    {
+        // Null = "the store cannot answer" (not booted, non-bool junk row).
+        $deps = $this->deps();
+        $this->stubOpenSignupRepo($deps[0]);
+        $open = $this->managerWithResolver(true, static fn(): ?bool => null, $deps);
+        self::assertArrayHasKey('access_token', $open->register('alice', 'a@example.com', 'longenough-pw'));
+
+        $depsClosed = $this->deps();
+        $depsClosed[0]->expects(self::never())->method('create');
+        $closed = $this->managerWithResolver(false, static fn(): ?bool => null, $depsClosed);
+        $this->expectException(SignupsDisabledException::class);
+        $closed->register('alice', 'a@example.com', 'longenough-pw');
+    }
+
+    public function testThrowingResolverFailsSafeToBootFlag(): void
+    {
+        // A DB blowing up mid-lookup must NOT silently open (or close)
+        // registration — the gate keeps whatever HUB_SIGNUPS_ENABLED said.
+        $deps = $this->deps();
+        $deps[0]->expects(self::never())->method('create');
+        $mgr = $this->managerWithResolver(
+            false,
+            static fn(): bool => throw new RuntimeException('db is down'),
+            $deps,
+        );
+
+        $this->expectException(SignupsDisabledException::class);
+        $mgr->register('alice', 'a@example.com', 'longenough-pw');
+    }
+
+    public function testThrowingResolverDoesNotCloseWhenEnvSaysOpen(): void
+    {
+        $deps = $this->deps();
+        $this->stubOpenSignupRepo($deps[0]);
+        $mgr = $this->managerWithResolver(
+            true,
+            static fn(): bool => throw new RuntimeException('db is down'),
+            $deps,
+        );
+
+        self::assertArrayHasKey('access_token', $mgr->register('alice', 'a@example.com', 'longenough-pw'));
     }
 
     public function testSignupRateLimiterCountsEveryAttemptAndTrips(): void

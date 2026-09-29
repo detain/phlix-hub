@@ -197,12 +197,58 @@ final class AuthServicesProvider implements ServiceProviderInterface
                     $signupRateLimiter,
                     $signupsEnabled,
                     new RefreshTokenRevocationService($txn),
+                    self::makeSignupsDisabledResolver(),
                 );
             })->parameter('logger', get('logger.' . LogChannels::AUTH))
                 ->parameter('dispatcher', null)
                 ->parameter('rateLimiter', get(RateLimitProfiles::LOGIN))
                 ->parameter('signupRateLimiter', get(RateLimitProfiles::SIGNUP)),
         ]);
+    }
+
+    /**
+     * Build the LIVE signup-gate resolver handed to {@see AuthManager}.
+     *
+     * This is the wiring that makes the `auth.signups_disabled` hub setting
+     * genuinely live: the returned closure reads the EFFECTIVE value
+     * ({@see HubSettingsRepository::getEffective()} — override row, else the
+     * `config/auth.php` `signups_disabled` twin derived from
+     * `HUB_SIGNUPS_ENABLED`) at register time, so an admin toggle applies to
+     * the very next signup with no worker restart, and "no row yet" degrades
+     * to exactly the boot-env behaviour the `$signupsEnabled` flag carries.
+     *
+     * Same construction rules as {@see makeTtlResolver()}: the repository is
+     * built directly from the static {@see ConnectionPool} (never through
+     * PHP-DI, to dodge the `entriesBeingResolved` coroutine race) and
+     * memoised in the closure. Returns `null` — "no live answer" — when the
+     * pool is not initialised (unit tests, CLI), leaving the caller on its
+     * env-derived fallback; DB errors propagate and {@see
+     * AuthManager::registrationsAreClosed()} catches them into the same
+     * fallback.
+     *
+     * @return callable(): ?bool
+     */
+    private static function makeSignupsDisabledResolver(): callable
+    {
+        $repository = null;
+
+        return static function () use (&$repository): ?bool {
+            if (!$repository instanceof HubSettingsRepository) {
+                // Not booted (unit tests, CLI smoke commands): there is no
+                // store to consult, so the env-derived boot flag IS the
+                // effective gate. Checked explicitly rather than caught,
+                // because ConnectionPool::getConnection() on an uninitialised
+                // pool emits warnings instead of throwing.
+                if (ConnectionPool::getInstance() === null) {
+                    return null;
+                }
+                $repository = new HubSettingsRepository(ConnectionPool::getConnection('mysql'));
+            }
+
+            $value = $repository->getEffective('auth.signups_disabled');
+
+            return is_bool($value) ? $value : null;
+        };
     }
 
     /**

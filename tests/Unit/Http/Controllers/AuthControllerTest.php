@@ -294,6 +294,83 @@ final class AuthControllerTest extends TestCase
         self::assertSame('auth.signups_disabled', $decoded['code']);
     }
 
+    /**
+     * Build a REAL AuthManager whose live-gate resolver answers `$disabled`
+     * on top of the given boot flag, with a repo stubbed so an open gate
+     * actually mints a session.
+     */
+    private function managerWithLiveGate(?bool $disabled, bool $bootEnabled = true): AuthManager
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->method('countUsers')->willReturn(2);
+        $repo->method('create')->willReturn('u-live');
+        $repo->method('findById')->willReturn([
+            'id'            => 'u-live',
+            'username'      => 'live',
+            'email'         => 'l@example.com',
+            'password_hash' => 'secret',
+        ]);
+
+        return new AuthManager(
+            $repo,
+            new JwtHandler(self::SECRET),
+            $this->createMock(AuditLogger::class),
+            $this->createMock(StructuredLogger::class),
+            new RateLimiter(windowSeconds: 900, maxAttempts: 9, cap: 100),
+            null,
+            null,
+            null,
+            $bootEnabled,
+            null,
+            static fn(): ?bool => $disabled,
+        );
+    }
+
+    /**
+     * End-to-end live toggle: the admin setting flipped ON (signups disabled)
+     * answers the registered 403 frame through the real stack — boot flag
+     * says open, the settings row wins.
+     */
+    public function testLiveSignupToggleClosedAnswers403ThroughRealManager(): void
+    {
+        $controller = $this->controller($this->managerWithLiveGate(true));
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/register';
+        $request->remoteIp = '203.0.113.9';
+        $request->body = ['username' => 'alice', 'email' => 'a@example.com', 'password' => 'longenough'];
+
+        $response = $controller($request);
+        self::assertSame(403, $response->statusCode);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($response->body, true);
+        self::assertSame('auth.signups_disabled', $decoded['code']);
+        self::assertSame('Registration is disabled on this hub', $decoded['error']);
+        self::assertSame('Registration is disabled on this hub', $decoded['message']);
+    }
+
+    /**
+     * …and flipped OFF the same request registers (201) even though the
+     * HUB_SIGNUPS_ENABLED boot flag said closed — live re-open, no restart.
+     */
+    public function testLiveSignupToggleOpenRegistersThroughRealManager(): void
+    {
+        // Boot flag closed (HUB_SIGNUPS_ENABLED=false shape) + live setting
+        // open → the admin's live re-open wins; signup mints 201.
+        $controller = $this->controller($this->managerWithLiveGate(false, bootEnabled: false));
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/auth/signup';
+        $request->remoteIp = '203.0.113.9';
+        $request->body = ['username' => 'alice', 'email' => 'a@example.com', 'password' => 'longenough'];
+
+        $response = $controller($request);
+        self::assertSame(201, $response->statusCode);
+        self::assertStringContainsString('access_token', $response->body);
+    }
+
     public function testSignupJsonReturns429WhenSignupLimiterTrips(): void
     {
         $mgr = $this->authMgr();

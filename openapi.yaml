@@ -1029,8 +1029,10 @@ paths:
       tags: ["Authentication"]
       summary: "Log in"
       description: |-
-        Exchanges credentials for an HS256 access token plus a refresh token. Rate-limited by a shared
-        DB-backed limiter keyed on the resolved client IP.
+        Exchanges credentials for an HS256 access token plus a refresh token (bearer-only surface —
+        the hub sets no cookies; both tokens are returned in the body). Rate-limited by a shared
+        DB-backed limiter keyed on the resolved client IP. Auth failures use the house error envelope
+        `{error, code}` plus the legacy top-level `message` key mirroring `error`.
       x-phlix-middleware: []
       security: []
       responses:
@@ -1040,6 +1042,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
+        "400":
+          description: >-
+            `username` (or `email`) and `password` are required. Code: `auth.missing_credentials`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            Credentials do not match (unknown account and wrong password are deliberately
+            indistinguishable). Code: `auth.invalid_credentials`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/logout":
@@ -1048,17 +1065,25 @@ paths:
       tags: ["Authentication"]
       summary: "Log out"
       description: |-
-        Clears the session cookies and invalidates the refresh token.
+        Revokes the presented refresh token's jti lineage and audits the logout. Bearer/body-only —
+        the hub sets no session cookies, so there is nothing to clear (the legacy cookie surface was
+        deleted as unreachable code). Idempotent: always answers 204 No Content, including when the
+        body is absent or the token is already dead.
       x-phlix-middleware: []
       security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+                  description: "The refresh JWT whose lineage to revoke; omitting it audits an empty revoke."
       responses:
-        "200":
-          description: "Success."
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
+        "204":
+          description: "Logged out — no content."
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/me":
@@ -1089,7 +1114,9 @@ paths:
       tags: ["Authentication"]
       summary: "Refresh the access token"
       description: |-
-        Exchanges a refresh token for a new short-lived access token.
+        Exchanges a refresh token for a new short-lived access token. Bearer-body surface only — the
+        cookie fallback was deleted along with the dead cookie surface. Auth failures use the house
+        error envelope `{error, code}` plus the legacy top-level `message` key mirroring `error`.
       x-phlix-middleware: []
       security: []
       responses:
@@ -1099,6 +1126,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
+        "400":
+          description: >-
+            `refresh_token` is required. Code: `auth.missing_credentials`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: >-
+            The token failed any of the three refresh gates (cryptographic, revoked, user-gone) —
+            deliberately not distinguishing which. Code: `auth.invalid_token`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/register":
@@ -1108,16 +1150,54 @@ paths:
       summary: "Register a hub account"
       description: |-
         Canonical signup path used by the shared `@phlix/ui` SPA and by phlix-server.
-        `\/api\/v1\/auth\/signup` is an alias for the same handler.
+        `\/api\/v1\/auth\/signup` is an alias for the same handler. Auth failures use the house
+        error envelope `{error, code}` plus the legacy top-level `message` key mirroring `error`.
       x-phlix-middleware: []
       security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["username", "email", "password"]
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 50
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 4096
+                  description: "Rejected pre-hash above 4096 chars (Argon2id DoS bound, code `validation_failed`)."
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Account created and session minted."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
+        "400":
+          description: >-
+            Absent fields → code `auth.missing_credentials`; a domain rejection (username/email/
+            password length or format, identity already taken) → code `validation_failed`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            Registrations are closed on this hub (live `auth.signups_disabled` setting, else the
+            boot-time `HUB_SIGNUPS_ENABLED` env) — checked before any hashing work.
+            Code: `auth.signups_disabled`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/signup":
@@ -1126,16 +1206,55 @@ paths:
       tags: ["Authentication"]
       summary: "Register a hub account (alias)"
       description: |-
-        Alias of `POST /api/v1/auth/register`, kept for older clients.
+        Alias of `POST /api/v1/auth/register`, kept for older clients. Identical body validation,
+        live signup gate, and per-IP budget. Auth failures use the house error envelope
+        `{error, code}` plus the legacy top-level `message` key mirroring `error`.
       x-phlix-middleware: []
       security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["username", "email", "password"]
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 50
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 4096
+                  description: "Rejected pre-hash above 4096 chars (Argon2id DoS bound, code `validation_failed`)."
       responses:
-        "200":
-          description: "Success."
+        "201":
+          description: "Account created and session minted."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
+        "400":
+          description: >-
+            Absent fields → code `auth.missing_credentials`; a domain rejection (username/email/
+            password length or format, identity already taken) → code `validation_failed`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            Registrations are closed on this hub (live `auth.signups_disabled` setting, else the
+            boot-time `HUB_SIGNUPS_ENABLED` env) — checked before any hashing work.
+            Code: `auth.signups_disabled`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/me":
@@ -4603,7 +4722,7 @@ components:
       additionalProperties: true
     AuthSession:
       type: object
-      description: "A minted session. The refresh token is also set as a cookie."
+      description: "A minted session. Bearer-only: the hub sets no cookies — both tokens are returned in the body for the client to carry."
       properties:
         access_token:
           type: string

@@ -34,10 +34,16 @@ declare(strict_types=1);
  * these were briefly renamed to `access_token_ttl` / `refresh_token_ttl`.)
  *
  * The hub-settings allow-list key is the DOTTED CONFIG PATH
- * (`auth.access_ttl` / `auth.refresh_ttl`) — see
+ * (`auth.access_ttl` / `auth.refresh_ttl` / `auth.signups_disabled`) — see
  * {@see \Phlix\Hub\Hub\HubSettingsRepository::ALLOWED_KEYS}. If a settings key
  * ever looks "orphaned", fix the ALLOW-LIST, never this file.
  */
+$signupsEnabled = !in_array(
+    strtolower(trim((string) (getenv('HUB_SIGNUPS_ENABLED') ?: 'true'))),
+    ['0', 'false', 'no', 'off'],
+    true,
+);
+
 return [
     'secret'      => getenv('HUB_JWT_SECRET') ?: null,
     'issuer'      => 'phlix-hub',
@@ -47,9 +53,14 @@ return [
     // Load-bearing for the same reason as the TTL keys above:
     // AuthServicesProvider reads this key verbatim and defaults to TRUE when
     // absent — a rename here silently disables HUB_SIGNUPS_ENABLED.
-    'signups_enabled' => !in_array(
-        strtolower(trim((string) (getenv('HUB_SIGNUPS_ENABLED') ?: 'true'))),
-        ['0', 'false', 'no', 'off'],
-        true,
-    ),
+    'signups_enabled' => $signupsEnabled,
+    // DOTTED-TWIN of `auth.signups_disabled` in
+    // {@see \Phlix\Hub\Hub\HubSettingsRepository::ALLOWED_KEYS}: getDefault()
+    // resolves this key, and HubSettingsAllowListTest rule 4 goes RED (loudly,
+    // in CI) if the key is ever removed or renamed. Live consumer: the signup
+    // gate consults the settings row through the resolver installed by
+    // AuthServicesProvider and falls back to the env-derived value carried
+    // here, so `signups_disabled` is always exactly `!signups_enabled` at
+    // config level — the DB override row is the only thing that can diverge.
+    'signups_disabled' => !$signupsEnabled,
 ];

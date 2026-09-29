@@ -82,6 +82,23 @@ class AuthManager
      *                                                          registry consulted by
      *                                                          `refresh()` and written by
      *                                                          `logout()` (migration 047).
+     * @param callable|null                     $signupsDisabledResolver Optional LIVE
+     *                                                          gate consulted BEFORE the
+     *                                                          boot-time `$signupsEnabled`
+     *                                                          flag: returns `?bool` —
+     *                                                          true = registrations closed,
+     *                                                          null = "no live answer, use
+     *                                                          the flag". Wired by
+     *                                                          AuthServicesProvider to read
+     *                                                          the `auth.signups_disabled`
+     *                                                          hub setting so an admin
+     *                                                          toggle applies to the very
+     *                                                          next request without a
+     *                                                          restart; any throw from it
+     *                                                          degrades to the flag
+     *                                                          (fail-safe: a settings-read
+     *                                                          outage must not change what
+     *                                                          the env already dictates).
      */
     public function __construct(
         private readonly UserRepository $userRepository,
@@ -94,8 +111,22 @@ class AuthManager
         private readonly ?RateLimiterInterface $signupRateLimiter = null,
         private readonly bool $signupsEnabled = true,
         private readonly ?RefreshTokenRevocationService $revocations = null,
+        ?callable $signupsDisabledResolver = null,
     ) {
+        // `callable` is not a legal property type in PHP — held untyped with
+        // a docblock, exactly like JwtHandler::$ttlResolver (the sibling
+        // live-settings seam).
+        $this->signupsDisabledResolver = $signupsDisabledResolver;
     }
+
+    /**
+     * Live signup-gate resolver (`callable(): ?bool`) — see the constructor
+     * documentation. Null means "no live store wired"; the boot-time
+     * `$signupsEnabled` flag decides.
+     *
+     * @var (callable(): ?bool)|null
+     */
+    private $signupsDisabledResolver;
 
     /**
      * Lazy dummy hash used to equalise the unknown-user login path with the
@@ -183,6 +214,41 @@ class AuthManager
     }
 
     /**
+     * Whether self-service registration is closed RIGHT NOW.
+     *
+     * Precedence (auth spec-debt fix, 2026-09-29): the live
+     * `auth.signups_disabled` hub setting answers first when a resolver is
+     * wired and reachable; otherwise the boot-time `HUB_SIGNUPS_ENABLED`
+     * flag decides. Concretely:
+     *
+     *  1. resolver returns `bool` → that is the effective gate (the resolver
+     *     itself composes override-row → config-default, so "no settings row"
+     *     already falls through to the env-derived default and the historical
+     *     precedence is preserved without a second lookup here);
+     *  2. resolver returns `null` (no DB pool — unit tests, CLI) → flag;
+     *  3. resolver THROWS (DB down, bad row) → flag, fail-safe: a settings
+     *     outage must never brick registration beyond what the env dictates.
+     *     Mirrors the JwtHandler TTL-resolver doctrine — "token minting must
+     *     never fail because a settings lookup did", applied to signup.
+     *
+     * Evaluated before ANY hashing, limiter, or repository work.
+     */
+    private function registrationsAreClosed(): bool
+    {
+        if ($this->signupsDisabledResolver === null) {
+            return !$this->signupsEnabled;
+        }
+
+        try {
+            $live = ($this->signupsDisabledResolver)();
+        } catch (Throwable) {
+            return !$this->signupsEnabled;
+        }
+
+        return $live === null ? !$this->signupsEnabled : $live;
+    }
+
+    /**
      * Register a fresh account.
      *
      * @param string $username Chosen username (3-50 chars).
@@ -200,7 +266,7 @@ class AuthManager
      */
     public function register(string $username, string $email, string $password, string $clientIp = ''): array
     {
-        if (!$this->signupsEnabled) {
+        if ($this->registrationsAreClosed()) {
             throw new SignupsDisabledException('Registration is disabled on this hub');
         }
         if (strlen($username) < 3 || strlen($username) > 50) {

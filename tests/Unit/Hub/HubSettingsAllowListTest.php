@@ -123,4 +123,28 @@ final class HubSettingsAllowListTest extends TestCase
         self::assertArrayHasKey('access_ttl', $authConfig);
         self::assertArrayHasKey('refresh_ttl', $authConfig);
     }
+
+    /**
+     * The live signup toggle keys must stay mirrored. `auth.signups_disabled`
+     * is the ALLOWED_KEYS / error-code spelling; `signups_enabled` is the
+     * boot spelling AuthServicesProvider reads verbatim. config/auth.php
+     * derives one from the other off HUB_SIGNUPS_ENABLED — if the twin ever
+     * drifts, the settings default would silently contradict the boot flag.
+     */
+    public function testSignupToggleKeysMirrorEachOtherInConfig(): void
+    {
+        self::assertArrayHasKey('auth.signups_disabled', HubSettingsRepository::ALLOWED_KEYS);
+        self::assertSame('bool', HubSettingsRepository::ALLOWED_KEYS['auth.signups_disabled']);
+
+        $authConfig = include dirname(__DIR__, 3) . '/config/auth.php';
+        self::assertIsArray($authConfig);
+        self::assertArrayHasKey('signups_enabled', $authConfig);
+        self::assertArrayHasKey('signups_disabled', $authConfig);
+        self::assertIsBool($authConfig['signups_disabled']);
+        self::assertSame(
+            !$authConfig['signups_enabled'],
+            $authConfig['signups_disabled'],
+            'signups_disabled must be the exact boolean twin of signups_enabled',
+        );
+    }
 }

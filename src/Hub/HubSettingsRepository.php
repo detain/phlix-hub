@@ -96,6 +96,15 @@ class HubSettingsRepository
         // src/Common/Container/Providers/AuthServicesProvider.php:113.
         'auth.access_ttl'  => 'int',
         'auth.refresh_ttl' => 'int',
+        // config/auth.php ('signups_disabled' twin of 'signups_enabled').
+        // LIVE: AuthManager::registrationsAreClosed() consults the effective
+        // value per signup through the resolver installed by
+        // AuthServicesProvider — src/Auth/AuthManager.php:236 (gate),
+        // src/Auth/AuthManager.php:269 (call site),
+        // src/Common/Container/Providers/AuthServicesProvider.php:231
+        // (resolver). Degrades to the boot-time HUB_SIGNUPS_ENABLED flag when
+        // no row / no pool / settings read fails.
+        'auth.signups_disabled' => 'bool',
     ];
 
     /**

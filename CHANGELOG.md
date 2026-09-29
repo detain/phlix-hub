@@ -6,6 +6,88 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — auth spec debt consumed: bearer-only AUTH paths in openapi + the live `auth.signups_disabled` hub setting — 2026-09-29
+
+- **The spec caught up with the bearer-only rework.** `/api/v1/auth/logout` still promised
+  "Clears the session cookies" with a 200-with-schema response — the cookie surface was deleted
+  in `bcbad51` (nothing ever set it) and the controller has always answered 204. The operation now
+  documents the real contract: optional `{refresh_token}` body (the lineage to revoke), 204 No
+  Content, idempotent. The `AuthSession` schema lost its "refresh token is also set as a cookie"
+  line for the same reason.
+- **Every AUTH failure frame the controllers actually emit is now on the spec.** login gained
+  400 `auth.missing_credentials` + 401 `auth.invalid_credentials`; refresh gained 400
+  `auth.missing_credentials` + 401 `auth.invalid_token`; register/signup gained 400
+  `validation_failed`, 400 `auth.missing_credentials`, 403 `auth.signups_disabled` and the 429
+  `rate_limited` budget trip. All five operations carry the house-envelope note: failures are
+  `Response::error` frames — `{error, code}` with the legacy top-level `message` mirror retained.
+  register/signup gained their request bodies (username 3-50, email, password 8-4096 — the cap is
+  the Argon2id DoS bound), and their stale success status was truth-fixed 200 → 201.
+- **The signup gate went live.** `auth.signups_disabled` joined `HubSettingsRepository::ALLOWED_KEYS`,
+  and `AuthManager::register()` now consults the EFFECTIVE setting per request through a resolver
+  wired by `AuthServicesProvider` — the same seam that made the auth TTLs live. Precedence is the
+  settings override row → `HUB_SIGNUPS_ENABLED` (via the `config/auth.php` `signups_disabled` twin
+  of `signups_enabled`) → open; every failure path (store not booted, DB unreachable, non-bool
+  junk) fail-safes to the boot-time flag, so a settings outage can never silently open or close
+  registration. Admins can now close or re-open signups from the settings UI with no restart.
+- **Settings surface:** the PUT/GET validation is driven by `ALLOWED_KEYS`, so the new key is
+  accepted and echoed automatically; the SPA row is bridged by a hub-local supplemental-meta map
+  because the vendored `detain/phlix-shared` schema predates the key — an upstream schema entry
+  wins the moment it ships (follow-up PR to that repo; the supplemental entry drops out then).
+- **Tests:** resolver-precedence units on `AuthManager` (row closes an env-open hub, re-opens an
+  env-closed one; null verdict and throwing resolver both defer to the boot flag), controller
+  end-to-end 403/201 frames through a real manager, and `HubSettingsRepository` env-precedence
+  regressions (no row → `HUB_SIGNUPS_ENABLED=false` reads as disabled; row beats env).
+
+### Fixed — platform-edge audit bundle: opaque invite tokens, MySQL deregister delete, share reactivation, request-status filters, transport hardening — 2026-09-29
+
+- **Invite links are opaque bearer-less tokens** (`779fc7f`, F8/F9): creation used to hand out a
+  full owner access JWT (1 h, non-revocable) inside the link — anyone holding the URL owned the
+  account — while redeem hashed the JWT string that was never the stored hash, so create→redeem
+  could never succeed. Tokens are single-use opaque secrets matched against the stored SHA-256,
+  and the list response no longer leaks `token_hash`.
+- **MySQL correctness** (`c568e72`, F4/F10/F5/F6): deregistration ran PostgreSQL
+  `DELETE … RETURNING` — a guaranteed 1064 on the MySQL deploy target that 500'd and orphaned
+  rows; it is now a plain delete with an affected-rows verdict (zero rows → 404 `SERVER_NOT_FOUND`
+  per the openapi contract). Re-sharing a revoked library reactivates the row in place instead of
+  colliding with the `uk_library_share` unique key forever. `GET /api/v1/admin/requests` honors the
+  approved/rejected/all status filter it always advertised, and approve/reject/mark-available/
+  delete moved from check-then-act to atomic conditional statements.
+- **Transport hardening** (`6e3b61c`, F1/F2/F3 + lows): case-insensitive `Content-Length` capture
+  (a lowercase header from an upstream relay disarmed the short-body force-close — a
+  response-splitting vector); unhandled 500s and the restart endpoint echo constant messages
+  instead of exception text (SQL/path fragments); `X-Content-Type-Options: nosniff` plus
+  `X-Frame-Options: DENY` / CSP `frame-ancestors 'none'` default onto every hub-emitted HTML
+  surface; Ed25519 key files close the chmod-after-write TOCTOU and the cross-process keygen race;
+  enrollment 401s distinguish `auth.invalid_token` from genuine `auth.enrollment_expired`; and
+  `user:create --password` became an optional interactive prompt so secrets stop landing in argv.
+
+### Fixed — CI greening — 2026-09-29
+
+- `fcc56b8` format-only phpcs/unused-import greening of the corpus, `2f61e2e` re-blessed the S468
+  LPT duration cache for Unit+Integration, `26f53c2` typed the federation 409 bind-conflict reason
+  node for phpstan. No behavior changes.
+
+### Fixed — auth audit: real logout revocation, race-free first-admin election, signup abuse limiter, bearer-only wire — 2026-09-28
+
+- **Logout means revoke.** A `RefreshTokenRevocationService` jti registry
+  (`auth_revoked_refresh_tokens`, migration 047) is written when logout is presented the refresh
+  JWT and consulted on every `refresh()`: logged-out tokens, tokens of deleted users, and revoked
+  jtis no longer mint pairs — the openapi logout promise became true.
+- **First-admin TOCTOU closed** by a race-free election on a one-row `auth_signup_guard` sentinel
+  (migration 047) with read-back verdict inside the registration transaction — two simultaneous
+  bootstrap signups can no longer both self-elect (residual shape is fail-safe: zero admins, never
+  two).
+- **Signup abuse bounded:** DB-backed global signup limiter (`rate_limiter.signup`, 3/3600 s per
+  real client IP, counting every attempt BEFORE the Argon2id work) plus a `HUB_SIGNUPS_ENABLED`
+  gate answering 403 `auth.signups_disabled`; unknown-user logins pay a dummy hash so response
+  time cannot enumerate accounts; passwords are capped at 4096 chars; JWT `nbf` is enforced.
+- **OAuth reuse detection un-gutted:** `pruneExpired` now retains revoked rows for 1 day — the
+  60 s reaper had been deleting the very evidence reuse detection reads.
+- **Contract codes on every auth failure** (`auth.invalid_credentials`, `auth.missing_credentials`,
+  `auth.invalid_token`, `validation_failed`) via `Response::error`, legacy `message` retained; and
+  the dead session-cookie surface (read/clear of cookies nothing ever set) was deleted with its
+  dead helpers — the hub auth API is bearer/body-only end to end.
+
 ### Changed — web-ui repin: `@phlix/ui` v0.99.6 → v0.99.7 tag tarball — rebuilt bundle verifies byte-identical — 2026-09-25
 
 - **The `@phlix/ui` pin advances to the `v0.99.7` release-tag tarball** (tag object `da9f1625…`,

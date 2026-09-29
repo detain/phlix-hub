@@ -20,6 +20,14 @@ final class HubSettingsRepositoryTest extends TestCase
         return new HubSettingsRepository($db, $configDir);
     }
 
+    /** A connection whose store holds no override rows at all. */
+    private function noRowsDb(): Connection
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+        return $db;
+    }
+
     // ------------------------------------------------------------ getOverride
 
     public function testGetOverrideReturnsDecodedValueWhenRowExists(): void
@@ -304,6 +312,63 @@ final class HubSettingsRepositoryTest extends TestCase
         self::assertArrayHasKey('server.enrollment_ttl', HubSettingsRepository::ALLOWED_KEYS);
         self::assertArrayHasKey('auth.access_ttl', HubSettingsRepository::ALLOWED_KEYS);
         self::assertArrayHasKey('auth.refresh_ttl', HubSettingsRepository::ALLOWED_KEYS);
+        self::assertArrayHasKey('auth.signups_disabled', HubSettingsRepository::ALLOWED_KEYS);
+    }
+
+    /**
+     * Live signup toggle, precedence leg 1: with NO `hub_settings` row the
+     * effective value falls through to `config/auth.php`, which derives it
+     * from HUB_SIGNUPS_ENABLED — the exact behavior the boot-time-only flag
+     * had before the live gate existed.
+     */
+    public function testSignupsDisabledFallsBackToEnvDerivedDefaultWhenNoRow(): void
+    {
+        $previous = getenv('HUB_SIGNUPS_ENABLED');
+        try {
+            putenv('HUB_SIGNUPS_ENABLED=false');
+            $closed = $this->repo($this->noRowsDb(), __DIR__ . '/../../../config')
+                ->getEffective('auth.signups_disabled');
+            self::assertTrue($closed, 'HUB_SIGNUPS_ENABLED=false must read as signups_disabled=true');
+
+            putenv('HUB_SIGNUPS_ENABLED=true');
+            $open = $this->repo($this->noRowsDb(), __DIR__ . '/../../../config')
+                ->getEffective('auth.signups_disabled');
+            self::assertFalse($open, 'HUB_SIGNUPS_ENABLED=true must read as signups_disabled=false');
+        } finally {
+            if ($previous === false) {
+                putenv('HUB_SIGNUPS_ENABLED');
+            } else {
+                putenv('HUB_SIGNUPS_ENABLED=' . $previous);
+            }
+        }
+    }
+
+    /**
+     * Live signup toggle, precedence leg 2: the stored override row wins over
+     * whatever the env said — this is the whole point of the live toggle
+     * (flip it from the admin UI, effective on the next request).
+     */
+    public function testSignupsDisabledOverrideRowBeatsEnvDefault(): void
+    {
+        $previous = getenv('HUB_SIGNUPS_ENABLED');
+        try {
+            putenv('HUB_SIGNUPS_ENABLED=true'); // env says OPEN
+
+            $db = $this->createMock(Connection::class);
+            $db->method('query')->willReturn([
+                ['setting_value' => '1', 'value_type' => 'bool'],
+            ]);
+
+            $effective = $this->repo($db, __DIR__ . '/../../../config')
+                ->getEffective('auth.signups_disabled');
+            self::assertTrue($effective, 'an override row must close signups even when env opens them');
+        } finally {
+            if ($previous === false) {
+                putenv('HUB_SIGNUPS_ENABLED');
+            } else {
+                putenv('HUB_SIGNUPS_ENABLED=' . $previous);
+            }
+        }
     }
 
     public function testDeniedKeysContainsSecrets(): void

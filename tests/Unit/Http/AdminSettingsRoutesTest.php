@@ -57,7 +57,7 @@ final class AdminSettingsRoutesTest extends TestCase
         );
         file_put_contents(
             $dir . '/auth.php',
-            "<?php\n\nreturn ['access_ttl' => 900, 'refresh_ttl' => 1209600];\n",
+            "<?php\n\nreturn ['access_ttl' => 900, 'refresh_ttl' => 1209600, 'signups_disabled' => false];\n",
         );
         $this->configDir = $dir;
 
