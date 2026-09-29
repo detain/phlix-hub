@@ -1,7 +1,9 @@
 -- migration: 010_invite_links
 -- Creates the `invite_links` table for single-use invite link sharing.
--- Invite links are signed JWTs that grant library access to recipients.
--- The token_hash stores SHA-256 of the raw JWT for enumeration-safe lookups.
+-- An invite link is an opaque 64-hex bearer token that grants library access
+-- to recipients (never a session-grade JWT — corrected post-779fc7f, which
+-- moved invites from signed-JWT URLs to these opaque tokens).
+-- The token_hash stores SHA-256 of the raw opaque token for enumeration-safe lookups.
 
 CREATE TABLE IF NOT EXISTS invite_links (
     id               CHAR(36) NOT NULL,

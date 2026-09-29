@@ -137,6 +137,10 @@ final class McpSseStream
             'Connection' => 'keep-alive',
             'X-Accel-Buffering' => 'no',
             'Transfer-Encoding' => 'chunked',
+            // This head bypasses {@see \Phlix\Hub\Http\Response::toWorkermanResponse()},
+            // which stamps the hub's central security defaults; restate the one
+            // that applies here — browsers must not MIME-sniff these frames.
+            'X-Content-Type-Options' => 'nosniff',
         ];
     }
 

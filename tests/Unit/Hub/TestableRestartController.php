@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Hub;
 
+use Phlix\Hub\Common\Logger\StructuredLogger;
+
 /**
  * Lightweight test double for {@see \Phlix\Hub\Http\Controllers\HubRestartController}.
  *
@@ -29,9 +31,9 @@ final class TestableRestartController extends \Phlix\Hub\Http\Controllers\HubRes
     /** @var (callable(): void)|null The deferred reload, pending manual firing. */
     private $pendingSignal = null;
 
-    public function __construct(string $pidFile, ?bool $signalResult)
+    public function __construct(string $pidFile, ?bool $signalResult, StructuredLogger $logger)
     {
-        parent::__construct($pidFile);
+        parent::__construct($pidFile, $logger);
         $this->signalResult = $signalResult;
     }
 

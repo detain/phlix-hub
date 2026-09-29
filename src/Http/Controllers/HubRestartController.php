@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Throwable;
@@ -68,14 +69,19 @@ class HubRestartController
     private string $pidFile;
 
     /**
-     * @param string $pidFile Absolute path to the PID file (from config/server.php's
-     *                        `pid_file`, which start.php also uses for
-     *                        `Worker::$pidFile` — single source of truth).
+     * @param string           $pidFile Absolute path to the PID file (from config/server.php's
+     *                                  `pid_file`, which start.php also uses for
+     *                                  `Worker::$pidFile` — single source of truth).
+     * @param StructuredLogger $logger  Hub-channel log. Injected (house controller pattern):
+     *                                  {@see restart()} records the real failure detail the
+     *                                  constant wire message deliberately withholds.
      *
      * @since Phase 10
      */
-    public function __construct(string $pidFile)
-    {
+    public function __construct(
+        string $pidFile,
+        private readonly StructuredLogger $logger,
+    ) {
         $this->pidFile = $pidFile;
     }
 
@@ -138,9 +144,16 @@ class HubRestartController
                 'success' => true,
                 'message' => 'Restart signal sent.',
             ]);
-        } catch (Throwable) {
+        } catch (Throwable $e) {
             // Constant wire message: raw exception text can carry pid-file paths
             // and environment detail. Operators get the detail from the log.
+            $this->logger->error('Hub restart failed', [
+                'exception' => $e::class,
+                'error'     => $e->getMessage(),
+                'file'      => $e->getFile(),
+                'line'      => $e->getLine(),
+            ]);
+
             return (new Response())->status(500)->json([
                 'success' => false,
                 'error'   => 'restart_failed',

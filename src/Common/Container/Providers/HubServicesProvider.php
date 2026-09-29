@@ -1121,7 +1121,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 $pidFile = is_string($appConfig['pid_file'] ?? null) && $appConfig['pid_file'] !== ''
                     ? $appConfig['pid_file']
                     : dirname(__DIR__, 4) . '/var/hub.pid';
-                return new HubRestartController($pidFile);
+                return new HubRestartController($pidFile, LoggerFactory::get(LogChannels::HUB));
             }),
 
             // Per-user relay bandwidth quota + concurrent-stream cap HTTP surface

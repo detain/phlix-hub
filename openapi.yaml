@@ -5227,10 +5227,9 @@ components:
           type: [string, "null"]
           description: "Full invite URL `{hubBaseUrl}/invite/{token}`; null for listed links (token unrecoverable from its hash)."
         expires_at:
-          type: string
+          type: [integer, "null"]
+          description: "Absolute Unix expiry epoch; null for links that never expire."
         max_uses:
-          type: integer
-        uses:
           type: integer
       additionalProperties: true
     InviteLinkList:

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Hub;
 
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Http\Controllers\HubRestartController;
 use Phlix\Hub\Http\Request;
 use PHPUnit\Framework\TestCase;
@@ -42,9 +43,18 @@ final class HubRestartControllerTest extends TestCase
         return $request;
     }
 
+    /**
+     * The controller's failure detail goes to the injected hub log; none of
+     * these cases exercise that path, so a quiet mock stands in.
+     */
+    private function makeLogger(): StructuredLogger
+    {
+        return $this->createMock(StructuredLogger::class);
+    }
+
     public function testRestartFailsWhenPidFileIsMissing(): void
     {
-        $controller = new HubRestartController($this->pidFile);
+        $controller = new HubRestartController($this->pidFile, $this->makeLogger());
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
@@ -59,7 +69,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '');
 
-        $controller = new HubRestartController($this->pidFile);
+        $controller = new HubRestartController($this->pidFile, $this->makeLogger());
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
@@ -74,7 +84,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, "not-a-pid\n");
 
-        $controller = new HubRestartController($this->pidFile);
+        $controller = new HubRestartController($this->pidFile, $this->makeLogger());
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
@@ -89,7 +99,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '99999'); // non-existent PID
 
-        $controller = new TestableRestartController($this->pidFile, false);
+        $controller = new TestableRestartController($this->pidFile, false, $this->makeLogger());
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
@@ -104,7 +114,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '12345');
 
-        $controller = new TestableRestartController($this->pidFile, true);
+        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(200, $response->statusCode);
@@ -127,7 +137,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '12345');
 
-        $controller = new TestableRestartController($this->pidFile, true);
+        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(200, $response->statusCode);
@@ -154,7 +164,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '4242');
 
-        $controller = new TestableRestartController($this->pidFile, true);
+        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
         $controller->restart($this->makeRequest(), []);
         $controller->fireScheduledSignal();
 
@@ -175,7 +185,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '99999');
 
-        $controller = new TestableRestartController($this->pidFile, false);
+        $controller = new TestableRestartController($this->pidFile, false, $this->makeLogger());
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
