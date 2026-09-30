@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — wire law: the one unregistered `code` emit in `FederationController` re-anchored to the registered generic — 2026-09-30
+
+- **`badRequest('invalid_leaf_hub_id')` (introduced d483f29) put an unregistered
+  literal on the wire's `code` field** at `POST /me/federation/peers` and
+  `PUT /me/federation/peers/{id}/leaf-hub-id` (400s; tests confirmed the value
+  arrived in `code`). `ErrorCodesContractTest` stayed green because its scanner
+  sees only literal `'code' => '…'` shapes and the helper writes
+  `'code' => $code` through a variable — the class docblock's acknowledged
+  variable blind spot, previously undocumented for this helper.
+- **Fix follows the 409 sibling precedent in the same controller:** both sites now
+  emit the registered generic `invalid_request` with the specific condition riding
+  the free-form `reason` field (`'leaf_hub_id must be a UUID'`); no dedicated
+  leaf_hub_id code is minted yet (`leaf_hub_id_already_bound` is reserved pending a
+  contracts release). `badRequest()` gained an optional `$reason` parameter and a
+  wire-law docblock; the unregistered key left the messages map. All 14 sibling
+  `badRequest` arguments, every inline `'code' =>` literal in the file, and
+  `AdminUserController`'s helper args were re-checked against the vendored 202-code
+  fixture — this was the only violation.
+- **Shape pinned** in `FederationControllerTest` (both 400s assert
+  `code === 'invalid_request'` + exact `reason`), and the contract test's
+  known-scan-limits docblock now names this helper so the blind spot can't hide a
+  future emit. Behavior change is limited to the two 400 bodies' `code`/`reason`
+  fields; no consumer (web-ui/openapi/docs) referenced the old literal.
+
 ### Changed — Dependency lane: `detain/phlix-shared` pin advanced to `^0.49.0` (lock `v0.49.1`) — estate parity with phlix-server — 2026-09-29
 
 - **A 21-release span that lands purely additively — proven, not assumed.** The hub

@@ -268,7 +268,10 @@ final class FederationController
         if ($leafHubIdRaw === null || $leafHubIdRaw === '') {
             $leafHubIdRaw = null;
         } elseif (!is_string($leafHubIdRaw) || !preg_match(self::UUID_PATTERN, $leafHubIdRaw)) {
-            return $this->badRequest('invalid_leaf_hub_id');
+            // Wire-law: registered generic + free-form reason (see the 409
+            // sibling in bindPeerLeafHubId(); no dedicated leaf_hub_id code is
+            // minted in the contracts registry yet).
+            return $this->badRequest('invalid_request', 'leaf_hub_id must be a UUID');
         }
 
         if (!is_string($urlRaw) || $urlRaw === '') {
@@ -348,7 +351,9 @@ final class FederationController
         /** @var mixed $leafHubIdRaw */
         $leafHubIdRaw = $body['leaf_hub_id'] ?? null;
         if (!is_string($leafHubIdRaw) || !preg_match(self::UUID_PATTERN, $leafHubIdRaw)) {
-            return $this->badRequest('invalid_leaf_hub_id');
+            // Wire-law: registered generic + free-form reason (see the 409
+            // conflict branch below).
+            return $this->badRequest('invalid_request', 'leaf_hub_id must be a UUID');
         }
 
         $peer = $this->hubRepo->getPeerById($peerId);
@@ -969,11 +974,22 @@ final class FederationController
     /**
      * Return a 400 Bad Request JSON response.
      *
-     * @param string $code Error code.
+     * Wire-law: `$code` MUST be a registered `@phlix/contracts` code. The
+     * ErrorCodesContractTest scanner sees only literal `'code' => '…'`
+     * shapes, and this helper's payload writes `'code' => $code` through a
+     * variable — so the verifiable literals are the CALL-SITE arguments,
+     * every one of which is registry-checked (the malformed-leaf_hub_id
+     * sites ride the registered generic 'invalid_request' with the specific
+     * condition in `reason`, mirroring the 409 precedent in
+     * bindPeerLeafHubId(); no dedicated leaf_hub_id code is minted yet).
+     *
+     * @param string $code   Registered error code.
+     * @param string $reason Optional free-form condition carried on the
+     *                       wire's `reason` field (never the `code` field).
      *
      * @return Response
      */
-    private function badRequest(string $code): Response
+    private function badRequest(string $code, string $reason = ''): Response
     {
         $messages = [
             'invalid_body' => 'Request body must be a JSON object',
@@ -990,16 +1006,21 @@ final class FederationController
             'missing_offer_id' => 'Offer ID is required',
             'missing_user_id' => 'User ID is required',
             'missing_delegation_id' => 'Delegation ID is required',
-            'invalid_leaf_hub_id' => 'leaf_hub_id must be a UUID',
         ];
 
-        $message = $messages[$code] ?? 'Bad Request';
+        $message = $messages[$code] ?? ($reason !== '' ? $reason : 'Bad Request');
 
-        return (new Response())->status(400)->json([
+        $payload = [
             'error' => 'Bad Request',
             'code' => $code,
             'message' => $message,
-        ]);
+        ];
+
+        if ($reason !== '') {
+            $payload['reason'] = $reason;
+        }
+
+        return (new Response())->status(400)->json($payload);
     }
 
     /**

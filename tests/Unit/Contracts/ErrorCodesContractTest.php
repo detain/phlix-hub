@@ -72,8 +72,12 @@ use const JSON_UNESCAPED_SLASHES;
  * map plus its whole-frame shape are pinned by
  * {@see \Phlix\Hub\Tests\Unit\Http\Middleware\AlexaRejectionCodeMapLawTest}),
  * and JSON-RPC / OAuth-authorization-code `code` fields, which are NOT members
- * of this vocabulary at all (RFC 6749/6750 values and integer JSON-RPC codes
- * are registry-excluded by design). The former text-only gate sites
+     * of this vocabulary at all (RFC 6749/6750 values and integer JSON-RPC codes
+     * are registry-excluded by design), plus `FederationController::badRequest()`
+     * — an unregistered `'invalid_leaf_hub_id'` rode its `'code' => $code` from
+     * 2026-09 d483f29 until re-anchored to the registered generic
+     * `'invalid_request'` (call-site args registry-checked; the malformed
+     * leaf_hub_id shape is pinned in FederationControllerTest). The former text-only gate sites
  * (`MISSING_SERVER_ID` / `UNAUTHORIZED` / the bare-`Bad Request` claim trio)
  * that the wave-2 emit promoted are inline `Response::error()` literals and
  * ARE visible to this scan.

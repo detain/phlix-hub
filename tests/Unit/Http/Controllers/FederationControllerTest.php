@@ -746,7 +746,10 @@ final class FederationControllerTest extends TestCase
 
         self::assertSame(400, $response->statusCode);
         $body = self::arrayNode(json_decode($response->body, true));
-        self::assertSame('invalid_leaf_hub_id', $body['code']);
+        // Wire-law shape: registered generic on `code`, the specific
+        // condition rides `reason` — never an unregistered code literal.
+        self::assertSame('invalid_request', $body['code']);
+        self::assertSame('leaf_hub_id must be a UUID', $body['reason']);
     }
 
     public function testBindPeerLeafHubIdSetsBindingOnUnboundPeer(): void
@@ -841,7 +844,10 @@ final class FederationControllerTest extends TestCase
 
         self::assertSame(400, $response->statusCode);
         $body = self::arrayNode(json_decode($response->body, true));
-        self::assertSame('invalid_leaf_hub_id', $body['code']);
+        // Wire-law shape: registered generic on `code`, the specific
+        // condition rides `reason` — never an unregistered code literal.
+        self::assertSame('invalid_request', $body['code']);
+        self::assertSame('leaf_hub_id must be a UUID', $body['reason']);
     }
 
     // ------------------------------------------------ master-side share push
