@@ -6,6 +6,39 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — sweep follow-up: the blind class gets its THIRD executable census (opaque call-site feeds) — 2026-09-30
+
+- Reviewer precision notes on the 90e496f sweep tests, closed. The residual
+  limit paragraph claimed the variable-site census "forces" helper feeds
+  coming from runtime variables to be enumerated — but nothing actually saw
+  call sites like `(new Response())->error(400, $wireCode, …)`, so the claim
+  was prose again. It is now a test:
+  `testEveryOpaqueCodeFeedIntoSweptHelpersIsEnumerated()` token-walks every
+  swept-helper call site (same gate as the literal sweep, refactored into a
+  shared `sweptCallSiteOpen()` so the two cannot drift) and censuses every
+  NON-literal argument at a code position into `OPAQUE_CODE_FEEDS`
+  (`<path>::<method>::<call>@<pos>` keys, `hop:` + ≥40-char reason doctrine,
+  anti-vacuity floor). Array-literal args are excluded by construction —
+  every swept code parameter is typed `string` under strict_types, so the
+  ~50 PSR-3 logger `error($msg, […])` calls cannot reach the wire; sole
+  code-shaped literals stay registry territory. Two real feeds today:
+  `AuthController::errorFrame`'s internal `$code` forward and
+  `AlexaSignatureMiddleware::reject`'s `REJECTION_CODE_MAP` hop (law test
+  named). Self-proof test plants variable feeds, a forward hop, and human
+  text in memory and pins all four exclusion classes; out-of-band
+  falsification: a planted `FrameEncoder::error(0, $guessed, …)` in
+  `ClientConnection` turned the census RED with its exact new key, revert
+  green.
+- Precision prose: the residual limits now state (a) dynamic dispatch
+  (`$fn='error'; $svc->$fn(…)`) bypasses the token walkers — inherent static
+  analysis limit; (b) both censuses key by SHAPE not occurrence — new
+  path/method/helper/position goes RED, a repeat occurrence inside an
+  already-enumerated key collapses silently (verified by probe); (c) reasons
+  stay human-authored — censuses force visibility, not truth. Optional
+  hardening: `Response` added to the `error@2` sweep's static receivers
+  (zero call sites today; closes the future `Response::error('literal', …)`
+  impersonation gap). LPT duration cache re-blessed alongside.
+
 ### Fixed — wire law: the SECOND unregistered `code` emit (`Relay/ClientConnection`) re-anchored, and the blind class made EXECUTABLE — 2026-09-30
 
 - **Correction to the entry below: "this was the only violation" was

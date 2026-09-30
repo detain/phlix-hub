@@ -85,7 +85,7 @@ use const JSON_UNESCAPED_SLASHES;
  * `Relay/ClientConnection.php` (fad2f2a-era, caught by the independent
  * re-review of f30e8a7 — the "sole violation" claim of the first sweep was
  * wrong precisely because its completeness relied on manual checking).
- * The blind class is therefore now policed by two executable tests instead
+ * The blind class is therefore now policed by three executable tests instead
  * of prose:
  *  - `testEveryCodeRidingVariableSiteIsEnumerated()` censuses every
  *    `'code' => $var` / `'error_code' => $var` occurrence in `src/` and
@@ -98,13 +98,28 @@ use const JSON_UNESCAPED_SLASHES;
  *    call site of each swept helper ({@see self::CODE_HELPER_SWEEPS}) and
  *    requires the literal at the code-carrying argument position to be a
  *    registered code.
+ *  - `testEveryOpaqueCodeFeedIntoSweptHelpersIsEnumerated()` closes the gap
+ *    BETWEEN those two: a swept helper called with a non-literal at its code
+ *    position (a variable hop like `AuthController::errorFrame`'s internal
+ *    `->error(…, $code, …)`, or a map lookup like `REJECTION_CODE_MAP`) is
+ *    invisible to the literal sweep, so this census enumerates every such
+ *    feed in {@see self::OPAQUE_CODE_FEEDS} with a `hop:` reason naming the
+ *    law or registry argument that keeps the runtime value registered.
  *
- * Residual limit (stated, not silently assumed): a helper whose code argument
- * is ITSELF fed from a runtime variable across a hop (e.g.
- * `AuthController::errorFrame` internals, or a map lookup like
- * `REJECTION_CODE_MAP`) cannot be literal-traced; the census forces such a
- * site to be enumerated with a reason, and each exclusion names the law test
- * or registry argument that covers it.
+ * Residual limits (stated, not silently assumed):
+ *  - Dynamic dispatch bypasses the token walkers: `$fn = 'error';
+ *    $svc->$fn(…)` (or `Cls::$fn(…)`) never presents the swept helper NAME as
+ *    a T_STRING at the gated position, so neither the literal sweep nor the
+ *    opaque-feed census sees the call — an inherent limit of static token
+ *    analysis, caught only by review.
+ *  - Both censuses key by SHAPE, not by occurrence: a new path, method,
+ *    helper or argument position produces a NEW key and goes RED, but a
+ *    repeat occurrence of an already-enumerated shape inside the same key
+ *    (a second `'code' => $var` in an already-listed `file::method`, or a
+ *    second opaque feed at the same `file::method::call@pos`) collapses into
+ *    that key and passes silently.
+ *  - Enumeration reasons stay human-authored: the censuses force a new shape
+ *    to be WRITTEN DOWN with a reason; they cannot prove the reason is true.
  *
  * ## The failure this file must never become
  *
@@ -164,8 +179,11 @@ final class ErrorCodesContractTest extends TestCase
      * Census of EVERY `'code' => $var` / `'error_code' => $var` occurrence in
      * `src/` — the shapes the literal scanner cannot see. Key:
      * `<src-relative path>::<enclosing named method>` (an occurrence inside a
-     * closure attributes to its enclosing named method); a NEW occurrence
-     * makes the census test RED until it is enumerated here, classified:
+     * closure attributes to its enclosing named method). Keys are SETS, not
+     * counts: a NEW KEY (new path or new method) makes the census test RED
+     * until it is enumerated here — but a repeat occurrence of the shape
+     * inside an already-enumerated key collapses into that key and passes
+     * silently (stated limit, see class docblock). Classified:
      *  - `swept:<call>@<pos>` — the variable is a helper parameter whose
      *    code-carrying call sites are registry-checked by
      *    {@see self::CODE_HELPER_SWEEPS};
@@ -226,8 +244,10 @@ final class ErrorCodesContractTest extends TestCase
      * @var list<array{file: string|null, call: string, positions: list<int>, staticReceivers: list<string>|null}>
      */
     private const array CODE_HELPER_SWEEPS = [
-        // Response->error(status, CODE, message, extra) — instance-only in practice.
-        ['file' => null, 'call' => 'error', 'positions' => [2], 'staticReceivers' => ['FrameEncoder']],
+        // Response->error(status, CODE, message, extra) — instance-only in
+        // practice; 'Response' is whitelisted for the `::` form anyway so a
+        // future static literal call cannot impersonate its way past the sweep.
+        ['file' => null, 'call' => 'error', 'positions' => [2], 'staticReceivers' => ['FrameEncoder', 'Response']],
         // Response::errorBody(CODE, message) — relay-frame JSON bodies.
         ['file' => null, 'call' => 'errorBody', 'positions' => [1], 'staticReceivers' => ['Response']],
         [
@@ -272,6 +292,50 @@ final class ErrorCodesContractTest extends TestCase
      * this fires BEFORE the membership assertion can pass vacuously.
      */
     private const int HELPER_SCAN_FLOOR = 40;
+
+    /**
+     * Census of every NON-LITERAL argument at a code-carrying position of a
+     * swept-helper call in `src/` — the feeds the literal sweep structurally
+     * cannot trace. Key:
+     * `<src-relative path>::<enclosing named method>::<call>@<pos>`; value:
+     * `hop:` + a reason of at least 40 characters naming the law test or
+     * registry argument that keeps the runtime value registered. Same
+     * set-key doctrine as the variable census: a new path/method/helper/
+     * position is a new key and goes RED; a repeat feed inside an
+     * enumerated key collapses silently. Excluded from counting BY
+     * CONSTRUCTION:
+     *  - sole code-shaped string literals — registry territory, policed by
+     *    the literal sweep itself;
+     *  - array literals at the code position — structurally impossible on
+     *    the wire: every swept code parameter is typed `string` and all
+     *    src/ files declare strict_types=1, so the ~50 PSR-3 logger
+     *    `$logger->error($msg, ['context' => …])` calls that land at
+     *    `error@2` cannot put their array on a code field without a
+     *    TypeError long before any wire;
+     *  - empty significant-token slots (trailing-comma call artifacts).
+     *
+     * @var array<string, string>
+     */
+    private const array OPAQUE_CODE_FEEDS = [
+        'Http/Controllers/AuthController.php::errorFrame::error@2' =>
+            'hop: errorFrame(int $status, string $code, string $message) forwards its own'
+            . ' string-typed $code parameter into (new Response())->error(...) — the inner'
+            . ' variable hop inherits the direct call-site sweep at errorFrame@2 above',
+        'Http/Middleware/AlexaSignatureMiddleware.php::reject::error@2' =>
+            'hop: reject() emits (new Response())->error(400, $wireCode, $code) where $wireCode'
+            . ' is a REJECTION_CODE_MAP value — registered dotted twins AND the whole frame'
+            . ' shape are pinned by \\Phlix\\Hub\\Tests\\Unit\\Http\\Middleware\\AlexaRejectionCodeMapLawTest',
+    ];
+
+    /**
+     * Anti-vacuity floor for the opaque-feed census: the live src/ walk must
+     * keep finding at least this many enumerated feeds. A walker collapse
+     * (gate, stack, classifier) drops the count to 0 and this fires BEFORE
+     * the set-equality assertion could pass vacuously against an emptied
+     * view. If both real hops were ever legitimately traced away, this
+     * constant is edited deliberately, in the same commit, with the reason.
+     */
+    private const int OPAQUE_FEED_FLOOR = 1;
 
     public function testVendoredVocabularyIsWellFormedAndFloored(): void
     {
@@ -497,6 +561,182 @@ final class ErrorCodesContractTest extends TestCase
     }
 
     /**
+     * The opaque-feed census: every call to a swept helper whose code-position
+     * argument is NOT a traceable literal (variable, map lookup, call, concat,
+     * human text) must be enumerated in {@see self::OPAQUE_CODE_FEEDS} with a
+     * `hop:` reason. This is the executable closing of the residual limit the
+     * first sweep left as prose — the over-claim was that such feeds were
+     * "forced to be enumerated" when in fact nothing saw them; now a new feed
+     * really does go RED. Floor first (anti-vacuity), then set-equality in
+     * BOTH directions: an added key must be enumerated, a removed key pruned.
+     */
+    public function testEveryOpaqueCodeFeedIntoSweptHelpersIsEnumerated(): void
+    {
+        $found = [];
+        foreach (self::CODE_HELPER_SWEEPS as $sweep) {
+            $files = $sweep['file'] === null
+                ? self::srcFiles()
+                : [$sweep['file'] => self::SRC_DIR . '/' . $sweep['file']];
+
+            foreach ($files as $rel => $abs) {
+                $feeds = self::extractOpaqueCodeFeeds(
+                    (string) file_get_contents($abs),
+                    $sweep['call'],
+                    $sweep['positions'],
+                    $sweep['staticReceivers'],
+                );
+                foreach ($feeds as $feed) {
+                    $found[$rel . '::' . $feed['method'] . '::' . $sweep['call'] . '@' . $feed['position']] = true;
+                }
+            }
+        }
+
+        $actual = array_keys($found);
+        sort($actual);
+
+        self::assertGreaterThanOrEqual(
+            self::OPAQUE_FEED_FLOOR,
+            count($actual),
+            'the opaque-feed census must keep finding at least ' . self::OPAQUE_FEED_FLOOR
+            . ' enumerated non-literal feeds in src/ (it found ' . count($actual)
+            . ') — a collapse here means the walker broke, not that the hub got clean',
+        );
+
+        $expected = array_keys(self::OPAQUE_CODE_FEEDS);
+        sort($expected);
+
+        self::assertSame(
+            $expected,
+            $actual,
+            'Census drift on opaque (non-literal) feeds into swept helpers — the class of site'
+            . ' the literal sweep structurally cannot trace. Added: '
+            . json_encode(array_values(array_diff($actual, $expected)), JSON_UNESCAPED_SLASHES)
+            . ' — enumerate in OPAQUE_CODE_FEEDS with a `hop:` reason naming the law or registry'
+            . ' argument covering the value. Removed: '
+            . json_encode(array_values(array_diff($expected, $actual)), JSON_UNESCAPED_SLASHES)
+            . ' — prune the stale entry.',
+        );
+
+        foreach (self::OPAQUE_CODE_FEEDS as $site => $reason) {
+            self::assertSame(
+                1,
+                preg_match('/^hop:.{40,}/su', $reason),
+                'Opaque feed ' . $site . ' must be `hop:` + an explanatory reason of at least 40'
+                . ' characters (census doctrine: reasons, not bare allows).',
+            );
+        }
+    }
+
+    /**
+     * Red-green self-proof for the opaque-feed walker: planted variable feeds
+     * and forward hops must be counted, while every exclusion class (code-
+     * shaped literal, logger array context, trailing-comma slot, definition)
+     * must NOT be. Even a sole string literal that is not code-shaped counts —
+     * human text at a code position currently escapes every other sweep. The
+     * real `src/` is never modified.
+     */
+    public function testTheOpaqueFeedCensusCatchesPlantedFeeds(): void
+    {
+        $gates = ['FrameEncoder', 'Response'];
+
+        // Leg 1: the FrameEncoder::error blind class, now fed by a VARIABLE
+        // instead of a literal — exactly the shape the literal sweep cannot see.
+        $varFeed = self::extractOpaqueCodeFeeds(
+            '<?php' . "\n"
+            . "if (\$kind === 'x') {\n"
+            . "    \$guessedCode = parse(\$frame);\n"
+            . "    \$raw = FrameEncoder::error(0, \$guessedCode, 'Unexpected frame type');\n"
+            . "}\n",
+            'error',
+            [2],
+            $gates,
+        );
+        self::assertCount(1, $varFeed, 'a variable fed to FrameEncoder::error position 2 must count as opaque');
+        self::assertSame('{top-level}', $varFeed[0]['method']);
+        self::assertSame(2, $varFeed[0]['position']);
+
+        // Leg 1b: the instance-forward hop (the AuthController::errorFrame shape).
+        $hopFeed = self::extractOpaqueCodeFeeds(
+            '<?php' . "\n"
+            . "class C {\n"
+            . "    private function errorFrame(int \$status, string \$code, string \$message): Response\n"
+            . "    {\n"
+            . "        return (new Response())->error(\$status, \$code, \$message);\n"
+            . "    }\n"
+            . "}\n",
+            'error',
+            [2],
+            $gates,
+        );
+        self::assertCount(1, $hopFeed, 'a parameter forwarded into ->error(…) must count as opaque');
+        self::assertSame('errorFrame', $hopFeed[0]['method']);
+
+        // Leg 2: a SOLE string literal that is not code-shaped is census
+        // material too — human text at a code position escapes every sweep.
+        $humanText = self::extractOpaqueCodeFeeds(
+            '<?php' . "\n"
+            . "\$raw = FrameEncoder::error(0, 'Something bad happened', 'x');\n",
+            'error',
+            [2],
+            $gates,
+        );
+        self::assertCount(1, $humanText, 'a non-code-shaped literal at a code position must count as opaque');
+
+        // Control A: sole code-shaped literal — registry territory, never census.
+        self::assertCount(
+            0,
+            self::extractOpaqueCodeFeeds(
+                '<?php' . "\n" . "\$raw = FrameEncoder::error(0, 'invalid_frame_type', 'x');\n",
+                'error',
+                [2],
+                $gates,
+            ),
+            'a code-shaped literal must not appear in the opaque census',
+        );
+
+        // Control B: PSR-3 logger call whose context array can never land on a
+        // typed-string code parameter under strict_types — excluded by design.
+        self::assertCount(
+            0,
+            self::extractOpaqueCodeFeeds(
+                '<?php' . "\n" . "\$logger->error('boom', ['error' => \$e->getMessage()]);\n",
+                'error',
+                [2],
+                $gates,
+            ),
+            'an array-literal context argument must not be census material',
+        );
+
+        // Control C: trailing-comma single-arg call — the post-comma slot is
+        // empty and must not be mistaken for an opaque feed.
+        self::assertCount(
+            0,
+            self::extractOpaqueCodeFeeds(
+                "<?php\n\$logger->error(\n    'boom',\n);\n",
+                'error',
+                [2],
+                $gates,
+            ),
+            'a trailing-comma empty slot must not be counted as an opaque feed',
+        );
+
+        // Control D: the definition itself must not register as a call site.
+        self::assertCount(
+            0,
+            self::extractOpaqueCodeFeeds(
+                '<?php' . "\n"
+                . "class R {\n"
+                . "    public function error(int \$status, string \$code, string \$message): Response {}\n"
+                . "}\n",
+                'error',
+                [2],
+                $gates,
+            ),
+            'an error() definition must not be mistaken for a call site',
+        );
+    }
+
+    /**
      * Red-green self-proof for the sweep: both HISTORICAL violations — the
      * d483f29 `badRequest('invalid_leaf_hub_id')` and the fad2f2a-era
      * `FrameEncoder::error(0, 'invalid_frame_type', …)` — are re-planted as
@@ -638,14 +878,7 @@ final class ErrorCodesContractTest extends TestCase
                 if ($arrow !== null && is_array($tokens[$arrow]) && $tokens[$arrow][0] === T_DOUBLE_ARROW) {
                     $value = self::nextSignificant($tokens, $arrow);
                     if ($value !== null && is_array($tokens[$value]) && $tokens[$value][0] === T_VARIABLE) {
-                        $enclosing = '{top-level}';
-                        for ($k = count($functions) - 1; $k >= 0; $k--) {
-                            if ($functions[$k]['name'] !== null) {
-                                $enclosing = (string) $functions[$k]['name'];
-                                break;
-                            }
-                        }
-                        $sites[] = $enclosing;
+                        $sites[] = self::enclosingNamedMethod($functions);
                     }
                 }
                 continue;
@@ -694,30 +927,8 @@ final class ErrorCodesContractTest extends TestCase
                 continue;
             }
 
-            $prev = self::prevSignificant($tokens, $i);
-            if ($prev === null) {
-                continue;
-            }
-            $prevToken = $tokens[$prev];
-            $isInstance = is_array($prevToken)
-                && in_array($prevToken[0], [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR], true);
-            $isStatic = is_array($prevToken) && $prevToken[0] === T_DOUBLE_COLON;
-
-            if ($isStatic && $staticReceivers !== null) {
-                $receiver = self::prevSignificant($tokens, $prev);
-                if (
-                    $receiver === null || !is_array($tokens[$receiver])
-                    || $tokens[$receiver][0] !== T_STRING
-                    || !in_array($tokens[$receiver][1], $staticReceivers, true)
-                ) {
-                    continue;
-                }
-            } elseif (!$isInstance && !$isStatic) {
-                continue;
-            }
-
-            $open = self::nextSignificant($tokens, $i);
-            if ($open === null || $tokens[$open] !== '(') {
+            $open = self::sweptCallSiteOpen($tokens, $i, $staticReceivers);
+            if ($open === null) {
                 continue;
             }
 
@@ -732,6 +943,51 @@ final class ErrorCodesContractTest extends TestCase
     }
 
     /**
+     * The call-site gate shared by the literal sweep and the opaque-feed
+     * census so the two can never drift apart: given the index of a T_STRING
+     * whose text equals a swept helper name, return the index of the call's
+     * '(' — or null when the site is not eligible. Preceded by `->`/`?->` the
+     * call is always eligible; preceded by `::` it needs a whitelisted T_STRING
+     * receiver when `$staticReceivers` is given, so an unrelated helper's
+     * same-position human text cannot impersonate a wire code; definitions
+     * (T_FUNCTION-preceded) and bare function calls fail the gate.
+     *
+     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
+     * @param list<string>|null                             $staticReceivers
+     */
+    private static function sweptCallSiteOpen(array $tokens, int $i, ?array $staticReceivers): ?int
+    {
+        $prev = self::prevSignificant($tokens, $i);
+        if ($prev === null) {
+            return null;
+        }
+        $prevToken = $tokens[$prev];
+        $isInstance = is_array($prevToken)
+            && in_array($prevToken[0], [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR], true);
+        $isStatic = is_array($prevToken) && $prevToken[0] === T_DOUBLE_COLON;
+
+        if ($isStatic && $staticReceivers !== null) {
+            $receiver = self::prevSignificant($tokens, $prev);
+            if (
+                $receiver === null || !is_array($tokens[$receiver])
+                || $tokens[$receiver][0] !== T_STRING
+                || !in_array($tokens[$receiver][1], $staticReceivers, true)
+            ) {
+                return null;
+            }
+        } elseif (!$isInstance && !$isStatic) {
+            return null;
+        }
+
+        $open = self::nextSignificant($tokens, $i);
+        if ($open === null || $tokens[$open] !== '(') {
+            return null;
+        }
+
+        return $open;
+    }
+
+    /**
      * Collect single-T_CONSTANT_ENCAPSED_STRING arguments at the requested
      * positions of the call whose '(' sits at $open.
      *
@@ -741,6 +997,30 @@ final class ErrorCodesContractTest extends TestCase
      * @return array<int, array{line: int, value: string}> position => literal
      */
     private static function callSiteLiteralArgs(array $tokens, int $open, array $positions): array
+    {
+        $found = [];
+        foreach (self::collectCallSiteArgs($tokens, $open, $positions) as $argIndex => $argTokens) {
+            $literal = self::soleStringLiteral($argTokens);
+            if ($literal !== null) {
+                $found[$argIndex] = $literal;
+            }
+        }
+        return $found;
+    }
+
+    /**
+     * Slice the raw token lists of the requested 1-based argument positions of
+     * the call whose '(' sits at $open. Depth-tracked: commas at the call's
+     * own depth split arguments; nested parens/brackets/braces — including
+     * string interpolation — travel inside the argument that contains them.
+     * Empty slots (trailing commas) are never emitted.
+     *
+     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
+     * @param list<int>                                     $positions
+     *
+     * @return array<int, list<array{0: int, 1: string, 2: int}|string>> position => raw arg tokens
+     */
+    private static function collectCallSiteArgs(array $tokens, int $open, array $positions): array
     {
         $found = [];
         $depth = 0;
@@ -763,19 +1043,13 @@ final class ErrorCodesContractTest extends TestCase
                 $depth--;
                 if ($depth === 0) {
                     if (in_array($argIndex, $positions, true) && $argTokens !== []) {
-                        $literal = self::soleStringLiteral($argTokens);
-                        if ($literal !== null) {
-                            $found[$argIndex] = $literal;
-                        }
+                        $found[$argIndex] = $argTokens;
                     }
                     break;
                 }
             } elseif ($text === ',' && $depth === 1) {
                 if (in_array($argIndex, $positions, true) && $argTokens !== []) {
-                    $literal = self::soleStringLiteral($argTokens);
-                    if ($literal !== null) {
-                        $found[$argIndex] = $literal;
-                    }
+                    $found[$argIndex] = $argTokens;
                 }
                 $argIndex++;
                 $argTokens = [];
@@ -788,6 +1062,164 @@ final class ErrorCodesContractTest extends TestCase
         }
 
         return $found;
+    }
+
+    /**
+     * Walk the same function/brace/paren stack as
+     * {@see self::extractCodeRidingSites()} and the same call-site gate as
+     * {@see self::extractCallSiteCodeLiterals()}, returning every gated call
+     * to $call whose argument at a requested position is opaque
+     * ({@see self::isOpaqueCodeArg()}), attributed to its enclosing NAMED
+     * method (closures inherit; interface signatures ending at ';' without
+     * ever opening a body are pruned so later real bodies attribute right).
+     *
+     * @param list<int>         $positions
+     * @param list<string>|null $staticReceivers
+     *
+     * @return list<array{method: string, position: int, line: int}>
+     */
+    private static function extractOpaqueCodeFeeds(
+        string $php,
+        string $call,
+        array $positions,
+        ?array $staticReceivers
+    ): array {
+        $tokens = token_get_all($php);
+        $feeds = [];
+        /** @var list<array{name: string|null, depth: int|null}> $functions */
+        $functions = [];
+        $brace = 0;
+        $paren = 0;
+
+        for ($i = 0, $n = count($tokens); $i < $n; $i++) {
+            $token = $tokens[$i];
+
+            if (is_array($token) && $token[0] === T_FUNCTION) {
+                $functions[] = ['name' => self::functionNameAfter($tokens, $i), 'depth' => null];
+                continue;
+            }
+
+            // Call-site probe. The lookahead is read-only; the main stack
+            // tracking below still walks through the argument tokens normally,
+            // so nested bodies and parens keep the function stack honest.
+            if (is_array($token) && $token[0] === T_STRING && $token[1] === $call) {
+                $open = self::sweptCallSiteOpen($tokens, $i, $staticReceivers);
+                if ($open !== null) {
+                    foreach (self::collectCallSiteArgs($tokens, $open, $positions) as $position => $argTokens) {
+                        if (self::isOpaqueCodeArg($argTokens)) {
+                            $feeds[] = [
+                                'method' => self::enclosingNamedMethod($functions),
+                                'position' => $position,
+                                'line' => $token[2],
+                            ];
+                        }
+                    }
+                }
+            }
+
+            $isOpenBrace = $token === '{'
+                || (is_array($token) && in_array($token[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true));
+            if ($isOpenBrace) {
+                $brace++;
+                if ($paren === 0) {
+                    for ($k = count($functions) - 1; $k >= 0; $k--) {
+                        if ($functions[$k]['depth'] === null) {
+                            $functions[$k]['depth'] = $brace;
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if ($token === '}') {
+                for ($k = count($functions) - 1; $k >= 0; $k--) {
+                    if ($functions[$k]['depth'] === $brace) {
+                        array_pop($functions);
+                    }
+                }
+                $brace--;
+                continue;
+            }
+
+            if ($token === '(' || $token === '[') {
+                $paren += $token === '(' ? 1 : 0;
+                continue;
+            }
+            if ($token === ')') {
+                $paren = max(0, $paren - 1);
+                continue;
+            }
+
+            // Interface/abstract signatures end at ';' without ever opening a
+            // body — drop pending entries so later real bodies attribute right.
+            if ($token === ';' && $paren === 0) {
+                for ($k = count($functions) - 1; $k >= 0; $k--) {
+                    if ($functions[$k]['depth'] === null) {
+                        array_splice($functions, $k, 1);
+                    }
+                }
+            }
+        }
+
+        return $feeds;
+    }
+
+    /**
+     * Is the argument at a code position OPAQUE to the literal sweep? NOT
+     * opaque — by construction, never census material:
+     *  - a sole code-shaped string literal (registry territory, policed by
+     *    the literal sweep);
+     *  - an argument opening with an array literal (`[…]` or `array(…)`) —
+     *    impossible on a typed-string code parameter under strict_types;
+     *  - no significant tokens at all (trailing-comma artifact).
+     * Everything else — variables, map lookups, calls, constant fetches via
+     * `::`, concatenation, interpolation, integers, and human-text literals
+     * too spaced or long to be codes — is opaque census material.
+     *
+     * @param list<array{0: int, 1: string, 2: int}|string> $argTokens
+     */
+    private static function isOpaqueCodeArg(array $argTokens): bool
+    {
+        $significant = [];
+        foreach ($argTokens as $token) {
+            if (is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+            $significant[] = $token;
+        }
+
+        if ($significant === []) {
+            return false;
+        }
+
+        $first = $significant[0];
+        if ($first === '[' || (is_array($first) && $first[0] === T_ARRAY)) {
+            return false;
+        }
+
+        $literal = self::soleStringLiteral($argTokens);
+        if ($literal !== null && preg_match('/^[A-Za-z0-9][A-Za-z0-9_.\-]*$/', $literal['value']) === 1) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * The innermost NAMED function on the stack (closures inherit their
+     * enclosing named method), or '{top-level}' outside any function.
+     *
+     * @param list<array{name: string|null, depth: int|null}> $functions
+     */
+    private static function enclosingNamedMethod(array $functions): string
+    {
+        for ($k = count($functions) - 1; $k >= 0; $k--) {
+            if ($functions[$k]['name'] !== null) {
+                return (string) $functions[$k]['name'];
+            }
+        }
+        return '{top-level}';
     }
 
     /**
