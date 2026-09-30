@@ -6,6 +6,51 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — wire law: the SECOND unregistered `code` emit (`Relay/ClientConnection`) re-anchored, and the blind class made EXECUTABLE — 2026-09-30
+
+- **Correction to the entry below: "this was the only violation" was
+  overstated.** An independent re-review of f30e8a7 found a second
+  unregistered literal on the wire `code` channel the manual sweep had
+  missed: `Relay/ClientConnection.php` (fad2f2a-era L-3 work) rode
+  `FrameEncoder::error(0, 'invalid_frame_type', …)` — a variable-riding
+  helper call site, exactly the class the three-shape literal scanner cannot
+  see. `invalid_frame_type` was never registered in `@phlix/contracts`.
+- **Fix follows the same precedent:** the relay ERROR frame now emits the
+  registered generic `invalid_request` (contracts `common` family) with the
+  full condition kept in the frame's human `message` field. Rejected by
+  meaning: `relay.encode_error` is registered for the hub's own frame-encode
+  failures (`RelayProxyManager.php:278`) — this site's encoder succeeded —
+  and `hub.protocol_unsupported` is registered for `protocol`-header
+  negotiation refusals, not per-frame client violations. Wire-shape
+  consequence: `code === 'invalid_frame_type'` no longer appears; no
+  consumer (web-ui/openapi/docs/clients) referenced it.
+  `ClientConnectionTest` pin flipped honestly to the new code + message
+  assertions, mutation property retained (dropping the `code` key still
+  fails the `?? null`-pinned assert).
+- **The durable fix — the blind class is now policed by tests, not prose.**
+  `ErrorCodesContractTest` gained two executable sweeps over `src/`:
+  (a) `testEveryCodeRidingVariableSiteIsEnumerated()` censuses every
+  `'code' => $var` / `'error_code' => $var` token-level occurrence and
+  requires two-way-set registration as `swept:…` or
+  `excluded:<written reason>` (15 sites today: 7 swept helper params, 8
+  reasoned exclusions — OAuth/claim codes, JSON-RPC integers, log/audit
+  context, `REJECTION_CODE_MAP`); (b)
+  `testCodeRidingHelperCallSitesEmitRegisteredCodes()` token-walks all call
+  sites of the swept helpers (`Response->error`, `Response::errorBody`,
+  `FrameEncoder::error`, both `badRequest`s, `unauthorized`, `challenge`,
+  `errorFrame`) and registry-checks the literal at each code-carrying
+  argument position — 103 literals / 44 distinct today, zero violations,
+  floor-guarded against walker decay. `testTheHelperSweepCatchesBothHistoricalViolations()`
+  re-plants BOTH historical literals (`invalid_leaf_hub_id`,
+  `invalid_frame_type`) in-memory and proves the sweep catches each; an
+  out-of-band re-injection into a `/tmp` copy of `src/` was likewise observed
+  to turn the live sweep red. Manual completeness claims ("sole violation")
+  are hereby superseded by these tests.
+- Gates: phpunit `Federation|ErrorCodesContract|ClientConnection|FrameEncoder`
+  314/1706 OK + full Unit,Integration canonical parallel run; phpstan level 9
+  CI-faithful 0 errors; psalm BOTH corpora clean (cisim:8.3, pdo_mysql+swoole);
+  S299 phpcs corpus clean.
+
 ### Fixed — wire law: the one unregistered `code` emit in `FederationController` re-anchored to the registered generic — 2026-09-30
 
 - **`badRequest('invalid_leaf_hub_id')` (introduced d483f29) put an unregistered

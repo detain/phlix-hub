@@ -213,7 +213,22 @@ final class ClientConnection
         // the payload carries the wire-standard {code,message} shape — the old
         // ad-hoc {"error": msg} shape desynced any client parsing error frames
         // uniformly across the relay protocol.
-        $this->sendRaw(FrameEncoder::error(0, 'invalid_frame_type', 'Unexpected frame type: ' . $frame->type->label()));
+        //
+        // Wire law: `code` must be a REGISTERED @phlix/contracts code; the
+        // human condition rides `message`. Chosen: the registered generic
+        // `invalid_request` (contracts src/errors.ts common.INVALID_REQUEST —
+        // "srv QuickConnectController.php:258,301 · hub InviteLinkController.php:110"),
+        // same re-anchoring family as FederationController::badRequest at
+        // f30e8a7. Rejected siblings by meaning: `relay.encode_error` is
+        // registered for the hub's OWN frame-encode failures (contracts entry:
+        // "hub RelayProxyManager.php:278") — this site's encoder succeeded, the
+        // CLIENT's frame was unacceptable; `hub.protocol_unsupported` is
+        // registered for `protocol`-header negotiation refusals (contracts
+        // entry: "400 when the `protocol` header is absent or not `phlix-hub`")
+        // — this connection already negotiated and the failure is per-request,
+        // not per-protocol. The old fad2f2a-era literal 'invalid_frame_type'
+        // was never registered; the full condition remains in `message`.
+        $this->sendRaw(FrameEncoder::error(0, 'invalid_request', 'Unexpected frame type: ' . $frame->type->label()));
     }
 
     /**

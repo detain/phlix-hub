@@ -217,12 +217,19 @@ final class ClientConnectionTest extends TestCase
 
         // L-3b: the payload must use the canonical FrameEncoder::error shape
         // {code, message} — NOT the old ad-hoc {error} literal.
+        // Wire law: the code is the REGISTERED generic `invalid_request`
+        // (@phlix/contracts common family) — the fad2f2a-era unregistered
+        // literal 'invalid_frame_type' rode `code` until the rework sweep.
+        // assertSame-on-`?? null` keeps the mutation property: dropping the
+        // `code` key entirely still goes red.
         /** @var array<string, mixed> $payload */
         $payload = json_decode($decoded->payload, true, 4, JSON_THROW_ON_ERROR);
         $this->assertIsArray($payload);
-        $this->assertSame('invalid_frame_type', $payload['code'] ?? null);
+        $this->assertSame('invalid_request', $payload['code'] ?? null);
         $this->assertArrayNotHasKey('error', $payload);
         $this->assertIsString($payload['message'] ?? null);
+        $this->assertStringContainsString('Unexpected frame type', (string) ($payload['message'] ?? ''));
+        $this->assertStringContainsString('ERROR', (string) ($payload['message'] ?? ''));
     }
 
     public function testOnMessageForwardsEveryFrameOfABatchedMessage(): void
