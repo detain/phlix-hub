@@ -46,8 +46,8 @@ use const JSON_UNESCAPED_SLASHES;
  *  - `Fixtures/contracts-server-route-manifest.json` — the vendored
  *    `@phlix/contracts` export (`dist/server-route-manifest.json`), the same
  *    bytes mobile (#52) and roku (#49) vendored: the canonical UNION of the
- *    Application (373) and WebPortal (48) wire-path guard sets minus the 11
- *    shared tuples = 410 tuples.
+ *    Application (375) and WebPortal (48) wire-path guard sets minus the 11
+ *    shared tuples = 412 tuples.
  *
  * Before this gate the two copies could drift INDEPENDENTLY: the hub could
  * refresh its own snapshot while the vendored contracts copy aged (or the
@@ -60,7 +60,7 @@ use const JSON_UNESCAPED_SLASHES;
  * pinned (S332/S350). The export is VENDORED, not imported: contracts'
  * `exports` map blocks subpath JSON access, and vendoring byte-identical
      * snapshots is the sanctioned cross-repo pattern (md5 at commit time:
-     * 06ce7ec95bc064cc0f13b94389af9a82).
+     * 915796837d38a77733c169996d97640c).
  *
  * @package Phlix\Hub\Tests\Unit\Http\Controllers
  */
@@ -75,7 +75,7 @@ final class S280ContractsRouteManifestParityTest extends TestCase
      * asserted absent from both vendored files (it identifies the GATE, not
      * the data). Bump the sha/count suffix in lockstep with the pins below.
      */
-    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@410-730e55b7';
+    private const S280_SURVIVAL_TOKEN = 'S280hubgate-manifest-parity@412-91579683';
 
     /**
      * cs#47 lane ritual token: code-resident only, space-free, asserted
@@ -85,10 +85,10 @@ final class S280ContractsRouteManifestParityTest extends TestCase
 
     /**
      * The tuple count BOTH derivations must carry — the canonical contracts
-     * total (373 Application + 48 WebPortal − 11 shared), pinned positively
+     * total (375 Application + 48 WebPortal − 11 shared), pinned positively
      * so an empty or gutted scan can never pass.
      */
-    private const S280_EXPECTED_ROUTE_COUNT = 410;
+    private const S280_EXPECTED_ROUTE_COUNT = 412;
 
     /**
      * The vendored S332 snapshot and the vendored contracts export must be
@@ -148,10 +148,10 @@ final class S280ContractsRouteManifestParityTest extends TestCase
     /**
      * Non-vacuity, stated positively from BOTH sides: each file's own recorded
      * count must equal the number of entries it carries AND the canonical
-     * 400 — so neither copy can pass (b) by being empty, gutted, or silently
+     * 412 — so neither copy can pass (b) by being empty, gutted, or silently
      * re-cut to a different total.
      */
-    public function testS280BothDerivationsAreNonVacuousAndCarryFourHundredTuples(): void
+    public function testS280BothDerivationsAreNonVacuousAndCarryFourHundredTwelveTuples(): void
     {
         $fixture = self::hubFixture();
         $export = self::contractsExport();
@@ -194,7 +194,7 @@ final class S280ContractsRouteManifestParityTest extends TestCase
      * after `/api/v1/` (`api/v1/<module>`), and for routes outside that shape
      * the bare first path segment (`hls`, `media`, `trickplay`, …). The group
      * map is compared exactly (ksort + assertSame), and both sums must hit the
-     * 400 denominator — the breakdown is printed so a future failure names
+     * 412 denominator — the breakdown is printed so a future failure names
      * the module that diverged.
      */
     public function testS280PerModuleGroupCountsMatchAcrossBothDerivations(): void
@@ -206,12 +206,12 @@ final class S280ContractsRouteManifestParityTest extends TestCase
         $this->assertSame(
             self::S280_EXPECTED_ROUTE_COUNT,
             array_sum($fixtureGroups),
-            'the fixture per-module groups must sum to the full 400-tuple denominator',
+            'the fixture per-module groups must sum to the full 412-tuple denominator',
         );
         $this->assertSame(
             self::S280_EXPECTED_ROUTE_COUNT,
             array_sum($exportGroups),
-            'the contracts export per-module groups must sum to the full 400-tuple denominator',
+            'the contracts export per-module groups must sum to the full 412-tuple denominator',
         );
         $this->assertSame(
             $fixtureGroups,

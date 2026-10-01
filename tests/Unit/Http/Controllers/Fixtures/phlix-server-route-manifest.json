@@ -1,9 +1,9 @@
 {
     "generator": "tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php",
     "source_repo": "detain/phlix-server",
-    "source_sha": "730e55b7d3ad44a155f6b46374a9f6c463792840",
-    "route_count": 410,
-    "sha256": "a8d051475844fb8b9e51581b970b32264f78595c4bbb48e9ef886e1baa8db9b4",
+    "source_sha": "758f91496c068551b310f1078093335f79c20e04",
+    "route_count": 412,
+    "sha256": "1476b3c5d6d471799b133bfec988f4ca1c4bb3b5c32e20df0a09bc11c2f2cc9f",
     "routes": [
         {
             "method": "DELETE",
@@ -516,6 +516,10 @@
         {
             "method": "GET",
             "path": "/api/v1/books/{id}/download"
+        },
+        {
+            "method": "GET",
+            "path": "/api/v1/books/{id}/progress"
         },
         {
             "method": "GET",
@@ -1304,6 +1308,10 @@
         {
             "method": "POST",
             "path": "/api/v1/auth/webauthn/register/verify"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/books/{id}/progress"
         },
         {
             "method": "POST",

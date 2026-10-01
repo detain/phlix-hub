@@ -6,6 +6,34 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — route snapshot currency-sync to server `758f9149` + contracts export re-vendor (410 → 412 tuples) — 2026-10-01
+
+- **The repin's CI run turned the S492 tripwire red for a FOREIGN reason**: the vendored S332
+  snapshot still described server `730e55b7` (410 tuples) while live server master carries the M-6
+  book-progress pair (`GET`/`POST /api/v1/books/{id}/progress`, landed at `da70cfa8`/`b3aece4e`
+  era, content-regenerated contracts-side by e2f2d53) — 412 tuples. Content drift is exactly what
+  the gate reddens on; this commit executes the sanctioned fix in one lockstep:
+  `dump-phlix-server-route-manifest.php` re-run against server `758f9149`, `S332_EXPECTED_SERVER_SOURCE_SHA`
+  bumped to the same sha, and the vendored contracts export
+  (`Fixtures/contracts-server-route-manifest.json`) re-vendored byte-identical from
+  `@phlix/contracts` e2f2d53 `dist/server-route-manifest.json` (md5 `91579683…`).
+- **Why the snapshot pins `758f9149` rather than live HEAD `fa3a15ff`:** S492 (owner ruling
+  batch39 F2 option (b)) judges by CONTENT digest, not the provenance string — `fa3a15ff` is a
+  provenance-only merge (web-ui repin + docs; the F-08 controller change touches no registration),
+  and the gate itself instructs that provenance-only server merges must not force sha churn. Pinning
+  the last CONTENT-changing server commit is what keeps the S280 both-copies-same-sha parity law
+  satisfiable: the contracts export is itself generated at `758f9149`, so hub-snapshot sha == export
+  sha is the only steady state that is green on BOTH the S492 currency job (content-equal, advisory
+  lag warning) and the S280 twin test. The generator's `--check` byte-compare against a moving
+  server HEAD embeds `source_sha` in the compared bytes and is therefore a same-instant premerge
+  ritual, not a CI job (per the script's own header — CI carries no server checkout).
+- **Gate constants moved honestly:** `S280_EXPECTED_ROUTE_COUNT` 410 → 412 (breakdown prose now
+  375 Application + 48 WebPortal − 11 shared), the survival token re-suffixed
+  `@412-91579683`, and the vendored-bytes md5 pin refreshed to `915796837d38a77733c169996d97640c`.
+- **Local gates:** `ServerProxy|RouteManifest|S332|S107|S280|S350` 1199/5131 OK; `SnapshotCurrency`
+  wiring 13 OK; `check-route-snapshot-currency.php` exits 0 against live server master with the
+  designed non-blocking lag warning; S299 phpcs corpus 521 files 0/0; phpstan level 9 no errors.
+
 ### Changed — web-ui repin: `@phlix/ui` v0.99.7 → v0.99.8 tag tarball — served SPA rebuilt and shipped — 2026-10-01
 
 - **The `@phlix/ui` pin advances to the `v0.99.8` release-tag tarball** (tag object `35f727a6…`,
