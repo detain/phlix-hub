@@ -6,6 +6,57 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — web-ui repin: `@phlix/ui` v0.99.7 → v0.99.8 tag tarball — served SPA rebuilt and shipped — 2026-10-01
+
+- **The `@phlix/ui` pin advances to the `v0.99.8` release-tag tarball** (tag object `35f727a6…`,
+  peeling to commit `a580410f…`). Unlike the v0.99.7 pin — where the whole tag delta never reached
+  the bundle — this release lands real wire changes in the served `/app/*` SPA: the SyncPlay `:8097`
+  handshake flips to the two-entry `['bearer', <jwt>]` subprotocol carrier with credential-free URLs
+  (retiring the last `?token=` WS-URL producers in the estate), invite links become one-time secrets
+  mirroring hub `779fc7f` (`CreateInviteLinkResponse.token`, listed rows carry `url:null`), the
+  L-4 `paths?` redaction guards ship, and `@phlix/ui/player.css` joins the exports map.
+- **Blob identity is the estate-wide tag proof, measured on the installed tree:**
+  `node_modules/@phlix/ui/dist/phlix-ui.js` = `sha256 63fe4ab3696d3e46e89cedae9147fccb07da86df91e7047ba03b220c92c8ef63`,
+  identical to the Windows (`5b457f4`), Tizen (`ac4c7c0`) and server (`fa3a15ff`) lanes' v0.99.8
+  installs, and to `git cat-file blob v0.99.8:dist/phlix-ui.js` in phlix-ui. Proofs on the installed
+  package AND on the shipped bundle: exactly one WS construction `new WebSocket(t, ["bearer", e])`,
+  ZERO `[?&]token=` occurrences in any emitted `.js`/`.cjs` (both in the ui `dist/` tree and in the
+  hub bundle; remaining `token=` strings live only in `.map` `sourcesContent` docblock prose),
+  `paths?.` read guards present in both the `LibraryScanPage` and `LibrariesPage` chunks.
+- **Lock churn is ui-node truth plus npm's peer annotation, zero version churn.** The dependency
+  spec, the `node_modules/@phlix/ui` `version`/`resolved`/`integrity` triple, and the removal of
+  `pinia`/`vue`/`vue-router` from the ui node's `dependencies` (v0.99.8 declares them peers-only)
+  are the substantive edits; npm additionally auto-marks the now-peer-only trees
+  (`vue`, `pinia`, `vue-router`, `yaml`, `acorn`, the unplugin toolchain…) with `"peer": true`
+  annotations — no node is added, removed, or re-versioned (verified by installed set: vue `3.5.40`,
+  vue-router `5.2.0`, pinia `3.0.4` unchanged). The hoisted root trio stays exactly where the
+  devDependency pin requires; the `@phlix/contracts` resolved node stays `0.4.6` untouched (the
+  pre-#317 divergence, still a future lane's call). Same lock shape the windows/tizen lanes shipped.
+- **The bundle really moved this time: 210 tracked files before and after — 130 new chunk files,
+  131 retired, `manifest.json` + `index.html` updated in place.** The S253 gate was honored from
+  disk, not assumed: consecutive `npm run build` runs are byte-identical (confirmed across four
+  builds — double/triple/quadruple hash comparison). Toolchain note: local reproduction ran node
+  `24.21.0`/npm `12.0.2` while the S253 job pins node `24.20.0` (npm 11) — the ui v0.99.8 dist
+  regen (ui `25173764`) already shipped deterministically through a same-shape CI on the newer
+  toolchain, and the SPA Bundle gate at HEAD is the arbiter; a toolchain-divergence red would be
+  closed by rebuilding under the exact pinned node, not by editing the gate.
+- **Gates:** `web-ui/tests` 31/31 green on the new pin (registry-parity drift guard included — the
+  locale SET is unchanged; catalog content 412→441 flows through the pin automatically, which is the
+  design of this seam). PHPUnit spot filter `Settings|Health|Response`: 201 tests, 0 failures
+  (2 pre-existing skips). Zero PHP files in the diff (`src/`, `tests/`, `scripts/`, `openapi.yaml`
+  untouched).
+- **Docs sweep: found-none requiring change.** `docs/websockets.md` frames `?token=` only as the
+  server-side REMOVED carrier and names no client producer; `hub_deploy.md` cites the tarball URL in
+  `vX.Y.Z` placeholder form. One stale pin literal was deliberately NOT touched here: the
+  `v0.99.5` prose in `web-ui/src/i18n/index.ts` (already wrong under the v0.99.7 pin) was edited
+  then reverted on this lane because that comment reaches the served artifacts only through the
+  sourcemap's embedded `sourcesContent` — rotating a shipped map for a prose literal is bundle churn
+  with no law behind it; the doc-truth fix rides a future source lane that moves bytes anyway.
+- **S181 pin-skew posture.** This bump lands the hub row at the live newest `@phlix/ui` tag
+  (OK, matching windows/tizen/server). Server stays the one pin-form (tarball-URL) consumer to
+  cascade; contracts `#v0.5.2` / syncplay `#v0.1.5` transitive specs inside the ui node are
+  unchanged, so no downstream fixture cascades open from this commit.
+
 ### Fixed — sweep follow-up: the blind class gets its THIRD executable census (opaque call-site feeds) — 2026-09-30
 
 - Reviewer precision notes on the 90e496f sweep tests, closed. The residual
