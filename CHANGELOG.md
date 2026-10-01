@@ -32,7 +32,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   vue-router `5.2.0`, pinia `3.0.4` unchanged). The hoisted root trio stays exactly where the
   devDependency pin requires; the `@phlix/contracts` resolved node stays `0.4.6` untouched (the
   pre-#317 divergence, still a future lane's call). Same lock shape the windows/tizen lanes shipped.
-- **The bundle really moved this time: 210 tracked files before and after — 130 new chunk files,
+- **The bundle really moved this time: 210 tracked files before and after — 131 new files,
   131 retired, `manifest.json` + `index.html` updated in place.** The S253 gate was honored from
   disk, not assumed: consecutive `npm run build` runs are byte-identical (confirmed across four
   builds — double/triple/quadruple hash comparison). Toolchain note: local reproduction ran node
