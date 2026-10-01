@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — wire law: the three `leaf_hub_id` sites flip to the dedicated `leaf_hub_id_already_bound` code — 2026-10-01
+
+- **Deferred-mint flip landed with the v0.5.3 re-vendor.** `FederationController`'s whole
+  `leaf_hub_id` family — the two malformed-UUID 400 parse sites (`createPeer` :274,
+  `bindPeerLeafHubId` :356, both `badRequest('invalid_request', 'leaf_hub_id must be a UUID')`)
+  and the 409 immutable-rebind conflict (:378, `'code' => 'invalid_request'`) — now ride the
+  dedicated registered code `leaf_hub_id_already_bound`, exactly as the contracts registry's
+  RESERVED docblock prescribed ("the hub switches these sites … when the next contracts release
+  pins it"). All three swaps are same-line: every `verify:cites` anchor into this file (274/356/378
+  plus the 347–956 cite cluster) holds byte-for-byte, file length unchanged at 1052 lines.
+- **Payload shape is otherwise identical:** the free-form `reason` (`'leaf_hub_id must be a UUID'`
+  on the 400s, the already-bound sentence on the 409) is unchanged; `leaf_hub_id_already_bound` is
+  not in `badRequest()`'s message map, so `message` still falls through to the reason — byte-stable
+  wire for every field except `code`. Stale "no dedicated leaf_hub_id code is minted yet" prose
+  replaced at all four sites (both 400 comments, the 409 comment, the `badRequest()` docblock).
+- **Tests rotated honestly, spec untouched:** the three `assertSame('invalid_request', …)` payload
+  pins in `FederationControllerTest` (400×2, 409×1) now assert the dedicated code with re-worded
+  wire-law comments; the flip's own wire-law proof is that `ErrorCodesContractTest`'s call-site
+  sweep passes the new literal against the freshly-vendored 204-code fixture (distinct-literal
+  census 78→79: `invalid_request` still lives at its other registered homes — ServerClaim,
+  InviteLink, relay ERROR frame). `openapi.yaml` enumerates no code literals on these endpoints
+  (prose-only 400/409 descriptions), so the spec needed no error-ref change.
+  `Federation|ErrorCodes|RegistrarAuth` filter green at 389 tests.
+
 ### Changed — Contracts error-code fixture re-vendored to `@phlix/contracts` v0.5.3 (202→204 codes) — 2026-10-01
 
 - **Byte-copy re-vendor from the tag tarball.** `tests/fixtures/contracts/error-codes.json` is now

@@ -148,7 +148,7 @@ final class ErrorCodesContractTest extends TestCase
      * Minimum distinct literals the live src/ scan must see. Guards the wire
      * law against path/iterator rot: a scanner that silently finds nothing
      * would otherwise pass by comparing [] to []. The scan currently sees
-     * 78 distinct registered literals.
+     * 79 distinct registered literals.
      */
     private const int LIVE_SCAN_FLOOR = 40;
 

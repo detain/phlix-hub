@@ -746,9 +746,9 @@ final class FederationControllerTest extends TestCase
 
         self::assertSame(400, $response->statusCode);
         $body = self::arrayNode(json_decode($response->body, true));
-        // Wire-law shape: registered generic on `code`, the specific
+        // Wire-law shape: registered dedicated code on `code`, the specific
         // condition rides `reason` — never an unregistered code literal.
-        self::assertSame('invalid_request', $body['code']);
+        self::assertSame('leaf_hub_id_already_bound', $body['code']);
         self::assertSame('leaf_hub_id must be a UUID', $body['reason']);
     }
 
@@ -813,9 +813,9 @@ final class FederationControllerTest extends TestCase
 
         self::assertSame(409, $response->statusCode);
         $body = self::arrayNode(json_decode($response->body, true));
-        // Registered conflict generic per the contracts wire law (the
-        // specific condition rides in error/reason, not a new code literal).
-        self::assertSame('invalid_request', $body['code']);
+        // Dedicated leaf-hub-id conflict code per the contracts wire law
+        // (minted v0.5.3; the specific condition still rides reason).
+        self::assertSame('leaf_hub_id_already_bound', $body['code']);
         self::assertStringContainsString('already bound', self::stringNode($body['reason']));
     }
 
@@ -844,9 +844,9 @@ final class FederationControllerTest extends TestCase
 
         self::assertSame(400, $response->statusCode);
         $body = self::arrayNode(json_decode($response->body, true));
-        // Wire-law shape: registered generic on `code`, the specific
+        // Wire-law shape: registered dedicated code on `code`, the specific
         // condition rides `reason` — never an unregistered code literal.
-        self::assertSame('invalid_request', $body['code']);
+        self::assertSame('leaf_hub_id_already_bound', $body['code']);
         self::assertSame('leaf_hub_id must be a UUID', $body['reason']);
     }
 

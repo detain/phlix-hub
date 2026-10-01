@@ -268,10 +268,10 @@ final class FederationController
         if ($leafHubIdRaw === null || $leafHubIdRaw === '') {
             $leafHubIdRaw = null;
         } elseif (!is_string($leafHubIdRaw) || !preg_match(self::UUID_PATTERN, $leafHubIdRaw)) {
-            // Wire-law: registered generic + free-form reason (see the 409
-            // sibling in bindPeerLeafHubId(); no dedicated leaf_hub_id code is
-            // minted in the contracts registry yet).
-            return $this->badRequest('invalid_request', 'leaf_hub_id must be a UUID');
+            // Wire-law: registered dedicated code + free-form reason (see the
+            // 409 sibling in bindPeerLeafHubId(); leaf_hub_id_already_bound
+            // minted at @phlix/contracts v0.5.3 — deferred-mint flip landed).
+            return $this->badRequest('leaf_hub_id_already_bound', 'leaf_hub_id must be a UUID');
         }
 
         if (!is_string($urlRaw) || $urlRaw === '') {
@@ -351,9 +351,9 @@ final class FederationController
         /** @var mixed $leafHubIdRaw */
         $leafHubIdRaw = $body['leaf_hub_id'] ?? null;
         if (!is_string($leafHubIdRaw) || !preg_match(self::UUID_PATTERN, $leafHubIdRaw)) {
-            // Wire-law: registered generic + free-form reason (see the 409
-            // conflict branch below).
-            return $this->badRequest('invalid_request', 'leaf_hub_id must be a UUID');
+            // Wire-law: registered dedicated code + free-form reason (see the
+            // 409 conflict branch below; flipped with the v0.5.3 re-vendor).
+            return $this->badRequest('leaf_hub_id_already_bound', 'leaf_hub_id must be a UUID');
         }
 
         $peer = $this->hubRepo->getPeerById($peerId);
@@ -369,13 +369,13 @@ final class FederationController
         $current = is_string($currentRaw) ? $currentRaw : '';
         if ($current !== '' && $current !== $leafHubIdRaw) {
             // Wire-law: 'code' literals must exist in the contracts registry;
-            // 'invalid_request' is its registered conflict generic (same
-            // precedent as InviteLinkController/LibraryShareController). The
-            // free-form 'reason' carries the specific condition for humans
-            // and MCP clients until a contracts release mints a dedicated code.
+            // leaf_hub_id_already_bound is the dedicated conflict code minted
+            // at @phlix/contracts v0.5.3 (deferred-mint flip of the earlier
+            // 'invalid_request'-generic precedent, InviteLink-style). The free-
+            // form 'reason' still carries the condition for humans and MCP.
             return (new Response())->status(409)->json([
                 'error' => 'Conflict',
-                'code' => 'invalid_request',
+                'code' => 'leaf_hub_id_already_bound',
                 'reason' => 'leaf_hub_id already bound to a different value',
                 'message' => 'This peer is already bound to a different leaf hub id',
             ]);
@@ -978,10 +978,10 @@ final class FederationController
      * ErrorCodesContractTest scanner sees only literal `'code' => '…'`
      * shapes, and this helper's payload writes `'code' => $code` through a
      * variable — so the verifiable literals are the CALL-SITE arguments,
-     * every one of which is registry-checked (the malformed-leaf_hub_id
-     * sites ride the registered generic 'invalid_request' with the specific
-     * condition in `reason`, mirroring the 409 precedent in
-     * bindPeerLeafHubId(); no dedicated leaf_hub_id code is minted yet).
+     * every one of which is registry-checked (the leaf_hub_id family — both
+     * malformed-UUID 400 sites and the 409 rebind conflict — rides the
+     * dedicated 'leaf_hub_id_already_bound' minted at @phlix/contracts v0.5.3,
+     * with the condition also carried in `reason`; f30e8a7 generic-era flipped).
      *
      * @param string $code   Registered error code.
      * @param string $reason Optional free-form condition carried on the
