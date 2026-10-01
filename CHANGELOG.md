@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — Contracts error-code fixture re-vendored to `@phlix/contracts` v0.5.3 (202→204 codes) — 2026-10-01
+
+- **Byte-copy re-vendor from the tag tarball.** `tests/fixtures/contracts/error-codes.json` is now
+  the verbatim `dist/error-codes.json` of the `@phlix/contracts` **v0.5.3** tag (fetched via
+  codeload `refs/tags/v0.5.3`; content md5 `40c1da48787f37d00a6fc9af6c64a1ac`, replacing the
+  v0.5.1-era `b919685d3816940fc76f2f67c9b9eee2`). Registry delta is pure-append: two additions,
+  zero removals, zero reorder — `leaf_hub_id_already_bound` (federation peer domain) and
+  `syncplay.queue_limit_exceeded` (syncplay domain). Census 204 codes / 37 domains, matching the
+  contracts release's own CHANGELOG census.
+- **Lockstep rotated in one commit per the vendored-fixture law:** `error-codes.PIN` `v0.5.1` →
+  `v0.5.3` and `ErrorCodesContractTest::CONTRACT_TAG` + its docblock/assertion-message era markers
+  rotated together; `CODE_FLOOR` stays 147 (it is an anti-vacuity floor, not a count pin, so the
+  growth needs no rotation). The fixture-honesty marker check and the empty wire-law whitelist are
+  untouched. `AlexaRejectionCodeMapLawTest`'s registry-era message now names v0.5.3.
+- **OpenAPI enum regenerated from the fixture:** the two members were inserted at their registry
+  declaration-order slots in `components.schemas.Error.code.enum` (`leaf_hub_id_already_bound`
+  after `missing_library_name`; `syncplay.queue_limit_exceeded` after `syncplay.group_full`) and
+  the enum's description reads `v0.5.3: 204 codes / 37 domains`. `ErrorCodesOpenApiEnumContractTest`'s
+  whole-list/ordered/exact `assertSame` is green against the new fixture (contract family 19 tests /
+  955 assertions; full `Federation|ErrorCodes|RegistrarAuth` filter 389 OK).
+- `syncplay.queue_limit_exceeded` ships as vocabulary only in this commit — its server-side emit
+  flip off `syncplay.group_limit_reached` is the server lane's deferred-mint step.
+
 ### Changed — Dependency lane: `detain/phlix-shared` pin advanced to `^0.50.0` (lock `v0.50.0`), `SUPPLEMENTAL_META` bridge retired, `nbf` gate now the shared predicate — 2026-10-01
 
 - **One-release advance to the freshly tagged upstream.** `composer.json` moves

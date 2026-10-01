@@ -111,7 +111,7 @@ final class AlexaRejectionCodeMapLawTest extends TestCase
             self::assertContains(
                 $dotted,
                 $registered,
-                'reject() emits ' . $dotted . ', which is not registered in @phlix/contracts v0.5.1',
+                'reject() emits ' . $dotted . ', which is not registered in @phlix/contracts v0.5.3',
             );
         }
     }
