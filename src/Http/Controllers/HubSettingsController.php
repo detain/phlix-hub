@@ -44,41 +44,6 @@ final class HubSettingsController
     private static ?array $schemaMeta = null;
 
     /**
-     * Hub-local render meta for allow-listed keys the vendored
-     * `hub-settings.schema.json` predates.
-     *
-     * The SPA builds its settings rows EXCLUSIVELY from {@see schemaMeta()},
-     * and the schema ships read-only inside `detain/phlix-shared`, so a fresh
-     * allow-list key would be PUT-settable yet invisible until the upstream
-     * schema catches up. Entries here merge under the schema projection and
-     * LOSE to it: when phlix-shared ships the property, its block wins
-     * verbatim and this map should drop the key (upstream PR filed as the
-     * follow-up). Projection shape is identical to {@see loadSchemaMeta()}'s
-     * output so consumers cannot tell the difference.
-     *
-     * @var array<string, array<string, mixed>>
-     */
-    private const array SUPPLEMENTAL_META = [
-        'auth.signups_disabled' => [
-            'label'      => 'Disable new signups',
-            'helpText'   => 'When enabled, POST /api/v1/auth/register (and the /signup alias) '
-                . 'answer 403 auth.signups_disabled before any hashing work. '
-                . 'Overrides HUB_SIGNUPS_ENABLED live — applies to the very next request, no restart.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'auth',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => false,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-    ];
-
-    /**
      * @param HubSettingsRepository $settings Hub settings store.
      */
     public function __construct(
@@ -114,6 +79,13 @@ final class HubSettingsController
      * admin SPA needs to render a settings row: label, help text, help links,
      * tier, group, enum constraints, min/max bounds, default value, and the
      * secret/restart flags.
+     *
+     * The vendored schema covers the whole allow-list, so the projection is
+     * the SOLE meta source. An earlier hub-local `SUPPLEMENTAL_META` bridge
+     * rendered `auth.signups_disabled` ahead of upstream; `detain/phlix-shared`
+     * v0.50.0 shipped the property in `hub-settings.schema.json`, and the
+     * bridge — key, map, and merge loop — was retired here at the pin of that
+     * tag (its docblock's stated yield condition).
      *
      * @return array<string, array<string, mixed>> Dotted setting key → meta block.
      */
@@ -184,14 +156,6 @@ final class HubSettingsController
                 'secret'     => !empty($def['secret']),
                 'restart'    => !empty($def['restart']),
             ];
-        }
-
-        // Hub-local keys the vendored schema has not shipped yet stay
-        // renderable; an upstream entry always wins (see SUPPLEMENTAL_META).
-        foreach (self::SUPPLEMENTAL_META as $key => $block) {
-            if (!array_key_exists($key, $meta)) {
-                $meta[$key] = $block;
-            }
         }
 
         return $meta;

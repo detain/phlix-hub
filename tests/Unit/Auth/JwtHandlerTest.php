@@ -134,6 +134,89 @@ final class JwtHandlerTest extends TestCase
     }
 
     /**
+     * The `nbf` gate in {@see JwtHandler::validateToken()} is the vendored
+     * shared predicate `Phlix\Shared\Auth\JwtClaims::isNotYetValid()`
+     * (detain/phlix-shared v0.50.0), called with its zero-leeway default —
+     * the hub mints no `nbf` itself, so any future-dated `nbf` is forgery or
+     * clock drift and strictness is the safe policy.
+     *
+     * These two cases pin that dependency from the hub side: a hand-minted
+     * correctly-signed token whose `nbf` is 600 s ahead must be REJECTED
+     * exactly because isNotYetValid() is true, and the same token with a
+     * past `nbf` must be ACCEPTED exactly because it is false. If the shared
+     * predicate's semantics ever move (leeway defaults, null handling, clock
+     * injection), these tests trip here rather than silently re-opening the
+     * not-yet-valid window on a live hub.
+     */
+    public function testValidateTokenRejectsFutureNbfViaSharedIsNotYetValid(): void
+    {
+        self::assertTrue(
+            $this->claimsAtNbf(time() + 600)->isNotYetValid(),
+            'The shared predicate must call a 600 s future nbf not-yet-valid at zero leeway.'
+        );
+        self::assertNull(
+            (new JwtHandler(self::SECRET))->validateToken($this->tokenWithNbf(time() + 600)),
+            'validateToken() must reject a future-nbf token via isNotYetValid().'
+        );
+    }
+
+    public function testValidateTokenAcceptsPastNbfViaSharedIsNotYetValid(): void
+    {
+        self::assertFalse(
+            $this->claimsAtNbf(time() - 600)->isNotYetValid(),
+            'The shared predicate must call a past nbf valid at zero leeway.'
+        );
+        $claims = (new JwtHandler(self::SECRET))->validateToken($this->tokenWithNbf(time() - 600));
+        self::assertNotNull($claims, 'validateToken() must accept a past-nbf token.');
+        self::assertSame('user-12', $claims->sub);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function nbfPayload(int $nbf): array
+    {
+        $now = time();
+        $claims = new JwtClaims(
+            iss: JwtClaims::ISS_PHLIX_HUB,
+            aud: JwtClaims::AUD_HUB,
+            sub: 'user-12',
+            iat: $now,
+            exp: $now + 3600,
+            nbf: $nbf,
+            type: JwtClaims::TYPE_ACCESS,
+            jti: null,
+            scope: [],
+            serverId: null,
+        );
+        return $claims->toPayload();
+    }
+
+    private function claimsAtNbf(int $nbf): JwtClaims
+    {
+        return JwtClaims::fromPayload($this->nbfPayload($nbf));
+    }
+
+    /**
+     * Mint a correctly-signed HS256 token carrying an explicit `nbf` — the
+     * hub's own minting API never sets one, and JwtHandler::encode() is
+     * private, so the test replicates the documented recipe (same secret,
+     * same algorithm, base64url without padding).
+     */
+    private function tokenWithNbf(int $nbf): string
+    {
+        $header = $this->base64UrlEncode(json_encode(['alg' => 'HS256', 'typ' => 'JWT'], JSON_THROW_ON_ERROR));
+        $payload = $this->base64UrlEncode(json_encode($this->nbfPayload($nbf), JSON_THROW_ON_ERROR));
+        $signature = $this->base64UrlEncode(hash_hmac('sha256', "{$header}.{$payload}", self::SECRET, true));
+        return "{$header}.{$payload}.{$signature}";
+    }
+
+    private function base64UrlEncode(string $raw): string
+    {
+        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+    }
+
+    /**
      * S8: a token whose header advertises `alg:none` (an unsigned token) must
      * be rejected before any signature work, even if it carries a payload the
      * handler would otherwise accept.

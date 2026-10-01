@@ -6,6 +6,46 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — Dependency lane: `detain/phlix-shared` pin advanced to `^0.50.0` (lock `v0.50.0`), `SUPPLEMENTAL_META` bridge retired, `nbf` gate now the shared predicate — 2026-10-01
+
+- **One-release advance to the freshly tagged upstream.** `composer.json` moves
+  `^0.49.0` → `^0.50.0` (the repo's standing `^0.<latest-minor>.0` pin style) and
+  `composer update detain/phlix-shared` resolved `v0.50.0` from packagist directly —
+  the compose-cs/packagist-flow webhook had the tag within the same minute, no VCS
+  override or retry fallback was needed. Lock provenance: source and dist both pin
+  `1880888c…`, the commit the annotated `v0.50.0` tag peels to. The delta over
+  `v0.49.1` is additive-only (new `JwtClaims::isNotYetValid()`, new
+  `auth.signups_disabled` schema property, docblock-only `RelayFrameType`
+  0x09–0x0F deprecations, test/tooling), proven in the shared release's own
+  CHANGELOG; nothing hub-side compiled against removed surface because nothing was
+  removed.
+- **`HubSettingsController::SUPPLEMENTAL_META` retired — the bridge's stated yield
+  condition fired.** The const existed solely so the SPA could render
+  `auth.signups_disabled` before `hub-settings.schema.json` shipped it; its docblock
+  said "when phlix-shared ships the property, its block wins verbatim and this map
+  should drop the key." v0.50.0 ships it, so the const, its merge loop, and the
+  upstream-wins guard are gone — `schemaMeta()` is now a pure upstream projection,
+  and the vendored schema (verified: 4 properties incl. `auth.signups_disabled`,
+  label "Disable new signups") covers the whole `ALLOWED_KEYS` allow-list.
+  Observable diff for operators: that row's copy is now upstream's verbatim, and
+  `helpLinks` carries the RFC-6819 reference where the bridge emitted an empty list.
+  `testEveryAllowedKeyHasRenderableSchemaMeta` keeps allow-list ↔ schema drift red
+  from this side; shared's new `PHLIX_HUB_REPO` drift guard keeps it red from there.
+- **`validateToken()`'s `nbf` gate adopts `JwtClaims::isNotYetValid()`.** The inline
+  `$claims->nbf !== null && $claims->nbf > time()` becomes the zero-leeway shared
+  call — bit-identical semantics (`leeway` defaults to 0, `now` defaults to
+  `time()`), a two-line swap inside an existing guard chain. Pinned from the hub
+  side by two new `JwtHandlerTest` cases that name the dependency: a hand-minted,
+  correctly-signed token with `nbf` 600 s ahead is rejected exactly because
+  `isNotYetValid()` is true, and the past-`nbf` twin is accepted exactly because it
+  is false — so a future semantics change in the shared predicate trips here instead
+  of silently re-opening the not-yet-valid window on a live hub.
+- **Gates at this commit:** php -l all touched files; `phpunit --filter
+  'Settings|HubSettings'` OK (68 tests) and `JwtHandlerTest|HubSettingsControllerTest`
+  OK (22 tests); full suite, phpstan level 9, psalm (both configs), S299 phpcs
+  corpus, `composer validate --strict`, and the S246 security-audit results are
+  recorded in the commit message.
+
 ### Changed — route snapshot currency-sync to server `758f9149` + contracts export re-vendor (410 → 412 tuples) — 2026-10-01
 
 - **The repin's CI run turned the S492 tripwire red for a FOREIGN reason**: the vendored S332

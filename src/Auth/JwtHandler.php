@@ -188,9 +188,9 @@ final class JwtHandler
      * - the issuer does not match this handler's configured `$issuer`,
      * - the audience does not match this handler's configured `$audience`,
      * - the token is expired (`exp` < now),
-     * - the token is not yet valid (`nbf` > now — minting side never sets
-     *   `nbf`, but a hand-forged or clock-shifted payload must not slip
-     *   through the one gate the vendored claims object left implicit),
+     * - the token is not yet valid (`{@see \Phlix\Shared\Auth\JwtClaims::isNotYetValid()}`
+     *   with zero leeway — the minting side never sets `nbf`, so a future-dated
+     *   `nbf` is forgery or clock drift, and strictness is the safe default),
      * - or the payload cannot be coerced into a {@see JwtClaims}.
      *
      * @param string $token Encoded JWT.
@@ -220,7 +220,7 @@ final class JwtHandler
         if ($claims->isExpired()) {
             return null;
         }
-        if ($claims->nbf !== null && $claims->nbf > time()) {
+        if ($claims->isNotYetValid()) {
             return null;
         }
 
