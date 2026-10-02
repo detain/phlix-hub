@@ -33,8 +33,11 @@ use Workerman\Connection\ConnectionInterface;
  * process. The HTTP worker (:8800) and the FederationWorker (:8805) each
  * hold their OWN instance with separate maps, so a live sendTo()/isVerified()
  * call made from HTTP-side code cannot see (or use) the sockets the federation
- * worker accepted — those calls no-op until an inter-process channel bridge
- * exists (see the send() seam docblock in {@see FederationMasterPusher}).
+ * worker accepted. That boundary is crossed by INTENT, not by shared state:
+ * {@see FederationPushBridge} publishes the push command over the
+ * workerman/channel broker and {@see FederationPushDispatcher} — running in
+ * THIS map's process — re-passes the verified law here before any write
+ * (see the local-first triage in {@see FederationMasterPusher}).
  *
  * @package Phlix\Hub\Federation
  */

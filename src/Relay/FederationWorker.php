@@ -11,9 +11,12 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Relay;
 
+use Channel\Client as ChannelClient;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Federation\FederationHubRepository;
+use Phlix\Hub\Federation\FederationPushDispatcher;
+use Phlix\Hub\Federation\FederationPushProtocol;
 use Phlix\Hub\Http\Controllers\FederationRelayController;
 use Psr\Container\ContainerInterface;
 use Throwable;
@@ -66,14 +69,22 @@ final class FederationWorker
     private static array $connHubIds = [];
 
     /**
-     * @param ContainerInterface $container PSR-11 container for resolving services.
-     * @param int                $port      Federation WS port (default 8805).
-     * @param int                $count     Number of worker processes.
+     * @param ContainerInterface $container   PSR-11 container for resolving services.
+     * @param int                $port        Federation WS port (default 8805).
+     * @param int                $count       Number of worker processes. MUST stay 1 in
+     *        production: the push dispatcher subscribes the process-local connection
+     *        map, and a second instance would hold sockets the first's replies (and
+     *        the HTTP side's view of "connected") cannot see — same count=1 law the
+     *        SyncPlay relay documents.
+     * @param string             $channelHost `workerman/channel` broker host.
+     * @param int                $channelPort `workerman/channel` broker port.
      */
     public function __construct(
         private readonly ContainerInterface $container,
         private readonly int $port = self::DEFAULT_PORT,
         private readonly int $count = 1,
+        private readonly string $channelHost = '127.0.0.1',
+        private readonly int $channelPort = RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
     ) {
     }
 
@@ -88,6 +99,7 @@ final class FederationWorker
         $worker->name = 'phlix-hub-federation-ws';
         $worker->count = $this->count;
 
+        $worker->onWorkerStart = [$this, 'onWorkerStart'];
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
@@ -97,6 +109,59 @@ final class FederationWorker
         \Phlix\Hub\Common\Database\ConnectionPool::armWorkerStopCleanup($worker);
 
         return $worker;
+    }
+
+    /**
+     * Join the cross-process channel broker and subscribe the federation
+     * push dispatcher.
+     *
+     * THIS process owns the leaf sockets and their H-4 verified stamps, so
+     * master-side push INTENTS published by the HTTP workers
+     * ({@see FederationPushBridge}) can only become real writes here — via
+     * {@see FederationPushDispatcher}, resolved from this process's container
+     * so it holds the SAME {@see \Phlix\Hub\Federation\FederationConnectionManager}
+     * the handshake callbacks stamp. Mirrors
+     * {@see \Phlix\Hub\SyncPlay\SyncPlayRelayWorker::onWorkerStart()}.
+     *
+     * The join is wrapped so a broker failure logs and CONTINUES: the WS
+     * surface itself — every leaf link, every handshake — must keep working
+     * when no cross-process push can be received, and a throw here would take
+     * down a resident worker at boot.
+     *
+     * @return void
+     */
+    public function onWorkerStart(): void
+    {
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+
+        try {
+            ChannelClient::connect($this->channelHost, $this->channelPort);
+
+            /** @var mixed $dispatcher */
+            $dispatcher = $this->container->get(FederationPushDispatcher::class);
+            if (!$dispatcher instanceof FederationPushDispatcher) {
+                $logger->error('Federation master push: could not resolve the push dispatcher');
+
+                return;
+            }
+
+            // The vendor Channel\Client::on() callback is typed with the legacy
+            // `callback` pseudo-type, which Psalm resolves to an (undefined)
+            // Channel\callback class that neither an array nor a Closure can
+            // satisfy. The runtime only does is_callable(), so a first-class
+            // callable is correct here.
+            /** @psalm-suppress InvalidArgument */
+            ChannelClient::on(FederationPushProtocol::COMMAND_EVENT, $dispatcher->onCommand(...));
+
+            $logger->info('Federation master push: worker joined channel broker', [
+                'channel_host' => $this->channelHost,
+                'channel_port' => $this->channelPort,
+            ]);
+        } catch (Throwable $e) {
+            $logger->error('Federation master push: channel init failed', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

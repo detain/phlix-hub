@@ -18,6 +18,7 @@ use Channel\Server as ChannelServer;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Federation\FederationPushBridge;
 use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\RelayProxyBridge;
@@ -1942,6 +1943,19 @@ final class Application
                 if ($pendingCommands instanceof ChannelPendingCommandPusher) {
                     /** @psalm-suppress InvalidArgument */
                     ChannelClient::on($pendingCommands->replyEvent(), $pendingCommands->onReply(...));
+                }
+
+                // Federation cross-process master push: the same broker carries
+                // share-offer/revocation/peer-close INTENTS to the :8805 worker
+                // that owns the leaf sockets. Subscribe the SINGLETON bridge's
+                // unique reply event so the delivered bool reaches the waiting
+                // coroutine — a second instance would answer to an event nobody
+                // publishes on and every command would time out to false.
+                /** @var mixed $federationPush */
+                $federationPush = $proxyContainer->get(FederationPushBridge::class);
+                if ($federationPush instanceof FederationPushBridge) {
+                    /** @psalm-suppress InvalidArgument */
+                    ChannelClient::on($federationPush->replyEvent(), $federationPush->onReply(...));
                 }
             } catch (Throwable $e) {
                 // Never let a container-resolution or broker failure kill a

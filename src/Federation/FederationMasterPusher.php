@@ -45,9 +45,12 @@ use function json_encode;
  * handshake completed in FederationFrameHandler/FederationWorker) — an
  * unverified socket gets nothing but a refused, logged push. Note also that
  * FederationConnectionManager is process-local: the :8800 HTTP worker and
- * the :8805 FederationWorker hold separate connection maps, so a live send
- * from here no-ops cross-process until a channel bridge exists — see the
- * send() seam docblock.
+ * the :8805 FederationWorker hold separate connection maps. A LOCAL-first
+ * triage therefore runs in-process only when THIS process actually holds the
+ * verified socket; otherwise the intent crosses the broker via
+ * {@see FederationPushBridge} and the :8805 process re-applies the same
+ * verified law before writing ({@see FederationPushDispatcher}). Transport
+ * moves intent, never authority.
  *
  * @package Phlix\Hub\Federation
  */
@@ -60,6 +63,7 @@ class FederationMasterPusher
     public function __construct(
         private readonly FederationHubRepository $hubRepo,
         private readonly FederationConnectionManager $connMgr,
+        private readonly ?FederationPushBridge $bridge = null,
     ) {
         $this->encoder = new FrameEncoder();
     }
@@ -81,13 +85,6 @@ class FederationMasterPusher
 
         $leafHubId = $this->resolve($targetPeerRowId, 'push share offer');
         if ($leafHubId === null) {
-            return false;
-        }
-
-        if (!$this->connMgr->isVerified($leafHubId)) {
-            $this->log()->warning('Federation master offer push skipped: channel not verified', [
-                'peer_id' => $targetPeerRowId,
-            ]);
             return false;
         }
 
@@ -113,7 +110,22 @@ class FederationMasterPusher
             ],
         ], JSON_THROW_ON_ERROR);
 
-        return $this->send($leafHubId, RelayFrameType::DATA, $payload);
+        // LOCAL-first: when THIS process owns the verified socket (the only
+        // process that can be the :8805 worker itself) write directly. In an
+        // HTTP worker the map is always empty here, so the intent crosses the
+        // broker and the :8805 dispatcher re-passes the verified gate itself.
+        if ($this->connMgr->isVerified($leafHubId)) {
+            return $this->send($leafHubId, RelayFrameType::DATA, $payload);
+        }
+
+        if ($this->bridge !== null) {
+            return $this->bridge->dispatch(FederationPushProtocol::ACTION_OFFER, $leafHubId, $payload);
+        }
+
+        $this->log()->warning('Federation master offer push skipped: channel not verified', [
+            'peer_id' => $targetPeerRowId,
+        ]);
+        return false;
     }
 
     /**
@@ -138,16 +150,22 @@ class FederationMasterPusher
             return false;
         }
 
-        if (!$this->connMgr->isVerified($leafHubId)) {
-            $this->log()->warning('Federation master revocation push skipped: channel not verified', [
-                'peer_id' => $targetPeerRowId,
-            ]);
-            return false;
-        }
-
         $payload = json_encode(['share_id' => $shareId], JSON_THROW_ON_ERROR);
 
-        return $this->send($leafHubId, RelayFrameType::DATA, $payload);
+        // LOCAL-first triage, same law as pushOffer(): the verified gate is
+        // re-passed by the dispatcher in the process that owns the stamp.
+        if ($this->connMgr->isVerified($leafHubId)) {
+            return $this->send($leafHubId, RelayFrameType::DATA, $payload);
+        }
+
+        if ($this->bridge !== null) {
+            return $this->bridge->dispatch(FederationPushProtocol::ACTION_REVOCATION, $leafHubId, $payload);
+        }
+
+        $this->log()->warning('Federation master revocation push skipped: channel not verified', [
+            'peer_id' => $targetPeerRowId,
+        ]);
+        return false;
     }
 
     /**
@@ -171,6 +189,15 @@ class FederationMasterPusher
 
         $conn = $this->connMgr->getConnection($leafHubId);
         if ($conn === null) {
+            // No socket in THIS process. When a bridge exists the live link may
+            // still be held by the :8805 worker — send the teardown intent
+            // there (the dispatcher replies true for "nothing live to close",
+            // the same answer this branch gives locally). Without a bridge the
+            // historical no-op stands.
+            if ($this->bridge !== null) {
+                return $this->bridge->dispatch(FederationPushProtocol::ACTION_CLOSE_PEER, $leafHubId, '');
+            }
+
             return true;
         }
 
@@ -251,15 +278,11 @@ class FederationMasterPusher
     /**
      * Encode one binary relay frame and write it to a leaf connection.
      *
-     * CROSS-PROCESS CAVEAT: FederationConnectionManager is PROCESS-LOCAL.
-     * This pusher is typically invoked from an HTTP worker process (:8800
-     * controller), while the leaf's WS socket is registered in the
-     * FederationWorker process (:8805) container — a different instance with
-     * a different map. There the sendTo() below finds no connection and
-     * returns false (a no-op), and the leaf only converges on its next
-     * hello-time share replay. This method is the single seam where a future
-     * inter-process channel bridge (worker-to-worker frame forwarding) must
-     * hook in to make live master pushes work across processes.
+     * LOCAL PATH ONLY: FederationConnectionManager is PROCESS-LOCAL, so this
+     * writes when the calling process IS the :8805 FederationWorker (or a test
+     * stands up the map locally). HTTP-worker callers reach the socket through
+     * the {@see FederationPushBridge} seam in the local-first triage above the
+     * send() call sites — never from here.
      *
      * @param string          $leafHubId Connection key (leaf's own hub uuid).
      * @param RelayFrameType  $type      Frame type.

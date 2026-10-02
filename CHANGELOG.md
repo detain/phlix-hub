@@ -6,6 +6,53 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — federation cross-process master push: the channel bridge the H-4/H-5 rework left as the open hole — 2026-10-02
+
+- **The hole closed.** `FederationMasterPusher` runs in the `:8800` HTTP worker, but the leaf's live
+  WebSocket — and the H-4 verified stamp authorising any push over it — lives in the `:8805`
+  `FederationWorker` process. `FederationConnectionManager` is per-process, so master-side
+  `pushOffer`/`pushRevocation` died at the empty local map's `isVerified()` gate and
+  `closePeerConnection` no-oped: share creates/revokes never reached a connected leaf until its next
+  hello, and revokes never converged at all. This is the topology note the 84f49f5 rework round (b)
+  documented; the owner approved building it.
+- **House pattern, parallel implementation.** The SyncPlay S93 pair
+  (`ChannelPendingCommandPusher`/`PendingCommandDispatcher`) already crosses this exact boundary with a
+  single command + measured reply — the shape this bridge needs. `RelayProxyBridge` was evaluated and
+  rejected for reuse: it carries proxy semantics (status/headers/body/stream phases) that would have to
+  be widened, destabilising the proven relay lane for no gain. New `Federation/FederationPushProtocol`
+  (command/reply envelope), `Federation/FederationPushBridge` (HTTP side, mirrors the S93 pusher incl.
+  the per-worker-singleton reply-event law) and `Federation/FederationPushDispatcher` (`:8805` side,
+  gates and writes against the process-real connection map).
+- **Transport moves intent, never authority.** The bridge dispatches after the local-first triage in the
+  pusher: when this process genuinely holds the verified socket (or a test stands one up) the frame
+  writes locally exactly as before; otherwise the command crosses the broker and the dispatcher
+  re-passes the SAME `isVerified()` law in the process that owns the stamps before any byte touches a
+  socket. `close_peer` carries no verification gate by parity with the in-process path (the goodbye
+  asserts nothing; tearing down a socket a deleted peer row can no longer own is safe). Malformed
+  commands get NO reply (never fabricate a verdict the dispatcher didn't measure); understood-but-
+  refused commands answer a measured `delivered: false`.
+- **Failure posture — fail-loud, degrade-never-corrupt.** Broker down / publish refused → the bridge
+  catches (deliberate deviation from the S93 pusher, which lets publish throw: the DB truth is already
+  committed by the time a command ships, and the admin request must not 500 over an advisory push),
+  logs `action`+`leaf_hub_id` loudly, returns false. No reply within 2 s → warning + false. The leaf
+  converges on its next hello replay either way; nothing queues in memory across requests.
+- **Wiring:** `HubServicesProvider` binds the bridge (per-worker singleton — pinned by
+  `FederationPushBridgeWiringTest`, same hazard the S93 pusher documents) into the pusher factory and
+  the dispatcher factory onto the process-real `FederationConnectionManager`;
+  `FederationWorker::onWorkerStart()` joins the broker (log-and-continue, `count = 1` subscriber law
+  documented) and subscribes `FederationPushProtocol::COMMAND_EVENT`; the HTTP worker's `onWorkerStart`
+  subscribes the singleton bridge's reply event. The `:8805` worker receives the SAME
+  `channel_port` config the HTTP side parses (`app.config`, single broker instance in the master).
+  Internal plumbing only: no routes, no openapi changes, no new wire error codes.
+- **Tests:** `FederationPushChannelRoundTripTest` (28 cases: verdict crosses the broker unchanged;
+  unverified-channel refusal never written; malformed-command no-reply law with succeeding control;
+  non-bool reply reads as false; late replies dropped; no-subscriber/publish-throw postures degrade
+  without throwing; worker boot survives an absent broker; protocol/timeout constants pinned) and
+  `FederationMasterPusherBridgeTest` (local-first law on all three surfaces, bridge carries the exact
+  wire payload, guards precede transport, historical no-bridge semantics verbatim). The four existing
+  `FederationControllerTest` push-routing pins are untouched — the mocked pusher's seam signatures did
+  not move. `scripts/parallel/test-durations.json` re-blessed for the three new files.
+
 ### Changed — wire law: the three `leaf_hub_id` sites flip to the dedicated `leaf_hub_id_already_bound` code — 2026-10-01
 
 - **Deferred-mint flip landed with the v0.5.3 re-vendor.** `FederationController`'s whole

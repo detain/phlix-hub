@@ -25,6 +25,8 @@ use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationMasterPusher;
 use Phlix\Hub\Federation\FederationPeerManager;
+use Phlix\Hub\Federation\FederationPushBridge;
+use Phlix\Hub\Federation\FederationPushDispatcher;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
@@ -56,6 +58,7 @@ use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyManager;
+use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
@@ -1207,13 +1210,36 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new FederationConnectionManager();
             }),
 
+            // HTTP-side half of the cross-process federation push. ⚠ MUST stay a
+            // per-container singleton like ChannelPendingCommandPusher above: it
+            // owns a UNIQUE reply event plus the in-flight map keyed against it,
+            // and Application::boot()'s HTTP onWorkerStart subscribes exactly ONE
+            // instance's replyEvent() to the broker. A per-request instance would
+            // publish pushes whose replies land on an event nobody listens to —
+            // every master push would silently time out to "not delivered".
+            FederationPushBridge::class => factory(static function (): FederationPushBridge {
+                return new FederationPushBridge(LoggerFactory::get(LogChannels::RELAY));
+            }),
+
+            // :8805-side half: resolved through the SAME container the WS
+            // callbacks use, so it holds the process-real
+            // FederationConnectionManager whose registrations carry the H-4
+            // verified stamps.
+            FederationPushDispatcher::class => factory(static function (
+                FederationConnectionManager $connMgr,
+            ): FederationPushDispatcher {
+                return new FederationPushDispatcher(LoggerFactory::get(LogChannels::RELAY), $connMgr);
+            })->parameter('connMgr', get(FederationConnectionManager::class)),
+
             FederationMasterPusher::class => factory(static function (
                 FederationHubRepository $hubRepo,
                 FederationConnectionManager $connMgr,
+                FederationPushBridge $bridge,
             ): FederationMasterPusher {
-                return new FederationMasterPusher($hubRepo, $connMgr);
+                return new FederationMasterPusher($hubRepo, $connMgr, $bridge);
             })->parameter('hubRepo', get(FederationHubRepository::class))
-                ->parameter('connMgr', get(FederationConnectionManager::class)),
+                ->parameter('connMgr', get(FederationConnectionManager::class))
+                ->parameter('bridge', get(FederationPushBridge::class)),
 
             FederationFrameHandler::class => factory(static function (
                 FederationHubRepository $hubRepo,
@@ -1472,8 +1498,28 @@ final class HubServicesProvider implements ServiceProviderInterface
 
         // Start the federation WebSocket worker for hub-to-hub connections. This
         // creates a Worker, which MUST happen in the master before runAll().
+        // The channel coordinates are the SAME broker Application::boot() starts
+        // and the HTTP workers join (single `channel_port` config key, parsed
+        // with the same idiom there), so the push dispatcher subscribed in the
+        // :8805 worker always sees the commands the HTTP bridges publish.
         try {
-            $federationWorker = new FederationWorker($container);
+            /** @var mixed $appConfig */
+            $appConfig = $container->get('app.config');
+            /** @var mixed $channelPortRaw */
+            $channelPortRaw = is_array($appConfig)
+                ? ($appConfig['channel_port'] ?? RelayProxyProtocol::DEFAULT_CHANNEL_PORT)
+                : RelayProxyProtocol::DEFAULT_CHANNEL_PORT;
+            $channelPort = is_int($channelPortRaw)
+                ? $channelPortRaw
+                : (int) (is_numeric($channelPortRaw) ? $channelPortRaw : RelayProxyProtocol::DEFAULT_CHANNEL_PORT);
+
+            $federationWorker = new FederationWorker(
+                $container,
+                FederationWorker::DEFAULT_PORT,
+                1,
+                '127.0.0.1',
+                $channelPort,
+            );
             $federationWorker->start();
         } catch (\Throwable) {
             // FederationWorker not available in this context — skip
