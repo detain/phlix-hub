@@ -281,14 +281,16 @@ final class ServerProxyController
             // GET ONLY, deliberately (S100 fix round 1: not mirrored under HEAD
             // either — see the HEAD block). The server also registers a
             // `POST /api/v1/music/scan` under this SAME prefix (a library-scan
-            // trigger). Adding `/api/v1/music` to any write-method key — or
-            // converting this to a broad write prefix — would expose that scan
-            // trigger over the relay. Browse scope stays read-only; the scan POST
-            // has no entry in EITHER map, and `/api/v1/music/scan` is
-            // additionally pinned in {@see self::SCOPE_DENY_PATTERNS} so the READ
-            // verbs cannot reach it either (it 404s server-side today only
-            // because that route happens to be registered POST-only — the hub
-            // must not depend on that accident).
+            // trigger; ADMIN-ONLY since the server's M-1 fix @9e765895 — see
+            // {@see self::SCOPE_DENY_PATTERNS}). Adding `/api/v1/music` to any
+            // write-method key — or converting this to a broad write prefix —
+            // would expose that scan trigger over the relay. Browse scope stays
+            // read-only; the scan POST has no entry in EITHER map, and
+            // `/api/v1/music/scan` is additionally pinned in
+            // {@see self::SCOPE_DENY_PATTERNS} so the READ verbs cannot reach it
+            // either (it 404s server-side today only because that route happens
+            // to be registered POST-only — the hub must not depend on that
+            // accident).
             '/api/v1/music',
             // Playback reads (bytes). The server exposes HLS/DASH at the ROOT
             // (not under /api/v1), so the forward tail is bare. `/hls` + `/dash`
@@ -608,12 +610,19 @@ final class ServerProxyController
      *
      * The prefix allowlist is a coarse instrument — allowing `/api/v1/music`
      * necessarily allows every sub-path under it, including sub-paths the server
-     * registers for a WRITE verb. Today `POST /api/v1/music/scan`
-     * (`WebPortalRouter`, an arbitrary-path `is_dir()` + blocking
-     * `scanDirectory()` that is auth-gated but NOT admin-gated) is refused
-     * because it appears in no scope map, and `GET`/`HEAD /api/v1/music/scan`
-     * 404 on the server only because that route happens to be registered
-     * POST-only. That is the SERVER's route table doing the work, not this gate:
+     * registers for a WRITE verb. `POST /api/v1/music/scan` (`WebPortalRouter`,
+     * an arbitrary-path `is_dir()` + blocking `scanDirectory()`) was auth-only
+     * when S100 pinned it and has been ADMIN-ONLY since the server's M-1 fix
+     * (security scan @9e765895): `WebPortalRouter.php:467` registers it inside
+     * the `AdminMiddleware` group — 401 unauthenticated, 403 + permission-denied
+     * audit for non-admins, before any disk I/O — and ONLY while both admin
+     * collaborators are wired (unwired construction registers no route at all,
+     * never a degraded auth-only one). So even a hypothetically-forwarded POST
+     * now fails closed upstream; `GET`/`HEAD /api/v1/music/scan` still 404 there
+     * only because that route is registered POST-only. Neither posture is load
+     * bearing: the hub refuses this path for EVERY method and spelling through
+     * its own deny pin below before any scope map consult, so the SERVER's route
+     * table never does this gate's work:
      * one `$r->get('/api/v1/music/scan', …)` or one
      * `GET /api/v1/music/{action}` catch-all on the server would silently turn
      * the hub into a deputy for a scan trigger. Pinning it here makes the hub's
@@ -754,11 +763,13 @@ final class ServerProxyController
         // phlix-server registration lines as they stood at `69497171` — the
         // same era pinned by `ServerProxyControllerTest::s107DeniedActionPaths()`
         // — EXCEPT the `/api/v1/collections` pair below, re-measured at
-        // `ab6d89a5` (2026-10-02). The PATTERNS are route-shaped and stay
-        // authoritative; re-verify the server tip before trusting any single
-        // line number as current.
+        // `ab6d89a5` (2026-10-02), and the `/api/v1/music/scan` cite,
+        // re-measured at `c42e166a` (2026-10-02). The PATTERNS are route-shaped
+        // and stay authoritative; re-verify the server tip before trusting any
+        // single line number as current.
         // --- under the `/api/v1/music` read prefix (S100) ------------------
-        // POST /api/v1/music/scan — WebPortalRouter.php:389.
+        // POST /api/v1/music/scan — WebPortalRouter.php:467 (AdminMiddleware
+        // group since M-1 @9e765895; was :389 auth-only in the 69497171 era).
         '#^/api/v1/music/scan(/|$)#i',
 
         // --- under the `/api/v1/libraries` read prefix (S107) --------------

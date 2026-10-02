@@ -3396,17 +3396,29 @@ final class ServerProxyControllerTest extends TestCase
      * happens to register them POST-only. That is the server's route table doing
      * the hub gate's job, which is exactly the accidental peer dependency S100
      * removed for `/api/v1/music/scan` and S107 removes for the whole class. The
-     * exposure is availability/consistency, not privilege escalation: relay
-     * traffic cannot pass phlix-server's `AdminMiddleware` (the hub's UUID matches
-     * no `users` row), so the risk is "someone kicks off a scan/prune they should
-     * not", not "someone becomes admin".
+     * exposure is availability/consistency, not privilege escalation — and that
+     * bound is LINK-DEPENDENT, not structural: since S301 the server's
+     * `RelayConsumer` maps `X-Phlix-Relay-User` through `user_identities`
+     * (`resolveRelayIdentity()`, server `src/Hub/RelayIdentityResolver.php:56`)
+     * onto a REAL local `users` row, so a linked hub account reaches
+     * `AdminMiddleware` as itself — if that local account is an admin, the
+     * request passes the admin gate. Only an UNLINKED hub UUID resolves to no
+     * local row (fallback `'hub-relay'` matches nothing in `users` →
+     * `findAdminById()` null → 403). The escalation claim therefore held under
+     * the pre-S301 one-way identity model; under the linked model the real
+     * ceiling is "what the linked local account may already do," never "someone
+     * becomes admin." Either way the hub still refuses these paths by its own
+     * gate, which is why the sweep does not depend on the distinction.
      *
-     * Server registration sites (phlix-server `69497171`), read-only:
-     *   Application.php:1698 scan · :1699 rescan · :1712 match-metadata ·
-     *   :1717 refresh-metadata · :1727 prune · :1728 clear-metadata ·
-     *   :1729 clear-artwork · :1730 delete-all · :1734 theme-media/scan ·
-     *   :1783 bulk-add · :1784 collection refresh · :587 match/apply ·
-     *   :660 subtitles/download · :1787 regenerate-assets (S284/S332).
+     * Server registration sites (phlix-server `c42e166a`, re-measured
+     * 2026-10-02; era pin `69497171` at first authoring), read-only:
+     *   Application.php:2092 scan · :2093 rescan · :2106 match-metadata ·
+     *   :2111 refresh-metadata · :2121 prune · :2122 clear-metadata ·
+     *   :2123 clear-artwork · :2124 delete-all · :2137 theme-media/scan ·
+     *   :2207 bulk-add · :2208 collection refresh · :763 match/apply ·
+     *   :836 subtitles/download · :2133 regenerate-assets (S284/S332).
+     *   Anchor reads `/scan-status` :2100 and `/scan-history` :2101 — the
+     *   `(/|$)` deny anchors exist to keep these two working.
      *
      * @return array<string, string> label => `/`-prefixed concrete path
      */
