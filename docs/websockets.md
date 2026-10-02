@@ -213,7 +213,37 @@ the token's own expiry. This is why S2b dropped the form from `:8803`.
 > appending `?token=…` here was never authenticating; it must move the token to
 > a header or the `bearer` subprotocol.
 
-### Message catalog
+### Two vocabularies, one socket (owner decision #14)
+
+This surface speaks **two message vocabularies** and never translates between them:
+
+- the **legacy BARE room dialect** (`group_join`, `room_state`, `playback_*`, …) —
+  the original relay vocabulary, which has **no live client consumer in the estate**
+  (zero-runtime-hit evidence in `SyncPlayRelayWorker`'s class docblock). Its
+  handlers stay for wire compatibility.
+- the **CANONICAL `syncplay_*` catalog** — the vocabulary of the media server's
+  `:8097` socket and every syncplay client, defined by
+  [`phlix-syncplay/SPEC.md`](../../phlix-syncplay/SPEC.md) §3 (19 closed-set types).
+  This is the **live room lane**: relay-mode syncplay clients (mobile is the first)
+  create, join, and steer rooms entirely in this catalog.
+
+**Per-connection dialect latch.** A connection is `bare` by default and latches to
+`canonical` the instant it sends its first `syncplay_*`-prefixed frame; the latch
+is permanent for the life of the socket. Every reply and every room fan-out to that
+socket is then encoded in its latched dialect, so a canonical client never sees a
+bare frame and a bare client never sees a canonical one — even if (hypothetically)
+the two shared a room. Because the hub already fans out per room, the latch adds
+one `continue` to `broadcastToRoom()` and a parallel `broadcastCanonical()`.
+
+**Rooms are shared bookkeeping, dialects are not.** Both vocabularies address the
+same `(server_id, owner)`-scoped rooms and the same playback anchor store; the
+canonical `group_id`/`group_name` simply rides as the friendly name inside the
+existing scoped key. An owner-scoped room therefore stays owned by its token
+holder regardless of which dialect created it. (A canonical client that joins a
+room a bare client created finds it, but the bare creator has no `host` concept —
+see the deferrals note under the canonical table.)
+
+### Message catalog — legacy BARE dialect
 
 Client → hub:
 
@@ -235,6 +265,51 @@ Hub → client:
 | `client_left` | Another client left the room (explicitly or by disconnect). |
 | `time_sync_reply` | Answer to a `time_sync` probe. `server_time` is stamped by the hub in **unix milliseconds**; `client_time` is echoed back untouched, whatever scale the client probed with. |
 
+### Message catalog — CANONICAL `syncplay_*` dialect
+
+Every frame carries the SPEC §2 envelope the hub's factory owns: `type`,
+`protocol_version: 1`, and a hub-stamped `timestamp` in **unix milliseconds** —
+client-supplied copies of all three are stripped, so a forged envelope cannot
+survive the relay. `member_id` on every outbound command frame is the hub's
+authoritative client id for the acting connection (SPEC §9), never the sender's
+claim.
+
+Client → hub (inbound; the catalog is a **closed set** — an unknown `syncplay_*`
+name gets `syncplay_error` `UNKNOWN_MESSAGE`, matching `:8097`'s strictness):
+
+| `type` | Meaning |
+| --- | --- |
+| `syncplay_group_create` | Open (or re-enter) the owner-scoped shadow room named by `group_name` (default `New Group`). First member is host. Answered with `syncplay_group_state` (`{group, your_id}`); other members get `syncplay_info`. |
+| `syncplay_group_join` | Same as create but keyed by `group_id` (must be a non-empty string, else `syncplay.group_not_found`). Join implies leave — moving rooms is one operation. `password_hash` is accepted and **ignored** (see the auth note above). |
+| `syncplay_group_leave` | Leave the current group. The leaver gets an `syncplay_info` ack; remaining members get a fresh `syncplay_group_state` (and `syncplay_host_elect` first, if the host left). Roomless → `syncplay_error` `syncplay.leave_failed`. |
+| `syncplay_playback_play` / `_pause` / `_seek` | **Host-only** control (non-host → `syncplay_error` `NOT_HOST`). The host's `play` is acked to it and relayed to the others; `pause`/`seek` go to the others only — the `:8097` law, deliberately opposite the bare sender-included echo above. Outbound frames carry no `group_id` (server shape). |
+| `syncplay_playback_sync` | State report relayed to **every** member including the reporter, carrying the room truth: current anchor `position`, `current_media_id`, `is_playing`, `member_id` = the host, and the hub's `server_time` in **unix ms** (documented deviation: `:8097` answers this in seconds — SPEC §2's ms law governs here). |
+| `syncplay_playback_queue` | **Host-only** queue replacement, normalized all-or-nothing (string `media_id` required; `media_info` keeps only string keys) and capped at 1000. Over-cap → `syncplay_error` `syncplay.queue_limit_exceeded` with the stored queue **unchanged**; accepted → `syncplay_group_state`-independent `syncplay_playback_queue` broadcast to all. |
+| `syncplay_chat` | Relayed to every member including the sender, stamped with authoritative `member_id`/`member_name`; a blank message is silently dropped; roomless → `NOT_IN_GROUP`. |
+| `syncplay_typing` | Relayed to the **other** members only. Roomless is silently ignored (server's shape). |
+| `syncplay_host_transfer` | The server's guard ladder verbatim: `NOT_IN_GROUP` → `NOT_HOST` → `INVALID_NEW_HOST` → `MEMBER_NOT_FOUND` → `SAME_HOST`; success broadcasts `syncplay_group_state` to all. |
+| `syncplay_group_list` | Direct reply `{groups: [{id, name, member_count, has_password: false, current_media, is_playing}], count}` listing only the connection's own `(server_id, owner)` shadow rooms. |
+| `syncplay_time_ping` | Roomless OK. Answered directly with `syncplay_time_pong` (`client_time` echoed, `server_time` unix ms). |
+| `syncplay_time_sync` | **Refused** with `syncplay_error` `hub.protocol_unsupported` — the relay holds no media clock authority; clients use `syncplay_time_ping`. |
+
+Hub → client (outbound, only to canonical-latched sockets):
+
+| `type` | Meaning |
+| --- | --- |
+| `syncplay_group_state` | `{group, your_id}` to a joiner (your_id = hub-minted client id); broadcast to **all** members on host change or a member leaving (broadcasts carry no `your_id`). `group` follows the server's `GroupState::getState()` shape: `group_id`/`group_name`, `members` as a DICT keyed by client id (`{id, name, is_host, joined_at}`), `host_id`, `current_media_id`, `playback_position` (ms), `playback_state`, `queue`, `created_at`/`last_activity_at` — and, like the server, `joined_at`/`created_at`/`last_activity_at` are **unix seconds** while `playback_position` is ms. |
+| `syncplay_info` | SPEC §6 membership announcements: `"{name} joined the group"` to the other members (top-level `member_id`/`member_name`, never echoed to the joiner) and `"{name} left the group"` as the leave ack to the leaver. |
+| `syncplay_host_elect` | `{elected_id, elected_by}` broadcast to all when the host leaves a non-empty room, immediately followed by the fresh `syncplay_group_state`. Election is oldest-membership (join order), ties broken by roster order. |
+| `syncplay_playback_play` / `_pause` / `_seek` / `_sync` / `_queue` / `_chat` / `_typing` | Canonical relay fan-outs — see each inbound row above for its audience law. |
+| `syncplay_time_pong` | Answer to `syncplay_time_ping`; `server_time` unix ms. |
+| `syncplay_error` | `{error_code, message}` for every refused canonical op. The canonical floor answers **loudly** — unlike the bare verbatim relay, no canonical refusal is silent unless the server's own shape is silent (blank chat, roomless typing). |
+
+> **Deferrals, stated honestly.** The relay does not implement the server's
+> `:8097`-only `time_sync` *status* answer or the S446 out-of-sync **nudge**, and
+> there is no cross-dialect translation. A canonical client in a room first seeded
+> by a bare `group_join` finds no host (bare members have no `is_host`), so its
+> host-gated ops fail loud with `NOT_HOST` until a canonical member exists; with
+> zero live bare consumers this boundary is documented rather than papered over.
+
 **Timestamps: milliseconds, and only where the hub stamps them.** `playback_*`
 frames relayed by the hub carry `timestamp` in **unix milliseconds**, and
 `time_sync_reply.server_time` is likewise ms — this matches the syncplay
@@ -245,19 +320,24 @@ The one deliberate seconds-scaled field on this surface is the S93
 by its only consumer (`@phlix/ui` `src/api/hubRelay.ts`, S298); it is
 delivery metadata, not a transport timestamp.
 
-**Playback relays reach every member, sender included.** The `:8804` direction
-contract is "broadcast to every client in the same room", so a sender's own
-`playback_*` frame comes back with the hub's authoritative `from_client_id` and
-`timestamp` stamped on it — the echo is the hub's acceptance signal. (Contrast
-the media server's `:8097`, where play/pause/seek exclude the sender —
-separate transports, deliberately separate echo semantics.)
+**Bare playback relays reach every member, sender included; canonical ones follow
+`:8097`.** The legacy `:8804` direction contract is "broadcast to every client in
+the same room", so a bare sender's own `playback_*` frame comes back with the hub's
+authoritative `from_client_id` and `timestamp` stamped on it — the echo is the hub's
+acceptance signal. The canonical dialect instead mirrors the media server exactly:
+play is acked to the host and relayed to the others, pause/seek exclude the sender,
+and only `syncplay_playback_sync` (a state report, not a command) reaches everyone.
+Separate dialects, deliberately separate echo semantics — see SPEC §9.1.
 
-**The catalog above is a floor, not a closed set.** `SyncPlayRelayWorker::onMessage()`
-relays any *unrecognised but properly-named* `type` verbatim to the rest of the
-room, so clients can agree on extra message types without the hub knowing about
-them. A frame that is not a JSON object, or carries a missing or non-string
-`type`, is **malformed and dropped** — never relayed. Junk must not become
-fan-out.
+**Each dialect has its own floor.** The legacy catalog above is a *floor, not a
+closed set*: `SyncPlayRelayWorker::onMessage()` relays any unrecognised but
+*properly-named bare* `type` verbatim to the rest of the room, so bare clients can
+agree on extensions without the hub knowing about them. The canonical catalog is a
+*closed set* of 19 (SPEC §3): any unknown `syncplay_*` name is refused with
+`syncplay_error` `UNKNOWN_MESSAGE` — a mistyped room op must never fan out through
+a relay as if it were an extension. In either dialect, a frame that is not a JSON
+object, or carries a missing or non-string `type`, is **malformed and dropped** —
+never relayed. Junk must not become fan-out.
 
 **Every connection carries an inbound byte budget** (`TokenBucket`, sized per
 process from `SyncPlayRelayWorker::INBOUND_RATE_BYTES_PER_SECOND` /
@@ -424,7 +504,13 @@ Privileged events: the whole Session, Playback and Dashboard groups, plus every
 > `syncplay_leave_group` / `syncplay_sync_state` / `syncplay_sync_request`,
 > which this document listed until audit L-8 corrected it).
 >
-> The two SyncPlay vocabularies are **different**. The hub's `:8804` relay speaks
-> `group_join` / `playback_play` / `time_sync`; the media server's `:8097` socket
-> speaks `syncplay_group_join` / `syncplay_playback_sync`. They are separate
-> transports for the same feature, not two names for one protocol.
+> The two SyncPlay vocabularies are **distinct frame families that now share one
+> socket**. The hub's `:8804` relay historically spoke only the bare vocabulary
+> (`group_join` / `playback_play` / `time_sync`); since owner decision #14 it also
+> speaks the media server's canonical `syncplay_*` catalog (`syncplay_group_join` /
+> `syncplay_playback_sync` / `syncplay_time_ping`) as its live room lane, latching
+> per connection and never translating across the two. `:8097` speaks only the
+> canonical catalog. The two transports remain separate wire contracts — where
+> they share a type name, payload shapes and echo laws still differ (the hub's
+> canonical dialect stamps ms where `:8097` answers `syncplay_playback_sync` in
+> seconds, and the hub has no clock authority or S446 nudge).

@@ -6,6 +6,53 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — `:8804` learns the canonical `syncplay_*` catalog: the relay room lane owner decision #14 opened — 2026-10-02
+
+- **What and why.** Until now the hub's SyncPlay relay spoke only its private BARE room vocabulary
+  (`group_join`/`room_state`/`playback_*`/`time_sync`) while every syncplay client speaks the
+  canonical `syncplay_*` catalog of `phlix-syncplay/SPEC.md` §3 — so relay-mode clients had to refuse
+  the feature outright (mobile's `RELAY_NOT_SUPPORTED` guard). The hub now speaks BOTH vocabularies on
+  the same socket; the mobile refusal is deleted downstream in the same owner ruling.
+- **Per-connection latch, zero translation.** A connection defaults to `bare` and latches to
+  `canonical` on its first `syncplay_*` frame, permanently (`SyncPlayClient::$canonical`). Replies and
+  room fan-outs are encoded in each member's latched dialect; `broadcastToRoom()` skips canonical
+  members and a parallel `broadcastCanonical()` skips bare ones. Cross-vocabulary frames never exist.
+  The design choice is justified by measurement: grepping every client repo for the bare room types
+  yields only docblock prose — each `:8804` consumer gates strictly on `type === 'pending_command'` —
+  so the bare room lane has ZERO live consumers and nothing can break; its handlers stay as-is.
+- **Canonical ops mapped.** `group_create`/`group_join` (shadow rooms keyed by the existing
+  `(server_id, owner)`-scoped room; first member becomes host; join implies leave; `password_hash`
+  accepted-and-ignored because the token triple-check already scopes rooms to their owner),
+  `group_leave` (info ack + `group_state` to remaining; host departure elects the oldest member and
+  broadcasts `host_elect` then `group_state`), `playback_play`/`_pause`/`_seek` (host-gated,
+  `:8097` audience laws: play acked to sender + relayed to others, pause/seek others-only),
+  `playback_sync` (room truth, host-stamped, to everyone including the reporter), `playback_queue`
+  (host-only, server's all-or-nothing normalization and the 1000-cap twin refusal code), `chat`
+  (all-inclusive), `typing` (others-only, silent roomless), `host_transfer` (the server's five-rung
+  guard ladder verbatim), `group_list` (own scope only), `time_ping` (ms pong, roomless OK).
+- **Envelope and identity laws pinned.** The hub's frame factory owns `type`/`protocol_version: 1`/
+  `timestamp` (ms) and strips client-supplied copies, and every outbound command carries the
+  hub-derived `member_id`, never the sender's claim (SPEC §9). GroupState payloads follow the
+  server's `GroupState::getState()` shape — members DICT, ms `playback_position`, SECONDS
+  `joined_at`/`created_at`/`last_activity_at`. The pending_command lane is untouched, including its
+  pinned unix-seconds `issued_at` exception; a user's idle and room sockets coexist and
+  `deliverToUser` counts every matching socket (pinned by tests).
+- **Loud floors, honest deferrals.** Unknown `syncplay_*` names are refused with `UNKNOWN_MESSAGE`
+  (closed 19-type set, `:8097`-strict) while bare names keep the open verbatim-relay floor;
+  `syncplay_time_sync` inbound is refused `hub.protocol_unsupported` (the relay holds no clock
+  authority — ping
+  is the lane), the S446 out-of-sync nudge is not relayed, and cross-user rooms remain impossible by
+  construction. All deferrals are documented in `docs/websockets.md`, not silent holes.
+- **Spec currency.** `openapi.yaml` `x-phlix-websockets` `:8804` entry and `docs/websockets.md`
+  extended IN THIS COMMIT with the two-catalog tables, the latch law, and the dialect-split floors;
+  `OpenApiSpecMatchesRouterTest` and the yaml gates stay green.
+- **Tests.** `tests/Unit/SyncPlay/SyncPlayRelayCanonicalDialectTest.php` — 28 tests / 311 asserts on
+  the real worker switch: full create→join→playback→sync→leave→teardown round-trips with canonical
+  names/fields/unit laws, dialect isolation in mixed rooms, the guard ladders, cross-owner scope
+  isolation, join-implies-leave rehoming, two-socket coexistence with `pending_command`, malformed
+  sanitation, and last-member bookkeeping sweeps. The existing `SyncPlayRelayWorkerTest` bare-dialect
+  suite passes untouched (23/23) — the compatibility claim is executed, not asserted.
+
 ### Added — federation cross-process master push: the channel bridge the H-4/H-5 rework left as the open hole — 2026-10-02
 
 - **The hole closed.** `FederationMasterPusher` runs in the `:8800` HTTP worker, but the leaf's live

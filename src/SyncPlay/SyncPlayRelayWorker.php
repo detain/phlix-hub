@@ -26,6 +26,7 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use Workerman\Timer;
 use Workerman\Worker;
 
+use function array_merge;
 use function count;
 use function explode;
 use function is_numeric;
@@ -34,7 +35,11 @@ use function json_decode;
 use function microtime;
 use function round;
 use function spl_object_id;
+use function sprintf;
+use function str_starts_with;
 use function strlen;
+use function substr;
+use function time;
 use function trim;
 
 /**
@@ -51,6 +56,33 @@ use function trim;
  *
  * This is separate from the main relay tunnel (ports 8802/8803) which uses
  * binary frames. SyncPlay uses native WebSocket JSON frames.
+ *
+ * ## Two vocabularies, one socket (owner decision #14)
+ *
+ * This endpoint speaks TWO JSON vocabularies and never confuses them:
+ *
+ * 1. The **bare room vocabulary** (`group_join` / `group_leave` /
+ *    `playback_*` / `time_sync` and their `room_state` / `client_joined` /
+ *    `client_left` / `time_sync_reply` replies) — the original :8804 dialect.
+ *    Its only proven live consumers in the estate are NONE: every client's
+ *    `:8804` code path is the `pending_command` family (a DIFFERENT,
+ *    type-gated frame family this worker also carries), and the room frames
+ *    were consumed by nobody (evidence: each hubRelay consumer gates strictly
+ *    on `type === 'pending_command'` — mobile `hubRelay.ts`, console
+ *    `HubRelayConsumer.php`, roku `HubCommandTask.brs`).
+ * 2. The **canonical `syncplay_*` catalog** (phlix-syncplay SPEC.md §3, the
+ *    vocabulary the server speaks on `:8097` and every syncplay client
+ *    already parses) — learned inbound and answered in-kind so relay-mode
+ *    clients need no dialect shim.
+ *
+ * A connection LATCHES its dialect with the first `syncplay_`-prefixed frame
+ * it sends ({@see SyncPlayClient::$canonical}); every room reply is then
+ * encoded for that dialect and fanned out only to same-dialect members. No
+ * translation happens between the vocabularies, so a hypothetical mixed room
+ * hears each speaker in its own tongue only — a deliberate, documented
+ * boundary, not an oversight: there is no consumer to bridge today, and a
+ * translator would be unverifiable fiction. The `pending_command` lane is
+ * dialect-agnostic: it is addressed to the user's sockets, not to a room.
  *
  * @package Phlix\Hub\SyncPlay
  */
@@ -100,6 +132,21 @@ final class SyncPlayRelayWorker
     public const INBOUND_BURST_BYTES = 262144.0;
 
     /**
+     * Envelope `protocol_version` stamped on every canonical `syncplay_*`
+     * frame, mirroring phlix-server `Messages::PROTOCOL_VERSION`
+     * (phlix-syncplay SPEC.md §2). Two repos, one number, cited both ways.
+     */
+    public const CANONICAL_PROTOCOL_VERSION = 1;
+
+    /**
+     * Playback-queue ceiling for canonical rooms — mirrors phlix-server
+     * `GroupState::MAX_QUEUE_SIZE = 1000` (its LOW-2 note: the same 1000-item
+     * ceiling the repo's job stores use). An over-cap submission is refused
+     * fail-loud with the stored queue UNTOUCHED, exactly like the server.
+     */
+    public const CANONICAL_MAX_QUEUE_SIZE = 1000;
+
+    /**
      * Active SyncPlay client connections keyed by connection ID.
      *
      * @var array<int, SyncPlayClient>
@@ -124,6 +171,37 @@ final class SyncPlayRelayWorker
      *      position?: float, media_id?: string}>
      */
     private static array $roomPlayback = [];
+
+    /**
+     * Canonical-dialect room bookkeeping — the pieces the bare vocabulary
+     * never needed and the `syncplay_*` catalog does. All keyed by the SAME
+     * scoped room key as {@see self::$rooms}, unset when the last member
+     * leaves and swept with the room by the 60s timer, so none of them can
+     * outlive the session they describe (the resident-worker leak rule).
+     *
+     * Host model (minimal, honest): the first member of a canonical room is
+     * its host (mirrors the server's "creator is host"); when the host leaves
+     * the oldest remaining member is elected (mirrors `GroupState`'s
+     * oldest-member election) and the room announces it with
+     * `syncplay_host_elect`; `syncplay_host_transfer` lets the host hand the
+     * role over voluntarily. Host-gated ops answer non-hosts with
+     * `syncplay_error` — the loud refusal :8097 gives, never silence.
+     *
+     * @var array<string, string> scoped room key => host clientId
+     */
+    private static array $roomHosts = [];
+
+    /** @var array<string, int> scoped room key => formed-at unix seconds (`group_state.created_at`) */
+    private static array $roomCreatedAt = [];
+
+    /** @var array<string, int> scoped room key => last canonical activity unix seconds (`group_state.last_activity_at`) */
+    private static array $roomActivity = [];
+
+    /** @var array<string, string> scoped room key => 'playing'|'paused'|'stopped' (`group_state.playback_state`) */
+    private static array $roomStates = [];
+
+    /** @var array<string, list<array{media_id: string, media_info: array<string, mixed>}>> scoped room key => normalized queue */
+    private static array $roomQueues = [];
 
     /**
      * Map of SCOPED room key => [client_id => SyncPlayClient].
@@ -217,7 +295,15 @@ final class SyncPlayRelayWorker
         Timer::add(60, static function (): void {
             foreach (self::$rooms as $roomName => $clients) {
                 if (count($clients) === 0) {
-                    unset(self::$rooms[$roomName], self::$roomPlayback[$roomName]);
+                    unset(
+                        self::$rooms[$roomName],
+                        self::$roomPlayback[$roomName],
+                        self::$roomHosts[$roomName],
+                        self::$roomCreatedAt[$roomName],
+                        self::$roomActivity[$roomName],
+                        self::$roomStates[$roomName],
+                        self::$roomQueues[$roomName],
+                    );
                 }
             }
         });
@@ -587,6 +673,14 @@ final class SyncPlayRelayWorker
             return;
         }
 
+        // Dialect latch (owner #14): choosing the `syncplay_*` vocabulary IS
+        // the handshake — no extra hello frame, no capability negotiation to
+        // get wrong. The latch decides which vocabulary this connection's
+        // REPLIES use; see {@see SyncPlayClient::$canonical}.
+        if (self::isCanonicalType($type)) {
+            $client->canonical = true;
+        }
+
         switch ($type) {
             case 'group_join':
                 $this->handleGroupJoin($client, $message);
@@ -603,13 +697,117 @@ final class SyncPlayRelayWorker
                 break;
 
             case 'group_leave':
-                $this->handleGroupLeave($client);
+                // LEAVE routes by the connection's LATCHED dialect, not by the
+                // frame name: a canonical-latched client asking to leave must
+                // run the canonical teardown (host election, state cleanup,
+                // canonical notices) or the room books would orphan its host
+                // slot. A client speaking both vocabularies is self-contradictory;
+                // its membership state follows the latch, faithfully.
+                if ($client->canonical) {
+                    $this->handleCanonicalLeave($client);
+                } else {
+                    $this->handleGroupLeave($client);
+                }
+                break;
+
+            // ---- Canonical catalog (phlix-syncplay SPEC.md §3) -------------
+            //
+            // `syncplay_group_create` and `syncplay_group_join` share ONE
+            // path: the hub holds no copy of the server's group registry
+            // (groups are REST/:8097 truth), so its canonical rooms are
+            // socket-side SHADOW rooms keyed by the supplied id/name inside
+            // the caller's own (server_id, owner) scope. Auto-creating on a
+            // first join is what keeps a relay client — which learns its
+            // group id over REST, never over this socket — able to reach its
+            // room at all. A REST-created group id rides in as the friendly
+            // room name verbatim; identity law is untouched (§9: the
+            // connection, never the payload, says who you are).
+
+            case 'syncplay_group_create':
+                $this->handleCanonicalJoin($client, $message, true);
+                break;
+
+            case 'syncplay_group_join':
+                $this->handleCanonicalJoin($client, $message, false);
+                break;
+
+            case 'syncplay_group_leave':
+                $this->handleCanonicalLeave($client);
+                break;
+
+            case 'syncplay_playback_play':
+            case 'syncplay_playback_pause':
+            case 'syncplay_playback_seek':
+                $this->handleCanonicalPlaybackCommand($client, $message, $type);
+                break;
+
+            case 'syncplay_playback_sync':
+                $this->handleCanonicalPlaybackSync($client);
+                break;
+
+            case 'syncplay_playback_queue':
+                $this->handleCanonicalPlaybackQueue($client, $message);
+                break;
+
+            case 'syncplay_chat':
+                $this->handleCanonicalChat($client, $message);
+                break;
+
+            case 'syncplay_typing':
+                $this->handleCanonicalTyping($client, $message);
+                break;
+
+            case 'syncplay_time_ping':
+                $this->handleCanonicalTimePing($client, $message);
+                break;
+
+            case 'syncplay_host_transfer':
+                $this->handleCanonicalHostTransfer($client, $message);
+                break;
+
+            case 'syncplay_group_list':
+                $this->handleCanonicalGroupList($client);
+                break;
+
+            case 'syncplay_time_sync':
+                // Documented deferral, loud reply: the STATUS-QUERY arm needs
+                // the server's own TimeSync authority (offset/latency/drift of
+                // a clock the hub does not track). Refusing beats inventing a
+                // confident-looking zero.
+                $this->sendCanonicalError(
+                    $client,
+                    'hub.protocol_unsupported',
+                    'The hub relay does not track server clock state; use syncplay_time_ping',
+                );
+                break;
+
+            case 'syncplay_group_state':
+            case 'syncplay_host_elect':
+            case 'syncplay_time_pong':
+            case 'syncplay_error':
+            case 'syncplay_info':
+                // Server→client direction (SPEC §3). A client SPEAKING these
+                // is a protocol violation — refuse loudly, never fan the lie
+                // out to the room. Same message the :8097 default gives.
+                $this->sendCanonicalError($client, 'UNKNOWN_MESSAGE', 'Unknown message type');
                 break;
 
             default:
+                if (self::isCanonicalType($type)) {
+                    // Unknown `syncplay_*` name: the CATALOG is understood here,
+                    // so the floor is CLOSED for it — :8097 answers exactly this
+                    // with the same error. Relaying an unreadable canonical name
+                    // would let one typo'd frame masquerade as state to every
+                    // canonical member of the room.
+                    $this->sendCanonicalError($client, 'UNKNOWN_MESSAGE', 'Unknown message type');
+                    break;
+                }
+
                 // Unrecognised but properly-typed message — the documented
                 // extension seam: relay verbatim to the REST of the room (the
                 // sender already holds the frame; echoing it back buys noise).
+                // Bare vocabulary only (see the syncplay_ arm above); reaches
+                // bare-dialect members only (see broadcastToRoom).
                 if ($client->room !== null) {
                     $this->broadcastToRoom($client->room, $data, $client->clientId);
                 }
@@ -660,9 +858,18 @@ final class SyncPlayRelayWorker
             return;
         }
 
-        // Remove from room if in one
+        // Remove from room if in one — routed by the connection's latched
+        // dialect so a canonical member's close still triggers election,
+        // notice, and bookkeeping cleanup (mirrors the server's
+        // onConnectionClose → leaveGroup path). The leave ack it sends is a
+        // write against an already-closed socket — at worst a no-op false
+        // return, same as production sends on dying connections elsewhere.
         if ($client->room !== null) {
-            $this->handleGroupLeave($client);
+            if ($client->canonical) {
+                $this->handleCanonicalLeave($client);
+            } else {
+                $this->handleGroupLeave($client);
+            }
         }
 
         unset(self::$clients[$connId]);
@@ -873,6 +1080,742 @@ final class SyncPlayRelayWorker
         $client->connection->send(json_encode($reply, JSON_THROW_ON_ERROR));
     }
 
+    // =====================================================================
+    // Canonical `syncplay_*` dialect (owner decision #14)
+    //
+    // Every handler below mirrors the phlix-server `SyncPlayManager` arm for
+    // the same message type — field names, unit law, exclusion law, guard
+    // order and error codes — so a client that works against `:8097` works
+    // against this relay with zero dialect shim. Where the relay honestly
+    // CANNOT be the server (no group registry, no clock authority, no
+    // per-member drift policy) the deviation is stated at the site, never
+    // hidden.
+    // =====================================================================
+
+    /**
+     * Is `$type` a name from the canonical catalog?
+     *
+     * The `syncplay_` prefix IS the catalog (every constant in phlix-server
+     * `Messages.php` carries it), which makes dialect detection a prefix test
+     * with no table to drift.
+     */
+    private static function isCanonicalType(string $type): bool
+    {
+        return str_starts_with($type, 'syncplay_');
+    }
+
+    /**
+     * Build one canonical frame with the envelope the FACTORY owns, mirroring
+     * phlix-server `Messages::frame()` (SPEC §2): `{type, protocol_version,
+     * ...payload, timestamp}` with `timestamp` in unix MILLISECONDS. A payload
+     * smuggling its own type/protocol_version/timestamp has those copies
+     * STRIPPED, so a client can never forge the hub's clock stamp or version.
+     *
+     * @param array<string, mixed> $payload
+     *
+     * @return array<string, mixed>
+     */
+    private static function canonicalFrame(string $frameType, array $payload): array
+    {
+        unset($payload['type'], $payload['protocol_version'], $payload['timestamp']);
+
+        return array_merge(
+            ['type' => $frameType, 'protocol_version' => self::CANONICAL_PROTOCOL_VERSION],
+            $payload,
+            ['timestamp' => self::nowMs()],
+        );
+    }
+
+    /**
+     * Write one canonical frame to a single client.
+     *
+     * @param array<string, mixed> $frame
+     *
+     * @return void
+     */
+    private function sendCanonical(SyncPlayClient $client, array $frame): void
+    {
+        $client->connection->send(json_encode($frame, JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * Loud canonical refusal: `{type: syncplay_error, error_code, message, …}`
+     * — the exact shape of phlix-server `Messages::error()`. Silence is not in
+     * this family's vocabulary.
+     */
+    private function sendCanonicalError(SyncPlayClient $client, string $code, string $message): void
+    {
+        $this->sendCanonical($client, self::canonicalFrame('syncplay_error', [
+            'error_code' => $code,
+            'message' => $message,
+        ]));
+    }
+
+    /**
+     * Fan a canonical frame out to the CANONICAL members of a room.
+     *
+     * The dialect twin of {@see self::broadcastToRoom()}: same single encode,
+     * same one exclusion parameter, plus the dialect guard — bare-latched
+     * members never see `syncplay_*` frames, exactly as canonical members
+     * never see bare ones.
+     *
+     * @param array<string, mixed> $frame
+     *
+     * @return void
+     */
+    private function broadcastCanonical(string $room, array $frame, ?string $excludeClientId = null): void
+    {
+        $encoded = json_encode($frame, JSON_THROW_ON_ERROR);
+        foreach (self::$rooms[$room] ?? [] as $client) {
+            if (!$client->canonical) {
+                continue;
+            }
+            if ($excludeClientId !== null && $client->clientId === $excludeClientId) {
+                continue;
+            }
+            $client->connection->send($encoded);
+        }
+    }
+
+    /**
+     * Recover the FRIENDLY room name a scoped key was built from.
+     *
+     * The scoped key is `serverId:userId:friendly` and the connection that
+     * joined it knows both of its own identity halves, so stripping the
+     * prefix it supplied is exact — the friendly name may itself contain
+     * colons and survives untouched. The internal key is never echoed to the
+     * wire, same law as the bare `room_state` echo.
+     */
+    private static function friendlyFromScoped(SyncPlayClient $client, string $scopedRoom): string
+    {
+        $prefix = $client->serverId . ':' . (string) $client->userId . ':';
+
+        return str_starts_with($scopedRoom, $prefix)
+            ? substr($scopedRoom, strlen($prefix))
+            : $scopedRoom;
+    }
+
+    /**
+     * Numeric coercion at the wire boundary (mirrors the server's private
+     * `intFromMixed`): numeric-ish values (int or decimal string) become
+     * ints, anything else takes the documented default.
+     */
+    private static function canonicalInt(mixed $value, int $default): int
+    {
+        return is_numeric($value) ? (int) $value : $default;
+    }
+
+    /**
+     * Elect the canonical room's next host: the OLDEST remaining member by
+     * `roomJoinedAt`, mirroring phlix-server `GroupState`'s host-election
+     * rule. Ties fall to roster order, which is insertion order — stable.
+     */
+    private static function electCanonicalHost(string $room): ?string
+    {
+        $elected = null;
+        $electedAt = 0;
+
+        foreach (self::$rooms[$room] ?? [] as $clientId => $member) {
+            $joinedAt = $member->roomJoinedAt ?? time();
+            if ($elected === null || $joinedAt < $electedAt) {
+                $elected = $clientId;
+                $electedAt = $joinedAt;
+            }
+        }
+
+        return $elected;
+    }
+
+    /**
+     * Build the `group` payload of `syncplay_group_state`, field-for-field
+     * per phlix-server `GroupState::getState()` law: members DICT keyed by
+     * member id with `{id, name, is_host, joined_at}`, the roster scalars,
+     * and `joined_at`/`created_at`/`last_activity_at` in UNIX SECONDS
+     * (SPEC §4) while `playback_position` rides wire MILLISECONDS (SPEC §2,
+     * S441). `current_media_duration` is the server's uninitialised default
+     * (0): a JSON relay does not inspect media.
+     *
+     * @return array<string, mixed>
+     */
+    private function canonicalGroupPayload(string $room, string $friendlyName): array
+    {
+        $now = time();
+        $hostId = self::$roomHosts[$room] ?? null;
+
+        $members = [];
+        foreach (self::$rooms[$room] ?? [] as $clientId => $member) {
+            $members[$clientId] = [
+                'id' => $clientId,
+                'name' => $member->displayName,
+                'is_host' => $hostId !== null && $clientId === $hostId,
+                'joined_at' => $member->roomJoinedAt ?? $now,
+            ];
+        }
+
+        $anchor = self::$roomPlayback[$room] ?? null;
+
+        return [
+            'group_id' => $friendlyName,
+            'group_name' => $friendlyName,
+            'member_count' => count($members),
+            'members' => $members,
+            'host_id' => $hostId,
+            'current_media_id' => $anchor['media_id'] ?? null,
+            'current_media_duration' => 0,
+            'playback_position' => isset($anchor['position']) ? (int) $anchor['position'] : 0,
+            'playback_state' => self::$roomStates[$room] ?? 'stopped',
+            'queue' => self::$roomQueues[$room] ?? [],
+            'created_at' => self::$roomCreatedAt[$room] ?? $now,
+            'last_activity_at' => self::$roomActivity[$room] ?? $now,
+        ];
+    }
+
+    /**
+     * Handle `syncplay_group_create` / `syncplay_group_join`.
+     *
+     * One path, two names (the server's `createGroup`/`joinGroup` collapse
+     * here because the hub auto-creates the shadow room — see the switch-arm
+     * comment). Law carried from the server:
+     *  - identity is the CONNECTION, never the payload claim (§9);
+     *    `member_name` is display metadata;
+     *  - `password_hash`/`password` are ACCEPTED AND IGNORED, which is safe
+     *    here for a stated reason rather than a luck: canonical rooms live
+     *    inside the caller's own `(server_id, owner)` scope, and that scope
+     *    is exactly what a group password protects — another user cannot
+     *    address this room key at all, and the owner's own devices are the
+     *    audience the owner chose by typing the password into them;
+     *  - join implies leave (the server's MED-3): an identity moving to a
+     *    second room detaches from the first with full teardown.
+     *
+     * @param array<string, mixed> $message
+     *
+     * @return void
+     */
+    private function handleCanonicalJoin(SyncPlayClient $client, array $message, bool $isCreate): void
+    {
+        // SV-4.7 twin for the canonical door: an unauthenticated socket must
+        // not exist here at all (the pre-101 token gate is the real wall), so
+        // this is belt-and-suspenders — same close the bare join performs.
+        if ($client->userId === null) {
+            $logger = LoggerFactory::get(LogChannels::RELAY);
+            $logger->warning('SyncPlay: rejected canonical join from unauthenticated client', [
+                'client_id' => $client->clientId,
+            ]);
+            $client->connection->close('', true);
+
+            return;
+        }
+
+        /** @var mixed $roomField */
+        $roomField = $message[$isCreate ? 'group_name' : 'group_id'] ?? null;
+        if ($isCreate) {
+            // Server default: a create without a usable name groups under 'New Group'.
+            $friendly = is_string($roomField) ? $roomField : 'New Group';
+        } else {
+            if (!is_string($roomField) || $roomField === '') {
+                $this->sendCanonicalError($client, 'syncplay.group_not_found', 'Group not found');
+
+                return;
+            }
+            $friendly = $roomField;
+        }
+
+        /** @var mixed $nameField */
+        $nameField = $message['member_name'] ?? null;
+        $displayName = is_string($nameField) ? $nameField : ($isCreate ? 'Host' : 'User');
+
+        if ($client->room !== null) {
+            $this->handleCanonicalLeave($client);
+        }
+
+        $scopedRoom = self::scopedRoomKey($client, $friendly);
+        if (!isset(self::$rooms[$scopedRoom])) {
+            self::$rooms[$scopedRoom] = [];
+        }
+
+        $now = time();
+        $isFirstMember = self::$rooms[$scopedRoom] === [];
+
+        $client->room = $scopedRoom;
+        $client->displayName = $displayName;
+        $client->roomJoinedAt = $now;
+        self::$rooms[$scopedRoom][$client->clientId] = $client;
+
+        if ($isFirstMember) {
+            // Creator (or first joiner of a shadow room) is host — the server's
+            // "creator is host" rule.
+            self::$roomHosts[$scopedRoom] = $client->clientId;
+            self::$roomCreatedAt[$scopedRoom] = $now;
+        }
+        self::$roomActivity[$scopedRoom] = $now;
+
+        // The joiner learns membership + identity: `your_id` is the hub-side
+        // member id every later frame will be stamped with (SPEC §9).
+        $this->sendCanonical($client, self::canonicalFrame('syncplay_group_state', [
+            'group' => $this->canonicalGroupPayload($scopedRoom, $friendly),
+            'your_id' => $client->clientId,
+        ]));
+
+        if (!$isFirstMember) {
+            // SPEC §6: a join is announced as syncplay_info with TOP-LEVEL
+            // member_id/member_name — the exact server prose, so a client
+            // greeting on the join toast needs no relay-specific branch.
+            $this->broadcastCanonical($scopedRoom, self::canonicalFrame('syncplay_info', [
+                'message' => $displayName . ' joined the group',
+                'member_id' => $client->clientId,
+                'member_name' => $displayName,
+            ]), $client->clientId);
+        }
+
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+        $logger->info('SyncPlay: canonical client joined room', [
+            'client_id' => $client->clientId,
+            'room' => $friendly,
+            'server_id' => $client->serverId,
+        ]);
+    }
+
+    /**
+     * Handle `syncplay_group_leave` (and the leave half of close/rejoin).
+     *
+     * Server law: the leaver is acked with `syncplay_info`; a PLAIN leave is
+     * reflected "in the next group_state" (SPEC §6) and the hub delivers that
+     * NEXT immediately — a relay that waits for an unrelated event would let
+     * stale rosters linger on every device; a host leave additionally fires
+     * `syncplay_host_elect` before the state, exactly like `leaveGroup()`.
+     * The emptied room's whole canonical bookkeeping (anchor, host, clocks,
+     * state, queue) dies in this step so a re-formed room starts truthful;
+     * the emptied bucket keeps the pinned 60s-sweep lifecycle.
+     */
+    private function handleCanonicalLeave(SyncPlayClient $client): void
+    {
+        $room = $client->room;
+        if ($room === null) {
+            // Server law: leaving without membership fails loud.
+            $this->sendCanonicalError($client, 'syncplay.leave_failed', 'Not in any group');
+
+            return;
+        }
+
+        $clientId = $client->clientId;
+        $memberName = $client->displayName;
+        $wasHost = (self::$roomHosts[$room] ?? null) === $clientId;
+        $friendly = self::friendlyFromScoped($client, $room);
+
+        unset(self::$rooms[$room][$clientId]);
+        $client->room = null;
+        $client->roomJoinedAt = null;
+
+        if ((self::$rooms[$room] ?? []) === []) {
+            unset(
+                self::$roomPlayback[$room],
+                self::$roomHosts[$room],
+                self::$roomCreatedAt[$room],
+                self::$roomActivity[$room],
+                self::$roomStates[$room],
+                self::$roomQueues[$room],
+            );
+        } else {
+            self::$roomActivity[$room] = time();
+
+            if ($wasHost) {
+                $newHost = self::electCanonicalHost($room);
+                if ($newHost !== null) {
+                    self::$roomHosts[$room] = $newHost;
+                } else {
+                    unset(self::$roomHosts[$room]);
+                }
+                $this->broadcastCanonical($room, self::canonicalFrame('syncplay_host_elect', [
+                    'elected_id' => $newHost,
+                    'elected_by' => $clientId,
+                ]));
+            }
+
+            $this->broadcastCanonical($room, self::canonicalFrame('syncplay_group_state', [
+                'group' => $this->canonicalGroupPayload($room, $friendly),
+            ]));
+        }
+
+        $this->sendCanonical($client, self::canonicalFrame('syncplay_info', [
+            'message' => $memberName . ' left the group',
+        ]));
+    }
+
+    /**
+     * Handle `syncplay_playback_play` / `_pause` / `_seek` (host-gated).
+     *
+     * Server law carried per type: the sender's claim about WHO sent this is
+     * overwritten with the connection's id (§9); `position`/`from_position`/
+     * `to_position` are wire milliseconds sanitized to ints; `server_time`
+     * passes through when the client supplied one (the :8097 arm echoes the
+     * payload value — it is the sender's clock reference, not the relay's).
+     * Outbound shape: PLAY returns to the host as a confirmation and to the
+     * others by broadcast; PAUSE/SEEK reach only the others (the server's
+     * exact asymmetry). The room anchor + state slot update BEFORE the fan-out,
+     * shared with the bare dialect, so a late joiner's state is truthful.
+     *
+     * @param array<string, mixed> $message
+     *
+     * @return void
+     */
+    private function handleCanonicalPlaybackCommand(SyncPlayClient $client, array $message, string $type): void
+    {
+        $room = $client->room;
+        if ($room === null) {
+            $this->sendCanonicalError($client, 'NOT_IN_GROUP', 'You are not in a group');
+
+            return;
+        }
+
+        if ((self::$roomHosts[$room] ?? null) !== $client->clientId) {
+            $this->sendCanonicalError($client, 'NOT_HOST', 'Only the host can control playback');
+
+            return;
+        }
+
+        $timestamp = self::nowMs();
+        $serverTime = self::canonicalInt($message['server_time'] ?? null, $timestamp);
+
+        if ($type === 'syncplay_playback_seek') {
+            $payload = [
+                'member_id' => $client->clientId,
+                'from_position' => self::canonicalInt($message['from_position'] ?? null, 0),
+                'to_position' => self::canonicalInt($message['to_position'] ?? null, 0),
+                'server_time' => $serverTime,
+            ];
+        } else {
+            $payload = [
+                'member_id' => $client->clientId,
+                'position' => self::canonicalInt($message['position'] ?? null, 0),
+                'server_time' => $serverTime,
+            ];
+        }
+
+        // Anchor before broadcast (the bare path's M-2 discipline, same slot,
+        // same distilled shape): `position`/`to_position`/`media_id` distil
+        // through the shared helper, so a mid-session joiner is anchored in
+        // either vocabulary it speaks.
+        self::$roomPlayback[$room] = self::playbackAnchor($type, $client->clientId, $timestamp, $message);
+        if ($type === 'syncplay_playback_play') {
+            self::$roomStates[$room] = 'playing';
+        } elseif ($type === 'syncplay_playback_pause') {
+            self::$roomStates[$room] = 'paused';
+        }
+        // SEEK deliberately leaves playback_state ALONE — the server's
+        // setPlaybackPosition-vs-updatePlayback distinction, kept.
+        self::$roomActivity[$room] = (int) ($timestamp / 1000);
+
+        $frame = self::canonicalFrame($type, $payload);
+        if ($type === 'syncplay_playback_play') {
+            $this->sendCanonical($client, $frame);
+        }
+        $this->broadcastCanonical($room, $frame, $client->clientId);
+    }
+
+    /**
+     * Handle `syncplay_playback_sync` (state report, anyone may send).
+     *
+     * Server law (S291/S441): the ANSWER carries the ROOM's current state
+     * stamped with the HOST's id — not the reporter's position — and reaches
+     * EVERY member including the reporter (this is the one frame family a
+     * client must not echo-suppress; SPEC §9.1). Deviation stated: the server
+     * stamps this payload's `server_time` with a seconds clock (`time()`);
+     * this relay keeps its own pinned ms law (see {@see self::nowMs()}) for
+     * every value IT stamps — the hub has never emitted a seconds `server_time`
+     * and will not start by borrowing a server bug-shape.
+     */
+    private function handleCanonicalPlaybackSync(SyncPlayClient $client): void
+    {
+        $room = $client->room;
+        if ($room === null) {
+            $this->sendCanonicalError($client, 'NOT_IN_GROUP', 'You are not in a group');
+
+            return;
+        }
+
+        self::$roomActivity[$room] = time();
+        $anchor = self::$roomPlayback[$room] ?? null;
+
+        $this->broadcastCanonical($room, self::canonicalFrame('syncplay_playback_sync', [
+            'member_id' => self::$roomHosts[$room] ?? null,
+            'group_id' => self::friendlyFromScoped($client, $room),
+            'current_media_id' => $anchor['media_id'] ?? null,
+            'position' => isset($anchor['position']) ? (int) $anchor['position'] : 0,
+            'is_playing' => (self::$roomStates[$room] ?? 'stopped') === 'playing',
+            'server_time' => self::nowMs(),
+        ]));
+    }
+
+    /**
+     * Handle `syncplay_playback_queue` (host-gated).
+     *
+     * Server law: parse the FULL replacement queue before touching live state
+     * (LOW-2 all-or-nothing), same entry normalization (`media_id` must be a
+     * string, `media_info` keeps only string keys), same cap and same
+     * registered overflow code `syncplay.queue_limit_exceeded` with the queue
+     * left UNTOUCHED on refusal. The accepted update broadcasts to everyone
+     * including the host (the server excludes nobody).
+     *
+     * @param array<string, mixed> $message
+     *
+     * @return void
+     */
+    private function handleCanonicalPlaybackQueue(SyncPlayClient $client, array $message): void
+    {
+        $room = $client->room;
+        if ($room === null) {
+            $this->sendCanonicalError($client, 'NOT_IN_GROUP', 'You are not in a group');
+
+            return;
+        }
+
+        if ((self::$roomHosts[$room] ?? null) !== $client->clientId) {
+            $this->sendCanonicalError($client, 'NOT_HOST', 'Only the host can modify the queue');
+
+            return;
+        }
+
+        /** @var mixed $queueRaw */
+        $queueRaw = $message['queue'] ?? [];
+
+        /** @var list<array{media_id: string, media_info: array<string, mixed>}> $parsed */
+        $parsed = [];
+        if (is_array($queueRaw)) {
+            foreach ($queueRaw as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                /** @var mixed $mediaId */
+                $mediaId = $item['media_id'] ?? null;
+                if (!is_string($mediaId)) {
+                    continue;
+                }
+                /** @var array<string, mixed> $mediaInfo */
+                $mediaInfo = [];
+                /** @var mixed $mediaInfoRaw */
+                $mediaInfoRaw = $item['media_info'] ?? [];
+                if (is_array($mediaInfoRaw)) {
+                    /**
+                     * @var array-key $infoKey
+                     * @var mixed      $infoValue
+                     */
+                    foreach ($mediaInfoRaw as $infoKey => $infoValue) {
+                        if (is_string($infoKey)) {
+                            /** @psalm-suppress MixedAssignment — wire-decoded value into a typed container, the house idiom */
+                            $mediaInfo[$infoKey] = $infoValue;
+                        }
+                    }
+                }
+                $parsed[] = ['media_id' => $mediaId, 'media_info' => $mediaInfo];
+            }
+        }
+
+        if (count($parsed) > self::CANONICAL_MAX_QUEUE_SIZE) {
+            $this->sendCanonicalError(
+                $client,
+                'syncplay.queue_limit_exceeded',
+                sprintf(
+                    'Playback queue exceeds the %d-item cap; queue unchanged',
+                    self::CANONICAL_MAX_QUEUE_SIZE,
+                ),
+            );
+
+            return;
+        }
+
+        self::$roomQueues[$room] = $parsed;
+        self::$roomActivity[$room] = time();
+
+        $this->broadcastCanonical($room, self::canonicalFrame('syncplay_playback_queue', [
+            'queue' => $parsed,
+        ]));
+    }
+
+    /**
+     * Handle `syncplay_chat` (any member).
+     *
+     * Server law: identity is the connection (S289), a blank message is
+     * dropped in silence, and the fan-out includes the sender (the server's
+     * broadcast carries no exclude list for chat).
+     *
+     * @param array<string, mixed> $message
+     *
+     * @return void
+     */
+    private function handleCanonicalChat(SyncPlayClient $client, array $message): void
+    {
+        $room = $client->room;
+        if ($room === null) {
+            $this->sendCanonicalError($client, 'NOT_IN_GROUP', 'You are not in a group');
+
+            return;
+        }
+
+        /** @var mixed $messageField */
+        $messageField = $message['message'] ?? null;
+        $text = is_string($messageField) ? $messageField : '';
+        if (trim($text) === '') {
+            return;
+        }
+
+        $this->broadcastCanonical($room, self::canonicalFrame('syncplay_chat', [
+            'member_id' => $client->clientId,
+            'member_name' => $client->displayName,
+            'message' => $text,
+        ]));
+    }
+
+    /**
+     * Handle `syncplay_typing` (any member).
+     *
+     * Server law: the guard misses are SILENT for typing (no error frames for
+     * a transient indicator), the boolean is read the server's way
+     * (`=== true` or the legacy `'1'` string), and the fan-out excludes the
+     * sender.
+     *
+     * @param array<string, mixed> $message
+     *
+     * @return void
+     */
+    private function handleCanonicalTyping(SyncPlayClient $client, array $message): void
+    {
+        $room = $client->room;
+        if ($room === null) {
+            return;
+        }
+
+        /** @var mixed $isTypingRaw */
+        $isTypingRaw = $message['is_typing'] ?? null;
+        $isTyping = $isTypingRaw === true || $isTypingRaw === '1';
+
+        $this->broadcastCanonical($room, self::canonicalFrame('syncplay_typing', [
+            'member_id' => $client->clientId,
+            'is_typing' => $isTyping,
+        ]), $client->clientId);
+    }
+
+    /**
+     * Handle `syncplay_time_ping`.
+     *
+     * NTP law (server `TimeSync::processPing`): echo `client_time` untouched,
+     * stamp `server_time` with the hub clock in MILLISECONDS, reply to the
+     * PINGER only. Room membership is NOT required — clock sync precedes and
+     * outlives rooms, same as on :8097.
+     *
+     * @param array<string, mixed> $message
+     *
+     * @return void
+     */
+    private function handleCanonicalTimePing(SyncPlayClient $client, array $message): void
+    {
+        $this->sendCanonical($client, self::canonicalFrame('syncplay_time_pong', [
+            'client_time' => self::canonicalInt($message['client_time'] ?? null, 0),
+            'server_time' => self::nowMs(),
+        ]));
+    }
+
+    /**
+     * Handle `syncplay_host_transfer` (host-gated).
+     *
+     * Server law with the server's guard order and codes: NOT_IN_GROUP →
+     * NOT_HOST → INVALID_NEW_HOST → MEMBER_NOT_FOUND → SAME_HOST; success
+     * rebroadcasts `syncplay_group_state` to EVERY member (the server
+     * excludes nobody), where the new host sees itself flagged.
+     *
+     * @param array<string, mixed> $message
+     *
+     * @return void
+     */
+    private function handleCanonicalHostTransfer(SyncPlayClient $client, array $message): void
+    {
+        $room = $client->room;
+        if ($room === null) {
+            $this->sendCanonicalError($client, 'NOT_IN_GROUP', 'You are not in a group');
+
+            return;
+        }
+
+        if ((self::$roomHosts[$room] ?? null) !== $client->clientId) {
+            $this->sendCanonicalError($client, 'NOT_HOST', 'Only the host can transfer ownership');
+
+            return;
+        }
+
+        /** @var mixed $newHostField */
+        $newHostField = $message['new_host_id'] ?? null;
+        $newHostId = is_string($newHostField) ? $newHostField : '';
+        if ($newHostId === '') {
+            $this->sendCanonicalError($client, 'INVALID_NEW_HOST', 'Missing new host member ID');
+
+            return;
+        }
+
+        if (!isset(self::$rooms[$room][$newHostId])) {
+            $this->sendCanonicalError($client, 'MEMBER_NOT_FOUND', 'New host is not a member of this group');
+
+            return;
+        }
+
+        if ($newHostId === $client->clientId) {
+            $this->sendCanonicalError($client, 'SAME_HOST', 'Cannot transfer to yourself');
+
+            return;
+        }
+
+        self::$roomHosts[$room] = $newHostId;
+        self::$roomActivity[$room] = time();
+
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+        $logger->info('SyncPlay: canonical host transferred', [
+            'room' => self::friendlyFromScoped($client, $room),
+            'old_host' => $client->clientId,
+            'new_host' => $newHostId,
+        ]);
+
+        $this->broadcastCanonical($room, self::canonicalFrame('syncplay_group_state', [
+            'group' => $this->canonicalGroupPayload($room, self::friendlyFromScoped($client, $room)),
+        ]));
+    }
+
+    /**
+     * Handle `syncplay_group_list`.
+     *
+     * The relay's honest answer is its OWN shadow rooms inside the caller's
+     * `(server_id, owner)` scope — the only rooms this socket could ever
+     * join. Server summary shape (`id`, `name`, `member_count`,
+     * `has_password`, `current_media`, `is_playing`) with two truthful
+     * constants: `id`/`name` are the friendly key and `has_password` is
+     * false because the hub gates by ownership scope, not passwords. Empty
+     * (pre-sweep) buckets are not listed.
+     */
+    private function handleCanonicalGroupList(SyncPlayClient $client): void
+    {
+        $prefix = $client->serverId . ':' . (string) $client->userId . ':';
+
+        $groups = [];
+        foreach (self::$rooms as $scopedRoom => $members) {
+            if (!str_starts_with($scopedRoom, $prefix) || $members === []) {
+                continue;
+            }
+            $friendly = substr($scopedRoom, strlen($prefix));
+            $anchor = self::$roomPlayback[$scopedRoom] ?? null;
+
+            $groups[] = [
+                'id' => $friendly,
+                'name' => $friendly,
+                'member_count' => count($members),
+                'has_password' => false,
+                'current_media' => $anchor['media_id'] ?? null,
+                'is_playing' => (self::$roomStates[$scopedRoom] ?? 'stopped') === 'playing',
+            ];
+        }
+
+        $this->sendCanonical($client, self::canonicalFrame('syncplay_group_list', [
+            'groups' => $groups,
+            'count' => count($groups),
+        ]));
+    }
+
     /**
      * Broadcast a message to the clients of a room.
      *
@@ -894,6 +1837,13 @@ final class SyncPlayRelayWorker
     ): void {
         $clients = self::$rooms[$room] ?? [];
         foreach ($clients as $client) {
+            // Dialect isolation: canonical-latched members receive only the
+            // `syncplay_*` catalog (see {@see self::broadcastCanonical()}).
+            // A room whose members are all bare — every room that exists in
+            // production today — is untouched by this guard.
+            if ($client->canonical) {
+                continue;
+            }
             if ($excludeClientId !== null && $client->clientId === $excludeClientId) {
                 continue;
             }
@@ -1065,5 +2015,10 @@ final class SyncPlayRelayWorker
         self::$clients = [];
         self::$rooms = [];
         self::$roomPlayback = [];
+        self::$roomHosts = [];
+        self::$roomCreatedAt = [];
+        self::$roomActivity = [];
+        self::$roomStates = [];
+        self::$roomQueues = [];
     }
 }

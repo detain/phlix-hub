@@ -40,6 +40,32 @@ final class SyncPlayClient
     public bool $inboundThrottleLogged = false;
 
     /**
+     * Wire-dialect latch (owner decision #14). `false` = the legacy bare room
+     * vocabulary (`group_join`/`room_state`/`playback_*`), the dialect this
+     * worker shipped with. `true` = the canonical `syncplay_*` catalog
+     * (phlix-syncplay SPEC.md §3, the vocabulary every syncplay client and the
+     * server `:8097` socket speak).
+     *
+     * The latch is set by {@see SyncPlayRelayWorker::onMessage()} on the first
+     * `syncplay_`-prefixed frame the connection sends, and it decides which
+     * vocabulary the connection's REPLIES are encoded in: canonical events fan
+     * out only to canonical-latched members, bare events only to bare members.
+     * Nothing is ever translated between the two — the bare vocabulary has zero
+     * live room consumers in the estate (evidence pinned in the worker's
+     * dialect docblock), so a room with BOTH dialects is a synthetic shape the
+     * relay answers per-speaker rather than inventing a bridge for.
+     */
+    public bool $canonical = false;
+
+    /**
+     * UNIX SECONDS this connection joined its CURRENT room, stamped by the
+     * canonical join path only. Feeds the `group_state` members dict
+     * (`joined_at` is seconds-scaled per SPEC §4) and the oldest-member host
+     * election. Reset to null on leave; never read for bare-dialect clients.
+     */
+    public ?int $roomJoinedAt = null;
+
+    /**
      * @param TcpConnection $connection   Workerman TCP connection.
      * @param string       $serverId    Server UUID this client belongs to.
      * @param string       $clientId    Unique client UUID assigned by hub.

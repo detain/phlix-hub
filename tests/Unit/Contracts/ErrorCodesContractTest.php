@@ -204,6 +204,7 @@ final class ErrorCodesContractTest extends TestCase
         'Http/Controllers/AdminUserController.php::badRequest' => 'swept:badRequest@2',
         'Http/Controllers/McpController.php::unauthorized' => 'swept:unauthorized@1',
         'Http/Middleware/AuthMiddleware.php::challenge' => 'swept:challenge@2',
+        'SyncPlay/SyncPlayRelayWorker.php::sendCanonicalError' => 'swept:sendCanonicalError@2',
         // — excluded, with reasons —
         'Http/Middleware/AlexaSignatureMiddleware.php::reject' =>
             'excluded: the emitted code flows through REJECTION_CODE_MAP (registered alexa.* dotted'
@@ -272,6 +273,15 @@ final class ErrorCodesContractTest extends TestCase
         [
             'file' => 'Http/Middleware/AuthMiddleware.php',
             'call' => 'challenge',
+            'positions' => [2],
+            'staticReceivers' => null,
+        ],
+        // SyncPlayRelayWorker::sendCanonicalError(client, CODE, message) — the
+        // canonical relay's loud floor: every refusal the :8804 syncplay_*
+        // dialect answers with rides $code into 'error_code'.
+        [
+            'file' => 'SyncPlay/SyncPlayRelayWorker.php',
+            'call' => 'sendCanonicalError',
             'positions' => [2],
             'staticReceivers' => null,
         ],
