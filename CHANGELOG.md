@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — proxy doc-comment currency: collection-write coords re-measured, ownership prose aligned — 2026-10-02
+
+- **What.** Prose-only pass over `ServerProxyController` after phlix-server
+  `ab6d89a5` moved collection writes from the interim `c53b1490` admin gate to
+  per-user ownership (member-scoped reads; owner-or-active-admin writes
+  in-handler; foreign miss = the same 404 as absence). `SCOPE_DENY_PATTERNS`
+  cited `Application.php:1783/1784` for bulk-add/refresh — true only at server
+  `69497171`; re-measured to `:2207/:2208` at `ab6d89a5`, with a coordinate-
+  currency note dating the remaining cites in that block to the `69497171` era.
+  The `POST /api/v1/playlists` allow entry now states the server's current
+  owner-or-admin posture (member creates over relay are legitimate) alongside
+  the dated interim-admin-gate history. No scope pattern, middleware, or
+  behavior line changed; the hub's deny/allow decisions are route-shaped and
+  posture-independent.
+
 ### Removed — the write-only `Http/RequestContext` scaffolding is deleted: nothing ever read it — 2026-10-02
 
 - **What and why.** `src/Http/RequestContext.php` (step 0.2c) was a typed

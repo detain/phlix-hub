@@ -536,6 +536,13 @@ final class ServerProxyController
             // HB-3.1: create playlist. Server: POST /api/v1/playlists (alias that
             // creates a collection). Anchored EXACT — no sub-path — so admin/scan
             // and any future `/api/v1/playlists/…` route stays denied.
+            // Server-side posture as of `ab6d89a5` (2026-10-02): `[AuthMiddleware]`
+            // with in-handler owner-or-active-admin semantics — a relayed member
+            // create is a legitimate self-owned write (stamps `created_by` from
+            // the relayed user). Historical: during the interim gate era
+            // `c53b1490` (2026-10-01) the server admin-gated this registration,
+            // so a member create 403'd upstream; the hub's anchored ALLOW entry
+            // never depended on either posture.
             '#^/api/v1/playlists$#',
 
             // ---- S63: cast/DLNA TRANSPORT CONTROL ---------------------------
@@ -743,6 +750,13 @@ final class ServerProxyController
      * @var list<non-empty-string>
      */
     private const SCOPE_DENY_PATTERNS = [
+        // Coordinate currency: the `File.php:NNNN` cites in this block record
+        // phlix-server registration lines as they stood at `69497171` — the
+        // same era pinned by `ServerProxyControllerTest::s107DeniedActionPaths()`
+        // — EXCEPT the `/api/v1/collections` pair below, re-measured at
+        // `ab6d89a5` (2026-10-02). The PATTERNS are route-shaped and stay
+        // authoritative; re-verify the server tip before trusting any single
+        // line number as current.
         // --- under the `/api/v1/music` read prefix (S100) ------------------
         // POST /api/v1/music/scan — WebPortalRouter.php:389.
         '#^/api/v1/music/scan(/|$)#i',
@@ -783,10 +797,19 @@ final class ServerProxyController
         '#^/api/v1/libraries/[^/]*/theme-media/scan(/|$)#i',
 
         // --- under the `/api/v1/collections` read prefix (S107) ------------
-        // POST /api/v1/collections/{id}/bulk-add — Application.php:1783
+        // POST /api/v1/collections/{id}/bulk-add — Application.php:2207
+        // POST /api/v1/collections/{id}/refresh  — Application.php:2208
+        // (refresh re-evaluates a smart collection's membership). Both coords
+        // re-measured at phlix-server `ab6d89a5` (2026-10-02; the earlier
+        // `:1783/:1784` spellings were true at `69497171`). Hub posture is
+        // unchanged by the server's collections-ownership flip: these are
+        // write ACTION paths inside the `/api/v1/collections` READ prefix,
+        // pinned per S107 rules (b)-(d) regardless of the server's gate —
+        // and in-handler ownership (owner-or-active-admin, foreign miss =
+        // the same 404 "Collection not found" as absence) does not make a
+        // GET-forwarded twin safe. The user-facing create path over relay
+        // stays the anchored POST `/api/v1/playlists` entry above.
         '#^/api/v1/collections/[^/]*/bulk-add(/|$)#i',
-        // POST /api/v1/collections/{id}/refresh  — Application.php:1784
-        // (re-evaluates a smart collection's membership).
         '#^/api/v1/collections/[^/]*/refresh(/|$)#i',
 
         // --- under the `/api/v1/media` read prefix (S107) ------------------
