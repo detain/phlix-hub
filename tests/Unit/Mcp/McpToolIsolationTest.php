@@ -125,7 +125,6 @@ final class McpToolIsolationTest extends TestCase
         'RelaySessionManager',
         'ServerListController',
         'McpTokenService',
-        'RequestContext',
         'userId',
         'user_id',
         'PDO',

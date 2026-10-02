@@ -14,7 +14,6 @@ namespace Phlix\Hub\Http\Middleware;
 use InvalidArgumentException;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Http\Request;
-use Phlix\Hub\Http\RequestContext;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\OAuth\OAuthError;
 use Phlix\Hub\OAuth\OAuthScopes;
@@ -225,12 +224,6 @@ final class OAuthResourceMiddleware
 
         $request->userId     = $grant->userId;
         $request->oauthGrant = $grant;
-
-        // Same coroutine-local publication AuthMiddleware performs, so a service
-        // downstream of an OAuth-authenticated request reads the same user id it
-        // would for a session-authenticated one. Never a static/global — this is
-        // `support\Context`-backed and dies with the coroutine.
-        RequestContext::setUserId($grant->userId);
 
         return null;
     }

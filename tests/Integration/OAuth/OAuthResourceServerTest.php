@@ -15,7 +15,6 @@ use Phlix\Hub\Http\Controllers\OAuthController;
 use Phlix\Hub\Http\Middleware\AuthMiddleware;
 use Phlix\Hub\Http\Middleware\OAuthResourceMiddleware;
 use Phlix\Hub\Http\Request;
-use Phlix\Hub\Http\RequestContext;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
 use Phlix\Hub\Mcp\McpScopes;
@@ -543,14 +542,14 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
      *
      * The same sentinel pins the two facts a controller behind this gate depends
      * on and that `/oauth/userinfo` happens not to use: `Request::$userId` and
-     * the coroutine-local {@see RequestContext} are both populated with the
-     * grant's user.
+     * the grant's `clientId` are both populated with the request's own
+     * credential.
      */
     public function testNothingThatFailsAGateEverReachesTheHandler(): void
     {
         $grant = $this->issueTokensFor(self::CLIENT_ID, self::SECRET, OAuthScopes::PROFILE_READ);
 
-        /** @var list<array{userId: ?string, contextUserId: ?string, clientId: string}> $seen */
+        /** @var list<array{userId: ?string, clientId: string}> $seen */
         $seen = [];
 
         $sentinel = new Router();
@@ -558,9 +557,8 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
             $r->get('/userinfo', static function (Request $req) use (&$seen): Response {
                 $grant = $req->oauthGrant;
                 $seen[] = [
-                    'userId'        => $req->userId,
-                    'contextUserId' => RequestContext::getUserId(),
-                    'clientId'      => $grant instanceof OAuthGrant ? $grant->clientId : '',
+                    'userId'   => $req->userId,
+                    'clientId' => $grant instanceof OAuthGrant ? $grant->clientId : '',
                 ];
 
                 return (new Response())->json(['reached' => true]);
@@ -568,21 +566,13 @@ final class OAuthResourceServerTest extends RealDatabaseTestCase
         }, [self::resourceMiddleware()]);
 
         // --- CONTROL: a good token reaches the handler, fully hydrated -------
-        RequestContext::setUserId(null);
         self::assertSame(200, $sentinel->dispatch($this->request($grant['access_token']))->statusCode);
         self::assertCount(1, $seen, 'the sentinel handler was never reached by a VALID token');
         self::assertSame($this->userId, $seen[0]['userId'], 'Request::$userId was not populated');
-        self::assertSame(
-            $this->userId,
-            $seen[0]['contextUserId'],
-            'RequestContext::setUserId() was not called, so a downstream service reading the '
-            . 'coroutine-local context sees nobody',
-        );
         self::assertSame(self::CLIENT_ID, $seen[0]['clientId']);
 
         // --- the user is deleted; the handler must NOT run ------------------
         $this->db->query('DELETE FROM users WHERE id = :id', ['id' => $this->userId]);
-        RequestContext::setUserId(null);
 
         $refused = $sentinel->dispatch($this->request($grant['access_token']));
 

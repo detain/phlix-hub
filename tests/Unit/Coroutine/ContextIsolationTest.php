@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Coroutine;
 
 use Fiber;
-use Phlix\Hub\Http\RequestContext;
 use PHPUnit\Framework\TestCase;
 use support\Context;
 
@@ -52,142 +51,12 @@ final class ContextIsolationTest extends TestCase
     }
 
     /**
-     * Sanity baseline: when no value has been published into the
-     * context, {@see RequestContext::getUserId()} returns `null` and
-     * {@see RequestContext::hasUserId()} returns `false`.
-     */
-    public function testUserIdIsNullWhenUnset(): void
-    {
-        $this->assertNull(RequestContext::getUserId());
-        $this->assertFalse(RequestContext::hasUserId());
-    }
-
-    /**
-     * The private constructor exists to forbid instantiation. This test
-     * pokes it via reflection so coverage reflects intent and a future
-     * hand that "loosens" the visibility doesn't go unnoticed.
-     */
-    public function testConstructorIsPrivateAndClassIsFinal(): void
-    {
-        $rc = new \ReflectionClass(RequestContext::class);
-        $this->assertTrue($rc->isFinal(), 'RequestContext must stay final');
-
-        $ctor = $rc->getConstructor();
-        $this->assertNotNull($ctor);
-        $this->assertTrue($ctor->isPrivate(), 'constructor must stay private');
-
-        $ctor->setAccessible(true);
-        $instance = $rc->newInstanceWithoutConstructor();
-        $ctor->invoke($instance);
-        $this->assertInstanceOf(RequestContext::class, $instance);
-    }
-
-    /**
-     * `setUserId` round-trips a string through `support\Context`.
-     */
-    public function testSetThenGetRoundTripsUserId(): void
-    {
-        RequestContext::setUserId('hub-user-42');
-        $this->assertSame('hub-user-42', RequestContext::getUserId());
-        $this->assertTrue(RequestContext::hasUserId());
-    }
-
-    /**
-     * Both `setUserId(null)` and `clearUserId()` wipe the slot. After
-     * either, `getUserId()` returns `null` and `hasUserId()` is `false`.
-     */
-    public function testClearUserIdRemovesTheSlot(): void
-    {
-        RequestContext::setUserId('hub-user-7');
-        $this->assertTrue(RequestContext::hasUserId());
-
-        RequestContext::clearUserId();
-        $this->assertNull(RequestContext::getUserId());
-        $this->assertFalse(RequestContext::hasUserId());
-
-        RequestContext::setUserId('hub-user-9');
-        RequestContext::setUserId(null);
-        $this->assertNull(RequestContext::getUserId());
-        $this->assertFalse(RequestContext::hasUserId());
-    }
-
-    /**
-     * Empty string is treated as "no user-id" by `hasUserId()` so an
-     * accidental `$request->userId = ''` cannot masquerade as an
-     * authenticated user downstream. `getUserId()` still returns the
-     * stored empty string — downstream code is expected to gate on
-     * `hasUserId()`.
-     */
-    public function testEmptyStringIsNotConsideredPresent(): void
-    {
-        RequestContext::setUserId('');
-        $this->assertFalse(RequestContext::hasUserId());
-        $this->assertSame('', RequestContext::getUserId());
-    }
-
-    /**
-     * If something else writes a non-string into the user-id slot,
-     * `getUserId()` returns `null` rather than handing back the wrong
-     * type. Keeps the `?string` contract honest under PHPStan L9 and
-     * Psalm errorLevel 1.
-     */
-    public function testGetUserIdReturnsNullForNonStringValue(): void
-    {
-        Context::set(RequestContext::KEY_USER_ID, 1234);
-        $this->assertNull(RequestContext::getUserId());
-        $this->assertFalse(RequestContext::hasUserId());
-
-        Context::set(RequestContext::KEY_USER_ID, ['oops']);
-        $this->assertNull(RequestContext::getUserId());
-        $this->assertFalse(RequestContext::hasUserId());
-    }
-
-    /**
-     * Core isolation property: setting a value in one Fiber must not
-     * leak into another. Each Fiber stands in for a Swoole coroutine —
-     * the {@see \Workerman\Coroutine\Context\Fiber} driver indexes its
-     * WeakMap by `Fiber::getCurrent()`, exactly like the Swoole driver
-     * indexes by coroutine-id.
-     *
-     * Without isolation, the second fiber would see `hub-user-A`
-     * (Fiber A's value). With isolation, it sees `null`.
-     */
-    public function testUserIdIsIsolatedBetweenFibers(): void
-    {
-        $resultsA = [];
-        $resultsB = [];
-
-        $fiberA = new Fiber(function () use (&$resultsA): void {
-            $resultsA['before'] = RequestContext::getUserId();
-            RequestContext::setUserId('hub-user-A');
-            $resultsA['after_set'] = RequestContext::getUserId();
-            Fiber::suspend();
-            $resultsA['after_resume'] = RequestContext::getUserId();
-        });
-
-        $fiberB = new Fiber(function () use (&$resultsB): void {
-            $resultsB['before'] = RequestContext::getUserId();
-            RequestContext::setUserId('hub-user-B');
-            $resultsB['after_set'] = RequestContext::getUserId();
-        });
-
-        $fiberA->start();
-        $fiberB->start();
-        $fiberA->resume();
-
-        $this->assertNull($resultsA['before'], 'Fiber A sees a clean context on entry');
-        $this->assertSame('hub-user-A', $resultsA['after_set']);
-        $this->assertSame('hub-user-A', $resultsA['after_resume'], 'Fiber A retains its own value across suspend');
-
-        $this->assertNull($resultsB['before'], 'Fiber B must NOT see Fiber A\'s hub-user-A');
-        $this->assertSame('hub-user-B', $resultsB['after_set']);
-    }
-
-    /**
-     * `support\Context` itself (not just the wrapper) must isolate.
-     * This guards against future "convenience" code that bypasses
-     * {@see RequestContext} and calls `Context::set` directly: such
-     * code MUST still be coroutine-safe.
+     * Core isolation property of `support\Context`: a value set in one
+     * Fiber must not leak into another. Each Fiber stands in for a
+     * Swoole coroutine — the {@see \Workerman\Coroutine\Context\Fiber}
+     * driver indexes its WeakMap by `Fiber::getCurrent()`, exactly like
+     * the Swoole driver indexes by coroutine-id. Any per-request state
+     * published through `Context::set()` therefore stays coroutine-safe.
      */
     public function testRawSupportContextIsIsolatedBetweenFibers(): void
     {

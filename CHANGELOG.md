@@ -6,6 +6,45 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Removed — the write-only `Http/RequestContext` scaffolding is deleted: nothing ever read it — 2026-10-02
+
+- **What and why.** `src/Http/RequestContext.php` (step 0.2c) was a typed
+  `support\Context` facade for publishing the authenticated user-id
+  coroutine-locally. Owner decision after a fresh 2026-10-02 audit: the
+  hub has **zero readers** of `getUserId()`/`hasUserId()` anywhere in
+  `src/`, `scripts/` or `public/` — only two writers (`AuthMiddleware`,
+  `OAuthResourceMiddleware` after successful auth) and tests that existed
+  solely to exercise the wrapper. Identity travels on `Request::$userId`
+  (and `$request->claims` / `$request->oauthGrant`); the facade was dead
+  scaffolding, and per the no-static-state law deleting it makes the
+  middlewares' "no cross-request state" posture strictly MORE true. The
+  performance worklog's 2026-07-13 incident entry that first flagged it
+  ("hypothesis REFUTED … never read = dead code") had an open follow-up
+  "remove dead RequestContext" — this closes it.
+- **Deletions.** `src/Http/RequestContext.php` (the class); the two
+  writers and their comment blocks + imports in `AuthMiddleware::__invoke`
+  and `OAuthResourceMiddleware::__invoke` (both methods keep hydrating
+  `Request` and returning `null` unchanged); `AuthMiddlewareTest`'s two
+  publication tests (`testPublishesUserIdToRequestContextOnSuccessfulAuth`,
+  `testDoesNotPublishUserIdOnAnyRejectionPath` — the success/rejection
+  paths they leaned on stay covered by the per-path tests above them);
+  the seven wrapper-specific tests in `ContextIsolationTest` (the file
+  keeps the raw `support\Context` Fiber-isolation proof and both
+  `start.php` swoole-branch tests); `RequestContext::getUserId()` pins in
+  `OAuthResourceServerTest`'s gate sentinel (`Request::$userId` and
+  `clientId` pins stay — the mutation-killing "nothing that fails a gate
+  reaches the handler" contract is untouched); the dead `'RequestContext'`
+  entry in `McpToolIsolationTest::FORBIDDEN` (a nonexistent class cannot
+  be named in loading code; the identity-bypass guard stays armed via
+  `userId`/`McpTokenService`).
+- **Not-found items (re-verified against disk).** The audit's claims of a
+  DI registration in `CommonServicesProvider` and a `RequestContext`
+  citation in `src/Workerman/Request.php` name coordinates that exist in
+  **phlix-server**, not hub — hub has neither, so those steps were no-ops.
+- **Docs truth.** `AGENTS.md`/`CLAUDE.md` architecture bullets no longer
+  list the class; `performance_worklog_hub.md` narrative preserved with
+  the class named descriptively and the follow-up marked DONE.
+
 ### Fixed — the dialect latch now gates INBOUND: bare room-family frames on a canonical socket are refused, ghost-host vector closed — 2026-10-02
 
 - **The gap.** Owner #14's latch gated the fan-out direction (`broadcastToRoom()`/
