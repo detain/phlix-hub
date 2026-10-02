@@ -4152,8 +4152,11 @@ x-phlix-websockets:
       (owner decision #14): the legacy BARE room dialect listed first below, and the CANONICAL
       `syncplay_*` catalog (phlix-syncplay SPEC.md §3 — the vocabulary of :8097 and every syncplay
       client). A connection latches its dialect with the first `syncplay_`-prefixed frame it sends
-      and all replies are then encoded in that dialect; frames are never translated across the two
-      and never cross the dialect boundary within a room.
+      and all replies are then encoded in that dialect; the latch gates inbound too — a bare
+      room-family frame (`group_join`, `playback_*`, `time_sync`) on a canonical-latched socket is
+      refused with `syncplay_error` `UNKNOWN_MESSAGE` and mutates nothing, so a canonical client
+      never sees a bare room frame; frames are never translated across the two and never cross the
+      dialect boundary within a room.
     auth: >-
       A client relay token, validated by ClientRelayTokenService and required to be bound to the
       path-derived server_id. Since step S237 the token is carried EXACTLY as on :8803 —

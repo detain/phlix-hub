@@ -77,12 +77,12 @@ use function trim;
  *
  * A connection LATCHES its dialect with the first `syncplay_`-prefixed frame
  * it sends ({@see SyncPlayClient::$canonical}); every room reply is then
- * encoded for that dialect and fanned out only to same-dialect members. No
- * translation happens between the vocabularies, so a hypothetical mixed room
- * hears each speaker in its own tongue only — a deliberate, documented
- * boundary, not an oversight: there is no consumer to bridge today, and a
- * translator would be unverifiable fiction. The `pending_command` lane is
- * dialect-agnostic: it is addressed to the user's sockets, not to a room.
+ * encoded for that dialect, the bare room family arriving on a canonical
+ * latch meets the `UNKNOWN_MESSAGE` floor instead of its bare handler, and
+ * fan-outs stay same-dialect — a canonical client never sees a bare frame in
+ * either direction. Nothing is translated: a mixed room hears each speaker in
+ * its own tongue only (deliberate — zero live bare consumers; a translator
+ * would be unverifiable fiction). `pending_command` is dialect-agnostic.
  *
  * @package Phlix\Hub\SyncPlay
  */
@@ -683,16 +683,43 @@ final class SyncPlayRelayWorker
 
         switch ($type) {
             case 'group_join':
+                // Room-family guard (owner #14 follow-up): a canonical-latched
+                // socket sending a BARE join would (a) receive the bare
+                // `room_state` reply — a frame its dialect must never see —
+                // and (b) if it already holds canonical membership, be re-homed
+                // through the BARE leave, skipping host election and every
+                // canonical book: a ghost host plus stale state until the
+                // sweep. Refused like the closed canonical floor instead.
+                if ($this->refuseBareFrameOnCanonicalLatch($client, $type)) {
+                    break;
+                }
+
                 $this->handleGroupJoin($client, $message);
                 break;
 
             case 'playback_play':
             case 'playback_pause':
             case 'playback_seek':
+                // Same guard: the fan-out can't reach the canonical sender
+                // (broadcastToRoom filters by dialect), but the shared
+                // playback anchor it writes feeds the canonical joiner's
+                // `group_state.playback` — a bare-dialect writer would stamp
+                // bare-shaped truth into canonical books.
+                if ($this->refuseBareFrameOnCanonicalLatch($client, $type)) {
+                    break;
+                }
+
                 $this->handlePlayback($client, $message, $type);
                 break;
 
             case 'time_sync':
+                // Same guard: the bare `time_sync_reply` would land directly on
+                // a canonical socket. The canonical clock lane is
+                // `syncplay_time_ping`; the bare probe name is not it.
+                if ($this->refuseBareFrameOnCanonicalLatch($client, $type)) {
+                    break;
+                }
+
                 $this->handleTimeSync($client, $message);
                 break;
 
@@ -702,7 +729,9 @@ final class SyncPlayRelayWorker
                 // run the canonical teardown (host election, state cleanup,
                 // canonical notices) or the room books would orphan its host
                 // slot. A client speaking both vocabularies is self-contradictory;
-                // its membership state follows the latch, faithfully.
+                // its membership state follows the latch, faithfully. (The room
+                // family above — join/playback/time — REFUSES instead: there is
+                // no dialect-correct bare analogue to route a join to.)
                 if ($client->canonical) {
                     $this->handleCanonicalLeave($client);
                 } else {
@@ -1149,6 +1178,35 @@ final class SyncPlayRelayWorker
             'error_code' => $code,
             'message' => $message,
         ]));
+    }
+
+    /**
+     * Guard for the bare room-family arms: does `$type` — a name from the BARE
+     * vocabulary — arrive on a socket already latched CANONICAL?
+     *
+     * The treatment is the closed canonical floor's own (the `syncplay_*`
+     * unknown-name and server-only-type arms): a `syncplay_error` carrying
+     * `UNKNOWN_MESSAGE`, the exact refusal a canonical client already knows how
+     * to read, and the same code a bare `group_join` earns on the server's
+     * :8097 socket, where only the catalog is spoken. The refused name rides in
+     * the human-readable `message` — clients branch on `error_code` (pinned by
+     * the estate's error maps), so naming it costs no compatibility and makes
+     * the dialect mistake self-diagnosing on the wire. The refusal is
+     * sender-addressed, like every error in this family: nothing fans out.
+     *
+     * @return bool True when the frame WAS refused — the caller must not run
+     *               its bare handler. False (and no write) for every
+     *               bare-latched connection: the legacy path stays byte-identical.
+     */
+    private function refuseBareFrameOnCanonicalLatch(SyncPlayClient $client, string $type): bool
+    {
+        if (!$client->canonical) {
+            return false;
+        }
+
+        $this->sendCanonicalError($client, 'UNKNOWN_MESSAGE', 'Unknown message type: ' . $type);
+
+        return true;
     }
 
     /**

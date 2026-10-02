@@ -6,6 +6,41 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — the dialect latch now gates INBOUND: bare room-family frames on a canonical socket are refused, ghost-host vector closed — 2026-10-02
+
+- **The gap.** Owner #14's latch gated the fan-out direction (`broadcastToRoom()`/
+  `broadcastCanonical()` filter by dialect) and routed `group_leave`/`onClose` by the latch, but the
+  bare room-family arms of the worker switch (`group_join`, `playback_*`, `time_sync`) ran their bare
+  handlers regardless of latch. A canonical-latched socket sending one of those names therefore
+  violated the documented absolute law — "a canonical client never sees a bare frame": a bare
+  `group_join` was answered with a bare `room_state`, a bare `time_sync` with a bare
+  `time_sync_reply`. The `group_join` arm was worse than a wire leak: when the sender already held
+  canonical membership, its internal re-home ran the BARE leave — no host election, no canonical
+  notices, canonical books (host slot, `roomStates`, activity) left stale — a ghost host until the
+  60s sweep, and the client's new bare homing then escaped the canonical teardown on close.
+- **The guard.** One helper, `refuseBareFrameOnCanonicalLatch()`, applied at the three bare
+  room-family arms: a canonical-latched connection gets the closed canonical floor's own answer —
+  `syncplay_error` with `UNKNOWN_MESSAGE`, the code `:8097` gives a bare `group_join` on the
+  server's catalog-only socket, with the refused name carried in the human-readable `message`
+  (clients branch on `error_code`, so naming costs no compatibility) — and NOTHING mutates: no
+  re-home, no anchor write (bare `playback_*` also stopped clobbering the shared playback anchor
+  that canonical `group_state.playback` reads), no fan-out. Bare-latched connections are
+  byte-unchanged; `group_leave` keeps its route-by-latch behavior (leaving has a dialect-correct
+  canonical handler; joining does not). The bare unknown-name extension floor (verbatim relay to
+  bare members) stays open by design — its receivers are already dialect-filtered.
+- **Truth sweep.** With the leak plugged, `docs/websockets.md` and the `openapi.yaml` `:8804`
+  entries now STATE the inbound gate alongside the absolute law (which the fix makes true in every
+  direction; the only lane outside the claim, `pending_command`, is named and scoped out — it is
+  user-addressed, not room-bound). `SyncPlayRelayWorker`'s class docblock and
+  `SyncPlayClient::$canonical` carry the same law; the docblock edit is deliberately line-neutral
+  so the `phlix-syncplay` SPEC §8.4 carrier coordinates stay anchored.
+- **Tests.** `SyncPlayRelayCanonicalDialectTest` +4 tests: the ghost-host vector end-to-end (bare
+  `group_join` on the canonical host → refusal frame, zero bare reply, host rank and books intact,
+  later leave still elects and notifies), bare `time_sync` and bare `playback_play` refusals (the
+  latter pinning the shared anchor to the canonical write), and a bare-latched control round-trip
+  proving the legacy path is byte-unchanged. Measured red first: all three refusal tests fail on
+  the pre-guard switch; the control passes on both sides. `--filter SyncPlayRelay` 55/55.
+
 ### Added — `:8804` learns the canonical `syncplay_*` catalog: the relay room lane owner decision #14 opened — 2026-10-02
 
 - **What and why.** Until now the hub's SyncPlay relay spoke only its private BARE room vocabulary

@@ -566,6 +566,171 @@ final class SyncPlayRelayCanonicalDialectTest extends TestCase
         self::assertSame($beforeD, count($sinkD));
     }
 
+    // ---- Dialect guard on the bare room family (owner #14 follow-up) -------
+
+    public function testBareGroupJoinFromCanonicalSocketIsRefusedWithoutRehomingOrGhostHost(): void
+    {
+        $worker = $this->makeWorker();
+
+        $sinkA = [];
+        $connA = $this->authedClient($worker, 'token-a', $sinkA);
+        $worker->onMessage($connA, $this->canonicalFrame('syncplay_group_create', [
+            'group_name' => 'party',
+            'member_name' => 'Alpha',
+        ]));
+        $sinkB = [];
+        $connB = $this->authedClient($worker, 'token-b', $sinkB);
+        $worker->onMessage($connB, $this->canonicalFrame('syncplay_group_join', ['group_id' => 'party']));
+
+        $beforeB = count($sinkB);
+
+        // THE GHOST-HOST VECTOR: the canonical host of `party` attempts a BARE
+        // join to another room. Unguarded, that ran the bare leave (unset with
+        // no election, no notice, stale canonical books) and answered with a
+        // bare room_state — a bare frame on a canonical socket.
+        $worker->onMessage($connA, (string) json_encode([
+            'type' => 'group_join',
+            'room' => 'other',
+            'display_name' => 'ghost',
+        ]));
+
+        // Refused with the closed canonical floor's own shape, naming the type.
+        $errors = $this->sinkFramesOfType($sinkA, 'syncplay_error');
+        self::assertCount(1, $errors, 'a bare join on a canonical latch is refused loudly');
+        self::assertSame('UNKNOWN_MESSAGE', $errors[0]['error_code']);
+        $refusal = $errors[0]['message'] ?? null;
+        self::assertIsString($refusal);
+        self::assertTrue(str_contains($refusal, 'group_join'), 'the refusal names the refused frame');
+        self::assertSame(1, $errors[0]['protocol_version']);
+        $this->assertUnixMs($errors[0]['timestamp']);
+
+        // Wire law: the canonical socket received no bare frame of any kind.
+        self::assertFalse($this->sinkHasType($sinkA, 'room_state'), 'a canonical client never sees a bare frame');
+        self::assertSame($beforeB, count($sinkB), 'the refusal is sender-addressed; the room hears nothing');
+
+        // Books intact in both directions: A STILL holds canonical host rank —
+        // a canonical play passes the host gate and is acked to its sender.
+        // (Unguarded, the re-home dropped A into a bare room where no host of
+        // record exists, and the same play would answer NOT_HOST.)
+        $worker->onMessage($connA, $this->canonicalFrame('syncplay_playback_play', ['position' => 1]));
+        self::assertTrue(
+            $this->sinkHasType($sinkA, 'syncplay_playback_play'),
+            'host rank survived the refused bare join',
+        );
+
+        // And the canonical leave still runs the canonical teardown: B finally
+        // learns of the departure through election + fresh state — exactly the
+        // notices the bare re-home would have silently eaten, leaving A's old
+        // room with a ghost host until the sweep.
+        $worker->onMessage($connA, $this->canonicalFrame('syncplay_group_leave', []));
+        $elects = $this->sinkFramesOfType($sinkB, 'syncplay_host_elect');
+        self::assertCount(1, $elects, 'the host slot transfers through the election, not the sweep');
+        $statesB = $this->sinkFramesOfType($sinkB, 'syncplay_group_state');
+        self::assertCount(2, $statesB, 'own join state + the post-leave state');
+        $final = $this->groupOfFrame($statesB[1]);
+        self::assertSame(1, $final['member_count']);
+        self::assertSame(
+            $this->yourIdOf($sinkB),
+            $final['host_id'],
+            'the election handed B the slot the ghost-host vector would have left vacant',
+        );
+    }
+
+    public function testBareTimeSyncFromCanonicalSocketIsRefusedNotAnsweredBare(): void
+    {
+        $worker = $this->makeWorker();
+
+        $sinkA = [];
+        $connA = $this->authedClient($worker, 'token-a', $sinkA);
+        // Latch WITHOUT a room: the pong is canonical, so the socket is
+        // canonical-latched before it ever joins anything.
+        $worker->onMessage($connA, $this->canonicalFrame('syncplay_time_ping', ['client_time' => 1]));
+        self::assertTrue($this->sinkHasType($sinkA, 'syncplay_time_pong'));
+
+        $worker->onMessage($connA, (string) json_encode(['type' => 'time_sync', 'client_time' => 2]));
+
+        self::assertFalse(
+            $this->sinkHasType($sinkA, 'time_sync_reply'),
+            'the bare clock answer must never land on a canonical socket',
+        );
+        $errors = $this->sinkFramesOfType($sinkA, 'syncplay_error');
+        self::assertCount(1, $errors);
+        self::assertSame('UNKNOWN_MESSAGE', $errors[0]['error_code']);
+        $refusal = $errors[0]['message'] ?? null;
+        self::assertIsString($refusal);
+        self::assertTrue(str_contains($refusal, 'time_sync'));
+    }
+
+    public function testBarePlaybackFromCanonicalSocketIsRefusedAndTheSharedAnchorStaysCanonical(): void
+    {
+        $worker = $this->makeWorker();
+
+        $sinkA = [];
+        $connA = $this->authedClient($worker, 'token-a', $sinkA);
+        $worker->onMessage($connA, $this->canonicalFrame('syncplay_group_create', [
+            'group_name' => 'party',
+            'member_name' => 'Alpha',
+        ]));
+        $sinkB = [];
+        $connB = $this->authedClient($worker, 'token-b', $sinkB);
+        $worker->onMessage($connB, $this->canonicalFrame('syncplay_group_join', ['group_id' => 'party']));
+
+        // Canonical play seeds the SHARED anchor slot at position 4242.
+        $worker->onMessage($connA, $this->canonicalFrame('syncplay_playback_play', ['position' => 4242]));
+
+        $beforeB = count($sinkB);
+
+        // A bare playback frame from the same socket would clobber that slot —
+        // it feeds canonical members' `group_state.playback` — with a bare-
+        // shaped write at position 99999.
+        $worker->onMessage($connA, (string) json_encode(['type' => 'playback_play', 'position' => 99999]));
+
+        $errors = $this->sinkFramesOfType($sinkA, 'syncplay_error');
+        self::assertCount(1, $errors, 'the bare control frame is refused, not silently dropped');
+        self::assertSame('UNKNOWN_MESSAGE', $errors[0]['error_code']);
+        $refusal = $errors[0]['message'] ?? null;
+        self::assertIsString($refusal);
+        self::assertTrue(str_contains($refusal, 'playback_play'));
+        self::assertSame($beforeB, count($sinkB), 'a refused bare frame fans out in no vocabulary');
+
+        // The anchor the room answers with is STILL the canonical one.
+        $worker->onMessage($connA, $this->canonicalFrame('syncplay_playback_sync', []));
+        $syncs = $this->sinkFramesOfType($sinkA, 'syncplay_playback_sync');
+        self::assertCount(1, $syncs);
+        self::assertSame(4242, $syncs[0]['position'], 'the refused bare write never touched the shared anchor');
+        self::assertTrue($syncs[0]['is_playing']);
+    }
+
+    public function testBareLatchedClientRoundTripsTheGuardedFamilyUnchanged(): void
+    {
+        $worker = $this->makeWorker();
+        $sinkC = [];
+        $connC = $this->authedClient($worker, 'token-c', $sinkC, 'user-c', 'server-c');
+
+        // Control pin for the guard: a BARE-latched socket keeps the legacy
+        // answers byte-for-byte — join, play, and clock probe all answered.
+        $worker->onMessage($connC, (string) json_encode(['type' => 'group_join', 'room' => 'bare-only']));
+        self::assertTrue($this->sinkHasType($sinkC, 'room_state'));
+
+        $worker->onMessage($connC, (string) json_encode(['type' => 'playback_play', 'position' => 1.5]));
+        self::assertTrue(
+            $this->sinkHasType($sinkC, 'playback_play'),
+            'bare play echoes to its sender (include-self law)',
+        );
+
+        $worker->onMessage($connC, (string) json_encode(['type' => 'time_sync', 'client_time' => 7]));
+        $reply = $this->firstSinkFrameOfType($sinkC, 'time_sync_reply');
+        self::assertIsArray($reply);
+        self::assertSame(7, $reply['client_time']);
+        $this->assertUnixMs($reply['server_time']);
+
+        self::assertCount(
+            0,
+            $this->sinkFramesOfType($sinkC, 'syncplay_error'),
+            'the guard is latch-only — a bare latch sees no canonical frame, refusal included',
+        );
+    }
+
     public function testServerToClientTypesSpokenInboundAreRefusedNotRelayed(): void
     {
         $worker = $this->makeWorker();

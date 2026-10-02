@@ -47,9 +47,12 @@ final class SyncPlayClient
      * server `:8097` socket speak).
      *
      * The latch is set by {@see SyncPlayRelayWorker::onMessage()} on the first
-     * `syncplay_`-prefixed frame the connection sends, and it decides which
-     * vocabulary the connection's REPLIES are encoded in: canonical events fan
-     * out only to canonical-latched members, bare events only to bare members.
+     * `syncplay_`-prefixed frame the connection sends, and it decides the
+     * vocabulary in BOTH directions: canonical events fan out only to
+     * canonical-latched members, bare events only to bare members, and the bare
+     * room family (`group_join`, `playback_*`, `time_sync`) arriving on a
+     * canonical latch is refused with the canonical floor's `UNKNOWN_MESSAGE`
+     * instead of running its bare handler.
      * Nothing is ever translated between the two — the bare vocabulary has zero
      * live room consumers in the estate (evidence pinned in the worker's
      * dialect docblock), so a room with BOTH dialects is a synthetic shape the

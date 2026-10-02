@@ -229,11 +229,19 @@ This surface speaks **two message vocabularies** and never translates between th
 
 **Per-connection dialect latch.** A connection is `bare` by default and latches to
 `canonical` the instant it sends its first `syncplay_*`-prefixed frame; the latch
-is permanent for the life of the socket. Every reply and every room fan-out to that
-socket is then encoded in its latched dialect, so a canonical client never sees a
-bare frame and a bare client never sees a canonical one — even if (hypothetically)
-the two shared a room. Because the hub already fans out per room, the latch adds
-one `continue` to `broadcastToRoom()` and a parallel `broadcastCanonical()`.
+is permanent for the life of the socket. The latch governs both directions.
+Outbound: every reply and every room fan-out to that socket is encoded in its
+latched dialect — the fan-outs filter by dialect (`broadcastToRoom()` skips
+canonical members; `broadcastCanonical()` skips bare ones). Inbound: the bare
+room family (`group_join`, `playback_*`, `time_sync`) arriving on a
+canonical-latched socket is refused with the closed canonical floor's own answer
+— `syncplay_error` `UNKNOWN_MESSAGE`, naming the refused frame — and mutates
+nothing, so no bare-handler reply is ever produced to leak; bare `group_leave`
+instead routes by the latch into the canonical teardown. Net law: a canonical
+client never sees a bare room frame and a bare client never sees a canonical one
+— even if (hypothetically) the two shared a room. The one lane outside the claim
+is by design: `pending_command` is addressed to the user's sockets, not to a
+room, and reaches every matching socket in either dialect (see below).
 
 **Rooms are shared bookkeeping, dialects are not.** Both vocabularies address the
 same `(server_id, owner)`-scoped rooms and the same playback anchor store; the
