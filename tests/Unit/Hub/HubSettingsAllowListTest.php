@@ -18,6 +18,13 @@ use Workerman\MySQL\Connection;
  * class of bug: it happily invents the config the production files lack. So
  * every assertion here points at `config/*.php` as deployed.
  *
+ * Roster-pin note (review P3, comment-only): every guard below is
+ * ALLOWED_KEYS-driven — a 19th key is auto-swept into all of them with no
+ * test change, and a removal silently shrinks coverage. Nothing pins the
+ * exact key-set or the W5 head-count of 18; treat a roster change as an
+ * explicit review + CHANGELOG event (a future lane may add a count/set
+ * pin here if drift ever shows up).
+ *
  * @package Phlix\Hub\Tests\Unit\Hub
  */
 final class HubSettingsAllowListTest extends TestCase
@@ -92,6 +99,12 @@ final class HubSettingsAllowListTest extends TestCase
      * enrolled estate; `tls_enabled` and `subdomain_auto_claim` drive
      * ACME/TLS provisioning and are a lockout foot-gun; the rest are secrets
      * or listen-socket config.
+     *
+     * Roster-pin note (review P3, comment-only): this guard only catches
+     * leaks of paths DENIED_KEYS already enumerates — a future secret-shaped
+     * key nobody added to DENIED_KEYS sails through. A naming heuristic
+     * (deny anything matching /secret|token|password|key$/) would close
+     * that gap; deliberately not added in a docs lane.
      */
     public function testNoDeniedKeyIsAllowListed(): void
     {

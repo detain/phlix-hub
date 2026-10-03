@@ -178,11 +178,20 @@ class FederationPeerManager
         private readonly AuditLogger $audit,
         private readonly Ed25519KeyManager $keyManager,
         // W5: LIVE reader of `federation.enabled` (HubSettingsResolvers::bool,
-        // fail-safe to the boot flag). Null (unit tests) keeps the pre-setting
-        // always-on behavior. Checked at dial time only — the reconnect timer
-        // keeps re-arming (≤60s backoff cap) while disabled, so re-enabling
-        // self-heals the link without a restart; the gate short-circuits the
-        // dial itself, making each idle tick a single cheap bool read.
+        // fail-safe to the boot flag). Null (unit tests) keeps the pre-W5
+        // always-on behavior. Checked at dial time only. Honest limits
+        // (docs-truth pass, corrects the earlier "self-heals" claim):
+        // re-enabling instantly re-admits frames on a link that SURVIVED the
+        // disabled window — the gates never tear an established socket down.
+        // But a link that DROPS while disabled dies after exactly one tick:
+        // scheduleReconnect() arms a ONE-SHOT Timer::add whose callback is
+        // this gated dial, and the gate returns BEFORE establishConnection(),
+        // so no onClose/onError re-arms the chain. Such a link re-dials only
+        // via a process restart (boot calls connectToMaster()) or an
+        // explicit trigger — the federation hub-config PUT role change or a
+        // peer relay toggle in FederationController, both of which reach an
+        // ungated connectToMaster() call once enabled. The ≤60s exponential
+        // backoff chain describes the enabled path only.
         private readonly mixed $enabledResolver = null,
     ) {
         $this->decoder = new FrameDecoder();

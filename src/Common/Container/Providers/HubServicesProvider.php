@@ -1415,9 +1415,15 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $adminDel,
                     $audit,
                     $keyManager,
-                    // LIVE federation.enabled gates OUTBOUND dials (the
-                    // reconnect loop keeps ticking; dial is refused while off,
-                    // so re-enabling self-heals without a restart).
+                    // LIVE federation.enabled gates OUTBOUND dials. Truth
+                    // pass: the reconnect timer is ONE-SHOT and re-arms only
+                    // through a live connection's onClose/onError, so a link
+                    // that drops while off gets one refused tick and stays
+                    // down — re-enabling instantly re-admits frames on links
+                    // that survived the off-window, while dead links need a
+                    // process restart or an explicit connectToMaster()
+                    // trigger (FederationController::putHubConfig role
+                    // change / ::toggleRelay enable).
                     HubSettingsResolvers::bool('federation.enabled', $federationEnabledBoot),
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))

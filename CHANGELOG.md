@@ -6,6 +6,47 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — docs-truth: the `federation.enabled` "self-heals on re-enable" claim (shipped in `98a10ca`) is false for links that drop while disabled — 2026-10-03
+
+Prose-only; zero behavior change. Forward correction of the W5
+Phase-6 entry below, whose `federation.enabled` bullet claimed "the
+≤60 s reconnect backoff keeps re-arming, so re-enabling self-heals
+without a restart" — `98a10ca`'s commit message of record says the
+same ("dial skip w/ self-healing backoff"). History is not rewritten
+here; the correction is this entry.
+
+Disk-verified truth: `FederationPeerManager::connectToMaster()`
+returns at the enabled gate BEFORE any state mutation or
+`establishConnection()`, and `scheduleReconnect()` arms a ONE-SHOT
+`Timer::add(..., persistent: false)` whose callback is exactly that
+gated dial. A link that drops while federation is off therefore
+consumes one refused tick, fires no onClose/onError, and never
+re-arms — the reconnect chain dies after that single tick. Re-enabling
+alone does NOT resurrect it. The corrected recovery doors, now stated
+at the ctor comment, the wiring comment, the disabled-transport test
+header and the admin helpText:
+
+- Frames gate LIVE in both directions (per-frame inbound refusal,
+  per-dial outbound refusal); disabling never tears down an
+  established socket (inbound binary is dropped, not closed), so a
+  link that survives the off-window re-admits traffic the moment the
+  flag flips back — no backoff wait.
+- A link that dropped while disabled re-dials only via (a) a process
+  restart — the boot sequence calls `connectToMaster()` and the gate
+  passes once federation is enabled again — or (b) an explicit dial
+  trigger: `PUT /api/v1/me/federation/hub-config` with a role field
+  (`putHubConfig` is deliberately OUT of the 409 guard; its role
+  change runs `disconnectFromMaster()` + `connectToMaster()`) or the
+  peer relay toggle (`toggleRelay` calls `connectToMaster()` on
+  enable; the endpoint itself is 409-gated while off).
+- The ≤60 s exponential-backoff description stays accurate for the
+  ENABLED path and was kept as such.
+
+Flagged owner feature-call (NOT implemented — behavior change):
+periodically re-arming the reconnect tick while disabled (re-arm
+inside the gated path) is what would make the original
+"self-heals without a restart" claim true.
+
 ### Added — W5 Phase-6 settings program: 14 administrable keys (allow-list 4 → 18), live enforcement at every consumption site, PUT bounds law, hub-local schema-meta bridge + SPA page hints — 2026-10-03
 
 Twelve Phase-6 toggles were audited against the plan corpus

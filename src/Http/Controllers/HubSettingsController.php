@@ -183,8 +183,10 @@ final class HubSettingsController
             'helpText'   => 'Master switch for hub-to-hub federation. Off: peer mutations 409 '
                 . 'provider.not_configured, inbound handshake/DATA frames are refused or dropped, '
                 . 'and outbound dials stop. Reads and hub-config CRUD stay open; the :8805 '
-                . 'listener stays bound until a restart. Re-enabling self-heals links via the '
-                . '<=60s reconnect backoff without a restart.',
+                . 'listener stays bound until a restart. Re-enabling instantly re-admits traffic '
+                . 'on links that survived the off-window; a link that dropped while off stays '
+                . 'down until a process restart or a hub-config save / peer relay toggle '
+                . 're-dials it (the <=60s reconnect backoff only retries while federation is on).',
             'helpLinks'  => [],
             'tier'       => 'standard',
             'group'      => 'federation',

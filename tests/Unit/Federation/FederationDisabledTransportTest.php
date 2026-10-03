@@ -23,9 +23,16 @@ use Workerman\Connection\ConnectionInterface;
  *
  * Pins: disabled -> inbound text refused with an audit trail, inbound binary
  * dropped without touching session state, outbound dial returns BEFORE any
- * repository read or state mutation (self-heal property: the reconnect timer
- * re-arms, the gate only short-circuits the dial). Null resolver keeps the
- * pre-W5 always-on path exactly — asserted by the unchanged answers.
+ * repository read or state mutation. That before-state placement ENDS the
+ * reconnect chain rather than pausing it: the armed timer is one-shot and
+ * the gated dial fires no connection event, so nothing re-arms after the
+ * first disabled tick (docs-truth pass — the earlier "self-heal timer
+ * re-arms" reading was false). A link dropped while disabled re-dials only
+ * on process restart or an explicit connectToMaster() trigger
+ * (FederationController hub-config PUT / relay toggle); re-enabling
+ * instantly re-admits frames on links that survived the off-window.
+ * Null resolver keeps the pre-W5 always-on path exactly — asserted by the
+ * unchanged answers.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
  */
