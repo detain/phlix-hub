@@ -3403,8 +3403,16 @@ final class ServerProxyControllerTest extends TestCase
      * onto a REAL local `users` row, so a linked hub account reaches
      * `AdminMiddleware` as itself — if that local account is an admin, the
      * request passes the admin gate. Only an UNLINKED hub UUID resolves to no
-     * local row (fallback `'hub-relay'` matches nothing in `users` →
-     * `findAdminById()` null → 403). The escalation claim therefore held under
+     * local row: when the resolver answers null the server keeps the raw hub
+     * UUID verbatim as the request's `userId` (server
+     * `src/Hub/RelayConsumer.php:2031`, same `c42e166a` era), that UUID matches
+     * no `users` row → `findAdminById()` null → the byte-identical
+     * `auth.not_admin` 403 every other non-admin receives. (Earlier revisions
+     * of this prose attributed the miss to a `'hub-relay'` fallback — a
+     * mislabel: `'hub-relay'` is the hub's metrics worker_id (migration 033,
+     * `MetricsFlushService`), never an identity fallback for a stamped UUID;
+     * server-side it only becomes a `userId` when the hub sent NO relay-user
+     * header at all.) The escalation claim therefore held under
      * the pre-S301 one-way identity model; under the linked model the real
      * ceiling is "what the linked local account may already do," never "someone
      * becomes admin." Either way the hub still refuses these paths by its own
