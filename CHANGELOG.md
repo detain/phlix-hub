@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — docs-truth (web-ui): the federation page hint still promised "re-establishes the link automatically (≤60 s reconnect backoff), no restart needed" — the SPA half of the `5a048a6` truth pass — 2026-10-03
+
+Copy-only; zero behavior change. `5a048a6` corrected the PHP-side
+prose sites and the admin `helpText` but deliberately left the
+committed SPA bundle untouched; `HubFederationPage.vue`'s hint clause
+was the one remaining admin-visible claim of the retired
+"self-heals on re-enable" law. The page copy now mirrors the ratified
+helpText: re-enabling instantly re-admits traffic on links that
+survived the off-window; a link that dropped while off stays down
+until a process restart or a hub-config save / peer relay toggle
+re-dials it (the ≤60 s backoff is one-shot and only retries while
+federation is on). The docblock's "self-heal law" phrasing received
+the same correction. Settings pages are unaffected by design: they
+render the settings-API `helpText` dynamically (verified: the built
+Settings chunk holds only a generic property access, no baked copy),
+so the ratified wording already flows through at runtime.
+
+Bundle: clean `npm ci` (npm 11, `NPM_CONFIG_USERCONFIG=/dev/null`) +
+`npm run build` (vue-tsc + vite), rebuilt twice with byte-identical
+md5 manifests (aggregate 8f8341f3650eac14316a4a0c630b37ee, 210 files
+before and after). Churn: the edited string lands in the main `index`
+chunk (`index-BBwLQUqE.js` → `index-BSZCAfH8.js`); the other 56
+renamed chunks verified byte-identical modulo the changed chunk
+reference, and the index chunk itself verified byte-identical modulo
+the sentence (plus its em-dash-to-full-stop clause split) and hash
+references — a surgical diff. `index.html` and `.vite/manifest.json`
+carry the new entry filename. `npm test` (web-ui) 31/31; the string
+is pinned by no test on either side.
+
 ### Fixed — docs-truth: the `federation.enabled` "self-heals on re-enable" claim (shipped in `98a10ca`) is false for links that drop while disabled — 2026-10-03
 
 Prose-only; zero behavior change. Forward correction of the W5
