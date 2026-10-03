@@ -6,6 +6,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — web-ui repin: `@phlix/ui` v0.99.8 → v0.99.9 tag tarball — served SPA rebuilt and shipped — 2026-10-03
+
+- **The `@phlix/ui` pin advances to the `v0.99.9` release-tag tarball** (tag object
+  `c7130f70…`, peeling to commit `cc931723…`). The release is the playlist create-contract fix:
+  `createPlaylist(name, libraryId)` now sends EXACTLY `{name, library_id}` to
+  `POST /api/v1/playlists` (server `CollectionController::create` requires `library_id` and never
+  read `media_id` — the member-facing 'Add to playlist' flow 400ed for every role before the pair
+  `ui 09bf8248` × `server c42e166a`), parses the `{collection}` 201 envelope with fail-loud
+  `ApiError`s on malformed 200s, and chains `POST /api/v1/collections/{id}/items/{mediaItemId}` so
+  the item lands. Also rides: the contracts `#v0.5.3` re-pin (204-code error catalog;
+  `syncplay.queue_limit_exceeded` now present in the served corpus) and the `library_id`
+  wire-truth doc pass (ui dist chain `db114905`/`7792546c`/`06b1253b`).
+- **Blob identity measured on the installed tree:** `node_modules/@phlix/ui/dist/phlix-ui.js` =
+  `sha256 5efa7cb5de88ee6941095361164ebc8e602ce8590fa7db51edd912858aa78cdc` — the same blob the
+  server lane (`4f06573a`) pinned, byte-identical to the tag's tree blob. Proofs on the shipped
+  bundle: the `{name:t,library_id:n}` create payload lives in the `client-*.js` chunk, the per-leg
+  failure toasts in the `MediaCard`/`MediaDetail` chunks, the `['bearer', …]` WS carrier is still
+  live (`new WebSocket(t,[\`bearer\`,e])`), and ZERO `[?&]token=` occurrences in any emitted file.
+- **Lock churn is the v0.99.8 precedent shape** (npm 11.19.0 / node 24.20.0,
+  `npm_config_userconfig=/dev/null`): root echo + the `node_modules/@phlix/ui`
+  `version`/`resolved`/`integrity` triple + its recorded contracts dep spec `#v0.5.2`→`#v0.5.3` —
+  5+/5−, zero other version/resolved moves; the stale hoisted `@phlix/contracts`/`@phlix/syncplay`
+  git resolutions (pre-dating v0.99.6) stay as this repo has carried them — neither package is
+  build-reachable (vite resolves no `@phlix/*` import outside the ui tarball; proven zero direct
+  imports in `web-ui/src` and zero external `@phlix/contracts` specifiers in the ui dist), so the
+  served bytes are unaffected. `npm ci` clean.
+- **Bundle rebuilt CI-faithfully:** 210 tracked files, two consecutive `vite build`s
+  byte-identical (md5 census), the S253-twin gate (`git diff --exit-code` + untracked-set check)
+  replayed green against the committed tree. `web-ui` `node --test` 31/31 on the new pin. Zero
+  PHP changes.
+
 ### Fixed — proxy doc-comment currency: collection-write coords re-measured, ownership prose aligned — 2026-10-02
 
 - **What.** Prose-only pass over `ServerProxyController` after phlix-server
