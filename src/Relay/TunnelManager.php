@@ -46,6 +46,12 @@ final class TunnelManager implements TunnelManagerInterface
      *                                                 tunnel keeps draining in-flight requests after a
      *                                                 VALIDATED reconnect displaces it (H-R6). `<= 0`
      *                                                 disables the drain (immediate hard displacement).
+     * @param (callable(): float)|null    $drainGraceResolver LIVE reader of
+     *                                                 `server.relay.reconnect_drain_grace_seconds`
+     *                                                 (HubSettingsResolvers::float, clamped 0..300,
+     *                                                 fail-safe to the boot value above). Consulted at
+     *                                                 each displacement — a rare event, never a hot
+     *                                                 path. Null (tests) keeps the boot value.
      */
     public function __construct(
         private readonly RelaySessionManager $sessionManager,
@@ -53,8 +59,20 @@ final class TunnelManager implements TunnelManagerInterface
         private readonly StructuredLogger $logger,
         private readonly ?EnrollmentJwtService $jwtService = null,
         private readonly float $reconnectDrainGraceSeconds = self::DEFAULT_RECONNECT_DRAIN_GRACE_SECONDS,
+        private readonly mixed $drainGraceResolver = null,
     ) {
         $this->tunnels = [];
+    }
+
+    /**
+     * Effective drain grace for the next displacement: live setting when a
+     * resolver is wired, else the boot value.
+     */
+    private function effectiveDrainGraceSeconds(): float
+    {
+        $resolver = $this->drainGraceResolver;
+
+        return is_callable($resolver) ? $resolver() : $this->reconnectDrainGraceSeconds;
     }
 
     /**
@@ -376,13 +394,14 @@ final class TunnelManager implements TunnelManagerInterface
         $this->tunnels[$serverId] = $pending;
 
         if ($incumbent !== null && $incumbent !== $pending && $incumbent->status !== Tunnel::STATUS_CLOSED) {
+            $graceSeconds = $this->effectiveDrainGraceSeconds();
             $this->logger->info('Relay: JWT validated, draining + displacing incumbent tunnel', [
                 'server_id' => $serverId,
                 'incumbent_tunnel_id' => $incumbent->tunnelId,
                 'new_tunnel_id' => $pending->tunnelId,
-                'grace_seconds' => $this->reconnectDrainGraceSeconds,
+                'grace_seconds' => $graceSeconds,
             ]);
-            $incumbent->beginDrain($this->reconnectDrainGraceSeconds, 'server_replaced');
+            $incumbent->beginDrain($graceSeconds, 'server_replaced');
         }
     }
 

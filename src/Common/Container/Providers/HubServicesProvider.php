@@ -38,6 +38,7 @@ use Phlix\Hub\Http\Controllers\LogController;
 use Phlix\Hub\Http\Controllers\HubRestartController;
 use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\ClaimRequestHandler;
+use Phlix\Hub\Hub\HubSettingsResolvers;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\DeregisterHandler;
 use Phlix\Hub\Hub\DnsAliasManager;
@@ -176,6 +177,31 @@ final class HubServicesProvider implements ServiceProviderInterface
         );
         $hubBaseUrl = self::stringOr($appConfig, 'hub_base_url', 'http://localhost:8800');
 
+        // W5 boot fallbacks for settings without a row / unreachable store.
+        // Each config file is `require`d directly (start.php's $appConfig is
+        // config/server.php only; TunnelManager's grace default set at :724
+        // uses the same precedent). Values feed HubSettingsResolvers'
+        // fail-safe chain ONLY — live rows win whenever they exist.
+        /** @var array<string, mixed> $federationBoot */
+        $federationBoot = require dirname(__DIR__, 4) . '/config/federation.php';
+        /** @var array<string, mixed> $requestsBoot */
+        $requestsBoot = require dirname(__DIR__, 4) . '/config/requests.php';
+        /** @var array<string, mixed> $inviteBoot */
+        $inviteBoot = require dirname(__DIR__, 4) . '/config/invite.php';
+        $federationEnabledBoot = ($federationBoot['enabled'] ?? true) !== false;
+        $autoApproveBoot = ($requestsBoot['auto_approve'] ?? false) === true;
+        $inviteExpiryBoot = is_numeric($inviteBoot['default_expiry_seconds'] ?? null)
+            ? max(0, min(31536000, (int) $inviteBoot['default_expiry_seconds']))
+            : 604800;
+        $maxServersBoot = is_numeric($appConfig['max_servers_per_user'] ?? null)
+            ? max(0, min(1000, (int) $appConfig['max_servers_per_user']))
+            : 0;
+        $maxUsersBoot = is_numeric($appConfig['max_users_per_server'] ?? null)
+            ? max(0, min(10000, (int) $appConfig['max_users_per_server']))
+            : 0;
+        /** @var array<array-key, mixed> $arrBootConfig */
+        $arrBootConfig = is_array($appConfig['arr'] ?? null) ? $appConfig['arr'] : [];
+
         // 🐛 S269 — the comment that used to sit here claimed "AuditLogRepository
         // must be registered before AuditLogger so PHP-DI can auto-inject it as
         // the optional nullable constructor param". That was wrong on both
@@ -221,7 +247,10 @@ final class HubServicesProvider implements ServiceProviderInterface
             ClaimRequestHandler::class => factory(static function (
                 Ed25519KeyManager $keyManager,
                 AuditLogger $audit,
-            ) use ($hubBaseUrl): ClaimRequestHandler {
+            ) use (
+                $hubBaseUrl,
+                $maxServersBoot,
+            ): ClaimRequestHandler {
                 return new ClaimRequestHandler(
                     // Dedicated 'txn' connection: isolates the claim transaction
                     // from the cid<0 maintenance reapers on 'mysql' that would
@@ -232,6 +261,8 @@ final class HubServicesProvider implements ServiceProviderInterface
                     LoggerFactory::get(LogChannels::HUB),
                     $audit,
                     $hubBaseUrl,
+                    // LIVE server.max_servers_per_user (0 = unlimited).
+                    HubSettingsResolvers::int('server.max_servers_per_user', $maxServersBoot, 0, 1000),
                 );
             })->parameter('keyManager', get(Ed25519KeyManager::class))
                 ->parameter('audit', get(AuditLogger::class)),
@@ -735,6 +766,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                     LoggerFactory::get(LogChannels::RELAY),
                     $jwtService,
                     $graceSeconds,
+                    // LIVE server.relay.reconnect_drain_grace_seconds (0..300).
+                    HubSettingsResolvers::float(
+                        'server.relay.reconnect_drain_grace_seconds',
+                        $graceSeconds,
+                        0.0,
+                        300.0,
+                    ),
                 );
             })->parameter('sessionManager', get(RelaySessionManager::class))
                 ->parameter('codec', get(RelayWireCodecInterface::class))
@@ -911,11 +949,13 @@ final class HubServicesProvider implements ServiceProviderInterface
             LibrarySharingHandler::class => factory(static function (
                 Connection $db,
                 UserRepository $users,
-            ): LibrarySharingHandler {
+            ) use ($maxUsersBoot): LibrarySharingHandler {
                 return new LibrarySharingHandler(
                     $db,
                     $users,
                     LoggerFactory::get(LogChannels::HUB),
+                    // LIVE server.max_users_per_server (0 = unlimited).
+                    HubSettingsResolvers::int('server.max_users_per_server', $maxUsersBoot, 0, 10000),
                 );
             })->parameter('db', get(Connection::class))
                 ->parameter('users', get(UserRepository::class)),
@@ -941,8 +981,18 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             InviteLinkController::class => factory(static function (
                 InviteLinkHandler $handler,
-            ): InviteLinkController {
-                return new InviteLinkController($handler);
+            ) use ($inviteExpiryBoot): InviteLinkController {
+                return new InviteLinkController(
+                    $handler,
+                    // LIVE invite.default_expiry_seconds (used only when the
+                    // request body omits `expires_in`).
+                    HubSettingsResolvers::int(
+                        'invite.default_expiry_seconds',
+                        $inviteExpiryBoot,
+                        0,
+                        31536000,
+                    ),
+                );
             })->parameter('handler', get(InviteLinkHandler::class)),
 
             LibraryController::class => factory(static function (
@@ -986,11 +1036,58 @@ final class HubServicesProvider implements ServiceProviderInterface
             RequestManager::class => factory(static function (
                 Connection $db,
                 ArrClientFactory $arrClientFactory,
+            ) use (
+                $autoApproveBoot,
+                $arrBootConfig,
             ): RequestManager {
                 return new RequestManager(
                     $db,
                     $arrClientFactory,
                     LoggerFactory::get(LogChannels::HUB),
+                    // LIVE requests.auto_approve (default false = queue as pending).
+                    HubSettingsResolvers::bool('requests.auto_approve', $autoApproveBoot),
+                    // LIVE effective arr config: boot section (api keys stay
+                    // env-only per DENIED_KEYS) with the four exposed knobs
+                    // overridden per approval.
+                    static function () use ($arrBootConfig): array {
+                        /** @var array<array-key, mixed> $sonarrBoot */
+                        $sonarrBoot = is_array($arrBootConfig['sonarr'] ?? null) ? $arrBootConfig['sonarr'] : [];
+                        /** @var array<array-key, mixed> $radarrBoot */
+                        $radarrBoot = is_array($arrBootConfig['radarr'] ?? null) ? $arrBootConfig['radarr'] : [];
+
+                        /** @var mixed $sonarrUrlRaw */
+                        $sonarrUrlRaw = $sonarrBoot['url'] ?? null;
+                        /** @var mixed $radarrUrlRaw */
+                        $radarrUrlRaw = $radarrBoot['url'] ?? null;
+                        /** @var mixed $sonarrKeyRaw */
+                        $sonarrKeyRaw = $sonarrBoot['api_key'] ?? null;
+                        /** @var mixed $radarrKeyRaw */
+                        $radarrKeyRaw = $radarrBoot['api_key'] ?? null;
+
+                        $sonarrUrl = is_string($sonarrUrlRaw) ? $sonarrUrlRaw : 'http://localhost:8989';
+                        $radarrUrl = is_string($radarrUrlRaw) ? $radarrUrlRaw : 'http://localhost:7878';
+                        $sonarrKey = is_string($sonarrKeyRaw) ? $sonarrKeyRaw : '';
+                        $radarrKey = is_string($radarrKeyRaw) ? $radarrKeyRaw : '';
+
+                        return [
+                            'sonarr' => [
+                                'url'     => HubSettingsResolvers::string('server.arr.sonarr.url', $sonarrUrl)(),
+                                'api_key' => $sonarrKey,
+                                'enabled' => HubSettingsResolvers::bool(
+                                    'server.arr.sonarr.enabled',
+                                    ($sonarrBoot['enabled'] ?? false) === true,
+                                )(),
+                            ],
+                            'radarr' => [
+                                'url'     => HubSettingsResolvers::string('server.arr.radarr.url', $radarrUrl)(),
+                                'api_key' => $radarrKey,
+                                'enabled' => HubSettingsResolvers::bool(
+                                    'server.arr.radarr.enabled',
+                                    ($radarrBoot['enabled'] ?? false) === true,
+                                )(),
+                            ],
+                        ];
+                    },
                 );
             })->parameter('db', get(Connection::class))
                 ->parameter('arrClientFactory', get(ArrClientFactory::class)),
@@ -1248,7 +1345,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 FederationConnectionManager $connMgr,
                 AuditLogger $audit,
                 Ed25519KeyManager $keyManager,
-            ): FederationFrameHandler {
+            ) use ($federationEnabledBoot): FederationFrameHandler {
                 return new FederationFrameHandler(
                     $hubRepo,
                     $sessions,
@@ -1256,6 +1353,9 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $connMgr,
                     $audit,
                     $keyManager,
+                    // LIVE federation.enabled (default true = always-on, the
+                    // pre-setting behavior) gates inbound peer traffic.
+                    HubSettingsResolvers::bool('federation.enabled', $federationEnabledBoot),
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))
                 ->parameter('sessions', get(FederationSessionManager::class))
@@ -1280,7 +1380,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 FederationPeerManager $peerManager,
                 AuditLogger $audit,
                 FederationMasterPusher $masterPusher,
-            ): FederationController {
+            ) use ($federationEnabledBoot): FederationController {
                 return new FederationController(
                     $hubRepo,
                     $sessions,
@@ -1289,6 +1389,8 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $peerManager,
                     $audit,
                     $masterPusher,
+                    // LIVE federation.enabled gates ADMIN MUTATIONS only.
+                    HubSettingsResolvers::bool('federation.enabled', $federationEnabledBoot),
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))
                 ->parameter('sessions', get(FederationSessionManager::class))
@@ -1305,7 +1407,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 FederationAdminDelegationRepository $adminDel,
                 AuditLogger $audit,
                 Ed25519KeyManager $keyManager,
-            ): FederationPeerManager {
+            ) use ($federationEnabledBoot): FederationPeerManager {
                 return new FederationPeerManager(
                     $hubRepo,
                     $sessions,
@@ -1313,6 +1415,10 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $adminDel,
                     $audit,
                     $keyManager,
+                    // LIVE federation.enabled gates OUTBOUND dials (the
+                    // reconnect loop keeps ticking; dial is refused while off,
+                    // so re-enabling self-heals without a restart).
+                    HubSettingsResolvers::bool('federation.enabled', $federationEnabledBoot),
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))
                 ->parameter('sessions', get(FederationSessionManager::class))

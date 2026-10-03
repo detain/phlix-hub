@@ -166,6 +166,9 @@ class FederationPeerManager
      * @param FederationAdminDelegationRepository $adminDel     Admin delegation repository.
      * @param AuditLogger                       $audit         Audit logger.
      * @param Ed25519KeyManager                 $keyManager    This leaf's Ed25519 keypair (HELLO_AUTH proof).
+     * @param (callable(): bool)|null           $enabledResolver LIVE reader of
+     *        `federation.enabled` (HubSettingsResolvers::bool, fail-safe to the
+     *        boot flag); null keeps the pre-W5 always-on dial behavior.
      */
     public function __construct(
         private readonly FederationHubRepository $hubRepo,
@@ -174,9 +177,26 @@ class FederationPeerManager
         private readonly FederationAdminDelegationRepository $adminDel,
         private readonly AuditLogger $audit,
         private readonly Ed25519KeyManager $keyManager,
+        // W5: LIVE reader of `federation.enabled` (HubSettingsResolvers::bool,
+        // fail-safe to the boot flag). Null (unit tests) keeps the pre-setting
+        // always-on behavior. Checked at dial time only — the reconnect timer
+        // keeps re-arming (≤60s backoff cap) while disabled, so re-enabling
+        // self-heals the link without a restart; the gate short-circuits the
+        // dial itself, making each idle tick a single cheap bool read.
+        private readonly mixed $enabledResolver = null,
     ) {
         $this->decoder = new FrameDecoder();
         $this->encoder = new FrameEncoder();
+    }
+
+    /**
+     * Whether the federation subsystem currently dials peers.
+     */
+    private function federationEnabled(): bool
+    {
+        $resolver = $this->enabledResolver;
+
+        return is_callable($resolver) ? $resolver() : true;
     }
 
     /**
@@ -191,6 +211,13 @@ class FederationPeerManager
      */
     public function connectToMaster(): void
     {
+        // W5 kill switch: no dials while federation is off. Deliberately
+        // BEFORE any state mutation (intentionalDisconnect stays as-is) so
+        // toggling the setting cannot silently re-arm a disconnected link.
+        if (!$this->federationEnabled()) {
+            return;
+        }
+
         $hubConfig = $this->hubRepo->getHubConfig();
         if ($hubConfig === null) {
             return;

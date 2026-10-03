@@ -157,6 +157,12 @@ final class ServerClaimController
                 'CLAIM_CODE_ALREADY_CLAIMED',
                 ['message' => 'Claim code has already been used'],
             ),
+            'SERVER_CAP_REACHED' => (new Response())->error(
+                409,
+                'quota.exceeded',
+                'SERVER_CAP_REACHED',
+                ['message' => 'Server quota reached for this account'],
+            ),
             'HUB_PROTOCOL_UNSUPPORTED' => (new Response())->error(
                 400,
                 'hub.protocol_unsupported',

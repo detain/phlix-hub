@@ -147,4 +147,43 @@ final class HubSettingsAllowListTest extends TestCase
             'signups_disabled must be the exact boolean twin of signups_enabled',
         );
     }
+
+    /**
+     * W5 (F9 lesson): EVERY numeric allow-listed key must carry hard bounds in
+     * the merged meta the PUT law reads. A cap/retention/TTL key without
+     * minimum+maximum would let any integer in through the settings API —
+     * exactly how a "max users" toggle becomes a DoS primitive. The consumer
+     * clamps again at read (HubSettingsResolvers), but admission here is what
+     * keeps the write path honest.
+     */
+    public function testEveryNumericKeyCarriesBoundsInMergedMeta(): void
+    {
+        $reflector = new \ReflectionClass(\Phlix\Hub\Http\Controllers\HubSettingsController::class);
+        $cache     = $reflector->getProperty('schemaMeta');
+        $cache->setAccessible(true);
+        $cache->setValue(null, null);
+        $meta = \Phlix\Hub\Http\Controllers\HubSettingsController::schemaMeta();
+        // Leave the cache warm exactly as production would find it.
+
+        foreach (HubSettingsRepository::ALLOWED_KEYS as $key => $type) {
+            if ($type !== 'int' && $type !== 'float') {
+                continue;
+            }
+
+            self::assertArrayHasKey($key, $meta, "numeric key {$key} needs a meta block");
+            self::assertIsNumeric(
+                $meta[$key]['minimum'] ?? null,
+                "numeric key {$key} must declare a minimum (F9 bounds law)",
+            );
+            self::assertIsNumeric(
+                $meta[$key]['maximum'] ?? null,
+                "numeric key {$key} must declare a maximum (F9 bounds law)",
+            );
+            self::assertLessThanOrEqual(
+                (float) $meta[$key]['maximum'],
+                (float) $meta[$key]['minimum'],
+                "bounds for {$key} are inverted",
+            );
+        }
+    }
 }

@@ -59,6 +59,11 @@ final class FederationController
     private const UUID_PATTERN =
         '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
 
+    /**
+     * @param (callable(): bool)|null $enabledResolver LIVE reader of
+     *        `federation.enabled` (HubSettingsResolvers::bool, fail-safe to the
+     *        boot flag); null keeps the pre-W5 always-on mutation surface.
+     */
     public function __construct(
         private readonly FederationHubRepository $hubRepo,
         private readonly FederationSessionManager $sessions,
@@ -69,7 +74,35 @@ final class FederationController
         // Master-side live push of share create/revoke. Null on deployments
         // predating the pusher; leaf-role hubs never use it.
         private readonly ?FederationMasterPusher $masterPusher = null,
+        // W5: LIVE reader of `federation.enabled` (HubSettingsResolvers::bool,
+        // fail-safe to the boot flag). Null (unit tests) keeps the pre-setting
+        // always-on behavior. Gates MUTATIONS only — reads and hub-config CRUD
+        // stay open so an operator can inspect state and re-enable federation
+        // through this very surface.
+        private readonly mixed $enabledResolver = null,
     ) {
+    }
+
+    /**
+     * 409 response (registered code provider.not_configured) while `federation.enabled` is off, null when open.
+     *
+     * Reads (GETs) and putHubConfig are deliberately NOT routed through this:
+     * disabling federation must never blind the admin to its state, and
+     * per-peer is_active is orthogonal config CRUD (the dial gate lives in
+     * FederationPeerManager::connectToMaster(), not here).
+     */
+    private function guardFederationDisabled(): ?Response
+    {
+        $resolver = $this->enabledResolver;
+        if (is_callable($resolver) && !$resolver()) {
+            return (new Response())->status(409)->json([
+                'error' => 'Conflict',
+                'code' => 'provider.not_configured',
+                'message' => 'Federation is disabled on this hub',
+            ]);
+        }
+
+        return null;
     }
 
     /**
@@ -249,6 +282,10 @@ final class FederationController
      */
     public function createPeer(Request $request): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $body = $request->body;
         if ($body === []) {
             return $this->badRequest('invalid_body');
@@ -342,6 +379,10 @@ final class FederationController
      */
     public function bindPeerLeafHubId(Request $request, array $params): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $peerId = $params['id'] ?? '';
         if ($peerId === '') {
             return $this->badRequest('missing_peer_id');
@@ -403,6 +444,10 @@ final class FederationController
      */
     public function deletePeer(Request $request, array $params): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $peerId = $params['id'] ?? '';
         if ($peerId === '') {
             return $this->badRequest('missing_peer_id');
@@ -451,6 +496,10 @@ final class FederationController
      */
     public function toggleRelay(Request $request, array $params): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $peerId = $params['id'] ?? '';
         if ($peerId === '') {
             return $this->badRequest('missing_peer_id');
@@ -507,6 +556,10 @@ final class FederationController
      */
     public function toggleAdminDelegation(Request $request, array $params): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $peerId = $params['id'] ?? '';
         if ($peerId === '') {
             return $this->badRequest('missing_peer_id');
@@ -579,6 +632,10 @@ final class FederationController
      */
     public function createOutgoingShare(Request $request): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $userId = $request->userId ?? '';
         $body = $request->body;
 
@@ -666,6 +723,10 @@ final class FederationController
      */
     public function revokeOutgoingShare(Request $request, array $params): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $userId = $request->userId ?? '';
         $shareId = $params['id'] ?? '';
 
@@ -738,6 +799,10 @@ final class FederationController
      */
     public function acceptIncomingOffer(Request $request, array $params): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $userId = $request->userId ?? '';
         $offerId = $params['id'] ?? '';
 
@@ -788,6 +853,10 @@ final class FederationController
      */
     public function rejectIncomingOffer(Request $request, array $params): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $userId = $request->userId ?? '';
         $offerId = $params['id'] ?? '';
 
@@ -884,6 +953,10 @@ final class FederationController
      */
     public function createAdminDelegation(Request $request): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         // Only allow on master hub
         $hubConfig = $this->hubRepo->getHubConfig();
         /** @var mixed $isMasterRaw */
@@ -942,6 +1015,10 @@ final class FederationController
      */
     public function deleteAdminDelegation(Request $request, array $params): Response
     {
+        if (($blocked = $this->guardFederationDisabled()) !== null) {
+            return $blocked;
+        }
+
         $userId = $request->userId ?? '';
         $delegationId = $params['id'] ?? '';
 

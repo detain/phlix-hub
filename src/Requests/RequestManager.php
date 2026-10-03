@@ -53,13 +53,65 @@ class RequestManager
      * @param Connection            $db               Hub MySQL connection.
      * @param ArrClientFactory      $arrClientFactory Factory for Sonarr/Radarr clients.
      * @param StructuredLogger|null $logger           Optional logger; defaults to HUB channel.
+     * @param (callable(): bool)|null $autoApproveResolver LIVE reader of
+     *        `requests.auto_approve` (HubSettingsResolvers::bool, fail-safe to
+     *        the boot flag). Null (tests, unbooted pool wiring) keeps the
+     *        pre-setting queue-everything-as-pending behavior.
+     * @param (callable(): array<array-key, mixed>)|null $arrConfigResolver
+     *        LIVE effective arr config (sonarr/radarr sections with url,
+     *        api_key, enabled — boot config merged with the effective
+     *        `server.arr.*` url/enabled overrides; api keys stay env-only per
+     *        the DENIED_KEYS law). Null keeps the boot-time factory verbatim.
      */
     public function __construct(
         private readonly Connection $db,
         private readonly ArrClientFactory $arrClientFactory,
         ?StructuredLogger $logger = null,
+        private readonly mixed $autoApproveResolver = null,
+        private readonly mixed $arrConfigResolver = null,
     ) {
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::HUB);
+    }
+
+    /**
+     * The arr factory for THIS approval: effective-config-backed when a live
+     * resolver is wired, else the boot-time factory. Built per call (a
+     * stateless config wrapper) so no per-request state is retained on this
+     * long-lived, resident-memory manager.
+     *
+     * Honest equivalence note: the rebuild carries CONFIG only — the hub's
+     * boot ArrClientFactory is itself built without an injected transport
+     * (`HubServicesProvider::ArrClientFactory` definition), so the effective
+     * factory keeps the same default-transport posture. If a future wire ever
+     * injects an async transport into the boot factory, this rebuild must
+     * forward it too — until then ArrClientFactory exposes no transport getter
+     * to copy it from.
+     *
+     * @return ArrClientFactory
+     */
+    private function effectiveArrFactory(): ArrClientFactory
+    {
+        $resolver = $this->arrConfigResolver;
+        if (!is_callable($resolver)) {
+            return $this->arrClientFactory;
+        }
+
+        /** @var array{sonarr?: array{url?: string, api_key?: string, enabled?: bool}, radarr?: array{url?: string, api_key?: string, enabled?: bool}} $config */
+        $config = $resolver();
+
+        return new ArrClientFactory($config);
+    }
+
+    /**
+     * Whether freshly-created requests should be approved immediately
+     * (`requests.auto_approve`, live). No resolver → false (the pre-setting
+     * queue behavior).
+     */
+    private function autoApproveEnabled(): bool
+    {
+        $resolver = $this->autoApproveResolver;
+
+        return is_callable($resolver) ? $resolver() : false;
     }
 
     /**
@@ -115,7 +167,37 @@ class RequestManager
             throw new \RuntimeException('Failed to create request: invalid row returned');
         }
 
-        return $this->hydrateRequest($firstRow);
+        $request = $this->hydrateRequest($firstRow);
+
+        // requests.auto_approve (W5, live per create): the row ALWAYS lands
+        // 'pending' first — the approval machinery (claim UPDATE, arr add,
+        // revert-on-failure) then runs unmodified on top of it. Best-effort:
+        // any approval failure (arr down, arr disabled, quota) leaves the
+        // request pending exactly as the manual queue does today, and never
+        // fails the create itself.
+        if ($this->autoApproveEnabled()) {
+            try {
+                $approved = $this->approveRequest($request['id']);
+                if ($approved) {
+                    // Re-read so the create response honestly carries the
+                    // post-approval row (status 'approved'), not the stale
+                    // 'pending' snapshot taken before the auto-approve ran.
+                    /** @var list<array<array-key, mixed>> $reread */
+                    $reread = $this->db->query('SELECT * FROM requests WHERE id = :id', ['id' => $request['id']]);
+                    $rereadRow = $reread[0] ?? null;
+                    if (is_array($rereadRow)) {
+                        $request = $this->hydrateRequest($rereadRow);
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('Auto-approve failed; request stays pending', [
+                    'request_id' => $request['id'],
+                    'error'      => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $request;
     }
 
     /**
@@ -366,7 +448,7 @@ class RequestManager
         // ArrClientFactory expects a PSR-3 LoggerInterface; StructuredLogger
         // is a Monolog wrapper without that interface, so we pass null and
         // log any failures through $this->logger ourselves.
-        $radarrClient = $this->arrClientFactory->createRadarrClient(null);
+        $radarrClient = $this->effectiveArrFactory()->createRadarrClient(null);
         if ($radarrClient === null) {
             $this->logger->warning('Cannot approve movie request: Radarr not configured', [
                 'request_id' => $request['id'],
@@ -406,7 +488,7 @@ class RequestManager
     private function approveSeriesRequest(array $request): bool
     {
         // See approveMovieRequest() for the null-logger rationale.
-        $sonarrClient = $this->arrClientFactory->createSonarrClient(null);
+        $sonarrClient = $this->effectiveArrFactory()->createSonarrClient(null);
         if ($sonarrClient === null) {
             $this->logger->warning('Cannot approve series request: Sonarr not configured', [
                 'request_id' => $request['id'],

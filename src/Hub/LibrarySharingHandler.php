@@ -28,11 +28,17 @@ class LibrarySharingHandler
      * @param Connection        $db         MySQL connection.
      * @param UserRepository    $users      User repository for email lookups.
      * @param StructuredLogger  $logger     Application logger.
+     * @param (callable(): int)|null $maxUsersResolver LIVE reader of
+     *        `server.max_users_per_server` (0 = unlimited;
+     *        HubSettingsResolvers::int, clamped 0..10000, fail-safe to boot
+     *        default). Null (tests, unbooted pool wiring) disables the cap —
+     *        the pre-setting behavior.
      */
     public function __construct(
         private readonly Connection $db,
         private readonly UserRepository $users,
         private readonly StructuredLogger $logger,
+        private readonly mixed $maxUsersResolver = null,
     ) {
     }
 
@@ -107,6 +113,14 @@ class LibrarySharingHandler
             );
         }
 
+        // Per-server collaborator quota (server.max_users_per_server, W5).
+        // Only NEW collaborators are gated: the reactivate branch above
+        // exempts returning users, and a user already active on another
+        // library of this same server is already inside the distinct count
+        // (see assertWithinShareCap). 0 (default) = unlimited, preserving
+        // the pre-setting behavior byte-for-byte.
+        $this->assertWithinShareCap($serverId, $collaboratorId, $now);
+
         /** @var string $shareId */
         $shareId = $this->generateUuid();
 
@@ -150,6 +164,73 @@ class LibrarySharingHandler
             createdAt: $now,
             expiresAt: $expiresAt,
         );
+    }
+
+    /**
+     * Enforce `server.max_users_per_server` before a first-ever collaborator
+     * share INSERTs.
+     *
+     * Counts DISTINCT active collaborator users on the server (unrevoked,
+     * unexpired) — the same denominator the quota names. If the new
+     * collaborator already appears in the count (active on another library of
+     * this server) the add doesn't grow it, so it passes. No resolver wired,
+     * or an effective cap of 0 → unlimited (historical behavior).
+     *
+     * Expiry uses PHP's clock bound as a parameter — MySQL NOW() would mix
+     * server timezones into the predicate (estate TZ-skew lesson).
+     *
+     * Honest caveat: concurrent first-shares to two DIFFERENT new users are
+     * not serialised against this count (no row lock spans it), so a rare
+     * small overshoot is possible on a quota guard, mirroring the claim-cap
+     * posture in ClaimRequestHandler.
+     *
+     * @throws InvalidArgumentException ('SERVER_SHARE_CAP_REACHED', 409) when
+     *         admitting this collaborator would exceed the cap.
+     */
+    private function assertWithinShareCap(string $serverId, string $collaboratorId, int $now): void
+    {
+        $resolver = $this->maxUsersResolver;
+        if (!is_callable($resolver)) {
+            return;
+        }
+
+        $cap = $resolver();
+        if ($cap <= 0) {
+            return;
+        }
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT COUNT(DISTINCT collaborator_user_id) AS total,
+                    MAX(collaborator_user_id = :cid) AS present
+             FROM library_shares
+             WHERE server_id = :sid
+               AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > :now)',
+            [
+                'cid' => $collaboratorId,
+                'sid' => $serverId,
+                'now' => $now,
+            ],
+        );
+
+        /** @var mixed $totalRaw */
+        $totalRaw = $rows[0]['total'] ?? null;
+        /** @var mixed $presentRaw */
+        $presentRaw  = $rows[0]['present'] ?? null;
+        $total       = is_numeric($totalRaw) ? (int) $totalRaw : 0;
+        $present     = is_numeric($presentRaw) ? (int) $presentRaw : 0;
+        $projected   = $present === 1 ? $total : $total + 1;
+
+        if ($projected > $cap) {
+            $this->logger->warning('Library share refused: per-server collaborator quota reached', [
+                'server_id'        => $serverId,
+                'collaborator_id'  => $collaboratorId,
+                'projected_total'  => $projected,
+                'cap'              => $cap,
+            ]);
+            throw new InvalidArgumentException('SERVER_SHARE_CAP_REACHED', 409);
+        }
     }
 
     /**

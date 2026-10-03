@@ -25,6 +25,17 @@ return [
     'host'          => $envStr('HUB_HOST', '0.0.0.0'),
     'port'          => $hubPort,
     'workers'       => $envInt('HUB_WORKERS', 2),
+
+    // Per-user server quota. `0` (default) = unlimited, preserving the
+    // pre-setting behavior where claim codes inserted servers with no cap.
+    // Load-bearing twin: `server.max_servers_per_user` in ALLOWED_KEYS; LIVE
+    // consumer: ClaimRequestHandler::handleClaimCode() pre-INSERT count.
+    'max_servers_per_user' => $envInt('HUB_MAX_SERVERS_PER_USER', 0),
+    // Per-server collaborator quota (distinct active users shared into a
+    // server's libraries). `0` (default) = unlimited. Load-bearing twin:
+    // `server.max_users_per_server` in ALLOWED_KEYS; LIVE consumer:
+    // LibrarySharingHandler::shareLibrary() INSERT-branch count.
+    'max_users_per_server' => $envInt('HUB_MAX_USERS_PER_SERVER', 0),
     'workerman_log' => $envStr('HUB_WORKERMAN_LOG', __DIR__ . '/../.logs/workerman.log'),
 
     // PID file for graceful reload (SIGUSR2). SINGLE SOURCE OF TRUTH: start.php

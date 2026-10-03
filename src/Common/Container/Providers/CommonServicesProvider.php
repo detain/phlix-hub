@@ -17,6 +17,7 @@ use Phlix\Hub\Common\RateLimit\DbRateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
+use Phlix\Hub\Hub\HubSettingsResolvers;
 use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Workerman\MySQL\Connection;
 
@@ -82,21 +83,25 @@ final class CommonServicesProvider implements ServiceProviderInterface
         $section = $appConfig['rate_limit'] ?? null;
         $rateLimit = is_array($section) ? $section : [];
 
-        $cap = self::intOr($rateLimit, 'cap', self::DEFAULT_CAP);
+        // server.rate_limit (W5, restart:true): SPARSE json override blob
+        // (e.g. {"login":{"max":10},"cap":5000}); unknown keys are ignored by
+        // the merge below, not merged. The HubSettingsResolvers::array closure
+        // reads the EFFECTIVE value once per factory invocation — factories
+        // run at FIRST PER-WORKER RESOLVE (PHP-DI caches the instance after),
+        // which is the worker's boot read. Limiter instances are per-worker
+        // singletons by design, so mid-tick swaps would orphan counters;
+        // admin edits apply to new workers via the graceful restart.
+        // Precedence at resolve: override blob → config/server.php section →
+        // RateLimitProfiles spec. Blob values must be ints > 0 to count (a
+        // hand-corrupted row degrades the chain, never the limiter).
+        $rateLimitOverride = HubSettingsResolvers::array('server.rate_limit', []);
 
         $definitions = [];
 
         foreach (RateLimitProfiles::defaults() as $id => $spec) {
             /**
-             * @var mixed $surfaceRaw
-             * @psalm-suppress MixedAssignment
+             * @var array{key: string, max: int, window: int} $spec
              */
-            $surfaceRaw = $rateLimit[$spec['key']] ?? null;
-            $surface = is_array($surfaceRaw) ? $surfaceRaw : [];
-
-            $max = self::intOr($surface, 'max', $spec['max']);
-            $window = self::intOr($surface, 'window', $spec['window']);
-
             if (
                 $id === RateLimitProfiles::LOGIN
                 || $id === RateLimitProfiles::MCP
@@ -121,15 +126,29 @@ final class CommonServicesProvider implements ServiceProviderInterface
                 // (non-abuse-amplifying) surfaces stay worker-local in-memory
                 // below.
                 $definitions[$id] = factory(
-                    static fn (Connection $db): DbRateLimiter => new DbRateLimiter($db, $window, $max)
+                    static function (Connection $db) use ($spec, $rateLimit, $rateLimitOverride): DbRateLimiter {
+                        /** @var array{max: int, window: int} $eff */
+                        $eff = self::effectiveSurface($spec, $rateLimit, $rateLimitOverride());
+
+                        return new DbRateLimiter($db, $eff['window'], $eff['max']);
+                    }
                 );
                 continue;
             }
 
-            // Arrow fn captures $window/$max/$cap BY VALUE at definition time,
-            // so each surface gets its own thresholds (and its own instance).
+            // Factory closure runs at first per-worker resolve: effective max/
+            // window/cap are computed there (see the W5 block comment), not
+            // captured at definition time.
             $definitions[$id] = factory(
-                static fn (): RateLimiter => new RateLimiter($window, $max, $cap)
+                static function () use ($spec, $rateLimit, $rateLimitOverride): RateLimiter {
+                    /** @var array<array-key, mixed> $override */
+                    $override = $rateLimitOverride();
+                    /** @var array{max: int, window: int} $eff */
+                    $eff = self::effectiveSurface($spec, $rateLimit, $override);
+                    $cap = self::overrideIntOr($override, 'cap', self::intOr($rateLimit, 'cap', self::DEFAULT_CAP));
+
+                    return new RateLimiter($eff['window'], $eff['max'], $cap);
+                }
             );
         }
 
@@ -249,5 +268,55 @@ final class CommonServicesProvider implements ServiceProviderInterface
             return (int) $value;
         }
         return $default;
+    }
+
+    /**
+     * Override-aware int read: a value counts only when numeric AND > 0.
+     *
+     * Used for the DB-backed sparse blob only — the config-file chain keeps
+     * the historical intOr semantics (an operator editing config may
+     * legitimately set any int; a hand-corrupted settings row may not).
+     */
+    /**
+     * @param array<array-key, mixed> $override Sparse admin blob (may hold junk).
+     */
+    private static function overrideIntOr(array $override, string $key, int $default): int
+    {
+        /**
+         * @var mixed $value
+         * @psalm-suppress MixedAssignment
+         */
+        $value = $override[$key] ?? null;
+        if (is_numeric($value) && (int) $value > 0) {
+            return (int) $value;
+        }
+
+        return $default;
+    }
+
+    /**
+     * Merge one surface's effective max/window: override blob → boot config
+     * section → RateLimitProfiles spec.
+     *
+     * @param array{key: string, max: int, window: int} $spec     Profile spec.
+     * @param array<array-key, mixed>                   $bootRateLimit Boot config 'rate_limit' section.
+     * @param array<array-key, mixed>                   $override  Effective server.rate_limit blob.
+     *
+     * @return array{max: int, window: int}
+     */
+    private static function effectiveSurface(array $spec, array $bootRateLimit, array $override): array
+    {
+        $key = $spec['key'];
+        /** @var mixed $bootSurface */
+        $bootSurface = $bootRateLimit[$key] ?? null;
+        $boot = is_array($bootSurface) ? $bootSurface : [];
+        /** @var mixed $overSurface */
+        $overSurface = $override[$key] ?? null;
+        $over = is_array($overSurface) ? $overSurface : [];
+
+        return [
+            'max'    => self::overrideIntOr($over, 'max', self::intOr($boot, 'max', $spec['max'])),
+            'window' => self::overrideIntOr($over, 'window', self::intOr($boot, 'window', $spec['window'])),
+        ];
     }
 }

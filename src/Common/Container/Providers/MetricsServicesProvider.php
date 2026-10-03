@@ -13,6 +13,7 @@ namespace Phlix\Hub\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Hub\HubSettingsResolvers;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
@@ -79,11 +80,24 @@ final class MetricsServicesProvider implements ServiceProviderInterface
 
             // Thin façade over the shared registry. The `enabled` flag makes
             // every record call a no-op when metrics are disabled.
+            // server.metrics.enabled (W5, restart:true): the factory closure
+            // runs at FIRST PER-WORKER RESOLVE (HTTP workers arm metrics in
+            // onWorkerStart, relay worker likewise), so this single read is
+            // the worker's boot read — a live read would flip collectors
+            // mid-tick and orphan registry counters. An admin toggle applies
+            // to new workers; the graceful-restart endpoint recycles them.
+            // Fail-safe: unbooted pool / settings outage → the $enabled boot
+            // value from config, i.e. exactly the pre-setting behavior.
             MetricsCollector::class => factory(
                 static function (ContainerInterface $c) use ($enabled): MetricsCollector {
                     /** @var MetricsRegistry $registry */
                     $registry = $c->get(MetricsRegistry::class);
-                    return new MetricsCollector($registry, $enabled);
+                    $effectiveEnabled = HubSettingsResolvers::bool(
+                        'server.metrics.enabled',
+                        $enabled,
+                    )();
+
+                    return new MetricsCollector($registry, $effectiveEnabled);
                 }
             ),
 
@@ -98,8 +112,23 @@ final class MetricsServicesProvider implements ServiceProviderInterface
                     if ($instance === null) {
                         /** @var MetricsCollector $collector */
                         $collector = $c->get(MetricsCollector::class);
+                        // server.metrics.retention_days (W5, live per prune):
+                        // bounds-clamped 1..3650 on every read, fail-safe to
+                        // the boot config value (the ctor's cfgInt default 7).
+                        $bootRetention = is_numeric($config['retention_days'] ?? null)
+                            ? (int) $config['retention_days']
+                            : 7;
                         /** @var MetricsFlushService $instance */
-                        $instance = new MetricsFlushService($collector, $config);
+                        $instance = new MetricsFlushService(
+                            $collector,
+                            $config,
+                            HubSettingsResolvers::int(
+                                'server.metrics.retention_days',
+                                $bootRetention,
+                                1,
+                                3650,
+                            ),
+                        );
                     }
                     /** @var MetricsFlushService $instance */
                     return $instance;

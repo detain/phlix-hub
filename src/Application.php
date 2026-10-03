@@ -27,6 +27,7 @@ use Phlix\Hub\Relay\RelayWorker;
 use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
 use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
+use Phlix\Hub\Hub\MaintenanceGate;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Http\Controllers\AdminUpdatesController;
 use Phlix\Hub\Http\Controllers\AdminUserController;
@@ -2011,6 +2012,21 @@ final class Application
         $router = $this->router;
         $logger = $this->resolveHttpLogger();
 
+        // W5 maintenance-mode gate (`hub.maintenance_mode`). Built once per
+        // HTTP worker registration with the boot flag from config/hub.php as
+        // its fail-open fallback; the live override is re-read inside the
+        // gate with a 1-second per-worker memo. Exempt control paths (auth,
+        // hub-settings, restart, /health) keep the off-switch reachable — see
+        // MaintenanceGate's class docblock for the full audit. The boot flag
+        // is `require`d from its own config file (start.php's $serverConfig
+        // is config/server.php only — TunnelManager's factory uses the same
+        // precedent for its grace default).
+        /** @var array<string, mixed> $hubBootConfig */
+        $hubBootConfig = require dirname(__DIR__) . '/config/hub.php';
+        $maintenanceGate = new MaintenanceGate(
+            ($hubBootConfig['maintenance_mode'] ?? null) === true,
+        );
+
         // Document root for the static-file fast path. Anything under
         // public/ that resolves to an existing non-PHP file is served
         // directly; anything else falls through to the router. The path
@@ -2028,6 +2044,7 @@ final class Application
             $router,
             $logger,
             $publicRoot,
+            $maintenanceGate,
             &$sharedCollector,
         ): void {
             /** @var MetricsCollector|null $collector */
@@ -2116,6 +2133,31 @@ final class Application
                         $connection->send($resp);
                         return;
                     }
+                }
+
+                // 1b. Maintenance-mode gate (hub.maintenance_mode, W5). Only
+                //     API traffic is blocked — the static fast path above has
+                //     already served (or missed) non-/api assets, and the SPA
+                //     shell must stay reachable so an admin can reach the
+                //     settings page. Exempt control paths (/api/v1/auth/*,
+                //     hub-settings, admin settings/restart, /health) are
+                //     answered by the gate without any store read at all:
+                //     the off-switch cannot depend on the round trip it
+                //     exists to bypass. Fail-open on settings outage: see
+                //     MaintenanceGate docblock for the posture rationale.
+                if (str_starts_with($path, '/api/') && $maintenanceGate->shouldBlock($path)) {
+                    $status = 503;
+                    $connection->send(
+                        (new Response())
+                            ->status(503)
+                            ->json([
+                                'error' => 'This hub is under maintenance. Try again shortly.',
+                                'code'  => 'provider_unavailable',
+                            ])
+                            ->toWorkermanResponse(),
+                    );
+
+                    return;
                 }
 
                 // 2. Dynamic dispatch via the router.

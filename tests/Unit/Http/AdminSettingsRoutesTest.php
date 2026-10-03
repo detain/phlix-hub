@@ -53,12 +53,26 @@ final class AdminSettingsRoutesTest extends TestCase
         mkdir($dir, 0775, true);
         file_put_contents(
             $dir . '/server.php',
-            "<?php\n\nreturn ['enrollment_ttl' => 3600];\n",
+            "<?php\n\nreturn ["
+            . "'enrollment_ttl' => 3600,"
+            . "'max_servers_per_user' => 0,"
+            . "'max_users_per_server' => 0,"
+            . "'metrics' => ['enabled' => true, 'retention_days' => 7],"
+            . "'relay' => ['reconnect_drain_grace_seconds' => 5.0],"
+            . "'rate_limit' => ['cap' => 10000, 'login' => ['max' => 5, 'window' => 900]],"
+            . "'arr' => ['sonarr' => ['url' => 'http://localhost:8989', 'api_key' => '', 'enabled' => false],"
+            . " 'radarr' => ['url' => 'http://localhost:7878', 'api_key' => '', 'enabled' => false]],"
+            . "];\n",
         );
         file_put_contents(
             $dir . '/auth.php',
             "<?php\n\nreturn ['access_ttl' => 900, 'refresh_ttl' => 1209600, 'signups_disabled' => false];\n",
         );
+        // W5 Phase-6 keys: one fixture file per dotted-key file segment.
+        file_put_contents($dir . '/hub.php', "<?php\n\nreturn ['maintenance_mode' => false];\n");
+        file_put_contents($dir . '/federation.php', "<?php\n\nreturn ['enabled' => true];\n");
+        file_put_contents($dir . '/requests.php', "<?php\n\nreturn ['auto_approve' => false];\n");
+        file_put_contents($dir . '/invite.php', "<?php\n\nreturn ['default_expiry_seconds' => 604800];\n");
         $this->configDir = $dir;
 
         $this->users = $this->createMock(UserRepository::class);
@@ -172,7 +186,8 @@ final class AdminSettingsRoutesTest extends TestCase
 
         $db = $this->createMock(Connection::class);
         // getSettings -> getEffectiveMany -> getAllOverrides: one no-param
-        // SELECT. No overrides -> all eight keys resolve to fixture defaults.
+        // SELECT. No overrides -> every allow-listed key resolves to fixture
+        // defaults (W5 grew the allow-list from four keys to eighteen).
         $db->method('query')->willReturnCallback(function (string $sql): array {
             self::assertStringContainsString('SELECT setting_key', $sql);
             return [];

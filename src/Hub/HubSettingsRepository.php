@@ -105,6 +105,73 @@ class HubSettingsRepository
         // (resolver). Degrades to the boot-time HUB_SIGNUPS_ENABLED flag when
         // no row / no pool / settings read fails.
         'auth.signups_disabled' => 'bool',
+
+        // ---- Phase-6 settings program (W5, 2026-10-03) -------------------
+        // Consumer citations below name the file that reads the EFFECTIVE
+        // value per use via a HubSettingsResolvers closure wired at the
+        // class's construction site; all degrade to the wire-time boot
+        // default on outage (src/Hub/HubSettingsResolvers.php contract).
+
+        // config/hub.php
+        // LIVE: MaintenanceGate::enabled() live-reads (1s memo) at the HTTP
+        // dispatch choke — src/Application.php (MaintenanceMiddleware wiring
+        // note: gate is consulted pre-dispatch in the HTTP onMessage path).
+        'hub.maintenance_mode' => 'bool',
+        // config/federation.php
+        // LIVE: FederationController mutators (409 provider.not_configured), FederationFrameHandler inbound
+        // dispatch, FederationPeerManager outbound dial — src/Federation/.
+        'federation.enabled' => 'bool',
+        // config/requests.php
+        // LIVE: RequestManager::createRequest() post-insert best-effort
+        // approve — src/Requests/RequestManager.php.
+        'requests.auto_approve' => 'bool',
+        // config/invite.php
+        // LIVE: InviteLinkController::handleCreate() when the body omits
+        // `expires_in` — src/Http/Controllers/InviteLinkController.php.
+        'invite.default_expiry_seconds' => 'int',
+
+        // config/server.php (flat quota keys)
+        // LIVE: ClaimRequestHandler::handleClaimCode() pre-INSERT per-user
+        // count — src/Hub/ClaimRequestHandler.php.
+        'server.max_servers_per_user' => 'int',
+        // LIVE: LibrarySharingHandler::shareLibrary() INSERT-branch distinct
+        // collaborator count — src/Hub/LibrarySharingHandler.php.
+        'server.max_users_per_server' => 'int',
+
+        // config/server.php 'metrics' section.
+        // BOOT per worker: MetricsServicesProvider collector factory closure
+        // live-reads at first per-worker resolve (HTTP workers arm the flush
+        // timer in onWorkerStart) — src/Common/Container/Providers/
+        // MetricsServicesProvider.php. Changing via the API applies to NEW
+        // workers (graceful restart picks it up); restart:true in meta.
+        'server.metrics.enabled' => 'bool',
+        // LIVE: MetricsFlushService::prune() re-reads per prune tick (count=1
+        // relay worker timer) — src/Metrics/MetricsFlushService.php.
+        'server.metrics.retention_days' => 'int',
+
+        // config/server.php 'relay' section.
+        // LIVE: TunnelManager displacement sites call the resolver at
+        // beginDrain time — src/Relay/TunnelManager.php.
+        'server.relay.reconnect_drain_grace_seconds' => 'float',
+
+        // config/server.php 'rate_limit' section (sparse-json override blob:
+        // only listed surface keys override; unknown keys are ignored by the
+        // merge, not merged).
+        // BOOT per worker: CommonServicesProvider limiter factory closures
+        // merge the effective blob over the static section at first per-worker
+        // resolve — src/Common/Container/Providers/CommonServicesProvider.php;
+        // restart:true in meta (limiter instances are per-worker singletons).
+        'server.rate_limit' => 'json',
+
+        // config/server.php 'arr' section. api_keys are NOT exposed — see
+        // DENIED_KEYS (secret rule 3). url/enabled only.
+        // LIVE: RequestManager approve paths rebuild the ArrClientFactory
+        // config per call through the arrConfigResolver —
+        // src/Requests/RequestManager.php (wired in HubServicesProvider).
+        'server.arr.sonarr.enabled' => 'bool',
+        'server.arr.sonarr.url'     => 'string',
+        'server.arr.radarr.enabled' => 'bool',
+        'server.arr.radarr.url'     => 'string',
     ];
 
     /**

@@ -37,6 +37,10 @@ class ClaimRequestHandler
      * @param StructuredLogger     $logger     Application logger.
      * @param AuditLogger          $audit     Audit logger for security events.
      * @param string               $hubBaseUrl Hub's public base URL.
+     * @param (callable(): int)|null $maxServersResolver LIVE reader of
+     *        `server.max_servers_per_user` (0 = unlimited; HubSettingsResolvers::int,
+     *        clamped 0..1000, fail-safe to boot default). Null (tests, unbooted
+     *        pool wiring) disables the cap — the pre-setting behavior.
      */
     public function __construct(
         private readonly Connection $db,
@@ -44,6 +48,7 @@ class ClaimRequestHandler
         private readonly StructuredLogger $logger,
         private readonly AuditLogger $audit,
         private readonly string $hubBaseUrl,
+        private readonly mixed $maxServersResolver = null,
     ) {
     }
 
@@ -64,6 +69,44 @@ class ClaimRequestHandler
             $this->hubBaseUrl,
             new HubSettingsRepository($this->db),
         );
+    }
+
+    /**
+     * Enforce `server.max_servers_per_user` before a claim INSERTs a server.
+     *
+     * No resolver wired, or an effective cap of 0 → unlimited (the historical
+     * behavior). Throws the wire-mapped 'SERVER_CAP_REACHED' code string
+     * (ServerClaimController::mapError → 409 quota.exceeded).
+     */
+    private function assertWithinServerCap(string $userId): void
+    {
+        $resolver = $this->maxServersResolver;
+        if (!is_callable($resolver)) {
+            return;
+        }
+
+        $cap = $resolver();
+        if ($cap <= 0) {
+            return;
+        }
+
+        /** @var list<array<string, mixed>> $countRows */
+        $countRows = $this->db->query(
+            'SELECT COUNT(*) AS cnt FROM servers WHERE user_id = :uid',
+            ['uid' => $userId],
+        );
+        /** @var mixed $count */
+        $count = $countRows[0]['cnt'] ?? null;
+        $owned = is_numeric($count) ? (int) $count : 0;
+
+        if ($owned >= $cap) {
+            $this->logger->warning('Server claim refused: per-user quota reached', [
+                'user_id' => $userId,
+                'owned'   => $owned,
+                'cap'     => $cap,
+            ]);
+            throw new InvalidArgumentException('SERVER_CAP_REACHED');
+        }
     }
 
     /**
@@ -205,6 +248,19 @@ class ClaimRequestHandler
                 ]);
                 throw new InvalidArgumentException('CLAIM_CODE_ALREADY_CLAIMED');
             }
+
+            // Per-user server quota (server.max_servers_per_user, W5). Read
+            // LIVE at claim time; 0 (default) = unlimited, preserving the
+            // pre-setting behavior byte-for-byte. Counted inside the claim's
+            // FOR UPDATE transaction and checked against ALL status values
+            // (online/offline/claiming/disabled — same denominator as the My
+            // Servers listing). Honest caveat: two DIFFERENT claim codes
+            // claimed concurrently by the same user can each pass this count
+            // before either INSERT lands (the FOR UPDATE locks the claim row,
+            // not the servers count) — a rare, self-correcting overshoot of
+            // at most the concurrent-claim count on a quota guard, not a
+            // billing-strict invariant. Documented, not defended.
+            $this->assertWithinServerCap($userId);
 
             $serverId = $this->generateUuid();
             $nowUnix = time();

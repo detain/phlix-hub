@@ -43,6 +43,14 @@ final class MetricsFlushService
     /** @var int Days of rollup history to retain before pruning. */
     private int $retentionDays;
 
+    /**
+     * LIVE `server.metrics.retention_days` reader — answers already clamped
+     * 1..3650 upstream by HubSettingsResolvers::int; null keeps the boot value.
+     *
+     * @var callable|null
+     */
+    private $retentionResolver = null;
+
     /** @var int Seconds of connection inactivity before a row is pruned. */
     private int $connectionTtlSeconds;
 
@@ -64,12 +72,16 @@ final class MetricsFlushService
      * @param array<string, mixed> $config    config/metrics.php array (reads
      *        retention_days, connection_ttl_seconds, flush_interval_seconds).
      */
-    public function __construct(MetricsCollector $collector, array $config)
+    public function __construct(MetricsCollector $collector, array $config, mixed $retentionResolver = null)
     {
         $this->collector            = $collector;
         $this->retentionDays        = $this->cfgInt($config, 'retention_days', 7);
         $this->connectionTtlSeconds = $this->cfgInt($config, 'connection_ttl_seconds', 15);
         $this->flushIntervalSeconds = max(1, $this->cfgInt($config, 'flush_interval_seconds', 5));
+        // server.metrics.retention_days (W5): LIVE reader of the effective
+        // override (HubSettingsResolvers::int, clamped 1..3650, fail-safe to
+        // the boot config value). Null (tests) keeps the boot value forever.
+        $this->retentionResolver    = is_callable($retentionResolver) ? $retentionResolver : null;
     }
 
     /**
@@ -162,7 +174,13 @@ final class MetricsFlushService
     {
         $db            = ConnectionPool::getConnection(self::CONNECTION);
         $connCutoff    = $this->datetime($nowTs - $this->connectionTtlSeconds);
-        $rollupCutoff  = $this->datetime($nowTs - ($this->retentionDays * 86400));
+        // LIVE retention: re-read every prune tick (count=1 relay worker,
+        // flush-interval cadence — never a hot path). An admin shrinking the
+        // window sees the first DELETE wave within one tick.
+        $retentionDays = is_callable($this->retentionResolver)
+            ? (int) ($this->retentionResolver)()
+            : $this->retentionDays;
+        $rollupCutoff  = $this->datetime($nowTs - ($retentionDays * 86400));
 
         $db->query(
             "DELETE FROM metrics_connections WHERE last_seen_at < :cutoff",

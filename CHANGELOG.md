@@ -6,6 +6,140 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — W5 Phase-6 settings program: 14 administrable keys (allow-list 4 → 18), live enforcement at every consumption site, PUT bounds law, hub-local schema-meta bridge + SPA page hints — 2026-10-03
+
+Twelve Phase-6 toggles were audited against the plan corpus
+(`plan_settings_findings/audit/phase6_hub.md` F-05); each ships a settings
+layer, or closes with evidence. All defaults PRESERVE today's effective
+behavior — flipping a key is the only way behavior changes.
+
+- **Schema admission:** `HubSettingsRepository::ALLOWED_KEYS` grows 4 → 18.
+  Every new key carries a LIVE consumer cite in the const comment (admission
+  rule 1) and resolves a non-null default from the real `config/` dir
+  (`HubSettingsAllowListTest` loops the const — 6/6 green). New config files
+  `config/hub.php`, `config/federation.php`, `config/requests.php`,
+  `config/invite.php` join `config/server.php` sections; `Connection` queries
+  added by this program use NAMED `:param` placeholders (hub law).
+- **`hub.maintenance_mode` (bool, default false — no prior gate existed):**
+  new `src/Hub/MaintenanceGate.php` consulted in `src/Application.php`
+  between the static-file fast path and router dispatch; blocks ALL `/api/*`
+  with 503 `provider_unavailable` while exempting `/health`,
+  `/api/v1/auth/*`, `/api/v1/me/hub-settings`, `/api/v1/admin/settings` and
+  `/api/v1/admin/restart` so an operator can always sign in, inspect and
+  lift. Live read with a 1-second memo (resident-process hot path bound);
+  every outage path fails OPEN to the boot flag — a DB blip never bricks a
+  healthy hub. `restart:false`.
+- **`federation.enabled` (bool, default true — federation booted
+  unconditionally pre-W5, `HubServicesProvider` FederationWorker definition):**
+  live gates on BOTH directions: `FederationController` refuses all 11
+  mutations with 409 `provider.not_configured` (GETs + hub-config CRUD stay
+  open so re-enabling is possible through the same surface),
+  `FederationFrameHandler` drops inbound text frames (audited
+  `FEDERATION_DISABLED` close reason) and binary DATA/heartbeat frames, and
+  `FederationPeerManager::connectToMaster()` early-returns before dialing —
+  the ≤60 s reconnect backoff keeps re-arming, so re-enabling self-heals
+  without a restart (`restart:false`). The listener socket itself stays
+  bound (architecture-fixed pre-fork resource — documented).
+- **`requests.auto_approve` (bool, default false — the `'pending'` INSERT
+  literal in `RequestManager::createRequest`):** after the row commits, the
+  effective flag is read and `approveRequest()` runs best-effort inside a
+  try/catch — an approve failure (ARR disabled/unreachable) logs
+  `Auto-approve failed; request stays pending` and NEVER fails the create.
+  On success the response re-reads the row so it honestly carries
+  `approved`.
+- **`invite.default_expiry_seconds` (int 0..31 536 000, default 604800 — the
+  pre-W5 literal at `InviteLinkController::createInviteLink`):** live at the
+  create- invite site; an explicit body `expires_in` still wins, and 0 keeps
+  the never-expiring `null` path.
+- **`server.max_servers_per_user` / `server.max_users_per_server` (int,
+  default 0 = unlimited — no prior count query existed at either site; the
+  F9 bounds law ships with them, clamped 0..1 000 / 0..10 000 on every read):**
+  the server cap counts `servers.user_id` rows inside the claim transaction
+  (FOR UPDATE-serialized; overshoot across concurrent claims disclosed in
+  the docblock) and answers 409 `quota.exceeded` via
+  `ServerClaimController::mapError`; the collaborator cap sits at the single
+  `LibrarySharingHandler::shareLibrary` choke (covers e-mail shares AND
+  invite redemption), counts DISTINCT non-revoked non-expired collaborators
+  bound with the PHP clock (TZ-skew law) and exempts reactivation of an
+  existing collaborator. Both surfaces map to 409 `quota.exceeded`.
+- **`server.metrics.enabled` (bool, default true `config/server.php`) and
+  `server.metrics.retention_days` (int 1..3650, default 7):** enabled is read
+  live-once when the per-worker `MetricsCollector` first resolves —
+  boot-consumed per worker, so `restart:true` is honest; retention is a LIVE
+  per-prune-tick read injected into `MetricsFlushService` (count=1 relay
+  worker tick cadence, never a hot path), `restart:false`.
+- **`server.relay.reconnect_drain_grace_seconds` (float 0..300, default 5.0
+  `config/server.php:141`):** `TunnelManager` gains a live resolver consulted
+  at the single displacement site (`beginDrain`), boot float preserved when
+  unwired.
+- **`server.rate_limit` (json, `restart:true` — limits are captured when
+  each worker's limiter instances first resolve):** one sparse admin-editable
+  blob `{cap, <surface>: {max, window}}` deep-merged OVER the
+  `config/server.php` rate_limit section inside the `CommonServicesProvider`
+  factory closures (per-surface chain override→boot→profile default; only
+  positive ints count as overrides).
+- **`server.arr.sonarr.{enabled,url}` / `server.arr.radarr.{enabled,url}`
+  (defaults env/false + `http://localhost:8989` / `:7878`):** live at every
+  approval — `RequestManager` rebuilds the `ArrClientFactory` from the
+  effective config (boot `api_key`s carried forward from env; the
+  `server.arr.*.api_key` keys stay DENIED per admission rule 3 — secrets are
+  env-only and the allow-list test pins their exclusion). helpText documents
+  the admin-trust boundary for URL changes.
+- **Deliberate closes with evidence (no settings layer shipped):**
+  registration_open — ALREADY live as `auth.signups_disabled` (`9c41784`,
+  `AuthManager::registrationsAreClosed`); invite-only sign-up — hub invites
+  redeem to LIBRARY SHARES for existing users (`InviteLinkHandler::redeem` →
+  `LibrarySharingHandler`); there is no invite→account provisioning
+  machinery to gate (shipping half of it is the lockout risk the plan warns
+  about); `public_server_listing` — no public listing exists: every server
+  surface is `userId`-scoped behind `auth.required`
+  (`ServerListController::index` 401 gate). Cross-key lockout guard
+  (registration off + everything off): UNREACHABLE — password admins,
+  admin-gated `AdminUserController::create`, the `bin/phlix`
+  user-create/promote CLI and the maintenance-exempt auth/settings/restart
+  paths remain, so no 422 guard was added; the analysis is recorded in the
+  key helpText blocks.
+- **PUT bounds law (closes the F-09 "advisory only" residual):**
+  `HubSettingsController::putSettings` now validates int/float payloads
+  against the merged meta `minimum`/`maximum` — VENDORED schema bounds are
+  enforced too (`server.enrollment_ttl` 30 → 400 `Must be >= 60.`), all
+  errors accumulate before the all-or-nothing persist.
+- **Meta bridge re-introduced:** the vendored `hub-settings.schema.json` is
+  immutable inside this repo (phlix-shared is a separate lane), so the
+  controller again serves `SUPPLEMENTAL_META` (14 blocks — label/helpText/
+  tier/group/bounds/restart) UNDER the schema output, upstream key wins,
+  retiring per-key when phlix-shared ships the property. `restart:true` is
+  limited to the two boot-consumed keys — the honest per-key flags law.
+- **SPA page hints (plan F-10 trio):** `@phlix/ui` v0.99.9 exports no
+  PageHint seam, so the three hints ship hub-local in `web-ui`:
+  `HubPageHint.vue` (dismissible, localStorage) wraps the MyServers,
+  Federation and ManageShares routes with text citing the real setting keys
+  and wire codes shipped above. `public/assets/app` rebuilt (deterministic,
+  manifest-verified).
+- **Resident-process resolver kit:** `src/Hub/HubSettingsResolvers.php` —
+  `bool/int/float/string/array` factories returning memoised-repo closures
+  (mirror of the `auth.signups_disabled` resolver idiom): unbooted pool →
+  boot default, `Throwable` → boot default, type-guarded, clamped EVERY
+  read, never a static value cache.
+- **Tests:** +93 unit tests / +555 assertions (full suite 4737 → 4830,
+  skips unchanged at 123): per-key defaults-preservation pins (no resolver →
+  byte-identical statement sets), clamp/0-is-a-value/live-per-call pins,
+  MaintenanceGate exemption matrix + memo + fail-open, cap transaction
+  semantics (rollback-before-commit, reactivate exemption, PHP-clock bind),
+  auto-approve best-effort trio incl. stub-transport approve-to-approved and
+  outage-stays-pending, federation guard loop over all 11 mutators + frame
+  drop + dial skip, drain-grace and retention seams, rate-limit merge chain,
+  bounds rejection (both supplemental AND vendored), meta-shape and
+  restart-flag census, numeric-key bounds law over `ALLOWED_KEYS`.
+  `scripts/parallel/test-durations.json` re-blessed.
+- **Gates:** PHPUnit 4830/0/0 (123 skipped, estate-identical set), PHPStan
+  level 9 clean, Psalm L1 src+scripts / L5 tests clean on touched files
+  (docker 8.4 venue; remaining lines are the pre-existing swoole-absence
+  family in untouched DB-infra files — CI installs swoole per its job
+  comment), PHPCS S299 corpus 543 files 0E/0W, `composer validate --strict`,
+  security-audit 97 packages clean.
+
+
 ### Changed — web-ui repin: `@phlix/ui` v0.99.8 → v0.99.9 tag tarball — served SPA rebuilt and shipped — 2026-10-03
 
 - **The `@phlix/ui` pin advances to the `v0.99.9` release-tag tarball** (tag object

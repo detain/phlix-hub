@@ -74,6 +74,13 @@ final class FederationFrameHandler
      * @param FederationConnectionManager      $connMgr        Connection manager for active WS connections.
      * @param AuditLogger                      $audit          Audit logger for federation events.
      * @param Ed25519KeyManager                $keyManager     This hub's Ed25519 keypair (master ACK signing).
+     * @param (callable(): bool)|null          $enabledResolver LIVE reader of
+     *        `federation.enabled` (HubSettingsResolvers::bool, fail-safe to the
+     *        boot flag). Null (unit tests) keeps the pre-setting always-on
+     *        behavior. When false: text frames close with 'federation_disabled'
+     *        and binary frames (HEARTBEAT/DATA/DISCONNECTED) are dropped — the
+     *        :8805 listener itself stays bound because its socket is created in
+     *        the pre-fork master; unbinding it needs a process restart.
      */
     public function __construct(
         private readonly FederationHubRepository $hubRepo,
@@ -82,8 +89,19 @@ final class FederationFrameHandler
         private readonly FederationConnectionManager $connMgr,
         private readonly AuditLogger $audit,
         private readonly Ed25519KeyManager $keyManager,
+        private readonly mixed $enabledResolver = null,
     ) {
         $this->encoder = new FrameEncoder();
+    }
+
+    /**
+     * Whether the federation subsystem currently accepts peer traffic.
+     */
+    private function federationEnabled(): bool
+    {
+        $resolver = $this->enabledResolver;
+
+        return is_callable($resolver) ? $resolver() : true;
     }
 
     /**
@@ -105,6 +123,13 @@ final class FederationFrameHandler
      */
     public function handleTextFrame(string $hubId, string $jsonPayload, ConnectionInterface $connection): ?string
     {
+        // W5: whole-subsystem kill switch, checked before any state read.
+        if (!$this->federationEnabled()) {
+            $this->audit->logFailedAuth('FEDERATION_DISABLED', ['hub_id' => $hubId]);
+
+            return 'federation_disabled';
+        }
+
         try {
             /** @var array<string, mixed>|null $decoded */
             $decoded = json_decode($jsonPayload, true, 4, JSON_THROW_ON_ERROR);
@@ -141,6 +166,12 @@ final class FederationFrameHandler
      */
     public function handleBinaryFrame(string $hubId, string $payload, int $frameType): void
     {
+        // W5: disabled subsystem drops every inbound binary frame
+        // (HEARTBEAT / DISCONNECTED / DATA) without touching session state.
+        if (!$this->federationEnabled()) {
+            return;
+        }
+
         try {
             $type = RelayFrameType::fromValue($frameType);
         } catch (Throwable) {

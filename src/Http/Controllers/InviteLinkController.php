@@ -26,11 +26,38 @@ use Phlix\Hub\Http\Response;
 final class InviteLinkController
 {
     /**
-     * @param InviteLinkHandler $handler Invite link handler.
+     * Ship default for invites whose creator omits `expires_in` — the exact
+     * literal this controller hardcoded before `invite.default_expiry_seconds`
+     * existed (defaults-preservation pin).
+     */
+    private const BOOT_DEFAULT_EXPIRY_SECONDS = 604800;
+
+    /**
+     * @param InviteLinkHandler $handler               Invite link handler.
+     * @param (callable(): int)|null $defaultExpiryResolver LIVE reader of
+     *        `invite.default_expiry_seconds` (HubSettingsResolvers::int, bounds
+     *        0..31536000, fail-safe to the boot default). Null (tests, unbooted
+     *        pool) keeps the historical 7-day literal.
      */
     public function __construct(
         private readonly InviteLinkHandler $handler,
+        private readonly mixed $defaultExpiryResolver = null,
     ) {
+    }
+
+    /**
+     * Effective default invite lifetime, consulted ONLY when the request body
+     * omits `expires_in` (an explicit body value always wins, preserving
+     * `0`/negative = never-expiring semantics at the call site below).
+     */
+    private function defaultExpirySeconds(): int
+    {
+        $resolver = $this->defaultExpiryResolver;
+        if (!is_callable($resolver)) {
+            return self::BOOT_DEFAULT_EXPIRY_SECONDS;
+        }
+
+        return $resolver();
     }
 
     /**
@@ -63,7 +90,7 @@ final class InviteLinkController
         /** @var mixed $maxUses */
         $maxUses = $body['max_uses'] ?? 1;
         /** @var mixed $expiresIn */
-        $expiresIn = $body['expires_in'] ?? 604800;
+        $expiresIn = $body['expires_in'] ?? $this->defaultExpirySeconds();
 
         if (!is_string($serverId) || $serverId === '') {
             return (new Response())->status(400)->json([
@@ -217,6 +244,15 @@ final class InviteLinkController
             return (new Response())->status(201)->json($share->toPayload());
         } catch (InvalidArgumentException $e) {
             $code = $e->getCode();
+            // W5 share quota surfaced through redeem: discriminated by
+            // message before the generic 409 (share_exists) arm.
+            if ($e->getMessage() === 'SERVER_SHARE_CAP_REACHED') {
+                return (new Response())->status(409)->json([
+                    'error' => 'Conflict',
+                    'code' => 'quota.exceeded',
+                    'message' => 'This server has reached its collaborator limit',
+                ]);
+            }
             if ($code === 400) {
                 return (new Response())->status(400)->json([
                     'error' => 'Bad Request',

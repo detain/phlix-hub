@@ -105,6 +105,15 @@ final class LibraryShareController
             return (new Response())->status(201)->json($share->toPayload());
         } catch (InvalidArgumentException $e) {
             $code = $e->getCode();
+            // W5 share quota: discriminated by message before the generic 409
+            // (share_exists) arm — both carry code 409.
+            if ($e->getMessage() === 'SERVER_SHARE_CAP_REACHED') {
+                return (new Response())->status(409)->json([
+                    'error' => 'Conflict',
+                    'code' => 'quota.exceeded',
+                    'message' => 'This server has reached its collaborator limit',
+                ]);
+            }
             if ($code === 404) {
                 return (new Response())->status(404)->json([
                     'error' => 'Not Found',
