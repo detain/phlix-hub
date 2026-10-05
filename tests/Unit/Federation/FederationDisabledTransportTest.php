@@ -35,8 +35,11 @@ use Workerman\Timer;
  * @5a048a6 "chain dies after one refused tick" reading): the chain now
  * SURVIVES the disabled window. The reconnect tick tests the gate itself;
  * while it is closed the chain PARKS at the ≤60 s backoff cap — one gated
- * re-check per cap, zero TCP attempts, zero repository reads — so
- * re-enabling re-dials automatically within one capped tick, no process
+ * re-check per cap, zero TCP attempts, zero FEDERATION-repository reads
+ * (precision 2026-10-05 review, mirroring the corrected src docblocks:
+ * each wake does perform ONE live `federation.enabled` settings-store
+ * read — a `hub_settings` SELECT per cap, the resolver's live-read law) —
+ * so re-enabling re-dials automatically within one capped tick, no process
  * restart or explicit trigger required. A refused explicit dial arms the
  * same parked probe (idempotent, never while a socket is live, never after
  * a deliberate disconnect — M-7). Links that survive the off-window still

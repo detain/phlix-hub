@@ -83,16 +83,20 @@ Fix, forward-only:
   rebuilt SPA bundle already promise exactly what this fix delivers ("no
   restart or explicit trigger needed" for a booted-off hub), so the bundle
   stays as-is (no `web-ui` rebuild; S253 untouched).
-- Tests: `FederationWorkerBootBootstrapTest` NEW, 9 tests — disabled boot
+- Tests: `FederationWorkerBootBootstrapTest` NEW, 10 tests — disabled boot
   arms exactly one child park chain (tick parks at the cap, transport and
   peer repo never touched, one park announcement); enabled boot dials once;
   the poisoned-latch reset law (mutation-proven: removing the two reset
   lines arms ZERO timers); failed enabled dial keeps climbing the ladder in
   the child; forked M-7 honored before even consulting the gate; the wss
-  constructor-throw shape logs loudly and arms; inherited timer id survives
-  as a live unrelated child timer (the del-the-inherited-id mutant dies);
-  count=1 single-dialer pin; fail-soft on null/throwing containers. The
-  pre-existing `FederationPushChannelRoundTripTest` worker-boot pins (broker
+  constructor-throw shape logs loudly and arms; its tick-side twin — an
+  enabled proceed tick whose dial throws re-arms through the callback's own
+  catch instead of escaping the timer
+  (`testEnabledTickWithThrowingDialReArmsInsteadOfDying` — the
+  M4 mutation-killed case for the throw-catch above); inherited timer id
+  survives as a live unrelated child timer (the del-the-inherited-id mutant
+  dies); count=1 single-dialer pin; fail-soft on null/throwing containers.
+  The pre-existing `FederationPushChannelRoundTripTest` worker-boot pins (broker
   absent, dispatcher unresolvable) pass UNMODIFIED against the new first
   act.
 - Full Unit suite green (exact figures in the close report); filter
