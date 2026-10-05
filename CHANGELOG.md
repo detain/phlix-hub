@@ -6,6 +6,69 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — behavior (BEHAVIOR lane): periodic reconnect re-arm — re-enabling federation now ACTUALLY self-heals dropped links without a restart, lifting the limitation documented by the `5a048a6` truth pass — 2026-10-05
+
+`FederationPeerManager::scheduleReconnect()` used to arm a ONE-SHOT timer
+whose callback was the gated dial: a tick firing while
+`hub.federation.enabled` was off returned at `connectToMaster()`'s gate
+before `establishConnection()`, so no onClose/onError re-armed anything and
+the chain died after exactly one refused tick (owner feature-call recorded
+at the foot of the `5a048a6` entry). Now the tick callback tests the gate
+itself: while it is closed the chain PARKS at `RECONNECT_DELAY_CAP_SECONDS`
+(new const, value 60 — the ladder's pre-existing inline cap literal,
+extracted and reused) — one wake per cap, zero TCP attempts, zero
+repository reads — and the next tick after re-enable dials for real within
+that cap window. Additionally, an explicit `connectToMaster()` refused
+while disabled arms the same parked probe (guarded: never while a socket is
+live, never across a deliberate `disconnectFromMaster()`), so a hub that
+BOOTED with federation off self-heals too.
+
+- **Single-in-flight-timer invariant preserved** at every new arming site
+  through the existing `reconnectScheduled` dedup (plus live-socket /
+  M-7 intentional / already-armed guards at the gate site);
+  `scheduleReconnect()` now also rolls the latch back if `Timer::add`
+  throws outside a Workerman runtime, so a swallowed arm can never strand
+  the chain.
+- **Log cadence:** the park is announced once per off-window on the RELAY
+  channel (throttled by `reconnectHoldAnnounced`, reset on enabled proceed
+  and on deliberate disconnect). No audit entries added — the outbound
+  gated dial never audited anything (the `FEDERATION_DISABLED` audit is
+  the frame handler's inbound law, untouched), and the enabled path's
+  audit trail is byte-preserved.
+- **Enabled path byte-preserved:** callback statement order (clear flags →
+  ladder increment → M-7 check → dial) is untouched; the disabled test sits
+  strictly between the M-7 guard and the dial. The 5→10→20→40→60→60 ladder
+  and "chain re-arms only via connection events while enabled" are pinned
+  by a new test; every pre-existing Federation test passed UNMODIFIED.
+- **Tests:** `FederationDisabledTransportTest` header flipped from the
+  chain-dies truth to chain-parks (the suite's dying-behavior pins updated —
+  the repository-silence pin holds and now also asserts the armed park);
+  +8 tests / +50 assertions: park-at-cap on a disabled tick (the exact
+  thing that died before), held tick proceeds past the gate on re-enable,
+  5-tick park never touches transport and announces exactly once (log-file
+  count), enabled ladder matrix, no-double-timer under disabled churn,
+  M-7 suppression at every new site including a late-fired enabled tick,
+  live-socket untouched, no-runtime latch rollback. Each mutation-killed:
+  removing the park branch (3F), the cap pin (3F), the gate arm (2F), the
+  dedup guard (1F), the live-socket guard (1F), the announce throttle (1F),
+  the intentional-before-park ordering (1F), and the latch rollback (1F).
+
+Prose flipped to the new truth at the six mirror sites of `5a048a6`:
+`FederationPeerManager` class header + ctor comment, `HubServicesProvider`
+wiring comment, `HubSettingsController::SUPPLEMENTAL_META` helpText, this
+entry, and `web-ui` `HubFederationPage.vue` (+rebuilt bundle). Bundle:
+clean `npm ci` (npm 11 via `npx --yes npm@11`,
+`NPM_CONFIG_USERCONFIG=/dev/null`) + `npm run build`, rebuilt twice
+byte-identical (aggregate md5 of the 210-file tree
+`ad5298da7dce9719a4f0a7d9e454e345`); churn = the edited sentence lands in
+the main `index` chunk (`index-BSZCAfH8.js` → `index-CvDvCQhS.js`), the
+other 56 renamed chunks verified byte-identical modulo chunk-hash
+references, `index.html` + `.vite/manifest.json` carry the new entry
+filename — the same surgical shape as `3c8d3f7`/`8a8780c`. Recovery
+doors that remain, now as conveniences rather than requirements: surviving
+links still re-admit instantly; hub-config PUT role change / peer relay
+toggle still dial immediately.
+
 ### Fixed — docs-truth (web-ui): the federation page hint still promised "re-establishes the link automatically (≤60 s reconnect backoff), no restart needed" — the SPA half of the `5a048a6` truth pass — 2026-10-03
 
 Copy-only; zero behavior change. `5a048a6` corrected the PHP-side

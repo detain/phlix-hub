@@ -1415,15 +1415,18 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $adminDel,
                     $audit,
                     $keyManager,
-                    // LIVE federation.enabled gates OUTBOUND dials. Truth
-                    // pass: the reconnect timer is ONE-SHOT and re-arms only
-                    // through a live connection's onClose/onError, so a link
-                    // that drops while off gets one refused tick and stays
-                    // down — re-enabling instantly re-admits frames on links
-                    // that survived the off-window, while dead links need a
-                    // process restart or an explicit connectToMaster()
-                    // trigger (FederationController::putHubConfig role
-                    // change / ::toggleRelay enable).
+                    // LIVE federation.enabled gates OUTBOUND dials. Re-check
+                    // law (BEHAVIOR lane, lifts the 5a048a6 one-shot-death
+                    // limitation): the reconnect tick PARKS at the ≤60s cap
+                    // while the gate is closed — one gated re-check per cap,
+                    // zero TCP attempts — so re-enabling re-dials a link
+                    // dropped off-window automatically within one capped
+                    // tick; a refused explicit dial arms the same parked
+                    // probe. Surviving links still re-admit frames instantly
+                    // (per-frame gates); the enabled-path backoff ladder is
+                    // unchanged. Explicit triggers (FederationController::
+                    // putHubConfig role change / ::toggleRelay enable) still
+                    // dial immediately when enabled.
                     HubSettingsResolvers::bool('federation.enabled', $federationEnabledBoot),
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))

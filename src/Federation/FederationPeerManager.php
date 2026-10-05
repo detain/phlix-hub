@@ -48,7 +48,10 @@ use Workerman\Timer;
  *      ADMIN_DELEGATION payloads) — all refused before the channel is
  *      verified (H-4 leaf-side gate)
  *   6. Auto-reconnects with exponential backoff on disconnect — never after
- *      a deliberate disconnectFromMaster() (M-7)
+ *      a deliberate disconnectFromMaster() (M-7); while federation is
+ *      disabled the chain PARKS at the capped backoff (one gated re-check
+ *      per ≤60 s, no TCP attempt) instead of dying, so re-enabling re-dials
+ *      automatically without a restart or an explicit trigger
  *   7. Pushes local library share changes to master when connected
  *
  * @package Phlix\Hub\Federation
@@ -62,6 +65,15 @@ class FederationPeerManager
      * master silently ignored a half-registered leaf).
      */
     private const int HELLO_ACK_TIMEOUT_SECONDS = 10;
+
+    /**
+     * Upper bound of the reconnect backoff ladder (seconds) — 5, 10, 20, 40,
+     * then held here. ALSO the parked cadence during a
+     * `federation.enabled=false` window: the reconnect tick's disabled branch
+     * re-arms at exactly this delay, so a long off-window costs one wake per
+     * cap — zero TCP attempts, no ladder restart (BEHAVIOR lane).
+     */
+    private const int RECONNECT_DELAY_CAP_SECONDS = 60;
 
     /**
      * Leaf-side connection to master hub (null when disconnected).
@@ -83,6 +95,16 @@ class FederationPeerManager
      * @var bool
      */
     private bool $reconnectScheduled = false;
+
+    /**
+     * True once the CURRENT disabled-window park has been announced on the
+     * RELAY log. Throttles the hold message to one line per off-window —
+     * reset when a tick proceeds past the enabled gate or the chain is torn
+     * down deliberately — instead of one line every capped re-check.
+     *
+     * @var bool
+     */
+    private bool $reconnectHoldAnnounced = false;
 
     /**
      * True between a deliberate disconnectFromMaster() and the next explicit
@@ -179,19 +201,18 @@ class FederationPeerManager
         private readonly Ed25519KeyManager $keyManager,
         // W5: LIVE reader of `federation.enabled` (HubSettingsResolvers::bool,
         // fail-safe to the boot flag). Null (unit tests) keeps the pre-W5
-        // always-on behavior. Checked at dial time only. Honest limits
-        // (docs-truth pass, corrects the earlier "self-heals" claim):
-        // re-enabling instantly re-admits frames on a link that SURVIVED the
-        // disabled window — the gates never tear an established socket down.
-        // But a link that DROPS while disabled dies after exactly one tick:
-        // scheduleReconnect() arms a ONE-SHOT Timer::add whose callback is
-        // this gated dial, and the gate returns BEFORE establishConnection(),
-        // so no onClose/onError re-arms the chain. Such a link re-dials only
-        // via a process restart (boot calls connectToMaster()) or an
-        // explicit trigger — the federation hub-config PUT role change or a
-        // peer relay toggle in FederationController, both of which reach an
-        // ungated connectToMaster() call once enabled. The ≤60s exponential
-        // backoff chain describes the enabled path only.
+        // always-on behavior. Checked at dial time. Re-check law (BEHAVIOR
+        // lane — lifts the one-shot death limitation recorded by the
+        // docs-truth pass @5a048a6): a reconnect chain does NOT die during a
+        // disabled window. The tick callback tests the gate itself and, while
+        // closed, parks at RECONNECT_DELAY_CAP_SECONDS — one wake per cap,
+        // zero TCP attempts — so re-enabling re-dials a link dropped
+        // off-window within one capped tick, no restart or explicit trigger
+        // needed. An explicit connectToMaster() refused while disabled arms
+        // the same parked probe (idempotent; never while a socket is live or
+        // the operator dropped the link — M-7). Links that survive the
+        // off-window still re-admit traffic instantly (per-frame gates); the
+        // ≤60s exponential backoff ladder on the ENABLED path is unchanged.
         private readonly mixed $enabledResolver = null,
     ) {
         $this->decoder = new FrameDecoder();
@@ -221,9 +242,25 @@ class FederationPeerManager
     public function connectToMaster(): void
     {
         // W5 kill switch: no dials while federation is off. Deliberately
-        // BEFORE any state mutation (intentionalDisconnect stays as-is) so
-        // toggling the setting cannot silently re-arm a disconnected link.
+        // BEFORE the enabled path's state mutation (intentionalDisconnect
+        // stays as-is) so toggling the setting cannot silently re-arm a link
+        // the operator dropped (M-7). BEHAVIOR lane: the refusal no longer
+        // lets the chain end silently — when nothing is live and no tick is
+        // already armed, arm the parked disabled-hold probe (scheduleReconnect
+        // owns the single-in-flight-timer guard). Outside a Workerman timer
+        // runtime Timer::add throws — swallowed exactly like the src/Relay
+        // sites, so in a plain CLI/unit context the observable behavior stays
+        // the silent return it always was.
         if (!$this->federationEnabled()) {
+            if ($this->masterConnection === null && !$this->intentionalDisconnect && !$this->reconnectScheduled) {
+                try {
+                    $this->scheduleReconnect();
+                } catch (Throwable) {
+                    // No Workerman runtime — nothing to arm; the next boot or
+                    // explicit trigger dials as before.
+                }
+            }
+
             return;
         }
 
@@ -353,6 +390,7 @@ class FederationPeerManager
         $this->masterPeerId = '';
         $this->channelVerified = false;
         $this->reconnectScheduled = false;
+        $this->reconnectHoldAnnounced = false;
         $this->reconnectDelaySeconds = 5;
     }
 
@@ -1239,12 +1277,21 @@ class FederationPeerManager
     /**
      * Schedule a reconnection attempt with exponential backoff.
      *
-     * Backoff sequence: 5, 10, 20, 40, max 60 seconds.
+     * Backoff sequence: 5, 10, 20, 40, max RECONNECT_DELAY_CAP_SECONDS.
      *
      * M-7: a DELIBERATE disconnectFromMaster() closes the socket, which fires
      * this path through onClose — while the intentional flag is set, no
      * reconnect may be armed, and any already-armed one-shot is cancelled
      * when it finally fires.
+     *
+     * Disabled-window park (BEHAVIOR lane): when the tick fires while
+     * `federation.enabled` is false, the callback re-arms at the cap instead
+     * of letting the gated dial end the chain — one wake per cap, zero TCP
+     * attempts, zero repository reads. The ENABLED-path ordering inside the
+     * callback (clear flags → ladder increment → intentional check → dial)
+     * is byte-preserved; the disabled check sits strictly between the M-7
+     * guard and the dial, so every previously-reachable enabled sequence
+     * still executes exactly the same statements in the same order.
      *
      * @return void
      */
@@ -1279,21 +1326,70 @@ class FederationPeerManager
         $delay = $this->reconnectDelaySeconds;
         $self = $this;
 
-        $this->reconnectTimerId = Timer::add(
-            $delay,
-            static function () use ($self, $delay): void {
-                $self->reconnectTimerId = null;
-                $self->reconnectScheduled = false;
-                $self->reconnectDelaySeconds = min($delay * 2, 60);
+        try {
+            $this->reconnectTimerId = Timer::add(
+                $delay,
+                static function () use ($self, $delay): void {
+                    $self->reconnectTimerId = null;
+                    $self->reconnectScheduled = false;
+                    $self->reconnectDelaySeconds = min($delay * 2, self::RECONNECT_DELAY_CAP_SECONDS);
 
-                if ($self->intentionalDisconnect) {
-                    return; // Operator dropped the link while we were waiting.
-                }
+                    if ($self->intentionalDisconnect) {
+                        return; // Operator dropped the link while we were waiting.
+                    }
 
-                $self->connectToMaster();
-            },
-            [],
-            false,
+                    if (!$self->federationEnabled()) {
+                        // Kill switch is down: park the chain at the cap rather
+                        // than letting the gated dial be this chain's last tick.
+                        $self->reconnectDelaySeconds = self::RECONNECT_DELAY_CAP_SECONDS;
+                        $self->announceDisabledReconnectHold();
+                        $self->scheduleReconnect();
+
+                        return;
+                    }
+
+                    $self->reconnectHoldAnnounced = false;
+                    $self->connectToMaster();
+                },
+                [],
+                false,
+            );
+        } catch (Throwable $e) {
+            // No Workerman timer runtime: roll the in-flight latch back before
+            // propagating, so a swallowed arm attempt (the gated-dial site in
+            // connectToMaster) can never strand the chain with
+            // reconnectScheduled stuck true and no timer behind it.
+            $this->reconnectScheduled = false;
+            $this->reconnectTimerId = null;
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Announce — once per disabled window — that the reconnect chain is
+     * parked at the capped backoff until federation is re-enabled.
+     *
+     * Deliberately a plain RELAY-channel log line, not an audit entry: the
+     * enabled path's audit trail is untouched, the inbound
+     * `FEDERATION_DISABLED` refusal law lives in FederationFrameHandler, and
+     * the per-cap wake cadence must not spam. The reconnectHoldAnnounced
+     * throttle resets when a tick proceeds past the gate (real dial attempt)
+     * or the chain is torn down deliberately.
+     *
+     * @return void
+     */
+    private function announceDisabledReconnectHold(): void
+    {
+        if ($this->reconnectHoldAnnounced) {
+            return;
+        }
+
+        $this->reconnectHoldAnnounced = true;
+
+        LoggerFactory::get(LogChannels::RELAY)->info(
+            'FederationPeerManager: reconnect chain parked — federation disabled; re-checking every '
+            . self::RECONNECT_DELAY_CAP_SECONDS . 's, dials on the next tick after re-enable',
         );
     }
 

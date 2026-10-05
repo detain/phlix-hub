@@ -184,9 +184,12 @@ final class HubSettingsController
                 . 'provider.not_configured, inbound handshake/DATA frames are refused or dropped, '
                 . 'and outbound dials stop. Reads and hub-config CRUD stay open; the :8805 '
                 . 'listener stays bound until a restart. Re-enabling instantly re-admits traffic '
-                . 'on links that survived the off-window; a link that dropped while off stays '
-                . 'down until a process restart or a hub-config save / peer relay toggle '
-                . 're-dials it (the <=60s reconnect backoff only retries while federation is on).',
+                . 'on links that survived the off-window, and re-establishes links that dropped '
+                . 'while off within <=60s automatically (the reconnect chain parks at the <=60s '
+                . 'backoff cap during the disabled window and re-checks on that cadence — no '
+                . 'restart or explicit trigger needed). The same cap also throttles the '
+                . 'disabled-window re-check cadence; a hub-config save / peer relay toggle still '
+                . 'dials immediately.',
             'helpLinks'  => [],
             'tier'       => 'standard',
             'group'      => 'federation',
