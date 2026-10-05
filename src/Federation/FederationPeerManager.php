@@ -50,8 +50,14 @@ use Workerman\Timer;
  *   6. Auto-reconnects with exponential backoff on disconnect — never after
  *      a deliberate disconnectFromMaster() (M-7); while federation is
  *      disabled the chain PARKS at the capped backoff (one gated re-check
- *      per ≤60 s, no TCP attempt) instead of dying, so re-enabling re-dials
- *      automatically without a restart or an explicit trigger
+ *      per ≤60 s — the only per-wake IO is the live `federation.enabled`
+ *      settings read, no TCP attempt) instead of dying, so re-enabling
+ *      re-dials automatically without a restart or an explicit trigger.
+ *      The boot case lives in a RUNNING worker too:
+ *      {@see self::bootstrapFromWorker()} (called from FederationWorker's
+ *      onWorkerStart) arms or dials in the child's real event loop — a
+ *      pre-fork master dial cannot connect and its pcntl-armed chain would
+ *      fork-poison every child's reconnect latch (2026-10-05 lane).
  *   7. Pushes local library share changes to master when connected
  *
  * @package Phlix\Hub\Federation
@@ -71,7 +77,11 @@ class FederationPeerManager
      * then held here. ALSO the parked cadence during a
      * `federation.enabled=false` window: the reconnect tick's disabled branch
      * re-arms at exactly this delay, so a long off-window costs one wake per
-     * cap — zero TCP attempts, no ladder restart (BEHAVIOR lane).
+     * cap — zero TCP attempts, no ladder restart (BEHAVIOR lane). The wake
+     * is not literally free: each re-check performs the live
+     * `federation.enabled` settings-store read (one `hub_settings` SELECT per
+     * cap; the resolver's live-read law), which is everything the park does
+     * besides resleeping.
      */
     private const int RECONNECT_DELAY_CAP_SECONDS = 60;
 
@@ -210,7 +220,10 @@ class FederationPeerManager
         // off-window within one capped tick, no restart or explicit trigger
         // needed. An explicit connectToMaster() refused while disabled arms
         // the same parked probe (idempotent; never while a socket is live or
-        // the operator dropped the link — M-7). Links that survive the
+        // the operator dropped the link — M-7), and so does a DISABLED BOOT
+        // — in the federation worker's child, via bootstrapFromWorker()
+        // (master-side boot dialing cannot live or self-heal: no event loop
+        // pre-fork, poisoned latch post-fork). Links that survive the
         // off-window still re-admit traffic instantly (per-frame gates); the
         // ≤60s exponential backoff ladder on the ENABLED path is unchanged.
         private readonly mixed $enabledResolver = null,
@@ -322,6 +335,115 @@ class FederationPeerManager
 
         $this->masterPeerId = $masterPeerId;
         $this->establishConnection($this->buildMasterWsUrl($masterUrl, $leafHubId), $hubConfig);
+    }
+
+    /**
+     * Child-process boot entry: (re-)establish this hub's leaf link from a
+     * RUNNING worker's event loop. Called by
+     * {@see \Phlix\Hub\Relay\FederationWorker::onWorkerStart()} — the single
+     * boot dialer, because that worker is count=1 (the same law the push-
+     * dispatcher subscription documents).
+     *
+     * Why the boot dial cannot live in the master (STEP-0 repro, 2026-10-05):
+     * {@see \Workerman\Worker::runAll()} only creates the event loop INSIDE
+     * each child ({@see \Workerman\Worker::$globalEvent} is null in the
+     * master), and {@see \Workerman\Worker::getEventLoop()} is typed
+     * non-nullable. A master-context dial therefore has two failure shapes,
+     * both terminal for self-heal:
+     *   1. `ws://` (http-scheme peer): `AsyncTcpConnection::connect()`
+     *      TypeErrors on getEventLoop() BEFORE the socket is created; the
+     *      established-path catch logs it and arms the backoff chain — in
+     *      the MASTER, via Workerman's pcntl task table. Master ticks fire
+     *      forever (one per ≤60 s once parked), each dying on the same
+     *      TypeError; and every forked child inherits
+     *      `reconnectScheduled = true` pointing at a master-owned task-table
+     *      entry that {@see \Workerman\Timer::signalHandle()} never ticks
+     *      once `Timer::$event` is set (children), so the child can neither
+     *      re-arm (dedup guard) nor inherit a live link. POISONED LATCH.
+     *   2. `wss://` (https-scheme peer): the vendored workerman v5.2.2 has
+     *      no `Protocols\Wss` class, so even the ASYNC CONNECTION
+     *      CONSTRUCTOR throws RuntimeException at
+     *      {@see self::establishConnection()} — outside that method's
+     *      connect() try/catch — escaping connectToMaster() entirely and
+     *      being swallowed silently by the pre-lane master-side boot
+     *      try/catch: no chain, no error log, link never attempted.
+     *
+     * Neither shape can occur inside this worker: the loop exists before
+     * onWorkerStart fires (Worker::run() sets globalEvent + Timer::init
+     * first), so a dial here either lives or fails into a backoff chain
+     * that ACTUALLY TICKS. That is what makes the boot self-heal law true
+     * in both the enabled and disabled case.
+     *
+     * @return void
+     */
+    public function bootstrapFromWorker(): void
+    {
+        // Latch-reset law: fork copies master process state, and any
+        // master-armed chain state a child inherits is untrustworthy by
+        // construction — the timer it names belongs to a scheduler that can
+        // never fire here (see the repro note above). Clear the two chain
+        // fields BEFORE doing anything else so every arming site below (and
+        // every later onClose/error re-arm) can take the dedup guard
+        // honestly. The inherited timer id is never del()'d: it names a
+        // MASTER task-table slot; del()'ing that id value against the
+        // child's event-loop driver would cancel an unrelated timer.
+        $this->reconnectScheduled = false;
+        $this->reconnectTimerId = null;
+
+        // M-7 across fork: a deliberate disconnect lives in THIS process's
+        // trigger path (HTTP worker), and boot()'s only master-side call was
+        // connectToMaster() — so at fork time this flag is false in every
+        // reachable production state. Honored defensively: if a future
+        // master-context ever sets it before forking, the child must not
+        // resurrect a link the operator dropped.
+        if ($this->intentionalDisconnect) {
+            return;
+        }
+
+        // Defensive (unreachable today, per the repro): a fork-inherited
+        // connection object cannot be a live socket — both master dial shapes
+        // die before a socket exists — but if a non-null handle ever did
+        // arrive via a future code path, drop the OBJECT without close():
+        // any fd behind it belongs to the master's context, and closing it
+        // here would tear a shared descriptor down under the parent. The
+        // dial below then creates this process's own socket.
+        $this->masterConnection = null;
+
+        if (!$this->federationEnabled()) {
+            // Booted disabled: park the chain HERE — this worker's real loop
+            // ticks it, so re-enabling re-dials within one capped tick. The
+            // fresh chain arms at the initial delay and parks at the cap on
+            // the first gated tick (identical ladder to the gate site).
+            try {
+                $this->scheduleReconnect();
+            } catch (Throwable) {
+                // No Workerman timer runtime (CLI/unit context) — an
+                // explicit trigger dials as before.
+            }
+
+            return;
+        }
+
+        try {
+            $this->connectToMaster();
+        } catch (Throwable $e) {
+            // Repro shape 2 (constructor-class throw escapes establishConnection's
+            // connect() catch): a boot dial must never die silently the way the
+            // master-side one did — log LOUDLY and hand the chain to the
+            // backoff, so the link is retried on this loop (the same posture
+            // an unreachable master already gets) instead of a single
+            // swallowed attempt.
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'FederationPeerManager: boot dial threw before the socket existed — arming backoff',
+                ['error' => $e->getMessage()],
+            );
+            try {
+                $this->scheduleReconnect();
+            } catch (Throwable) {
+                // No timer runtime — nothing to arm; explicit trigger path
+                // remains the recovery door.
+            }
+        }
     }
 
     /**
@@ -1287,7 +1409,13 @@ class FederationPeerManager
      * Disabled-window park (BEHAVIOR lane): when the tick fires while
      * `federation.enabled` is false, the callback re-arms at the cap instead
      * of letting the gated dial end the chain — one wake per cap, zero TCP
-     * attempts, zero repository reads. The ENABLED-path ordering inside the
+     * attempts, zero FEDERATION-repository reads. Precision (2026-10-05
+     * review): each wake does perform ONE live `federation.enabled`
+     * settings-store read (the resolver's per-call `hub_settings` SELECT —
+     * uncached by design; the only memoized half is the config-file
+     * default), so "zero repository reads" was never literally true of the
+     * settings store, only of the peer/hub transport path. The ENABLED-path
+     * ordering inside the
      * callback (clear flags → ladder increment → intentional check → dial)
      * is byte-preserved; the disabled check sits strictly between the M-7
      * guard and the dial, so every previously-reachable enabled sequence
@@ -1349,7 +1477,23 @@ class FederationPeerManager
                     }
 
                     $self->reconnectHoldAnnounced = false;
-                    $self->connectToMaster();
+                    // The dial may THROW before any socket exists (the
+                    // establishConnection constructor line is outside its
+                    // own catch — e.g. the vendored wss scheme gap) or
+                    // inside the guard chain (a settings/DB read failing at
+                    // boot). An escape here dies the chain at best and
+                    // crash-loops the worker at worst, so a throw re-arms
+                    // the ladder instead of ending it. The enabled
+                    // statement order inside this callback is unchanged.
+                    try {
+                        $self->connectToMaster();
+                    } catch (Throwable $e) {
+                        LoggerFactory::get(LogChannels::RELAY)->error(
+                            'FederationPeerManager: reconnect tick threw — chain re-armed',
+                            ['error' => $e->getMessage()],
+                        );
+                        $self->scheduleReconnect();
+                    }
                 },
                 [],
                 false,

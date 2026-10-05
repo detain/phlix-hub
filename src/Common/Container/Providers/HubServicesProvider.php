@@ -1577,8 +1577,10 @@ final class HubServicesProvider implements ServiceProviderInterface
      * {@see \Workerman\Worker::runAll()} forks the workers.
      *
      * That is limited to work which genuinely belongs pre-fork: creating the
-     * {@see FederationWorker} (a Worker must be constructed before runAll) and
-     * bootstrapping the leaf→master federation WS connection.
+     * {@see FederationWorker} (a Worker must be constructed before runAll).
+     * The leaf→master link bootstrap deliberately does NOT belong here — the
+     * master has no event loop, so the dial boots from the federation
+     * worker's own onWorkerStart (see the inline note in the body).
      *
      * The periodic maintenance timers are deliberately NOT armed here — see the
      * inline note below. They are split by data locality (HB-2.6): the in-memory
@@ -1647,16 +1649,17 @@ final class HubServicesProvider implements ServiceProviderInterface
         // its own collector AND arms its own flush timer inside onWorkerStart
         // (see Application::run()'s HTTP worker and RelayWorker::onWorkerStart()).
 
-        // Bootstrap leaf hub WS connection to master hub
-        try {
-            /** @var mixed $peerManager */
-            $peerManager = $container->get(FederationPeerManager::class);
-            if ($peerManager instanceof FederationPeerManager) {
-                $peerManager->connectToMaster();
-            }
-        } catch (\Throwable) {
-            // FederationPeerManager not available in this context — skip
-        }
+        // The leaf→master federation link is deliberately NOT bootstrapped
+        // here either (2026-10-05 lane). The master has no event loop
+        // (Worker::$globalEvent is children-only), so a pre-fork
+        // connectToMaster() either died at AsyncTcpConnection::connect()
+        // while parking an untickable pcntl-table chain in the master —
+        // poisoning every child's reconnectScheduled latch through the fork —
+        // or (wss peers) threw from the connection constructor into this
+        // method's swallow with no chain and no log at all. The dial now
+        // boots from FederationWorker::onWorkerStart() — a count=1 child with
+        // a real loop — see
+        // {@see \Phlix\Hub\Federation\FederationPeerManager::bootstrapFromWorker()}.
     }
 
     /**

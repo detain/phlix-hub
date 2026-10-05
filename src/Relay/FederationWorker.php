@@ -15,6 +15,7 @@ use Channel\Client as ChannelClient;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Federation\FederationHubRepository;
+use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationPushDispatcher;
 use Phlix\Hub\Federation\FederationPushProtocol;
 use Phlix\Hub\Http\Controllers\FederationRelayController;
@@ -128,11 +129,44 @@ final class FederationWorker
      * when no cross-process push can be received, and a throw here would take
      * down a resident worker at boot.
      *
+     * Boot self-heal lives HERE, not in the master (2026-10-05 lane): the
+     * leaf→master dial is bootstrapped through
+     * {@see \Phlix\Hub\Federation\FederationPeerManager::bootstrapFromWorker()}
+     * as the FIRST act of this callback, in its own guard. The master cannot
+     * dial: {@see \Workerman\Worker::$globalEvent} exists only in running
+     * children, so a pre-fork dial dies at connect() (ws peers, after parking
+     * an untickable chain in the master's pcntl table that also POISONS every
+     * child's reconnectScheduled latch) or at the AsyncTcpConnection
+     * constructor (wss peers, where the throw escaped the old master-side
+     * try/catch entirely). This worker is count=1 — the same production law
+     * as the push-dispatcher subscription above — so exactly one child boots
+     * exactly one link: the single-dialer invariant holds by construction.
+     * Deliberately BEFORE the broker join: an unresolvable dispatcher or a
+     * down broker must never strand the outbound link bootstrap behind it.
+     *
      * @return void
      */
     public function onWorkerStart(): void
     {
         $logger = LoggerFactory::get(LogChannels::RELAY);
+
+        // Boot self-heal: park the chain (disabled) or dial (enabled) in
+        // THIS process's real event loop. Every failure mode here is
+        // log-and-continue — a broken bootstrap may never take down the
+        // resident WS surface this worker hosts.
+        try {
+            /** @var mixed $peerManager */
+            $peerManager = $this->container->get(FederationPeerManager::class);
+            if ($peerManager instanceof FederationPeerManager) {
+                $peerManager->bootstrapFromWorker();
+            } else {
+                $logger->error('Federation boot: could not resolve the peer manager');
+            }
+        } catch (Throwable $e) {
+            $logger->error('Federation boot: leaf link bootstrap failed', [
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         try {
             ChannelClient::connect($this->channelHost, $this->channelPort);

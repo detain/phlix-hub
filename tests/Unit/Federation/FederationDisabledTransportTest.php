@@ -42,7 +42,10 @@ use Workerman\Timer;
  * a deliberate disconnect — M-7). Links that survive the off-window still
  * re-admit frames instantly; the ENABLED-path backoff ladder (5→10→20→40→
  * 60→60) is byte-preserved and pinned here. Null resolver keeps the pre-W5
- * always-on path exactly — asserted by the unchanged answers.
+ * always-on path exactly — asserted by the unchanged answers. Boot-time
+ * (master-context) arming of this chain was itself the 2026-10-05 follow-up
+ * phantom — the boot arm/dial moved into the federation worker's child,
+ * pinned by {@see FederationWorkerBootBootstrapTest}.
  *
  * @package Phlix\Hub\Tests\Unit\Federation
  */
@@ -218,10 +221,15 @@ final class FederationDisabledTransportTest extends TestCase
 
     /**
      * A disabled explicit dial still consults NO repository (gate placement
-     * unchanged) — and now arms the single parked self-heal probe instead of
-     * silently ending there, so a hub that booted with federation off
-     * re-dials on its own within one capped tick of re-enabling. Repeated
-     * refusals stay idempotent (single-in-flight-timer invariant).
+     * unchanged) — and now arms the single parked probe instead of silently
+     * ending there. Note the causality (2026-10-05 follow-up lane): what
+     * makes a BOOTED-disabled hub re-dial on its own within one capped tick
+     * of re-enabling is the CHILD-side park armed by
+     * {@see FederationWorkerBootBootstrapTest} in
+     * FederationWorker::onWorkerStart — an arm from this gate site while it
+     * ran in the master would have landed in the untickable pcntl table;
+     * this site's own job is refused EXPLICIT triggers inside a worker.
+     * Repeated refusals stay idempotent (single-in-flight-timer invariant).
      */
     public function testDisabledDialReturnsBeforeAnyRepositoryRead(): void
     {

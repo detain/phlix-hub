@@ -6,6 +6,99 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — behavior (follow-up to the entry below, same day): the BOOT half of that self-heal claim was a phantom in the master process — the leaf chain is now armed/dialed in the federation worker's CHILD, which is where the claim above becomes true — 2026-10-05
+
+Adversarial review of the entry below asked whether "a hub that BOOTED with
+federation off self-heals too" actually holds end-to-end. A dedicated STEP-0
+repro (real `FederationPeerManager`, simulated master context, `pcntl_fork`)
+says it did NOT, and the same repro shows the enabled-boot path was
+similarly degraded PRE-EXISTING — both boot dials ran in the MASTER
+(`HubServicesProvider::boot()` is a documented pre-fork method; its own
+comments acknowledge the master has no event loop and route the maintenance
+timers away for exactly this reason):
+
+- `Worker::$globalEvent` is children-only and `Worker::getEventLoop()` is
+  typed non-nullable, so a master-context `AsyncTcpConnection::connect()`
+  dies with `TypeError: … must be of type EventInterface, null returned`
+  (measured, `ws`-scheme peer). `establishConnection()`'s catch turns that
+  into a `scheduleReconnect()` — in the MASTER, where `Timer::add` succeeds
+  via Workerman's pcntl task table. The chain then wakes in the master every
+  ≤60 s and can NEVER connect there; worse, the fork copies
+  `reconnectScheduled = true` (naming a master-table id) into every child,
+  and children's `Timer::init($globalEvent)` makes
+  `Timer::signalHandle()` short-circuit — the inherited table never ticks and
+  the dedup guard refuses every child-side re-arm. POISONED LATCH: children
+  hold no chain and cannot build one.
+- For an `https`-scheme peer the repro found a strictly worse shape: the
+  vendored workerman v5.2.2 ships `Protocols\Ws` but NO `Protocols\Wss`, so
+  even the AsyncTcpConnection CONSTRUCTOR throws `RuntimeException("class
+  \Protocols\Wss not exist")` — at a line OUTSIDE establishConnection's own
+  catch — escaping `connectToMaster()` into `boot()`'s `catch (Throwable)`
+  and vanishing SILENTLY: no chain, no error log, nothing retried. (The
+  missing wss protocol class is itself a separate pre-existing vendor gap —
+  every production wss dial throws it in ANY context — reported to the
+  owner, out of this lane's remit; what this lane fixes is that the boot
+  path now catches it LOUDLY and arms the backoff instead of swallowing it.)
+- The in-worker park law the entry below shipped (tick parks at the cap,
+  re-enable re-dials within one capped tick) is UNCHANGED and was always
+  true for chains that live in a child — the phantom was only the BOOT-time
+  arm landing in the wrong process.
+
+Fix, forward-only:
+
+- `FederationPeerManager::bootstrapFromWorker()` (new public child-boot
+  entry) runs as the FIRST act of `FederationWorker::onWorkerStart()`, in
+  its own log-and-continue guard ahead of the push-dispatcher join (an
+  unresolvable dispatcher must never strand the link bootstrap):
+  latch-reset law first (`reconnectScheduled = false`,
+  `reconnectTimerId = null` — inherited ids name MASTER task-table slots and
+  are forgotton, NEVER `Timer::del()`'d against the child loop, where the
+  numeric id can collide with a live child timer — pinned); then M-7 across
+  fork (a deliberate `disconnectFromMaster()` still suppresses everything,
+  checked BEFORE the settings gate); then disabled → arm the park chain IN
+  THIS LOOP, enabled → `connectToMaster()` now. A dial that throws before
+  the socket exists (the wss shape) logs at ERROR and hands the chain to the
+  backoff instead of ending silent.
+- `HubServicesProvider::boot()` no longer resolves the peer manager or dials
+  in the master at all — the pre-fork block is replaced by an inline note
+  explaining why the move exists. With nothing dialing pre-fork, no chain
+  can poison the fork, and the latch-reset stays as the defensive law.
+- Single-dialer invariant: the federation worker is count=1 by its own
+  documented law, so exactly one child boots exactly one link; the pin
+  asserts the constructor default and refuses a silent rotation.
+- `scheduleReconnect()`'s enabled proceed step now wraps the callback's
+  `connectToMaster()` in a throw-catch that re-arms (a throwing dial must not
+  end the chain or crash-loop the worker on event-loop drivers); enabled-path
+  statement ORDER inside the callback is untouched.
+- Prose precision folded with the fix: the "zero repository reads" claim on
+  the parked tick was only ever true of the FEDERATION repositories — each
+  wake performs the live `federation.enabled` settings-store read (one
+  `hub_settings` SELECT per cap, the resolver's live-read law). Corrected at
+  the `scheduleReconnect()` docblock, the class header item 6, the
+  `RECONNECT_DELAY_CAP_SECONDS` const docblock, and the
+  `FederationDisabledTransportTest` gate-site docblock (the boot-half
+  causality comment), plus this note. The entry BELOW stays verbatim: its
+  end-state claim is what this fix makes true; history is not rewritten.
+- No admin-visible copy needed touching: the settings `helpText` and the
+  rebuilt SPA bundle already promise exactly what this fix delivers ("no
+  restart or explicit trigger needed" for a booted-off hub), so the bundle
+  stays as-is (no `web-ui` rebuild; S253 untouched).
+- Tests: `FederationWorkerBootBootstrapTest` NEW, 9 tests — disabled boot
+  arms exactly one child park chain (tick parks at the cap, transport and
+  peer repo never touched, one park announcement); enabled boot dials once;
+  the poisoned-latch reset law (mutation-proven: removing the two reset
+  lines arms ZERO timers); failed enabled dial keeps climbing the ladder in
+  the child; forked M-7 honored before even consulting the gate; the wss
+  constructor-throw shape logs loudly and arms; inherited timer id survives
+  as a live unrelated child timer (the del-the-inherited-id mutant dies);
+  count=1 single-dialer pin; fail-soft on null/throwing containers. The
+  pre-existing `FederationPushChannelRoundTripTest` worker-boot pins (broker
+  absent, dispatcher unresolvable) pass UNMODIFIED against the new first
+  act.
+- Full Unit suite green (exact figures in the close report); filter
+  `Federation|HubSettings` green; phpstan L9, psalm (touched files), phpcs
+  S299 corpus and `composer validate --strict` green.
+
 ### Added — behavior (BEHAVIOR lane): periodic reconnect re-arm — re-enabling federation now ACTUALLY self-heals dropped links without a restart, lifting the limitation documented by the `5a048a6` truth pass — 2026-10-05
 
 `FederationPeerManager::scheduleReconnect()` used to arm a ONE-SHOT timer
