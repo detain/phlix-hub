@@ -14,8 +14,12 @@
  * The venue demonstrably supports this (real openssl handshake + WS upgrade +
  * text/binary frames both ways on loopback with verify_peer TRUE).
  *
- * Positive leg: the REAL FederationPeerManager dials `https://localhost:<port>`,
- * the strict plan (cafile = pinned test CA, peer_name = localhost) completes
+ * Positive leg: the REAL FederationPeerManager dials `https://127.0.0.1:<port>`
+ * (literal IPv4 on purpose — CI runners and Docker map `localhost` to `::1`
+ * before `127.0.0.1` in getaddrinfo order, while the child listener binds the
+ * IPv4 wildcard, so a `localhost` dial dies at ECONNREFUSED before any TLS
+ * byte; the strict plan — cafile = pinned test CA, peer_name = 127.0.0.1
+ * verified against the cert's IP SAN — completes
  * TLS + upgrade, the genuine H-4 Ed25519 ceremony runs over the encrypted
  * channel, a master-pushed DATA offer is rebased to the local peer FK (M-5)
  * through the real socket, and the leaf's share push rides back DOWN the TLS
@@ -390,7 +394,10 @@ final class FederationMasterTlsDialTest extends TestCase
     {
         return [
             'id' => self::MASTER_PEER_ID,
-            'url' => 'https://localhost:' . $port,
+            // Literal IPv4, not 'localhost': see the class-docblock venue law —
+            // `localhost` resolves ::1-first on CI/Docker hosts and the IPv4
+            // wildcard listener would never see the SYN.
+            'url' => 'https://127.0.0.1:' . $port,
             'name' => 'tls-master',
             'public_key' => $this->masterPubB64,
             'leaf_hub_id' => self::MASTER_HUB_ID,

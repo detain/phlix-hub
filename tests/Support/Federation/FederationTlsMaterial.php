@@ -7,9 +7,12 @@
  * Everything is generated IN-PROCESS with ext-openssl — no openssl CLI
  * dependency, no committed key files, nothing that outlives the test tmp dir.
  * The shapes mirror the venue-proven pattern from tests/Support/Alexa/:
- * a CA, a leaf server cert signed by it (SAN DNS:localhost + IPs so
- * peer-name verification against 'localhost' genuinely exercises the SAN
- * path), and a SECOND unrelated CA used to prove verify_peer is real —
+ * a CA, a leaf server cert signed by it (SAN DNS:localhost + loopback IPs so
+ * peer-name verification genuinely exercises the SAN path for either dial
+ * shape — the E2E positive leg dials the literal 127.0.0.1 because
+ * AsyncTcpConnection's async connect uses only the FIRST getaddrinfo answer
+ * and CI/Docker order ::1 before 127.0.0.1 for 'localhost'), and a SECOND
+ * unrelated CA used to prove verify_peer is real —
  * a client trusting only that other anchor must be refused.
  *
  * @copyright 2026 Phlix

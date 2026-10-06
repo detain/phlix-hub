@@ -6,6 +6,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — test venue: the real-TLS federation E2E dialed `localhost`, which CI resolves `::1`-first against its IPv4-only child listener — the dial died at ECONNREFUSED before any TLS byte (the TLS test has been red on every CI run since it landed) — 2026-10-06
+
+Three consecutive master CI runs (519c0c0 → run 37480895351, 372b407 → run
+37486319241, and this lane's 422bfb6 → run 37541775899) failed the single
+test `FederationMasterTlsDialTest::testHttpsMasterOverRealTlsCompletesCeremonyAndSwapsDataFrames`
+("the full https→TLS ceremony never completed") while the identical suite
+was green on the dev host. Reproduced deterministically in a clean
+php:8.4-cli container — whose `/etc/hosts`, like GitHub runners, maps
+`localhost` to BOTH `127.0.0.1` and `::1`: Workerman's `AsyncTcpConnection`
+issues a single non-blocking `connect()` to the FIRST getaddrinfo answer
+(`::1`), while the child TLS listener binds the IPv4 wildcard `0.0.0.0`, so
+the SYN is refused in ~0.5 ms — leaf.log shows
+`connect localhost:PORT fail` + the 5 s/10 s backoff ticks — and the 20 s
+watchdog fires. The dev host maps `localhost` to `127.0.0.1` only, which is
+why the introducing lane saw green.
+
+Fix is test-side only, production law untouched: `masterPeerRow()` now dials
+the literal `https://127.0.0.1:<port>` — the throwaway cert's SAN already
+carries `IP:127.0.0.1`, so the positive leg still proves the strict seam end
+to end (cafile pinning + `verify_peer` + `verify_peer_name` against the
+certificate), and the negative leg now reaches the handshake for real
+(previously in CI it also "passed" but vacuously — refused at TCP, never at
+TLS). The docblocks in the test and in `FederationTlsMaterial` record the
+venue law (async dial needs an address-family-honest host; sync clients like
+the Alexa probe server's fetcher are unaffected because they try every
+resolved address, which is why those long-standing tests never went red).
+Verified: container (the reproducing venue) red→green on the exact test,
+mutation `127.9.9.9` reddens it again, and the full Federation filter (276
+tests) is green inside the container; host suite unchanged green.
+
 ### Fixed — federation: the two scheme-table legs the 519c0c0 cut left short — explicit `ws://` masters stay PLAINTEXT, and a TLS dial in a process without php-openssl now fails LOUD at dial time — 2026-10-06
 
 A re-read of the ratified https-master spec against the shipped
