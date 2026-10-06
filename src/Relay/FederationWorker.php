@@ -136,9 +136,12 @@ final class FederationWorker
      * dial: {@see \Workerman\Worker::$globalEvent} exists only in running
      * children, so a pre-fork dial dies at connect() (ws peers, after parking
      * an untickable chain in the master's pcntl table that also POISONS every
-     * child's reconnectScheduled latch) or at the AsyncTcpConnection
-     * constructor (wss peers, where the throw escaped the old master-side
-     * try/catch entirely). This worker is count=1 — the same production law
+     * child's reconnectScheduled latch) or died at the AsyncTcpConnection
+     * constructor (wss peers pre-transport=ssl, where the throw escaped the
+     * old master-side try/catch entirely — since the https→ws+ssl mapping in
+     * FederationPeerManager::buildMasterDialPlan() that shape connects for
+     * real, but the loop-shape argument for booting here stands unchanged).
+     * This worker is count=1 — the same production law
      * as the push-dispatcher subscription above — so exactly one child boots
      * exactly one link: the single-dialer invariant holds by construction.
      * Deliberately BEFORE the broker join: an unresolvable dispatcher or a

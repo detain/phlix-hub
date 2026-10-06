@@ -1655,8 +1655,10 @@ final class HubServicesProvider implements ServiceProviderInterface
         // connectToMaster() either died at AsyncTcpConnection::connect()
         // while parking an untickable pcntl-table chain in the master —
         // poisoning every child's reconnectScheduled latch through the fork —
-        // or (wss peers) threw from the connection constructor into this
-        // method's swallow with no chain and no log at all. The dial now
+        // or (wss peers, before the https→ws+transport=ssl mapping shipped in
+        // FederationPeerManager::buildMasterDialPlan()) threw from the
+        // connection constructor into this method's swallow with no chain and
+        // no log at all. The dial now
         // boots from FederationWorker::onWorkerStart() — a count=1 child with
         // a real loop — see
         // {@see \Phlix\Hub\Federation\FederationPeerManager::bootstrapFromWorker()}.

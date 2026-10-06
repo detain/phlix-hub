@@ -18,6 +18,7 @@ use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use ReflectionProperty;
+use RuntimeException;
 use Workerman\Connection\AsyncTcpConnection;
 
 /**
@@ -29,6 +30,33 @@ use Workerman\Connection\AsyncTcpConnection;
  * H-4 ack tests run on REAL sodium keypairs: a master keypair signs the ack
  * (its public half is stored on the master peer row), and this leaf's real
  * Ed25519KeyManager produces the outbound proof.
+ *
+ * @phpstan-type DialPlan array{
+ *     uri: string,
+ *     transport: string,
+ *     socket_context: array{
+ *         ssl?: array{
+ *             verify_peer: bool,
+ *             verify_peer_name: bool,
+ *             SNI_enabled: bool,
+ *             peer_name: string,
+ *             cafile?: string
+ *         }
+ *     }
+ * }
+ * @psalm-type DialPlan = array{
+ *     uri: string,
+ *     transport: string,
+ *     socket_context: array{
+ *         ssl?: array{
+ *             verify_peer: bool,
+ *             verify_peer_name: bool,
+ *             SNI_enabled: bool,
+ *             peer_name: string,
+ *             cafile?: string
+ *         }
+ *     }
+ * }
  *
  * @package Phlix\Hub\Tests\Unit\Federation
  */
@@ -79,9 +107,18 @@ final class FederationPeerManagerTest extends TestCase
      */
     private string $masterKp;
 
+    private string|false $origCaBundle = false;
+
     protected function setUp(): void
     {
         parent::setUp();
+
+        // The dial plan reads PHLIX_FEDERATION_CA_BUNDLE at plan time; pin a
+        // known-empty env so the strict-default pins are absolute regardless
+        // of what the surrounding shell exports, and so a CA-bundle leak from
+        // another test can never flip them.
+        $this->origCaBundle = getenv('PHLIX_FEDERATION_CA_BUNDLE');
+        putenv('PHLIX_FEDERATION_CA_BUNDLE');
 
         $this->hubRepo = $this->createMock(FederationHubRepository::class);
         $this->sessions = $this->createMock(FederationSessionManager::class);
@@ -123,6 +160,11 @@ final class FederationPeerManagerTest extends TestCase
 
     protected function tearDown(): void
     {
+        if ($this->origCaBundle === false) {
+            putenv('PHLIX_FEDERATION_CA_BUNDLE');
+        } else {
+            putenv('PHLIX_FEDERATION_CA_BUNDLE=' . $this->origCaBundle);
+        }
         LoggerFactory::reset();
         if ($this->loggerTmp !== null && is_file($this->loggerTmp . '/logger.php')) {
             unlink($this->loggerTmp . '/logger.php');
@@ -141,47 +183,184 @@ final class FederationPeerManagerTest extends TestCase
         parent::tearDown();
     }
 
-    // ------------------------------------------------- buildMasterWsUrl (M-8)
+    // ---------------------------------------------- buildMasterDialPlan (M-8)
 
-    public function testDialUrlHonorsConfiguredPortAndDefaultsToWss(): void
+    /**
+     * The owner finding this lane closes: an `https://` peer used to map to
+     * a `wss://` URI whose CONSTRUCTOR throws (vendored workerman has no
+     * Protocols\Wss), so https masters could never connect. The shipped
+     * idiom is `ws://` + transport `ssl` + a strict ssl stream context —
+     * pinned here at the seam, and proven over a real TLS socket end to end
+     * by FederationMasterTlsDialTest.
+     */
+    public function testHttpsMasterPlanIsWsUriWithSslTransportAndExplicitPort(): void
     {
+        $plan = $this->buildPlan('https://master.example.com:8443', 'leaf id');
+
+        self::assertSame('ws://master.example.com:8443/relay/federation/leaf%20id', $plan['uri']);
+        self::assertSame('ssl', $plan['transport']);
         self::assertSame(
-            'wss://master.example.com:8805/relay/federation/leaf%20id',
-            $this->buildUrl('https://master.example.com:8805', 'leaf id'),
+            [
+                'ssl' => [
+                    'verify_peer' => true,
+                    'verify_peer_name' => true,
+                    'SNI_enabled' => true,
+                    'peer_name' => 'master.example.com',
+                ],
+            ],
+            $plan['socket_context'],
+            'The scheme is ws://, so peer_name/SNI must name the real host EXPLICITLY',
         );
     }
 
-    public function testDialUrlMapsHttpSchemeToPlainWs(): void
+    /**
+     * Portless https keeps the bare host in the URI — workerman's connect()
+     * resolves transport==='ssl' && port 0 to :443 itself (pinned against
+     * the vendor in FederationMasterDialConstructionTest).
+     */
+    public function testHttpsMasterPlanOmitsPortAndLetsSslDefaultTo443(): void
     {
+        $plan = $this->buildPlan('https://master.example.com', 'l1');
+
+        self::assertSame('ws://master.example.com/relay/federation/l1', $plan['uri']);
+        self::assertSame('ssl', $plan['transport']);
+        $ssl = $plan['socket_context']['ssl'] ?? null;
+        self::assertIsArray($ssl, 'a TLS plan must carry an ssl stream context');
+        self::assertTrue($ssl['verify_peer']);
+    }
+
+    /**
+     * Plaintext masters are byte-preserved from the pre-fix path: plain
+     * ws:// URI, no transport override, no stream context at all.
+     */
+    public function testHttpMasterPlanIsPlainWsBytePreserved(): void
+    {
+        $plan = $this->buildPlan('http://master.lan', 'l1');
+
+        self::assertSame('ws://master.lan/relay/federation/l1', $plan['uri']);
+        self::assertSame('', $plan['transport']);
+        self::assertSame([], $plan['socket_context']);
+    }
+
+    /**
+     * The legacy secure-by-default fallbacks — bare host AND an
+     * operator-written wss:// (which used to be the constructor-throw
+     * itself) — both map onto the TLS leg.
+     *
+     * @return array<array-key, array{0: string, 1: string}>
+     */
+    public static function tlsFallbackUrlProvider(): array
+    {
+        return [
+            'bare host' => ['master.example.com', 'master.example.com'],
+            'literal wss config' => ['wss://master.example.com:8805', 'master.example.com'],
+            'foreign scheme' => ['https://198.51.100.7:8443', '198.51.100.7'],
+        ];
+    }
+
+    /**
+     * @param string $configured    configured URL (any non-http scheme)
+     * @param string $expectedHost  host the plan must carry into peer_name
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('tlsFallbackUrlProvider')]
+    public function testNonHttpSchemesMapToTlsLegNeverToWssUri(string $configured, string $expectedHost): void
+    {
+        $plan = $this->buildPlan($configured, 'l1');
+
+        self::assertStringStartsNotWith('wss://', $plan['uri']);
+        self::assertStringStartsWith('ws://' . $expectedHost, $plan['uri']);
+        self::assertSame('ssl', $plan['transport']);
+        $ssl = $plan['socket_context']['ssl'] ?? null;
+        self::assertIsArray($ssl, 'a TLS plan must carry an ssl stream context');
+        self::assertSame($expectedHost, $ssl['peer_name']);
+    }
+
+    /**
+     * Trust-anchor seam, default posture: with no PHLIX_FEDERATION_CA_BUNDLE
+     * the context carries NO cafile key at all — the wrapper falls back to
+     * the php.ini/system store — and every strict flag stays pinned true.
+     * The strict-default assertion is byte-exact on purpose: a future
+     * "convenience" key (allow_self_signed, crypto_method relaxation,
+     * peer_name override) would break this pin and force a deliberate talk.
+     */
+    public function testTlsContextDefaultsToStrictSystemStoreWithNoCafileKey(): void
+    {
+        $plan = $this->buildPlan('https://master.example.com', 'l1');
+
         self::assertSame(
-            'ws://master.lan/relay/federation/l1',
-            $this->buildUrl('http://master.lan', 'l1'),
+            [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+                'SNI_enabled' => true,
+                'peer_name' => 'master.example.com',
+            ],
+            $plan['socket_context']['ssl'] ?? null,
         );
     }
 
-    public function testDialUrlOmitsPortWhenNotConfigured(): void
+    /**
+     * Private-CA operators point the bundle env at a PEM file; the plan
+     * threads it through as ssl.cafile WITHOUT touching any strict flag —
+     * selecting a trust anchor is not an escape hatch.
+     */
+    public function testCaBundleEnvSelectsTrustAnchorKeepingVerificationStrict(): void
     {
-        self::assertSame(
-            'wss://master.example.com/relay/federation/l1',
-            $this->buildUrl('https://master.example.com', 'l1'),
-        );
+        $bundle = tempnam(sys_get_temp_dir(), 'phlix-ca-pin-');
+        self::assertIsString($bundle);
+        file_put_contents($bundle, "-----BEGIN CERTIFICATE-----\nplaceholder\n");
+        try {
+            putenv('PHLIX_FEDERATION_CA_BUNDLE=' . $bundle);
+            $plan = $this->buildPlan('https://master.example.com', 'l1');
+
+            $ssl = $plan['socket_context']['ssl'] ?? null;
+            self::assertIsArray($ssl, 'a TLS plan must carry an ssl stream context');
+            self::assertSame($bundle, $ssl['cafile'] ?? null);
+            self::assertTrue($ssl['verify_peer']);
+            self::assertTrue($ssl['verify_peer_name']);
+            self::assertTrue($ssl['SNI_enabled']);
+        } finally {
+            @unlink($bundle);
+        }
     }
 
-    public function testDialUrlFallsBackToWssForBareHost(): void
+    /**
+     * Fail-loud law: a configured-but-unreadable bundle aborts the plan at
+     * dial time. Silently falling through to the system store would be the
+     * dangerous mutation this pin kills — the dial would either confuse
+     * later or verify against an unintended trust root.
+     */
+    public function testUnreadableCaBundleRefusesTheDialLoudly(): void
     {
-        self::assertSame(
-            'wss://master.example.com/relay/federation/l1',
-            $this->buildUrl('master.example.com', 'l1'),
-        );
+        $bundle = sys_get_temp_dir() . '/phlix-no-such-ca-' . bin2hex(random_bytes(4)) . '.pem';
+        putenv('PHLIX_FEDERATION_CA_BUNDLE=' . $bundle);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('PHLIX_FEDERATION_CA_BUNDLE');
+
+        $this->buildPlan('https://master.example.com', 'l1');
     }
 
-    private function buildUrl(string $configured, string $leafHubId): string
+    /**
+     * The exact dial-plan shape via the class-level DialPlan alias: the
+     * strict inner ssl shape keeps every flag/peer_name assertion typed, so
+     * a future src change that loosens the context reddens here at analysis
+     * time, not just at assertion time.
+     *
+     * @phpstan-return DialPlan
+     * @psalm-return DialPlan
+     */
+    private function buildPlan(string $configured, string $leafHubId): array
     {
-        $method = new ReflectionMethod($this->manager, 'buildMasterWsUrl');
+        $method = new ReflectionMethod($this->manager, 'buildMasterDialPlan');
         $method->setAccessible(true);
 
-        /** @var string */
-        return $method->invoke($this->manager, $configured, $leafHubId);
+        /**
+         * @phpstan-var DialPlan
+         * @psalm-var DialPlan
+         */
+        $plan = $method->invoke($this->manager, $configured, $leafHubId);
+
+        return $plan;
     }
 
     // ---------------------------- HELLO_ACK verification (M-8 + H-4)
@@ -479,6 +658,46 @@ final class FederationPeerManagerTest extends TestCase
 
         self::assertFalse((bool) $this->readProperty('reconnectScheduled'));
         self::assertTrue((bool) $this->readProperty('intentionalDisconnect'));
+    }
+
+    // ------------------------------------------- text/binary frame routing (E2E-found)
+
+    /**
+     * Regression pin from the real-TLS E2E: the leaf's ONLY text-frame entry
+     * point is isTextFrame, and its pre-fix form (`json_decode` assoc=false +
+     * array-or-scalar acceptance) classified EVERY JSON-object payload —
+     * including the master's hub_hello_ack — as binary, because an object
+     * decodes to a stdClass. The whole :8805 leaf handshake was dead on real
+     * sockets and invisible to reflection-driven tests. These pins hold the
+     * dispatch law itself, without needing a socket.
+     *
+     * @return array<string, array{0: string, 1: bool}>
+     */
+    public static function frameClassificationProvider(): array
+    {
+        // Hand-built rather than json_encode: the payload's exact shape is
+        // the fixture here, and the literal keeps the provider string-typed.
+        $ack = '{"type":"hub_hello_ack","session_id":"sess-1","master_hub_id":"master-1",'
+            . '"capabilities":["library_shares","relay"],"nonce":"n","signature":"s"}';
+
+        return [
+            'handshake ack object is TEXT' => [$ack, true],
+            'bare object is TEXT' => ['{"type":"x"}', true],
+            'array is TEXT' => ['[1,2,3]', true],
+            'empty payload is BINARY' => ['', false],
+            'scalar json is BINARY' => ['5', false],
+            'seq-zero DATA frame is BINARY' => ["\x00\x00\x00\x00\x05payload", false],
+            'random binary is BINARY' => ["\x01\x02\x7bnot json\x7b", false],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('frameClassificationProvider')]
+    public function testIsTextFrameRoutesObjectsToTheTextPath(string $payload, bool $expectedText): void
+    {
+        $method = new ReflectionMethod($this->manager, 'isTextFrame');
+        $method->setAccessible(true);
+
+        self::assertSame($expectedText, $method->invoke($this->manager, $payload));
     }
 
     // ---------------------------------------------------------------- helpers

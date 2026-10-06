@@ -6,6 +6,77 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — federation: `https` masters now CONNECT — ws://-URI + `transport=ssl` is the WSS client idiom; and the real-TLS E2E found the leaf was misrouting every HELLO_ACK — 2026-10-06
+
+The owner finding stood since the e225443 era: a peer configured with an
+`https://` URL could never link — `buildMasterWsUrl()` mapped the scheme to
+`wss://`, and the vendored workerman v5.2.2 has no `Protocols\Wss`, so the
+AsyncTcpConnection CONSTRUCTOR threw on every dial (loud and self-retrying
+since the child-boot fix, but never connecting). Per the ratified design this
+ships the documented workerman idiom instead of any protocol shim: **keep the
+`ws://` scheme and set `$con->transport = 'ssl'` before `connect()`** — TLS
+via php-openssl, no new dependency.
+
+- `buildMasterWsUrl()` → `buildMasterDialPlan(): array{uri, transport,
+  socket_context}`. `http` → byte-preserved plain-ws plan; `https` (and the
+  bare-host / foreign-scheme fallbacks that always intended TLS) →
+  `ws://host[:port]` + `transport='ssl'` + an EXPLICIT strict context:
+  `verify_peer`, `verify_peer_name`, `SNI_enabled` and `peer_name` all set by
+  hand — `peer_name` is load-bearing because the URI scheme says `ws://`
+  while the certificate is for the real host, and workerman only auto-sets
+  it on its proxy paths (verified in the vendor source). Strict verification
+  is law here: there is no `verify_peer=false` and no self-signed tolerance
+  anywhere in the client path — unlike the server repo's documented
+  relay-mirror escape.
+- Trust-anchor seam: `PHLIX_FEDERATION_CA_BUNDLE` pins a CA bundle into the
+  context `cafile` (needed because `openssl.cafile` is not runtime-settable
+  and private-CA deployments exist). It selects an anchor, never weakens
+  verification, and REFUSES the dial loudly if the path is unreadable rather
+  than silently falling back to the system store. Default unset = system
+  trust store.
+- Single construction site: every master dial (child boot
+  `bootstrapFromWorker`, role-PUT and toggleRelay explicit triggers, the
+  reconnect ticks) funnels through `connectToMaster()` →
+  `establishConnection($dialPlan, …)`; a recursive scan pins exactly one
+  `new AsyncTcpConnection` in src fed by the plan, and a tokenized law pins
+  that no quoted `wss://` literal and no verification-weakening flag pair
+  can re-enter the client path (the legitimate SERVER-side TLS listener
+  context in `RelayWorker` is exempted by name).
+- **Production bug the real-TLS E2E immediately caught:**
+  `isTextFrame()` decoded with `assoc=false` and accepted only
+  array-or-scalar — so every JSON *object* (a `stdClass`) counted as
+  BINARY. The leaf fed every genuine `hub_hello_ack` to the relay-frame
+  decoder, logged "undecodable frame", and closed — on ANY scheme, ws
+  included. Reflection-driven tests called `handleTextFrame`/`handleHelloAck`
+  directly and never crossed the dispatcher, so this was invisible until a
+  real socket existed in the room. Fixed (assoc decode + `is_array`) and
+  pinned by a classification provider; the same E2E now proves the full
+  ceremony over TLS.
+- Tests: plan-shape pins in `FederationPeerManagerTest` (explicit-port,
+  :443-default, plain-http byte-preservation, fallback schemes, CA-bundle
+  select + fail-loud); `FederationMasterDialConstructionTest` (vendor wss
+  throw reproduced, 7-URL real-construction matrix, vendor's ssl→443/80
+  port defaults, single-site + tokenized literal law); and
+  `FederationMasterTlsDialTest` — a process-level REAL-TLS loopback: a
+  genuine workerman `websocket://` listener with `transport='ssl'` and a
+  throwaway-CA cert (in-process openssl, no CLI dependency) in a child
+  process, the REAL `FederationPeerManager` dialing `https://localhost`,
+  strict `verify_peer` against the pinned CA, the genuine Ed25519 H-4
+  ceremony, and DATA frames both ways with M-5 offer rebasing observed on
+  both ends — plus the negative leg: trusting an unrelated CA must die at
+  the handshake before a single application byte flows, with the backoff
+  chain re-armed behind the wreckage.
+- The boot-bootstrap tests' throw fabrication moved from the retired
+  `wss://`-constructor shape to a settings-repository throw (the catch's
+  standing raison d'être in the transport=ssl era); e225443-era prose that
+  said https masters cannot connect is flipped to shipped truth in
+  `FederationPeerManager`, `FederationWorker`, `HubServicesProvider` and
+  these tests.
+- phlix-server audit (lane item 5): **no same-class defect.**
+  `RelayConsumer::resolveHubTransport()` already implements this exact idiom
+  (strips `wss://`→`ws://`, sets `transport='ssl'`, pins
+  `Protocols\Ws`, strict by default via `relayTlsVerify`). No server commit.
+
 ### Fixed — behavior (follow-up to the entry below, same day): the BOOT half of that self-heal claim was a phantom in the master process — the leaf chain is now armed/dialed in the federation worker's CHILD, which is where the claim above becomes true — 2026-10-05
 
 Adversarial review of the entry below asked whether "a hub that BOOTED with

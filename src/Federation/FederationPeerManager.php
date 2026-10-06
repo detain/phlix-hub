@@ -20,6 +20,7 @@ use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
 use Phlix\Shared\Relay\RelayFrameType;
+use RuntimeException;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
 use Workerman\Timer;
@@ -334,7 +335,7 @@ class FederationPeerManager
         }
 
         $this->masterPeerId = $masterPeerId;
-        $this->establishConnection($this->buildMasterWsUrl($masterUrl, $leafHubId), $hubConfig);
+        $this->establishConnection($this->buildMasterDialPlan($masterUrl, $leafHubId), $hubConfig);
     }
 
     /**
@@ -360,13 +361,19 @@ class FederationPeerManager
      *      entry that {@see \Workerman\Timer::signalHandle()} never ticks
      *      once `Timer::$event` is set (children), so the child can neither
      *      re-arm (dedup guard) nor inherit a live link. POISONED LATCH.
-     *   2. `wss://` (https-scheme peer): the vendored workerman v5.2.2 has
-     *      no `Protocols\Wss` class, so even the ASYNC CONNECTION
-     *      CONSTRUCTOR throws RuntimeException at
+     *   2. `wss://` (https-scheme peer, pre-2026-10-06): the vendored
+     *      workerman v5.2.2 has no `Protocols\Wss` class, so even the ASYNC
+     *      CONNECTION CONSTRUCTOR threw RuntimeException at
      *      {@see self::establishConnection()} — outside that method's
      *      connect() try/catch — escaping connectToMaster() entirely and
      *      being swallowed silently by the pre-lane master-side boot
-     *      try/catch: no chain, no error log, link never attempted.
+     *      try/catch: no chain, no error log, link never attempted. FIXED
+     *      forward: https peers now map to the `ws://` + `transport='ssl'`
+     *      idiom in {@see self::buildMasterDialPlan()}, so this shape can
+     *      no longer occur — the catch below stays for the remaining
+     *      pre-socket throws (a malformed peer URL still fails in the
+     *      constructor; a dead settings/DB read throws before the plan is
+     *      ever built).
      *
      * Neither shape can occur inside this worker: the loop exists before
      * onWorkerStart fires (Worker::run() sets globalEvent + Timer::init
@@ -427,12 +434,15 @@ class FederationPeerManager
         try {
             $this->connectToMaster();
         } catch (Throwable $e) {
-            // Repro shape 2 (constructor-class throw escapes establishConnection's
-            // connect() catch): a boot dial must never die silently the way the
-            // master-side one did — log LOUDLY and hand the chain to the
-            // backoff, so the link is retried on this loop (the same posture
-            // an unreachable master already gets) instead of a single
-            // swallowed attempt.
+            // Constructor-class throws still escape establishConnection's
+            // connect() catch (the legacy repro used the missing Wss protocol;
+            // since the transport=ssl mapping an https peer no longer throws
+            // there, but a malformed peer URL still can, and the settings/DB
+            // reads before the plan is built always can): a boot dial must
+            // never die silently the way the master-side one did — log LOUDLY
+            // and hand the chain to the backoff, so the link is retried on
+            // this loop (the same posture an unreachable master already gets)
+            // instead of a single swallowed attempt.
             LoggerFactory::get(LogChannels::RELAY)->error(
                 'FederationPeerManager: boot dial threw before the socket existed — arming backoff',
                 ['error' => $e->getMessage()],
@@ -447,23 +457,61 @@ class FederationPeerManager
     }
 
     /**
-     * Build the master dial URL from the configured peer URL (M-8).
+     * Parse the configured peer URL into a connection plan (M-8).
      *
-     * Honors the configured scheme (http → ws, anything else → wss) and the
-     * configured port; the old code hard-coded 'wss://' + bare host, so a
-     * peer URL like `https://master.example:8443` silently dialed the wrong
-     * endpoint.
+     * Honors the configured scheme (http → plaintext ws, anything else →
+     * TLS) and the configured port; the pre-M-8 code hard-coded 'wss://' +
+     * bare host, so a peer URL like `https://master.example:8443` silently
+     * dialed the wrong endpoint.
+     *
+     * TLS is expressed the way the vendored workerman v5.2.2 requires: it
+     * has NO `Protocols\Wss` class, so a `wss://` URI throws at the
+     * AsyncTcpConnection CONSTRUCTOR — the scheme is not a protocol, it is
+     * a stream transport. The documented idiom (and the one phlix-server's
+     * RelayConsumer already ships for its hub dial) is a `ws://` URI with
+     * `$connection->transport = 'ssl'` set before connect(). The scheme
+     * `ws` resolves the real client protocol (`Workerman\Protocols\Ws`),
+     * the TLS handshake runs under the hood, and the WS upgrade then flows
+     * through the encrypted stream — see {@see self::establishConnection()}.
+     *
+     * The ssl stream context states the verification posture EXPLICITLY:
+     * `verify_peer`, `verify_peer_name` and `SNI_enabled` are true, and
+     * `peer_name` names the configured host — because the URI scheme is
+     * `ws://`, the certificate must still be checked against the real
+     * master hostname, not whatever the raw TCP dial happened to target.
+     * Strict verification is law here: there is deliberately NO hub-side
+     * escape hatch (no verify_peer=false, no allow_self_signed toggle —
+     * unlike phlix-server's documented relay mirror).
+     *
+     * Trust anchor: by default the context carries NO `cafile`, so the
+     * wrapper falls back to the openssl.cafile / openssl.capath php.ini
+     * entries and the system store. An operator whose master presents a
+     * private-CA certificate sets `PHLIX_FEDERATION_CA_BUNDLE` to a PEM
+     * bundle — that SELECTS a trust anchor, it never weakens
+     * verification (a missing/unreadable bundle fails the dial LOUD at
+     * plan time rather than silently degrading to the system store;
+     * runtime `ini_set('openssl.cafile', ...)` is not a usable seam
+     * because that entry is not user-modifiable at runtime).
+     *
+     * The port is only embedded when the peer URL carries one. A portless
+     * `https://` master yields `ws://{host}` + transport `ssl`, and
+     * `AsyncTcpConnection::connect()` resolves that pairing to :443
+     * itself; portless plaintext keeps the :80 default — the same numbers
+     * the old wss/ws URLs implied.
      *
      * @param string $masterUrl Configured peer URL (e.g. https://host:port).
      * @param string $leafHubId This hub's own federation_hubs.id.
      *
-     * @return string Fully-qualified WebSocket dial URL.
+     * @return array{uri: string, transport: string, socket_context: array<string, mixed>}
+     *   uri: the ws:// dial URL (never wss:// — TLS rides on `transport`);
+     *   transport: 'ssl' for TLS masters, '' for plaintext (property left
+     *   at workerman's default);
+     *   socket_context: ssl stream options for TLS, [] for plaintext.
      */
-    private function buildMasterWsUrl(string $masterUrl, string $leafHubId): string
+    private function buildMasterDialPlan(string $masterUrl, string $leafHubId): array
     {
         $scheme = parse_url($masterUrl, PHP_URL_SCHEME);
         $scheme = is_string($scheme) ? strtolower($scheme) : '';
-        $wsScheme = $scheme === 'http' ? 'ws' : 'wss';
 
         $host = parse_url($masterUrl, PHP_URL_HOST);
         $masterHost = is_string($host) && $host !== '' ? $host : $masterUrl;
@@ -471,8 +519,45 @@ class FederationPeerManager
         $port = parse_url($masterUrl, PHP_URL_PORT);
         $portSuffix = is_numeric($port) ? ':' . $port : '';
 
-        return $wsScheme . '://' . $masterHost . $portSuffix
+        $uri = 'ws://' . $masterHost . $portSuffix
             . '/relay/federation/' . rawurlencode($leafHubId);
+
+        if ($scheme === 'http') {
+            return ['uri' => $uri, 'transport' => '', 'socket_context' => []];
+        }
+
+        // https, a bare host (the legacy secure-by-default fallback), and
+        // any other scheme — including an operator-written `wss://` — all
+        // mean TLS: the exact mapping table the old code sent to the
+        // nonexistent Wss protocol class.
+        $ssl = [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+            'SNI_enabled' => true,
+            'peer_name' => $masterHost,
+        ];
+
+        $caBundle = getenv('PHLIX_FEDERATION_CA_BUNDLE');
+        if (is_string($caBundle) && $caBundle !== '') {
+            if (!is_file($caBundle) || !is_readable($caBundle)) {
+                // Fail loud, never degrade: a configured bundle that cannot
+                // be read must abort the dial, not quietly fall back to the
+                // system store (which would either fail confusingly later or,
+                // worse, succeed against a different trust root).
+                throw new RuntimeException(
+                    'FederationPeerManager: PHLIX_FEDERATION_CA_BUNDLE is set to "' . $caBundle
+                    . '" but no readable file exists there — refusing to dial rather than'
+                    . ' falling back to the system trust store.',
+                );
+            }
+            $ssl['cafile'] = $caBundle;
+        }
+
+        return [
+            'uri' => $uri,
+            'transport' => 'ssl',
+            'socket_context' => ['ssl' => $ssl],
+        ];
     }
 
     /**
@@ -614,19 +699,37 @@ class FederationPeerManager
     /**
      * Establish a new WebSocket connection to the master hub.
      *
-     * @param string $wsUrl     Full WebSocket URL.
+     * The single AsyncTcpConnection construction site for master dials.
+     * TLS rides the workerman idiom parsed upstream in
+     * {@see self::buildMasterDialPlan()}: a `ws://` URI (so the real
+     * `Workerman\Protocols\Ws` client protocol resolves — there is no
+     * `Protocols\Wss` in the vendored version and constructing one is the
+     * RuntimeException this seam exists to prevent) plus `transport = 'ssl'`
+     * and the strict ssl stream context set BEFORE connect(), so the TCP
+     * dial, the TLS handshake (SNI + peer_name from the plan) and the WS
+     * upgrade all inherit the same identity.
+     *
+     * @param array{uri: string, transport: string, socket_context: array<string, mixed>} $dialPlan
+     *        Connection plan from {@see self::buildMasterDialPlan()}.
      * @param array<string, mixed> $hubConfig This hub's configuration row.
      *
      * @return void
      */
-    private function establishConnection(string $wsUrl, array $hubConfig): void
+    private function establishConnection(array $dialPlan, array $hubConfig): void
     {
         // Prevent multiple simultaneous connection attempts
         if ($this->masterConnection !== null) {
             return;
         }
 
-        $this->masterConnection = new AsyncTcpConnection($wsUrl);
+        $this->masterConnection = new AsyncTcpConnection($dialPlan['uri'], $dialPlan['socket_context']);
+
+        if ($dialPlan['transport'] !== '') {
+            // Must precede connect(): connect() reads the transport to pick
+            // the default port (ssl → 443) and checkConnection() runs the
+            // TLS handshake off it before any WS bytes flow.
+            $this->masterConnection->transport = $dialPlan['transport'];
+        }
 
         $hubConfigFinal = $hubConfig;
         $self = $this;
@@ -1479,7 +1582,8 @@ class FederationPeerManager
                     $self->reconnectHoldAnnounced = false;
                     // The dial may THROW before any socket exists (the
                     // establishConnection constructor line is outside its
-                    // own catch — e.g. the vendored wss scheme gap) or
+                    // own catch — e.g. a malformed peer URL; the https
+                    // mapping since rides transport=ssl instead) or
                     // inside the guard chain (a settings/DB read failing at
                     // boot). An escape here dies the chain at best and
                     // crash-loops the worker at worst, so a throw re-arms
@@ -1540,7 +1644,12 @@ class FederationPeerManager
     /**
      * Determine whether an incoming frame payload is a text (JSON) frame.
      *
-     * Text frames are valid UTF-8 JSON starting with '{' or '['.
+     * Text frames are valid UTF-8 JSON objects/arrays (the handshake
+     * messages are all JSON objects). The assoc flag is load-bearing:
+     * `json_decode(..., false)` hands back a stdClass for every object and
+     * an array-or-scalar acceptance test then silently misroutes EVERY
+     * hub_hello_ack to the binary decoder — the real-TLS E2E
+     * (FederationMasterTlsDialTest) is what surfaced that.
      *
      * @param string $data Raw frame payload.
      *
@@ -1559,11 +1668,11 @@ class FederationPeerManager
             return false;
         }
 
-        // Otherwise check if it's valid UTF-8 JSON
+        // Otherwise check if it's a valid UTF-8 JSON object/array
         try {
             /** @var mixed $decoded */
-            $decoded = json_decode($data, false, 2);
-            return is_array($decoded) || is_scalar($decoded);
+            $decoded = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
+            return is_array($decoded);
         } catch (Throwable) {
             return false;
         }

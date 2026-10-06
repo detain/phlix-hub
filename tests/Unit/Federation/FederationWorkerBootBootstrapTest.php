@@ -18,6 +18,7 @@ use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionProperty;
+use RuntimeException;
 use Workerman\Timer;
 
 /**
@@ -48,7 +49,8 @@ use Workerman\Timer;
  *      (the pre-existing enabled-boot gap, closed);
  *   5. forked intentionalDisconnect → the child arms nothing and dials
  *      nothing, without even consulting the settings gate;
- *   6. a `wss`-scheme boot dial that throws from the constructor logs
+ *   6. a boot dial that throws before the socket exists (settings store
+ *      down; pre-2026-10-06 it was the `wss://` constructor throw) logs
  *      LOUDLY and hands the chain to the backoff instead of vanishing;
  *   7. an inherited reconnectTimerId is never Timer::del()'d in the child —
  *      the id names a MASTER task-table slot whose numeric value can
@@ -259,24 +261,22 @@ final class FederationWorkerBootBootstrapTest extends TestCase
     // ------------------------------------------------------------------ 6
 
     /**
-     * The repro's silent-death shape: an `https` peer maps to the `wss`
-     * scheme whose CONSTRUCTOR throws RuntimeException (vendored workerman
-     * has no Protocols\Wss) — outside establishConnection's own catch. The
-     * bootstrap must turn THAT into a loud log + a backoff chain, which is
-     * what makes "boot self-heal" true for every scheme instead of only
-     * the ws one. (The wss scheme itself is a separate vendor gap.)
+     * The boot catch's raison d'être in the transport=ssl era: a dial that
+     * throws BEFORE establishConnection's own socket try/catch can run —
+     * the settings repository failing on the very first read is the standing
+     * example (the pre-2026-10-06 shape was the `wss://` constructor throw;
+     * https peers now ride ws+transport=ssl and reach the socket, so that
+     * exact supplier is retired — see FederationMasterTlsDialTest for what
+     * really happens over TLS now). The bootstrap must still turn any such
+     * pre-socket escape into a loud log + a backoff chain, which is what
+     * makes "boot self-heal" true for every failure shape.
      */
     public function testConstructorThrowingBootDialLogsLoudlyAndArmsBackoff(): void
     {
         $this->forceWorkermanRuntime();
-        $this->hubRepo->method('getHubConfig')->willReturn([
-            'id'        => 'leaf-1',
-            'role'      => 'leaf',
-            'is_active' => 1,
-        ]);
-        $this->hubRepo->method('getDialablePeers')->willReturn([
-            ['id' => 'peer-m', 'url' => 'https://master.example', 'peer_name' => 'm', 'public_key' => ''],
-        ]);
+        $this->hubRepo->method('getHubConfig')->willThrowException(
+            new RuntimeException('hub config store down — pre-socket throw shape'),
+        );
 
         $manager = $this->peerManager(static fn (): bool => true);
         $this->workerHolding($manager)->onWorkerStart();
@@ -284,13 +284,17 @@ final class FederationWorkerBootBootstrapTest extends TestCase
         self::assertSame(
             5.0,
             $this->soleArmedTimer()['interval'],
-            'the escaped constructor throw is caught: the chain is armed, not vanished',
+            'the escaped pre-socket throw is caught: the chain is armed, not vanished',
         );
         self::assertTrue((bool) $this->readProp($manager, 'reconnectScheduled'));
 
         $log = (string) file_get_contents($this->logFile);
         self::assertStringContainsString('boot dial threw before the socket existed', $log);
-        self::assertStringContainsString('Wss', $log, 'the loud line names the real cause');
+        self::assertStringContainsString(
+            'hub config store down — pre-socket throw shape',
+            $log,
+            'the loud line names the real cause',
+        );
     }
 
     // ------------------------------------------------------------------ 7
@@ -381,32 +385,29 @@ final class FederationWorkerBootBootstrapTest extends TestCase
     // ------------------------------------------------------------------ 10
 
     /**
-     * The tick-side twin of the constructor-throw hardening: an ENABLED
-     * proceed tick whose dial throws (the wss constructor shape) must
-     * re-arm through the callback's own catch instead of letting the
-     * exception escape the timer callback (chain death on pcntl drivers,
-     * crash-loop risk on event-loop drivers). Without the try/catch added
-     * around the callback's connectToMaster(), firing this tick throws out
-     * of fireArmedTicks() and the test errors — the mutation pin.
+     * The tick-side twin of the pre-socket-throw hardening: an ENABLED
+     * proceed tick whose dial throws before establishConnection's own socket
+     * try/catch can run (here: the settings repository failing on first
+     * read — the standing example since https peers rode transport=ssl into
+     * real sockets) must re-arm through the callback's own catch instead of
+     * letting the exception escape the timer callback (chain death on pcntl
+     * drivers, crash-loop risk on event-loop drivers). Without the try/catch
+     * added around the callback's connectToMaster(), firing this tick throws
+     * out of fireArmedTicks() and the test errors — the mutation pin.
      */
     public function testEnabledTickWithThrowingDialReArmsInsteadOfDying(): void
     {
         $this->forceWorkermanRuntime();
-        $this->hubRepo->method('getHubConfig')->willReturn([
-            'id'        => 'leaf-1',
-            'role'      => 'leaf',
-            'is_active' => 1,
-        ]);
-        $this->hubRepo->method('getDialablePeers')->willReturn([
-            ['id' => 'peer-m', 'url' => 'https://master.example', 'peer_name' => 'm', 'public_key' => ''],
-        ]);
+        $this->hubRepo->method('getHubConfig')->willThrowException(
+            new RuntimeException('hub config store down — pre-socket throw shape'),
+        );
 
         $manager = $this->peerManager(static fn (): bool => true);
         $arm = new \ReflectionMethod($manager, 'scheduleReconnect');
         $arm->invoke($manager);
         self::assertSame(5.0, $this->soleArmedTimer()['interval']);
 
-        $this->fireArmedTicks(); // dial throws from the ctor → callback catch must hold
+        $this->fireArmedTicks(); // dial throws pre-socket → callback catch must hold
 
         self::assertSame(
             10.0,
