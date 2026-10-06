@@ -6,6 +6,65 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — federation: the two scheme-table legs the 519c0c0 cut left short — explicit `ws://` masters stay PLAINTEXT, and a TLS dial in a process without php-openssl now fails LOUD at dial time — 2026-10-06
+
+A re-read of the ratified https-master spec against the shipped
+`buildMasterDialPlan()` found the mapping narrower than the design on its
+plaintext side and blinder than the design on its runtime-failure side:
+
+- **`ws://` → TLS (wrong leg).** The landed table put only `http` on the
+  plaintext side, so an operator deliberately configuring a plaintext
+  `ws://master:8805` acquired the ssl transport + a strict context and
+  failed the handshake against a plaintext listener. The ratified scheme
+  table names `ws` alongside `http` as plaintext — matching the phlix-server
+  `RelayConsumer::resolveHubTransport()` precedent ("a `ws://` URL yields no
+  SSL context and no ssl transport (plain tcp)"). `buildMasterDialPlan()`
+  now returns the plain plan for the whole `http`/`ws` pair; every other
+  scheme (https, bare host, foreign, operator-written `wss://`) keeps the
+  secure-by-default TLS leg exactly as shipped. Pinned by
+  `testExplicitWsSchemeStaysOnThePlaintextLeg` (explicit-port +
+  default-port rows) and a new `ws://` row in the real-construction matrix;
+  the renamed `testNonPlaintextSchemesMapToTlsLegNeverToWssUri` states the
+  fallback law for the complement.
+- **Missing php-openssl was an opaque error.** The spec required a fail-loud
+  check AT DIAL TIME naming the extension; S258 asserts openssl only in CI,
+  not on production hosts, and without the check a TLS dial died in
+  `connect()` with a `Worker::getEventLoop`/stream-socket shape that says
+  nothing about the actual cause (measured — it is literally what the new
+  red-first test's failure output showed pre-fix). `establishConnection()`
+  now refuses a TLS plan when the extension is absent: one RELAY error line
+  naming `openssl`, an early return (deliberately NOT a throw), and a
+  backoff re-arm so the chain survives exactly like every other dial
+  failure — enable the extension, restart, the link dials again with no
+  explicit trigger. Plaintext dials never consult the extension (scoped
+  guard, pinned). The check runs through a
+  `tlsExtensionProbe` constructor seam mirroring the `enabledResolver`
+  shape — null everywhere in production reads the real
+  `extension_loaded('openssl')`.
+
+Tests: `testTlsDialWithoutOpensslRefusesLoudlyAndKeepsChainAlive` (no throw,
+no construction, named log line, sole re-arm timer),
+`testTlsDialWithOpensslPresentReachesConstruction` (positive control — the
+guard is invisible when the probe says present; real construction +
+`transport === 'ssl'` read back off the connection),
+`testPlaintextDialProceedsWithoutOpenssl` (scope law),
+`testDefaultProbeUsesRealOpensslAvailability` (null-wiring law, premise
+asserted against the S258 image), and `testCreatePeerAcceptsWssMasterUrl`
+(boundary law: PUT/POST validation accepts `wss://` peer URLs —
+`FILTER_VALIDATE_URL` always did; now pinned so no future scheme enum can
+re-lock the door the dial fix opens). Mutation ledger — each planted and
+killed: guard block removed (opaque-error red), guard throws instead of
+returning (error), TLS-scope dropped (plaintext leg red), probe wiring
+ignored (refusal-leg red), re-arm removed (timer-count red), ws exemption
+removed (both ws rows red).
+
+Prose: `docs/websockets.md` `:8805` section gains the dial-side scheme truth
+(accepted URL shapes, the transport=ssl idiom, strict-verification law,
+`PHLIX_FEDERATION_CA_BUNDLE`, the openssl-at-dial requirement);
+`buildMasterDialPlan()`/`establishConnection()` docblocks mirror the pair.
+No new wire error codes (registry stays owner-sealed), no new files (census
+untouched), helpText/openapi carried no contrary claim.
+
 ### Fixed — federation: `https` masters now CONNECT — ws://-URI + `transport=ssl` is the WSS client idiom; and the real-TLS E2E found the leaf was misrouting every HELLO_ACK — 2026-10-06
 
 The owner finding stood since the e225443 era: a peer configured with an

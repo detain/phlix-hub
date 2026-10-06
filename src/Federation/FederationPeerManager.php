@@ -202,6 +202,11 @@ class FederationPeerManager
      * @param (callable(): bool)|null           $enabledResolver LIVE reader of
      *        `federation.enabled` (HubSettingsResolvers::bool, fail-safe to the
      *        boot flag); null keeps the pre-W5 always-on dial behavior.
+     * @param (callable(): bool)|null           $tlsExtensionProbe testable seam
+     *        over `extension_loaded('openssl')` checked at DIAL time (owner
+     *        2026-10-06 spec: a TLS master in a process without the extension
+     *        must fail loud naming openssl, never as an opaque stream error);
+     *        null reads the real extension state.
      */
     public function __construct(
         private readonly FederationHubRepository $hubRepo,
@@ -228,6 +233,13 @@ class FederationPeerManager
         // off-window still re-admit traffic instantly (per-frame gates); the
         // ≤60s exponential backoff ladder on the ENABLED path is unchanged.
         private readonly mixed $enabledResolver = null,
+        // Owner lane 2026-10-06: dial-time probe over extension_loaded('openssl').
+        // S258 (scripts/assert-required-extensions.php) asserts the extension in
+        // CI and the image ships it; this is the RUNTIME voice for a production
+        // host provisioned without it — see tlsExtensionAvailable() and the
+        // guard at the top of establishConnection(). Null (every production and
+        // pre-existing construction site) reads the real extension state.
+        private readonly mixed $tlsExtensionProbe = null,
     ) {
         $this->decoder = new FrameDecoder();
         $this->encoder = new FrameEncoder();
@@ -241,6 +253,22 @@ class FederationPeerManager
         $resolver = $this->enabledResolver;
 
         return is_callable($resolver) ? $resolver() : true;
+    }
+
+    /**
+     * Whether THIS process can speak TLS on a dial: php-openssl must be
+     * loaded. S258 asserts the extension for CI and the Docker image, but a
+     * production host built without it would otherwise meet only an opaque
+     * stream-socket error at connect() — this seam turns that into one loud,
+     * named line at dial time. Mirrors the {@see self::federationEnabled()}
+     * injectable shape so the refused branch stays unit-provable on hosts
+     * where the extension (conveniently) IS present.
+     */
+    private function tlsExtensionAvailable(): bool
+    {
+        $probe = $this->tlsExtensionProbe;
+
+        return is_callable($probe) ? $probe() : extension_loaded('openssl');
     }
 
     /**
@@ -459,10 +487,10 @@ class FederationPeerManager
     /**
      * Parse the configured peer URL into a connection plan (M-8).
      *
-     * Honors the configured scheme (http → plaintext ws, anything else →
-     * TLS) and the configured port; the pre-M-8 code hard-coded 'wss://' +
-     * bare host, so a peer URL like `https://master.example:8443` silently
-     * dialed the wrong endpoint.
+     * Honors the configured scheme (the plaintext pair http/ws → plain ws,
+     * anything else → TLS) and the configured port; the pre-M-8 code
+     * hard-coded 'wss://' + bare host, so a peer URL like
+     * `https://master.example:8443` silently dialed the wrong endpoint.
      *
      * TLS is expressed the way the vendored workerman v5.2.2 requires: it
      * has NO `Protocols\Wss` class, so a `wss://` URI throws at the
@@ -522,14 +550,14 @@ class FederationPeerManager
         $uri = 'ws://' . $masterHost . $portSuffix
             . '/relay/federation/' . rawurlencode($leafHubId);
 
-        if ($scheme === 'http') {
+        if ($scheme === 'http' || $scheme === 'ws') {
             return ['uri' => $uri, 'transport' => '', 'socket_context' => []];
         }
 
         // https, a bare host (the legacy secure-by-default fallback), and
-        // any other scheme — including an operator-written `wss://` — all
-        // mean TLS: the exact mapping table the old code sent to the
-        // nonexistent Wss protocol class.
+        // any scheme outside the plaintext http/ws pair — including an
+        // operator-written `wss://` — all mean TLS: the exact mapping table
+        // the old code sent to the nonexistent Wss protocol class.
         $ssl = [
             'verify_peer' => true,
             'verify_peer_name' => true,
@@ -709,6 +737,11 @@ class FederationPeerManager
      * dial, the TLS handshake (SNI + peer_name from the plan) and the WS
      * upgrade all inherit the same identity.
      *
+     * Before any construction, a TLS plan in a process without php-openssl
+     * is refused LOUD — one named error line plus a backoff re-arm, never a
+     * throw and never the opaque stream error it replaces (owner spec
+     * 2026-10-06). Plaintext plans never consult the extension.
+     *
      * @param array{uri: string, transport: string, socket_context: array<string, mixed>} $dialPlan
      *        Connection plan from {@see self::buildMasterDialPlan()}.
      * @param array<string, mixed> $hubConfig This hub's configuration row.
@@ -719,6 +752,21 @@ class FederationPeerManager
     {
         // Prevent multiple simultaneous connection attempts
         if ($this->masterConnection !== null) {
+            return;
+        }
+
+        if ($dialPlan['transport'] === 'ssl' && !$this->tlsExtensionAvailable()) {
+            // Owner 2026-10-06 spec: fail LOUD at dial time, not later as an
+            // opaque stream error. Log + early return — deliberately NOT a
+            // throw — and re-arm the backoff so the chain stays alive exactly
+            // like every other dial failure; the link recovers after the
+            // operator enables php-openssl and restarts, no explicit trigger.
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'FederationPeerManager: refusing TLS dial — the openssl PHP extension is not '
+                . 'loaded, so no TLS master can be reached; enable php-openssl to dial this peer',
+            );
+            $this->scheduleReconnect();
+
             return;
         }
 

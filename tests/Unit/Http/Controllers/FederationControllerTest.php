@@ -216,6 +216,35 @@ final class FederationControllerTest extends TestCase
         self::assertSame('pending', $body['status']);
     }
 
+    /**
+     * Scheme-acceptance law (2026-10-06 lane): boundary validation must
+     * ACCEPT wss:// master URLs — the dial side maps them onto
+     * ws://-URI + transport='ssl', so a reject-at-PUT would strand the very
+     * TLS-terminating-master deployments (nginx/Caddy in front) the dial
+     * fix exists for. Garbage schemes still die (invalid_url sibling).
+     */
+    public function testCreatePeerAcceptsWssMasterUrl(): void
+    {
+        $this->hubRepo->method('getPeerByUrl')->willReturn(null);
+        $this->hubRepo->method('getPeerByPublicKey')->willReturn(null);
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/peers';
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'url' => 'wss://master.example.com:8805',
+            'public_key' => 'wss-peer-key',
+            'name' => 'Wss Master',
+        ];
+
+        $response = $this->controller->createPeer($request);
+
+        self::assertSame(201, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('wss://master.example.com:8805', $body['url']);
+    }
+
     public function testCreatePeerReturns400WhenUrlMissing(): void
     {
         $request = new Request();

@@ -370,6 +370,21 @@ Parsed by `FederationWorker::parseHubId()` with
 `~^/relay/federation/([^/?#]+)/?(?:[?#].*)?$~`. Leaf hubs dial the master hub;
 this worker is the master-side listener.
 
+**Dial-side schemes (leaf → master).** The configured peer URL may be
+`https://` / `wss://` (a master behind a TLS-terminating proxy — the common
+production shape), `http://` / `ws://` (plaintext), or a bare host.
+`FederationPeerManager::buildMasterDialPlan()` maps TLS peers onto the
+workerman WSS-client idiom — a `ws://` URI with `transport = 'ssl'` and a
+strict stream context (`verify_peer`, `verify_peer_name`, `SNI_enabled`,
+`peer_name` from the configured host). Verification is strict by design: no
+`verify_peer = false` escape hatch ships. For a master with a private-CA
+certificate, set `PHLIX_FEDERATION_CA_BUNDLE` to an absolute PEM bundle path
+(unset = system trust store; set-but-unreadable = the dial is refused loudly).
+TLS dials additionally require the openssl PHP extension at runtime — without
+it the dial is refused with a log line naming the extension. This listener
+itself stays plaintext; TLS on the master side terminates upstream (nginx /
+Caddy) when the master advertises an `https://` / `wss://` URL.
+
 The worker is constructed in `HubServicesProvider::boot()` — that is, in the
 **master process, before `Worker::runAll()` forks**, because a Workerman `Worker`
 must exist before `runAll()`. It is not started from `Application::run()` like the

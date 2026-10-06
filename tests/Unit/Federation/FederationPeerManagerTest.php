@@ -20,6 +20,8 @@ use ReflectionMethod;
 use ReflectionProperty;
 use RuntimeException;
 use Workerman\Connection\AsyncTcpConnection;
+use Workerman\Events\Select;
+use Workerman\Worker;
 
 /**
  * Unit tests for {@see FederationPeerManager} leaf-side logic that can be
@@ -243,6 +245,40 @@ final class FederationPeerManagerTest extends TestCase
     }
 
     /**
+     * Owner lane 2026-10-06 (scheme-table completion): an EXPLICIT `ws://`
+     * peer is plaintext by intent — the same leg as `http://`, no transport
+     * override, no stream context. The first cut of the table had only
+     * `http` on the plaintext side, which forced TLS on operators who
+     * deliberately configured a plaintext scheme; the phlix-server
+     * RelayConsumer::resolveHubTransport precedent keeps `ws://` plain
+     * ("no SSL context and no ssl transport (plain tcp)"), and the ratified
+     * spec table names ws alongside http.
+     *
+     * @return array<array-key, array{0: string, 1: string}>
+     */
+    public static function plaintextWsUrlProvider(): array
+    {
+        return [
+            'ws explicit port' => ['ws://master.lan:8805', 'ws://master.lan:8805/relay/federation/l1'],
+            'ws default port'  => ['ws://master.lan', 'ws://master.lan/relay/federation/l1'],
+        ];
+    }
+
+    /**
+     * @param string $configured    explicitly plaintext-configured ws:// URL
+     * @param string $expectedUri   the exact dial URI the plan must emit
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('plaintextWsUrlProvider')]
+    public function testExplicitWsSchemeStaysOnThePlaintextLeg(string $configured, string $expectedUri): void
+    {
+        $plan = $this->buildPlan($configured, 'l1');
+
+        self::assertSame($expectedUri, $plan['uri']);
+        self::assertSame('', $plan['transport'], 'a ws:// master must not acquire the ssl transport');
+        self::assertSame([], $plan['socket_context'], 'a ws:// master must not carry a stream context');
+    }
+
+    /**
      * The legacy secure-by-default fallbacks — bare host AND an
      * operator-written wss:// (which used to be the constructor-throw
      * itself) — both map onto the TLS leg.
@@ -259,11 +295,12 @@ final class FederationPeerManagerTest extends TestCase
     }
 
     /**
-     * @param string $configured    configured URL (any non-http scheme)
+     * @param string $configured    configured URL (any scheme OUTSIDE the
+     *                              plaintext http/ws pair)
      * @param string $expectedHost  host the plan must carry into peer_name
      */
     #[\PHPUnit\Framework\Attributes\DataProvider('tlsFallbackUrlProvider')]
-    public function testNonHttpSchemesMapToTlsLegNeverToWssUri(string $configured, string $expectedHost): void
+    public function testNonPlaintextSchemesMapToTlsLegNeverToWssUri(string $configured, string $expectedHost): void
     {
         $plan = $this->buildPlan($configured, 'l1');
 
@@ -338,6 +375,197 @@ final class FederationPeerManagerTest extends TestCase
         $this->expectExceptionMessage('PHLIX_FEDERATION_CA_BUNDLE');
 
         $this->buildPlan('https://master.example.com', 'l1');
+    }
+
+    // --------------------------- dial-time openssl guard (2026-10-06 lane)
+
+    /**
+     * Spec law (owner 2026-10-06): a TLS dial in a process WITHOUT the
+     * openssl extension must fail LOUD at dial time — a clear log line
+     * naming the missing extension, an early return, NO throw that bricks
+     * the chain — instead of surfacing as an opaque stream-socket error.
+     * The refused dial re-arms the backoff so the chain survives the way
+     * every other dial failure does.
+     */
+    public function testTlsDialWithoutOpensslRefusesLoudlyAndKeepsChainAlive(): void
+    {
+        $logFile = $this->startFileLogger();
+        $prevLoop = Worker::$globalEvent;
+
+        try {
+            Worker::$globalEvent = null;
+            $manager = $this->managerWithTlsProbe(static fn (): bool => false);
+            $plan = $this->buildPlan('https://master.example.com', 'l1');
+
+            // Must NOT throw — the whole point is "log + early return".
+            $this->invokeEstablish($manager, $plan);
+
+            self::assertNull(
+                $this->readPropOn($manager, 'masterConnection'),
+                'the refusal must happen BEFORE any AsyncTcpConnection is constructed',
+            );
+            self::assertSame(
+                1,
+                $this->pendingTimerTaskCount(),
+                'a refused dial re-arms the backoff chain — the link recovers after the '
+                . 'operator enables php-openssl and restarts, no explicit trigger needed',
+            );
+
+            $contents = (string) file_get_contents($logFile);
+            self::assertStringContainsString(
+                'openssl',
+                $contents,
+                'the log line must name the missing extension by its real name',
+            );
+            self::assertStringNotContainsString(
+                'failed to connect',
+                $contents,
+                'no socket attempt may have been made — the guard precedes construction',
+            );
+        } finally {
+            Worker::$globalEvent = $prevLoop;
+            $this->stopFileLogger($logFile);
+        }
+    }
+
+    /**
+     * Positive control (probe-injected true): the guard must be invisible to
+     * a process that HAS the extension — the TLS dial proceeds past the
+     * check into real construction with transport='ssl' in place.
+     */
+    public function testTlsDialWithOpensslPresentReachesConstruction(): void
+    {
+        $this->assertDialReachesConstruction(static fn (): bool => true, 'https://127.0.0.1:1', 'ssl');
+    }
+
+    /**
+     * Scope law: the guard is TLS-only. A plaintext plan (http:// peer) must
+     * construct normally even in a process WITHOUT openssl — killing the
+     * mutation "guard dropped the transport check".
+     */
+    public function testPlaintextDialProceedsWithoutOpenssl(): void
+    {
+        $this->assertDialReachesConstruction(static fn (): bool => false, 'http://127.0.0.1:1', 'tcp');
+    }
+
+    /**
+     * Wiring law: with NO probe injected (the production construction), the
+     * guard consults the REAL extension_loaded('openssl'). Pinned via the
+     * host premise: openssl is loaded here (S258 asserts it in CI), so a
+     * default-wired TLS dial must reach construction, never the refusal.
+     */
+    public function testDefaultProbeUsesRealOpensslAvailability(): void
+    {
+        self::assertTrue(
+            extension_loaded('openssl'),
+            'premise: this suite runs on the S258-asserted image where openssl is loaded',
+        );
+
+        $this->assertDialReachesConstruction(null, 'https://127.0.0.1:1', 'ssl');
+    }
+
+    /**
+     * Shared body: run the REAL establishConnection for the given plan shape
+     * and assert it reached AsyncTcpConnection construction (no refusal log,
+     * connection live, transport as pinned) — then tear the socket down.
+     *
+     * @param (callable(): bool)|null $probe    extension seam under test
+     * @param string                  $peerUrl  configured peer URL to plan
+     * @param string                  $expected 'ssl' for TLS legs, 'tcp' for
+     *                                          workerman's untouched default
+     */
+    private function assertDialReachesConstruction(?callable $probe, string $peerUrl, string $expected): void
+    {
+        $logFile = $this->startFileLogger();
+        $prevLoop = Worker::$globalEvent;
+
+        try {
+            Worker::$globalEvent = new Select();
+            $manager = $this->managerWithTlsProbe($probe);
+            $plan = $this->buildPlan($peerUrl, 'l1');
+
+            $this->invokeEstablish($manager, $plan);
+
+            $conn = $this->readPropOn($manager, 'masterConnection');
+            self::assertInstanceOf(
+                AsyncTcpConnection::class,
+                $conn,
+                'the dial must reach construction when the guard does not fire',
+            );
+            self::assertSame($expected, $conn->transport);
+            self::assertStringNotContainsString(
+                'openssl',
+                (string) file_get_contents($logFile),
+                'the refusal line must never appear when the guard does not fire',
+            );
+
+            $conn->destroy();
+        } finally {
+            Worker::$globalEvent = $prevLoop;
+            $this->stopFileLogger($logFile);
+        }
+    }
+
+    /**
+     * @param (callable(): bool)|null $probe null = production wiring
+     */
+    private function managerWithTlsProbe(?callable $probe): FederationPeerManager
+    {
+        return new FederationPeerManager(
+            $this->hubRepo,
+            $this->sessions,
+            $this->libraryShares,
+            $this->adminDel,
+            $this->audit,
+            $this->leafKeyManager,
+            null,
+            $probe,
+        );
+    }
+
+    /**
+     * Fire the private dial site exactly as connectToMaster does.
+     *
+     * @param array{uri: string, transport: string, socket_context: array<string, mixed>} $plan
+     */
+    private function invokeEstablish(FederationPeerManager $manager, array $plan): void
+    {
+        $method = new ReflectionMethod($manager, 'establishConnection');
+        $method->setAccessible(true);
+        $method->invoke($manager, $plan, ['id' => 'l1']);
+    }
+
+    private function readPropOn(FederationPeerManager $manager, string $name): mixed
+    {
+        $property = new ReflectionProperty($manager, $name);
+        $property->setAccessible(true);
+
+        return $property->getValue($manager);
+    }
+
+    /**
+     * Re-point the RELAY logger at a readable temp file (the class default
+     * is php://memory, which cannot be re-read). Mirrors the
+     * FederationDisabledTransportTest stream-handler config shape.
+     */
+    private function startFileLogger(): string
+    {
+        $logFile = (string) tempnam((string) $this->loggerTmp, 'guard-log-');
+        file_put_contents(
+            (string) $this->loggerTmp . '/logger-guard.php',
+            "<?php return ['default' => 'mem', 'handlers' => ['mem' => "
+            . "['type' => 'stream', 'path' => '" . $logFile . "', 'level' => 'debug']]];",
+        );
+        LoggerFactory::reset();
+        LoggerFactory::init((string) $this->loggerTmp . '/logger-guard.php');
+
+        return $logFile;
+    }
+
+    private function stopFileLogger(string $logFile): void
+    {
+        @unlink($logFile);
+        @unlink((string) $this->loggerTmp . '/logger-guard.php');
     }
 
     /**

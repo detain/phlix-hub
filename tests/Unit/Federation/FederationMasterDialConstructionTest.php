@@ -108,6 +108,7 @@ final class FederationMasterDialConstructionTest extends TestCase
             'https default'       => 'https://master.example.com',
             'http explicit port'  => 'http://master.lan:8080',
             'http default'        => 'http://master.lan',
+            'ws explicit port'    => 'ws://master.lan:8805',
             'bare host fallback'  => 'master.example.com',
             'operator wrote wss'  => 'wss://master.example.com:8805',
             'ipv4 literal'        => 'https://198.51.100.7:8443',
