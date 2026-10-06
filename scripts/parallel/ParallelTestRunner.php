@@ -498,6 +498,9 @@ final class ParallelTestRunner
                     $f['code'],
                     $f['log'],
                 ));
+                foreach (self::failureDigest($outDir, $f['id'], $f['log']) as $line) {
+                    fwrite(STDERR, "    $line\n");
+                }
             }
 
             return 1;
@@ -789,6 +792,89 @@ final class ParallelTestRunner
     private static function logPath(string $outDir, int $id): string
     {
         return $outDir . "/log-{$id}.txt";
+    }
+
+    /**
+     * Name the red tests in the STEP LOG itself when a bucket fails.
+     *
+     * A bare "see /tmp/…/log-N.txt" pointer is dead information on an
+     * ephemeral CI runner: the out-dir dies with the job, so every red CI
+     * suite had to be reproduced locally just to learn WHICH test reddened —
+     * and a CI-only failure then stays unidentified forever. At report time
+     * the per-bucket junit (the same artifact mergeJunit trusts for the S173
+     * gate) is still on disk, so echo every <failure>/<error> case from it,
+     * and fall back to the bucket log's tail for shapes junit cannot hold
+     * (boot fatals, wrapper crashes). Pure observability: no exit-code,
+     * artifact, or scheduling behavior changes.
+     *
+     * @return list<string>
+     */
+    private static function failureDigest(string $outDir, int $id, string $logFile): array
+    {
+        $lines = [];
+        $junitNote = null;
+
+        $junitPath = $outDir . "/junit-{$id}.xml";
+        if (!is_file($junitPath)) {
+            $junitNote = "(no per-bucket junit at $junitPath)";
+        } else {
+            $doc = new DOMDocument();
+            $root = @$doc->load($junitPath) ? $doc->documentElement : null;
+            if ($root === null) {
+                $junitNote = "(unparseable per-bucket junit at $junitPath)";
+            } else {
+                foreach (self::elements($root->getElementsByTagName('testcase')) as $case) {
+                    $problem = $case->getElementsByTagName('failure')->item(0)
+                        ?? $case->getElementsByTagName('error')->item(0);
+                    if (!$problem instanceof DOMElement) {
+                        continue;
+                    }
+                    $message = $problem->textContent;
+                    $owner = $case->getAttribute('class') !== ''
+                        ? $case->getAttribute('class')
+                        : $case->getAttribute('file');
+                    // PHPUnit 10 repeats "Class::method" as the failure's FIRST
+                    // line; the interesting text starts at the next non-empty,
+                    // non-echoing line.
+                    $first = 'no message';
+                    foreach (preg_split('/\R/', $message) ?: [] as $candidate) {
+                        $candidate = trim($candidate);
+                        if ($candidate !== '' && !str_starts_with($candidate, $owner . '::')) {
+                            $first = $candidate;
+                            break;
+                        }
+                    }
+                    $lines[] = sprintf(
+                        '%s::%s — %s',
+                        $owner,
+                        $case->getAttribute('name'),
+                        mb_substr($first, 0, 300),
+                    );
+                }
+                if ($lines === []) {
+                    $junitNote = "(per-bucket junit at $junitPath held no failure nodes)";
+                }
+            }
+        }
+
+        if ($junitNote === null) {
+            return $lines;
+        }
+
+        // junit cannot name the red: pair the reason with the bucket log tail —
+        // the only signal that survives boot fatals and wrapper crashes.
+        $lines = [$junitNote];
+        if (is_file($logFile)) {
+            $rawTail = file($logFile, FILE_IGNORE_NEW_LINES);
+            foreach (array_slice($rawTail === false ? [] : $rawTail, -30) as $logLine) {
+                $lines[] = '| ' . mb_substr($logLine, 0, 300);
+            }
+        }
+        if (count($lines) === 1) {
+            $lines[] = '(no failure nodes and no log tail — the bucket died early)';
+        }
+
+        return $lines;
     }
 
     /**
