@@ -3399,7 +3399,7 @@ final class ServerProxyControllerTest extends TestCase
      * exposure is availability/consistency, not privilege escalation — and that
      * bound is LINK-DEPENDENT, not structural: since S301 the server's
      * `RelayConsumer` maps `X-Phlix-Relay-User` through `user_identities`
-     * (`resolveRelayIdentity()`, server `src/Hub/RelayIdentityResolver.php:56`)
+     * (`resolveRelayIdentity()`, server `src/Hub/RelayConsumer.php:2081`)
      * onto a REAL local `users` row, so a linked hub account reaches
      * `AdminMiddleware` as itself — if that local account is an admin, the
      * request passes the admin gate. Only an UNLINKED hub UUID resolves to no
@@ -3666,7 +3666,7 @@ final class ServerProxyControllerTest extends TestCase
      * ALLOWED — with the boundary rows chosen to fail if a pattern is loosened in
      * any of the four ways that would over-reach:
      *  - **the `(/|$)` anchor**: `scan-status` and `scan-history`
-     *    (`Application.php:1653-1654`) are the reads the whole S107 sweep must not
+     *    (`Application.php:2100-2101`) are the reads the whole S107 sweep must not
      *    touch, and they differ from `scan` by a single `-`;
      *  - **the `[^/]*` id class**: a library whose id is literally `scan`,
      *    `prune` or `delete-all` must stay browsable — `[^/]*` deliberately
@@ -5088,7 +5088,7 @@ final class ServerProxyControllerTest extends TestCase
      * An allowlist widening is only as good as what it still refuses, so each row
      * is a path a BROADER shape would have admitted:
      *  - the whole `/api/v1/users` surface a `/api/v1/users` PREFIX would have
-     *    opened (`WebPortalRouter.php:332-373`): settings, continue-watching,
+     *    opened (`WebPortalRouter.php:355-396`): settings, continue-watching,
      *    next-up, recently-watched, favorites, history — plus the bare prefix and
      *    a bare user resource;
      *  - anything DEEPER than the server's single-segment matchers: an artwork
@@ -5201,8 +5201,8 @@ final class ServerProxyControllerTest extends TestCase
      * The image reads are opened for GET ONLY.
      *
      * The load-bearing rows are `POST /api/v1/users/me/avatar` (avatar UPLOAD,
-     * `WebPortalRouter.php:372`) and `DELETE /api/v1/users/me/avatar` (avatar
-     * DELETE, `:373`) — two REAL server writes at the exact path S238 now admits
+     * `WebPortalRouter.php:395`) and `DELETE /api/v1/users/me/avatar` (avatar
+     * DELETE, `:396`) — two REAL server writes at the exact path S238 now admits
      * under GET. They stay refused by the hub's OWN method gate (no avatar entry
      * under any write key), which is why they need no `SCOPE_DENY_PATTERNS`
      * entry: nothing here depends on the server's route table.

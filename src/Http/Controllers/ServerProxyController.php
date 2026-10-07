@@ -474,7 +474,7 @@ final class ServerProxyController
             // `/history` — none of which S238 asks for. Anchored on the literal
             // `avatar` tail, the ONLY path this admits is the avatar image itself.
             // The upload/delete twins (`POST`/`DELETE /api/v1/users/me/avatar`,
-            // WebPortalRouter.php:372-373) stay refused by the hub's own method
+            // WebPortalRouter.php:395-396) stay refused by the hub's own method
             // gate: this entry is under the GET key and neither write key carries
             // an avatar entry, so no peer route-table accident is being relied on.
             '#^/api/v1/users/[^/]+/avatar$#',
@@ -552,16 +552,16 @@ final class ServerProxyController
             // each anchored to exactly one real server route with a
             // single-segment `[^/]+` device id:
             //   POST /api/v1/cast/devices/{id}/play|pause|stop|seek
-            //        (`ChromecastController`, Application.php:3327-3330)
+            //        (`ChromecastController`, Application.php:3909-3912)
             //   POST /api/v1/dlna/renderers/{id}/pause|stop|seek
-            //        (`Dlna\RendererListController`, Application.php:3267-3273)
+            //        (`Dlna\RendererListController`, Application.php:3849-3855)
             //
             // ⚠ TWO real server routes at these paths are DELIBERATELY ABSENT,
             // and their absence is the point of anchoring rather than prefixing:
-            //   - `POST /api/v1/cast/devices/{id}/cast` (Application.php:3324) —
+            //   - `POST /api/v1/cast/devices/{id}/cast` (Application.php:3906) —
             //     session START. It takes the media item to cast, so it is a
             //     "begin playing X" action, not transport control.
-            //   - `POST /api/v1/dlna/renderers/{id}/play` (Application.php:3264)
+            //   - `POST /api/v1/dlna/renderers/{id}/play` (Application.php:3846)
             //     — despite the name this is `playTo()`, also a session START,
             //     and its body carries a caller-supplied `uri` the renderer is
             //     told to fetch. Handing a model a field that makes a device on
@@ -759,40 +759,41 @@ final class ServerProxyController
      * @var list<non-empty-string>
      */
     private const SCOPE_DENY_PATTERNS = [
-        // Coordinate currency: the `File.php:NNNN` cites in this block record
-        // phlix-server registration lines as they stood at `69497171` — the
-        // same era pinned by `ServerProxyControllerTest::s107DeniedActionPaths()`
-        // — EXCEPT the `/api/v1/collections` pair below, re-measured at
-        // `ab6d89a5` (2026-10-02), and the `/api/v1/music/scan` cite,
-        // re-measured at `c42e166a` (2026-10-02). The PATTERNS are route-shaped
-        // and stay authoritative; re-verify the server tip before trusting any
-        // single line number as current.
+        // Coordinate currency: every `File.php:NNNN` cite in this block was
+        // re-measured against phlix-server `c9b69f3b` (2026-10-07) and stands
+        // correct there. History: the cites were authored in the `69497171`
+        // era (a few measured wrong even against that stamp when re-checked —
+        // this sweep supersedes them); the `/api/v1/collections` pair was
+        // re-measured at `ab6d89a5` and the `/api/v1/music/scan` cite at
+        // `c42e166a` (both 2026-10-02) — those held through today. The
+        // PATTERNS are route-shaped and stay authoritative; re-verify the
+        // server tip before trusting any single line number as current.
         // --- under the `/api/v1/music` read prefix (S100) ------------------
         // POST /api/v1/music/scan — WebPortalRouter.php:467 (AdminMiddleware
         // group since M-1 @9e765895; was :389 auth-only in the 69497171 era).
         '#^/api/v1/music/scan(/|$)#i',
 
         // --- under the `/api/v1/libraries` read prefix (S107) --------------
-        // POST /api/v1/libraries/{id}/scan   — Application.php:1698
-        // POST /api/v1/libraries/{id}/rescan — Application.php:1699
+        // POST /api/v1/libraries/{id}/scan   — Application.php:2092
+        // POST /api/v1/libraries/{id}/rescan — Application.php:2093
         // The `(/|$)` anchor is what keeps the two REAL reads
-        // `/scan-status` (Application.php:1653) and `/scan-history` (:1654)
+        // `/scan-status` (Application.php:2100) and `/scan-history` (:2101)
         // working — `scan-status` has no `/` or end-of-string after `scan`.
         '#^/api/v1/libraries/[^/]*/(re)?scan(/|$)#i',
-        // POST /api/v1/libraries/{id}/match-metadata   — Application.php:1712
+        // POST /api/v1/libraries/{id}/match-metadata   — Application.php:2106
         '#^/api/v1/libraries/[^/]*/match-metadata(/|$)#i',
-        // POST /api/v1/libraries/{id}/refresh-metadata — Application.php:1717
+        // POST /api/v1/libraries/{id}/refresh-metadata — Application.php:2111
         '#^/api/v1/libraries/[^/]*/refresh-metadata(/|$)#i',
-        // POST /api/v1/libraries/{id}/prune          — Application.php:1727
+        // POST /api/v1/libraries/{id}/prune          — Application.php:2121
         '#^/api/v1/libraries/[^/]*/prune(/|$)#i',
-        // POST /api/v1/libraries/{id}/clear-metadata — Application.php:1728
+        // POST /api/v1/libraries/{id}/clear-metadata — Application.php:2122
         '#^/api/v1/libraries/[^/]*/clear-metadata(/|$)#i',
-        // POST /api/v1/libraries/{id}/clear-artwork  — Application.php:1729
+        // POST /api/v1/libraries/{id}/clear-artwork  — Application.php:2123
         '#^/api/v1/libraries/[^/]*/clear-artwork(/|$)#i',
-        // POST /api/v1/libraries/{id}/delete-all     — Application.php:1730
+        // POST /api/v1/libraries/{id}/delete-all     — Application.php:2124
         // (DESTRUCTIVE: removes every item in the library.)
         '#^/api/v1/libraries/[^/]*/delete-all(/|$)#i',
-        // POST /api/v1/libraries/{id}/regenerate-assets — Application.php:1787
+        // POST /api/v1/libraries/{id}/regenerate-assets — Application.php:2133
         // (S284: re-prime the FILE-based media-asset queue — chapter thumbnails
         // and `media_asset_jobs` queue entries. It met all four of S107's inclusion
         // criteria six days after S107 shipped and was silently absent here —
@@ -800,10 +801,10 @@ final class ServerProxyController
         // `ServerProxyControllerTest` re-derives this whole list from
         // phlix-server's route table so a third occurrence cannot land unseen.)
         '#^/api/v1/libraries/[^/]*/regenerate-assets(/|$)#i',
-        // POST /api/v1/libraries/{id}/theme-media/scan — Application.php:1734.
+        // POST /api/v1/libraries/{id}/theme-media/scan — Application.php:2137.
         // Needs its own entry: the `(re)?scan` pattern above cannot reach it,
-        // because `[^/]*` never crosses a `/`. GET /theme-media (:1733) and
-        // DELETE /theme-media (:1735) share a path, so only the `/scan` ACTION
+        // because `[^/]*` never crosses a `/`. GET /theme-media (:2136) and
+        // DELETE /theme-media (:2138) share a path, so only the `/scan` ACTION
         // is pinned — see the disposition list above.
         '#^/api/v1/libraries/[^/]*/theme-media/scan(/|$)#i',
 
@@ -824,11 +825,11 @@ final class ServerProxyController
         '#^/api/v1/collections/[^/]*/refresh(/|$)#i',
 
         // --- under the `/api/v1/media` read prefix (S107) ------------------
-        // POST /api/v1/media/{id}/match/apply — Application.php:587. The sibling
-        // READ `/match/search` (:586) is a different literal segment and stays
+        // POST /api/v1/media/{id}/match/apply — Application.php:763. The sibling
+        // READ `/match/search` (:762) is a different literal segment and stays
         // allowed.
         '#^/api/v1/media/[^/]*/match/apply(/|$)#i',
-        // POST /api/v1/media/{id}/subtitles/download — Application.php:660: it
+        // POST /api/v1/media/{id}/subtitles/download — Application.php:836: it
         // FETCHES a subtitle from a remote provider and attaches it as an
         // external track, i.e. a server-side mutation, not a read. The sibling
         // reads `/subtitles`, `/subtitles/search` and `/subtitles/{index}` stay

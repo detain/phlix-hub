@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — docs currency: every server `File.php:NNNN` cite in `ServerProxyController` (deny + allow blocks) and its test re-measured against phlix-server `c9b69f3b` — comment-only, zero behavior — 2026-10-07
+
+The S107 deny-block cites recorded the `69497171` era and drifted with the
+server's route-table growth: the collections pair (re-measured at
+`ab6d89a5`) and the `WebPortalRouter.php:467` music/scan cite (re-measured
+at `c42e166a`) held, the rest had not. Re-check also found two denies that
+contradicted the block's collective `69497171` era claim: the `:1653-1654`
+scan-status/history pair (that era had them at 1706/1707) and `:1787`
+regenerate-assets (that line was a collections route there — the endpoint
+itself post-dates `69497171`). The S63 cast/DLNA cites carried no era stamp
+at all; they were stale-unmeasured legacy. All
+coordinates now carry `c9b69f3b` truth: libraries family 2092-2138, the
+collections pair stays 2207/2208, media 762/763, subtitles/download 836,
+Chromecast transport 3909-3912 (session-start 3906), DLNA transport
+3849-3855 (playTo start 3846), avatar twins 395/396 (users surface
+355-396). Test-side: the `s107DeniedActionPaths()` manifest was already
+current (its `c42e166a` stamp re-verified line-for-line, untouched);
+`resolveRelayIdentity()`'s cite was corrected to the file that defines the
+method (`src/Hub/RelayConsumer.php:2081`, was the resolver-class line).
+Docblock-only proof: `phpunit --filter ServerProxyControllerTest` byte-
+identical both sides (OK — 1194 tests, 5115 assertions); S299 corpus 548
+files, 0 errors / 0 warnings. Closes the estate-ledger residual "hub
+ServerProxyController stale Application.php coords" (deferred 2026-10-02).
+
 ### Changed — dependency + settings-meta lane: `detain/phlix-shared` re-vendored to `^0.52.0` and the `SUPPLEMENTAL_META` bridge RETIRED — the fourteen W5 Phase-6 keys are now upstream in `hub-settings.schema.json`; `loadSchemaMeta()` passes numeric bounds through verbatim — 2026-10-07
 
 The W5 wave (98a10ca) carried the Phase-6 settings metadata in a hub-local
