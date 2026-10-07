@@ -13,13 +13,15 @@ use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
 /**
- * W5 tests for the merged settings meta bridge and the PUT bounds law on
+ * W5 tests for the schema-sourced settings meta and the PUT bounds law on
  * {@see HubSettingsController}.
  *
  * Two halves:
- * 1. schemaMeta() must describe EVERY allow-listed key (the SUPPLEMENTAL_META
- *    bridge covers the 14 W5 keys the immutable vendored schema predates;
- *    upstream keys win where both define one);
+ * 1. schemaMeta() must describe EVERY allow-listed key, sourced solely from
+ *    the vendored `hub-settings.schema.json` — the fourteen W5 keys were
+ *    upstreamed into that schema at `detain/phlix-shared` v0.52.0 and the
+ *    hub-local SUPPLEMENTAL_META bridge that carried them pre-pin was
+ *    deleted (a reflection pin below keeps the deletion permanent);
  * 2. writes outside [minimum, maximum] are rejected 400 (closing the F-09
  *    "advisory only" residual) — including the honest boundary values and the
  *    0-is-a-real-value semantics of the cap keys.
@@ -38,7 +40,7 @@ final class HubSettingsBoundsAndMetaTest extends TestCase
     {
         parent::setUp();
 
-        // Fresh static cache per test (vendored schema + supplemental merge).
+        // Fresh static cache per test (vendored schema projection).
         $prop = (new ReflectionClass(HubSettingsController::class))->getProperty('schemaMeta');
         $prop->setAccessible(true);
         $prop->setValue(null, null);
@@ -120,8 +122,12 @@ final class HubSettingsBoundsAndMetaTest extends TestCase
         }
     }
 
-    public function testUpstreamSchemaWinsWhereBothDefineAKey(): void
+    public function testMetaIsSourcedSolelyFromTheVendoredSchema(): void
     {
+        // Bridge-era provenance, rotated 2026-10-07 at the shared v0.52.0
+        // re-pin: the schema property set and the served meta key set are now
+        // the SAME set in the SAME order — no hub-local additions merge over
+        // or under the schema output anymore.
         $schemaPath = dirname(__DIR__, 3)
             . '/vendor/detain/phlix-shared/schemas/hub-settings.schema.json';
         /** @var array<string, mixed> $schema */
@@ -136,13 +142,24 @@ final class HubSettingsBoundsAndMetaTest extends TestCase
 
         $meta = HubSettingsController::schemaMeta();
 
-        // The four vendored keys must show the vendored labels (and only the
-        // vendored restart flag), never a hypothetical supplemental override:
-        // the bridge merges UNDER the schema output.
-        self::assertArrayHasKey('server.enrollment_ttl', $properties);
+        self::assertSame(array_keys($properties), array_keys($meta));
+
+        // Every served label/restart is the vendored value, verbatim:
         $vendored = self::arrayNode($properties['server.enrollment_ttl']);
         self::assertSame($vendored['label'], $meta['server.enrollment_ttl']['label']);
         self::assertSame($vendored['restart'], $meta['server.enrollment_ttl']['restart']);
+    }
+
+    public function testSupplementalMetaBridgeIsDeleted(): void
+    {
+        // The bridge's yield contract: once upstream ships every W5 key (done
+        // at shared v0.52.0), the hub-local projection is dead weight — and it
+        // must STAY dead, or drift between two meta sources becomes possible
+        // again. Pin its absence.
+        self::assertFalse(
+            (new ReflectionClass(HubSettingsController::class))->hasConstant('SUPPLEMENTAL_META'),
+            'HubSettingsController::SUPPLEMENTAL_META must not return — the vendored schema is the sole meta source',
+        );
     }
 
     // ----------------------------------------------------------- bounds law

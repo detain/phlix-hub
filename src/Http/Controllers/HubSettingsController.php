@@ -72,7 +72,7 @@ final class HubSettingsController
     }
 
     /**
-     * Reject numeric values outside the merged-meta minimum/maximum.
+     * Reject numeric values outside the schema-meta minimum/maximum.
      *
      * Null (in-range, or key carries no numeric bounds / no meta) means
      * "acceptable". Value arrives already type-validated by the caller.
@@ -105,7 +105,7 @@ final class HubSettingsController
     }
 
     /**
-     * Per-key meta block sourced directly from the shared hub settings schema.
+     * Per-key meta block sourced from the shared hub settings schema.
      *
      * Each key in the returned map corresponds to a property in
      * `hub-settings.schema.json`.  The meta block carries everything the
@@ -113,15 +113,13 @@ final class HubSettingsController
      * tier, group, enum constraints, min/max bounds, default value, and the
      * secret/restart flags.
      *
-     * The vendored schema covers the four original keys; `detain/phlix-shared`
-     * v0.50.0 shipped `auth.signups_disabled` and the first bridge was retired
-     * at that pin (its docblock's stated yield condition). The W5 Phase-6 wave
-     * re-introduces the SAME bridge shape for the fourteen new keys because
-     * the vendored schema is immutable from inside this repo (SchemaPaths
-     * resolves strictly inside the phlix-shared package): each entry is
-     * MERGED UNDER the schema output — if upstream ever ships a property for
-     * one of these keys, the upstream block wins and the local entry becomes
-     * dead weight to delete, exactly the previous bridge's contract.
+     * The vendored `detain/phlix-shared` schema is the SOLE source.  The W5
+     * Phase-6 keys briefly lived in a hub-local `SUPPLEMENTAL_META` bridge
+     * merged UNDER the schema output; upstreaming all fourteen into
+     * `hub-settings.schema.json` at shared v0.52.0 satisfied the bridge's
+     * stated yield condition, and the bridge was deleted here — its contract
+     * was "if upstream ever ships a property for one of these keys, the local
+     * entry becomes dead weight to delete".
      *
      * `restart` is honest per key: TRUE only where the value is consumed at
      * worker boot (metrics enabled at first per-worker resolve; rate-limiter
@@ -134,290 +132,21 @@ final class HubSettingsController
     public static function schemaMeta(): array
     {
         if (self::$schemaMeta === null) {
-            $meta = self::loadSchemaMeta();
-            foreach (self::SUPPLEMENTAL_META as $key => $block) {
-                if (!array_key_exists($key, $meta)) {
-                    $meta[$key] = $block;
-                }
-            }
-            self::$schemaMeta = $meta;
+            self::$schemaMeta = self::loadSchemaMeta();
         }
 
         return self::$schemaMeta;
     }
 
     /**
-     * Hub-local meta projection for the W5 Phase-6 keys, merged UNDER the
-     * vendored schema (see {@see schemaMeta()} for the yield contract).
-     *
-     * Bounds here are NOT advisory: putSettings() validates incoming values
-     * against minimum/maximum (the F-09 residual — the vendored schema's
-     * bounds were never enforced server-side — is fixed for these keys and
-     * retroactively covers any future schema-shipped bounds, since the
-     * validation reads the merged projection).
-     *
-     * @var array<string, array<string, mixed>>
-     */
-    private const array SUPPLEMENTAL_META = [
-        'hub.maintenance_mode' => [
-            'label'      => 'Maintenance mode',
-            'helpText'   => 'When enabled, the hub answers 503 provider_unavailable for API '
-                . 'traffic. Auth, hub-settings, admin settings/restart and /health stay '
-                . 'reachable so the off-switch is never locked behind the gate; the /app SPA '
-                . 'shell keeps serving. Live within ~1s per worker; a settings outage fails '
-                . 'OPEN to the HUB_MAINTENANCE_MODE boot flag.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'hub',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => false,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'federation.enabled' => [
-            'label'      => 'Enable hub federation',
-            'helpText'   => 'Master switch for hub-to-hub federation. Off: peer mutations 409 '
-                . 'provider.not_configured, inbound handshake/DATA frames are refused or dropped, '
-                . 'and outbound dials stop. Reads and hub-config CRUD stay open; the :8805 '
-                . 'listener stays bound until a restart. Re-enabling instantly re-admits traffic '
-                . 'on links that survived the off-window, and re-establishes links that dropped '
-                . 'while off within <=60s automatically (the reconnect chain parks at the <=60s '
-                . 'backoff cap during the disabled window and re-checks on that cadence — no '
-                . 'restart or explicit trigger needed). The same cap also throttles the '
-                . 'disabled-window re-check cadence; a hub-config save / peer relay toggle still '
-                . 'dials immediately.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'federation',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => true,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'requests.auto_approve' => [
-            'label'      => 'Auto-approve media requests',
-            'helpText'   => 'Newly filed requests are approved immediately after the pending '
-                . 'row lands (best-effort: any approval failure — arr disabled, down, quota — '
-                . 'leaves the request pending exactly like the manual queue). Live per create.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'requests',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => false,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'invite.default_expiry_seconds' => [
-            'label'      => 'Default invite expiry (seconds)',
-            'helpText'   => 'Invite lifetime applied ONLY when the creator omits expires_in '
-                . '(an explicit body value always wins). 0 = never expire; 604800 = the 7-day '
-                . 'default invites shipped with before this setting. Live per create.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'invite',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => 0,
-            'maximum'    => 31536000,
-            'default'    => 604800,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'server.max_servers_per_user' => [
-            'label'      => 'Max servers per user',
-            'helpText'   => 'Per-account server quota checked at claim time against ALL owned '
-                . 'servers (any status). 0 = unlimited, the shipped behavior. Rare concurrent '
-                . 'claims of DIFFERENT codes may overshoot by the concurrency count — a quota '
-                . 'guard, not a billing-strict invariant.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => 0,
-            'maximum'    => 1000,
-            'default'    => 0,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'server.max_users_per_server' => [
-            'label'      => 'Max collaborators per server',
-            'helpText'   => 'Distinct active collaborator users per server, enforced on share '
-                . 'create and invite redeem. 0 = unlimited, the shipped behavior. Returning '
-                . 'collaborators (reactivation, or already active on another library of the '
-                . 'same server) never count as new.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => 0,
-            'maximum'    => 10000,
-            'default'    => 0,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'server.metrics.enabled' => [
-            'label'      => 'Enable metrics collection',
-            'helpText'   => 'Read once per worker at boot (HTTP/relay workers arm their '
-                . 'collectors in onWorkerStart); mid-lifetime flips apply to NEW workers — use '
-                . 'the graceful restart to recycle. Metrics flush/prune stop when every worker '
-                . 'boots with this off.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => true,
-            'secret'     => false,
-            'restart'    => true,
-        ],
-        'server.metrics.retention_days' => [
-            'label'      => 'Metrics retention (days)',
-            'helpText'   => 'Rollup/connections older than this are pruned on the relay '
-                . 'worker flush ticks. Live: re-read every prune, so shrinking the window '
-                . 'deletes within one tick. Clamped 1..3650 at read.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => 1,
-            'maximum'    => 3650,
-            'default'    => 7,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'server.relay.reconnect_drain_grace_seconds' => [
-            'label'      => 'Reconnect drain grace (seconds)',
-            'helpText'   => 'Seconds a displaced incumbent tunnel keeps draining in-flight '
-                . 'requests after a validated reconnect. 0 = immediate hard displacement. '
-                . 'Live at each displacement event; clamped 0..300 at read.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => 0,
-            'maximum'    => 300,
-            'default'    => 5.0,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'server.rate_limit' => [
-            'label'      => 'Rate-limit overrides (JSON)',
-            'helpText'   => 'Sparse override blob over config/server.php rate_limit, e.g. '
-                . '{"login":{"max":10},"cap":5000}. Known surface keys: login, proxy, '
-                . 'heartbeat, jwks, relay_connect, client_mount, mcp, alexa, signup, cap. '
-                . 'Values must be integers > 0 to count; unknown keys are ignored. Applied '
-                . 'per worker at boot — use the graceful restart to recycle. Tightening '
-                . 'signup/login limits while locked out is not possible: limits exist to '
-                . 'protect the hub, and the exempt maintenance paths do not bypass them.',
-            'helpLinks'  => [],
-            'tier'       => 'advanced',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => [],
-            'secret'     => false,
-            'restart'    => true,
-        ],
-        'server.arr.sonarr.enabled' => [
-            'label'      => 'Sonarr integration enabled',
-            'helpText'   => 'Overrides HUB_SONARR_ENABLED live at each approval. The API key '
-                . 'stays env-only (HUB_SONARR_API_KEY) and is never exposed through the '
-                . 'settings surface — see the DENIED_KEYS admission law.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => false,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'server.arr.sonarr.url' => [
-            'label'      => 'Sonarr base URL',
-            'helpText'   => 'Live at each approval. Admin-trust boundary: this URL is fetched '
-                . 'server-side from the settings write surface (same trust class as other '
-                . 'admin-controlled URLs); api_key never leaves the env.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => 'http://localhost:8989',
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'server.arr.radarr.enabled' => [
-            'label'      => 'Radarr integration enabled',
-            'helpText'   => 'Overrides HUB_RADARR_ENABLED live at each approval. The API key '
-                . 'stays env-only (HUB_RADARR_API_KEY) and is never exposed through the '
-                . 'settings surface — see the DENIED_KEYS admission law.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => false,
-            'secret'     => false,
-            'restart'    => false,
-        ],
-        'server.arr.radarr.url' => [
-            'label'      => 'Radarr base URL',
-            'helpText'   => 'Live at each approval. Admin-trust boundary: this URL is fetched '
-                . 'server-side from the settings write surface (same trust class as other '
-                . 'admin-controlled URLs); api_key never leaves the env.',
-            'helpLinks'  => [],
-            'tier'       => 'standard',
-            'group'      => 'server',
-            'enum'       => null,
-            'enumLabels' => null,
-            'optionHelp' => null,
-            'minimum'    => null,
-            'maximum'    => null,
-            'default'    => 'http://localhost:7878',
-            'secret'     => false,
-            'restart'    => false,
-        ],
-    ];
-
-    /**
      * Read and decode the shared `hub-settings.schema.json` and project
      * every property into a per-key meta block.
+     *
+     * Numeric bounds pass through VERBATIM in the JSON literal type the
+     * schema author chose (`json_decode` yields int for `60`, float for
+     * `60.0`); meta consumers compare with assertSame, and the wire
+     * encoding is type-independent (`JSON_PRETTY_PRINT` without
+     * `JSON_PRESERVE_ZERO_FRACTION` renders both as `60`).
      *
      * Fail-safe: any unreadable, unparseable, or structurally-unexpected
      * schema yields an empty map `[]` rather than an exception.
@@ -463,11 +192,11 @@ final class HubSettingsController
                 'optionHelp' => isset($def['optionHelp']) && is_array($def['optionHelp'])
                     ? $def['optionHelp']
                     : null,
-                'minimum'    => isset($def['minimum']) && is_numeric($def['minimum'])
-                    ? (float) $def['minimum']
+                'minimum'    => (isset($def['minimum']) && (is_int($def['minimum']) || is_float($def['minimum'])))
+                    ? $def['minimum']
                     : null,
-                'maximum'    => isset($def['maximum']) && is_numeric($def['maximum'])
-                    ? (float) $def['maximum']
+                'maximum'    => (isset($def['maximum']) && (is_int($def['maximum']) || is_float($def['maximum'])))
+                    ? $def['maximum']
                     : null,
                 'default'    => array_key_exists('default', $def) ? $def['default'] : null,
                 'secret'     => !empty($def['secret']),

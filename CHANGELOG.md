@@ -6,6 +6,56 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — dependency + settings-meta lane: `detain/phlix-shared` re-vendored to `^0.52.0` and the `SUPPLEMENTAL_META` bridge RETIRED — the fourteen W5 Phase-6 keys are now upstream in `hub-settings.schema.json`; `loadSchemaMeta()` passes numeric bounds through verbatim — 2026-10-07
+
+The W5 wave (98a10ca) carried the Phase-6 settings metadata in a hub-local
+`HubSettingsController::SUPPLEMENTAL_META` const merged UNDER the vendored
+schema output, under an explicit yield contract: "if upstream ever ships a
+property for one of these keys, the local entry becomes dead weight to
+delete." `detain/phlix-shared` v0.52.0 ships all fourteen — helpText copied
+verbatim, types/bounds/defaults/enums mirrored — so this commit deletes the
+bridge and its merge loop: `schemaMeta()` is now a pure projection of
+`loadSchemaMeta()` (static cache retained; the schema is immutable vendored
+config). `composer.json` constraint `^0.50.0`→`^0.52.0` (0.51 touched only
+`server-settings.schema.json`, which this repo never reads; the lock node
+moved `v0.50.0`→`v0.52.0` directly — the vendored
+`hub-settings.schema.json` is byte-identical to the tag
+`git show v0.52.0:schemas/hub-settings.schema.json`, cmp-proven, md5
+`5e8080f01fe9aa2e0a4ccaf1b174407d`); the lock diff is surgical — only the
+phlix-shared node + `content-hash`, zero unrelated composer churn.
+
+**Extraction law flip (the one real code change beyond deletion):**
+`loadSchemaMeta()` previously `(float)`-cast every numeric bound. With the
+bridge gone, a single extraction path must serve BOTH the four original
+keys — whose meta pins in `HubSettingsControllerTest` are float
+(`assertSame(60.0, …)`, inherited from the cast era) — AND the fourteen W5
+keys, whose cap pins in `HubSettingsBoundsAndMetaTest` are int
+(`assertSame(0, …)`). The schema now writes each bound in the literal type
+its pin expects (`60.0` vs `0`), and the extractor passes `is_int ||
+is_float` values through VERBATIM instead of coercing. The wire is
+unaffected either way: `Response->json()` encodes without
+`JSON_PRESERVE_ZERO_FRACTION`, so float `60.0` renders as `60` — the
+settings API's per-key meta payload stays byte-identical for every key that
+existed pre-pin. One deliberate additive wire delta: `helpLinks` for the
+fourteen keys went `[]` → one curated link each (shared's own plan §3.5
+law requires ≥1 link per schema property); no hub test or SPA file reads
+`helpLinks`.
+
+Test rotation (bridge-era wording only; every wire/bounds/restart pin held
+green UNMODIFIED): `testUpstreamSchemaWinsWhereBothDefineAKey` was
+tautological without the bridge — replaced by
+`testMetaIsSourcedSolelyFromTheVendoredSchema` (served meta key set ==
+schema property set, same order — the strongest form of "schema is the sole
+source") plus `testSupplementalMetaBridgeIsDeleted` (reflection pin: the
+const must never return). Unit suite 4752→4753 (+2 new, −1 rotated),
+assertions 42276 unchanged; Federation|HubSettings filter 440/1835 OK;
+phpstan level 9 clean; S299 phpcs corpus 548 files 0E/0W; psalm (docker
+8.4 venue) clean on touched files — the only reported lines are the
+pre-existing `PhlixMySQLConnection.php:180` ext-stub noise in a file this
+commit does not touch (0 diff vs base); CI is authoritative there.
+`public/assets/app` untouched — helpText is served dynamically, zero SPA
+churn by design.
+
 ### Fixed — test venue: the real-TLS federation E2E dialed `localhost`, which CI resolves `::1`-first against its IPv4-only child listener — the dial died at ECONNREFUSED before any TLS byte (the TLS test has been red on every CI run since it landed) — 2026-10-06
 
 Three consecutive master CI runs (519c0c0 → run 37480895351, 372b407 → run
