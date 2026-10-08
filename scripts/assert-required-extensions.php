@@ -26,10 +26,11 @@
  * ## Why naming the extension in the workflow is NOT sufficient on its own
  *
  * Measured against the pinned action
- * (`shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240`):
- * `src/scripts/unix.sh` reads `fail_fast="${fail_fast:-${FAIL_FAST:-false}}"`,
+ * (`shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60` = v2.40.0,
+ * re-verified on that commit — unchanged from the v2.37.2-era pin this cite
+ * carried): `src/scripts/unix.sh` reads `fail_fast="${fail_fast:-${FAIL_FAST:-false}}"`,
  * and `add_log()` only does `[ "$fail_fast" = "true" ] && exit 1`. So on a
- * default `ubuntu-latest` run an extension setup-php could not install is
+ * default `ubuntu-26.04` run an extension setup-php could not install is
  * reported as a red cross in the log and the STEP STILL SUCCEEDS.
  *
  * Naming `openssl` in `extensions:` therefore records the intent — it is the
