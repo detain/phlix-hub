@@ -19,14 +19,14 @@ on:
 jobs:
   composer-validate:
     name: Composer Validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
 
@@ -35,11 +35,11 @@ jobs:
 
   openapi:
     name: OpenAPI Description
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       # S66. This job answers ONE question — is openapi.yaml a structurally
       # valid OpenAPI 3.1 document — and nothing else. Whether it still MATCHES
@@ -56,11 +56,11 @@ jobs:
 
   snapshot-currency:
     name: Server Route Snapshot Currency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       # S332 / S492. The S107 deny enumeration is re-derived from a VENDORED
       # snapshot of phlix-server's route table
@@ -101,7 +101,7 @@ jobs:
           echo "phlix-server master fetched at $(git -C ../phlix-server rev-parse HEAD)"
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
 
@@ -110,14 +110,14 @@ jobs:
 
   phpcs:
     name: PHP CodeSniffer (PSR-12)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
           extensions: json, pcntl, posix, openssl, curl, sodium, mbstring, hash, filter, ctype
@@ -153,14 +153,14 @@ jobs:
 
   phpstan:
     name: PHPStan Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
           extensions: json, pcntl, posix, openssl, curl, sodium, mbstring, hash, filter, ctype
@@ -178,14 +178,14 @@ jobs:
 
   psalm:
     name: Psalm Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
           # swoole is required so Psalm can reflect \Swoole\Coroutine\Channel
@@ -218,7 +218,7 @@ jobs:
 
   phpunit:
     name: PHPUnit Test Suite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # S173: raised from 10. The 31 real-database tests each drop every table and
     # re-apply the whole 29-file migration chain in their setUp(), measured at
     # ~14 s per test against MySQL 8.0.46 (≈8 min for the Integration suite on
@@ -251,10 +251,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
           # S258: openssl and curl were relied on via setup-php's base build and
@@ -419,7 +419,7 @@ jobs:
         run: php scripts/assert-coverage-report.php coverage.xml
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         with:
           files: ./coverage.xml
           flags: phpunit
@@ -436,14 +436,14 @@ jobs:
 
   composer-audit:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
 
@@ -501,13 +501,13 @@ jobs:
   # each of those edits, on a missing mysql service, on a dropped HUB_DB_*
   # variable, and on any `needs:` appearing in this job.
   #
-  # node is NOT pinned via actions/setup-node: ubuntu-latest ships node >= 20,
+  # node is NOT pinned via actions/setup-node: ubuntu-26.04 ships node >= 20,
   # and the prereqs script ASSERTS the version instead of assuming it — a
   # future runner image that drops node reds the job HERE, named, rather than
   # three silently-skipped tests later.
   mcp-e2e:
     name: Real MCP Client SSE Session
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
 
     services:
@@ -526,10 +526,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
           # S258: the same security-path extension set the other PHP jobs
@@ -689,11 +689,11 @@ jobs:
   # guard is the only thing standing between removal and a silent green.
   cross-repo-paths:
     name: Cross-Repo Path Contract
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       # phlix-server is public, so this fetch needs no token — ci.yml already
       # reads it anonymously (git ls-remote) in snapshot-currency. A failed
@@ -707,7 +707,7 @@ jobs:
           echo "phlix-server master fetched at $(git -C ../phlix-server rev-parse HEAD)"
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
 
@@ -755,7 +755,7 @@ jobs:
   # vanished pin to prove every failure mode is loud.
   ui-pin-skew: # S181PINSKEWX9Q2
     name: UI Pin Skew
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
 
     permissions:
@@ -763,10 +763,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        uses: shivammathur/setup-php@4424c9aab975b57bd706ee5a39c6b4334d6e4f60
         with:
           php-version: '8.3'
 
@@ -849,7 +849,7 @@ jobs:
   # The gate only compares; it never writes to public/assets/app.
   spa-bundle: # S253HUBGATEX7H9
     name: SPA Bundle Build + Compare Gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     # A type-check + build + local diff needs no write scope and no secret, so
@@ -859,7 +859,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       # node is pinned to the EXACT patch (24.20.0), not just the major: this
       # job's WHOLE VERDICT is "does a fresh build reproduce the committed
