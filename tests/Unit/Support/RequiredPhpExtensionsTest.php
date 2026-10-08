@@ -399,9 +399,11 @@ final class RequiredPhpExtensionsTest extends TestCase
     /**
      * Naming an extension is necessary but NOT sufficient, and this is the
      * measured reason: in the pinned setup-php
-     * (`f3e473d116dcccaddc5834248c87452386958240`), `src/scripts/unix.sh` sets
+     * (`4424c9aab975b57bd706ee5a39c6b4334d6e4f60` = v2.40.0), `src/scripts/unix.sh`
+     * sets
      * `fail_fast="${fail_fast:-${FAIL_FAST:-false}}"` and only exits 1 when it
-     * is `true`. On a default `ubuntu-latest` run an extension setup-php could
+     * is `true` (re-verified on that commit — unchanged from the v2.37.2-era
+     * pin this cite carried). On a default `ubuntu-26.04` run an extension setup-php could
      * not install is logged as a red cross and the step still SUCCEEDS. The gate
      * script is therefore what turns an absence into a failure, and every PHP
      * job has to run it.
