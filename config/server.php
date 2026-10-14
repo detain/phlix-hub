@@ -26,6 +26,40 @@ return [
     'port'          => $hubPort,
     'workers'       => $envInt('HUB_WORKERS', 2),
 
+    // R14-15 — auxiliary listener ports. Before this block these keys were
+    // read at their call sites ONLY through `?? <default>` fallbacks that no
+    // config ever set — configurability theater. Each is now wired through
+    // the $envInt seam with the defaults byte-identical to the literals the
+    // consumers fall back to, so behavior with the env unset is unchanged:
+    //   8802 relay-ws worker (server tunnels)       — Application relay site
+    //   8803 client relay    (remote client sockets) — ClientRelayWorker::DEFAULT_PORT
+    //   8804 syncplay relay  (watch-party clients)   — SyncPlayRelayWorker::DEFAULT_PORT
+    //   8805 federation link (hub-to-hub TLS)        — FederationWorker::DEFAULT_PORT
+    //   2206 channel broker  (cross-process RPC)     — RelayProxyProtocol::DEFAULT_CHANNEL_PORT
+    'relay_port'        => $envInt('HUB_RELAY_PORT', 8802),
+    'client_relay_port' => $envInt('HUB_CLIENT_RELAY_PORT', 8803),
+    'syncplay_port'     => $envInt('HUB_SYNCPLAY_PORT', 8804),
+    'federation_port'   => $envInt('HUB_FEDERATION_PORT', 8805),
+    'channel_port'      => $envInt('HUB_CHANNEL_PORT', 2206),
+
+    // Swoole coroutine runtime (R14-01/R16-01). Consumed by start.php's
+    // master gate and by every worker's CoroutineHooks::apply through
+    // src/Runtime/SwooleRuntime.php. The hub ports the server's curated hook
+    // ALLOWLIST: SWOOLE_HOOK_ALL crashed workers with general-protection
+    // faults inside swoole.so (exit status 139) on PHP 8.5 / Swoole 6.2.1 /
+    // kernel-7 io_uring. Only socket/sleep/stream hooks stay enabled; the
+    // per-worker behavioral probe (HookDelivery) is the delivery verdict.
+    'coroutine' => [
+        // Set false to disable the coroutine runtime hook entirely while keeping
+        // Swoole as the event loop — the most conservative option.
+        'enabled' => true,
+        // Override the curated default with an explicit SWOOLE_HOOK_* bitmask if
+        // a specific hook must be re-enabled, e.g.
+        //   'hook_flags' => SWOOLE_HOOK_ALL & ~SWOOLE_HOOK_FILE,
+        // Leave unset to use SwooleRuntime::safeHookFlags().
+        // 'hook_flags' => null,
+    ],
+
     // Per-user server quota. `0` (default) = unlimited, preserving the
     // pre-setting behavior where claim codes inserted servers with no cap.
     // Load-bearing twin: `server.max_servers_per_user` in ALLOWED_KEYS; LIVE

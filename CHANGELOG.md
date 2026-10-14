@@ -6,6 +6,34 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — R14-15 + R14-17 + R3-02 LOW-MED/MED/LOW: relay/federation/channel ports become real config keys; the federation-boot swallow is logged; start.php stops promising a deleted shim — 2026-10-14
+
+(1) R14-15: `Application::boot()` read `relay_port` / `client_relay_port` /
+`syncplay_port` / `channel_port` through `?? <literal>` fallbacks — and
+`config/server.php` set NONE of them, so every "override" path was theater and
+the hub always bound the hardcoded ports; the federation worker went further and
+was constructed with the bare `FederationWorker::DEFAULT_PORT` const (the review
+asked to *add* that const — it already existed at :62, disk-verified). Config
+now ships all five keys through the file's existing `$envInt` seam —
+`HUB_RELAY_PORT` 8802, `HUB_CLIENT_RELAY_PORT` 8803, `HUB_SYNCPLAY_PORT` 8804,
+`HUB_FEDERATION_PORT` 8805, `HUB_CHANNEL_PORT` 2206 — defaults byte-identical to
+the consumer fallbacks, and the `HubServicesProvider` federation site parses
+`federation_port` with the same idiom before constructing the worker. An
+env-less boot binds exactly what it bound before. (2) R14-17: the
+`catch (\Throwable) {}` around federation construction in `HubServicesProvider::boot()`
+kept its skip but now `error_log`s the throwable — an operator expecting :8805
+and getting silence previously had zero evidence of why. (3) R3-02: `start.php`'s
+header claimed `public/index.php` "is kept as a thin shim" — the file has not
+existed since the S300 serving-model rewrite (docker-entrypoint.sh records the
+same correction); the header now states start.php is the ONLY entry point. Tests:
+`tests/Unit/Config/ServerPortsConfigTest.php` pins defaults==consumer literals,
+per-key env override, the curated `coroutine` block shipping with `hook_flags`
+deliberately unset, the Application/provider read-the-key wiring, the logged-not-
+swallowed catch shape, and the entry-truth docblock. `scripts/docker-boot-smoke.sh`'s
+runtime bind probe intentionally stays at 8802-8804: the federation worker's boot is
+conditional (needs key material), so asserting its socket would couple the CI boot
+gate to federation setup — recorded as a deliberate non-change, same as in R14-19.
+
 ### Fixed — R14-13 + R14-19 MED/LOW: `opcache.enable_cli` activates the inert opcache block for the CLI daemon; dead `docker/nginx.conf` + `docker/supervisord.conf` deleted; `EXPOSE` gains the federation port — 2026-10-14
 
 Three docker-surface defects, one commit. (1) R14-13: `docker/php.ini` set

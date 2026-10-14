@@ -16,9 +16,11 @@
  *      configured port, the relay workers on the tunnel ports, and
  *      calls `Worker::runAll()`.
  *
- * `public/index.php` is kept as a thin shim that requires this file —
- * existing systemd units that point at `public/index.php start` keep
- * working — but `start.php` is the canonical entry going forward.
+ * `start.php` is the ONLY entry point: the old `public/index.php` shim was
+ * deleted with the S300 serving-model rewrite (no such file ships or exists
+ * — see docker/docker-entrypoint.sh for the same correction), so nothing
+ * may assume a web-root fallback. The systemd/Docker commands below invoke
+ * this file directly.
  *
  * Usage:
  *   php start.php start          # foreground

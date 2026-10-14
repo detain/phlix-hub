@@ -1631,9 +1631,21 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ? $channelPortRaw
                 : (int) (is_numeric($channelPortRaw) ? $channelPortRaw : RelayProxyProtocol::DEFAULT_CHANNEL_PORT);
 
+            // R14-15: the listen port is a real config key now (HUB_FEDERATION_PORT
+            // via config/server.php), parsed with the same idiom as the channel
+            // coordinates above; FederationWorker::DEFAULT_PORT stays the fallback
+            // so behavior with the key unset is byte-identical.
+            /** @var mixed $federationPortRaw */
+            $federationPortRaw = is_array($appConfig)
+                ? ($appConfig['federation_port'] ?? FederationWorker::DEFAULT_PORT)
+                : FederationWorker::DEFAULT_PORT;
+            $federationPort = is_int($federationPortRaw)
+                ? $federationPortRaw
+                : (int) (is_numeric($federationPortRaw) ? $federationPortRaw : FederationWorker::DEFAULT_PORT);
+
             $federationWorker = new FederationWorker(
                 $container,
-                FederationWorker::DEFAULT_PORT,
+                $federationPort,
                 1,
                 '127.0.0.1',
                 $channelPort,
@@ -1643,8 +1655,13 @@ final class HubServicesProvider implements ServiceProviderInterface
             // side composition only — apply() runs at child worker-start, well
             // outside this try, so a delivery failure still escapes loudly.
             CoroutineHooks::wrap($federationWorker->start(), is_array($appConfig) ? $appConfig : []);
-        } catch (\Throwable) {
-            // FederationWorker not available in this context — skip
+        } catch (\Throwable $e) {
+            // R14-17: the skip stays (tests and stripped contexts construct this
+            // worker without federation's deps), but it is no longer silent — an
+            // operator who expects :8805 and gets nothing previously had zero
+            // evidence of why. error_log writes to stderr under the daemon, which
+            // is where Workerman's own output goes.
+            error_log('[phlix-hub] Federation worker skipped: ' . $e->getMessage());
         }
 
         // Metrics flush timer: deliberately NOT armed here. boot() runs in the
