@@ -103,8 +103,9 @@ COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
 #   8802 relay WebSocket, server side   (RelayWorker)
 #   8803 relay WebSocket, client side   (ClientRelayWorker::DEFAULT_PORT)
 #   8804 SyncPlay relay                 (SyncPlayRelayWorker::DEFAULT_PORT)
+#   8805 hub federation link            (FederationWorker::DEFAULT_PORT)
 # The previous `EXPOSE 80 443` described an nginx that is not in the image.
-EXPOSE 8800 8802 8803 8804
+EXPOSE 8800 8802 8803 8804 8805
 
 # Without this, a container in which the application never started reports
 # `Up` forever. /health is served by the daemon itself (Application::

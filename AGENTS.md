@@ -21,7 +21,7 @@ cd web-ui && NPM_CONFIG_USERCONFIG=/dev/null npm ci && npm run build   # Vite SP
 Container, provisioning, and CI:
 
 ```bash
-docker compose up                  # local stack: docker/docker-entrypoint.sh + docker/nginx.conf
+./scripts/docker-boot-smoke.sh phlix-hub-boot:local   # builds the image, boots it vs throwaway MySQL, probes /health + relay binds (the CI docker gate; no compose file exists)
 bash scripts/install.sh            # provision PHP deps + system prerequisites
 php scripts/run-migrations.php     # standalone CLI migration runner
 ls .github/workflows/              # CI pipelines: phpunit + phpstan + psalm + phpcs + mcp-e2e + docker
@@ -41,7 +41,7 @@ npx --yes @redocly/cli lint openapi.yaml              # HTTP surface description
 - `src/Mcp/` — `McpToolRegistry` + `Tools/` behind `POST /mcp` (JSON-RPC) and `GET /mcp` (SSE), PAT auth via `McpTokenService` (migration `044_mcp_tokens`) and `McpScopes`. `src/OAuth/` — the shared authorization server: `OAuthClientRegistry`, `AuthorizationCodeService`, `Pkce` (**S256 only**), `ConsentTicketService`, `OAuthTokenService`, `OAuthScopes` = `profile:read` + every `McpScopes` value (migration `045_oauth_authorization_server`). `src/Alexa/` — skill envelope, `ChainVerification` signature chain, `AlexaMediaGateway`. `src/Hub/Updates/` — `CoreUpdateCheckWorker` (`config/updates.php`). `src/Console/Commands/` — `bin/phlix` commands.
 - `src/Federation/`, `src/Auth/` (`AuthManager`, `JwtHandler` HS256, `UserRepository`), `src/Common/{Database,Http,Logger,RateLimit}/` (`Common/Http/TrustedProxyResolver.php` resolves the real client IP via `TRUSTED_PROXIES` for IP-keyed limiters), `src/Health/`.
 - `config/{server,database,logger,auth,updates}.php` · `migrations/` · `openapi.yaml` + `redocly.yaml` (HTTP surface) · `docs/websockets.md` (the `:8802`/`:8803`/`:8804`/`:8805` surfaces) · `web-ui/` (`@phlix/hub-web-ui` consuming `@phlix/ui`, built to `public/assets/app/`) · `tests/` mirror src (`tests/E2E/Mcp/` drives the real `@modelcontextprotocol/sdk` client). **The legacy Smarty page UI was removed** (`smarty/smarty` dropped, no `public/templates/` or `public/assets/js/`); the `/app` Vue SPA is the only UI and legacy page paths 302-redirect to it.
-- `docker/` (`docker-entrypoint.sh`, `nginx.conf` — container image) · `scripts/` (`install.sh` provisioning, `run-migrations.php` standalone migrator, `add-headers.php` file-level `@copyright`/`@license` docblocks, `assert-*.php` CI gates, `mcp-e2e-seed.php`, `docker-boot-smoke.sh`) · `.github/workflows/` (CI gates) · `.opencode/` (`memory`, `skills`, `package.json`) + `.remember/` (cross-session agent context).
+- `docker/` (`docker-entrypoint.sh`, `php.ini` — container image; the image boots the Workerman daemon directly, the old `nginx.conf`/`supervisord.conf` were dead weight and deleted) · `scripts/` (`install.sh` provisioning, `run-migrations.php` standalone migrator, `add-headers.php` file-level `@copyright`/`@license` docblocks, `assert-*.php` CI gates, `mcp-e2e-seed.php`, `docker-boot-smoke.sh`) · `.github/workflows/` (CI gates) · `.opencode/` (`memory`, `skills`, `package.json`) + `.remember/` (cross-session agent context).
 
 ## Conventions
 

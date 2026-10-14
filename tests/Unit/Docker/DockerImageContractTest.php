@@ -81,8 +81,14 @@ final class DockerImageContractTest extends TestCase
      */
     private const HTTP_PORT = 8800;
 
-    /** Relay/SyncPlay worker ports (RelayWorker, ClientRelayWorker, SyncPlayRelayWorker). */
-    private const RELAY_PORTS = [8802, 8803, 8804];
+    /**
+     * Relay/SyncPlay/Federation worker ports (RelayWorker, ClientRelayWorker,
+     * SyncPlayRelayWorker, FederationWorker). R14-15: 8805 was missing from the
+     * list while the daemon has bound it since the federation link shipped —
+     * the pin only catches drift for ports it enumerates, so the enumeration
+     * is part of the contract.
+     */
+    private const RELAY_PORTS = [8802, 8803, 8804, 8805];
 
     /** Read a file, failing the test rather than returning '' when it is absent. */
     private function contents(string $path, string $why): string

@@ -22,7 +22,7 @@ SPA: `cd web-ui && NPM_CONFIG_USERCONFIG=/dev/null npm ci && npm run build` → 
 Container + provisioning (outside Workerman):
 
 ```bash
-docker compose up                              # local stack: docker/docker-entrypoint.sh + docker/nginx.conf
+./scripts/docker-boot-smoke.sh phlix-hub-boot:local   # builds the image, boots it vs throwaway MySQL, probes /health + relay binds (the CI docker gate; no compose file exists)
 bash scripts/install.sh                        # provision PHP deps + system prerequisites
 php scripts/run-migrations.php                 # standalone CLI migration runner
 ```
@@ -49,7 +49,7 @@ npx --yes @redocly/cli lint openapi.yaml       # HTTP surface description (confi
 
 **DB**: `src/Common/Database/` — `PhlixMySQLConnection`, `ConnectionPool`, `PooledMySQLConnection`, `MigrationRunner`. **Rate limiting** (`src/Common/RateLimit/`): per-surface `RateLimiter` + shared DB-backed `DbRateLimiter` (login), `RateLimitProfiles`; IP-keyed surfaces resolve the real client address through `src/Common/Http/TrustedProxyResolver.php` (`TRUSTED_PROXIES`). **Relay metrics** (`src/Stats/Metrics/`): `MetricsRegistry`/`MetricsCollector`/`MetricsFlushService`. Logging: `src/Common/Logger/LoggerFactory::get(LogChannels::*)`. **Web UI**: the `/app` Vue SPA (`@phlix/hub-web-ui` consuming `@phlix/ui`, built to `public/assets/app/`, shell served via `src/Http/ViteAssets.php`) is the **only** UI. The legacy Smarty stack (`src/Common/WebPortal/PageRenderer.php`, `PageController`, `CsrfMiddleware`, `public/templates/`, `public/assets/js|css/`) and the `smarty/smarty` dependency were **removed**; legacy page paths 302-redirect to `/app` in `src/Application.php`.
 
-**Ops & tooling**: `docker/` holds `docker-entrypoint.sh` and `nginx.conf` for the container image; `scripts/` holds `install.sh` (provisioning), `run-migrations.php` (standalone migrator outside the app loop), `add-headers.php` (idempotent file-level `@copyright`/`@license` docblocks) and the CI gate scripts (`assert-*.php`, `security-audit-check.php`, `docker-boot-smoke.sh`, `mcp-e2e-seed.php`); `.github/workflows/` runs the CI gates (PHPUnit/PHPStan/Psalm/phpcs, MCP E2E, docker). Agent context lives in `.opencode/` (`memory`, `skills`, `package.json`) and `.remember/`.
+**Ops & tooling**: `docker/` holds `docker-entrypoint.sh` and `php.ini` for the container image (the image boots the Workerman daemon directly — the old `nginx.conf`/`supervisord.conf` were dead weight and deleted); `scripts/` holds `install.sh` (provisioning), `run-migrations.php` (standalone migrator outside the app loop), `add-headers.php` (idempotent file-level `@copyright`/`@license` docblocks) and the CI gate scripts (`assert-*.php`, `security-audit-check.php`, `docker-boot-smoke.sh`, `mcp-e2e-seed.php`); `.github/workflows/` runs the CI gates (PHPUnit/PHPStan/Psalm/phpcs, MCP E2E, docker). Agent context lives in `.opencode/` (`memory`, `skills`, `package.json`) and `.remember/`.
 
 **Config**: `config/{server,database,logger,auth,updates}.php`. **API description**: `openapi.yaml` (linted with `redocly.yaml`) covers the `:8800` HTTP surface; `docs/websockets.md` covers the `:8802`/`:8803`/`:8804`/`:8805` WebSocket surfaces. **Shared types**: cross-repo DTOs live in the `Phlix\Shared\*` namespace (the shared composer package) — do not duplicate.
 

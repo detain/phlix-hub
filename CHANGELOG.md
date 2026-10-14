@@ -6,6 +6,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — R14-13 + R14-19 MED/LOW: `opcache.enable_cli` activates the inert opcache block for the CLI daemon; dead `docker/nginx.conf` + `docker/supervisord.conf` deleted; `EXPOSE` gains the federation port — 2026-10-14
+
+Three docker-surface defects, one commit. (1) R14-13: `docker/php.ini` set
+`opcache.enable = 1` and nothing else CLI-side — but opcache stays OFF for a CLI
+process unless `opcache.enable_cli` is also set, and this daemon IS the CLI SAPI
+(`php start.php start`, resident for weeks). The whole `[opcache]` block was
+decorative; `enable_cli = 1` is now shipped with the rationale comment
+(same defect class phlix-server documents in its own ini). `validate_timestamps = 0`
+stays: unlike the server, the hub has no runtime PHP writer, so the immutability
+premise holds here. (2) R14-19: `docker/nginx.conf` (a `fastcgi_pass :9000` vhost)
+and `docker/supervisord.conf` (programs for php-fpm/nginx binaries the
+`php:8.3-cli-alpine` base does not ship, plus a `command=` naming the nonexistent
+`public/index.php`) survived the S300 serving-model rewrite as on-disk fossils —
+the Dockerfile never COPYed them (the contract test pins that absence, and that
+assertion is string-based, so deleting the files keeps it green) but AGENTS.md and
+CLAUDE.md still described the local stack as running through them. Both deleted;
+both docs corrected to the truth (the boot path is `scripts/docker-boot-smoke.sh`;
+no compose file has ever existed in-repo). (3) R14-15's image-side half: `EXPOSE`
+named 8800/8802/8803/8804 while the daemon has bound the federation port 8805 since
+the link shipped — added, and `DockerImageContractTest::RELAY_PORTS` extended to
+enumerate it so the pin can actually catch drift on it. The smoke script's runtime
+bind-check deliberately still probes only 8802–8804: the federation worker's boot is
+conditional (its construction is guarded), so asserting its socket in the boot gate
+would couple the gate to federation key material — recorded as a follow-up instead.
+
 ### Fixed — R14-08 MED: JWT-secret boot pre-flight — a documented placeholder, empty, or short `HUB_JWT_SECRET` now halts `start.php` before the container builds — 2026-10-14
 
 The review claimed "hub boots with missing/placeholder `HUB_JWT_SECRET` (per-worker
