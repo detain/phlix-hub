@@ -6,6 +6,53 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — R14-01/R16-01 HIGH: coroutine hook mask narrowed from `SWOOLE_HOOK_ALL` to the curated allowlist, delivered and behaviorally verified in EVERY worker's `onWorkerStart` — port of the phlix-server `S433` `Runtime\{SwooleRuntime,HookDelivery,HookDeliveryException}` trio — 2026-10-14
+
+`start.php` used to call `\Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL)` in the
+master, and the vendored `Workerman\Events\Swoole` adapter constructor re-asserts
+`Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL])` per worker at event-loop build
+time — so the full-danger mask (FILE, PROC, CURL, NATIVE_CURL, STDIO, PDO…) was
+live in every child regardless of what the master set. The server repo proved the
+fix after a production kernel bug (`io_uring` fork-corruption on the estate's
+PHP 8.5 + Swoole + Linux 7.x stack, `swoole_runtime.so` SIGSEGV class): a curated
+allowlist (TCP/UDP/UNIX/UDG/SSL/TLS/STREAM_FUNCTION/SLEEP/SOCKETS = `0x2a`) plus a
+delivery the code *observes* instead of trusts — `Coroutine::getOptions()` is
+forbidden on this Swoole (it false-negatives after the adapter's pre-constructor
+`install_all`), so `HookDelivery` proves the mask by running a blocking curl in one
+coroutine while a sibling ticks: if the ticks keep flowing while curl is inside a
+syscall window, the curl hook is NOT delivered and a `HookDeliveryException`
+escapes — crash-looping the worker, the designed fail mode (an idle masked worker
+is worse than a visible restart storm). Hub-side: the trio lands under
+`Phlix\Hub\Runtime\` (same math, hub docblocks), `CoroutineHooks` adds the hub
+composition seam — `apply(config)` (extension-guarded resolve → enforce →
+verify → `Worker::log` ACK) and `wrap(Worker, config)` (prepends `apply` to an
+already-assigned `onWorkerStart` property without touching the classes that own
+it). Wiring: master block in `start.php` now gates the pre-fork set behind
+`SwooleRuntime::coroutineEnabled` + `resolveHookFlags` (config `coroutine.enabled`
+/ `coroutine.hook_flags` escape hatch honored; the child re-set is still
+overridden by the per-worker enforcement); `CoroutineHooks::apply` is the FIRST
+statement of the HTTP and maintenance `onWorkerStart` closures in `Application.php`;
+relay `:8802`, client-relay `:8803` and syncplay `:8804` workers are `wrap`ped at
+their construction sites in `Application.php`, and federation `:8805` at its
+`HubServicesProvider` site — six workers, zero edits to the four worker classes
+(foreign lanes own those files). Tests: ported `SwooleRuntimeTest` (mask matrix,
+ALL-exclusion equality, `runtimeHookMask`/`curlHookFlags` semantics) and
+`CuratedHookDeliveryProbeTest` (real `\Swoole\Coroutine\run` harness — curated
+mask passes the blocking-curl probe, `SWOOLE_HOOK_ALL`-style install is what the
+probe exists to catch, contamination guard zeroes hooks after the class) plus new
+`CoroutineHooksTest` (seam-driven: mask resolution, ACK line, throw propagation,
+wrap ordering incl. double-wrap and class-callback originals) and
+`HookEnforcementGuardTest` (static: no `SWOOLE_HOOK_ALL` string survives in
+`start.php`, no `Coroutine::set`/`getOptions` anywhere in the delivery path,
+per-site census 2 apply + 3 + 1 wraps, first-statement ordering pins, survival
+token). Venue note: the host's Swoole 6.2.1 is a DEBUG build emitting unconditional
+`TRACE` lines to stdout — the probe tests run green under it; CI's PECL build is
+silent. Gates: Runtime suite 53 tests / 202 assertions OK (1 designed skip: the
+no-extension variant on this swoole host); `--filter Federation|Relay|Application`
+925 tests / 11879 assertions OK; PHPStan level 9 clean both with and without
+ext-swoole loaded (CI installs none); S299 corpus 556 files 0 errors / 0 warnings;
+`composer validate --strict` OK.
+
 ### Changed — docs currency: every server `File.php:NNNN` cite in `ServerProxyController` (deny + allow blocks) and its test re-measured against phlix-server `c9b69f3b` — comment-only, zero behavior — 2026-10-07
 
 The S107 deny-block cites recorded the `69497171` era and drifted with the

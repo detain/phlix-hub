@@ -24,6 +24,7 @@ use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
+use Phlix\Hub\Runtime\CoroutineHooks;
 use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
 use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
@@ -1913,12 +1914,22 @@ final class Application
         // different registry instance than the flush timer drains.
         $sharedCollector = null;
 
+        // R14-01/R16-01: the curated coroutine-hook mask is config-resolved, so
+        // the closure captures the boot config to re-assert + prove delivery as
+        // the FIRST statement of every worker start.
+        $bootConfig = $this->config;
+
         $worker->onWorkerStart = static function () use (
+            $bootConfig,
             $channelHost,
             $channelPort,
             $proxyContainer,
             &$sharedCollector,
         ): void {
+            // Deliberately OUTSIDE the try below: a HookDeliveryException must
+            // escape so the child dies loudly (crash-loop is the designed fail
+            // mode for an undelivered SIGSEGV mitigation).
+            CoroutineHooks::apply($bootConfig);
             try {
                 ChannelClient::connect($channelHost, $channelPort);
                 /** @var mixed $bridge */
@@ -2293,6 +2304,11 @@ final class Application
                 $maintenanceWorker->onWorkerStart = static function (Worker $w) use (
                     $serverConfig
                 ): void {
+                    // R14-01/R16-01: FIRST statement, outside the best-effort
+                    // try below — an undelivered hook mask must kill this child
+                    // loudly, never idle behind 'Maintenance worker failed to
+                    // start' (mirrors the server S433 rethrow-before-warning law).
+                    CoroutineHooks::apply($serverConfig);
                     try {
                         // Built inside the fork so the child owns its own DB/HTTP state.
                         $container = \Phlix\Hub\Common\Container\ContainerFactory::create($serverConfig);
@@ -2351,7 +2367,10 @@ final class Application
             $relayTlsCert,
             $relayTlsKey,
         );
-        $relayWorker->start();
+        // R14-01/R16-01: the relay worker's own onWorkerStart is set inside
+        // RelayWorker::start() (a file outside this lane), so prepend the
+        // curated-hook step here, pre-fork.
+        CoroutineHooks::wrap($relayWorker->start(), $this->config);
 
         // Start the client-facing relay WebSocket worker on port 8803. Remote
         // clients connect here (GET /client/{server_id}) to reach a server
@@ -2362,7 +2381,9 @@ final class Application
             ? $clientRelayPortRaw
             : (int) (is_numeric($clientRelayPortRaw) ? $clientRelayPortRaw : ClientRelayWorker::DEFAULT_PORT);
         $clientRelayWorker = new ClientRelayWorker($this->container, $clientRelayPort);
-        $clientRelayWorker->start();
+        // R14-01/R16-01: prepend the curated-hook step to this worker's
+        // class-owned onWorkerStart (same wrap law as the relay worker).
+        CoroutineHooks::wrap($clientRelayWorker->start(), $this->config);
 
         // Start the SyncPlay relay WebSocket worker on port 8804. Remote
         // SyncPlay clients connect here (GET /syncplay/{server_id}) to
@@ -2383,7 +2404,9 @@ final class Application
             $channelHost,
             $channelPort,
         );
-        $syncplayWorker->start();
+        // R14-01/R16-01: prepend the curated-hook step to this worker's
+        // class-owned onWorkerStart (same wrap law as the relay worker).
+        CoroutineHooks::wrap($syncplayWorker->start(), $this->config);
 
         Worker::runAll();
     }

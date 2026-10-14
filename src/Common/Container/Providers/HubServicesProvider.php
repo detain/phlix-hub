@@ -62,6 +62,7 @@ use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
+use Phlix\Hub\Runtime\CoroutineHooks;
 use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
 use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
@@ -1637,7 +1638,11 @@ final class HubServicesProvider implements ServiceProviderInterface
                 '127.0.0.1',
                 $channelPort,
             );
-            $federationWorker->start();
+            // R14-01/R16-01: prepend the curated coroutine-hook step to this
+            // worker's class-owned onWorkerStart. The wrap itself is master-
+            // side composition only — apply() runs at child worker-start, well
+            // outside this try, so a delivery failure still escapes loudly.
+            CoroutineHooks::wrap($federationWorker->start(), is_array($appConfig) ? $appConfig : []);
         } catch (\Throwable) {
             // FederationWorker not available in this context — skip
         }
