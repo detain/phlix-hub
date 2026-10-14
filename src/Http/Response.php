@@ -195,6 +195,16 @@ class Response
             $this->statusCode = $statusCode;
         }
         $this->headers['Content-Type'] = 'text/html; charset=utf-8';
+        // Dynamic HTML (the SPA shell in particular) must revalidate on every
+        // load: without a Cache-Control header browsers cache it heuristically
+        // and keep referencing old hashed asset chunks after a deploy (stale UI
+        // until a hard refresh). The hashed assets themselves stay immutable
+        // (see the serving layer). This only seeds a default — a caller that set
+        // its own Cache-Control beforehand keeps its value, and one that sets it
+        // afterwards overwrites this via header(). Mirrors phlix-server Response.
+        if (! isset($this->headers['Cache-Control'])) {
+            $this->headers['Cache-Control'] = 'no-cache';
+        }
         $this->body = $html;
         return $this;
     }

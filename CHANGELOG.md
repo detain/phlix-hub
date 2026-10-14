@@ -6,6 +6,62 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — R12-03 + R12-05 + R12-02(hub) MED: the `/app` SPA shell gains a nonce'd CSP, revalidating Cache-Control, and `__PHLIX__` socket-hint fields — 2026-10-14
+
+(1) R12-03: `SharedUiController::shell()` injected the `window.__PHLIX__` config as
+an inline `<script>` with **no nonce**, and the hub had **no `script-src` CSP** on
+the shell at all — only `Response`'s F3 baseline (`frame-ancestors 'none'`,
+nosniff, X-Frame-Options), applied at render. Ported the phlix-server pattern
+(`Server/WebPortal/Controllers/SharedUiController.php` +
+`Server/Http/Middleware/SecurityHeaders.php`): the shell now mints a per-request
+`base64_encode(random_bytes(16))` nonce, stamps it on both the inline tag and the
+`script-src` of a full `Content-Security-Policy` header, so the bootstrap block is
+the only inline script that runs without ever adding `'unsafe-inline'`. Directive
+set (derived from what the committed `public/assets/app/` bundle actually loads,
+not copied from the server):
+`default-src 'self'; script-src 'self' 'nonce-…'; style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:;
+media-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'`.
+Rationale: `style-src 'unsafe-inline'` is the token-theming law (SPA writes CSS
+custom properties via `el.style.setProperty()`); `img-src` carries `data:` (one
+inline SVG texture) and `blob:` (object-URL posters) but **no TMDB CDN** — the hub
+relay-proxies art same-origin, so the server's `image.tmdb.org` hosts are
+deliberately absent; `media-src`/`worker-src blob:` are required by hls.js (MSE
+object URL + blob-sourced transmux worker, both present in the `hls-*` chunk).
+**connect-src** = `'self' ws: wss:`: the SPA dials WebSockets on non-default ports
+verified in the bundle — `:8804` hub syncplay relay and `:8097` backing-server
+direct — always on the page host but CSP cannot express "any port on the current
+host", and hardcoding the client's port constants would couple two independently-
+versioned artifacts and break cross-origin `hubBaseUrl` relay setups. The
+exfiltration-via-WS threat that exact connect-src sources would defend is already
+foreclosed by the `script-src` nonce (no foreign script executes), so the socket
+schemes are wildcarded and documented. `frame-ancestors 'none'` is carried inside
+the explicit header because stamping a CSP now bypasses the `Response` baseline
+(hub F3 posture, stricter than the server's `'self'`); X-Frame-Options DENY is a
+separate header and still applies. 503 "not built" pages keep the minimal baseline
+(no `__PHLIX__`, no full CSP) — server parity. `Application.php` was NOT touched:
+the header rides inside `shell()`. (2) R12-05: `Response::html()` set no
+Cache-Control, so browsers cached the dynamic shell heuristically and pinned stale
+hashed asset references after a deploy. Now seeds `Cache-Control: no-cache` **only
+when absent** — a caller that set one before keeps it, and one set after overwrites
+(OAuth `secure()` still wins with `no-store`). (3) R12-02 (hub half): the
+`__PHLIX__` payload gains `wsUrl` and `wsPath` derived from `HUB_WS_URL` /
+`HUB_WS_PATH` (grammar-validated; both `null` by default = the client's legacy
+same-origin derivation, so no behavior change until the ui consumer lands in its
+sibling lane). Accepted `wsUrl`: `ws(s)://host[:port]` with no path/query/userinfo;
+accepted `wsPath`: a single absolute path segment set. Fail-soft (invalid ⇒ null),
+mirroring the `HUB_COOKIE_INSECURE` precedent — the bootstrap hint must never break
+the shell. JSON_HEX_TAG/AMP + JSON_UNESCAPED_SLASHES preserved. **ui-lane contract:**
+consume `window.__PHLIX__.wsUrl` (`?string`, explicit `ws(s)://origin[:port]`) and
+`window.__PHLIX__.wsPath` (`?string`, e.g. `/syncplay`); both `null` ⇒ derive
+same-origin as today. Tests:
+`tests/Unit/Http/Controllers/SharedUiControllerCspTest.php` (34) pins the exact
+directive set + the `image.tmdb.org`/`unsafe-eval`/`script-src 'unsafe-inline'`
+absences, inline-tag↔header nonce equality and per-request rotation, one CSP on the
+wire with X-Frame-Options intact, `no-cache` default with both explicit-override
+arms, 503 minimalism, and the `__PHLIX__` payload shape + `HUB_WS_URL`/`HUB_WS_PATH`
+grammar (accept/reject datasets).
+
 ### Fixed — R14-15 + R14-17 + R3-02 LOW-MED/MED/LOW: relay/federation/channel ports become real config keys; the federation-boot swallow is logged; start.php stops promising a deleted shim — 2026-10-14
 
 (1) R14-15: `Application::boot()` read `relay_port` / `client_relay_port` /
