@@ -64,6 +64,34 @@ final class AuthServicesProvider implements ServiceProviderInterface
      */
     public const DEV_SECRET_ENV_FLAG = 'HUB_JWT_ALLOW_DEV_SECRET';
 
+    /** Minimum accepted `HUB_JWT_SECRET` length in bytes (R14-08 boot guard). */
+    public const MIN_SECRET_BYTES = 32;
+
+    /**
+     * Placeholder secrets shipped in documentation and examples
+     * (R14-08, review finding: "hub boots with missing/placeholder
+     * HUB_JWT_SECRET"). Copy-paste setups land on one of these, and at
+     * 32+ bytes they would sail through the length gate and mint
+     * publicly-forgeable HS256 tokens.
+     *
+     * This is a DENYLIST of the concrete literals this estate actually
+     * publishes — deliberately narrow, because a denylist never catches
+     * everything: the ≥ {@see self::MIN_SECRET_BYTES} entropy floor in
+     * {@see self::secretViolation()} is the load-bearing defense, and this
+     * list only closes the gap the floor leaves open (long, dumb, PUBLIC
+     * strings). The `CHANGE-ME-run-openssl-rand-hex-32` member is verbatim
+     * from README.md's env example (33 bytes — it passed the old gate).
+     */
+    public const PLACEHOLDER_JWT_SECRETS = [
+        'CHANGE-ME-run-openssl-rand-hex-32',
+        'default-secret-change-me',
+        'change-me',
+        'changeme',
+        'your-secret-here',
+        'secret-change-me',
+        'replace-me',
+    ];
+
     /**
      * Test seam for the loud dev-fallback warning. Defaults to the AUTH
      * channel logger; tests may swap in a spy so no output leaks under
@@ -305,6 +333,12 @@ final class AuthServicesProvider implements ServiceProviderInterface
     /**
      * Pull the JWT secret from env first, then config.
      *
+     * A value on the {@see self::PLACEHOLDER_JWT_SECRETS} denylist is refused
+     * HERE too (R14-08), not just by the `start.php` pre-flight — every path
+     * that builds the container (HTTP workers, the maintenance fork,
+     * `bin/phlix` console commands) then hits the same wall before any token
+     * is ever minted with a publicly-guessable key.
+     *
      * When neither a `HUB_JWT_SECRET` env (≥32 bytes) nor a `secret` config
      * value (≥32 bytes) is present:
      *  - In production (the env is NOT dev/local and the dev-secret flag is
@@ -325,7 +359,8 @@ final class AuthServicesProvider implements ServiceProviderInterface
     private static function resolveSecret(array $authConfig): string
     {
         $env = getenv('HUB_JWT_SECRET');
-        if (is_string($env) && strlen($env) >= 32) {
+        if (is_string($env) && strlen($env) >= self::MIN_SECRET_BYTES) {
+            self::refusePlaceholder($env);
             return $env;
         }
         /**
@@ -333,7 +368,8 @@ final class AuthServicesProvider implements ServiceProviderInterface
          * @psalm-suppress MixedAssignment
          */
         $configured = $authConfig['secret'] ?? null;
-        if (is_string($configured) && strlen($configured) >= 32) {
+        if (is_string($configured) && strlen($configured) >= self::MIN_SECRET_BYTES) {
+            self::refusePlaceholder($configured);
             return $configured;
         }
 
@@ -348,6 +384,134 @@ final class AuthServicesProvider implements ServiceProviderInterface
 
         self::warnDevFallback();
         return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * Hard-refuse a documented placeholder value (R14-08 tier that is fatal
+     * in EVERY environment — dev boxes have the explicit random fallback
+     * ({@see self::DEV_SECRET_ENV_FLAG}) and do not need a guessable key).
+     *
+     * @throws MissingJwtSecretException Always (by contract, on a hit).
+     */
+    private static function refusePlaceholder(string $value): void
+    {
+        if (in_array(strtolower(trim($value)), array_map('strtolower', self::PLACEHOLDER_JWT_SECRETS), true)) {
+            throw new MissingJwtSecretException(
+                'CRITICAL: HUB_JWT_SECRET is still a documented placeholder ("' . $value . '"). '
+                . 'Refusing to mint tokens under a publicly-guessable signing key. '
+                . 'Generate a real one with `openssl rand -hex 32` (64 chars) and re-export HUB_JWT_SECRET.',
+            );
+        }
+    }
+
+    /**
+     * Pure JWT-secret policy (mirrors the phlix-server `secretViolation`
+     * doctrine, R14-08): returns the fatal boot message for a bad secret, or
+     * null when it is acceptable.
+     *
+     * Three tiers, in order:
+     *   1. empty                     → fatal everywhere (unsigned/forgeable
+     *                                  HS256 tokens);
+     *   2. a documented placeholder  → fatal everywhere (publicly guessable,
+     *                                  and ≥32 bytes long so the floor below
+     *                                  would never catch it);
+     *   3. shorter than
+     *      {@see self::MIN_SECRET_BYTES} → fatal outside development. The dev
+     *      relaxation covers ONLY the length floor — tiers 1 and 2 still
+     *      refuse to boot a dev box, which has the explicit random fallback
+     *      instead.
+     *
+     * Kept pure (no env reads, no exceptions) so the matrix is directly
+     * unit-testable — {@see self::assertSecretConfigured()} can never run
+     * under PHPUnit because its test-environment early-return exists
+     * precisely so the suite boots without a real secret.
+     *
+     * @param string $value   The configured secret value.
+     * @param bool   $devMode Whether the caller resolves to dev environment.
+     *
+     * @return string|null The RuntimeException message, or null when OK.
+     */
+    public static function secretViolation(string $value, bool $devMode = false): ?string
+    {
+        if ($value === '') {
+            return 'CRITICAL: HUB_JWT_SECRET is set but empty. Refusing to start with an '
+                . 'empty signing key — HS256 tokens would be forgeable. '
+                . 'Set a high-entropy HUB_JWT_SECRET (e.g. `openssl rand -hex 32`) or unset it '
+                . 'to reach the documented missing-secret path.';
+        }
+
+        if (in_array(strtolower(trim($value)), array_map('strtolower', self::PLACEHOLDER_JWT_SECRETS), true)) {
+            return 'CRITICAL: HUB_JWT_SECRET is still a documented placeholder ("' . $value . '"). '
+                . 'Refusing to start with a publicly-guessable signing key — every HS256 token '
+                . 'it mints is forgeable by anyone who can read the README. '
+                . 'Generate one with `openssl rand -hex 32` (64 chars) and re-export HUB_JWT_SECRET.';
+        }
+
+        if (!$devMode && strlen($value) < self::MIN_SECRET_BYTES) {
+            return 'CRITICAL: HUB_JWT_SECRET is only ' . strlen($value) . ' bytes; at least '
+                . self::MIN_SECRET_BYTES . ' are required outside development. '
+                . 'A short HMAC key is offline-bruteforceable, forging every hub token. '
+                . 'Generate one with `openssl rand -hex 32` (64 chars) and re-export HUB_JWT_SECRET.';
+        }
+
+        return null;
+    }
+
+    /**
+     * Boot-time pre-flight (R14-08): called from `start.php` BEFORE the
+     * container is built and before `Worker::runAll()` forks any worker, so a
+     * misconfigured deployment dies once, loudly, on the console — instead of
+     * per-worker inside each child's bootstrap (and instead of the old hole:
+     * ANY ≥32-byte string, including the README's own placeholder, was
+     * accepted silently).
+     *
+     * An UNSET secret deliberately passes here: the missing-secret verdict
+     * belongs to {@see self::resolveSecret()} — production throws
+     * {@see MissingJwtSecretException} at container build, dev/local falls
+     * back to a random secret with a loud warning. Both paths continue to
+     * work exactly as before; this seam only polices values that ARE set.
+     *
+     * Skipped in the test environment (PHPUnit constants defined or
+     * `HUB_ENV`/`APP_ENV`/`PHLIX_ENV` === 'test') so the suite — which never
+     * sets a real secret — is unaffected, mirroring the server doctrine.
+     *
+     * @param string|false|null $secret Override for the configured secret;
+     *                                  defaults to `getenv('HUB_JWT_SECRET')`.
+     *                                  `false`/`null` model an unset env var.
+     *
+     * @throws \RuntimeException When the secret violates
+     *                           {@see self::secretViolation()}.
+     */
+    public static function assertSecretConfigured(string|false|null $secret = null): void
+    {
+        if (self::isTestEnvironment()) {
+            return;
+        }
+
+        $raw = $secret ?? getenv('HUB_JWT_SECRET');
+        if (!is_string($raw) || $raw === '') {
+            return; // unset → resolveSecret owns the verdict (see docblock).
+        }
+
+        $violation = self::secretViolation($raw, self::devFallbackAllowed());
+        if ($violation !== null) {
+            throw new \RuntimeException($violation);
+        }
+    }
+
+    /**
+     * Running under PHPUnit? (test-env skip seam for
+     * {@see self::assertSecretConfigured()}.)
+     */
+    private static function isTestEnvironment(): bool
+    {
+        foreach (['HUB_ENV', 'APP_ENV', 'PHLIX_ENV'] as $key) {
+            if (getenv($key) === 'test') {
+                return true;
+            }
+        }
+
+        return defined('PHPUNIT_COMPOSER_INSTALL') || defined('__PHPUNIT_PHAR__');
     }
 
     /**

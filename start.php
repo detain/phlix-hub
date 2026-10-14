@@ -155,6 +155,24 @@ Worker::$pidFile = $hubPidFile;
 Worker::$statusFile = $hubStatusFile;
 
 // -----------------------------------------------------------------------------
+// 3c. JWT secret pre-flight (R14-08)
+// -----------------------------------------------------------------------------
+// Fail-fast BEFORE the container builds and before any worker forks: a
+// SET-but-bad HUB_JWT_SECRET (documented placeholder, empty, or short outside
+// development) must kill the boot once, loudly, on the console. The UNSET
+// case deliberately passes here — resolveSecret() owns that verdict
+// (production: MissingJwtSecretException at container build; dev/local:
+// random fallback with a loud warning), and docker-entrypoint.sh's
+// persist-or-generate path always exports a real key, so containers are
+// unaffected. Mirrors phlix-server's start.php pre-flight doctrine.
+try {
+    \Phlix\Hub\Common\Container\Providers\AuthServicesProvider::assertSecretConfigured();
+} catch (\RuntimeException $e) {
+    fwrite(STDERR, $e->getMessage() . PHP_EOL);
+    exit(1);
+}
+
+// -----------------------------------------------------------------------------
 // 4. Build the PSR-11 container from server.php + injected paths
 // -----------------------------------------------------------------------------
 

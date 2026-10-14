@@ -6,6 +6,39 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — R14-08 MED: JWT-secret boot pre-flight — a documented placeholder, empty, or short `HUB_JWT_SECRET` now halts `start.php` before the container builds — 2026-10-14
+
+The review claimed "hub boots with missing/placeholder `HUB_JWT_SECRET` (per-worker
+randoms → intermittent auth fails)". Disk-verification split that in two: the
+**missing** half was already refused in production (`resolveSecret` throws
+`MissingJwtSecretException` at container build — start.php runs it pre-fork), but
+the **placeholder** half was a live hole — the gate was a bare `strlen ≥ 32`, and
+README.md's own env example ships `HUB_JWT_SECRET=CHANGE-ME-run-openssl-rand-hex-32`
+at 33 bytes, so a copy-paste setup booted and minted every HS256 token under a
+publicly-guessable key. Port of the phlix-server `AuthServicesProvider` secret
+doctrine: a pure `secretViolation(value, devMode)` three-tier policy (empty → fatal
+everywhere; a documented placeholder → fatal everywhere — dev boxes have the explicit
+random fallback instead; shorter than `MIN_SECRET_BYTES=32` → fatal outside
+development), a `PLACEHOLDER_JWT_SECRETS` denylist seeded with the README literal
+(plus the server's `default-secret-change-me` sentinel and common variants;
+case/space-insensitive), and `assertSecretConfigured()` called from `start.php` as
+step 3c — before `ContainerFactory::create` and before `Worker::runAll()` forks
+anything — writing the message to STDERR and `exit(1)` on a violation. The placeholder
+fold is also enforced inside `resolveSecret` itself, so every container-build path
+(HTTP workers, the maintenance fork, `bin/phlix`) hits the same wall, not just the
+`start.php` pre-flight. An **unset** secret deliberately passes the pre-flight: that
+verdict stays with `resolveSecret` (prod throws, dev/local randoms with a warning),
+and `docker-entrypoint.sh`'s persist-or-generate path always exports a real key — so
+containers and the `HUB_JWT_ALLOW_DEV_SECRET`/`APP_ENV=dev` quick-starts are
+unchanged. Tests: `JwtSecretBootGuardTest` — the README literal's 33-byte length
+proving the old gate let it through, the full tier matrix (incl. case/space
+folding), `resolveSecret` placeholder refusal from both env and config via reflection,
+the PHPUnit early-return inertness pin, and a start.php static pin that
+`assertSecretConfigured()` precedes `ContainerFactory::create` and exits non-zero to
+STDERR. `AuthServicesProviderTest` + `MissingJwtSecretExceptionTest` unchanged and
+green (33 tests total). PHPStan level 9 clean with and without ext-swoole; phpcs
+PSR-12 clean on the three changed files.
+
 ### Fixed — R14-01/R16-01 HIGH: coroutine hook mask narrowed from `SWOOLE_HOOK_ALL` to the curated allowlist, delivered and behaviorally verified in EVERY worker's `onWorkerStart` — port of the phlix-server `S433` `Runtime\{SwooleRuntime,HookDelivery,HookDeliveryException}` trio — 2026-10-14
 
 `start.php` used to call `\Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL)` in the
