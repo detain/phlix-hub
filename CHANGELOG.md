@@ -6,6 +6,48 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — HUB-CI-FIX lane: three push-proven-red gates cured before the unpushed chain lands — 2026-10-15
+
+The endgame review of the unpushed HUB chain (…→dad6455) proved three CI gates
+would redden on push. All three are cured here, none by weakening a check.
+
+- **PHPStan level 9 (30 errors → 0).** Every finding sat in the two HUB-DB
+  real-MySQL tests (`ClaimCodeNormRealDbTest`, `InviteTokenHashUniqueRealDbTest`):
+  `cast.string`/`cast.int` on driver `mixed`, `method.nonObject` on
+  `PDOStatement::query()|false`, offset-access on `mixed`, plus one broken
+  `/**  list<…>` docblock (missing `@var`) that degraded a row to `mixed`.
+  Fixed per the estate boundary-parser precedent (phlix-plugin-trakt d477b85):
+  `stringField()`/`intField()` (and `parseRow()`/`parseRows()` on the PDO side)
+  parse each driver value once, fail LOUD with the column name on null/array/
+  object, and normalise scalars exactly as the previous casts did — zero
+  assertion-semantics change; both files re-ran green against real MySQL.
+  Verified `./vendor/bin/phpstan analyze` exits 0 both with local extensions
+  and under the CI-faithful no-swoole ini scan (the phpstan job installs no
+  swoole — S128 trap documented in `phpstan.neon.dist`).
+- **S173 zero-skip gate.** `CoroutineHooksTest::testApplyIsSilentNoopWithoutTheExtension`
+  skips whenever ext-swoole is loaded — which CI always is — while
+  `scripts/assert-integration-tests-ran.php` `ALLOWED_SKIPS` tolerated nothing.
+  Cured via the script's own sanctioned path: one named `Class::method` entry
+  with a branch-reachability justification (the no-swoole arm is only
+  exercisable on non-swoole venues; the swoole-loaded arms run on CI). The
+  allow key was matched against the EXACT PHPUnit-10 junit node produced on
+  this swoole host — old script: exit 1 naming the skip; new script: skip
+  consumed, gate prints the applied-allowance line on the full run.
+- **IdleReaper /tmp litter.** `Ed25519KeyManager`'s cold path mints
+  `<key>.lock` (fopen 'c') and never unlinks it; the test's trailing `@unlink`
+  pair missed it on every green run and leaked ALL files on any mid-test
+  assertion failure — 102 historical strays had accumulated. The test now
+  registers key + `.lock` + `.previous.json` the moment the random path is
+  derived and `tearDown()` reclaims exactly those files on every exit path
+  (zero strays after a full `IdleReaperTest` run; the historical ones — all
+  matching this test's unique `phlix_hub_idlereaper_key_*` prefix — swept as
+  a one-off, nothing else under /tmp touched).
+- **README count currency.** "all 31 migrations" → 35 (disk truth); the
+  zero-skip-gate paragraph now states the gate's real semantics — MIN floor 31
+  enforced, suite runs 125 integration cases, one justified skip allowance —
+  instead of implying the suite is 31 tests. `MigrationFileTest` roster == disk
+  re-verified green.
+
 ### Fixed — review-fix lane: audit-retention wipe guard + hook-mask pins + socket-port range — 2026-10-15
 
 Adversarial-review follow-ups (campaign 2026-10-14, this lane).
