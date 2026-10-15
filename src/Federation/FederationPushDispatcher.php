@@ -170,7 +170,8 @@ final class FederationPushDispatcher
         // different, empty map. Refusing here is what stops the bridge from
         // becoming a gate bypass.
         if (!$this->connMgr->isVerified($leafHubId)) {
-            $this->logger->warning("Federation master push command ({$action}): channel not verified", [
+            $this->logger->warning('Federation master push command refused: channel not verified', [
+                'action' => $action,
                 'leaf_hub_id' => $leafHubId,
             ]);
             // Understood command, measured answer: NOT delivered.
@@ -189,7 +190,8 @@ final class FederationPushDispatcher
             // Oversized/undecodable payload or a socket that died mid-write.
             // The resident worker stays up; the HTTP side hears the measured
             // truth.
-            $this->logger->error("Federation master push command ({$action}): send failed", [
+            $this->logger->error('Federation master push command failed: send failed', [
+                'action' => $action,
                 'leaf_hub_id' => $leafHubId,
                 'error' => $e->getMessage(),
             ]);
@@ -201,7 +203,8 @@ final class FederationPushDispatcher
             'delivered' => $delivered,
         ]);
 
-        $this->logger->info("Federation master push command ({$action}): dispatched", [
+        $this->logger->info('Federation master push command dispatched', [
+            'action' => $action,
             'leaf_hub_id' => $leafHubId,
             'delivered' => $delivered,
         ]);
