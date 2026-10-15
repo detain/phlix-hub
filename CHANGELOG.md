@@ -6,6 +6,72 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — HUB-DB lane: R19-01 / R19-04 / R19-08 / R19-11 / R20-03 / R20-04 / R17-06 / R18-15 — 2026-10-15
+
+Review campaign (2026-10-14) database and hardening findings for the hub, shipped
+as seven commits on master.
+
+- **R19-01 (HIGH)** `ClaimRequestHandler` paired-servers locking SELECT used
+  `WHERE REPLACE(claim_code,'-','') = ? FOR UPDATE` — a function over the column
+  defeats `claim_code`, forcing a full-table scan under next-key locks during every
+  pairing. Migration `048_claim_code_norm.sql` adds
+  `claim_code_norm CHAR(8) GENERATED ALWAYS AS (REPLACE(claim_code,'-','')) STORED`
+  with `UNIQUE KEY uk_server_claims_code_norm` (the mint is `XXXX-XXXX`, the
+  handler's normalizer at entry strips non-alphanumerics and upper-cases —
+  `CHAR(8)` fits exactly). The locking SELECT now hits the unique index by
+  equality; `ClaimCodeNormRealDbTest` (integration, real MySQL) proves the
+  generated-column semantics end-to-end and a unit pin asserts the `REPLACE()`
+  form is gone from the query path.
+- **R19-04 (MED)** `HeartbeatHandler` wrote `last_seen_at` / `received_at` from the
+  PHP clock while `ServerReaper` compares them with SQL `NOW()` — any host/DB
+  timezone or clock skew produced false offline flips (and false reaps). Both
+  handlers now stamp those DATETIME columns with the DB clock (`NOW()`); the
+  `server_heartbeats` insert and the libraries path got the same treatment.
+  Int-column `now` payloads are unaffected.
+- **R19-08 (MED)** `invite_links.token_hash` carried only a plain INDEX, so an
+  atomic-claim `UPDATE ... WHERE token_hash = ?` could in principle over-consume
+  on duplicate-hash rows. Migration `049_invite_token_hash_unique.sql` guards
+  first (duplicate-hash pre-flight and non-64-hex width audit — both fail loudly,
+  server-096 idiom), then `MODIFY token_hash CHAR(64) NOT NULL`, drops the old
+  index by its real name and adds `UNIQUE KEY uk_invite_links_token_hash`.
+  Every write site already stores `hash('sha256', …)` (64-hex) and the reader
+  pre-rejects non-conforming input; `client_relay_tokens.token_hash` is a
+  different table and stays as-is.
+- **R19-11 (MED)** `audit_logs` was INSERT-only with zero retention. Added
+  `ServerReaper::sweepAuditLogs()`: two-phase batched delete (`SELECT id … WHERE
+  created_at < DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY id LIMIT 1000`, then
+  `DELETE … WHERE id IN (…)`, looped until exhausted per tick) with deadlock
+  retry, armed on the existing maintenance-worker `onWorkerStart` timer group
+  (fork-safe). Retention knob: env `HUB_AUDIT_RETENTION_DAYS`, default **365**,
+  read per sweep via `config/server.php` — deliberately NOT a `hub_settings` key
+  (that would require a phlix-shared schema bump; noted as the upgrade path if
+  admins ever need runtime tuning).
+- **R20-04 (LOW)** claim-request INFO logs printed the plaintext pairing code.
+  Logs now carry `claim_id` plus `claim_code_fp` (first 8 hex of SHA-256 over the
+  normalized code); the plaintext survives only in the legitimate wire response.
+- **R20-03 (LOW)** the `src/Application.php` static fast-path refused only `.php`;
+  `.map` (source maps) and `.tpl` were servable. Ported the phlix-server
+  `85c06de1` idiom: `DENIED_STATIC_EXTENSIONS = ['php','map','tpl']` behind
+  `isDeniedStaticPath()`, pinned by three new `ApplicationStaticAssetCacheTest`
+  cases (deny set, lookalike-servable set, exact-constant reflection pin).
+- **R17-06 (LOW)** `ServerProxyController` docblocks claimed the server-side
+  parental rating gate "stays inert" for proxied traffic — stale since server
+  S301 (`b73f9ffa`): `RelayIdentityResolver` maps the crossing hub UUID to a
+  server user via verified account linking, so **linked** users do get the
+  server's RatingGate/stream-limit/session protections while unmapped
+  principals keep pass-through. Prose corrected; the wire-law test keeps
+  asserting that no profile marker crosses the tunnel.
+- **R18-15 (LOW)** `FederationPushDispatcher` built PSR-3 messages by
+  interpolation (`"Processing {$action} …"`). Log records now use static message
+  templates with the variable in structured context (`'action' => $action`),
+  keeping the messages groupable.
+
+Verification: targeted phpunit filters over claim/heartbeat/invite/reaper/
+federation/static/proxy suites green; `phpcs` PSR-12 and the repo standard clean
+on every changed file; PHPStan level 9 clean on changed src+tests. Migrations
+048/049 apply under the guarded-MariaDB-compatible idiom and are exercised by
+the real-MySQL integration leg.
+
 ### Fixed — R12-03 + R12-05 + R12-02(hub) MED: the `/app` SPA shell gains a nonce'd CSP, revalidating Cache-Control, and `__PHLIX__` socket-hint fields — 2026-10-14
 
 (1) R12-03: `SharedUiController::shell()` injected the `window.__PHLIX__` config as
