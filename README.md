@@ -915,7 +915,7 @@ HUB_TEST_DB_USER=root HUB_TEST_DB_PASSWORD=root HUB_TEST_DB_NAME=phlix_hub_test 
 ```
 
 The named database must already exist (the tests create tables, not schemas).
-Expect roughly 15 s per test: each one re-applies all 31 migrations.
+Expect roughly 15 s per test: each one re-applies all 35 migrations.
 
 CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci.yml):
 
@@ -926,11 +926,15 @@ CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci
 - PHPUnit (with coverage uploaded to Codecov) — provisions a `mysql:8.0` service,
   applies the migration chain to it, and runs **both** suites
 - **Zero-skip gate** — `scripts/assert-integration-tests-ran.php` reads PHPUnit's
-  JUnit report and fails the build if any test was skipped, or if fewer than 31
-  real-database tests executed. ⚠ A skipped test is not a neutral absence:
-  PHPUnit exits `0` with *"OK, but some tests were skipped!"*, so before this gate
-  a missing MySQL service made all 31 integration tests skip on every run while
-  the check stayed green
+  JUnit report and fails the build if any test skipped without an explicit,
+  justified `ALLOWED_SKIPS` entry (to date exactly one: the no-swoole noop case in
+  `CoroutineHooksTest`, whose branch is unreachable on the swoole-loading CI
+  venue), or if fewer than 31 real-database tests executed — 31 is the enforced
+  MIN floor, not the suite size; the Integration suite currently runs 125 cases.
+  ⚠ A skipped test is not a neutral absence: PHPUnit exits `0` with *"OK, but
+  some tests were skipped!"*, so before this gate a missing MySQL service made
+  every integration test — 31 at the time — skip on every run while the check
+  stayed green
 - **Real MCP client SSE session (S329)** — the `mcp-e2e` job boots the real hub
   on `:8800` against the MySQL service, mints PATs through the real
   `McpTokenService`, and drives the official `@modelcontextprotocol/sdk` client
