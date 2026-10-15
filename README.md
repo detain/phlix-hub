@@ -61,7 +61,10 @@ You can use the public Hub or run your own — the same codebase powers both.
 ## Features
 
 - **Accounts & auth** — signup/login, Argon2id password hashing, HMAC-SHA256 JWT access &
-  refresh tokens, and a published JWKS endpoint. The first account created is auto-promoted to admin.
+  refresh tokens, and a published JWKS endpoint. **The first account created is auto-promoted
+  to admin** — on a fresh deployment register your admin account *before* exposing `:8800` to
+  the network; whoever signs up first wins. Close the door afterwards with `HUB_SIGNUPS_ENABLED=false`
+  at boot or the live `auth.signups_disabled` hub setting (admin console → Settings).
 - **Server claiming** — short-lived claim codes, enrollment JWTs, and a server registry with
   per-server public keys (JWK).
 - **Reverse-tunnel relay** — servers hold an outbound WebSocket to the Hub; remote clients are
@@ -219,7 +222,8 @@ What `--update` does, in order:
 3. `git fetch --depth 1 origin $BRANCH` then `git reset --hard origin/$BRANCH` in the install
    directory. Uncommitted local edits are **discarded** — the script warns first.
 4. `composer install --no-dev --optimize-autoloader` (follows `composer.lock`).
-5. Clears `var/smarty/{compile,cache}` to avoid stale compiled templates.
+5. Clears the legacy `var/smarty/{compile,cache}` directories **only if they still exist**
+   (vestigial from the pre-SPA Smarty UI — a no-op on installs created after it was removed).
 6. Runs `scripts/run-migrations.php` — idempotent, only pending migrations apply.
 7. `systemctl daemon-reload` then `systemctl restart phlix-hub`.
 8. `curl http://localhost:$HUB_PORT/health` as a final sanity check.
@@ -328,16 +332,19 @@ export HUB_DB_HOST=127.0.0.1 HUB_DB_USER=phlix_hub HUB_DB_PASSWORD=phlix_hub HUB
 export HUB_JWT_SECRET="$(openssl rand -hex 32)"
 
 php scripts/run-migrations.php     # create the schema (idempotent)
-php public/index.php start         # start the Hub (Ctrl-C to stop)
+php start.php start                # start the Hub (Ctrl-C to stop)
 
 curl http://localhost:8800/health  # => {"status":"ok",...}
 ```
 
-Then open <http://localhost:8800/signup> to create the first account (auto-promoted to admin).
+Then open <http://localhost:8800/signup> to create the first account — it is auto-promoted to
+**admin**. On a public deployment make sure that first signup is *yours* before opening `:8800`
+to the network, then lock registration down: `HUB_SIGNUPS_ENABLED=false` at boot, or flip the
+live `auth.signups_disabled` hub setting under `/app/admin/settings` (no restart needed).
 After signing in, `/my-servers` lists your servers and `/claim-server` walks through pairing a
 new one.
 
-> Run `php public/index.php start -d` to daemonize; `stop`, `restart`, `reload`, and `status`
+> Run `php start.php start -d` to daemonize; `stop`, `restart`, `reload`, and `status`
 > are also available.
 
 ### CLI (`bin/phlix`)
@@ -444,7 +451,7 @@ The Hub is configured entirely through environment variables (see the
 [reference](#configuration-reference)). Create an env file the service will load:
 
 ```bash
-sudo tee /etc/phlix-hub.env >/dev/null <<'EOF'
+sudo tee /etc/phlix-hub.env >/dev/null <<EOF
 HUB_HOST=0.0.0.0
 HUB_PORT=8800
 HUB_WORKERS=4
@@ -456,15 +463,24 @@ HUB_DB_USER=phlix_hub
 HUB_DB_PASSWORD=CHANGE-ME-strong-password
 HUB_DB_NAME=phlix_hub
 
-# REQUIRED in production: a >=32-byte secret. Generate once and keep stable.
-HUB_JWT_SECRET=CHANGE-ME-run-openssl-rand-hex-32
+# REQUIRED in production: a real >=32-byte secret, generated as the file is
+# written (the heredoc is deliberately UNQUOTED so $(...) expands once).
+# Boot-time pre-flight refuses documented placeholder literals outright.
+HUB_JWT_SECRET=$(openssl rand -hex 32)
 EOF
 sudo chmod 600 /etc/phlix-hub.env
 ```
 
-Generate a secret with `openssl rand -hex 32`. If `HUB_JWT_SECRET` is unset the Hub falls back to
-a random per-process secret — fine for dev, but it invalidates every token on restart, so it must
-be set in production.
+> The `HUB_DB_PASSWORD` placeholder above still needs a real value matching the MySQL user
+> you created in step 2 — the boot gate polices only `HUB_JWT_SECRET`.
+
+`HUB_JWT_SECRET` is enforced before the worker fork (R14-08): a value on the placeholder denylist
+(`CHANGE-ME-run-openssl-rand-hex-32`, `change-me`, `your-secret-here`, `replace-me`, … —
+case/space-insensitive) aborts startup with `exit 1` rather than minting tokens under a
+publicly-guessable key. An **unset** (or <32-byte) secret falls back to a random per-process key
+only in development (`APP_ENV`/`HUB_ENV` = `dev|local`, or `HUB_JWT_ALLOW_DEV_SECRET=1`) — that
+fallback invalidates every token on restart and differs per worker, so set a real secret in
+production with `openssl rand -hex 32` and keep it stable.
 
 ### 5. Run migrations
 
@@ -503,7 +519,7 @@ User=www-data
 Group=www-data
 EnvironmentFile=/etc/phlix-hub.env
 WorkingDirectory=/opt/phlix-hub
-ExecStart=/usr/bin/php /opt/phlix-hub/public/index.php start
+ExecStart=/usr/bin/php /opt/phlix-hub/start.php start
 Restart=on-failure
 RestartSec=5
 
@@ -555,21 +571,41 @@ Hub and add a matching wildcard TLS certificate.
 
 ## Docker
 
-A `Dockerfile` is provided (PHP 8.3 + Swoole/UV, nginx, supervisor).
+A `Dockerfile` is provided. The image builds on the shared base
+(`ghcr.io/detain/phlix-base`: PHP 8.3 + Swoole + php-uv) and runs the Workerman daemon
+(`start.php`) as PID 1 — **no nginx, no php-fpm, no supervisord**. The entrypoint
+(`docker/docker-entrypoint.sh`) applies pending migrations at boot, then `exec`s the daemon;
+the image `EXPOSE`s `8800 8802 8803 8804 8805` and its healthcheck probes `/health`.
 
 ```bash
 docker build -t phlix-hub .
 
+# Export real values first — the shell below refuses to start the container with them unset,
+# and placeholder JWT literals are refused at boot anyway.
+export HUB_DB_PASSWORD='…matching a real MySQL user…'
+
 docker run -d --name phlix-hub \
-  -p 8800:8800 -p 8802:8802 -p 8803:8803 \
+  -p 8800:8800 -p 8802:8802 -p 8803:8803 -p 8804:8804 -p 8805:8805 \
   -e HUB_DB_HOST=host.docker.internal \
   -e HUB_DB_USER=phlix_hub \
-  -e HUB_DB_PASSWORD=CHANGE-ME \
+  -e HUB_DB_PASSWORD="${HUB_DB_PASSWORD:?export HUB_DB_PASSWORD before running}" \
   -e HUB_DB_NAME=phlix_hub \
-  -e HUB_JWT_SECRET="$(openssl rand -hex 32)" \
+  -v phlix-hub-config:/var/phlix/config \
   phlix-hub
+```
 
-# Apply migrations against the configured database
+`HUB_JWT_SECRET` may be passed explicitly (`-e HUB_JWT_SECRET="$(openssl rand -hex 32)"`) or
+left unset: the entrypoint then generates one key **once** and persists it to
+`/var/phlix/config/hub_jwt_secret` — mount that path as a volume (as above) so sessions survive
+container re-creation. An ephemeral generated key without the volume invalidates all tokens on
+every restart.
+
+Migrations run automatically from the entrypoint on every boot (look for the
+`PHLIX-HUB-MIGRATIONS-OK` banner); set `HUB_MIGRATIONS_STRICT=1` to refuse booting on a
+half-migrated schema instead of the start-anyway default. A manual idempotent re-run stays
+available:
+
+```bash
 docker exec phlix-hub php /var/www/html/scripts/run-migrations.php
 ```
 
@@ -590,6 +626,52 @@ development fallbacks.
 | `HUB_WORKERS` | `2` | Number of HTTP worker processes |
 | `HUB_WORKERMAN_LOG` | `.logs/workerman.log` | Workerman's own log file |
 | `HUB_PUBLIC_DOMAIN` | `phlix.media` | Base domain for per-server subdomains |
+| `HUB_BASE_URL` | `https://<HUB_PUBLIC_DOMAIN>`, else `http://localhost:<HUB_PORT>` | Public base URL baked into enrollment JWTs and the JWKS URL — must be reachable **by enrolled servers**, not just in-process |
+| `HUB_RELAY_PORT` | `8802` | Server-tunnel WS listen port (`RelayWorker`) |
+| `HUB_CLIENT_RELAY_PORT` | `8803` | Client-mount WS listen port (`ClientRelayWorker`) |
+| `HUB_SYNCPLAY_PORT` | `8804` | SyncPlay relay listen port (`SyncPlayRelayWorker`) |
+| `HUB_FEDERATION_PORT` | `8805` | Hub-to-hub federation listen port (`FederationWorker`) |
+| `HUB_CHANNEL_PORT` | `2206` | Cross-process channel broker (relay RPC between HTTP workers and the count=1 relay) |
+| `HUB_MAX_SERVERS_PER_USER` | `0` | Per-user server-claim quota (`0` = unlimited); live twin of the `server.max_servers_per_user` hub setting |
+| `HUB_MAX_USERS_PER_SERVER` | `0` | Per-server collaborator cap (`0` = unlimited); live twin of `server.max_users_per_server` |
+| `HUB_ENROLLMENT_TTL` | `604800` | Enrollment-JWT lifetime (seconds); effective value re-resolved per mint (hub-setting override wins) |
+| `HUB_AUDIT_RETENTION_DAYS` | `365` | Days of `audit_logs` the maintenance reaper retains (R19-11). Deliberately env-only, **not** a `hub_settings` key — an operator dial, not an admin-UI one |
+| `HUB_MCP_PLAYBACK_CONTROL` | `false` | Registers the `playback_control` MCP tool — the only MCP tool that mutates server state. **Read the S261 review warning in [`config/server.php`](config/server.php) before enabling** (retroactively activates the scope on pre-existing tokens) |
+| `HUB_MCP_SSE_KEEPALIVE` / `HUB_MCP_SSE_MAX_SECONDS` | `15` / `900` | `GET /mcp` SSE keep-alive interval and hard stream-lifetime ceiling |
+| `HUB_RELAY_RECONNECT_DRAIN_GRACE` | `5.0` | Seconds an incumbent tunnel keeps draining in-flight requests after a validated server reconnect displaces it (`0` = hard displacement) |
+
+> The six listen-port envs were wired through `config/server.php` in R14-15 — before that the
+> auxiliary ports existed only as `?? <default>` fallbacks no config set (configurability
+> theater). Defaults are byte-identical to the previous literals, so behaviour with the envs
+> unset is unchanged.
+
+#### Security & posture envs
+
+Verified against `config/` and the consuming classes; each default preserves shipped behaviour.
+Where a live `hub_settings` twin exists (admin-console override, no restart), it is named.
+
+| Variable | Default | What it does / unblocks |
+|----------|---------|-------------------------|
+| `HUB_SIGNUPS_ENABLED` | `true` | `false`/`0`/`no`/`off` closes self-service registration: `POST /api/v1/auth/{register,signup}` answers **403** `auth.signups_disabled` before any hashing work. Live twin: `auth.signups_disabled` |
+| `HUB_FEDERATION_ENABLED` | `true` | `false` stops new federation dials, drops inbound DATA frames pre-verification, and rejects controller mutators with **409** `provider.not_configured`. The `:8805` listener stays bound until restart (pre-fork socket). Live twin: `federation.enabled` |
+| `HUB_MAINTENANCE_MODE` | `false` | `true` answers **503** `provider_unavailable` for API traffic. Exempt by design: `/health`, `/api/v1/auth/*`, hub-settings + admin-settings GET/PUT (the off-switch), `/api/v1/admin/restart`; the SPA shell and hashed assets still serve. Live twin: `hub.maintenance_mode` |
+| `HUB_RELAY_TLS` | `false` | Terminates TLS on the `:8802` server-tunnel listener (`wss://`) — what you must enable to pair servers over untrusted networks. Needs `HUB_RELAY_TLS_CERT` / `HUB_RELAY_TLS_KEY` (both default `null`) |
+| `HUB_RELAY_TLS_CERT` / `HUB_RELAY_TLS_KEY` | `null` | PEM paths for the `:8802` TLS context above |
+| `HUB_COOKIE_INSECURE` | unset | Drops `Secure` from session cookies — **local plain-HTTP development only** |
+| `HUB_WS_HOST` | falls back to `HUB_PUBLIC_DOMAIN`, then `your-hub-host` | Host advertised in the `X-WS-Endpoint` steer when a plain HTTP GET hits the `:8802`/`:8803` WebSocket mounts |
+| `HUB_REQUESTS_AUTO_APPROVE` | `false` | Auto-approves freshly filed media requests (best-effort, after the `pending` row lands). Live twin: `requests.auto_approve` |
+| `HUB_INVITE_DEFAULT_EXPIRY` | `604800` (7 days) | Default invite lifetime in seconds when the creator omits `expires_in`; `0` = never expire. An explicit body value always wins. Live twin: `invite.default_expiry_seconds` |
+
+#### SPA shell hints (`window.__PHLIX__`)
+
+The `/app` shell injects a small bootstrap payload (R12-02). Both hints default to `null`,
+which keeps the SPA's legacy **same-origin** derivation of its WebSocket endpoints — set them
+only behind a reverse proxy or port map that breaks same-origin:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HUB_WS_URL` | unset → `null` | Explicit WS base origin (`ws(s)://host[:port]`, **no path**). Grammar-validated; an invalid value fails soft to `null` |
+| `HUB_WS_PATH` | unset → `null` | Single absolute socket path (e.g. `/syncplay`). Grammar-validated; invalid → `null` |
 
 #### Rate limiting ([`config/server.php`](config/server.php) `rate_limit`)
 
@@ -633,12 +715,14 @@ handshakes (:8802/:8803) reject with WS close code **1013** (Try Again Later) in
 | `HUB_DB_USER` | `phlix_hub` | MySQL user |
 | `HUB_DB_PASSWORD` | `phlix_hub` | MySQL password |
 | `HUB_DB_NAME` | `phlix_hub` | MySQL database name |
+| `DB_POOL_ENABLED` | `1` | Coroutine connection pool (each coroutine leases its own connection). `0` falls back to the single mutex-serialised socket |
+| `DB_POOL_SIZE` | `8` | Pool size per connection name **per worker** — keep `workers × connection names × DB_POOL_SIZE` under MySQL `max_connections` |
 
 ### Auth ([`config/auth.php`](config/auth.php))
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HUB_JWT_SECRET` | _(random per-process)_ | **Required in production.** ≥32-byte HMAC secret |
+| `HUB_JWT_SECRET` | _(none in prod)_ | **Required in production.** ≥32-byte HMAC secret. A denylisted placeholder literal is refused at boot with `exit 1` (R14-08 pre-flight, folded into `resolveSecret()` so console commands and workers enforce it too); unset = hard boot refusal (`MissingJwtSecretException`) outside dev, random per-process fallback inside dev (`APP_ENV`/`HUB_ENV` `dev|local` or `HUB_JWT_ALLOW_DEV_SECRET=1`). The Docker entrypoint generates + persists one to `/var/phlix/config/hub_jwt_secret` when unset |
 | `HUB_JWT_ACCESS_TTL` | `3600` | Access-token lifetime (seconds) |
 | `HUB_JWT_REFRESH_TTL` | `604800` | Refresh-token lifetime (seconds) |
 
@@ -859,12 +943,15 @@ CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci
 
 ```
 phlix-hub/
+├── bin/              # bin/phlix CLI entry script (webman/console)
 ├── config/          # Environment-driven config (server, database, auth, logger, updates)
+├── docker/           # docker-entrypoint.sh + php.ini (image bits; the image boots start.php directly)
 ├── docs/            # websockets.md — the :8802/:8803/:8804/:8805 surfaces
 ├── migrations/      # Idempotent SQL migrations
 ├── openapi.yaml     # HTTP surface description (linted with redocly.yaml)
 ├── public/
-│   └── index.php    # Workerman HTTP entry point
+│   └── assets/       # Static files + built SPA — public/ holds NO index.php; the daemon entry
+│                     # point is start.php at the repo root
 ├── scripts/
 │   ├── run-migrations.php
 │   └── assert-*.php     # CI gates (phpcs corpus, coverage, integration + MCP E2E currency)
@@ -883,6 +970,7 @@ phlix-hub/
 │   ├── Requests/        # Media request manager
 │   ├── Stats/           # Relay metrics registry, collector, flush service
 │   └── SyncPlay/        # SyncPlay relay worker + pending-command dispatch
+├── start.php         # Workerman daemon entry point — `php start.php start` (stop/restart/reload/status)
 ├── tests/           # PHPUnit Unit + Integration + E2E suites
 ├── web-ui/          # Vite + TypeScript SPA (@phlix/hub-web-ui), built to public/assets/app/
 └── Dockerfile
