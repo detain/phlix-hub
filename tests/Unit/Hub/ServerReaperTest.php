@@ -228,6 +228,99 @@ final class ServerReaperTest extends TestCase
         $reaper->sweepHeartbeats();
     }
 
+    public function testSweepAuditLogsSelectsExpiredIdsThenDeletesByPrimaryKey(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $selectSql = '';
+        $selectParams = null;
+        $deleteSql = '';
+        $deleteParams = null;
+        $db->method('query')->willReturnCallback(
+            function (
+                string $sql,
+                $params = null
+            ) use (
+                &$selectSql,
+                &$selectParams,
+                &$deleteSql,
+                &$deleteParams,
+            ): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    $selectSql = $sql;
+                    $selectParams = $params;
+                    return [['id' => 'uuid-a'], ['id' => 'uuid-b']];
+                }
+                $deleteSql = $sql;
+                $deleteParams = $params;
+                return 2;
+            },
+        );
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 7, 90);
+        $count = $reaper->sweepAuditLogs();
+
+        self::assertSame(2, $count);
+
+        // Phase 1: DB-clock cutoff, non-locking PK-ordered SELECT (R19-11).
+        self::assertStringContainsString('SELECT id FROM audit_logs', $selectSql);
+        self::assertStringContainsString('created_at < NOW() - INTERVAL :retention DAY', $selectSql);
+        self::assertStringContainsString('ORDER BY id', $selectSql);
+        self::assertStringContainsString('LIMIT 1000', $selectSql);
+        self::assertSame(['retention' => 90], $selectParams);
+
+        // Phase 2: keyed DELETE by PRIMARY KEY, never a range delete on
+        // created_at (that is the gap-locking shape the heartbeat sweep fixed).
+        self::assertStringContainsString('DELETE FROM audit_logs WHERE id IN (', $deleteSql);
+        self::assertStringNotContainsString('created_at', $deleteSql);
+        self::assertSame(['id_0' => 'uuid-a', 'id_1' => 'uuid-b'], $deleteParams);
+    }
+
+    public function testSweepAuditLogsUsesDefaultRetentionOf365Days(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $selectParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$selectParams): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    $selectParams = $params;
+                    return [];
+                }
+                return 0;
+            },
+        );
+
+        $reaper = new ServerReaper($db, $logger);
+        $reaper->sweepAuditLogs();
+
+        self::assertSame(['retention' => 365], $selectParams);
+        self::assertSame(365, $reaper->getAuditRetentionDays());
+    }
+
+    public function testSweepAuditLogsSkipsDeleteWhenNothingExpired(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $deleteIssued = false;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$deleteIssued): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    return [];
+                }
+                $deleteIssued = true;
+                return 0;
+            },
+        );
+
+        $reaper = new ServerReaper($db, $logger);
+        self::assertSame(0, $reaper->sweepAuditLogs());
+        self::assertFalse($deleteIssued, 'No DELETE should run when nothing is expired');
+    }
+
     public function testTickCallsBothMaintenanceMethods(): void
     {
         $db = $this->createMock(Connection::class);
@@ -241,6 +334,9 @@ final class ServerReaperTest extends TestCase
                 if (str_starts_with(ltrim($sql), 'SELECT id FROM server_heartbeats')) {
                     return [['id' => 'aaa']];
                 }
+                if (str_starts_with(ltrim($sql), 'SELECT id FROM audit_logs')) {
+                    return [['id' => 'bbb']];
+                }
                 return 1;
             },
         );
@@ -248,9 +344,11 @@ final class ServerReaperTest extends TestCase
         $reaper = new ServerReaper($db, $logger, 60, 180, 7);
         $reaper->tick();
 
-        // tick() should call both markStaleServersOffline and sweepHeartbeats.
+        // tick() should call markStaleServersOffline, sweepHeartbeats and
+        // sweepAuditLogs (R19-11).
         $hasOfflineUpdate = false;
         $hasDelete = false;
+        $hasAuditDelete = false;
         foreach ($sqlCalls as $sql) {
             if (str_contains($sql, "status = 'offline'")) {
                 $hasOfflineUpdate = true;
@@ -258,10 +356,14 @@ final class ServerReaperTest extends TestCase
             if (str_contains($sql, 'DELETE FROM server_heartbeats')) {
                 $hasDelete = true;
             }
+            if (str_contains($sql, 'DELETE FROM audit_logs')) {
+                $hasAuditDelete = true;
+            }
         }
 
         self::assertTrue($hasOfflineUpdate, 'Expected an UPDATE to mark servers offline');
         self::assertTrue($hasDelete, 'Expected a DELETE from server_heartbeats');
+        self::assertTrue($hasAuditDelete, 'Expected a DELETE from audit_logs');
     }
 
     public function testGettersReturnConfiguredValues(): void
@@ -269,10 +371,11 @@ final class ServerReaperTest extends TestCase
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
 
-        $reaper = new ServerReaper($db, $logger, 30, 300, 14);
+        $reaper = new ServerReaper($db, $logger, 30, 300, 14, 45);
 
         self::assertSame(30, $reaper->getIntervalSeconds());
         self::assertSame(300, $reaper->getOfflineThresholdSeconds());
         self::assertSame(14, $reaper->getHeartbeatRetentionDays());
+        self::assertSame(45, $reaper->getAuditRetentionDays());
     }
 }

@@ -109,6 +109,17 @@ return [
     // Default 180 = 3 x config/process.php's `maintenance.poll_seconds`.
     'maintenance_stale_seconds' => $envInt('HUB_MAINTENANCE_STALE_SECONDS', 180),
 
+    // Days of `audit_logs` history the maintenance reaper retains (R19-11).
+    // REAL CONSUMER: Phlix\Hub\ServerReaper::sweepAuditLogs(), armed on the
+    // existing reaper timer inside the count=1 maintenance worker (fork-safe:
+    // no new timer). Deliberately an ENV knob, not a `hub_settings` key — the
+    // settings allow-list lives in the phlix-shared schema and adding a key
+    // there crosses repos for a dial only an operator (not the admin UI)
+    // needs. Default 365 days; the table was previously INSERT-only and
+    // unbounded. Literal 365 mirrors ServerReaper::DEFAULT_AUDIT_RETENTION_DAYS
+    // (config files must stay loadable without class autoload).
+    'audit_retention_days' => $envInt('HUB_AUDIT_RETENTION_DAYS', 365),
+
     // Public domain used to build relay URLs for subdomain-allocated servers.
     // Each enrolled server gets `<subdomain>.<public_domain>` (see migration
     // 008 and `Phlix\Hub\Hub\DnsAliasManager`).

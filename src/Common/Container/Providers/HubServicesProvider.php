@@ -891,6 +891,10 @@ final class HubServicesProvider implements ServiceProviderInterface
                 $retention = is_int($appConfig['heartbeat_retention_days'] ?? null)
                     ? (int) $appConfig['heartbeat_retention_days']
                     : ServerReaper::DEFAULT_HEARTBEAT_RETENTION_DAYS;
+                /** @var int $auditRetention */
+                $auditRetention = is_int($appConfig['audit_retention_days'] ?? null)
+                    ? (int) $appConfig['audit_retention_days']
+                    : ServerReaper::DEFAULT_AUDIT_RETENTION_DAYS;
 
                 return new ServerReaper(
                     $db,
@@ -898,6 +902,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $interval,
                     $offlineThreshold,
                     $retention,
+                    $auditRetention,
                 );
             })->parameter('db', get(Connection::class)),
 

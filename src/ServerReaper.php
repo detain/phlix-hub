@@ -26,8 +26,14 @@ use Workerman\Timer;
  *    does not grow unboundedly (only the latest ~20 rows are ever read, so
  *    retention can be aggressive).
  *
- * Both tasks run on the same timer to avoid scheduling two separate periodic
- * workers.  The reaper is started from {@see HubServicesProvider::boot()}.
+ *  - R19-11: purges `audit_logs` rows older than the retention window. The
+ *    table is INSERT-only in every code path — before this sweeper it grew
+ *    without bound forever. Same two-phase keyed delete as the heartbeat
+ *    sweep, on the same timer (no second periodic worker, no new fork-time
+ *    scheduling surface).
+ *
+ * All tasks run on the same timer. The reaper is started from
+ * {@see HubServicesProvider::boot()}.
  *
  * @package Phlix\Hub\Hub
  */
@@ -59,6 +65,18 @@ final class ServerReaper
     public const DEFAULT_INTERVAL_SECONDS = 60;
 
     /**
+     * Default audit-log retention in days (R19-11).
+     *
+     * A year keeps a full incident-investigation window while capping the
+     * previously unbounded, INSERT-only `audit_logs` table. Override via
+     * `config/server.php['audit_retention_days']` (env
+     * HUB_AUDIT_RETENTION_DAYS).
+     *
+     * @var int
+     */
+    public const DEFAULT_AUDIT_RETENTION_DAYS = 365;
+
+    /**
      * Maximum heartbeat rows purged per {@see sweepHeartbeats()} call.
      *
      * Bounds the lock footprint of a single sweep; the leftover backlog (if
@@ -69,12 +87,23 @@ final class ServerReaper
     private const HEARTBEAT_SWEEP_BATCH_SIZE = 1000;
 
     /**
+     * Maximum audit rows purged per {@see sweepAuditLogs()} call (R19-11).
+     *
+     * Same lock-footprint bound as the heartbeat sweep.
+     *
+     * @var int
+     */
+    private const AUDIT_SWEEP_BATCH_SIZE = 1000;
+
+    /**
      * @param \Workerman\MySQL\Connection $db                       Database connection.
      * @param StructuredLogger             $logger                  Structured logger.
      * @param int                          $intervalSeconds         Interval between scans.
      * @param int                          $offlineThresholdSeconds Seconds after last_seen_at before a
      *                                                                server is considered offline.
      * @param int                          $heartbeatRetentionDays  Days of heartbeat history to retain.
+     * @param int                          $auditRetentionDays      Days of audit-log history to retain
+     *                                                                (R19-11).
      */
     public function __construct(
         private readonly \Workerman\MySQL\Connection $db,
@@ -82,6 +111,7 @@ final class ServerReaper
         private readonly int $intervalSeconds = self::DEFAULT_INTERVAL_SECONDS,
         private readonly int $offlineThresholdSeconds = self::DEFAULT_OFFLINE_THRESHOLD_SECONDS,
         private readonly int $heartbeatRetentionDays = self::DEFAULT_HEARTBEAT_RETENTION_DAYS,
+        private readonly int $auditRetentionDays = self::DEFAULT_AUDIT_RETENTION_DAYS,
     ) {
     }
 
@@ -120,6 +150,7 @@ final class ServerReaper
             'interval_seconds' => $this->intervalSeconds,
             'offline_threshold_seconds' => $this->offlineThresholdSeconds,
             'heartbeat_retention_days' => $this->heartbeatRetentionDays,
+            'audit_retention_days' => $this->auditRetentionDays,
         ]);
 
         return $timerId;
@@ -166,6 +197,7 @@ final class ServerReaper
     {
         $this->markStaleServersOffline();
         $this->sweepHeartbeats();
+        $this->sweepAuditLogs();
     }
 
     /**
@@ -310,6 +342,96 @@ final class ServerReaper
     }
 
     /**
+     * Delete audit-log rows older than the retention window (R19-11).
+     *
+     * `audit_logs` is INSERT-only everywhere in the codebase, so without this
+     * sweep the table grows unboundedly. Same two-phase keyed delete as
+     * {@see sweepHeartbeats()} — non-locking PK SELECT (bounded batch,
+     * PK-ordered) followed by `DELETE ... WHERE id IN (...)` on the primary
+     * key — to avoid the next-key/gap-lock storm a ranged
+     * `DELETE ... WHERE created_at < ... LIMIT n` would take against the
+     * concurrent audit writers. The cutoff is DB-clock (`NOW()`), matching how
+     * `created_at` defaults are stamped.
+     *
+     * @return int Number of rows deleted.
+     */
+    public function sweepAuditLogs(): int
+    {
+        $maxRetries = 3;
+
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                // Phase 1: non-locking read of the expired PKs, PK-ordered so
+                // phase 2 acquires row locks in a deterministic order.
+                // idx_created_at (migration 029) keeps it a tight range scan.
+                /** @var mixed $rows */
+                $rows = $this->db->query(
+                    'SELECT id FROM audit_logs
+                     WHERE created_at < NOW() - INTERVAL :retention DAY
+                     ORDER BY id
+                     LIMIT ' . self::AUDIT_SWEEP_BATCH_SIZE,
+                    ['retention' => $this->auditRetentionDays],
+                );
+
+                $ids = [];
+                if (is_array($rows)) {
+                    /** @var list<array<string, mixed>> $rows */
+                    foreach ($rows as $row) {
+                        /** @var mixed $rawId */
+                        $rawId = $row['id'] ?? null;
+                        if (is_string($rawId) && $rawId !== '') {
+                            $ids[] = $rawId;
+                        }
+                    }
+                }
+
+                // Nothing expired — no lock-taking DELETE needed.
+                if ($ids === []) {
+                    return 0;
+                }
+
+                // Phase 2: delete exactly those rows by PRIMARY KEY. Colon-free
+                // named placeholders (workerman/mysql prepends `:`).
+                $placeholders = [];
+                $params = [];
+                foreach ($ids as $i => $id) {
+                    $key = 'id_' . $i;
+                    $placeholders[] = ':' . $key;
+                    $params[$key] = $id;
+                }
+
+                /** @var mixed $result */
+                $result = $this->db->query(
+                    'DELETE FROM audit_logs WHERE id IN (' . implode(', ', $placeholders) . ')',
+                    $params,
+                );
+                $count = is_numeric($result) ? (int) $result : 0;
+
+                if ($count > 0) {
+                    $this->logger->info('ServerReaper: audit sweep complete', [
+                        'deleted' => $count,
+                        'retention_days' => $this->auditRetentionDays,
+                    ]);
+                }
+
+                return $count;
+            } catch (\PDOException $e) {
+                if ($attempt === $maxRetries || strpos($e->getMessage(), 'Deadlock') === false) {
+                    throw $e;
+                }
+                $this->logger->debug('ServerReaper: audit sweep deadlock, retrying', [
+                    'attempt' => $attempt,
+                    'max_retries' => $maxRetries,
+                    'error' => $e->getMessage(),
+                ]);
+                usleep(50000 * $attempt);
+            }
+        }
+
+        return 0;
+    }
+
+    /**
      * Get the scan interval in seconds.
      */
     public function getIntervalSeconds(): int
@@ -331,5 +453,13 @@ final class ServerReaper
     public function getHeartbeatRetentionDays(): int
     {
         return $this->heartbeatRetentionDays;
+    }
+
+    /**
+     * Get the audit-log retention window in days (R19-11).
+     */
+    public function getAuditRetentionDays(): int
+    {
+        return $this->auditRetentionDays;
     }
 }
