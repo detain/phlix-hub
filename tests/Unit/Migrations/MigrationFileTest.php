@@ -70,6 +70,7 @@ final class MigrationFileTest extends TestCase
             '046_federation_peer_leaf_hub_id.sql',
             '047_auth_admin_election_and_refresh_revocation.sql',
             '048_claim_code_norm.sql',
+            '049_invite_token_hash_unique.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);
