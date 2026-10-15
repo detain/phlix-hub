@@ -86,7 +86,6 @@ class HeartbeatHandler
             );
         }
 
-        $now = time();
         $hostnameJson = json_encode($heartbeat->hostnameCandidates, JSON_THROW_ON_ERROR);
 
         // Wrap the SELECT … FOR UPDATE existence check and the dependent
@@ -110,12 +109,18 @@ class HeartbeatHandler
                 throw new InvalidArgumentException('SERVER_NOT_FOUND');
             }
 
+            // R19-04: servers.last_seen_at is stamped with the DATABASE clock
+            // (NOW()), not PHP's `date()`. The reaper compares this column
+            // against MySQL's NOW() (ServerReaper::markStaleServersOffline());
+            // a PHP-written value formats in the PHP process timezone while
+            // NOW() formats in the MySQL session timezone, and any skew — e.g.
+            // host TZ ≠ container TZ — silently shifts the freshness margin
+            // and false-flips servers offline (or keeps ghosts online).
+            // Single clock, single source of truth.
             $this->db->query(
-                "UPDATE servers SET status = 'online', last_seen_at = :last_seen_at, version = :version,
+                "UPDATE servers SET status = 'online', last_seen_at = NOW(), version = :version,
                  hostname_candidates_json = :hostname_candidates_json WHERE id = :id",
                 [
-                    // servers.last_seen_at is a DATETIME column.
-                    'last_seen_at' => date('Y-m-d H:i:s', $now),
                     'version' => $heartbeat->version,
                     'hostname_candidates_json' => $hostnameJson,
                     'id' => $serverId,
@@ -126,19 +131,20 @@ class HeartbeatHandler
                 "INSERT INTO server_heartbeats (id, server_id, version, uptime_seconds, active_sessions,
                  active_transcodes, hostname_candidates_json, received_at)
                  VALUES (:id, :server_id, :version, :uptime_seconds, :active_sessions, :active_transcodes,
-                 :hostname_candidates_json, :received_at)",
-                [
-                    'id' => $this->generateUuid(),
-                    'server_id' => $serverId,
-                    'version' => $heartbeat->version,
-                    'uptime_seconds' => $heartbeat->uptimeSeconds,
-                    'active_sessions' => $heartbeat->activeSessions,
-                    'active_transcodes' => $heartbeat->activeTranscodes,
-                    'hostname_candidates_json' => $hostnameJson,
-                    // server_heartbeats.received_at is a DATETIME column.
-                    'received_at' => date('Y-m-d H:i:s', $now),
-                ],
-            );
+                 :hostname_candidates_json, NOW())",
+            [
+                'id' => $this->generateUuid(),
+                'server_id' => $serverId,
+                'version' => $heartbeat->version,
+                'uptime_seconds' => $heartbeat->uptimeSeconds,
+                'active_sessions' => $heartbeat->activeSessions,
+                'active_transcodes' => $heartbeat->activeTranscodes,
+                'hostname_candidates_json' => $hostnameJson,
+                // R19-04: server_heartbeats.received_at is stamped with the
+                // DATABASE clock — the same column the retention sweep
+                // (ServerReaper::sweepHeartbeats) ages against NOW().
+            ],
+        );
 
             // Store libraries reported by the server (same transaction so the
             // cached library list is consistent with the heartbeat row).

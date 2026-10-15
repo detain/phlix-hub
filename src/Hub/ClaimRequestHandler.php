@@ -278,15 +278,13 @@ class ClaimRequestHandler
             /** @var string */
             $claimRowId = is_string($row['id'] ?? null) ? $row['id'] : '';
 
-            $nowDateTime = date('Y-m-d H:i:s', $nowUnix);
-
             $this->db->query(
                 'INSERT INTO servers
                     (id, user_id, server_name, version, public_key_jwk, hostname_candidates_json,
                      status, last_seen_at, created_at, enrolled_at)
                  VALUES
                     (:id, :user_id, :server_name, :version, :public_key_jwk, :hostname_candidates_json,
-                     \'online\', :last_seen_at, :created_at, :enrolled_at)',
+                     \'online\', NOW(), NOW(), :enrolled_at)',
                 [
                     'id' => $serverId,
                     'user_id' => $userId,
@@ -294,10 +292,15 @@ class ClaimRequestHandler
                     'version' => $version,
                     'public_key_jwk' => $publicKeyJwk,
                     'hostname_candidates_json' => $hostnameCandidates,
-                    // servers.last_seen_at / created_at are DATETIME columns.
-                    'last_seen_at' => $nowDateTime,
-                    'created_at' => $nowDateTime,
-                    // servers.enrolled_at is INT UNSIGNED (migration 012).
+                    // R19-04: servers.last_seen_at / created_at are DATETIME
+                    // columns stamped with the DATABASE clock. last_seen_at in
+                    // particular is aged against MySQL NOW() by
+                    // ServerReaper::markStaleServersOffline(); writing it from
+                    // PHP's timezone-formatted date() let host/DB clock skew
+                    // false-flip a freshly enrolled server. (Federation
+                    // already sets its own last_seen_at with NOW() — same law.)
+                    // servers.enrolled_at is INT UNSIGNED (migration 012) —
+                    // a Unix epoch is timezone-free, so it stays PHP-written.
                     'enrolled_at' => $nowUnix,
                 ],
             );

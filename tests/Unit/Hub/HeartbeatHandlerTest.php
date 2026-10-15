@@ -100,6 +100,68 @@ final class HeartbeatHandlerTest extends TestCase
     }
 
     /**
+     * R19-04 law pin: the two DATETIME liveness columns a heartbeat writes
+     * (servers.last_seen_at, server_heartbeats.received_at) are stamped with
+     * the DATABASE clock (NOW()), never a PHP date()-formatted string. Both
+     * columns are aged against MySQL NOW() by ServerReaper, so a PHP-written
+     * value in a different process timezone skews the freshness/retention
+     * maths and false-flips servers offline. Pins: NOW() present in each
+     * statement AND no clock param left in the bind arrays.
+     */
+    public function testHandleStampsLivenessColumnsWithDatabaseClock(): void
+    {
+        $serverId = 'server-db-clock';
+
+        /** @var array<string, array{sql: string, params: array<string, mixed>}> $writes */
+        $writes = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use ($serverId, &$writes): array {
+                if (str_contains($sql, 'FOR UPDATE')) {
+                    return [['id' => $serverId]];
+                }
+                if (str_contains($sql, 'UPDATE servers')) {
+                    $writes['update_servers'] = ['sql' => $sql, 'params' => is_array($params) ? $params : []];
+                }
+                if (str_contains($sql, 'INSERT INTO server_heartbeats')) {
+                    $writes['insert_heartbeats'] = ['sql' => $sql, 'params' => is_array($params) ? $params : []];
+                }
+                return [];
+            },
+        );
+
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
+        $logger = $this->createMock(StructuredLogger::class);
+        $handler = $this->createHandler($db, $jwtService, $logger);
+
+        $handler->handle($serverId, $jwtService->createEnrollmentJwt($serverId), new HeartbeatDto(
+            serverId: $serverId,
+            version: '0.11.0',
+            timestamp: time(),
+            uptimeSeconds: 86400,
+            activeSessions: 0,
+            activeTranscodes: 0,
+            hostnameCandidates: [],
+        ));
+
+        self::assertArrayHasKey('update_servers', $writes);
+        self::assertArrayHasKey('insert_heartbeats', $writes);
+        self::assertStringContainsString('last_seen_at = NOW()', $writes['update_servers']['sql']);
+        self::assertStringContainsString(', NOW())', $writes['insert_heartbeats']['sql']);
+        self::assertArrayNotHasKey('last_seen_at', $writes['update_servers']['params']);
+        self::assertArrayNotHasKey('received_at', $writes['insert_heartbeats']['params']);
+        foreach ($writes as $write) {
+            foreach ($write['params'] as $value) {
+                self::assertFalse(
+                    is_string($value) && preg_match('/\A\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\z/', $value) === 1,
+                    'A PHP-clock DATETIME literal must never ride the bind params: ' . $write['sql'],
+                );
+            }
+        }
+    }
+
+    /**
      * HB-4.6c headline bug: the old 5/900 login-grade limiter tripped the
      * legitimate ~60s heartbeat cadence. Drive 20 heartbeats at a 60s cadence
      * (simulated advancing clock) through ONE handler backed by the REAL
