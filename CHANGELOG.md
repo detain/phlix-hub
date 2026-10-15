@@ -6,6 +6,54 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review-fix lane: audit-retention wipe guard + hook-mask pins + socket-port range — 2026-10-15
+
+Adversarial-review follow-ups (campaign 2026-10-14, this lane).
+
+- **MAJOR — `HUB_AUDIT_RETENTION_DAYS=0` armed a mass-delete of
+  `audit_logs`.** The config `$envInt` seam (is_numeric) and the provider's
+  `is_int` gate both let `0`/negatives through, and
+  `created_at < NOW() - INTERVAL 0 DAY` matches EVERY row — the reaper tick
+  wiped the audit trail 1000 rows at a time. Fix mirrors phlix-server's
+  `StatsCollector::retentionDays()` clamp idiom at the deepest choke point:
+  `ServerReaper::normalizeRetentionDays(mixed $raw, int $default)` (non-numeric
+  → default, `<1` → default, cap `RETENTION_DAYS_CAP = 36500`) is applied by
+  the constructor to BOTH retention windows (heartbeat shares the unclamped
+  shape), which falls back loudly and logs a `warning` with
+  provided/effective days whenever a dial is rejected. The config seam stays a
+  pure forwarder (config files remain autoload-free); the provider's `is_int`
+  gate is unchanged because the constructor now normalizes everything that
+  reaches SQL. Pins: `ServerReaperTest` +7 (0→365 audit with warning + SQL
+  param proof, -5→365, `1` honored, heartbeat 0→7 while the audit window stays
+  untouched, cap 40000→36500, direct coercion table), new
+  `tests/Unit/Config/AuditRetentionConfigTest` walks env → real
+  `config/server.php` → normalize end-to-end (0→365, -5→365, 1→1). Clamp-strip
+  mutation reddens exactly 6 tests.
+- **MINOR — the hook-mask HTTP arm was under-pinned.** The structural guard
+  compared `CoroutineHooks::apply` only against `ChannelClient::connect`, so
+  relocating the apply INSIDE the swallowing try (still ahead of connect)
+  survived while silently re-opening the R16-01 idle-worker hole. Both worker
+  arms now pin the boundary: the first `try {` after each `onWorkerStart`
+  assign must open AFTER the apply. Plus a behavioral counterpart in
+  `CoroutineHooksTest`: wrapping a worker whose enforcement throws must let
+  the `HookDeliveryException` escape the composed callback and starve the
+  original — never proceed with an undelivered mask. Mutation (apply moved
+  inside the try) reddens exactly the new arm.
+- **MINOR — `SharedUiController::configuredSocketBaseUrl()` overclaimed.**
+  The docblock promised out-of-range ports are rejected; the grammar-only
+  regex admitted `:99999`. Chose to make the promise true (trivial, pin-
+  testable) instead of weakening the docblock: the host/port now parse into
+  groups and a present port must be 1–65535, else fail-soft `null` (shell
+  renders, client keeps same-origin derivation). Five new dataset arms
+  (`:65535`/`:1` accepted, `:0`/`:65536`/`:99999` rejected); range-check
+  neuter mutation reddens exactly the 3 rejection arms.
+- **MINOR — `McpSseStream::headers()` docblock credited a deleted file.**
+  `docker/nginx.conf` is gone (image boots Workerman directly); the
+  `X-Accel-Buffering: no` prose now says what it is — a hint for any
+  operator-fronting nginx-family proxy, no-op for the stock image.
+
+Docs: the `HUB_AUDIT_RETENTION_DAYS` README row states the ≥1 clamp truth.
+
 ### Added — R17-07 hardening: admin-delegation validation-before-write — 2026-10-15
 
 Review campaign (2026-10-14) INFO/hardening finding. `FederationPeerManager::

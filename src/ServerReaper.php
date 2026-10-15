@@ -96,23 +96,96 @@ final class ServerReaper
     private const AUDIT_SWEEP_BATCH_SIZE = 1000;
 
     /**
+     * Hard ceiling (~100 years) for any retention window in days.
+     *
+     * Mirrors phlix-server's StatsCollector::retentionDays() cap idiom: a
+     * fat-fingered huge value must not turn the sweep predicate into an
+     * effectively-never-true no-op via integer overflow on other engines.
+     *
+     * @var int
+     */
+    public const RETENTION_DAYS_CAP = 36500;
+
+    /** Days of heartbeat history to retain (normalized, never < 1). */
+    private readonly int $heartbeatRetentionDays;
+
+    /** Days of audit-log history to retain (normalized, never < 1). */
+    private readonly int $auditRetentionDays;
+
+    /**
+     * Normalize a raw retention value into a safe day count.
+     *
+     * The mass-delete footgun this kills: `HUB_AUDIT_RETENTION_DAYS=0` used
+     * to survive both the config `$envInt` (is_numeric accepts 0) and the
+     * provider `is_int` gate, reaching the sweep SQL as
+     * `created_at < NOW() - INTERVAL 0 DAY` — which matches EVERY audit row,
+     * so each 60 s tick deleted `audit_logs` 1000 rows at a time. A retention
+     * window of zero or fewer days is not "keep nothing", it is "wipe the
+     * table"; the honest reading of a non-positive dial is "the operator
+     * mis-typed it", so it falls back to the safe default (loudly, at the
+     * constructor). Same shape as phlix-server StatsCollector::retentionDays().
+     *
+     * @param mixed $raw     Raw config/env value (int, numeric string, null, garbage).
+     * @param int   $default Default applied when $raw is non-numeric or < 1.
+     */
+    public static function normalizeRetentionDays(mixed $raw, int $default): int
+    {
+        if (!is_numeric($raw)) {
+            return $default;
+        }
+
+        $days = (int) $raw;
+        if ($days < 1) {
+            return $default;
+        }
+
+        return min($days, self::RETENTION_DAYS_CAP);
+    }
+
+    /**
      * @param \Workerman\MySQL\Connection $db                       Database connection.
      * @param StructuredLogger             $logger                  Structured logger.
      * @param int                          $intervalSeconds         Interval between scans.
      * @param int                          $offlineThresholdSeconds Seconds after last_seen_at before a
      *                                                                server is considered offline.
-     * @param int                          $heartbeatRetentionDays  Days of heartbeat history to retain.
+     * @param int                          $heartbeatRetentionDays  Days of heartbeat history to retain;
+     *                                                                normalized via {@see normalizeRetentionDays()}
+     *                                                                — non-positive falls back to the default.
      * @param int                          $auditRetentionDays      Days of audit-log history to retain
-     *                                                                (R19-11).
+     *                                                                (R19-11); normalized the same way.
      */
     public function __construct(
         private readonly \Workerman\MySQL\Connection $db,
         private readonly StructuredLogger $logger,
         private readonly int $intervalSeconds = self::DEFAULT_INTERVAL_SECONDS,
         private readonly int $offlineThresholdSeconds = self::DEFAULT_OFFLINE_THRESHOLD_SECONDS,
-        private readonly int $heartbeatRetentionDays = self::DEFAULT_HEARTBEAT_RETENTION_DAYS,
-        private readonly int $auditRetentionDays = self::DEFAULT_AUDIT_RETENTION_DAYS,
+        int $heartbeatRetentionDays = self::DEFAULT_HEARTBEAT_RETENTION_DAYS,
+        int $auditRetentionDays = self::DEFAULT_AUDIT_RETENTION_DAYS,
     ) {
+        $this->heartbeatRetentionDays = self::normalizeRetentionDays(
+            $heartbeatRetentionDays,
+            self::DEFAULT_HEARTBEAT_RETENTION_DAYS,
+        );
+        $this->auditRetentionDays = self::normalizeRetentionDays(
+            $auditRetentionDays,
+            self::DEFAULT_AUDIT_RETENTION_DAYS,
+        );
+
+        if ($this->heartbeatRetentionDays !== $heartbeatRetentionDays) {
+            $this->logger->warning('ServerReaper: rejected heartbeat retention window, falling back to default', [
+                'provided_days' => $heartbeatRetentionDays,
+                'effective_days' => $this->heartbeatRetentionDays,
+                'reason' => 'retention window must be between 1 and ' . self::RETENTION_DAYS_CAP . ' days',
+            ]);
+        }
+
+        if ($this->auditRetentionDays !== $auditRetentionDays) {
+            $this->logger->warning('ServerReaper: rejected audit-log retention window, falling back to default', [
+                'provided_days' => $auditRetentionDays,
+                'effective_days' => $this->auditRetentionDays,
+                'reason' => 'retention window must be between 1 and ' . self::RETENTION_DAYS_CAP . ' days',
+            ]);
+        }
     }
 
     /**

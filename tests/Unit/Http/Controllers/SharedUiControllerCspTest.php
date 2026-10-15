@@ -269,6 +269,13 @@ final class SharedUiControllerCspTest extends TestCase
             'reject bare host' => ['hub.example.com', null],
             'reject empty' => ['', null],
             'reject whitespace only' => ['   ', null],
+            // REVIEW-FIX: the docblock always promised range rejection; these
+            // arms are what make that promise true (grammar-only admitted 99999).
+            'accept highest valid port' => ['wss://hub.example.com:65535', 'wss://hub.example.com:65535'],
+            'accept lowest valid port' => ['ws://127.0.0.1:1', 'ws://127.0.0.1:1'],
+            'reject port zero' => ['wss://hub.example.com:0', null],
+            'reject out-of-range port 65536' => ['wss://hub.example.com:65536', null],
+            'reject out-of-range port 99999' => ['ws://127.0.0.1:99999', null],
         ];
     }
 

@@ -139,6 +139,46 @@ final class CoroutineHooksTest extends TestCase
         CoroutineHooks::apply([]);
     }
 
+    /**
+     * REVIEW-FIX (hook-mask HTTP arm): behavioral counterpart of the
+     * structural pin in HookEnforcementGuardTest. A delivery failure raised
+     * through the WRAPPED callback must escape — never be swallowed by a
+     * downstream best-effort try inside the original. If wrap() ever moved
+     * self::apply() after (or inside a guarded call to) the original, or the
+     * composition order flipped, this reddens: the exception must surface at
+     * the invocation site and the original must not have run.
+     */
+    public function testWrapLetsTheEnforcementThrowEscapeAndStarvesTheOriginal(): void
+    {
+        $this->requireSwoole();
+
+        CoroutineHooks::setEnforcerForTesting(static function (int $mask): array {
+            throw new HookDeliveryException('planted wrap-escape');
+        });
+        CoroutineHooks::setLogSinkForTesting(static function (string $message): void {
+        });
+
+        $originalRan = false;
+        $worker = new Worker();
+        $worker->onWorkerStart = static function (Worker $w) use (&$originalRan): void {
+            $originalRan = true;
+        };
+
+        CoroutineHooks::wrap($worker, ['coroutine' => ['enabled' => true]]);
+
+        $callback = $worker->onWorkerStart;
+        self::assertIsCallable($callback);
+
+        try {
+            $callback($worker);
+            self::fail('the enforcement throw must escape the wrapped callback, not be caught');
+        } catch (HookDeliveryException $e) {
+            self::assertSame('planted wrap-escape', $e->getMessage());
+        }
+
+        self::assertFalse($originalRan, 'a worker whose hook mask failed to deliver must never proceed');
+    }
+
     public function testWrapRunsTheEnforcementStepBeforeTheOriginalCallback(): void
     {
         $this->requireSwoole();

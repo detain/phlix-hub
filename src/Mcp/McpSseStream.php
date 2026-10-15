@@ -116,7 +116,9 @@ final class McpSseStream
     /**
      * The response head an SSE stream must carry.
      *
-     * `X-Accel-Buffering: no` is for the nginx in `docker/nginx.conf`, which
+     * `X-Accel-Buffering: no` is a hint for any operator-fronting
+     * nginx-family proxy (the hub image ships none since `docker/nginx.conf`
+     * was deleted — it only takes effect when one sits in front), which
      * would otherwise buffer the stream and deliver every frame at once —
      * turning a live channel into a batch at close. `no-store` is on the
      * `Cache-Control` because an intermediary that cached this would replay a

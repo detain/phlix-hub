@@ -253,8 +253,18 @@ final class SharedUiController
         if ($candidate === '') {
             return null;
         }
-        if (preg_match('#^wss?://[A-Za-z0-9._-]+(?::[0-9]{1,5})?$#', $candidate) === 1) {
-            return $candidate;
+        // REVIEW-FIX: the grammar alone admitted `:99999` while the docblock
+        // promised out-of-range ports are rejected. Parse, then range-check —
+        // the promise is now real (still fail-soft: rejection yields null,
+        // the shell renders, the client falls back to same-origin derivation).
+        if (preg_match('#^(wss?)://([A-Za-z0-9._-]+)(?::([0-9]{1,5}))?$#', $candidate, $parts) === 1) {
+            $port = $parts[3] ?? '';
+            if ($port === '') {
+                return $candidate;
+            }
+            if ((int) $port >= 1 && (int) $port <= 65535) {
+                return $candidate;
+            }
         }
 
         return null;

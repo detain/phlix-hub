@@ -635,7 +635,7 @@ development fallbacks.
 | `HUB_MAX_SERVERS_PER_USER` | `0` | Per-user server-claim quota (`0` = unlimited); live twin of the `server.max_servers_per_user` hub setting |
 | `HUB_MAX_USERS_PER_SERVER` | `0` | Per-server collaborator cap (`0` = unlimited); live twin of `server.max_users_per_server` |
 | `HUB_ENROLLMENT_TTL` | `604800` | Enrollment-JWT lifetime (seconds); effective value re-resolved per mint (hub-setting override wins) |
-| `HUB_AUDIT_RETENTION_DAYS` | `365` | Days of `audit_logs` the maintenance reaper retains (R19-11). Deliberately env-only, **not** a `hub_settings` key — an operator dial, not an admin-UI one |
+| `HUB_AUDIT_RETENTION_DAYS` | `365` | Days of `audit_logs` the maintenance reaper retains (R19-11). Deliberately env-only, **not** a `hub_settings` key — an operator dial, not an admin-UI one. Must be ≥ 1: non-positive or oversized values are clamped back to `365` with a logged warning — a `0` here can never arm a wipe-everything sweep |
 | `HUB_MCP_PLAYBACK_CONTROL` | `false` | Registers the `playback_control` MCP tool — the only MCP tool that mutates server state. **Read the S261 review warning in [`config/server.php`](config/server.php) before enabling** (retroactively activates the scope on pre-existing tokens) |
 | `HUB_MCP_SSE_KEEPALIVE` / `HUB_MCP_SSE_MAX_SECONDS` | `15` / `900` | `GET /mcp` SSE keep-alive interval and hard stream-lifetime ceiling |
 | `HUB_RELAY_RECONNECT_DRAIN_GRACE` | `5.0` | Seconds an incumbent tunnel keeps draining in-flight requests after a validated server reconnect displaces it (`0` = hard displacement) |

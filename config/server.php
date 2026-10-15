@@ -118,6 +118,10 @@ return [
     // needs. Default 365 days; the table was previously INSERT-only and
     // unbounded. Literal 365 mirrors ServerReaper::DEFAULT_AUDIT_RETENTION_DAYS
     // (config files must stay loadable without class autoload).
+    // SAFETY: this seam forwards ANY numeric verbatim (0, -5 included) — the
+    // consumer clamps: ServerReaper normalizes non-positive/oversized windows
+    // back to the default and logs a warning, so a mis-set 0 can never arm
+    // the delete-everything sweep. See ServerReaper::normalizeRetentionDays().
     'audit_retention_days' => $envInt('HUB_AUDIT_RETENTION_DAYS', 365),
 
     // Public domain used to build relay URLs for subdomain-allocated servers.

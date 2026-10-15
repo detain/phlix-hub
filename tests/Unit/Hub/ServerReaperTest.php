@@ -300,6 +300,115 @@ final class ServerReaperTest extends TestCase
         self::assertSame(365, $reaper->getAuditRetentionDays());
     }
 
+    /**
+     * REVIEW-FIX (audit-retention footgun): a zero/negative window must NEVER
+     * reach SQL. `created_at < NOW() - INTERVAL 0 DAY` matches EVERY row, so
+     * HUB_AUDIT_RETENTION_DAYS=0 used to arm a wipe-audit_logs-everything
+     * sweep, 1000 rows per tick. The constructor clamps to the default and
+     * logs loudly; this pins both halves.
+     */
+    public function testZeroAuditRetentionIsClampedToDefaultAndLogged(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $logger->expects($this->once())
+            ->method('warning')
+            ->with(
+                $this->stringContains('audit-log retention window'),
+                $this->callback(static fn (array $context): bool => $context['provided_days'] === 0
+                    && $context['effective_days'] === 365),
+            );
+
+        $selectParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$selectParams): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    $selectParams = $params;
+                    return [];
+                }
+                return 0;
+            },
+        );
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 7, 0);
+        self::assertSame(365, $reaper->getAuditRetentionDays());
+        $reaper->sweepAuditLogs();
+        self::assertSame(['retention' => 365], $selectParams, 'SQL must never see retention 0');
+    }
+
+    public function testNegativeAuditRetentionIsClampedToDefault(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 7, -5);
+        self::assertSame(365, $reaper->getAuditRetentionDays());
+    }
+
+    public function testRetentionOfExactlyOneDayIsHonored(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $logger->expects($this->never())->method('warning');
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 1, 1);
+        self::assertSame(1, $reaper->getHeartbeatRetentionDays());
+        self::assertSame(1, $reaper->getAuditRetentionDays());
+    }
+
+    public function testZeroHeartbeatRetentionIsClampedToItsOwnDefault(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $logger->expects($this->once())
+            ->method('warning')
+            ->with(
+                $this->stringContains('heartbeat retention window'),
+                $this->callback(static fn (array $context): bool => $context['provided_days'] === 0
+                    && $context['effective_days'] === 7),
+            );
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 0, 90);
+        self::assertSame(7, $reaper->getHeartbeatRetentionDays());
+        // The sibling window stays untouched: one bad dial must not censor good ones.
+        self::assertSame(90, $reaper->getAuditRetentionDays());
+    }
+
+    public function testOversizedRetentionIsCapped(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 40000, 40000);
+        self::assertSame(ServerReaper::RETENTION_DAYS_CAP, $reaper->getHeartbeatRetentionDays());
+        self::assertSame(ServerReaper::RETENTION_DAYS_CAP, $reaper->getAuditRetentionDays());
+    }
+
+    /**
+     * The shared normalization function, pinned directly (mirrors the server
+     * StatsCollector::retentionDays() table the reviewer asked to mirror).
+     */
+    public function testNormalizeRetentionDaysCoercionTable(): void
+    {
+        // Non-numeric / missing → default.
+        self::assertSame(365, ServerReaper::normalizeRetentionDays(null, 365));
+        self::assertSame(365, ServerReaper::normalizeRetentionDays('abc', 365));
+        self::assertSame(365, ServerReaper::normalizeRetentionDays([], 365));
+        // Non-positive → default (the wipe-the-table shapes).
+        self::assertSame(365, ServerReaper::normalizeRetentionDays(0, 365));
+        self::assertSame(365, ServerReaper::normalizeRetentionDays('0', 365));
+        self::assertSame(365, ServerReaper::normalizeRetentionDays(-5, 365));
+        // Valid → honored.
+        self::assertSame(1, ServerReaper::normalizeRetentionDays(1, 365));
+        self::assertSame(90, ServerReaper::normalizeRetentionDays('90', 365));
+        self::assertSame(36500, ServerReaper::normalizeRetentionDays(36500, 365));
+        // Oversized → cap.
+        self::assertSame(36500, ServerReaper::normalizeRetentionDays(40000, 365));
+    }
+
     public function testSweepAuditLogsSkipsDeleteWhenNothingExpired(): void
     {
         $db = $this->createMock(Connection::class);

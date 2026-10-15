@@ -244,6 +244,17 @@ final class HookEnforcementGuardTest extends TestCase
         self::assertLessThan($firstBody, $apply, 'the HTTP apply must precede the closure body it guards');
         self::assertLessThan(400, $apply - $assign, 'apply drifted away from the closure head?');
 
+        // REVIEW-FIX (hook-mask HTTP arm): the offsets above alone let a
+        // relocation of apply INSIDE the swallowing try survive — still ahead
+        // of connect, yet back to the silent-idle-worker hole R16-01 closed.
+        // Structurally pin the boundary: the first `try {` after the closure
+        // assign must open AFTER the apply statement.
+        $httpTry = strpos($app, 'try {', $assign);
+        self::assertNotFalse($httpTry, 'the HTTP worker closure must contain its best-effort try');
+        self::assertLessThan($httpTry, $apply, 'the HTTP apply must sit OUTSIDE (before) the try that '
+            . 'swallows — enforcement failure must escape to Workerman, not idle the worker');
+        self::assertLessThan($firstBody, $httpTry, 'sanity: the guarded connect body follows the try open');
+
         // Maintenance worker: apply precedes the 'failed to start' warning
         // catch by a bounded gap — the delivery throw must sit OUTSIDE the
         // try that swallows everything else (server S433 rule 3, hub shape).
@@ -257,6 +268,12 @@ final class HookEnforcementGuardTest extends TestCase
         self::assertLessThan($warning, $mApply, 'an undelivered hook mask must escape before the '
             . 'best-effort warning can convert it into an idle worker');
         self::assertLessThan(600, $warning - $mApply, 'the apply and the catch it guards drifted apart?');
+
+        // Same structural boundary as the HTTP arm: apply precedes the try open.
+        $mTry = strpos($app, 'try {', $mAssign);
+        self::assertNotFalse($mTry, 'the maintenance closure must contain its best-effort try');
+        self::assertLessThan($mTry, $mApply, 'the maintenance apply must sit OUTSIDE (before) the try '
+            . 'whose catch logs the failure — same escape law as the HTTP worker');
     }
 
     public function testSurvivalTokenIsCodeResidentAndAbsentFromProductionSource(): void
