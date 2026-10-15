@@ -132,19 +132,20 @@ class HeartbeatHandler
                  active_transcodes, hostname_candidates_json, received_at)
                  VALUES (:id, :server_id, :version, :uptime_seconds, :active_sessions, :active_transcodes,
                  :hostname_candidates_json, NOW())",
-            [
-                'id' => $this->generateUuid(),
-                'server_id' => $serverId,
-                'version' => $heartbeat->version,
-                'uptime_seconds' => $heartbeat->uptimeSeconds,
-                'active_sessions' => $heartbeat->activeSessions,
-                'active_transcodes' => $heartbeat->activeTranscodes,
-                'hostname_candidates_json' => $hostnameJson,
-                // R19-04: server_heartbeats.received_at is stamped with the
-                // DATABASE clock — the same column the retention sweep
-                // (ServerReaper::sweepHeartbeats) ages against NOW().
-            ],
-        );
+                [
+                    // R19-04: server_heartbeats.received_at is stamped with the
+                    // DATABASE clock (NOW() in the VALUES list) — the same
+                    // column the retention sweep (ServerReaper::sweepHeartbeats)
+                    // ages against NOW(). No PHP-clock param rides this write.
+                    'id' => $this->generateUuid(),
+                    'server_id' => $serverId,
+                    'version' => $heartbeat->version,
+                    'uptime_seconds' => $heartbeat->uptimeSeconds,
+                    'active_sessions' => $heartbeat->activeSessions,
+                    'active_transcodes' => $heartbeat->activeTranscodes,
+                    'hostname_candidates_json' => $hostnameJson,
+                ],
+            );
 
             // Store libraries reported by the server (same transaction so the
             // cached library list is consistent with the heartbeat row).
