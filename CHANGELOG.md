@@ -6,6 +6,49 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — R17-07 hardening: admin-delegation validation-before-write — 2026-10-15
+
+Review campaign (2026-10-14) INFO/hardening finding. `FederationPeerManager::
+handleAdminDelegation()` stored the frame-carried `peer_id`/`user_id` strings
+of the RESERVED master→leaf DATA envelope with no validation against the local
+tables: a frame from a cryptographically verified master could still persist
+rows that dangle (the `user_id` column has no FK at all; `peer_id`'s FK to
+`federation_peers(id)` only turns the same defect into an unhandled MySQL 1452
+inside the frame handler).
+
+- **Law.** Every write is now stamped with the LOCAL dialed-peer row id
+  (`masterPeerId`) — the frame's identity strings never reach the database.
+  Validation-before-write, all refusals logging + auditing a snake_case reason
+  via `AuditLogger::logFailedAuth` with zero persistence: non-empty-string
+  shape (`admin_delegation_missing_fields`), action ∈ {grant, revoke}
+  (`admin_delegation_unknown_action`), a dialed peer row carrying its
+  ceremony-bound hub identity (`admin_delegation_no_bound_peer` — stricter
+  than the M-5 offer rebase: a privilege write refuses an unbound channel
+  outright), wire `peer_id` equal to that bound hub uuid
+  (`admin_delegation_peer_id_mismatch`), and `user_id` resolving in THIS hub's
+  `users` table (`admin_delegation_unknown_user`).
+- **Seam + wiring.** Constructor gains a 9th optional `localUserProbe`
+  (callable(string): bool) alongside the existing resolver seams; `HubServicesProvider`
+  wires it to `UserRepository::userExists`. The consumer FAILS CLOSED when the
+  seam is unwired (`admin_delegation_user_probe_unwired`), and
+  `FederationUserProbeWiringTest` resolves the real production container graph
+  to pin that the wiring is present — a forgotten seam degrades silently by
+  design, so the guard is the loud half.
+- **Honesty.** The docblock, `docs/websockets.md` `:8805` DATA row and the
+  openapi `x-phlix-websockets` line keep stating the write-only truth: the
+  master-side producer is still unimplemented and `isUserAdminOnPeer` still
+  has zero request-path consumers — this lane hardens the receiving contract
+  for the day both ends light up, it does not enable the feature.
+- **Proof.** The handler stays behind the H-4 pre-verification DATA gate
+  (`handleDataFrame()`'s `!$this->channelVerified` guard is its only entry
+  point — cited in the test comments; all delegation tests drive the payload
+  through `handleDataFrame()`, never by reflecting into the handler). 11 new
+  unit tests + the rewritten gate-off control in `FederationPeerManagerTest`
+  (44 total); mutations: provider probe→null reddens the wiring guard, stripping
+  the peer_id cross-check reddens exactly its pin, neutering the user check
+  reddens exactly its pin. `scripts/parallel/test-durations.json` carries the
+  new/changed file entries.
+
 ### Fixed — HUB-DB lane: R19-01 / R19-04 / R19-08 / R19-11 / R20-03 / R20-04 / R17-06 / R18-15 — 2026-10-15
 
 Review campaign (2026-10-14) database and hardening findings for the hub, shipped

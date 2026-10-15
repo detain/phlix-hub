@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "7ff9bcb serial junit, pcov",
+    "generatedFrom": "7ff9bcb serial junit, pcov + r1707 lane hand-entries (measured PHPUnit Time x2)",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.017,
         "tests/Health/HealthControllerTest.php": 0.008,
@@ -20,6 +20,7 @@
         "tests/Unit/Auth/RefreshTokenRevocationServiceTest.php": 0.004,
         "tests/Unit/Auth/UserRepositoryTest.php": 2.919,
         "tests/Unit/Common/Container/ContainerFactoryTest.php": 0.004,
+        "tests/Unit/Common/Container/FederationUserProbeWiringTest.php": 0.045,
         "tests/Unit/Common/Container/JwtSecretBootGuardTest.php": 0.004,
         "tests/Unit/Common/Container/MaintenanceHealthWiringTest.php": 0.018,
         "tests/Unit/Common/Container/MissingJwtSecretExceptionTest.php": 0.001,
@@ -73,7 +74,7 @@
         "tests/Unit/Federation/FederationMasterPusherTest.php": 0.011,
         "tests/Unit/Federation/FederationMasterTlsDialTest.php": 3.387,
         "tests/Unit/Federation/FederationPeerDtoTest.php": 0.002,
-        "tests/Unit/Federation/FederationPeerManagerTest.php": 0.046,
+        "tests/Unit/Federation/FederationPeerManagerTest.php": 0.128,
         "tests/Unit/Federation/FederationPushChannelRoundTripTest.php": 0.026,
         "tests/Unit/Federation/FederationSessionManagerTest.php": 0.009,
         "tests/Unit/Federation/FederationWorkerBootBootstrapTest.php": 0.015,

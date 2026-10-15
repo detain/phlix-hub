@@ -47,7 +47,9 @@ use Workerman\Timer;
  *   4. Sends HEARTBEAT (generic binary) every 15 seconds once verified
  *   5. Handles incoming DATA envelopes (library-share offers/revocations,
  *      ADMIN_DELEGATION payloads) — all refused before the channel is
- *      verified (H-4 leaf-side gate)
+ *      verified (H-4 leaf-side gate); admin delegations additionally run
+ *      validation-before-write against the authenticated channel identity
+ *      and the local users table (R17-07)
  *   6. Auto-reconnects with exponential backoff on disconnect — never after
  *      a deliberate disconnectFromMaster() (M-7); while federation is
  *      disabled the chain PARKS at the capped backoff (one gated re-check
@@ -207,6 +209,13 @@ class FederationPeerManager
      *        2026-10-06 spec: a TLS master in a process without the extension
      *        must fail loud naming openssl, never as an opaque stream error);
      *        null reads the real extension state.
+     * @param (callable(string): bool)|null     $localUserProbe R17-07 seam over
+     *        THIS hub's `users` table (wired to UserRepository::userExists):
+     *        an admin-delegation payload's user_id is only persisted when the
+     *        probe resolves it. Null FAILS CLOSED — an unwired probe refuses
+     *        every delegation with its own audit reason, so a construction
+     *        site that forgets the wiring can never silently open the
+     *        dangling-row write path (the column has no FK to catch it).
      */
     public function __construct(
         private readonly FederationHubRepository $hubRepo,
@@ -240,6 +249,9 @@ class FederationPeerManager
         // guard at the top of establishConnection(). Null (every production and
         // pre-existing construction site) reads the real extension state.
         private readonly mixed $tlsExtensionProbe = null,
+        // R17-07: local-user resolution seam for admin-delegation payloads —
+        // see the constructor @param and handleAdminDelegation()'s law.
+        private readonly mixed $localUserProbe = null,
     ) {
         $this->decoder = new FrameDecoder();
         $this->encoder = new FrameEncoder();
@@ -1424,7 +1436,39 @@ class FederationPeerManager
     }
 
     /**
-     * Handle an incoming admin delegation push from master.
+     * Handle an incoming admin delegation push from master (R17-07: validated
+     * before any write).
+     *
+     * Wire-law for this RESERVED envelope (docs/websockets.md `:8805` DATA
+     * table): the frame's `peer_id` carries the MASTER's own hub uuid — the
+     * identity the signed HELLO_ACK ceremony bound onto the master peer row —
+     * and it is used ONLY as a cross-check. Every write stamps the LOCAL
+     * channel peer row id (`masterPeerId`), never a frame-carried string, so
+     * a delegation can neither bind to nor dangle away from a row this
+     * database did not authenticate. Validation-before-write, in order:
+     *   1. shape — user_id / peer_id / action must be non-empty strings and
+     *      action must be 'grant' or 'revoke';
+     *   2. channel — the dialed master peer row must exist AND carry its
+     *      bound hub identity. Unlike the M-5 offer rebase (which tolerates
+     *      an unbound row), a privilege write refuses an unbound channel
+     *      outright — a verified ceremony always leaves a binding behind
+     *      (handleHelloAck persists it before setting channelVerified), so an
+     *      unbound row here is an anomalous state, not a bootstrap race;
+     *   3. identity — the frame peer_id must equal that bound hub uuid;
+     *   4. user — user_id must resolve in THIS hub's `users` table via the
+     *      localUserProbe seam (the column has no FK, so a dangling id would
+     *      otherwise persist silently; unwired probe fails closed).
+     * Any refusal logs + audits a snake_case reason and persists nothing.
+     *
+     * Write-only feature today, honestly: the master-side producer of this
+     * envelope is unimplemented (FederationMasterPusher has no delegation
+     * push) and FederationAdminDelegationRepository::isUserAdminOnPeer has
+     * zero request-path consumers, so nothing reads these rows into an
+     * authorization decision yet. The law above is the contract the rows
+     * will honour the day both ends light up; if a real producer ever adopts
+     * peer-namespaced user ids instead of local ones, step 4 is the clause to
+     * revisit — deliberately choosing local resolution per the owner ruling
+     * that minted this lane (2026-10-15).
      *
      * @param array<string, mixed> $data Payload with user_id, peer_id, action.
      *
@@ -1440,26 +1484,117 @@ class FederationPeerManager
         $action = is_string($data['action'] ?? null) ? $data['action'] : '';
 
         if ($userId === '' || $peerId === '') {
+            $this->refuseAdminDelegation('admin_delegation_missing_fields', ['action' => $action]);
+
             return;
         }
 
+        if ($action !== 'grant' && $action !== 'revoke') {
+            $this->refuseAdminDelegation('admin_delegation_unknown_action', [
+                'peer_id' => $peerId,
+                'user_id' => $userId,
+            ]);
+
+            return;
+        }
+
+        if ($this->masterPeerId === '') {
+            $this->refuseAdminDelegation('admin_delegation_no_bound_peer', [
+                'wire_peer_id' => $peerId,
+                'user_id' => $userId,
+            ]);
+
+            return;
+        }
+
+        $masterPeer = $this->hubRepo->getPeerById($this->masterPeerId);
+        if ($masterPeer === null) {
+            $this->refuseAdminDelegation('admin_delegation_no_bound_peer', [
+                'peer_id' => $this->masterPeerId,
+                'user_id' => $userId,
+            ]);
+
+            return;
+        }
+
+        /** @var string $boundHubId */
+        $boundHubId = is_string($masterPeer['leaf_hub_id'] ?? null) ? $masterPeer['leaf_hub_id'] : '';
+        if ($boundHubId === '') {
+            $this->refuseAdminDelegation('admin_delegation_no_bound_peer', [
+                'peer_id' => $this->masterPeerId,
+                'user_id' => $userId,
+            ]);
+
+            return;
+        }
+
+        if ($peerId !== $boundHubId) {
+            $this->refuseAdminDelegation('admin_delegation_peer_id_mismatch', [
+                'peer_id' => $this->masterPeerId,
+                'bound_hub_id' => $boundHubId,
+                'wire_peer_id' => $peerId,
+            ]);
+
+            return;
+        }
+
+        $probe = $this->localUserProbe;
+        if (!is_callable($probe)) {
+            $this->refuseAdminDelegation('admin_delegation_user_probe_unwired', [
+                'peer_id' => $this->masterPeerId,
+                'user_id' => $userId,
+            ]);
+
+            return;
+        }
+
+        if ($probe($userId) !== true) {
+            $this->refuseAdminDelegation('admin_delegation_unknown_user', [
+                'peer_id' => $this->masterPeerId,
+                'user_id' => $userId,
+            ]);
+
+            return;
+        }
+
+        // Past this line the payload is bound to THIS authenticated channel:
+        // every write and audit stamp the local peer row id — the frame's
+        // identity strings never reach the database.
         if ($action === 'grant') {
-            $this->adminDel->grant($this->generateUuid(), $peerId, $userId);
-            $this->audit->logAdminDelegation($peerId, $userId, 'grant');
-        } elseif ($action === 'revoke') {
-            $delegations = $this->adminDel->getActiveDelegationsForUser($userId);
-            foreach ($delegations as $d) {
-                /** @var string $dId */
-                $dId = is_string($d['id'] ?? null) ? $d['id'] : '';
-                /** @var string $dPeerId */
-                $dPeerId = is_string($d['peer_id'] ?? null) ? $d['peer_id'] : '';
-                if ($dId !== '' && $dPeerId === $peerId) {
-                    $this->adminDel->revoke($dId);
-                    $this->audit->logAdminDelegation($peerId, $userId, 'revoke');
-                    break;
-                }
+            $this->adminDel->grant($this->generateUuid(), $this->masterPeerId, $userId);
+            $this->audit->logAdminDelegation($this->masterPeerId, $userId, 'grant');
+
+            return;
+        }
+
+        $delegations = $this->adminDel->getActiveDelegationsForUser($userId);
+        foreach ($delegations as $d) {
+            /** @var string $dId */
+            $dId = is_string($d['id'] ?? null) ? $d['id'] : '';
+            /** @var string $dPeerId */
+            $dPeerId = is_string($d['peer_id'] ?? null) ? $d['peer_id'] : '';
+            if ($dId !== '' && $dPeerId === $this->masterPeerId) {
+                $this->adminDel->revoke($dId);
+                $this->audit->logAdminDelegation($this->masterPeerId, $userId, 'revoke');
+                break;
             }
         }
+    }
+
+    /**
+     * Loud, audited refusal of an admin-delegation payload that failed the
+     * validation-before-write law — mirrors refuseHelloAck()'s posture at the
+     * payload layer: RELAY warning + snake_case audit reason, zero persistence.
+     *
+     * @param array<string, string> $context Machine-readable refusal detail.
+     */
+    private function refuseAdminDelegation(string $reason, array $context): void
+    {
+        LoggerFactory::get(LogChannels::RELAY)->warning(
+            'FederationPeerManager: admin delegation refused — ' . $reason,
+            $context,
+        );
+        $this->audit->logFailedAuth($reason, $context);
     }
 
     /**

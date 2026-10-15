@@ -1413,6 +1413,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 FederationAdminDelegationRepository $adminDel,
                 AuditLogger $audit,
                 Ed25519KeyManager $keyManager,
+                UserRepository $users,
             ) use ($federationEnabledBoot): FederationPeerManager {
                 return new FederationPeerManager(
                     $hubRepo,
@@ -1434,13 +1435,22 @@ final class HubServicesProvider implements ServiceProviderInterface
                     // putHubConfig role change / ::toggleRelay enable) still
                     // dial immediately when enabled.
                     HubSettingsResolvers::bool('federation.enabled', $federationEnabledBoot),
+                    // Slot 8 (tlsExtensionProbe): null = read the real
+                    // extension state (the seam is for unit tests only).
+                    null,
+                    // R17-07: admin-delegation payloads resolve their user_id
+                    // against THIS hub's users table before any write; the
+                    // consumer fails closed when unwired, so production must
+                    // (and here does) wire it.
+                    static fn (string $userId): bool => $users->userExists($userId),
                 );
             })->parameter('hubRepo', get(FederationHubRepository::class))
                 ->parameter('sessions', get(FederationSessionManager::class))
                 ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
                 ->parameter('adminDel', get(FederationAdminDelegationRepository::class))
                 ->parameter('audit', get(AuditLogger::class))
-                ->parameter('keyManager', get(Ed25519KeyManager::class)),
+                ->parameter('keyManager', get(Ed25519KeyManager::class))
+                ->parameter('users', get(UserRepository::class)),
 
             // Metrics API controller (S4). Read by Application::registerMetricsRoutes().
             MetricsController::class => factory(static function (

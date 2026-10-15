@@ -781,7 +781,12 @@ final class FederationPeerManagerTest extends TestCase
      * H-4 (leaf side): offers/revocations/admin-delegation payloads arriving
      * before the channel is verified are dropped and audited — admin
      * delegation in particular must NEVER grant from an unauthenticated
-     * source.
+     * source. This IS the gate protecting handleAdminDelegation(): the
+     * `!$this->channelVerified` guard opening handleDataFrame() is its only
+     * entry point, and every delegation test below drives the payload through
+     * handleDataFrame() (never by reflecting into the handler directly), so
+     * all of them ride this same gate — the R17-07 validations only ever run
+     * on a cryptographically verified channel.
      */
     public function testDataFrameBeforeVerificationIsRefused(): void
     {
@@ -801,24 +806,250 @@ final class FederationPeerManagerTest extends TestCase
     }
 
     /**
-     * Gate-off control: with the channel verified, the same admin-delegation
-     * payload is processed normally.
+     * Gate-off control with a fully valid payload (R17-07 law): the wire
+     * peer_id equals the channel's ceremony-bound hub uuid and the local user
+     * probe resolves the user — the grant is processed AND persisted under the
+     * LOCAL channel peer row id, never the frame-carried identity string.
      */
     public function testDataFrameAfterVerificationIsProcessed(): void
     {
-        $this->setMasterPeerId('peer-master-1');
-        $property = new ReflectionProperty($this->manager, 'channelVerified');
-        $property->setAccessible(true);
-        $property->setValue($this->manager, true);
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->boundPeerRow('master-hub-uuid');
 
         $this->adminDel->expects(self::once())->method('grant')
-            ->with(self::anything(), 'peer-master-1', 'u-1');
+            ->with(self::isType('string'), 'peer-master-1', 'u-1');
         $this->audit->expects(self::never())->method('logFailedAuth');
+        $this->audit->expects(self::once())->method('logAdminDelegation')
+            ->with('peer-master-1', 'u-1', 'grant');
 
         $this->invokeHandleDataFrame(json_encode([
             'user_id' => 'u-1',
-            'peer_id' => 'peer-master-1',
+            'peer_id' => 'master-hub-uuid',
             'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    // --------------------------------- admin delegation validation (R17-07)
+
+    /**
+     * A signed frame from a DIFFERENT authenticated channel could still name
+     * the wrong peer space — the wire peer_id must equal THIS channel's bound
+     * hub identity (learned from the verified HELLO_ACK ceremony) or the
+     * payload is refused with zero writes.
+     */
+    public function testAdminDelegationWirePeerIdMustMatchBoundChannelIdentity(): void
+    {
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->boundPeerRow('master-hub-uuid');
+
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->adminDel->expects(self::never())->method('revoke');
+        $this->audit->expects(self::once())->method('logFailedAuth')
+            ->with('admin_delegation_peer_id_mismatch', [
+                'peer_id' => 'peer-master-1',
+                'bound_hub_id' => 'master-hub-uuid',
+                'wire_peer_id' => 'OTHER-hub-uuid',
+            ]);
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'OTHER-hub-uuid',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * The user_id column has no FK — validation is the only thing keeping
+     * dangling privilege rows out of the table. Unknown local user → refused.
+     */
+    public function testAdminDelegationUnknownLocalUserIsRefused(): void
+    {
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->boundPeerRow('master-hub-uuid');
+
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->audit->expects(self::once())->method('logFailedAuth')
+            ->with('admin_delegation_unknown_user', self::anything());
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'ghost-not-in-users',
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * Privilege writes refuse an UNBOUND channel identity outright (stricter
+     * than the M-5 offer rebase's tolerate-unbound posture): a completed
+     * ceremony always persists the binding, so an unbound row here is an
+     * anomalous state, not a bootstrap race.
+     */
+    public function testAdminDelegationUnboundChannelIdentityIsRefused(): void
+    {
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->boundPeerRow('');
+
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->audit->expects(self::once())->method('logFailedAuth')
+            ->with('admin_delegation_no_bound_peer', self::anything());
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * The dialed peer row vanished from under a live channel — there is no
+     * local FK target, so nothing may be written.
+     */
+    public function testAdminDelegationMissingPeerRowIsRefused(): void
+    {
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->hubRepo->method('getPeerById')->willReturn(null);
+
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->audit->expects(self::once())->method('logFailedAuth')
+            ->with('admin_delegation_no_bound_peer', self::anything());
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * No dialed peer at all (masterPeerId never captured): the refusal must
+     * fire without touching the repository — an unauthenticated channel space
+     * has no row to bind to.
+     */
+    public function testAdminDelegationWithoutDialedPeerIsRefused(): void
+    {
+        $this->manager = $this->managerWithUserProbe($this->knownUsersProbe());
+        $verified = new ReflectionProperty($this->manager, 'channelVerified');
+        $verified->setAccessible(true);
+        $verified->setValue($this->manager, true);
+
+        $this->hubRepo->expects(self::never())->method('getPeerById');
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->audit->expects(self::once())->method('logFailedAuth')
+            ->with('admin_delegation_no_bound_peer', self::anything());
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * Fail-closed wiring law: a construction site that forgets the
+     * localUserProbe must NOT silently regain the pre-lane dangling-row write
+     * path — every delegation is refused under its own audit reason. (Rides
+     * the DEFAULT manager, built without the probe in setUp.)
+     */
+    public function testAdminDelegationFailsClosedWhenUserProbeUnwired(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $verified = new ReflectionProperty($this->manager, 'channelVerified');
+        $verified->setAccessible(true);
+        $verified->setValue($this->manager, true);
+        $this->boundPeerRow('master-hub-uuid');
+
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->audit->expects(self::once())->method('logFailedAuth')
+            ->with('admin_delegation_user_probe_unwired', self::anything());
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    public function testAdminDelegationUnknownActionIsRefused(): void
+    {
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->boundPeerRow('master-hub-uuid');
+
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->adminDel->expects(self::never())->method('revoke');
+        $this->audit->expects(self::once())->method('logFailedAuth')
+            ->with('admin_delegation_unknown_action', self::anything());
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'demote',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * Shape failures that USED to drop silently (pre-R17-07) are now audited:
+     * a non-string user_id reaches the handler via handleDataFrame's isset()
+     * dispatch and must refuse with admin_delegation_missing_fields.
+     */
+    public function testAdminDelegationMissingFieldsAreRefusedAndAudited(): void
+    {
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->hubRepo->expects(self::never())->method('getPeerById');
+
+        $this->adminDel->expects(self::never())->method('grant');
+        $this->audit->expects(self::once())->method('logFailedAuth')
+            ->with('admin_delegation_missing_fields', self::anything());
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 1066,
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'grant',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * Revoke rides the same validation chain; the row it soft-revokes is the
+     * one stamped with the LOCAL channel peer id (what grant writes), and the
+     * audit carries the local id too.
+     */
+    public function testAdminDelegationRevokeMatchesRowStampedWithLocalChannelId(): void
+    {
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->boundPeerRow('master-hub-uuid');
+
+        $this->adminDel->expects(self::once())->method('getActiveDelegationsForUser')
+            ->with('u-1')
+            ->willReturn([['id' => 'd-1', 'peer_id' => 'peer-master-1', 'user_id' => 'u-1']]);
+        $this->adminDel->expects(self::once())->method('revoke')->with('d-1');
+        $this->audit->expects(self::never())->method('logFailedAuth');
+        $this->audit->expects(self::once())->method('logAdminDelegation')
+            ->with('peer-master-1', 'u-1', 'revoke');
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'revoke',
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * A delegation row from another peer's id-space must never be revoked by
+     * THIS channel's frame — the match is against the channel's local row id.
+     */
+    public function testAdminDelegationRevokeIgnoresRowsOfOtherPeerSpace(): void
+    {
+        $this->verifiedChannel($this->knownUsersProbe());
+        $this->boundPeerRow('master-hub-uuid');
+
+        $this->adminDel->method('getActiveDelegationsForUser')
+            ->willReturn([['id' => 'd-9', 'peer_id' => 'some-other-peer', 'user_id' => 'u-1']]);
+        $this->adminDel->expects(self::never())->method('revoke');
+        $this->audit->expects(self::never())->method('logAdminDelegation');
+
+        $this->invokeHandleDataFrame(json_encode([
+            'user_id' => 'u-1',
+            'peer_id' => 'master-hub-uuid',
+            'action' => 'revoke',
         ], JSON_THROW_ON_ERROR));
     }
 
@@ -971,6 +1202,67 @@ final class FederationPeerManagerTest extends TestCase
         $property = new ReflectionProperty($this->manager, 'masterPeerId');
         $property->setAccessible(true);
         $property->setValue($this->manager, $peerId);
+    }
+
+    /**
+     * Rebuild the manager with the R17-07 localUserProbe seam and bring it to
+     * the post-ceremony state: dialed master peer id captured + channel
+     * verified. Order matters — the rebuild must precede the state stamps
+     * because the reflection targets live on $this->manager.
+     *
+     * @param (callable(string): bool)|null $userProbe null = unwired (fail-closed path)
+     */
+    private function verifiedChannel(?callable $userProbe = null): void
+    {
+        $this->manager = $this->managerWithUserProbe($userProbe);
+        $this->setMasterPeerId('peer-master-1');
+        $property = new ReflectionProperty($this->manager, 'channelVerified');
+        $property->setAccessible(true);
+        $property->setValue($this->manager, true);
+    }
+
+    /**
+     * Stub the dialed master peer row with the given ceremony-bound hub
+     * identity ('' = unbound) — the same row shape handleHelloAck worked on.
+     */
+    private function boundPeerRow(string $boundHubId): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-master-1',
+            'name' => 'Master',
+            'leaf_hub_id' => $boundHubId,
+            'public_key' => base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+        ]);
+    }
+
+    /**
+     * Probe resolving exactly the local account 'u-1' (the fixture user id the
+     * delegation payloads carry).
+     *
+     * @return callable(string): bool
+     */
+    private function knownUsersProbe(): callable
+    {
+        return static fn (string $userId): bool => $userId === 'u-1';
+    }
+
+    /**
+     * @param (callable(string): bool)|null $probe 8th/9th positional seams:
+     *        tls probe stays null, the R17-07 user probe is the subject.
+     */
+    private function managerWithUserProbe(?callable $probe): FederationPeerManager
+    {
+        return new FederationPeerManager(
+            $this->hubRepo,
+            $this->sessions,
+            $this->libraryShares,
+            $this->adminDel,
+            $this->audit,
+            $this->leafKeyManager,
+            null,
+            null,
+            $probe,
+        );
     }
 
     private function readProperty(string $name): mixed
