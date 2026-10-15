@@ -21,11 +21,39 @@ class IdleReaperTest extends TestCase
 {
     private StructuredLogger $logger;
 
+    /**
+     * Absolute paths of every file this test mints under the system temp dir
+     * (key PEM, `.lock` flock sidecar, `.previous.json` rotation sidecar).
+     *
+     * Deterministic leak-proofing: Ed25519KeyManager's cold path creates
+     * `<keyPath>.lock` with fopen('c') and NEVER unlinks it, so the previous
+     * success-path `@unlink` pair left `.lock` strays in /tmp for every run —
+     * and a mid-test assertion failure leaked ALL of the files. Registration
+     * happens the moment the path is derived, so tearDown reclaims the files
+     * even when an assertion fails, and it touches only files this very test
+     * named (random 12-hex suffix, `phlix_hub_idlereaper_key_` prefix).
+     *
+     * @var list<string>
+     */
+    private array $mintedFiles = [];
+
     protected function setUp(): void
     {
         parent::setUp();
 
         $this->logger = $this->createMock(StructuredLogger::class);
+    }
+
+    protected function tearDown(): void
+    {
+        foreach ($this->mintedFiles as $file) {
+            if (is_string($file) && $file !== '' && is_file($file)) {
+                @unlink($file);
+            }
+        }
+        $this->mintedFiles = [];
+
+        parent::tearDown();
     }
 
     public function testTickReapsOnlyStaleTunnels(): void
@@ -354,6 +382,12 @@ class IdleReaperTest extends TestCase
         $tunnelManager = $this->createMock(TunnelManagerInterface::class);
 
         $keyPath = sys_get_temp_dir() . '/phlix_hub_idlereaper_key_' . bin2hex(random_bytes(6)) . '.pem';
+        // Register the key and BOTH sidecars the manager will mint under this
+        // path before anything creates them, so tearDown reclaims them on every
+        // exit path — including a failed assertion mid-test.
+        $this->mintedFiles[] = $keyPath;
+        $this->mintedFiles[] = $keyPath . '.lock';
+        $this->mintedFiles[] = $keyPath . '.previous.json';
         $now = 1_000_000;
         $keyManager = new Ed25519KeyManager($keyPath, static function () use (&$now): int {
             return $now;
@@ -384,8 +418,8 @@ class IdleReaperTest extends TestCase
             'reapDbMaintenance() must invoke purgeExpiredPreviousKey() on the injected key manager',
         );
 
-        @unlink($keyPath);
-        @unlink($sidecar);
+        // No trailing @unlink here: every registered path (key, .lock,
+        // .previous.json) is reclaimed by tearDown() on ALL exit paths.
     }
 
     public function testReapDbMaintenanceIsNoopForKeyManagerWhenNull(): void
