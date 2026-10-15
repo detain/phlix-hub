@@ -336,6 +336,100 @@ final class ClaimRequestHandlerTest extends TestCase
         self::assertSame(2, substr_count((string) ($result['enrollment_jwt'] ?? ''), '.'));
     }
 
+    /**
+     * R19-01 + R20-04 law pins, driven through one full claim:
+     *
+     *  1. The locking read matches the indexed generated column
+     *     (`claim_code_norm = :code` — migration 048) and no longer applies
+     *     REPLACE() to the column (a non-sargable predicate turned every
+     *     FOR UPDATE into a full-table next-key lock storm).
+     *  2. The bind param carries the normalised (stripped + uppercased) code,
+     *     so lenient input matches the stored display form.
+     *  3. Neither the logger nor the audit trail ever receives the claim code
+     *     in plaintext (raw or normalised) — only the sha256 fingerprint under
+     *     `claim_code_fp`. The code is a pairing bearer secret; logs and
+     *     audit_logs outlive its 10-minute TTL by months.
+     */
+    public function testClaimLookupUsesIndexedNormColumnAndNeverLeadsPlaintextCode(): void
+    {
+        /** @var list<array{sql: string, params: array<string, mixed>}> $selects */
+        $selects = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')
+            ->willReturnCallback(function (string $sql, $params = null) use (&$selects) {
+                if (str_contains($sql, 'FOR UPDATE')) {
+                    $selects[] = ['sql' => $sql, 'params' => is_array($params) ? $params : []];
+
+                    return [[
+                        'id' => 'claim-norm-1',
+                        'claim_code' => 'DR4Q-7AXB',
+                        'expires_at' => time() + 600,
+                        'claimed_by' => null,
+                        'public_key_jwk' => '{"kty":"OKP","crv":"Ed25519","x":"aaa"}',
+                        'hostname_candidates_json' => '[]',
+                        'server_name' => 'Norm Server',
+                        'version' => '0.12.0',
+                    ]];
+                }
+                return [];
+            });
+
+        /** @var list<array<string, mixed>> $logContexts */
+        $logContexts = [];
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->method('info')->willReturnCallback(
+            static function (string $message, array $context = []) use (&$logContexts): void {
+                $logContexts[] = $context;
+            },
+        );
+        /** @var list<array{reason: string, context: array<string, mixed>}> $auditRecords */
+        $auditRecords = [];
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->method('logFailedAuth')->willReturnCallback(
+            static function (string $reason, array $context = []) use (&$auditRecords): void {
+                $auditRecords[] = ['reason' => $reason, 'context' => $context];
+            },
+        );
+
+        $handler = new ClaimRequestHandler(
+            $db,
+            new Ed25519KeyManager($this->tmpDir . '/key.pem'),
+            $logger,
+            $audit,
+            'https://hub.example.com',
+        );
+
+        // Lenient input: lowercase + dash + stray space must normalise to DR4Q7AXB.
+        $handler->handleClaimCode('dr4q-7axb ', 'user-norm-1');
+
+        self::assertCount(1, $selects, 'exactly one locking claim read');
+        self::assertStringContainsString('WHERE claim_code_norm = :code FOR UPDATE', $selects[0]['sql']);
+        self::assertStringNotContainsString('REPLACE(', $selects[0]['sql']);
+        self::assertSame(['code' => 'DR4Q7AXB'], $selects[0]['params']);
+
+        // No plaintext code anywhere in the log or audit payloads.
+        $haystack = json_encode(['logs' => $logContexts, 'audit' => $auditRecords], JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString('DR4Q-7AXB', $haystack);
+        self::assertStringNotContainsString('DR4Q7AXB', $haystack);
+
+        // The success record exists and carries exactly the fingerprint.
+        self::assertNotEmpty($logContexts);
+        $expectedFp = substr(hash('sha256', 'DR4Q7AXB'), 0, 8);
+        self::assertSame(
+            $expectedFp,
+            ClaimRequestHandler::claimCodeFingerprint('dr4q-7axb '),
+            'fingerprint is display-variant stable',
+        );
+        $found = false;
+        foreach ($logContexts as $context) {
+            if (($context['claim_code_fp'] ?? null) !== null) {
+                self::assertSame($expectedFp, $context['claim_code_fp']);
+                $found = true;
+            }
+        }
+        self::assertTrue($found, 'success INFO must carry claim_code_fp');
+    }
+
     private function makeHandler(Connection $db): ClaimRequestHandler
     {
         $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');

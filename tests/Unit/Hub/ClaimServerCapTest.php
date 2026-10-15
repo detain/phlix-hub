@@ -87,7 +87,10 @@ final class ClaimServerCapTest extends TestCase
     private function seedFlow(?int $ownedCount): void
     {
         $this->responder = function (string $sql, array $params) use ($ownedCount) {
-            if (str_contains($sql, 'FROM server_claims WHERE REPLACE')) {
+            // R19-01: the claim lookup moved from REPLACE(claim_code,'-','')
+            // (non-sargable, full-table FOR UPDATE lock storm) to the indexed
+            // generated column — matcher follows the new predicate shape.
+            if (str_contains($sql, 'FROM server_claims WHERE claim_code_norm')) {
                 return [[
                     'id'                        => 'claim-row-1',
                     'claim_code'                => 'DR4Q-7AXB',

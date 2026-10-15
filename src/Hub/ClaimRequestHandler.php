@@ -131,7 +131,11 @@ class ClaimRequestHandler
             /** @var string */
             $claimId = is_string($row['id'] ?? null) ? $row['id'] : '';
             $this->logger->info('Returning existing claim code for duplicate request', [
-                'claim_code' => $claimCode,
+                // R20-04: the claim code is a 10-minute pairing bearer secret —
+                // it never goes to logs or the audit trail in plaintext. The
+                // sha256 fingerprint keeps records correlatable per code.
+                'claim_code_fp' => self::claimCodeFingerprint($claimCode),
+                'claim_id' => $claimId,
                 'server_name' => $request->serverName,
             ]);
             return new ClaimResponse(
@@ -171,7 +175,8 @@ class ClaimRequestHandler
 
         $this->logger->info('Created new server claim', [
             'claim_id' => $claimId,
-            'claim_code' => $claimCode,
+            // R20-04: fingerprint, never the plaintext code (see above).
+            'claim_code_fp' => self::claimCodeFingerprint($claimCode),
             'server_name' => $request->serverName,
         ]);
 
@@ -201,7 +206,9 @@ class ClaimRequestHandler
         // like "dr4q 7axb" or "dr4q-7axb" normalises to "DR4Q7AXB".
         $normalizedCode = strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $claimCode));
         if ($normalizedCode === '') {
-            $this->audit->logFailedAuth('CLAIM_CODE_INVALID', ['claim_code' => $claimCode]);
+            $this->audit->logFailedAuth('CLAIM_CODE_INVALID', [
+                'claim_code_fp' => self::claimCodeFingerprint($claimCode),
+            ]);
             throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
         }
 
@@ -218,17 +225,26 @@ class ClaimRequestHandler
         // between the read and the writes.
         $this->db->beginTrans();
         try {
-            // claim_code is stored in its dashed display form (e.g. ABCD-1234);
-            // compare against the de-dashed stored value so the normalised input
-            // (separators removed) still matches.
+            // R19-01: match the STORED generated column `claim_code_norm`
+            // (migration 048) instead of wrapping claim_code in REPLACE(). The
+            // functional predicate could not use any index, so this FOR UPDATE
+            // full-scanned and next-key-locked the whole table, serialising
+            // every pairing. Equality against claim_code_norm is a single
+            // const-access hit on uk_server_claims_code_norm — the row lock
+            // lands exactly on the claimed row. claim_code itself stays the
+            // dashed display form (e.g. ABCD-1234); the column derives the
+            // de-dashed value, and its utf8mb4_unicode_ci collation matches
+            // this method's uppercased normaliser.
             /** @var list<array<string, mixed>> $rows */
             $rows = $this->db->query(
-                "SELECT * FROM server_claims WHERE REPLACE(claim_code, '-', '') = :code FOR UPDATE",
+                'SELECT * FROM server_claims WHERE claim_code_norm = :code FOR UPDATE',
                 ['code' => $normalizedCode],
             );
 
             if (empty($rows)) {
-                $this->audit->logFailedAuth('CLAIM_CODE_NOT_FOUND', ['claim_code' => $normalizedCode]);
+                $this->audit->logFailedAuth('CLAIM_CODE_NOT_FOUND', [
+                    'claim_code_fp' => self::claimCodeFingerprint($normalizedCode),
+                ]);
                 throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
             }
             /** @var array<string, mixed> $row */
@@ -238,12 +254,14 @@ class ClaimRequestHandler
             $claimedBy = $row['claimed_by'] ?? null;
 
             if ($expiresAt < $now) {
-                $this->audit->logFailedAuth('CLAIM_CODE_EXPIRED', ['claim_code' => $normalizedCode]);
+                $this->audit->logFailedAuth('CLAIM_CODE_EXPIRED', [
+                    'claim_code_fp' => self::claimCodeFingerprint($normalizedCode),
+                ]);
                 throw new InvalidArgumentException('CLAIM_CODE_EXPIRED');
             }
             if ($claimedBy !== null) {
                 $this->audit->logFailedAuth('CLAIM_CODE_ALREADY_CLAIMED', [
-                    'claim_code' => $normalizedCode,
+                    'claim_code_fp' => self::claimCodeFingerprint($normalizedCode),
                     'claimed_by' => $claimedBy,
                 ]);
                 throw new InvalidArgumentException('CLAIM_CODE_ALREADY_CLAIMED');
@@ -339,7 +357,8 @@ class ClaimRequestHandler
         $this->logger->info('Server claimed successfully', [
             'server_id' => $serverId,
             'user_id' => $userId,
-            'claim_code' => $normalizedCode,
+            // R20-04: fingerprint only — the pairing secret stays out of logs.
+            'claim_code_fp' => self::claimCodeFingerprint($normalizedCode),
         ]);
 
         return [
@@ -405,6 +424,26 @@ class ClaimRequestHandler
         }
 
         return ['status' => 'pending'];
+    }
+
+    /**
+     * Correlation fingerprint of a claim code for logs/audit (R20-04).
+     *
+     * The claim code is a short-lived bearer secret that pairs a server to an
+     * account; plaintext copies in logs or `audit_logs.context_json` outlive
+     * the code's 10-minute TTL in every log-retention window and leak across
+     * the admin audit surface. Emit instead the first 8 hex chars of its
+     * SHA-256 over the NORMALISED form (separators stripped, uppercased) —
+     * display variants of one code fingerprint identically, correlation per
+     * code survives, and 32 bits of collision space over the tiny live-code
+     * population is ample for a log tag (this is not a security boundary,
+     * just a one-way label).
+     */
+    public static function claimCodeFingerprint(string $claimCode): string
+    {
+        $normalized = strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $claimCode));
+
+        return substr(hash('sha256', $normalized), 0, 8);
     }
 
     /**
