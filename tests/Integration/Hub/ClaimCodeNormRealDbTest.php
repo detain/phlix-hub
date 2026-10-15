@@ -74,11 +74,11 @@ final class ClaimCodeNormRealDbTest extends RealDatabaseTestCase
         );
 
         self::assertCount(1, $column);
-        self::assertSame('char', (string) $column[0]['DATA_TYPE']);
-        self::assertSame(8, (int) $column[0]['CHARACTER_MAXIMUM_LENGTH']);
-        self::assertStringContainsString('STORED GENERATED', (string) $column[0]['EXTRA']);
-        self::assertStringContainsString('replace', strtolower((string) $column[0]['GENERATION_EXPRESSION']));
-        self::assertStringContainsString('claim_code', (string) $column[0]['GENERATION_EXPRESSION']);
+        self::assertSame('char', self::stringField($column[0], 'DATA_TYPE'));
+        self::assertSame(8, self::intField($column[0], 'CHARACTER_MAXIMUM_LENGTH'));
+        self::assertStringContainsString('STORED GENERATED', self::stringField($column[0], 'EXTRA'));
+        self::assertStringContainsString('replace', strtolower(self::stringField($column[0], 'GENERATION_EXPRESSION')));
+        self::assertStringContainsString('claim_code', self::stringField($column[0], 'GENERATION_EXPRESSION'));
 
         /** @var list<array<string, mixed>> $index */
         $index = $this->db->query(
@@ -89,9 +89,9 @@ final class ClaimCodeNormRealDbTest extends RealDatabaseTestCase
         );
 
         self::assertCount(1, $index, 'exactly one index covers claim_code_norm');
-        self::assertSame('uk_server_claims_code_norm', (string) $index[0]['INDEX_NAME']);
+        self::assertSame('uk_server_claims_code_norm', self::stringField($index[0], 'INDEX_NAME'));
         // A non-unique imposter under any name keeps the dup-mint hole open.
-        self::assertSame(0, (int) $index[0]['NON_UNIQUE']);
+        self::assertSame(0, self::intField($index[0], 'NON_UNIQUE'));
     }
 
     public function testHandlerLockingPredicateIsAConstAccessOnTheUniqueIndex(): void
@@ -128,8 +128,8 @@ final class ClaimCodeNormRealDbTest extends RealDatabaseTestCase
         $plan = $statement->fetchAll(\PDO::FETCH_ASSOC);
 
         self::assertNotEmpty($plan);
-        self::assertSame('uk_server_claims_code_norm', (string) $plan[0]['key']);
-        self::assertSame('const', (string) $plan[0]['type']);
+        self::assertSame('uk_server_claims_code_norm', self::stringField($plan[0], 'key'));
+        self::assertSame('const', self::stringField($plan[0], 'type'));
     }
 
     public function testMySQLDerivesTheNormValueAndRejectsDisplayVariantDuplicates(): void
@@ -142,7 +142,7 @@ final class ClaimCodeNormRealDbTest extends RealDatabaseTestCase
             ['id' => 'claim-norm-a'],
         );
         // MySQL derives the de-dashed value at INSERT (no app-side write).
-        self::assertSame('BBBB3333', (string) $derived[0]['claim_code_norm']);
+        self::assertSame('BBBB3333', self::stringField($derived[0], 'claim_code_norm'));
 
         // The OLD unique key (claim_code, display form) would happily accept
         // this row; the norm key must reject it with 1062 on its own name.
@@ -174,13 +174,13 @@ final class ClaimCodeNormRealDbTest extends RealDatabaseTestCase
         self::assertArrayHasKey('enrollment_jwt', $result);
         self::assertSame(2, substr_count((string) $result['enrollment_jwt'], '.'));
 
-        /**  list<array<string, mixed>> $row */
+        /** @var list<array<string, mixed>> $row */
         $row = $this->db->query(
             'SELECT claimed_by, status FROM server_claims WHERE id = :id',
             ['id' => 'claim-norm-flow'],
         );
-        self::assertSame($userId, (string) $row[0]['claimed_by']);
-        self::assertSame('paired', (string) $row[0]['status']);
+        self::assertSame($userId, self::stringField($row[0], 'claimed_by'));
+        self::assertSame('paired', self::stringField($row[0], 'status'));
 
         // R19-04 rides the same INSERT: servers.last_seen_at must now carry the
         // DB clock — within a few seconds of MySQL NOW(), not a PHP-formatted
@@ -193,8 +193,68 @@ final class ClaimCodeNormRealDbTest extends RealDatabaseTestCase
                 . ' FROM servers WHERE id = :id',
             ['id' => (string) $result['server_id']],
         );
-        self::assertLessThan(5, abs((int) $server[0]['drift']));
-        self::assertLessThan(5, abs((int) $server[0]['age']));
+        self::assertLessThan(5, abs(self::intField($server[0], 'drift')));
+        self::assertLessThan(5, abs(self::intField($server[0], 'age')));
+    }
+
+    /**
+     * Typed boundary parse for a string column off a raw DB row (estate
+     * precedent: phlix-plugin-trakt d477b85 — PHPStan level 9 hands every
+     * driver value as `mixed`; parsing once at the boundary keeps the
+     * assertions themselves cast-free and trusted).
+     *
+     * Scalars are normalised exactly as the previous `(string)` casts did;
+     * anything else (null/array/object) fails LOUD with the column name —
+     * a NULL here would mean the very schema contract under test is broken,
+     * which must never coerce silently into a green run.
+     *
+     * @param array<string, mixed> $row
+     */
+    private static function stringField(array $row, string $field): string
+    {
+        $value = $row[$field];
+
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        throw new \RuntimeException(sprintf(
+            'Expected a scalar string column %s, got %s.',
+            $field,
+            get_debug_type($value),
+        ));
+    }
+
+    /**
+     * Typed boundary parse for an integer column off a raw DB row. MySQL
+     * delivers numerics as strings under emulated prepares (and ints under
+     * native ones), so both arrive; anything non-numeric fails loud for the
+     * same reason {@see self::stringField()} rejects non-scalars.
+     *
+     * @param array<string, mixed> $row
+     */
+    private static function intField(array $row, string $field): int
+    {
+        $value = $row[$field];
+
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+
+        throw new \RuntimeException(sprintf(
+            'Expected a numeric column %s, got %s.',
+            $field,
+            get_debug_type($value),
+        ));
     }
 
     private function insertClaimRow(string $id, string $claimCode): void

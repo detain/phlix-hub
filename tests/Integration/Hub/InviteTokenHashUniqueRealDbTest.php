@@ -34,37 +34,49 @@ final class InviteTokenHashUniqueRealDbTest extends RealDatabaseTestCase
 {
     public function testTokenHashColumnIsChar64NotNull(): void
     {
-        $row = $this->pdo()->query(
+        // PDO::query() yields PDOStatement|false and fetch() yields mixed —
+        // both are parsed at this boundary (estate precedent: phlix-plugin-trakt
+        // d477b85 typed boundary parsers) so every assertion below reads a
+        // trusted scalar instead of re-casting driver output.
+        $statement = $this->pdo()->query(
             "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE"
                 . " FROM information_schema.COLUMNS"
                 . " WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invite_links'"
-                . " AND COLUMN_NAME = 'token_hash'"
-        )->fetch(PDO::FETCH_ASSOC);
+                . " AND COLUMN_NAME = 'token_hash'",
+        );
+        self::assertNotFalse($statement, 'the information_schema probe must execute');
 
-        self::assertIsArray($row);
-        self::assertSame('char', strtolower((string) $row['DATA_TYPE']));
-        self::assertSame(64, (int) $row['CHARACTER_MAXIMUM_LENGTH']);
-        self::assertSame('NO', $row['IS_NULLABLE'], 'token_hash must stay NOT NULL for the unique key');
+        $row = self::parseRow($statement->fetch(PDO::FETCH_ASSOC));
+        self::assertSame('char', strtolower(self::stringField($row, 'DATA_TYPE')));
+        self::assertSame(64, self::intField($row, 'CHARACTER_MAXIMUM_LENGTH'));
+        self::assertSame(
+            'NO',
+            self::stringField($row, 'IS_NULLABLE'),
+            'token_hash must stay NOT NULL for the unique key',
+        );
     }
 
     public function testUniqueIndexOnTokenHashAloneAndNoPlainIndexRemains(): void
     {
-        $rows = $this->pdo()->query(
+        $statement = $this->pdo()->query(
             "SELECT INDEX_NAME, NON_UNIQUE, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS cols"
                 . " FROM information_schema.STATISTICS"
                 . " WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invite_links'"
-                . " GROUP BY INDEX_NAME, NON_UNIQUE"
-        )->fetchAll(PDO::FETCH_ASSOC);
+                . " GROUP BY INDEX_NAME, NON_UNIQUE",
+        );
+        self::assertNotFalse($statement, 'the STATISTICS probe must execute');
+
+        $rows = self::parseRows($statement->fetchAll(PDO::FETCH_ASSOC));
 
         $unique = [];
         $plain = [];
         foreach ($rows as $row) {
-            $shape = strtolower((string) $row['cols']);
+            $shape = strtolower(self::stringField($row, 'cols'));
             if ($shape === 'token_hash') {
-                if ((int) $row['NON_UNIQUE'] === 0) {
-                    $unique[] = (string) $row['INDEX_NAME'];
+                if (self::intField($row, 'NON_UNIQUE') === 0) {
+                    $unique[] = self::stringField($row, 'INDEX_NAME');
                 } else {
-                    $plain[] = (string) $row['INDEX_NAME'];
+                    $plain[] = self::stringField($row, 'INDEX_NAME');
                 }
             }
         }
@@ -115,18 +127,114 @@ final class InviteTokenHashUniqueRealDbTest extends RealDatabaseTestCase
 
         $invite = $handler->createInviteLink($userId, $serverId, null, 'read', 3, null);
 
+        /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
             'SELECT token_hash, max_uses FROM invite_links WHERE id = :id',
             ['id' => $invite->id],
         );
         self::assertCount(1, $rows);
-        self::assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', (string) $rows[0]['token_hash']);
-        self::assertSame(3, (int) $rows[0]['max_uses']);
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', self::stringField($rows[0], 'token_hash'));
+        self::assertSame(3, self::intField($rows[0], 'max_uses'));
         self::assertSame(
             hash('sha256', (string) $invite->token),
-            (string) $rows[0]['token_hash'],
+            self::stringField($rows[0], 'token_hash'),
             'the stored hash must derive from the opaque token the URL carries',
         );
+    }
+
+    /**
+     * Parse one raw PDO fetch result into a trusted associative row.
+     *
+     * PDOStatement::fetch() is `mixed` to PHPStan (and literally `false` when
+     * the result set is empty) — a missing row here means the schema object
+     * under test is absent, which must fail LOUD by name, never coerce.
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function parseRow(mixed $row): array
+    {
+        if (!is_array($row)) {
+            throw new \RuntimeException(
+                'Expected one associative row from PDO, got ' . get_debug_type($row)
+                . ' — the schema object this test pins is missing.',
+            );
+        }
+
+        return $row;
+    }
+
+    /**
+     * Parse a raw PDO fetchAll result into trusted associative rows.
+     *
+     * @return list<array<array-key, mixed>>
+     */
+    private static function parseRows(mixed $rows): array
+    {
+        if (!is_array($rows)) {
+            throw new \RuntimeException(
+                'Expected a result set from PDO, got ' . get_debug_type($rows),
+            );
+        }
+
+        $parsed = [];
+        foreach ($rows as $row) {
+            $parsed[] = self::parseRow($row);
+        }
+
+        return $parsed;
+    }
+
+    /**
+     * Typed boundary parse for a string column off a raw DB row (estate
+     * precedent: phlix-plugin-trakt d477b85). Scalars normalise exactly as
+     * the previous `(string)` casts did; non-scalars fail loud.
+     *
+     * @param array<array-key, mixed> $row
+     */
+    private static function stringField(array $row, string $field): string
+    {
+        $value = $row[$field];
+
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        throw new \RuntimeException(sprintf(
+            'Expected a scalar string column %s, got %s.',
+            $field,
+            get_debug_type($value),
+        ));
+    }
+
+    /**
+     * Typed boundary parse for an integer column off a raw DB row: MySQL
+     * delivers numerics as strings under emulated prepares and ints under
+     * native ones; anything else fails loud.
+     *
+     * @param array<array-key, mixed> $row
+     */
+    private static function intField(array $row, string $field): int
+    {
+        $value = $row[$field];
+
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+
+        throw new \RuntimeException(sprintf(
+            'Expected a numeric column %s, got %s.',
+            $field,
+            get_debug_type($value),
+        ));
     }
 
     private function insertInviteRow(string $id, string $userId, string $serverId, string $hash): void
