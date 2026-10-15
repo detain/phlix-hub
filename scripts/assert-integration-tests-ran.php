@@ -65,13 +65,29 @@ const INTEGRATION_CLASS_PREFIX = 'Phlix\\Hub\\Tests\\Integration\\';
 /**
  * Skips that are explicitly accepted, as `Class::method` => justification.
  *
- * Empty on purpose: on CI (swoole + a MySQL service) nothing legitimately skips.
- * Anything added here must name WHY the skip is correct in CI, not merely that it
- * happens.
+ * Was empty by design — on CI (swoole + a MySQL service) nothing legitimately
+ * skips — and stays a denylist-by-default: anything added here must name WHY
+ * the skip is correct in CI, not merely that it happens.
  *
  * @var array<string, string>
  */
-const ALLOWED_SKIPS = [];
+const ALLOWED_SKIPS = [
+    // Pinned exactly as the JUnit report assembles it: `class` attribute
+    // (namespaced class name) + '::' + `name` attribute (method name).
+    // Verified against a live skip node produced by PHPUnit 10 on a swoole host.
+    'Phlix\\Hub\\Tests\\Unit\\Runtime\\CoroutineHooksTest::testApplyIsSilentNoopWithoutTheExtension'
+    => 'Unavoidable BY BRANCH REACHABILITY, not by venue luck: the CI PHPUnit job '
+    . 'always loads ext-swoole (setup-php `extensions:` list in '
+    . '.github/workflows/ci.yml, enforced by its "Verify swoole + uv loaded" step), '
+    . 'and this case pins the no-swoole early-exit branch of CoroutineHooks::apply() '
+    . '— the branch is UNREACHABLE wherever the extension is loaded, so the test '
+    . 'skips itself by design there (its own markTestSkipped message says so). It '
+    . 'executes fully on non-swoole venues (dev boxes, slim images), which is the '
+    . 'only place the noop law can be observed; the swoole-LOADED side of the same '
+    . 'class is covered by the requireSwoole-gated cases, which really run on CI. '
+    . 'Note the polarity: this skip means the extension is PRESENT — the opposite '
+    . 'of the missing-service lie this gate hunts.',
+];
 
 $reportPath = $argv[1] ?? (dirname(__DIR__) . '/junit.xml');
 
