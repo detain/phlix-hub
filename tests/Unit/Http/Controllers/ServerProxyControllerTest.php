@@ -6526,23 +6526,22 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * S247 — the PARENTAL RATING GATE is documented as INERT on this path, and
-     * that claim is pinned rather than left in a comment.
+     * S247 — the hub-side half of the relay-identity contract is pinned rather
+     * than left in a comment: the ONLY user identity crossing the tunnel is the
+     * hub UUID, and no parental/rating/profile marker rides alongside it.
      *
-     * `Phlix\Media\RatingGate` lives in phlix-server and resolves a filter from
-     * that server's own user/profile rows. The only identity the hub can supply
-     * is `X-Phlix-Relay-User`, the HUB user's UUID, which matches no row there —
-     * so the gate is a strict no-op for every relayed request, byte stream
-     * included. The hub cannot substitute for it (it holds no parental-control
-     * profile and no per-item rating).
-     *
-     * What this test can assert, and does, is the hub-side half of that
-     * statement: the ONLY user identity crossing the tunnel is the hub UUID, and
-     * no parental/rating marker is added alongside it. If a future change starts
-     * mapping the hub identity to a server identity, this test goes red and the
+     * Post-S301 (phlix-server b73f9ffa) the SERVER resolves that principal to a
+     * server user entirely from its own `user_identities` rows
+     * (`RelayIdentityResolver`; a link is written only by an account-link that
+     * cryptographically verifies a hub JWT). Linked users get the server-side
+     * protections that resolve user rows — `Phlix\Media\RatingGate` included;
+     * unmapped principals stay pass-through for them (auth-presence + log
+     * attribution only). That split lives server-side and does NOT change what
+     * may cross this tunnel: still exactly the hub UUID. If a future change
+     * starts shipping a profile marker from the hub, this test goes red and the
      * caveat in `buildForwardHeaders()` has to be revisited in the same commit.
      */
-    public function testS247OnlyTheHubUuidCrossesTheTunnelSoTheServerRatingGateStaysInert(): void
+    public function testS247OnlyTheHubUuidCrossesTheTunnelAndNoProfileMarkerRidesIt(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn([
@@ -6578,9 +6577,10 @@ final class ServerProxyControllerTest extends TestCase
             $this->assertStringNotContainsStringIgnoringCase(
                 'profile',
                 (string) $name,
-                'no server-side PROFILE identity crosses the tunnel — which is exactly why phlix-server\'s '
-                . 'RatingGate cannot fire for a relayed request. Closing that needs a hub->server identity '
-                . 'mapping in phlix-server; it is OWED, not shipped.',
+                'no server-side PROFILE identity crosses the tunnel — the hub sends only its own '
+                . 'UUID; phlix-server maps it to a user row via user_identities (S301 '
+                . 'RelayIdentityResolver) or the protections that resolve user rows stay '
+                . 'inert for the request.',
             );
         }
     }

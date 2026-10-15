@@ -1742,19 +1742,25 @@ final class ServerProxyController
         // Trust markers: the hub has authenticated the user and verified
         // ownership, so the server runs the request as this user.
         $headers['X-Phlix-Relay'] = '1';
-        // The relayed user identity. CAVEAT (do not read more into this header
-        // than it delivers): this is the HUB user's UUID, which matches no row in
-        // the paired server's `users` table. `RelayConsumer::buildRequest()`
-        // applies it as `$request->userId`, which is enough to satisfy the
-        // server's `AuthMiddleware` presence check and to attribute the request
-        // in logs — but any server-side protection that RESOLVES the id against
-        // its own user rows is inert for relay traffic: `RatingGate` finds no
-        // parental-control cap for it, and per-user session lookups (music
-        // `now-playing`) find no sessions. Mapping the hub identity to a server
-        // identity is tracked as its own step; until it lands, do NOT claim the
-        // server applies this user's parental-control profile to relayed
-        // requests. The hub-side gate (authenticated user → server ownership →
-        // traversal → browse scope) is what actually protects this surface.
+        // The relayed user identity: the HUB user's UUID — and the hub sends
+        // nothing else alongside it (no profile marker, no server-side id;
+        // pinned by the S247 tunnel-crossing test). `RelayConsumer::buildRequest()`
+        // applies it as `$request->userId`, satisfying the server's
+        // `AuthMiddleware` presence check and attributing the request in logs.
+        // Since S301 the server can additionally RESOLVE it: phlix-server's
+        // `RelayIdentityResolver` maps hub-UUID → server user entirely from
+        // that server's own `user_identities` rows (provider 'hub', written only
+        // by an account-link that cryptographically verifies a hub JWT — never
+        // by a client-supplied claim). LINKED users therefore get the full
+        // server-side protection set on relay traffic (parental `RatingGate`,
+        // per-profile stream limits, per-user session lookups). An UNLINKED hub
+        // UUID matches no row there and such a request stays pass-through for
+        // those resolvers — auth-presence and log attribution only, which
+        // `checkStreamLimit()`'s profile_not_found refusal names honestly.
+        // The hub-side gate (authenticated user → server ownership → traversal
+        // → browse scope) protects this surface either way. (R17-06 truth pass:
+        // this block previously claimed a blanket server-side inertness that
+        // S301 b73f9ffa made false for linked users.)
         //
         // ⚠ S247 makes that caveat LOAD-BEARING rather than academic, because
         // the direct-play byte stream is relayable now. Name the gates exactly:
@@ -1766,15 +1772,18 @@ final class ServerProxyController
         //  - BANDWIDTH is gated hub-side too: RelaySessionManager::checkUserQuota()
         //    → 503 `quota.exceeded`, plus the per-user TokenBucket rate cap the
         //    ConnectionResponseSink paces the body against.
-        //  - The PARENTAL RATING GATE does NOT fire. `Phlix\Media\RatingGate`
+        //  - The PARENTAL RATING GATE FIRES FOR LINKED USERS. `Phlix\Media\RatingGate`
         //    lives in phlix-server and resolves a filter from that server's own
-        //    user/profile rows; a hub UUID matches none of them, so
-        //    resolveFilterForUser() returns null and the gate is a strict no-op
-        //    for EVERY relayed request. The hub cannot substitute for it — it
-        //    holds no parental-control profile and no per-item rating. Closing
-        //    that needs a hub→server identity mapping in phlix-server. It is
-        //    OWED, not shipped. Do not write anywhere that the relayed byte
-        //    stream is parentally gated.
+        //    user/profile rows; S301 (b73f9ffa) shipped the mapping that supplies
+        //    that identity — `RelayIdentityResolver` resolves the hub principal
+        //    through `user_identities`, written only by a verified account-link.
+        //    For an UNLINKED principal the hub UUID matches no row,
+        //    resolveFilterForUser() returns null, and the gate is inert for that
+        //    request — pass-through for a missing mapping, not a bypass of an
+        //    existing one. The hub itself holds no parental-control profile and
+        //    no per-item rating; it cannot substitute. (R17-06: the previous
+        //    prose claimed strict inertness for EVERY relayed request and called
+        //    the mapping OWED — stale since S301 shipped it.)
         //
         // `Range` is deliberately NOT in STRIPPED_REQUEST_HEADERS, so a
         // `<video>` seek's range request reaches the server verbatim and its
