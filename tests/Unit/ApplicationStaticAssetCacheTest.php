@@ -288,4 +288,41 @@ final class ApplicationStaticAssetCacheTest extends TestCase
 
         $this->assertFalse($this->invokeStaticFileMemo($missing));
     }
+
+    // ---- R20-03 static deny list ------------------------------------------
+
+    public function testDeniedStaticPathRefusesRawPhpAndSourceMaps(): void
+    {
+        $this->assertTrue(Application::isDeniedStaticPath('/public/index.php'));
+        $this->assertTrue(Application::isDeniedStaticPath('/public/TOOLS.PHP'));
+        // pathinfo takes the LAST dot: the shipped SPA maps are `.js.map`.
+        $this->assertTrue(
+            Application::isDeniedStaticPath('/public/assets/app/assets/users-CNniaPj9-BfHRV-eJ.js.map'),
+        );
+        $this->assertTrue(Application::isDeniedStaticPath('/public/views/page.tpl'));
+    }
+
+    public function testDeniedStaticPathKeepsServingRealAssets(): void
+    {
+        $this->assertFalse(Application::isDeniedStaticPath('/public/assets/app/assets/app-abc123.js'));
+        $this->assertFalse(Application::isDeniedStaticPath('/public/assets/app/styles.css'));
+        $this->assertFalse(Application::isDeniedStaticPath('/public/index.html'));
+        $this->assertFalse(Application::isDeniedStaticPath('/public/favicon.ico'));
+        // Extension decision, not substring: lookalikes must stay servable.
+        $this->assertFalse(Application::isDeniedStaticPath('/public/sitemap.xml'));
+        $this->assertFalse(Application::isDeniedStaticPath('/public/tool.phpx'));
+        $this->assertFalse(Application::isDeniedStaticPath('/public/map'));
+    }
+
+    public function testDeniedStaticExtensionSetIsTheCoordinatedEstateList(): void
+    {
+        // Byte-coordinated with phlix-server HttpHandler::DENIED_STATIC_EXTENSIONS
+        // (85c06de1). Changing one side without the other splits the estate's
+        // static-exposure posture — this pin makes that loud.
+        $constant = (new ReflectionMethod(Application::class, 'isDeniedStaticPath'))
+            ->getDeclaringClass()
+            ->getConstant('DENIED_STATIC_EXTENSIONS');
+
+        $this->assertSame(['php', 'map', 'tpl'], $constant);
+    }
 }

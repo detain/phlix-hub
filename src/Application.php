@@ -108,6 +108,37 @@ final class Application
      */
     private const int STATIC_FILE_MEMO_MAX = 4096;
 
+    /**
+     * Extensions the static-file fast path must NEVER serve (R20-03).
+     *
+     *  - `php`  — never hand out raw script sources through the static leg;
+     *  - `map`  — source maps reconstruct the SPA's original sources (the
+     *             hub ships 102 `.js.map` files under public/assets/app);
+     *  - `tpl`  — template sources (hub has none today; kept so a future
+     *             template drop cannot become an exposure).
+     *
+     * List is byte-coordinated with phlix-server
+     * `src/Server/Workerman/HttpHandler.php::DENIED_STATIC_EXTENSIONS`
+     * (85c06de1) so the estate has one deny vocabulary on both HTTP daemons.
+     */
+    private const array DENIED_STATIC_EXTENSIONS = ['php', 'map', 'tpl'];
+
+    /**
+     * True when a resolved static path must not be served (R20-03).
+     *
+     * Public + static so the predicate is unit-pinnable — the decision lives
+     * inside the Workerman `onMessage` closure otherwise, same venue reason
+     * as {@see computeStaticCacheDecision()}.
+     */
+    public static function isDeniedStaticPath(string $realPath): bool
+    {
+        return in_array(
+            strtolower(pathinfo($realPath, PATHINFO_EXTENSION)),
+            self::DENIED_STATIC_EXTENSIONS,
+            true,
+        );
+    }
+
     private Router $router;
 
     /**
@@ -2067,7 +2098,9 @@ final class Application
             try {
                 // 1. Static-file fast path. Serve files under public/
                 //    directly (CSS, JS, images, fonts). Refuses traversal
-                //    via realpath() prefix check; refuses raw .php files.
+                //    via realpath() prefix check; refuses the
+                //    DENIED_STATIC_EXTENSIONS list (raw .php sources and
+                //    .js.map source reconstruction, R20-03).
                 $path = $request->path();
                 if ($path !== '' && $path !== '/' && !str_starts_with($path, '/api/')) {
                     $candidate = $publicRoot . $path;
@@ -2077,7 +2110,7 @@ final class Application
                     if (
                         $file !== false
                         && str_starts_with($file['real'], $publicRoot . DIRECTORY_SEPARATOR)
-                        && strtolower(pathinfo($file['real'], PATHINFO_EXTENSION)) !== 'php'
+                        && !self::isDeniedStaticPath($file['real'])
                     ) {
                         $real = $file['real'];
                         // Extension-first MIME map — mime_content_type()
