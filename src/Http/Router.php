@@ -21,8 +21,9 @@ use BadMethodCallException;
  * with shared middleware.
  *
  * CORS: `OPTIONS` preflights are answered by the {@see CorsPolicy} (default-deny,
- * env-configured) before middleware runs, and dispatched responses are decorated
- * for allowlisted origins — see {@see self::dispatch()}.
+ * env-configured) AFTER the matched path's route middleware chain has run —
+ * an authed path answers nothing pre-auth — and dispatched responses are
+ * decorated for allowlisted origins — see {@see self::dispatch()}.
  *
  * @package Phlix\Hub\Http
  */
@@ -208,14 +209,15 @@ class Router
     /**
      * Dispatch a request to the matching route, or 404.
      *
-     * CORS preflights (`OPTIONS`) never carry `Authorization` — by spec the
-     * browser strips it — so they short-circuit here BEFORE any route
-     * middleware runs, and an allowlisted preflight can never be rejected by
-     * an auth gate that was never designed to see the browser's probe. Every
-     * dispatched response (handler result, middleware short-circuit, and the
-     * 404s) then passes through {@see CorsPolicy::decorate()} so the actual
-     * cross-origin reply is readable too. Requests with no `Origin` header
-     * see byte-identical responses to the pre-CORS router.
+     * CORS preflights (`OPTIONS`) take the {@see self::dispatchPreflight()}
+     * path: the router matches the verbs registered for the path, applies the
+     * default-deny origin gate, and — since review `hub__crossfe` M9r3 — runs
+     * the matched routes' middleware chain BEFORE answering, so an authed
+     * endpoint is never elicited by an unauthenticated probe. Every dispatched
+     * response (handler result, middleware short-circuit, preflight challenge,
+     * and the 404s) then passes through {@see CorsPolicy::decorate()} so the
+     * actual cross-origin reply is readable too. Requests with no `Origin`
+     * header see byte-identical responses to the pre-CORS router.
      *
      * @param Request $request Incoming request.
      *
@@ -259,18 +261,39 @@ class Router
     /**
      * Serve an OPTIONS request against the registered verbs for its path.
      *
-     * Deny is silent by design: a preflight from an origin that is not
-     * allowlisted gets the exact same 404 envelope as a preflight for a path
-     * the hub does not know, so a probe from a disallowed website cannot map
-     * the hub's route table (the collections law — deny must not become an
-     * oracle). An OPTIONS with no `Origin` header is not a browser preflight
-     * at all — no fetch can send one without it — so it gets a truthful
-     * body-less 204 naming the verbs this path answers.
+     * Position law (review `hub__crossfe` M9r3 — cure of the 72707074
+     * pre-AUTH oracle): the preflight answer sits BEHIND the matched path's
+     * route middleware chain, not in front of it. The first cut short-circuited
+     * `OPTIONS` before any middleware ran, so every authed endpoint answered
+     * `204` + `Access-Control-Allow-Methods` to a credential-free probe (and
+     * the no-`Origin` arm answered to any socket at all) — a pre-auth route-
+     * and-verb enumeration surface plus an auth-free flood path. The arms now:
+     *
+     *  - unknown path → the 404 envelope (byte-identical deny — unchanged);
+     *  - `Origin` present but not allowlisted → that same 404, WITHOUT running
+     *    the chain (deny-before-work: a disallowed probe neither costs nor
+     *    learns from the middleware);
+     *  - the chain short-circuits — for authed routes this is the browser's
+     *    normal outcome, since preflights carry no `Authorization` by spec and
+     *    {@see \Phlix\Hub\Http\Middleware\AuthMiddleware} therefore challenges
+     *    exactly as it would for an unauthenticated GET (401 `auth.required`
+     *    on `/api/`, login redirect otherwise; per the review's no-oracle
+     *    adjudication the challenge discloses nothing beyond GET's own
+     *    401-vs-404 existence tell, and the verb list never leaks pre-auth);
+     *  - the chain passes — a public route, or a probe that really carries
+     *    credentials the middleware accepts — gets the policy's preflight
+     *    reply naming the registered verbs.
+     *
+     * Consequence, stated so nobody rediscovers it as a bug: cross-origin
+     * browser access to authed hub REST is closed by construction (a failed
+     * preflight blocks the actual request). Same-origin SPA traffic never
+     * preflights and is untouched; the desktop clients keep their relay-WS
+     * surfaces, which CORS does not govern.
      */
     private function dispatchPreflight(Request $request): Response
     {
-        $verbs = $this->verbsForPath($request->path);
-        if ($verbs === []) {
+        $matched = $this->matchRoutesForPath($request->path);
+        if ($matched === []) {
             return $this->cors->decorate($request, $this->notFound());
         }
 
@@ -279,32 +302,87 @@ class Router
             return $this->cors->decorate($request, $this->notFound());
         }
 
-        return $this->cors->preflightResponse($request, $verbs);
+        // Mirror dispatch(): path params land on the request BEFORE its chain
+        // runs, so middleware gated on `{param}` segments sees the same shape.
+        // ($matched is non-empty here — the [] case returned above.)
+        foreach ($matched as $match) {
+            $request->pathParams = $match['params'];
+            break;
+        }
+
+        foreach ($this->chainFor($matched) as $middleware) {
+            /** @var mixed $result */
+            $result = $middleware($request);
+            if ($result instanceof Response) {
+                return $this->cors->decorate($request, $result);
+            }
+        }
+
+        return $this->cors->preflightResponse($request, array_keys($matched));
     }
 
     /**
-     * Collect the HTTP verbs with a registered route matching `$path`
-     * (excluding `OPTIONS` itself, which the policy reports separately).
+     * Collect every route registered for `$path`, first pattern hit per verb,
+     * with its captured params (excluding `OPTIONS` itself, which the policy
+     * reports separately — and which no hub route ever registers).
      *
-     * @return list<string>
+     * @return array<string, array{
+     *     route: array{middleware: array<int, callable>, path: string},
+     *     params: array<string, string>
+     * }>
+     *         verb (excluding `OPTIONS`) => matching route + captures
      */
-    private function verbsForPath(string $path): array
+    private function matchRoutesForPath(string $path): array
     {
-        $verbs = [];
+        $matched = [];
         foreach ($this->routes as $verb => $patterns) {
             if ($verb === 'OPTIONS') {
                 continue;
             }
             foreach ($patterns as $pattern => $route) {
                 /** @var non-empty-string $pattern */
-                if (preg_match($pattern, $path) === 1) {
-                    $verbs[] = $verb;
+                if (preg_match($pattern, $path, $captures) === 1) {
+                    /** @var array<string, string> $params */
+                    $params = array_filter($captures, 'is_string', ARRAY_FILTER_USE_KEY);
+                    /** @var array{middleware: array<int, callable>, path: string} $shape */
+                    $shape = ['middleware' => $route['middleware'], 'path' => $route['path']];
+                    $matched[$verb] = ['route' => $shape, 'params' => $params];
                     break;
                 }
             }
         }
 
-        return $verbs;
+        return $matched;
+    }
+
+    /**
+     * The middleware a preflight must clear: the deduplicated union of the
+     * chains of every verb registered for the path, in first-seen order.
+     * Group middleware shared across verbs (the container resolves them as
+     * singletons) run once. PHP strict comparison IS the identity test: the
+     * same invokable object shared by reference dedupes; distinct instances of
+     * the same class are distinct callables and each run (the hub's chains are
+     * pure gates, so repeats are cheap and order-stable).
+     *
+     * @param array<string, array{
+     *     route: array{middleware: array<int, callable>, path: string},
+     *     params: array<string, string>
+     * }> $matched
+     *
+     * @return list<callable>
+     */
+    private function chainFor(array $matched): array
+    {
+        $chain = [];
+        foreach ($matched as $match) {
+            foreach ($match['route']['middleware'] as $middleware) {
+                if (!in_array($middleware, $chain, true)) {
+                    $chain[] = $middleware;
+                }
+            }
+        }
+
+        return $chain;
     }
 
     /**

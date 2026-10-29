@@ -40,6 +40,38 @@ eyeballed-against-server-precedent fragment review, and the server installer's
 `^backend be_hub\b` merged-config check is immune to the two new backend names
 (`_` is a word char).
 
+### Fixed — M-HUB-09 r3: CORS preflight answers AFTER the route middleware chain — the pre-auth allow-answer oracle of 72707074 is cured; public paths still pre-answer — 2026-10-29
+
+Review round 2 on the CORS lane (finding relayed from the r2 reviewer;
+`hub__secnet` custody lens): `Router::dispatch()` short-circuited `OPTIONS`
+before any route middleware ran, so every authed endpoint answered
+`204` + `Access-Control-Allow-Methods` to a credential-free probe from an
+allowlisted origin — and the no-`Origin` arm answered the same truthful verb
+list to any socket. That is a pre-auth route-and-verb enumeration oracle
+sitting in front of the very gate the endpoints are built on, plus an
+auth-free flood path. Cured by position: `dispatchPreflight()` now matches
+the path, keeps the silent 404 deny for disallowed origins (deny-before-work
+— the probe neither costs nor learns from the chain), and then runs the
+matched routes' deduplicated middleware union before answering. Authed paths
+therefore see what an unauthenticated GET sees — the byte-identical 401
+`auth.required` challenge (`/api/` JSON arms) or login redirect (HTML arms) —
+and since preflights carry no `Authorization` by spec, cross-origin browser
+calls to authed hub REST are blocked by design; the verb list never leaks
+pre-auth, and a probe that really presents accepted credentials still gets
+its 204 (the law is AFTER auth, not NEVER). Public routes (empty chain) keep
+pre-answering exactly as shipped. Consequence owned openly: desktop hub-mode
+cross-origin authed REST is out of preflight reach again — the same posture
+as an unauthenticated GET flood pays per request; no REST limiter exists on
+either arm (router cost is regex-scan + challenge build, zero DB when no
+token is present). `Vary: Origin` coverage restated with the arms it now
+includes (allow, deny, challenge, handler); openapi CORS section rewritten
+to the position law; the maintenance 503 continues to gate `OPTIONS`
+pre-router without CORS headers (caveat carried). Tests: the two pre-auth
+positioning pins flipped to the new law, four new behavioral pins added
+(401-not-204 for allowlisted pre-auth probes, no-Origin enumeration closed
+on authed paths, credential-carrying probe still clears to 204, public
+truthfulness intact) — 3 red at 72707074, green here.
+
 ### Fixed — M-HUB-08 r2: the party lane's `@phlix/ui` seam premise corrected to the shipped export truth; true justification + two-producer cross-pins; copy-link hint + leaveParty send guard from r1 minors — 2026-10-29
 
 Review `hub__casualgamer` M8-r1 MAJOR-1: the M-HUB-08 entry below (and both

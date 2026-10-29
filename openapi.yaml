@@ -50,24 +50,31 @@ info:
 
     ## Cross-origin (CORS)
 
-    The `:8800` REST surface is **default-deny cross-origin**. `src/Http/Router.php` answers every
-    `OPTIONS` preflight before route middleware runs (preflights carry no `Authorization` by spec);
-    a preflight succeeds only for an origin listed in `PHLIX_CORS_ALLOW_ORIGINS`
-    (comma-separated, exact lowercase origins, read once at worker boot — restart to change it).
-    With the variable unset nothing is allowlisted; a denied preflight is answered with the same
+    The `:8800` REST surface is **default-deny cross-origin**. `src/Http/Router.php` answers an
+    `OPTIONS` preflight only after the matched path's route middleware chain has run: authed
+    endpoints answer nothing pre-auth (an uncredentialed preflight gets the same 401
+    `auth.required` challenge — or login redirect — an unauthenticated GET gets, and the verb
+    list is never named before auth), and preflights carry no `Authorization` by spec, so
+    cross-origin browser access is designed for public control endpoints. A preflight succeeds
+    only for an origin listed in `PHLIX_CORS_ALLOW_ORIGINS` (comma-separated, exact lowercase
+    origins, read once at worker boot — restart to change it). With the variable unset nothing
+    is allowlisted; a denied preflight (known path, disallowed origin) is answered with the same
     404 envelope as an unknown path, so probing from a disallowed origin cannot map the route
     table. `Access-Control-Allow-Headers` mirrors the requested headers and
     `Access-Control-Max-Age` is 600; `Access-Control-Allow-Credentials` is never emitted — hub
     REST authenticates with bearer tokens, which CORS does not govern, and no browser-side
     cross-origin read can ride a hub session cookie. Allowlisted origins also get
-    `Access-Control-Allow-Origin` on the actual (non-preflight) replies, and any response a
-    request with `Origin` can produce carries `Vary: Origin`; same-origin traffic sends no
+    `Access-Control-Allow-Origin` on the actual (non-preflight) replies, and every response a
+    request carrying `Origin` can produce — the 204 preflight allow, the 404 deny, the auth
+    challenge, and handler replies — carries `Vary: Origin`; same-origin traffic sends no
     `Origin` header and sees byte-identical responses.
     Desktop hub-mode consumers (the packaged Windows client runs the same `@phlix/ui` bundle from
-    the `app://-` origin) need `app://-` in the list — deliberately not shipped pre-granted.
-    Caveats, stated honestly: the pre-router static-file fast path, the maintenance-mode 503, and
-    streamed relay bodies (`streamProducer` owns the whole wire response) sit outside this policy
-    and carry no CORS headers.
+    the `app://-` origin) need `app://-` in the list — deliberately not shipped pre-granted; note
+    that authed REST stays beyond preflight reach for them by the position law above.
+    Caveats, stated honestly: the pre-router static-file fast path, the maintenance-mode 503
+    (which blocks `/api/` traffic including `OPTIONS`, before the router and without CORS
+    headers), and streamed relay bodies (`streamProducer` owns the whole wire response) sit
+    outside this policy and carry no CORS headers.
 
     ## Conventions
 

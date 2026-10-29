@@ -11,12 +11,14 @@ use Phlix\Hub\Http\Router;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Router-integration tests for the CORS preflight short-circuit and the
- * response decoration (review hub__crossfe MAJOR-1).
+ * Router-integration tests for the CORS preflight and the response
+ * decoration (review hub__crossfe MAJOR-1; position rework M9r3).
  *
  * These pin the dispatch contract end of the seam the browser actually
- * probes: OPTIONS must answer BEFORE middleware (preflights carry no
- * Authorization by spec), deny must be indistinguishable from an unknown
+ * probes: a preflight is answered ONLY where the path's middleware chain
+ * passes (public endpoints; authed endpoints get the same challenge an
+ * unauthenticated GET gets — the pre-AUTH allow-answer oracle of 72707074
+ * is dead and stays dead), deny must be indistinguishable from an unknown
  * path, and every dispatched response a cross-origin caller can read must
  * carry the `Access-Control-Allow-Origin`/`Vary` pair for allowlisted
  * origins — including error replies, or the client sees an opaque network
@@ -50,9 +52,12 @@ final class RouterCorsTest extends TestCase
     }
 
     /**
-     * A router with the desktop hub-mode surface: a GET list endpoint, a POST
-     * create endpoint behind a recording middleware that short-circuits 401
-     * unless a bearer token is present, and the SPA catch-all.
+     * A router with the desktop hub-mode surface: a public GET/POST control
+     * endpoint (mirroring the real hub's credential-free `/api/v1` members,
+     * e.g. server-claims initiation), a GET list endpoint and a POST create
+     * endpoint behind a recording middleware that short-circuits 401
+     * (byte-identical to AuthMiddleware's `auth.required` envelope) unless a
+     * bearer token is present, and the SPA catch-all.
      *
      * @return array{0: Router, 1: \ArrayObject<int,string>} router + middleware call recorder
      */
@@ -69,6 +74,13 @@ final class RouterCorsTest extends TestCase
             return null;
         };
 
+        // Public control surface — NO middleware (real-hub analogue:
+        // /api/v1/server-claims/new, registered outside the authed group).
+        $router->group('/api/v1/auth', static function (Router $r): void {
+            $r->get('/status', static fn (): Response => self::jsonReply(200, ['status' => 'ok']));
+            $r->get('/refresh', static fn (): Response => self::jsonReply(200, ['refreshed' => 'get']));
+            $r->post('/refresh', static fn (): Response => self::jsonReply(200, ['refreshed' => true]));
+        });
         $router->group('/api/v1', static function (Router $r): void {
             $r->get('/me/servers', static fn (): Response => self::jsonReply(200, ['servers' => []]));
             $r->post('/me/invite-links', static fn (): Response => self::jsonReply(201, ['created' => true]));
@@ -78,13 +90,13 @@ final class RouterCorsTest extends TestCase
         return [$router, $calls];
     }
 
-    // ---- preflight short-circuit ----
+    // ---- preflight: public paths pre-answer, authed paths never do ----
 
-    public function testAllowedPreflightForPostRouteReturnsExactHeaderSetAndRunsNoMiddleware(): void
+    public function testAllowedPreflightForPublicRouteReturnsExactHeaderSetAndRunsNoMiddleware(): void
     {
         [$router, $calls] = $this->desktopRouter();
 
-        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/me/invite-links', [
+        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/auth/refresh', [
             'Origin' => self::ALLOWED,
             'Access-Control-Request-Method' => 'POST',
             'Access-Control-Request-Headers' => 'authorization, content-type',
@@ -94,23 +106,134 @@ final class RouterCorsTest extends TestCase
         self::assertSame('', $response->body, 'preflight replies carry no JSON body (contracts law)');
         self::assertArrayNotHasKey('Content-Type', $response->headers);
         self::assertSame('app://-', $response->headers['Access-Control-Allow-Origin']);
-        self::assertSame('OPTIONS, POST', $response->headers['Access-Control-Allow-Methods']);
+        self::assertSame('GET, OPTIONS, POST', $response->headers['Access-Control-Allow-Methods']);
         self::assertSame('authorization, content-type', $response->headers['Access-Control-Allow-Headers']);
         self::assertSame('600', $response->headers['Access-Control-Max-Age']);
         self::assertSame('Origin', $response->headers['Vary']);
 
-        // THE short-circuit law: the auth middleware never saw the probe.
-        self::assertCount(0, $calls, 'OPTIONS must run NO route middleware');
+        // Public route = empty chain: the preflight clears it trivially.
+        self::assertCount(0, $calls, 'a middleware-less public path must run no chain');
     }
 
-    public function testPreflightForGetRouteReportsOnlyTheRegisteredVerbs(): void
+    public function testUnauthenticatedPreflightForAuthedRouteGetsTheChallengeNotTheAllowAnswer(): void
+    {
+        // THE M9r3 law (red at 72707074, which answered 204 + Allow-Methods
+        // here): an allowlisted origin probing an AUTHED path pre-credentials
+        // receives the same 401 `auth.required` an unauthenticated GET gets —
+        // never a preflight allow. Browsers block the actual request on any
+        // non-2xx preflight, so authed REST is not elicitable cross-origin
+        // without clearing auth, and the verb list never leaks pre-auth.
+        [$router, $calls] = $this->desktopRouter();
+
+        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/me/invite-links', [
+            'Origin' => self::ALLOWED,
+            'Access-Control-Request-Method' => 'POST',
+            'Access-Control-Request-Headers' => 'authorization, content-type',
+        ]));
+
+        self::assertSame(401, $response->statusCode);
+        /** @var array{code?: string}|null $envelope */
+        $envelope = json_decode($response->body, true);
+        self::assertSame('auth.required', is_array($envelope) ? ($envelope['code'] ?? null) : null);
+        self::assertArrayNotHasKey(
+            'Access-Control-Allow-Methods',
+            $response->headers,
+            'the registered verb set of an authed path must never be named pre-auth',
+        );
+        // The challenge stays CORS-decorated — the estate's 401 envelope shape
+        // (error+code) is untouched, only the readability headers ride on top.
+        self::assertSame('app://-', $response->headers['Access-Control-Allow-Origin']);
+        self::assertSame('Origin', $response->headers['Vary']);
+        self::assertSame(['OPTIONS'], (array) $calls->getArrayCopy(), 'the route chain saw the probe');
+    }
+
+    public function testNoOriginOptionsToAuthedRouteNoLongerEnumeratesVerbs(): void
+    {
+        // 72707074's truthful no-Origin 204 arm ran the same enumeration for
+        // every socket without even an Origin header. Post-rework the chain
+        // gates it: no token, no verb list.
+        [$router, $calls] = $this->desktopRouter();
+
+        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/me/servers'));
+
+        self::assertSame(401, $response->statusCode);
+        self::assertArrayNotHasKey('Access-Control-Allow-Methods', $response->headers);
+        self::assertSame(['OPTIONS'], (array) $calls->getArrayCopy());
+    }
+
+    public function testNoOriginOptionsToPublicRouteStaysTruthful(): void
+    {
+        // Non-browser probes keep the honest verb list ONLY where the path is
+        // public anyway (the openapi spec documents these paths in the clear).
+        [$router, $calls] = $this->desktopRouter();
+
+        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/auth/refresh'));
+
+        self::assertSame(204, $response->statusCode);
+        self::assertSame('GET, OPTIONS, POST', $response->headers['Access-Control-Allow-Methods']);
+        self::assertArrayNotHasKey('Access-Control-Allow-Origin', $response->headers, 'no Origin -> no grant');
+        self::assertCount(0, $calls);
+    }
+
+    public function testPreflightCarryingValidCredentialsClearsTheChainAndGetTheAllowAnswer(): void
+    {
+        // The reworked position is AFTER auth, not NEVER: a probe that really
+        // presents the token AuthMiddleware accepts gets the normal preflight
+        // allow (curl/desktop probes can enumerate what they are entitled to).
+        [$router, $calls] = $this->desktopRouter();
+
+        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/me/invite-links', [
+            'Origin' => self::ALLOWED,
+            'Authorization' => 'Bearer tok',
+        ]));
+
+        self::assertSame(204, $response->statusCode);
+        self::assertSame('OPTIONS, POST', $response->headers['Access-Control-Allow-Methods']);
+        self::assertSame(['OPTIONS'], (array) $calls->getArrayCopy());
+    }
+
+    public function testSharedGroupMiddlewareRunsOnceForAMultiVerbPreflight(): void
+    {
+        // Dedup law: a path registered under several verbs of one group shares
+        // the middleware INSTANCE; the preflight clears the union, so the
+        // shared gate runs once, not once per verb.
+        $calls = new \ArrayObject();
+        $router = new Router(new CorsPolicy([self::ALLOWED]));
+        $auth = static function (Request $request) use ($calls): ?Response {
+            $calls->append($request->method);
+            if ($request->getHeader('Authorization') === null) {
+                return (new Response())->status(401)->json(['error' => 'Unauthorized', 'code' => 'auth.required']);
+            }
+            return null;
+        };
+        $router->group('/api/v1', static function (Router $r): void {
+            $r->get('/me/servers', static fn (): Response => self::jsonReply(200, ['servers' => []]));
+            $r->delete('/me/servers', static fn (): Response => self::jsonReply(200, ['cleared' => true]));
+        }, [$auth]);
+
+        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/me/servers', [
+            'Origin' => self::ALLOWED,
+            'Authorization' => 'Bearer tok',
+        ]));
+
+        self::assertSame(204, $response->statusCode);
+        self::assertSame('DELETE, GET, OPTIONS', $response->headers['Access-Control-Allow-Methods']);
+        self::assertSame(['OPTIONS'], (array) $calls->getArrayCopy(), 'shared middleware must run exactly once');
+    }
+
+    public function testPreflightReportsTheRegisteredVerbsNotTheRequestedOne(): void
     {
         [$router, $calls] = $this->desktopRouter();
 
-        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/me/servers', ['Origin' => self::ALLOWED]));
+        // The public GET/POST control path answers a DELETE request-method
+        // with exactly what is registered — mirror, don't invent (class law).
+        $response = $router->dispatch($this->request('OPTIONS', '/api/v1/auth/refresh', [
+            'Origin' => self::ALLOWED,
+            'Access-Control-Request-Method' => 'DELETE',
+        ]));
 
         self::assertSame(204, $response->statusCode);
-        self::assertSame('GET, OPTIONS', $response->headers['Access-Control-Allow-Methods']);
+        self::assertSame('GET, OPTIONS, POST', $response->headers['Access-Control-Allow-Methods']);
         self::assertCount(0, $calls);
     }
 
@@ -266,6 +389,8 @@ final class RouterCorsTest extends TestCase
 
         self::assertSame($before, $router->getRoutes(), 'preflight answering must not register an OPTIONS route');
         self::assertArrayNotHasKey('OPTIONS', $router->getRoutes());
-        self::assertCount(0, $calls);
+        // M9r3: the authed path's chain now DOES see the probe (and rejects
+        // it) — reading the table to answer must still never write it.
+        self::assertSame(['OPTIONS'], (array) $calls->getArrayCopy());
     }
 }
