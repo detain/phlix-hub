@@ -46,7 +46,7 @@ class HeartbeatHandler
      * {@see self::updateServerLibraries()} this makes server_libraries growth
      * per enrolled server finite: rows ≤ MAX_LIBRARY_COUNT at all times.
      */
-    public const MAX_LIBRARY_COUNT = 500;
+    public const int MAX_LIBRARY_COUNT = 500;
 
     /**
      * M-HUB-15: maximum CHARACTER count of a reported library_id, pinned to the
@@ -54,13 +54,13 @@ class HeartbeatHandler
      * utf8mb4 columns measure in characters, so the check counts characters
      * (mb_strlen), not bytes.
      */
-    public const MAX_LIBRARY_ID_CHARS = 36;
+    public const int MAX_LIBRARY_ID_CHARS = 36;
 
     /**
      * M-HUB-15: maximum CHARACTER count of a reported library_name, pinned to
      * the server_libraries.library_name column width VARCHAR(255) (migration 031).
      */
-    public const MAX_LIBRARY_NAME_CHARS = 255;
+    public const int MAX_LIBRARY_NAME_CHARS = 255;
 
     /**
      * @param Connection           $db         MySQL connection.
