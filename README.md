@@ -312,10 +312,29 @@ outright if there was no pre-Phlix config) and stops/disables `haproxy`.
 The **hub server-tunnel port** (`:8802`) is a separate listener — servers connect to that port
 directly. Open it on the firewall but don't put it behind the HAProxy 80/443 frontend.
 
+**What the managed install makes reachable:**
+
+| Port | Surface | Managed HAProxy path | `--no-proxy` path |
+| --- | --- | --- | --- |
+| `8800` | HTTP API + SPA + `/health` | routed at `/` via 80/443 | ufw-opened |
+| `8802` | server tunnels | direct — ufw-opened (pairing law: never proxied) | ufw-opened |
+| `8803` | client mount (declared unavailable) | routed at `/client/` | loopback only — point your proxy at it |
+| `8804` | SyncPlay watch-party clients | routed at `/syncplay/` | ufw-opened (plaintext WS — close it once your proxy routes it) |
+| `8805` | federation MASTER ingress (peer dials) | routed at `/relay/federation/` | ufw-opened (same plaintext caveat) |
+| `2206` | cross-process channel broker | loopback only | loopback only |
+
+Under the managed HAProxy the two relay WebSocket surfaces are **not** opened on the
+firewall: browser clients dial `wss://<domain>/syncplay/{server_id}` and federation leaves
+dial `wss://<master-domain>/relay/federation/{hub_id}` over the existing 443 frontend — no
+extra port, TLS included. `--no-proxy` installs instead open `8804`/`8805` in ufw (when it
+is active) so the plain `ws://<host>:8804` / `ws://<host>:8805` forms documented in
+[`docs/websockets.md`](docs/websockets.md) stay reachable.
+
 If you'd rather use your own reverse proxy (nginx, Caddy, Traefik, etc.) instead of the
 managed HAProxy, pass `--no-proxy` to either install script. Each service then listens on its
-own port (8800 / 8802 / 8803 for phlix-hub, 8096 for phlix-server) and you point your proxy
-at those.
+own port (8800 / 8802 / 8803 / 8804 / 8805 for phlix-hub, 8096 for phlix-server) and you point
+your proxy at those — replicate the same path prefixes the managed config uses (`/client/`,
+`/syncplay/`, `/relay/federation/`) and see §7 for the WebSocket pass-through requirements.
 
 Everything else is already namespaced (env files, systemd units, install dirs, service users,
 MySQL DBs, backend ports, certbot artefacts) so there are no other co-install conflicts.
@@ -535,8 +554,11 @@ curl http://localhost:8800/health
 
 ### 7. Reverse proxy & TLS
 
-Terminate TLS at a reverse proxy in front of the Hub. Both the HTTP API (`8800`) and the
-client-facing relay (`8803`, WebSocket) need to be reachable. (The `8803` listener still
+Terminate TLS at a reverse proxy in front of the Hub. The HTTP API (`8800`) plus the three
+path-namespaced WebSocket surfaces need to be reachable through it: the client mount
+(`8803`, `GET /client/{server_id}`), the SyncPlay relay (`8804`, `GET /syncplay/{server_id}`)
+and — only when this hub advertises itself to other hubs as a federation master — the
+federation ingress (`8805`, `GET /relay/federation/{hub_id}`). (The `8803` listener still
 serves the rate-limited, authenticated 1011 refusal — mount traffic itself is declared
 unavailable in this topology; see the worker table above.) Example nginx server block:
 
@@ -556,6 +578,30 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
 
         # WebSocket upgrade (relay + client mount)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }
+
+    # SyncPlay relay (watch-party clients). The path must reach the listener
+    # unprefixed — its parser anchors on ^/syncplay/. Auth rides the
+    # `Authorization: Bearer <token>` header or the `bearer, <token>` WebSocket
+    # subprotocol, never the query string.
+    location /syncplay/ {
+        proxy_pass http://127.0.0.1:8804;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;  # long-lived rooms; the managed HAProxy carries timeout tunnel 1h
+    }
+
+    # Federation master ingress (leaf-hub dials). Authentication is the Ed25519
+    # handshake ceremony, not TLS — but wss:// stays the production shape.
+    location /relay/federation/ {
+        proxy_pass http://127.0.0.1:8805;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";

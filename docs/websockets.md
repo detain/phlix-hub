@@ -257,6 +257,14 @@ ws://hub.phlix.tv:8804/syncplay/{server_id}
 Parsed by `SyncPlayRelayWorker::parseServerId()` with
 `~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~`.
 
+**Getting there.** The managed installer routes `GET /syncplay/…` on the shared HAProxy
+frontend (80/443) straight to this listener, so browser clients dial
+`wss://<hub-domain>/syncplay/{server_id}` and no firewall port is involved. On `--no-proxy`
+installs the installer opens `8804/tcp` in ufw (when ufw is active), which is what makes the
+plain `ws://<host>:8804/…` form above reachable. Behind any hand-rolled proxy, replicate the
+`/syncplay/` pass-through with HTTP/1.1 upgrade headers and an hour-scale read timeout — the
+hub's managed HAProxy defaults carry `timeout tunnel 1h`.
+
 JSON text frames throughout — this surface does **not** use the binary frame
 format. Room state is held in the worker and messages are broadcast to every
 client in the room. The room key is scoped to the authenticated
@@ -501,8 +509,18 @@ certificate, set `PHLIX_FEDERATION_CA_BUNDLE` to an absolute PEM bundle path
 (unset = system trust store; set-but-unreadable = the dial is refused loudly).
 TLS dials additionally require the openssl PHP extension at runtime — without
 it the dial is refused with a log line naming the extension. This listener
-itself stays plaintext; TLS on the master side terminates upstream (nginx /
-Caddy) when the master advertises an `https://` / `wss://` URL.
+itself stays plaintext; TLS on the master side terminates upstream when the
+master advertises an `https://` / `wss://` URL.
+
+**Getting there.** The managed installer routes `GET /relay/federation/…` on the shared
+HAProxy frontend (80/443) to this listener, so a master installed with `scripts/install.sh`
+already satisfies the upstream-TLS shape above through its existing 443 entry — no extra
+firewall port. On `--no-proxy` installs the installer opens `8805/tcp` in ufw (when ufw is
+active), which is what makes the plain `ws://<host>:8805/…` form reachable; a master that
+advertises `wss://` instead needs the path routed through its TLS frontend with the same
+HTTP/1.1-upgrade + hour-scale-timeout treatment as `:8804` (the managed HAProxy defaults
+carry `timeout tunnel 1h`). Federation ingress is only required on hubs that act as
+masters; a leaf-only hub may keep the port closed.
 
 The worker is constructed in `HubServicesProvider::boot()` — that is, in the
 **master process, before `Worker::runAll()` forks**, because a Workerman `Worker`

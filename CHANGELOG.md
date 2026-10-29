@@ -6,6 +6,40 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-11: the managed install now reaches :8804 and :8805 — HAProxy routes `/syncplay/` and `/relay/federation/` on the existing frontends, `--no-proxy` opens both in ufw, docs carry the full port-reachability law — 2026-10-29
+
+Review `hub__devops` MAJ-1: the installer opened 80/443 + `:8802` and routed only
+`/` and `/client/` through its HAProxy fragment, while `:8804` (SyncPlay watch
+parties) and `:8805` (federation master ingress) were wired into nothing — on a
+ufw-active VPS browser clients and leaf-hub dials were silently refused, and no
+document named the cause. The installer's existing posture adjudicates the cure:
+it is not open-nothing (it opens `:8802` outright and proxies `:8803` by path),
+so both surfaces follow the house idiom they were missing. Shipped in
+`scripts/install.sh`: named `SYNCPLAY_PORT`/`FEDERATION_PORT` vars matching the
+`config/server.php` defaults (the fresh unit's wait-for-free-ports gate uses
+them; the old-unit retrofit intentionally keeps its literals — it rewrites the
+exact line shipped before these vars existed); all three frontend-fragment
+variants (TLS, HTTP+domain, HTTP no-domain) gained `be_hub_syncplay` (path_beg
+`/syncplay/`) and `be_hub_federation` (path_beg `/relay/federation/`) ordered
+before the `be_hub` catch-all, with matching loopback backends; `--no-proxy`
+installs now `ufw allow` both ports (best-effort `|| true` idiom, plaintext-WS
+close-it-again hint printed) and the summary/SKIP_HAPROXY info blocks enumerate
+every listener. Under the managed proxy no new port opens: clients dial
+`wss://<domain>/syncplay/{server_id}` and leaves dial
+`wss://<master-domain>/relay/federation/{hub_id}` over the existing 443 — which
+finally makes `docs/websockets.md`'s long-standing "TLS terminates upstream"
+promise for `:8805` satisfiable by an artifact in this repo. Docs: README gains
+a per-port reachability table and `:8804`/`:8805` nginx locations (HTTP/1.1
+upgrade, `proxy_read_timeout 3600s` mirroring the managed `timeout tunnel 1h`,
+bearer-subprotocol-never-query auth note); `docs/websockets.md` gains
+"Getting there" paragraphs in both worker sections. No PHP touched. Disclosure:
+`tests/` carries no install.sh-parsing venue (grep-verified — the
+artifact-parsing family here covers workflows and Dockerfiles only), so no
+red-on-parent script pin was fabricated; the gate was `bash -n` plus
+eyeballed-against-server-precedent fragment review, and the server installer's
+`^backend be_hub\b` merged-config check is immune to the two new backend names
+(`_` is a word char).
+
 ### Fixed — M-HUB-08 r2: the party lane's `@phlix/ui` seam premise corrected to the shipped export truth; true justification + two-producer cross-pins; copy-link hint + leaveParty send guard from r1 minors — 2026-10-29
 
 Review `hub__casualgamer` M8-r1 MAJOR-1: the M-HUB-08 entry below (and both

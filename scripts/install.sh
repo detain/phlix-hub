@@ -38,6 +38,8 @@ DB_PASS=""              # generated if empty
 HUB_PORT="8800"
 RELAY_PORT="8802"
 CLIENT_RELAY_PORT="8803"
+SYNCPLAY_PORT="8804"   # matches HUB_SYNCPLAY_PORT default in config/server.php
+FEDERATION_PORT="8805" # matches HUB_FEDERATION_PORT default in config/server.php
 HUB_WORKERS="4"
 
 DOMAIN=""               # public hostname; enables TLS when set with --admin-email
@@ -889,6 +891,8 @@ EOF
 ## section: fe_https
     acl is_phlix_hub_host hdr(host) -i ${dom}
     use_backend be_hub_client_relay if is_phlix_hub_host { path_beg /client/ }
+    use_backend be_hub_syncplay if is_phlix_hub_host { path_beg /syncplay/ }
+    use_backend be_hub_federation if is_phlix_hub_host { path_beg /relay/federation/ }
     use_backend be_hub if is_phlix_hub_host
 ## end
 
@@ -898,6 +902,8 @@ EOF
 ## section: fe_http
     acl is_phlix_hub_host hdr(host) -i ${dom}
     use_backend be_hub_client_relay if is_phlix_hub_host { path_beg /client/ }
+    use_backend be_hub_syncplay if is_phlix_hub_host { path_beg /syncplay/ }
+    use_backend be_hub_federation if is_phlix_hub_host { path_beg /relay/federation/ }
     use_backend be_hub if is_phlix_hub_host
 ## end
 
@@ -906,6 +912,8 @@ EOF
       cat <<EOF
 ## section: fe_http
     use_backend be_hub_client_relay if { path_beg /client/ }
+    use_backend be_hub_syncplay if { path_beg /syncplay/ }
+    use_backend be_hub_federation if { path_beg /relay/federation/ }
     use_backend be_hub
 ## end
 
@@ -918,6 +926,10 @@ backend be_hub
     server hub 127.0.0.1:${HUB_PORT}
 backend be_hub_client_relay
     server clientrelay 127.0.0.1:${CLIENT_RELAY_PORT}
+backend be_hub_syncplay
+    server syncplay 127.0.0.1:${SYNCPLAY_PORT}
+backend be_hub_federation
+    server federation 127.0.0.1:${FEDERATION_PORT}
 ## end
 EOF
   } > "$fragment"
@@ -1591,7 +1603,8 @@ info "Install path : $INSTALL_PATH"
 info "Service user : $SERVICE_USER"
 info "Database     : $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
 info "Public domain: $PUBLIC_DOMAIN"
-info "HTTP port    : $HUB_PORT  (relay $RELAY_PORT, client-relay $CLIENT_RELAY_PORT)"
+info "HTTP port    : $HUB_PORT  (relay $RELAY_PORT, client-relay $CLIENT_RELAY_PORT,"
+info "               syncplay $SYNCPLAY_PORT, federation $FEDERATION_PORT)"
 info "TLS / HAProxy: $TLS_ENABLED"
 echo
 confirm "Proceed with installation?" || die "Aborted by user."
@@ -1801,7 +1814,7 @@ Environment="HOME=${INSTALL_PATH}/var"
 # alternative fix — during the stop/start overlap BOTH masters would accept
 # on the same ports, splitting relay tunnels and WS sessions between a dying
 # process and the new one. This ExecStartPre gate is the correct fix.
-ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t 90 ${HUB_PORT} ${RELAY_PORT} ${CLIENT_RELAY_PORT} 8804 8805 2206
+ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t 90 ${HUB_PORT} ${RELAY_PORT} ${CLIENT_RELAY_PORT} ${SYNCPLAY_PORT} ${FEDERATION_PORT} 2206
 # start.php is the Workerman bootstrap (webman-style — see start.php
 # for the full pattern). public/index.php no longer exists; public/ is
 # a pure document root containing only static assets + templates.
@@ -1900,13 +1913,20 @@ if [ "$SKIP_HAPROXY" = "yes" ]; then
   info "Run your own reverse proxy in front of:"
   info "  127.0.0.1:${HUB_PORT}  (HTTP API + SSR pages + /health)"
   info "  127.0.0.1:${CLIENT_RELAY_PORT}  (GET /client/{server_id}, WebSocket)"
+  info "  127.0.0.1:${SYNCPLAY_PORT}  (GET /syncplay/{server_id}, WebSocket — watch parties)"
+  info "  127.0.0.1:${FEDERATION_PORT}  (GET /relay/federation/{hub_id}, WebSocket — only"
+  info "      needed when this hub acts as a federation MASTER accepting peer dials)"
   info "Servers connect to 127.0.0.1:${RELAY_PORT} for their outbound tunnels."
   info "See README.md → 'Running alongside phlix-server' for a sample shared HAProxy config."
 
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
     ufw allow "$HUB_PORT"/tcp comment 'Phlix Hub HTTP' >/dev/null 2>&1 || true
     ufw allow "$RELAY_PORT"/tcp comment 'Phlix Hub server tunnels' >/dev/null 2>&1 || true
-    info "Opened ports ${HUB_PORT}/tcp and ${RELAY_PORT}/tcp in ufw."
+    ufw allow "$SYNCPLAY_PORT"/tcp comment 'Phlix Hub SyncPlay WS' >/dev/null 2>&1 || true
+    ufw allow "$FEDERATION_PORT"/tcp comment 'Phlix Hub federation ingress' >/dev/null 2>&1 || true
+    info "Opened ports ${HUB_PORT}/tcp, ${RELAY_PORT}/tcp, ${SYNCPLAY_PORT}/tcp and ${FEDERATION_PORT}/tcp in ufw."
+    info "(${SYNCPLAY_PORT}/${FEDERATION_PORT} are plaintext WebSocket — if you fronted them"
+    info " with your own TLS proxy, close them again: ufw deny ${SYNCPLAY_PORT}/tcp && ufw deny ${FEDERATION_PORT}/tcp)"
   fi
 else
 # Reach a TLS-or-HTTP fragment + rebuild the merged haproxy.cfg.
