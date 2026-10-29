@@ -6,6 +6,69 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-01: the `:8803` client-mount WS now FAILS LOUD — declared unavailable in the multi-process topology — 2026-10-29
+
+Review `hub__asphp` M2: `ClientRelayWorker` (port `:8803`) runs as its own
+Workerman process, and its `onWorkerStart` docblock confessed the
+consequence — "the client worker owns no tunnels and joins no channel
+broker". `ClientMountController::onWebSocketConnect()` nevertheless resolved
+the container's `TunnelManagerInterface` and called `acceptClient()` against
+a registry that is PER-PROCESS: tunnels register only via
+`TunnelManager::acceptServer()`, whose sole production caller is `RelayWorker`
+(`:8802`, count=1). In the `:8803` process the registry is forever empty, so
+every mount silently died in the "no active server tunnel" branch with WS
+close **1013 Try Again Later** — a retry invitation for a surface that can
+never serve.
+
+Re-verified at HEAD (a5f3a0a6; these files untouched since the review) and
+re-audited estate-wide: ZERO consumers connect to `:8803` (clients stream
+through the live HTTP relay proxy `/api/v1/servers/{id}/proxy/*`;
+`phlix-ui/src/api/hubRelay.ts` targets `:8804`).
+
+Cure (B — fail-loud), because wiring (A) is a design-level rebuild: the
+workerman/channel broker already runs in-repo (`RelayProxyProtocol`
+REQUEST/CANCEL + per-request reply events) but its protocols are
+request/response-shaped; a raw client mount needs a PERSISTENT BIDIRECTIONAL
+byte pipe with per-mount flow control (the Tunnel data plane keys queues,
+drain timers, and throttle buckets on same-process object identity). Either
+folding client WS onto the `:8802` worker (port/LB/security-zone merge) or a
+new per-mount bridge protocol over the broker is an owner-level architecture
+call — recorded in the lane memo, not invented here.
+
+Shipped: `onWebSocketConnect()` now refuses at the top with a real close
+frame **1011** (do-not-retry) and a `client_mount_bridge_unavailable`
+relay-log warning carrying server_id + authenticated user_id — the auth
+ladder (IP limiter → relay token → ownership re-confirmation) still runs
+FIRST, so refusals stay attributed and flood-cheap. No new wire codes: the
+HTTP signpost keeps the registry-pinned `relay.client_ws_endpoint`
+(`UPGRADE_REQUIRED` / `NOT_IMPLEMENTED_VIA_HTTP` literals intact) and gains a
+machine-readable `available: false` field; its steer prose now names the
+live proxy path instead of promising a dead mount. The bind body was deleted
+(the S42 throttle-at-mount chain behind it becomes a documented rebuild seam;
+`acceptClient()`/`ClientConnection` stay as tested building blocks).
+Six bug-encoding tests flipped to the new law (refusal even with an ACTIVE
+same-process tunnel; throttle registry never consulted; zero server-ward
+frames; rate-limiter discriminator 1013-throttle vs 1011-refusal) — red
+before, green after. Docs truth pass: README worker table + proxy section,
+`docs/websockets.md` `:8803` banner + Messages + the `:8097` "reaches it
+through the :8803 mount" claim, openapi overview/credential prose, the
+`x-phlix-websockets` Client-mount block (new `availability` + `closeCodes`),
+and the `/client/{server_id}` path (its 200/404 response block replaced by
+the 400/426/501 it actually answers).
+
+Completion pass (takeover lane M-HUB-01T): the controller is fully STATELESS —
+the now-unread `ContainerInterface` constructor parameter was removed together
+with its provider-factory wiring (`new ClientMountController()`), and the three
+remaining test construction sites dropped their container mocks (the
+`WorkermanHeaderBoundaryTest` `unusedContainer()` helper retired;
+`ClientMountControllerTest`'s throwing-stub premise comment rewritten to the
+stateless law). Docblock truths the flip makes stale were corrected in the same
+commit: `Application`'s `/client/{server_id}` route comment no longer says
+clients "actually mount" there, and the `TunnelManagerInterface` alias comment
+in `HubServicesProvider` no longer lists `ClientMountController` among the
+registry's resolvers. Mutation-proven against this tree: silent-drop refusal
+→ 5 reds; 1013-instead-of-1011 → 5 reds; dropped `available` field → red.
+
 ### Fixed — HUB-CI-FIX lane: three push-proven-red gates cured before the unpushed chain lands — 2026-10-15
 
 The endgame review of the unpushed HUB chain (…→dad6455) proved three CI gates

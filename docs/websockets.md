@@ -7,7 +7,7 @@ WebSocket surfaces across two repositories.
 | Port | Surface | Repository | Worker | Encoding |
 | --- | --- | --- | --- | --- |
 | `8802` | Server relay tunnel | `phlix-hub` | `Phlix\Hub\Relay\RelayWorker` | JSON handshake, then binary `RelayFrame` |
-| `8803` | Client mount | `phlix-hub` | `Phlix\Hub\Relay\ClientRelayWorker` | binary `RelayFrame` |
+| `8803` | Client mount ⚠ declared-unavailable (see below) | `phlix-hub` | `Phlix\Hub\Relay\ClientRelayWorker` | binary `RelayFrame` |
 | `8804` | SyncPlay relay | `phlix-hub` | `Phlix\Hub\SyncPlay\SyncPlayRelayWorker` | JSON text |
 | `8805` | Hub federation | `phlix-hub` | `Phlix\Hub\Relay\FederationWorker` | signed JSON handshake, then binary `DATA` envelopes |
 | `8097` | Media server events + SyncPlay | `phlix-server` | `Phlix\Server\WebSocket\WebSocketServer` | JSON text |
@@ -132,6 +132,25 @@ path `phlix-server` derives from `config/relay.php`'s `hub_wss_url`.
 
 ## `:8803` — client mount
 
+> ⚠ **DECLARED UNAVAILABLE** in the deployed multi-process topology
+> (review `hub__asphp` M2). A mount can only bind to a Tunnel living in the
+> **same** process (per-client queues, throttle buckets, and drain timers are
+> keyed on same-process object identity), and tunnels register exclusively on
+> the `:8802` relay worker (`TunnelManager::acceptServer` ← `RelayWorker`,
+> count=1). This separate `:8803` process resolves its own per-process
+> `TunnelManager`, whose registry can never hold an entry. Every mount is now
+> refused **loudly**: after the auth ladder completes (limiter → relay token →
+> ownership re-confirmation), the controller closes the socket with a real WS
+> close frame **1011** (do-not-retry — deliberately not 1013, which invites
+> endless reconnect loops against a structurally dead surface) and logs
+> `client_mount_bridge_unavailable` on the relay channel. Live
+> client-to-server traffic rides the HTTP relay proxy
+> (`/api/v1/servers/{id}/proxy/*`). The original cure options (fold the client
+> WS onto `:8802`, or bridge per-mount byte streams over the channel broker —
+> whose current protocols are request/response shaped) are owner-level
+> architecture decisions; the catalog below describes the intended wire if
+> either lands.
+
 ```
 ws://hub.phlix.tv:8803/client/{server_id}
 ```
@@ -171,7 +190,8 @@ real client IP comes from `TrustedProxyResolver` and not from the loopback peer.
 
 ### Messages
 
-Once bound, the socket carries `DATA` (`0x05`) in both directions on this
+If a mount ever binds (see the M2 banner above — in the deployed topology
+none ever does), the socket carries `DATA` (`0x05`) in both directions on this
 client's channel id, plus `DISCONNECTED` (`0x07`) when the underlying server
 tunnel goes away and `ERROR` (`0x08`).
 
@@ -471,7 +491,10 @@ ws://media-server:8097/
 ```
 
 Not this repository's socket. It is documented here because a hub client
-routinely reaches it *through* the `:8803` mount, so the two catalogs are read
+reaches it either directly (when the network allows) or through the hub's
+HTTP relay proxy (`/api/v1/servers/{id}/proxy/*`) — the `:8803` WS mount that
+once promised to carry it is declared unavailable (M2 banner above) — and its
+SyncPlay vocabulary is mirrored on `:8804`, so the two catalogs are read
 together. Source of truth: `phlix-server/src/Server/WebSocket/WebSocketEvents.php`
 and `WebSocketServer.php`.
 

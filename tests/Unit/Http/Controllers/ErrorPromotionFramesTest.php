@@ -29,7 +29,6 @@ use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use PHPUnit\Framework\TestCase;
-use Psr\Container\ContainerInterface;
 
 use function array_keys;
 use function base64_encode;
@@ -589,7 +588,7 @@ final class ErrorPromotionFramesTest extends TestCase
 
     public function testClientMountMissingServerIdFrameIsWholeFramePinned(): void
     {
-        $controller = new ClientMountController($this->createMock(ContainerInterface::class));
+        $controller = new ClientMountController();
 
         self::assertGateFrame(
             400,

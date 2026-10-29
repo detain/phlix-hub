@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
-use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Http\Request;
@@ -20,8 +19,6 @@ use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\WebSocketCloseFrame;
-use Psr\Container\ContainerInterface;
-use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
@@ -32,9 +29,30 @@ use function spl_object_id;
  * Handles inbound client WebSocket connections to reach servers via the relay tunnel.
  *
  * Clients connect via WSS to `GET /client/{server_id}` and authenticate with
- * an enrollment JWT. The hub validates the JWT, looks up the tunnel for the
- * server_id, and if found, creates a ClientConnection and attaches it to
- * the tunnel for frame multiplexing.
+ * a per-user relay token. The hub validates the token, looks up the tunnel for
+ * the server_id, and if found, would create a ClientConnection and attach it
+ * to the tunnel for frame multiplexing.
+ *
+ * ⚠ DECLARED UNAVAILABLE in the deployed multi-process topology (M2, review
+ * hub__asphp). A mount can only be served when the client socket and the
+ * server's Tunnel live in the SAME process — the tunnel's per-client queues,
+ * throttle buckets, and drain timers are keyed on same-process object
+ * identity. Tunnels are registered exclusively via
+ * {@see \Phlix\Hub\Relay\TunnelManager::acceptServer()}, whose only production
+ * caller is {@see \Phlix\Hub\Relay\RelayWorker} on port `:8802` (count=1).
+ * This controller runs inside {@see \Phlix\Hub\Relay\ClientRelayWorker} on
+ * port `:8803` — a SEPARATE Workerman process whose container resolves its
+ * own fresh {@see TunnelManagerInterface} (per-process PHP-DI factory). That
+ * registry can never hold an entry, so the bind lookup is structurally dead
+ * here: {@see onWebSocketConnect()} refuses every mount LOUDLY with a real WS
+ * close code 1011 (do-not-retry) and an explicit topology reason in the
+ * relay log instead of pretending to consider it. The conformant live path
+ * for client→server traffic is the HTTP-over-relay proxy
+ * (`/api/v1/servers/{id}/proxy/*`, bridged over the workerman/channel broker).
+ * A real fix is an owner-level architecture decision (fold the client WS into
+ * the :8802 worker, or build a per-mount bidirectional byte bridge over the
+ * broker — the current broker protocol is request/response shaped); see the
+ * CHANGELOG entry for this refusal.
  *
  * @package Phlix\Hub\Http\Controllers
  */
@@ -43,17 +61,30 @@ final class ClientMountController
     /**
      * RFC 6455 §7.4.1 — "Unexpected Condition": server aborted (mount errors,
      * unknown connection state). L-4: delivered as a real WS close frame.
+     *
+     * M2 (review hub__asphp): THE mount-refusal code. The :8803 surface refuses
+     * every mount with this code because the bind cannot be served in this
+     * process at all — unlike 1013, 1011 does not invite retry loops against a
+     * structurally dead surface.
      */
     public const CLOSE_INTERNAL_ERROR = 1011;
 
     /**
-     * RFC 6455 §7.4.1 — "Try Again Later": no live server tunnel right now;
-     * the client should retry. Mirrors ClientRelayWorker::CLOSE_TRY_AGAIN_LATER.
+     * RFC 6455 §7.4.1 — "Try Again Later": transient server-side refusal; the
+     * client should back off and retry. Emitted by the :8803 worker's mount
+     * RATE LIMITER ({@see \Phlix\Hub\Relay\ClientRelayWorker::CLOSE_TRY_AGAIN_LATER})
+     * — NOT by this controller since M2: mount refusals here are structural
+     * ({@see CLOSE_INTERNAL_ERROR}), never "try again".
      */
     public const CLOSE_TRY_AGAIN_LATER = 1013;
 
     /**
      * Map of connection ID => ClientConnection for active client connections.
+     *
+     * M2 (review hub__asphp): written only by a successful mount — which the
+     * declared-unavailable law makes impossible in this topology — so this map
+     * stays empty in production and the pair below is the preserved rebuild
+     * seam (see {@see onClientMessage()}).
      *
      * @var array<int, ClientConnection>
      */
@@ -62,26 +93,30 @@ final class ClientMountController
     /**
      * Map of connection ID => FrameDecoder for streaming frame parsing.
      *
+     * Paired with {@see self::$connClients}; stays empty under the M2 law.
+     *
      * @var array<int, FrameDecoder>
      */
     private static array $connDecoders = [];
 
     /**
-     * @param ContainerInterface $container PSR-11 container for resolving TunnelManager.
+     * The controller is stateless since M2 (no container, no resolvable
+     * services): the HTTP signpost is pure response construction and the WS
+     * mount refuses before consulting anything (class docblock).
      */
-    public function __construct(
-        private readonly ContainerInterface $container,
-    ) {
+    public function __construct()
+    {
     }
 
     /**
      * Handle a client connection request to `/client/{server_id}`.
      *
-     * Performs JWT validation and upgrades to WebSocket if valid.
-     * The first message (after WS handshake) should be the client's
-     * authentication token for verification.
+     * This HTTP surface never mounted anything: it is a signpost that steers
+     * callers to the dedicated `:8803` WebSocket worker (see class docblock for
+     * the M2 declared-unavailable law on that mount path). Authentication,
+     * tunnel binding, and frame relay all live on the WS worker.
      *
-     * @param Request          $request Workerman HTTP request.
+     * @param Request          $request The Workerman HTTP request.
      * @param array<string, string> $params Route params containing 'server_id'.
      *
      * @return Response
@@ -120,6 +155,16 @@ final class ClientMountController
         $wsEndpoint = 'ws://' . $hubWsHost . ':' . \Phlix\Hub\Relay\ClientRelayWorker::DEFAULT_PORT
             . '/client/' . $serverId;
 
+        // M2 (review hub__asphp): the steer names where the surface lives, but
+        // it must not promise it works — in the deployed multi-process topology
+        // the :8803 mount refuses every connection (WS close 1011). The
+        // `available: false` field makes that machine-readable.
+        // (S2b truth: the mount credential is the per-user CLIENT RELAY TOKEN,
+        // not the enrollment JWT — the stale wording is corrected here too.)
+        $unavailableNote = ' The WebSocket surface at this address is not available in this hub '
+            . 'topology (it refuses every mount with close code 1011); live client-to-server '
+            . 'traffic rides the HTTP relay proxy at /api/v1/servers/' . $serverId . '/proxy/.';
+
         // Read through getHeader(): $request->headers is case-NORMALISED at the
         // Workerman boundary (Workerman lowercases, collectHeadersFromWorkerman()
         // then uppercases), so the literal 'Upgrade' never matched and this
@@ -134,8 +179,9 @@ final class ClientMountController
                     'error' => 'UPGRADE_REQUIRED',
                     'code' => 'relay.client_ws_endpoint',
                     'message' => 'The client relay must be established via WebSocket. Connect to '
-                        . $wsEndpoint . ' with your enrollment JWT.',
+                        . $wsEndpoint . ' with your client relay token.' . $unavailableNote,
                     'ws_endpoint' => $wsEndpoint,
+                    'available' => false,
                 ]);
         }
 
@@ -146,30 +192,36 @@ final class ClientMountController
                 'error' => 'NOT_IMPLEMENTED_VIA_HTTP',
                 'code' => 'relay.client_ws_endpoint',
                 'message' => 'The client relay tunnel must be established over the WebSocket worker. Connect to '
-                    . $wsEndpoint . ' with your enrollment JWT.',
+                    . $wsEndpoint . ' with your client relay token.' . $unavailableNote,
                 'ws_endpoint' => $wsEndpoint,
+                'available' => false,
             ]);
     }
 
     /**
-     * Handle WebSocket upgrade for a client connection.
+     * Handle WebSocket upgrade for a client connection — refused loudly.
      *
-     * Invoked by {@see \Phlix\Hub\Relay\ClientRelayWorker} after the
-     * enrollment JWT has been validated for $serverId. Binds the client to
-     * the matching server tunnel via {@see TunnelManagerInterface::acceptClient()}.
+     * Invoked by {@see \Phlix\Hub\Relay\ClientRelayWorker} after the client
+     * relay token has been validated for $serverId. Under the M2
+     * declared-unavailable law (class docblock) this method NEVER binds: the
+     * mount is refused with a real WS close code 1011 (do-not-retry) and the
+     * relay log carries an explicit `client_mount_bridge_unavailable` reason,
+     * replacing the old silent "no active server tunnel" 1013 that indistinguish-
+     * ably invited eternal reconnect loops against a structurally dead surface.
      *
-     * The caller (ClientRelayWorker) is responsible for authentication; this
-     * method assumes $serverId has already been authorised.
+     * The caller (ClientRelayWorker) remains responsible for authentication;
+     * $userId is accepted and logged so operators can see WHO attempted the
+     * dead mount (the auth ladder still runs first: cheap rate-limit, token
+     * validation, ownership re-confirmation).
      *
      * @param TcpConnection    $connection Workerman TCP connection.
-     * @param WorkermanRequest $request    The WS upgrade request (path/headers).
+     * @param WorkermanRequest $request    The WS upgrade request (path/headers) —
+     *                                     parsed by the caller; unused here.
      * @param string           $serverId   Server UUID the client wants to reach.
      * @param string           $userId     Authenticated owning-user UUID resolved by
-     *                                     {@see ClientRelayWorker::validateClientAuth()}
-     *                                     (S42, updates.md #50). Passed to
-     *                                     {@see TunnelManagerInterface::acceptClient()}
-     *                                     so the mounted connection enforces the user's
-     *                                     per-user relay throttle. Empty mounts Unlimited.
+     *                                     {@see \Phlix\Hub\Relay\ClientRelayWorker::validateClientAuth()}
+     *                                     (S42). Logged for attribution; empty when
+     *                                     the caller had none to forward.
      *
      * @return void
      */
@@ -179,71 +231,29 @@ final class ClientMountController
         string $serverId,
         string $userId = '',
     ): void {
-        $connId = spl_object_id($connection);
+        // Law 4 (fail loud): the bind cannot be served in THIS process — the
+        // tunnel registry lives in the :8802 relay worker (see class docblock).
+        // Refuse explicitly instead of probing a lookup that is dead by design.
         $logger = LoggerFactory::get(LogChannels::RELAY);
+        $logger->warning('Relay: client WS mount refused — client-mount bridge is not available in this hub topology', [
+            'server_id' => $serverId,
+            'user_id' => $userId !== '' ? $userId : null,
+            'reason' => 'client_mount_bridge_unavailable',
+            'close_code' => self::CLOSE_INTERNAL_ERROR,
+        ]);
 
-        try {
-            $tunnelManager = $this->container->get(TunnelManagerInterface::class);
-            if (!$tunnelManager instanceof TunnelManagerInterface) {
-                // L-4: real close frame, 1011 (unexpected server condition).
-                WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL_ERROR);
-                return;
-            }
-
-            // Generate a client ID for this connection
-            $clientId = $this->generateUuid();
-
-            // Accept the client connection and attach to tunnel. The owning
-            // user id (S42) is forwarded so acceptClient() resolves + attaches
-            // that user's per-user relay throttle to the new connection.
-            $client = $tunnelManager->acceptClient(
-                $serverId,
-                $connection,
-                $clientId,
-                '',
-                $userId !== '' ? $userId : null,
-            );
-
-            if ($client === null) {
-                // No active server tunnel for this server_id — reject.
-                // L-4: 1013 (Try Again Later) is the exact RFC 6455 code for
-                // "upstream not available, retry" — sent as a real close frame
-                // so the client's close event carries it.
-                $logger->info('Relay: client WS closed, no active server tunnel', [
-                    'server_id' => $serverId,
-                    'client_id' => $clientId,
-                ]);
-                WebSocketCloseFrame::reject($connection, self::CLOSE_TRY_AGAIN_LATER);
-                return;
-            }
-
-            // Store mapping for message handling
-            self::$connClients[$connId] = $client;
-            self::$connDecoders[$connId] = new FrameDecoder();
-
-            $logger->info('Relay: client WS connected', [
-                'server_id' => $serverId,
-                'client_id' => $clientId,
-            ]);
-
-            // NOTE: connection cleanup is driven by the owning worker's
-            // onClose callback ({@see \Phlix\Hub\Relay\ClientRelayWorker::onClose})
-            // which dispatches to {@see onClientClose()}. We deliberately do
-            // NOT set $connection->onClose here — doing so would override the
-            // worker-level callback Workerman copied onto the connection and
-            // silently drop the worker's own bookkeeping.
-        } catch (Throwable $e) {
-            $logger->error('Relay: client mount error', [
-                'server_id' => $serverId,
-                'error' => $e->getMessage(),
-            ]);
-            // L-4: real close frame with 1011 (unexpected condition).
-            WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL_ERROR);
-        }
+        // L-4: real close frame. 1011 (NOT 1013): retrying this surface can
+        // never succeed until the topology changes.
+        WebSocketCloseFrame::reject($connection, self::CLOSE_INTERNAL_ERROR);
     }
 
     /**
      * Handle incoming message from a client connection.
+     *
+     * Since M2 no mount ever succeeds on this surface, so the bookkeeping maps
+     * stay empty and every frame falls into the defensive 1011 rejection below.
+     * The dispatch stays wired (ClientRelayWorker routes onMessage here) as the
+     * rebuild seam for the owner's architecture decision.
      *
      * @param TcpConnection $connection Client connection.
      * @param string        $data       Raw message data.
@@ -282,15 +292,5 @@ final class ClientMountController
             self::$connClients[$connId]->onClose();
             unset(self::$connClients[$connId], self::$connDecoders[$connId]);
         }
-    }
-
-    /**
-     * Generate a random UUID v4.
-     *
-     * @return string UUID string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

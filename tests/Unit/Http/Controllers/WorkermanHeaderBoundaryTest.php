@@ -14,7 +14,6 @@ use Phlix\Hub\Hub\DnsAliasManager;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Hub\EnrollmentJwtService;
 use Phlix\Hub\Hub\TlsCertificateManager;
-use Psr\Container\ContainerInterface;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
@@ -299,7 +298,7 @@ final class WorkermanHeaderBoundaryTest extends TestCase
      */
     public function testClientMountReachesTheWsSteerWhenARealRequestUpgrades(): void
     {
-        $controller = new ClientMountController(self::unusedContainer());
+        $controller = new ClientMountController();
 
         $request = self::hubRequest('GET', '/client/server-uuid-ccc', ['Upgrade' => 'websocket']);
         $response = $controller->handle($request, ['server_id' => 'server-uuid-ccc']);
@@ -313,7 +312,7 @@ final class WorkermanHeaderBoundaryTest extends TestCase
      */
     public function testClientMountStillReturns426ForARealRequestWithoutAnUpgradeHeader(): void
     {
-        $controller = new ClientMountController(self::unusedContainer());
+        $controller = new ClientMountController();
 
         $request = self::hubRequest('GET', '/client/server-uuid-ddd');
         $response = $controller->handle($request, ['server_id' => 'server-uuid-ddd']);
@@ -363,20 +362,5 @@ final class WorkermanHeaderBoundaryTest extends TestCase
         /** @var array<string, mixed> $decoded */
         $decoded = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
         return $decoded;
-    }
-
-    private static function unusedContainer(): ContainerInterface
-    {
-        return new class implements ContainerInterface {
-            public function get(string $id): mixed
-            {
-                throw new \RuntimeException('container not used by handle(): ' . $id);
-            }
-
-            public function has(string $id): bool
-            {
-                return false;
-            }
-        };
     }
 }

@@ -61,13 +61,21 @@ use function trim;
  *      the HTTP relay proxy's ownership gate. The server's long-lived 7-day
  *      enrollment JWT is NO LONGER accepted as a client credential. On failure,
  *      close with WS code 4401 (application "unauthorized").
- *   3. On success, delegate to {@see ClientMountController::onWebSocketConnect()}
- *      which binds the client to the matching server tunnel. If no tunnel is
- *      connected for the `server_id`, the connection is closed
- *      (TunnelManager::acceptClient returns null → controller closes).
- *   4. Subsequent binary frames are dispatched to
- *      {@see ClientMountController::onClientMessage()}; close events go to
- *      {@see ClientMountController::onClientClose()}.
+ *   3. On success, delegate to {@see ClientMountController::onWebSocketConnect()}.
+ *      ⚠ M2 (review hub__asphp): that mount path is DECLARED UNAVAILABLE — the
+ *      controller refuses every mount with a real close frame 1011 and an
+ *      explicit `client_mount_bridge_unavailable` relay-log reason. A tunnel
+ *      can only be bound in the process that owns it (the :8802 relay worker,
+ *      count=1); this :8803 worker's per-process TunnelManager registry is
+ *      structurally empty, so the bind could never succeed here. Steps 1-2
+ *      still run (cheap limiter, then auth + ownership re-confirmation) so the
+ *      refusal is attributed to an authenticated user and a mount flood stays
+ *      throttled. See the controller class docblock for the full topology
+ *      evidence and the owner-level rebuild options.
+ *   4. Post-upgrade frames dispatch to {@see ClientMountController::onClientMessage()}
+ *      and close events to {@see ClientMountController::onClientClose()}; since
+ *      M2 the bookkeeping maps they read are never populated, so frames on a
+ *      refused socket meet the defensive 1011 path.
  *
  * @package Phlix\Hub\Relay
  */
@@ -207,10 +215,13 @@ final class ClientRelayWorker
      * Must be per-worker here (NOT in the master via a service provider) so the
      * connection hooks feed the SAME {@see \Phlix\Hub\Stats\Metrics\MetricsRegistry}
      * instance the flush drains. Unlike {@see RelayWorker::onWorkerStart()} the
-     * client worker owns no tunnels and joins no channel broker, so this hook is
-     * metrics-only. Guarded end-to-end so a metrics failure never breaks the
-     * client relay worker; when metrics is disabled {@see $metrics} stays null
-     * and every connection hook no-ops.
+     * client worker owns no tunnels and joins no channel broker — that is
+     * precisely why the client-mount path it serves is DECLARED UNAVAILABLE and
+     * refuses every mount (M2, review hub__asphp; see
+     * {@see \Phlix\Hub\Http\Controllers\ClientMountController}'s class
+     * docblock) — so this hook is metrics-only. Guarded end-to-end so a metrics
+     * failure never breaks the client relay worker; when metrics is disabled
+     * {@see $metrics} stays null and every connection hook no-ops.
      *
      * @return void
      */
@@ -383,13 +394,16 @@ final class ClientRelayWorker
                 $metricsId = Ids::uuidV4();
                 self::$connMetricsIds[$connId] = $metricsId;
                 self::$liveConnections[$connId] = $connection;
-                // kind 'stream': unlike the server tunnel (RelayWorker uses
-                // 'websocket' — a control-plane frame multiplexer), a client relay
-                // connection IS the media playback path (the fallback used when a
-                // direct signed URL is unavailable). sessionId is null (the client
-                // relay keeps no relay_sessions row); mediaItemId carries the
-                // server_id being reached — the best per-connection correlator
-                // available at mount time.
+                // kind 'stream': a client relay connection WAS designed as the
+                // media playback path (the fallback when a direct signed URL is
+                // unavailable). Since M2 the mount is refused before any byte
+                // flows, so in the deployed topology these rows record REFUSED
+                // mount attempts, not delivered media — the honest reading until
+                // the surface is rebuilt (unlike the server tunnel (RelayWorker
+                // uses 'websocket' — a control-plane frame multiplexer)).
+                // sessionId is null (the client relay keeps no relay_sessions
+                // row); mediaItemId carries the server_id being reached — the
+                // best per-connection correlator available at mount time.
                 $metrics->openConnection(
                     $metricsId,
                     'stream',
@@ -400,12 +414,14 @@ final class ClientRelayWorker
                 );
             }
 
-            // Bind the client to the matching tunnel. The controller closes
-            // the connection itself if no active tunnel exists (server_offline);
-            // the metrics row is then left for onClose's final touch + the flush
-            // TTL to reap (mirrors RelayWorker / the server's WS close hook).
-            // $userId (S42) is forwarded so the mounted connection enforces this
-            // user's per-user relay throttle.
+            // M2 (review hub__asphp): the mount is refused LOUDLY by the
+            // controller — real close frame 1011 + `client_mount_bridge_
+            // unavailable` relay-log reason — because the tunnel registry lives
+            // in the separate :8802 process and this worker's own registry can
+            // never hold an entry (its own onWorkerStart docblock states it).
+            // The connection's metrics row (opened just above) is left for
+            // onClose's final touch + the flush TTL to reap, exactly as the old
+            // server_offline path did. $userId is forwarded for attribution.
             $controller->onWebSocketConnect($connection, $request, $serverId, $userId);
         } catch (Throwable $e) {
             $logger->error('Relay: client WS connect error', [

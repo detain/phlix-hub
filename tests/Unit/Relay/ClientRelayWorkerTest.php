@@ -14,7 +14,6 @@ use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Hub\ServerInfoHandler;
-use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\FrameEncoder;
@@ -25,7 +24,6 @@ use Phlix\Hub\Relay\WebSocketCloseFrame;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
 use Phlix\Hub\Stats\Metrics\MetricsRegistry;
-use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayWireCodecInterface;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
@@ -122,7 +120,7 @@ final class ClientRelayWorkerTest extends TestCase
         $this->tunnelManager = new TunnelManager($this->sessionManager, $this->codec, $this->logger);
         // HB-4.6f: the controller no longer takes a rate limiter — the real
         // client-mount limit lives on the ClientRelayWorker WS surface.
-        $this->controller = new ClientMountController($this->buildContainer());
+        $this->controller = new ClientMountController();
     }
 
     protected function tearDown(): void
@@ -379,12 +377,14 @@ final class ClientRelayWorkerTest extends TestCase
             'Authorization' => 'Bearer ' . $token,
         ]);
 
-        // No tunnel registered for this server_id → controller rejects with a
-        // real WS close frame (L-4): 1013 Try Again Later, not the old literal
-        // 'server_offline' text.
+        // M2 (review hub__asphp): the mount bridge is DECLARED UNAVAILABLE in the
+        // deployed multi-process topology — the controller refuses with 1011
+        // WITHOUT consulting the tunnel registry. 1011 (not 1013 "Try Again
+        // Later"): retrying this surface can never succeed until the
+        // architecture changes; do not induce client retry loops.
         $connection = $this->createMock(TcpConnection::class);
         $worker->onWebSocketConnect($connection, $request);
-        $this->assertRejectedWithCloseFrame($connection, ClientMountController::CLOSE_TRY_AGAIN_LATER);
+        $this->assertRejectedWithCloseFrame($connection, ClientMountController::CLOSE_INTERNAL_ERROR);
     }
 
     // ---- HB-4.6f: client-mount rate limit (WS close 1013) ---------------
@@ -401,7 +401,11 @@ final class ClientRelayWorkerTest extends TestCase
         $this->grantToken($token, self::OWNER_USER_ID, $serverId);
         $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
-        // Bring up an ACTIVE tunnel so under-limit mounts bind successfully.
+        // Bring up an ACTIVE tunnel: under the old law this made under-limit
+        // mounts BIND; under the M2 declared-unavailable law every mount
+        // refuses (1011) regardless — so the ONLY per-connection difference the
+        // limiter can still produce is 1013 (throttled, never reaches the
+        // controller) vs 1011 (passed the limiter, refused at the controller).
         $serverWs = $this->createMock(TcpConnection::class);
         $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
         $tunnel->relaySessionId = 'session-123';
@@ -419,31 +423,32 @@ final class ClientRelayWorkerTest extends TestCase
             'Authorization' => 'Bearer ' . $token,
         ]);
 
-        // The 2 under-limit mounts from one IP are NOT closed → they bind.
+        // The 2 under-limit mounts pass the limiter → they reach the controller
+        // and receive the structural 1011 refusal (NOT the 1013 throttle).
         for ($i = 0; $i < 2; $i++) {
             $conn = $this->createMock(TcpConnection::class);
             $conn->method('getRemoteIp')->willReturn('198.51.100.5');
-            $conn->expects($this->never())->method('close');
             $worker->onWebSocketConnect($conn, $request);
+            $this->assertRejectedWithCloseFrame($conn, ClientMountController::CLOSE_INTERNAL_ERROR);
         }
-        self::assertCount(2, $tunnel->clientConnections, 'the two under-limit mounts must bind');
+        self::assertCount(0, $tunnel->clientConnections, 'no mount binds in this topology (M2)');
 
         // The 3rd mount from the same IP trips the limiter → real WS close frame
-        // 1013 (L-4), and NO tunnel bind occurs (the mount is rejected before
-        // binding).
+        // 1013 (L-4): the throttle code, never the controller's 1011 — proving
+        // the limiter short-circuits ahead of the mount path.
         $limited = $this->createMock(TcpConnection::class);
         $limited->method('getRemoteIp')->willReturn('198.51.100.5');
         $worker->onWebSocketConnect($limited, $request);
         $this->assertRejectedWithCloseFrame($limited, ClientRelayWorker::CLOSE_TRY_AGAIN_LATER);
-        self::assertCount(2, $tunnel->clientConnections, 'a rate-limited mount must not bind');
+        self::assertCount(0, $tunnel->clientConnections, 'a rate-limited mount must not reach the controller');
 
-        // After the window resets, a legit reconnect from the same IP passes.
+        // After the window resets, a legit reconnect from the same IP passes the
+        // limiter again (controller refusal 1011, not throttle 1013).
         $now += 61;
         $reconnect = $this->createMock(TcpConnection::class);
         $reconnect->method('getRemoteIp')->willReturn('198.51.100.5');
-        $reconnect->expects($this->never())->method('close');
         $worker->onWebSocketConnect($reconnect, $request);
-        self::assertCount(3, $tunnel->clientConnections, 'a post-window reconnect must bind again');
+        $this->assertRejectedWithCloseFrame($reconnect, ClientMountController::CLOSE_INTERNAL_ERROR);
     }
 
     /**
@@ -542,16 +547,27 @@ final class ClientRelayWorkerTest extends TestCase
         self::assertCount(2, array_unique($limiter->hits));
     }
 
-    // ---- WS connect: success / binding ----------------------------------
+    // ---- WS connect: declared-unavailable refusal (M2, review hub__asphp) --
 
-    public function testOnWebSocketConnectBindsToActiveTunnel(): void
+    /**
+     * M2 (review hub__asphp): the client-mount bridge is architecturally
+     * unavailable in the deployed multi-process topology. A same-process tunnel
+     * CAN be conjured here (the unit harness shares one container) — and the
+     * mount STILL must refuse, because the refusal is STRUCTURAL (the :8803
+     * worker's process-local TunnelManager can never hold the :8802 process's
+     * registry), not "this server happens to be offline". Pins the 1011
+     * (no-retry) code: 1013 "Try Again Later" would invite eternal reconnect
+     * loops against a surface that can never serve.
+     */
+    public function testMountIsRefusedEvenWithActiveTunnel(): void
     {
         $serverId = 'server-uuid-online';
         $token = 'valid-token-online';
         $this->grantToken($token, self::OWNER_USER_ID, $serverId);
         $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
-        // Bring up an ACTIVE tunnel for this server.
+        // Bring up an ACTIVE tunnel for this server in THIS process — the exact
+        // state production :8803 can never have. The mount still refuses.
         $serverWs = $this->createMock(TcpConnection::class);
         $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
         $tunnel->relaySessionId = 'session-123';
@@ -563,57 +579,33 @@ final class ClientRelayWorkerTest extends TestCase
         ]);
 
         $clientWs = $this->createMock(TcpConnection::class);
-        // The client connection should NOT be closed on a successful bind.
-        $clientWs->expects($this->never())->method('close');
-
         $worker->onWebSocketConnect($clientWs, $request);
 
-        // A client connection is now attached to the tunnel.
-        self::assertCount(1, $tunnel->clientConnections);
+        $this->assertRejectedWithCloseFrame($clientWs, ClientMountController::CLOSE_INTERNAL_ERROR);
+        // The refusal happens BEFORE any registry lookup: no client is ever
+        // attached, no tunnel bookkeeping mutates.
+        self::assertCount(0, $tunnel->clientConnections);
     }
 
-    // ---- S42: per-user throttle attached AT MOUNT -------------------------
+    // ---- M2 refusal is structural: S42's mount plumbing is never reached ---
 
     /**
-     * The authenticated user's `throttle_bps` must reach the mounted
-     * {@see ClientConnection} — the whole of S42's enforcement hangs off this one
-     * plumbing chain, and nothing pinned it.
-     *
-     * Chain under test, end to end and all production code:
-     * {@see ClientRelayWorker::onWebSocketConnect()} resolves the owning user from
-     * the relay token, forwards it to
-     * {@see ClientMountController::onWebSocketConnect()}, which forwards it to
-     * {@see \Phlix\Hub\Relay\TunnelManager::acceptClient()}, which reads
-     * {@see RelaySessionManager::getUserThrottleBps()} and constructs the
-     * connection's token bucket.
-     *
-     * 🔴 Measured on master (2026-08-03): deleting the `$userId` argument from the
-     * worker's `$controller->onWebSocketConnect(...)` call — a one-token edit that
-     * mounts EVERY native client Unlimited and makes the entire S42 feature inert
-     * in production — left the whole suite green (2532 tests, 19894 assertions,
-     * exit 0, byte-identical to baseline). Same for passing `null` instead of
-     * `$userId` in the controller's `acceptClient()` call. This is the same
-     * "one argument from inert" shape the S42/S43 audit found on the HTTP path at
-     * `ServerProxyController.php:1072`.
-     *
-     * The lookup is asserted to happen exactly ONCE and with the authenticated
-     * user id, and the attached rate is asserted to be the value that user (and
-     * only that user) resolves to, so neither a dropped argument nor a hardcoded
-     * default can satisfy this test.
+     * The S42 per-user throttle chain (worker → controller →
+     * TunnelManager::acceptClient → RelaySessionManager::getUserThrottleBps)
+     * sat BEHIND the mount bind. Since the bind is now refused structurally
+     * (M2, review hub__asphp), nothing in that chain may be consulted on the
+     * :8803 mount path — and a refused mount must attach no ClientConnection.
+     * (The throttle mechanics themselves stay unit-pinned at their own level:
+     * ClientConnectionTest / TunnelManagerTest.)
      */
-    public function testOnWebSocketConnectAttachesTheOwningUsersThrottleToTheMountedConnection(): void
+    public function testMountRefusalNeverConsultsUserThrottle(): void
     {
         $serverId = 'server-uuid-throttled';
         $token = 'valid-token-throttled';
         $this->grantToken($token, self::OWNER_USER_ID, $serverId);
         $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
-        // Only the authenticated owner resolves to 5 Mbps; anybody else (and the
-        // no-user case a dropped argument produces) resolves to Unlimited.
-        $this->sessionManager->expects($this->once())
-            ->method('getUserThrottleBps')
-            ->with(self::OWNER_USER_ID)
-            ->willReturn(5_000_000);
+        $this->sessionManager->expects($this->never())->method('getUserThrottleBps');
 
         $serverWs = $this->createMock(TcpConnection::class);
         $serverWs->method('send')->willReturn(true);
@@ -640,110 +632,20 @@ final class ClientRelayWorkerTest extends TestCase
 
         $worker->onWebSocketConnect($clientWs, $request);
 
-        $client = null;
-        foreach ($tunnel->clientConnections as $mounted) {
-            $client = $mounted;
-        }
-
-        self::assertInstanceOf(ClientConnection::class, $client);
-        self::assertSame(
-            5_000_000,
-            $client->throttleBps,
-            'the mounted connection must carry the authenticated user’s throttle_bps',
-        );
-        self::assertTrue($client->isThrottled());
-        self::assertNotNull($client->throttleBucket, 'a capped user must mount WITH a token bucket');
-        // bits/sec -> bytes/sec conversion happens once, at construction.
-        self::assertSame(625_000.0, $client->throttleBucket->ratePerSecond());
-        self::assertSame(625_000.0, $client->throttleBucket->capacity());
-
-        // …and the attached bucket is actually CONSULTED by the send path: with
-        // the bucket in debt, a server->client DATA frame must not reach the
-        // socket (it is queued for the drain timer instead).
-        $client->throttleBucket->spend(1_000_000.0);
-        self::assertSame(0, $delivered, 'no client frame should have been delivered before the DATA send');
-
-        $tunnel->sendToClient(
-            $client->channelId,
-            new RelayFrame(RelayFrameType::DATA, $client->channelId, 'payload'),
-        );
-
-        self::assertSame(
-            0,
-            $delivered,
-            'a mounted, throttled connection with an empty bucket must queue rather than deliver',
-        );
-    }
-
-    /**
-     * The negative half of the pair above: a user configured Unlimited (`0`)
-     * mounts with NO bucket and takes the unthrottled fast path.
-     *
-     * Together with the 5 Mbps case this proves the attached cap TRACKS the
-     * per-user lookup rather than being a constant, and it independently pins the
-     * lookup call itself (a dropped `$userId` argument never queries at all, so
-     * `expects($this->once())` fails).
-     */
-    public function testOnWebSocketConnectMountsAnUnlimitedUserWithNoBucket(): void
-    {
-        $serverId = 'server-uuid-unlimited';
-        $token = 'valid-token-unlimited';
-        $this->grantToken($token, self::OWNER_USER_ID, $serverId);
-        $this->setServerOwner($serverId, self::OWNER_USER_ID);
-
-        $this->sessionManager->expects($this->once())
-            ->method('getUserThrottleBps')
-            ->with(self::OWNER_USER_ID)
-            ->willReturn(0);
-
-        $serverWs = $this->createMock(TcpConnection::class);
-        $serverWs->method('send')->willReturn(true);
-        $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
-        $tunnel->relaySessionId = 'session-123';
-        $tunnel->status = Tunnel::STATUS_ACTIVE;
-
-        $worker = new ClientRelayWorker($this->buildContainer());
-        $request = $this->makeUpgradeRequest('/client/' . $serverId, [
-            'Authorization' => 'Bearer ' . $token,
-        ]);
-
-        $delivered = 0;
-        $clientWs = $this->createMock(TcpConnection::class);
-        $clientWs->method('send')->willReturnCallback(
-            static function (mixed $data) use (&$delivered): bool {
-                if (!is_string($data)) {
-                    Assert::fail('the relay must only send string frames to the client');
-                }
-                $delivered++;
-                return true;
-            },
-        );
-
-        $worker->onWebSocketConnect($clientWs, $request);
-
-        $client = null;
-        foreach ($tunnel->clientConnections as $mounted) {
-            $client = $mounted;
-        }
-
-        self::assertInstanceOf(ClientConnection::class, $client);
-        self::assertSame(0, $client->throttleBps);
-        self::assertFalse($client->isThrottled());
-        self::assertNull($client->throttleBucket, 'Unlimited must build no bucket at all');
-
-        // Unlimited delivers immediately — no queue, no timer.
-        $tunnel->sendToClient(
-            $client->channelId,
-            new RelayFrame(RelayFrameType::DATA, $client->channelId, 'payload'),
-        );
-
-        self::assertSame(1, $delivered, 'an Unlimited mount must deliver on the fast path');
-        self::assertNull($client->throttleDrainTimerId);
+        $this->assertRejectedWithCloseFrame($clientWs, ClientMountController::CLOSE_INTERNAL_ERROR);
+        self::assertCount(0, $tunnel->clientConnections, 'a refused mount must attach no client to the tunnel');
+        self::assertSame(0, $delivered, 'no frames may flow to a refused mount');
     }
 
     // ---- Frame round-trip through the router ----------------------------
 
-    public function testClientDataFrameIsRelayedToServerTunnel(): void
+    /**
+     * M2 flip: a refused mount must leave NOTHING that can carry frames. The
+     * old test proved client DATA reached the server tunnel through the mount;
+     * under the declared-unavailable law, DATA arriving on a refused (or
+     * merely unmounted) connection must reach no server tunnel at all.
+     */
+    public function testClientFramesAfterRefusalReachNoServerTunnel(): void
     {
         $serverId = 'server-uuid-relay';
         $token = 'valid-token-relay';
@@ -755,8 +657,9 @@ final class ClientRelayWorkerTest extends TestCase
         $tunnel->relaySessionId = 'session-123';
         $tunnel->status = Tunnel::STATUS_ACTIVE;
 
-        // Capture everything written to the server side. registerClient emits
-        // a CLIENT_CONNECT frame first; the DATA frame we send should follow.
+        // Capture everything written to the server side. Under the old law
+        // registerClient emitted a CLIENT_CONNECT frame first; under the
+        // declared-unavailable law the server side must see NOTHING.
         $sentToServer = [];
         $serverWs->method('send')->willReturnCallback(
             function (string $data) use (&$sentToServer): bool {
@@ -773,28 +676,22 @@ final class ClientRelayWorkerTest extends TestCase
         $clientWs = $this->createMock(TcpConnection::class);
         $worker->onWebSocketConnect($clientWs, $request);
 
-        // Client sends a DATA frame; the worker routes it to onClientMessage,
-        // which forwards it through the tunnel to the server.
+        // The connect itself is refused (close frame armed on the socket). Even
+        // if bytes arrive before that lands, onClientMessage finds NO
+        // ClientConnection bookkeeping and must write nothing server-ward.
         $encoder = new FrameEncoder();
         $dataFrame = $encoder->encode(RelayFrameType::DATA, 7, 'hello-server');
 
         $worker->onMessage($clientWs, $dataFrame);
 
-        // Decode each server-bound payload and confirm a DATA frame with our
-        // payload reached the server.
-        $sawData = false;
-        foreach ($sentToServer as $bytes) {
-            $decoded = (new FrameDecoder())->decode($bytes);
-            if ($decoded instanceof RelayFrame && $decoded->type === RelayFrameType::DATA) {
-                self::assertSame('hello-server', $decoded->payload);
-                $sawData = true;
-            }
-        }
-
-        self::assertTrue($sawData, 'Expected a DATA frame to be relayed to the server tunnel');
+        self::assertSame(
+            [],
+            $sentToServer,
+            'a refused mount must never emit CLIENT_CONNECT or DATA toward the server tunnel',
+        );
     }
 
-    public function testOnCloseDetachesClientAndNotifiesServer(): void
+    public function testRefusedMountLeavesTunnelUntouched(): void
     {
         $serverId = 'server-uuid-close';
         $token = 'valid-token-close';
@@ -814,10 +711,10 @@ final class ClientRelayWorkerTest extends TestCase
 
         $clientWs = $this->createMock(TcpConnection::class);
         $worker->onWebSocketConnect($clientWs, $request);
-        self::assertCount(1, $tunnel->clientConnections);
+        self::assertCount(0, $tunnel->clientConnections, 'a refused mount never attaches a client');
 
-        // Client disconnects — worker dispatches to onClientClose, which
-        // detaches the client from the tunnel (sending CLIENT_DISCONNECT).
+        // Closing the refused connection must neither raise nor mutate:
+        // onClientClose finds no bookkeeping and no-ops.
         $worker->onClose($clientWs);
 
         self::assertCount(0, $tunnel->clientConnections);
@@ -848,7 +745,9 @@ final class ClientRelayWorkerTest extends TestCase
         $this->grantToken($token, self::OWNER_USER_ID, $serverId);
         $this->setServerOwner($serverId, self::OWNER_USER_ID);
 
-        // Bring up an ACTIVE tunnel so the mount binds (not server_offline).
+        // Bring up an ACTIVE tunnel — under the M2 declared-unavailable law the
+        // mount refuses regardless; the metrics row is opened by the WORKER flow
+        // before the controller runs, which is what this case pins.
         $serverWs = $this->createMock(TcpConnection::class);
         $tunnel = $this->tunnelManager->acceptServer($serverId, $serverWs);
         $tunnel->relaySessionId = 'session-123';
@@ -931,8 +830,9 @@ final class ClientRelayWorkerTest extends TestCase
     public function testMetricsAreNoOpWhenCollectorUnavailable(): void
     {
         // No metrics services in the container → onWorkerStart resolves nothing
-        // (guarded) and the connection hooks stay pure no-ops: the mount still
-        // binds and no registry state is created.
+        // (guarded) and the connection hooks stay pure no-ops: the mount is
+        // still refused (declared-unavailable, M2) and no registry state is
+        // created.
         $serverId = 'server-uuid-no-metrics';
         $token = 'valid-token-no-metrics';
         $this->grantToken($token, self::OWNER_USER_ID, $serverId);
@@ -950,14 +850,14 @@ final class ClientRelayWorkerTest extends TestCase
             'Authorization' => 'Bearer ' . $token,
         ]);
         $clientWs = $this->createMock(TcpConnection::class);
-        $clientWs->expects($this->never())->method('close');
 
         $worker->onWebSocketConnect($clientWs, $request);
-        self::assertCount(1, $tunnel->clientConnections);
+        // Refused regardless of metrics state — the refusal is structural.
+        $this->assertRejectedWithCloseFrame($clientWs, ClientMountController::CLOSE_INTERNAL_ERROR);
+        self::assertCount(0, $tunnel->clientConnections);
 
         // Closing must not raise even though nothing was recorded.
         $worker->onClose($clientWs);
-        self::assertCount(0, $tunnel->clientConnections);
     }
 
     // ---- Helpers ---------------------------------------------------------

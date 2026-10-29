@@ -1202,13 +1202,17 @@ final class Application
             return $relayController->handle($req, $typedParams);
         });
 
-        // Client relay mount — client-initiated WSS to reach servers via hub.
+        // Client relay mount — client-initiated WSS mirror on the HTTP surface.
         //
         // ⚠ This one is CORRECTLY bare and must stay bare: it mirrors the path
         // that {@see \Phlix\Hub\Relay\ClientRelayWorker} parses on `:8803`
-        // (`~^/client/([^/?#]+)/?(?:[?#].*)?$~`), which is where clients
-        // actually mount. Adding an `/api/v1` prefix here would make the HTTP
-        // mirror disagree with the WS worker. (S204 inventory.)
+        // (`~^/client/([^/?#]+)/?(?:[?#].*)?$~`), so the HTTP signpost names
+        // exactly what the WS worker reads. Adding an `/api/v1` prefix here
+        // would make the HTTP mirror disagree with the WS worker. (S204
+        // inventory.) M2 (review hub__asphp): the mount itself is DECLARED
+        // UNAVAILABLE in this multi-process topology — the HTTP handler steers
+        // with `available: false` and the :8803 worker refuses every mount
+        // (close 1011); live client→server traffic rides the HTTP relay proxy.
         $clientMountController = $this->resolveClientMountController();
         $this->router->get('/client/{server_id}', static function (
             Request $req,

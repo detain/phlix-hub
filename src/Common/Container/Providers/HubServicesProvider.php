@@ -723,14 +723,14 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new RelayController($jwtService);
             })->parameter('jwtService', get(EnrollmentJwtService::class)),
 
-            ClientMountController::class => factory(static function (
-                ContainerInterface $container,
-            ): ClientMountController {
-                // No limiter: the HTTP handle() is a dead stub (426/501 → steer to
-                // the WS endpoint). The REAL client-mount rate limit lives on the
-                // :8803 ClientRelayWorker WS surface (HB-4.6f).
-                return new ClientMountController($container);
-            })->parameter('container', get(ContainerInterface::class)),
+            ClientMountController::class => factory(static function (): ClientMountController {
+                // Stateless since M2 (review hub__asphp): the HTTP handle() is a
+                // steer stub (426/501 + available:false) and the :8803 WS mount
+                // refuses structurally — nothing is resolved from a container.
+                // The REAL client-mount rate limit lives on the :8803
+                // ClientRelayWorker WS surface (HB-4.6f).
+                return new ClientMountController();
+            }),
 
             FrameDecoder::class => factory(static function (): FrameDecoder {
                 return new FrameDecoder();
@@ -814,9 +814,12 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             // Alias the interface to the concrete TunnelManager so callers
             // that depend on the abstraction (RelayWorker, ClientRelayWorker,
-            // ClientMountController, IdleReaper) all resolve the *same*
-            // singleton tunnel registry. Without this binding the relay
-            // workers would fail to resolve TunnelManagerInterface at runtime.
+            // IdleReaper) all resolve the *same* singleton tunnel registry
+            // within their process. M2 (review hub__asphp): ClientMountController
+            // no longer appears in this list — it is stateless and resolves no
+            // TunnelManager at all (the :8803 mount refuses before lookup).
+            // Without this binding the relay workers would fail to resolve
+            // TunnelManagerInterface at runtime.
             TunnelManagerInterface::class => factory(static function (
                 TunnelManager $tunnelManager,
             ): TunnelManagerInterface {

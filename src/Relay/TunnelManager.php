@@ -31,6 +31,15 @@ use function is_string;
  *   - Client connection routing via acceptClient()
  *   - Tunnel lifecycle (close, reaper)
  *
+ * ⚠ PROCESS-LOCAL by design: this registry is a per-process PHP-DI factory
+ * product, and tunnels register ONLY inside the :8802 relay worker
+ * ({@see RelayWorker::handleHello()} → acceptServer). M2 (review
+ * hub__asphp): {@see acceptClient()} consequently has NO production caller —
+ * the :8803 client-mount path resolves a different instance whose registry is
+ * forever empty and now refuses loudly
+ * ({@see \Phlix\Hub\Http\Controllers\ClientMountController}). The method stays
+ * as the tested data-plane building block for the owner's rebuild decision.
+ *
  * @package Phlix\Hub\Relay
  */
 final class TunnelManager implements TunnelManagerInterface

@@ -38,7 +38,9 @@ info:
 
     - **`:8800` HTTP** — everything in `paths` below. Behind HAProxy in production.
     - **`:8802` WebSocket** — the media server's outbound relay tunnel.
-    - **`:8803` WebSocket** — a client mounting a server through that tunnel.
+    - **`:8803` WebSocket** — a client mounting a server through that tunnel. ⚠ Declared
+      unavailable in the deployed multi-process topology: the mount refuses every connection
+      (close code 1011); live client-to-server traffic rides the `:8800` HTTP relay proxy.
     - **`:8804` WebSocket** — SyncPlay rooms relayed between clients.
     - **`:8805` WebSocket** — hub-to-hub federation (master side).
 
@@ -54,7 +56,8 @@ info:
     Three distinct credentials appear here. A **user** bearer token is HS256 and is what the SPA and
     clients send. An **enrollment JWT** is Ed25519 and is what an enrolled media server sends; its
     public keys are published at `/.well-known/jwks.json`. A **client relay token** is minted by
-    `POST /api/v1/me/servers/{id}/relay-token` and is presented only on the `:8803` WebSocket.
+    `POST /api/v1/me/servers/{id}/relay-token` and is presented on the `:8803` and `:8804`
+    WebSocket surfaces (one credential class, both carriers).
 
     Server-facing endpoints additionally require the `Accept-Phlix-Protocol: v1` header where
     `HubProtocolMiddleware` is in the chain; a missing or wrong value is a 400, not a 401.
@@ -2384,8 +2387,9 @@ paths:
       tags: ["My Servers"]
       summary: "Mint a client relay token"
       description: |-
-        Mints the short-lived per-user token a client presents when mounting
-        `ws://hub:8803/client/{server_id}`. See the WebSocket section.
+        Mints the short-lived per-user token a client presents on the relay WebSocket
+        surfaces (`:8803` mount — currently DECLARED UNAVAILABLE, see the WebSocket
+        section — and the live `:8804` SyncPlay relay). See the WebSocket section.
       x-phlix-middleware: [AuthMiddleware]
       parameters:
         - name: "id"
@@ -3204,10 +3208,14 @@ paths:
       tags: ["Relay"]
       summary: "Client mount signpost"
       description: |-
-        HTTP mirror of the client-mount path. The real mount is a WebSocket on
-        `:8803/client/{server_id}`; this route exists so the HTTP surface names the same path the
-        `ClientRelayWorker` regex parses. **This path is deliberately bare (no `/api/v1` prefix)** and
-        must stay that way, or the HTTP mirror would disagree with the WS worker.
+        HTTP mirror of the client-mount path. The mount surface is a WebSocket on
+        `:8803/client/{server_id}`; this route exists so the HTTP mirror names the same path
+        that the `ClientRelayWorker` regex parses. **This path is deliberately bare (no
+        `/api/v1` prefix)** and must stay that way, or the HTTP mirror would disagree with
+        the WS worker. ⚠ M2 (review hub__asphp): the `:8803` mount itself is DECLARED
+        UNAVAILABLE in the deployed multi-process topology — it refuses every connection
+        with WS close 1011 — so this signpost's `available` field answers `false`; live
+        client-to-server traffic rides `/api/v1/servers/{id}/proxy/*`.
       x-phlix-middleware: []
       parameters:
         - name: "server_id"
@@ -3218,15 +3226,27 @@ paths:
             type: string
       security: []
       responses:
-        "200":
-          description: "Success."
+        "400":
+          description: "Missing server_id segment."
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
-        "404":
-          $ref: "#/components/responses/NotFound"
+        "426":
+          description: "No WebSocket upgrade requested; steers to the :8803 WS endpoint (available: false, M2)."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "501":
+          description: "Upgrade requested but this HTTP worker never mounts; steers to the :8803 WS endpoint (available: false, M2)."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
   "/federation":
     get:
       operationId: "get_federation"
@@ -4123,18 +4143,37 @@ x-phlix-websockets:
     path: "/client/{server_id}"
     pathPattern: "~^/client/([^/?#]+)/?(?:[?#].*)?$~"
     worker: "Phlix\\Hub\\Relay\\ClientRelayWorker"
-    direction: "client → hub, bridged onto the target server's :8802 tunnel"
+    direction: "client → hub, intended bridge onto the target server's :8802 tunnel"
+    availability: >-
+      DECLARED UNAVAILABLE in the deployed multi-process topology (review hub__asphp M2).
+      A mount can only bind to a Tunnel living in the SAME process, and tunnels register
+      exclusively on the :8802 relay worker (count=1); this separate :8803 process resolves
+      its own per-process TunnelManager whose registry can never hold an entry. Every mount
+      is therefore refused LOUDLY after the auth ladder completes, with a real WS close
+      frame 1011 (do-not-retry — never 1013, which would invite endless reconnect loops)
+      and a `client_mount_bridge_unavailable` relay-log line. The HTTP steer
+      (`GET /client/{server_id}` on :8800) answers 426/501 with `available: false`. Live
+      client-to-server traffic rides the HTTP relay proxy at
+      `/api/v1/servers/{id}/proxy/*`. A real cure is an owner-level architecture decision:
+      fold client WS onto the :8802 worker, or build a per-mount bidirectional byte bridge
+      over the workerman/channel broker (whose current protocols are request/response
+      shaped); the catalog below describes the intended wire once either lands.
     auth: >-
       A per-user client relay token from POST /api/v1/me/servers/{id}/relay-token, presented as
       `Authorization: Bearer <token>` or as `Sec-WebSocket-Protocol: bearer, <token>` (browsers
       cannot set arbitrary headers on a WebSocket). The `?token=` query form was REMOVED in step
       S2b so credentials never reach access logs. The token must be scoped to the path-derived
-      server_id, and the resolved user must still own that server.
+      server_id, and the resolved user must still own that server. This ladder still RUNS before
+      the M2 refusal (rate limit → token → ownership), so refusals are attributed.
     encoding: "binary RelayFrame (same wire format as :8802)"
     messages:
       - "0x05 DATA — bidirectional payload, multiplexed onto this client's channel id"
       - "0x07 DISCONNECTED — hub→client, the server tunnel went away; reconnect"
       - "0x08 ERROR — hub→client"
+    closeCodes:
+      - "1013 — connect rate limit exceeded; back off and reconnect"
+      - "4401 — relay token missing/invalid or ownership re-confirmation failed"
+      - "1011 — mount refused: the client-mount bridge is not available in this topology (M2); retrying cannot succeed"
     notes: >-
       GET /client/{server_id} also exists on the :8800 HTTP surface as a signpost. It is
       deliberately registered WITHOUT the /api/v1 prefix so the HTTP mirror names exactly the path
@@ -4905,7 +4944,7 @@ components:
             additionalProperties: true
     RelayToken:
       type: object
-      description: "Short-lived token for mounting ws://hub:8803/client/{server_id}."
+      description: "Short-lived token for the relay WS surfaces (:8804 SyncPlay live; :8803 client mount declared-unavailable, M2)."
       properties:
         token:
           type: string

@@ -8,7 +8,6 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Relay\ClientRelayWorker;
-use Psr\Container\ContainerInterface;
 
 /**
  * Unit tests for {@see ClientMountController}'s plain-HTTP entry point.
@@ -39,23 +38,11 @@ final class ClientMountControllerTest extends TestCase
     {
         parent::setUp();
 
-        // handle() never touches the container (only the WS-upgrade callbacks
-        // resolve the TunnelManager), so a throwing stub is sufficient here.
-        $container = new class implements ContainerInterface {
-            public function get(string $id): mixed
-            {
-                throw new \RuntimeException('container not used by handle(): ' . $id);
-            }
-
-            public function has(string $id): bool
-            {
-                return false;
-            }
-        };
-
-        // HB-4.6f: the HTTP handle() no longer takes a rate limiter — the real
-        // client-mount limit lives on the :8803 WS worker (ClientRelayWorker).
-        $this->controller = new ClientMountController($container);
+        // Stateless since M2 (review hub__asphp): neither the HTTP signpost nor
+        // the declared-unavailable WS refusal resolves anything from a container
+        // (see the controller class docblock). HB-4.6f still holds: the real
+        // client-mount rate limit lives on the :8803 WS worker.
+        $this->controller = new ClientMountController();
     }
 
     public function testReturns400WhenServerIdMissing(): void
@@ -80,6 +67,11 @@ final class ClientMountControllerTest extends TestCase
         self::assertStringContainsString('/client/server-uuid-aaa', $body['ws_endpoint']);
         self::assertArrayHasKey('X-WS-Endpoint', $response->headers);
         self::assertStringContainsString(':' . ClientRelayWorker::DEFAULT_PORT, $response->headers['X-WS-Endpoint']);
+        // M2 (review hub__asphp): the steer must not promise a working mount —
+        // the WS surface declares itself unavailable in this topology.
+        self::assertFalse($body['available']);
+        self::assertIsString($body['message']);
+        self::assertStringContainsString('not available', $body['message']);
     }
 
     public function testReturns501WhenWebSocketUpgradeRequested(): void
@@ -96,6 +88,11 @@ final class ClientMountControllerTest extends TestCase
         self::assertIsString($body['ws_endpoint']);
         self::assertStringContainsString(':' . ClientRelayWorker::DEFAULT_PORT, $body['ws_endpoint']);
         self::assertArrayHasKey('X-WS-Endpoint', $response->headers);
+        // M2 (review hub__asphp): see the 426 pin — the WS mount it steers to
+        // refuses structurally; this body must not promise it works.
+        self::assertFalse($body['available']);
+        self::assertIsString($body['message']);
+        self::assertStringContainsString('not available', $body['message']);
     }
 
     /**

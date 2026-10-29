@@ -111,7 +111,7 @@ process group:
 |--------|--------------|---------|
 | HTTP | `8800` | REST API + the Vue SPA (`/app`; legacy page paths 302-redirect here) + `/health` |
 | Relay (server-facing) | `8802` | Servers connect here to open their outbound tunnel |
-| Relay (client-facing) | `8803` | Remote clients connect (`GET /client/{server_id}`) and are routed down a tunnel |
+| Relay (client-facing) | `8803` | Client-mount WS (`GET /client/{server_id}`). ⚠ **Declared unavailable** in the multi-process topology: every mount is refused with close 1011 (`client_mount_bridge_unavailable`) — see `docs/websockets.md`; live client↔server traffic rides the HTTP relay proxy (`/api/v1/servers/{id}/proxy/*`) |
 | SyncPlay relay | `8804` | Synchronised-playback clients (`GET /syncplay/{server_id}`) |
 | Federation | `8805` | Hub-to-hub peer tunnel |
 
@@ -536,7 +536,9 @@ curl http://localhost:8800/health
 ### 7. Reverse proxy & TLS
 
 Terminate TLS at a reverse proxy in front of the Hub. Both the HTTP API (`8800`) and the
-client-facing relay (`8803`, WebSocket) need to be reachable. Example nginx server block:
+client-facing relay (`8803`, WebSocket) need to be reachable. (The `8803` listener still
+serves the rate-limited, authenticated 1011 refusal — mount traffic itself is declared
+unavailable in this topology; see the worker table above.) Example nginx server block:
 
 ```nginx
 server {
