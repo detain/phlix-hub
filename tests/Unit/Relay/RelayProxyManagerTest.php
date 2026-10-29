@@ -476,15 +476,15 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead($head),
-        ));
+        ), 'srv-1');
         foreach (RelayHttpResponseCodec::chunkBody('{"ok":true}!!') as $bodyChunk) {
-            $manager->onResponseFrame(new RelayFrame(RelayFrameType::HTTP_RESPONSE, $requestId, $bodyChunk));
+            $manager->onResponseFrame(new RelayFrame(RelayFrameType::HTTP_RESPONSE, $requestId, $bodyChunk), 'srv-1');
         }
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         $this->assertCount(1, $this->published);
         $reply = $this->published[0];
@@ -492,6 +492,120 @@ final class RelayProxyManagerTest extends TestCase
         $this->assertSame(200, $reply['data']['status']);
         $this->assertSame(['Content-Type' => 'application/json'], $reply['data']['headers']);
         $this->assertSame('{"ok":true}!!', $reply['data']['body']);
+    }
+
+    /**
+     * C-1 (hub__secnet): HTTP_RESPONSE frames are bound to their source tunnel.
+     * Relay request ids allocate from ONE per-process counter shared by all
+     * tunnels, so a malicious paired server can trivially forge the `seq` of
+     * another tenant's in-flight request (observed from its own ids, which run
+     * sequentially). Every forged phase — HEAD (status/headers into the
+     * victim's browser), BODY (attacker bytes under the victim's own-server
+     * provenance), END (early termination) — must be refused outright, without
+     * touching the victim's pending entry in any way (no clock refresh, no body
+     * append, no phase publish), and the legitimate tunnel's stream must still
+     * complete byte-exact afterwards.
+     */
+    public function testHttpResponseFromForeignTunnelIsRefusedWithoutTouchingVictimEntry(): void
+    {
+        $sent = [];
+        $serverWs = $this->capturingServerWs($sent);
+        $tunnel = $this->activeTunnel('srv-1', $serverWs);
+        $tunnelManager = $this->createMock(TunnelManagerInterface::class);
+        $tunnelManager->method('getTunnelForServer')->willReturn($tunnel);
+
+        $manager = new RelayProxyManager(
+            $tunnelManager,
+            $this->createMock(StructuredLogger::class),
+            30,
+            $this->publisher(),
+        );
+
+        $manager->onRequest([
+            'request_id' => 'req-victim',
+            'reply_event' => 'reply.victim',
+            'server_id' => 'srv-1',
+            'method' => 'GET',
+            'path' => '/api/v1/segment.m4s',
+            'query' => '',
+            'headers' => [],
+            'body_b64' => '',
+            'stream' => true,
+        ]);
+        $requestId = self::lastSentFrame($sent)->seq;
+
+        // Rewind the victim entry's inactivity clock to a provably-stale value
+        // so any (even no-op-looking) refresh by a forged frame is detectable.
+        $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
+        $pendingProp->setAccessible(true);
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $pending[$requestId]['lastActivityAt'] = 1000.0;
+        $pendingProp->setValue($manager, $pending);
+
+        // Forge the full response lifecycle from a FOREIGN tunnel ('srv-evil'
+        // is registered nowhere near this request; the manager must not trust
+        // the seq alone).
+        $forgedHead = new RelayHttpResponseHead(418, ['X-Forged' => 'yes'], 6);
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead($forgedHead),
+        ), 'srv-evil');
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('FORGED'),
+        ), 'srv-evil');
+        $this->assertCount(0, $this->published, 'forged HEAD/BODY must publish nothing into the victim stream');
+
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $this->assertArrayHasKey($requestId, $pending, 'forged frames must not drop the victim entry');
+        $this->assertSame(
+            1000.0,
+            $pending[$requestId]['lastActivityAt'],
+            'forged frames must not refresh the inactivity clock'
+        );
+
+        // A forged END must not complete/terminate the victim's request either.
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ), 'srv-evil');
+        $this->assertCount(0, $this->published, 'a forged END must not terminate the victim stream');
+        /** @var array<int, array<string, mixed>> $pending */
+        $pending = $pendingProp->getValue($manager);
+        $this->assertArrayHasKey($requestId, $pending);
+
+        // The legitimate tunnel still works: the SAME request completes via the
+        // owner tunnel with byte-exact content.
+        $head = new RelayHttpResponseHead(200, ['Content-Type' => 'video/mp4'], 6);
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeHead($head),
+        ), 'srv-1');
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeBody('REAL!!'),
+        ), 'srv-1');
+        $manager->onResponseFrame(new RelayFrame(
+            RelayFrameType::HTTP_RESPONSE,
+            $requestId,
+            RelayHttpResponseCodec::encodeEnd(),
+        ), 'srv-1');
+
+        $this->assertCount(3, $this->published);
+        $this->assertSame('head', $this->published[0]['data']['phase']);
+        $this->assertSame(200, $this->published[0]['data']['status']);
+        $this->assertSame(['Content-Type' => 'video/mp4'], $this->published[0]['data']['headers']);
+        $this->assertSame('body', $this->published[1]['data']['phase']);
+        $this->assertSame('REAL!!', $this->published[1]['data']['body']);
+        $this->assertSame('end', $this->published[2]['data']['phase']);
+        $this->assertSame('req-victim', $this->published[2]['data']['request_id']);
     }
 
     /**
@@ -539,12 +653,12 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, [], 120)),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody(str_repeat('A', 60)),
-        ));
+        ), 'srv-1');
         $this->assertCount(0, $this->published, 'within the cap nothing is replied yet');
 
         // 60 + 60 = 120 > 100-byte cap → overflow fires on THIS frame.
@@ -552,7 +666,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody(str_repeat('B', 60)),
-        ));
+        ), 'srv-1');
 
         $this->assertCount(1, $this->published, 'overflow must publish exactly one failure reply');
         $reply = $this->published[0];
@@ -598,7 +712,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
         $this->assertCount(1, $this->published, 'no double-reply after the overflow failure');
     }
 
@@ -659,12 +773,12 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead($head),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         // Completed on END — exactly ONE buffered reply, never a phased stream
         // and never a stall waiting on a body frame that never arrives.
@@ -685,7 +799,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
         $this->assertCount(1, $this->published);
     }
 
@@ -736,12 +850,12 @@ final class RelayProxyManagerTest extends TestCase
                 ['Content-Length' => '10', 'Accept-Ranges' => 'bytes'],
                 10,
             )),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $headReqId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         $this->assertCount(1, $this->published);
         $this->assertSame(200, $this->published[0]['data']['status']);
@@ -771,17 +885,17 @@ final class RelayProxyManagerTest extends TestCase
                 ['Content-Range' => 'bytes 0-4/10', 'Content-Length' => '5'],
                 5,
             )),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $getReqId,
             RelayHttpResponseCodec::encodeBody('Hello'),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $getReqId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         // HEAD reply (1) + GET head/body/end phases (3) = 4 published entries.
         $this->assertCount(4, $this->published);
@@ -835,22 +949,22 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead($head),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('foo'),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('bar'),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         // Each frame is published as its own phase — nothing is buffered into a
         // single blob (unlike the buffered path, which publishes exactly once).
@@ -915,7 +1029,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '10'], 10)),
-        ));
+        ), 'srv-1');
 
         $manager->failServer('srv-1');
 
@@ -993,7 +1107,7 @@ final class RelayProxyManagerTest extends TestCase
                 ['Content-Length' => '1000000'],
                 1000000
             )),
-        ));
+        ), 'srv-1');
 
         // Run the sweep — it must detect the exceeded absolute duration.
         $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
@@ -1009,12 +1123,12 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('y'),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
         $this->assertCount($countAfterTermination, $this->published);
     }
 
@@ -1063,7 +1177,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '10'], 10)),
-        ));
+        ), 'srv-1');
 
         // Fire the inactivity timer directly (no real event loop in PHPUnit).
         $onTimeout = new ReflectionMethod(RelayProxyManager::class, 'onTimeout');
@@ -1088,7 +1202,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('late'),
-        ));
+        ), 'srv-1');
         $this->assertCount($countAfter, $this->published);
     }
 
@@ -1153,7 +1267,7 @@ final class RelayProxyManagerTest extends TestCase
                 ['Content-Length' => '1000000'],
                 1000000
             )),
-        ));
+        ), 'srv-1');
 
         // The head phase is published; no terminating end phase.
         $this->assertSame($publishedBefore + 1, count($this->published));
@@ -1165,7 +1279,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('x'),
-        ));
+        ), 'srv-1');
 
         // The body phase is published; no terminating end phase.
         $this->assertSame($publishedBefore + 1, count($this->published));
@@ -1260,12 +1374,12 @@ final class RelayProxyManagerTest extends TestCase
                 ['Content-Length' => '1000000'],
                 1000000
             )),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('x'),
-        ));
+        ), 'srv-1');
 
         $publishedBefore = count($this->published); // head + body
 
@@ -1337,7 +1451,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '10'], 10)),
-        ));
+        ), 'srv-1');
 
         // The server then goes SILENT. Back-date lastActivityAt past the timeout
         // while keeping stream_opened_at recent, so the INACTIVITY path — not the
@@ -1414,7 +1528,7 @@ final class RelayProxyManagerTest extends TestCase
                 ['Content-Length' => '1000000'],
                 1000000
             )),
-        ));
+        ), 'srv-1');
 
         // Back-date ONLY stream_opened_at past the 900s ceiling; leave
         // lastActivityAt recent so the inactivity path cannot be what fires.
@@ -1431,7 +1545,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('x'),
-        ));
+        ), 'srv-1');
 
         $sweep = new ReflectionMethod(RelayProxyManager::class, 'sweepStreamTimers');
         $sweep->setAccessible(true);
@@ -1465,7 +1579,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             999,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         $this->assertCount(0, $this->published);
     }
@@ -1803,7 +1917,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         /** @var array<string, int> $mapAfter */
         $mapAfter = $clientToRelayProp->getValue($manager);
@@ -2134,7 +2248,7 @@ final class RelayProxyManagerTest extends TestCase
                 ['Content-Length' => '1000000'],
                 1000000
             )),
-        ));
+        ), 'srv-1');
 
         // Simulate a stream that has been open far beyond the absolute ceiling.
         $pendingProp = new ReflectionProperty(RelayProxyManager::class, 'pending');
@@ -2381,12 +2495,12 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, [], 0)),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         // Back to zero on completion.
         $this->assertSame(0, $this->registryInt($registry, 'relayPendingRequests'));
@@ -2491,7 +2605,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             999,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         $this->assertSame(1, $this->registryInt($registry, 'relayReplyDrops'));
         $this->assertCount(0, $this->published);
@@ -2526,18 +2640,18 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, [], 3)),
-        ));
+        ), 'srv-1');
         // First-byte recorded on the HEAD frame.
         $this->assertSame(1, $this->relayLatencyObservationCount($registry));
 
         foreach (RelayHttpResponseCodec::chunkBody('abc') as $bodyChunk) {
-            $manager->onResponseFrame(new RelayFrame(RelayFrameType::HTTP_RESPONSE, $requestId, $bodyChunk));
+            $manager->onResponseFrame(new RelayFrame(RelayFrameType::HTTP_RESPONSE, $requestId, $bodyChunk), 'srv-1');
         }
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         // The migration-036 histogram is documented as first-byte only, so END
         // records NOTHING more — exactly ONE observation per request (H-R8 fix:
@@ -2572,7 +2686,7 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeHead(new RelayHttpResponseHead(200, ['Content-Length' => '6'], 6)),
-        ));
+        ), 'srv-1');
         // First-byte recorded on the streamed HEAD.
         $this->assertSame(1, $this->relayLatencyObservationCount($registry));
 
@@ -2586,12 +2700,12 @@ final class RelayProxyManagerTest extends TestCase
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeBody('foobar'),
-        ));
+        ), 'srv-1');
         $manager->onResponseFrame(new RelayFrame(
             RelayFrameType::HTTP_RESPONSE,
             $requestId,
             RelayHttpResponseCodec::encodeEnd(),
-        ));
+        ), 'srv-1');
 
         // Only the first-byte observation exists at completion — the stream's
         // multi-minute session duration is NOT recorded, so the ">5s" bucket

@@ -543,7 +543,13 @@ final class Tunnel implements TunnelInterface
             return;
         }
 
-        $this->proxyManager->onResponseFrame($frame);
+        // Bind the frame to THIS tunnel's authenticated identity (C-1
+        // hub__secnet): request ids allocate from a shared per-process
+        // counter, so without this the manager could not tell whether the
+        // tunnel delivering a response frame is the one the request was sent
+        // down. The manager drops any frame whose source server id does not
+        // own the pending entry.
+        $this->proxyManager->onResponseFrame($frame, $this->serverId);
     }
 
     /**

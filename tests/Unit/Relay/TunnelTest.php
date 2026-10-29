@@ -754,6 +754,96 @@ class TunnelTest extends TestCase
         $this->assertSame(Tunnel::STATUS_ACTIVE, $tunnel->status);
     }
 
+    /**
+     * C-1 (hub__secnet) end-to-end: an HTTP_RESPONSE frame whose seq names a
+     * request owned by ANOTHER server's tunnel must be refused at the tunnel
+     * boundary — the arrival tunnel forwards its OWN authenticated server id and
+     * the proxy manager rejects the mismatch — while the owning tunnel can
+     * still complete the same request. Drives the real wire path
+     * (onServerMessage → handleBinaryFrame → onHttpResponse → manager), not a
+     * direct manager call, so the identity threading itself is pinned.
+     */
+    public function testHttpResponseOverForeignTunnelCannotTouchAnotherServersRequest(): void
+    {
+        $published = [];
+        $managerLogger = $this->createMock(StructuredLogger::class);
+        $managerLogger
+            ->expects($this->once())
+            ->method('warning')
+            ->with(
+                'Relay proxy: HTTP_RESPONSE arrived on foreign tunnel, dropping',
+                $this->callback(static fn (array $ctx): bool => ($ctx['tunnel_server_id'] ?? null) === 'server-evil'
+                    && ($ctx['owner_server_id'] ?? null) === 'server-123'),
+            );
+
+        $proxyManager = new \Phlix\Hub\Relay\RelayProxyManager(
+            $this->createMock(\Phlix\Hub\Relay\TunnelManagerInterface::class),
+            $managerLogger,
+            30,
+            static function (string $event, array $data) use (&$published): void {
+                $published[] = ['event' => $event, 'data' => $data];
+            },
+        );
+
+        $this->sessionManager->method('registerServer')->willReturn('sess-1');
+
+        // Victim tunnel owns request id 42 (seeded below).
+        $victim = new Tunnel(
+            'server-123',
+            $this->serverWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            null,
+            $proxyManager,
+        );
+        $victim->onServerMessage((string) json_encode([
+            'type' => 'hello',
+            'enrollment_jwt' => 'a.b.c',
+            'server_id' => 'server-123',
+        ]));
+
+        // Attacker tunnel: a legitimately-registered DIFFERENT server.
+        $evilWs = $this->createMock(TcpConnection::class);
+        $evilWs->method('send')->willReturn(true);
+        $attacker = new Tunnel(
+            'server-evil',
+            $evilWs,
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+            null,
+            null,
+            $proxyManager,
+        );
+        $attacker->onServerMessage((string) json_encode([
+            'type' => 'hello',
+            'enrollment_jwt' => 'a.b.c',
+            'server_id' => 'server-evil',
+        ]));
+
+        $this->seedPendingRequest($proxyManager, 'server-123');
+
+        // Forge an END for the victim's request id on the ATTACKER's tunnel.
+        $frame = $this->codec->encode(
+            RelayFrameType::HTTP_RESPONSE,
+            42,
+            \Phlix\Shared\Relay\RelayHttpResponseCodec::encodeEnd(),
+        );
+        $attacker->onServerMessage($frame);
+
+        $this->assertCount(0, $published, 'a forged response must not reach the victim reply channel');
+        $this->assertArrayHasKey(42, $this->pendingRequests($proxyManager), 'the victim entry survives the forgery');
+
+        // The owning tunnel completes the very same frame byte-for-byte.
+        $victim->onServerMessage($frame);
+        $this->assertCount(1, $published, 'the owner tunnel must still complete its request');
+        $this->assertSame('reply-x', $published[0]['event']);
+        $this->assertSame('client-req-1', $published[0]['data']['request_id']);
+        $this->assertArrayNotHasKey(42, $this->pendingRequests($proxyManager));
+    }
+
     public function testActiveTunnelClosesCleanlyOnUndecodableFrame(): void
     {
         // A JSON HELLO/HELLO_ACK ({"type":...) arriving on an already-ACTIVE
@@ -1132,9 +1222,11 @@ class TunnelTest extends TestCase
                 'body' => '',
                 'stream' => false,
                 'stream_started' => false,
+                'first_byte_recorded' => false,
                 'timeout' => 30.0,
                 'stream_opened_at' => microtime(true),
                 'sent_at' => microtime(true),
+                'lastActivityAt' => microtime(true),
             ],
         ]);
     }

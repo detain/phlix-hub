@@ -361,18 +361,47 @@ final class RelayProxyManager
     /**
      * Handle an HTTP_RESPONSE frame arriving from a server tunnel.
      *
-     * @param RelayFrame $frame The HTTP_RESPONSE frame (request id in seq).
+     * SECURITY (C-1 hub__secnet): the frame is bound to its source tunnel.
+     * Relay request ids allocate from one deterministic per-process counter
+     * shared by ALL tunnels, so the `seq` of another tenant's in-flight
+     * request is addressable by any paired server. `$sourceServerId` is the
+     * AUTHENTICATED server id of the tunnel the frame actually arrived on
+     * (threaded in by {@see Tunnel::onHttpResponse()} from its own verified
+     * HELLO identity); it must equal the pending entry's `server_id` — the
+     * tunnel this hub sent the matching HTTP_REQUEST down — or the frame is
+     * foreign and is dropped unapplied. This is the same cross-server check
+     * {@see onCancel()} already performs on the cancel path; without it a
+     * malicious paired server could forge HEAD/BODY/END phases into another
+     * tenant's proxied response stream.
+     *
+     * @param RelayFrame $frame          The HTTP_RESPONSE frame (request id in seq).
+     * @param string     $sourceServerId Authenticated server id of the tunnel the frame arrived on.
      *
      * @return void
      *
      * @since 0.10.0
      */
-    public function onResponseFrame(RelayFrame $frame): void
+    public function onResponseFrame(RelayFrame $frame, string $sourceServerId): void
     {
         $requestId = $frame->channelId();
-        if (!isset($this->pending[$requestId])) {
+        $entry = $this->pending[$requestId] ?? null;
+        if ($entry === null) {
             $this->logger->warning('Relay proxy: HTTP_RESPONSE for unknown/closed request, dropping', [
                 'request_id' => $requestId,
+            ]);
+            $this->metrics?->recordRelayReplyDrop();
+            return;
+        }
+
+        // Foreign-tunnel guard BEFORE any state touch: a frame arriving on a
+        // tunnel that does not own the pending entry must not refresh the
+        // inactivity clock, apply body bytes, or publish any phase into the
+        // victim's browser stream.
+        if ($entry['server_id'] !== $sourceServerId) {
+            $this->logger->warning('Relay proxy: HTTP_RESPONSE arrived on foreign tunnel, dropping', [
+                'request_id' => $requestId,
+                'tunnel_server_id' => $sourceServerId,
+                'owner_server_id' => $entry['server_id'],
             ]);
             $this->metrics?->recordRelayReplyDrop();
             return;

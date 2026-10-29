@@ -1411,12 +1411,12 @@ final class ServerProxyControllerTest extends TestCase
                             ['Content-Type' => 'video/mp4', 'Content-Length' => '12345', 'Accept-Ranges' => 'bytes'],
                             12345,
                         )),
-                    ));
+                    ), 'srv-1');
                     $proxyManager->onResponseFrame(new RelayFrame(
                         RelayFrameType::HTTP_RESPONSE,
                         $frame->seq,
                         RelayHttpResponseCodec::encodeEnd(),
-                    ));
+                    ), 'srv-1');
                 }
                 return true;
             },
@@ -2572,12 +2572,12 @@ final class ServerProxyControllerTest extends TestCase
                             ['Content-Type' => 'application/json'],
                             0,
                         )),
-                    ));
+                    ), 'srv-1');
                     $proxyManager->onResponseFrame(new RelayFrame(
                         RelayFrameType::HTTP_RESPONSE,
                         $frame->seq,
                         RelayHttpResponseCodec::encodeEnd(),
-                    ));
+                    ), 'srv-1');
                 }
 
                 return true;
