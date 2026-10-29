@@ -40,6 +40,22 @@ use Phlix\Shared\Hub\ClaimRequest;
 final class ServerClaimController
 {
     /**
+     * Claim-surface body cap (M-HUB-13, review hub__exploiter M2: no body cap
+     * at the claim surface; Workerman materializes every body per
+     * Content-Length before routing, so the parse boundary is where the bill
+     * gets refused). 16 KiB = the largest legal claim payload (serverName 255
+     * + version 32 + Ed25519 JWK + 16×253-byte hostname candidates, ~2× for
+     * JSON escaping ≈ 8.5 KB) with a 2× margin at a power-of-two boundary,
+     * ≈ 400× the ~40-byte
+     * typical pairing request. McpController's 256 KiB JSON-RPC envelope is
+     * the shape precedent, not the value precedent — claim payloads are an
+     * order of magnitude smaller by spec. The estate-wide GLOBAL cap at the
+     * HTTP boundary stays a separate item (review minor-10); this is the
+     * claim-scoped floor M2 charged.
+     */
+    private const int MAX_CLAIM_BODY_BYTES = 16384;
+
+    /**
      * @param ClaimRequestHandler       $handler        Claim request handler.
      * @param RateLimiterInterface|null $claimsLimiter  SERVER_CLAIMS profile limiter;
      *        null (unit tests, unbooted pool wiring) disables the budget — the
@@ -108,6 +124,16 @@ final class ServerClaimController
                 'HUB_PROTOCOL_UNSUPPORTED',
                 ['message' => 'Accept-Phlix-Protocol: v1 required'],
             );
+        }
+
+        // Fail loud BEFORE any parse work: a body over cap never reaches the
+        // decoder, the budget, or the DB. Frame = this endpoint's existing
+        // shape-reject arm (invalid_payload/'Bad Request'), byte-shaped like
+        // the fromPayload catch below — no new wire codes.
+        if (strlen($request->rawBody) > self::MAX_CLAIM_BODY_BYTES) {
+            return (new Response())->error(400, 'invalid_payload', 'Bad Request', [
+                'message' => 'Request body exceeds ' . self::MAX_CLAIM_BODY_BYTES . ' bytes.',
+            ]);
         }
 
         try {
@@ -272,6 +298,18 @@ final class ServerClaimController
                 'server.key_invalid',
                 'SERVER_KEY_INVALID',
                 ['message' => 'Server key is malformed or not Ed25519'],
+            ),
+            // M-HUB-13 (hostname-array bound): the payload's
+            // hostnameCandidates exceed the count/length bounds justified on
+            // the ClaimRequestHandler constants — a present-but-unparseable-
+            // per-endpoint-spec field, the registered `invalid_payload`
+            // family the fromPayload catch above already speaks (zero new
+            // wire codes, same {error,code,message} shape).
+            'HOSTNAME_CANDIDATES_INVALID' => (new Response())->error(
+                400,
+                'invalid_payload',
+                'Bad Request',
+                ['message' => 'hostnameCandidates exceed the pairing bounds'],
             ),
             default => (new Response())->error(
                 500,

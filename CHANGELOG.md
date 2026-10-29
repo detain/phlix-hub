@@ -115,6 +115,53 @@ without dispatching; no existing test drives controller-level `onMessage`
 classification end-to-end, so the real-socket handshake path was never proven.
 Owner-lane follow-up.
 
+### Fixed — M-HUB-13: `POST /server-claims/new` gains a body cap, a hostname-array bound, a dedupe WINDOW, and a hub-wide pairing-table floor — the anonymous pairing surface can no longer grow the table without bound — 2026-10-29
+
+Review `hub__exploiter` M2 (batch W53, lanes 1–3 of this lineage phantom-died;
+this is the fourth-session disk completion). The M12 era shipped the per-IP
+SERVER_CLAIMS limiter and the per-guess audit de-amplification and explicitly
+disclosed M2's size/aggregate bounds as a separate item — this entry lands
+them. Four independent floors, all inside the shipped envelope law (no new
+wire codes, contracts registry md5 `40c1da48` frozen):
+
+- **Body cap** (`ServerClaimController::MAX_CLAIM_BODY_BYTES = 16384`): the
+  claim surface answers oversized raw bodies with its own registered
+  `invalid_payload` 400 BEFORE the decoder, the budget, or the DB. Value =
+  the largest spec-legal payload (~8.5 KB with escaping) doubled at a
+  power-of-two boundary; McpController's self-cap is the shape precedent.
+- **Hostname-array bound** (`validateClaimRequest`): `hostnameCandidates`
+  reached the json_encode-into-column path type-checked but unbounded; now
+  ≤ 16 entries (2× the largest realistic multi-homed advertise set) of
+  non-empty ≤ 253-octet strings (RFC-1035 text domain cap), rejected via a
+  `HOSTNAME_CANDIDATES_INVALID` marker that mapError answers as 400
+  `invalid_payload` — deliberately NOT through the legacy `Invalid …`
+  markers' 500 default-arm oddity.
+- **Retry pile-up cure** (`findExistingPendingClaim`): the dedupe scan read
+  the SINGLE newest pending row over the whole table — one interleaved
+  pairing and a retry missed itself and INSERTed a fresh row every attempt.
+  Now a bounded newest-50 window (`CLAIM_LOOKUP_WINDOW`, interleaving math
+  justified at the constant) with first-fingerprint-match reuse.
+- **Aggregate table floor** (`assertRoomForNewClaim`): per-IP buckets cap a
+  RATE; nothing capped the TOTAL against a key-rotating botnet. At
+  `MAX_CLAIM_TABLE_ROWS = 1000` (same ceiling family as
+  `server.max_servers_per_user`) the floor pressure-reaps expired rows
+  (`server_claims` is transient by design — success deletes, expiry makes
+  the poll answer 'expired') and refuses only a genuinely-full pairing
+  table. The refusal throws `RateLimitException(resetAt: now + CLAIM_TTL)`
+  past the controller's catches into the central 429 mapping — `Retry-After`
+  and `{error, code:'rate_limited'}` for free, the assertPairingBudget law
+  exactly; trips log to file only (never an audit row per attacker-paced
+  trip, honoring the M12 events-not-attempts posture).
+
+Tests: NEW `ServerClaimRegistrationFloorsTest` (10 — including a semantic
+fake Connection that HONORS `LIMIT n`, so the parent tree genuinely
+reproduces the pile-up, not just its SQL text) + six new arms in
+`ServerClaimControllerTest` (cap frame, inclusive boundary, guard ordering,
+legit pass-through, hostname 400 frame, floor-bubble pass-through).
+Red-on-parent 9F+1W measured at 877f481f; mutation battery M1–M8 each strip
+→ named reds (ledger in `.reviews/fixlog/M-HUB-13__fix.md`). openapi `/new`
+description carries the bounds; claim-family 82 tests green unmodified.
+
 ### Fixed — M-HUB-18: `:8804` gets a server-originated liveness ping and a bounded silent-socket reap — a half-open ghost HOST can no longer freeze its watch party forever — 2026-10-29
 
 Review `hub__gameux` M3: the SyncPlay relay surface had **no keepalive at all** —

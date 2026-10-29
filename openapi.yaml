@@ -2683,7 +2683,10 @@ paths:
       description: |-
         A freshly installed server calls this with no credentials; the returned claim id is the
         unguessable bearer secret it polls with, and the claim code is what the operator pastes into the
-        hub UI.
+        hub UI. Bounded per M-HUB-13: body ≤ 16 KiB (`400 invalid_payload`), `hostnameCandidates`
+        ≤ 16 entries of ≤ 253 octets (`400 invalid_payload`), and a hub-wide pending-pairing floor of
+        1000 rows answers over-floor inserts with the central `429 rate_limited` (+ `Retry-After`)
+        once expired rows have been reaped.
       x-phlix-middleware: [HubProtocolMiddleware]
       parameters:
         - $ref: "#/components/parameters/AcceptPhlixProtocol"

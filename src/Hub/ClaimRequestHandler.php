@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\AuditLogger;
@@ -31,6 +32,52 @@ use Workerman\MySQL\Connection;
  */
 class ClaimRequestHandler
 {
+    /**
+     * Pairing-code lifetime. A pending claim row is useful for at most this
+     * long; the aggregate floor's `Retry-After` honesty bound derives from it.
+     */
+    private const int CLAIM_TTL_SECONDS = 600;
+
+    /**
+     * Hard bound on `hostnameCandidates` count (M-HUB-13, review
+     * hub__exploiter M2 — the array reached the column type-checked only).
+     * 16 covers the largest realistic multi-homed advertise set — LAN IPv4,
+     * global IPv6, link-local IPv6, mDNS, DDNS alias, relay alias ≈ 8 — with
+     * 2× headroom, while a flood payload can no longer park an unbounded
+     * list inside one INSERT.
+     */
+    private const int MAX_HOSTNAME_CANDIDATES = 16;
+
+    /**
+     * Per-candidate length bound: RFC-1035 caps a text domain name at 253
+     * octets (IPv6 literals need 45); anything longer is not a hostname an
+     * operator typed, it is flood padding.
+     */
+    private const int MAX_HOSTNAME_LENGTH = 253;
+
+    /**
+     * Rows the duplicate-retry window scan inspects (was `LIMIT 1`).
+     * The dedupe target — a retry of THIS exact JWK — sits adjacent to the
+     * newest row while retries interleave; 50 covers 49 concurrent unrelated
+     * pairings at the floor-gated aggregate rate (1000 rows / 600 s ≈ 1.7/s
+     * → a ~30 s window of interleaving) with 30× headroom over steady state.
+     * Per-row cost is bounded by the two caps above plus the controller body
+     * cap: one json_decode of a ≤1 KB JWK column each.
+     */
+    private const int CLAIM_LOOKUP_WINDOW = 50;
+
+    /**
+     * Aggregate floor on TOTAL `server_claims` rows (M-HUB-13: the per-IP
+     * limiter caps rate per IP per worker; a key-rotating, IP-rotating flood
+     * stays under every per-IP bucket and would still grow the table without
+     * bound). 1000 is the same ceiling family as `server.max_servers_per_user`
+     * (shared schema clamps it 0..1000); with post-cap rows ≈ 1 KB the table
+     * cost is ~1 MB — and the floor converts the pairing surface from
+     * "unbounded inserts" to ≤1000 rows per 600 s window hub-wide, i.e. the
+     * AGGREGATE stop the per-IP profile structurally cannot be.
+     */
+    private const int MAX_CLAIM_TABLE_ROWS = 1000;
+
     /**
      * @param Connection          $db         MySQL connection.
      * @param Ed25519KeyManager   $keyManager Key manager (used indirectly via EnrollmentJwtService).
@@ -146,12 +193,14 @@ class ClaimRequestHandler
             );
         }
 
+        // New-row path only: the reuse arm above grows nothing. Aggregate
+        // floor (M-HUB-13) — bounded table, honest 429, zero new wire codes.
+        $this->assertRoomForNewClaim();
+
         $claimId = $this->generateUuid();
         $claimCode = $this->generateClaimCode();
         $now = time();
-        /** @var int */
-        $ttl = 600;
-        $expiresAt = $now + $ttl;
+        $expiresAt = $now + self::CLAIM_TTL_SECONDS;
 
         $this->db->query(
             'INSERT INTO server_claims
@@ -180,11 +229,9 @@ class ClaimRequestHandler
             'server_name' => $request->serverName,
         ]);
 
-        /** @var int */
-        $ttl = 600;
         return new ClaimResponse(
             claimCode: $claimCode,
-            expiresIn: $ttl,
+            expiresIn: self::CLAIM_TTL_SECONDS,
             claimId: $claimId,
             hubBaseUrl: $this->hubBaseUrl,
         );
@@ -522,7 +569,99 @@ class ClaimRequestHandler
         if ($request->version === '' || strlen($request->version) > 32) {
             throw new InvalidArgumentException('Invalid version');
         }
+        // M-HUB-13 (review hub__exploiter M2): the shared ClaimRequest parser
+        // type-checks candidates as strings but bounds neither COUNT nor
+        // LENGTH, and the array is json_encode'd straight into the column at
+        // the INSERT below — this is the only boundary that sees the full
+        // shape. Empties included: a zero-length "hostname" is not advertise
+        // material, it is payload filler. Marker maps to 400 invalid_payload
+        // (ServerClaimController::mapError), the endpoint's registered
+        // shape-reject frame — NOT the legacy 'Invalid …' strings that ride
+        // the 500 default arm.
+        if (count($request->hostnameCandidates) > self::MAX_HOSTNAME_CANDIDATES) {
+            throw new InvalidArgumentException('HOSTNAME_CANDIDATES_INVALID');
+        }
+        foreach ($request->hostnameCandidates as $candidate) {
+            // list<string> is the parser's guarantee (shared fromPayload
+            // rejects non-strings); strict_types makes a hand-constructed
+            // violator TypeError loudly at strlen instead of silently.
+            if ($candidate === '' || strlen($candidate) > self::MAX_HOSTNAME_LENGTH) {
+                throw new InvalidArgumentException('HOSTNAME_CANDIDATES_INVALID');
+            }
+        }
         $this->validateJwkStructure($request->publicKeysJwk);
+    }
+
+    /**
+     * Bound the TOTAL size of the pairing table before an INSERT grows it.
+     *
+     * Economics (M-HUB-13): the SERVER_CLAIMS per-IP limiter caps the RATE of
+     * any single source per worker; nothing but this floor caps the aggregate
+     * row count against a botnet that keeps every individual IP under its
+     * bucket while rotating keypairs (each request is a fresh JWK, so the
+     * dedupe window can never reuse for it). `server_claims` is transient by
+     * design — a successful claim deletes the row (handleClaimCode) and an
+     * expired row answers only 'expired' to the poll — so expired rows are
+     * reclaimable garbage: the floor first REAPS them, then refuses only if
+     * the table is genuinely full of live pending pairings.
+     *
+     * The throw is a {@see RateLimitException} on purpose: it bubbles past
+     * the controller's InvalidArgumentException catches into the CENTRAL
+     * 429 mapping (Application::rateLimitResponse — 429 + `Retry-After` +
+     * `{error:'Too Many Requests', code:'rate_limited'}`, the same registered
+     * envelope assertPairingBudget trips to). Zero new wire codes; the
+     * resetAt = one full claim TTL is the honest bound on when live rows
+     * start freeing slots (expired rows were already reaped).
+     *
+     * Trip telemetry is a file-log warning only — NO audit_logs row per trip:
+     * trips are attacker-paced by construction, and M-HUB-12 established
+     * that retained-DB writes record events, not attempts.
+     *
+     * @throws RateLimitException Table at the floor with nothing left to reap.
+     */
+    private function assertRoomForNewClaim(): void
+    {
+        $pending = $this->countClaimRows();
+        if ($pending < self::MAX_CLAIM_TABLE_ROWS) {
+            return;
+        }
+
+        // Pressure moment: reclaim dead weight (expired pairings the poll can
+        // no longer answer for) before refusing live demand.
+        $this->db->query(
+            'DELETE FROM server_claims WHERE expires_at <= :now',
+            ['now' => time()],
+        );
+        $pending = $this->countClaimRows();
+        if ($pending < self::MAX_CLAIM_TABLE_ROWS) {
+            return;
+        }
+
+        $this->logger->warning('Server claim refused: pairing table at aggregate floor', [
+            'rows' => $pending,
+            'floor' => self::MAX_CLAIM_TABLE_ROWS,
+        ]);
+        throw new RateLimitException(
+            resetAt: time() + self::CLAIM_TTL_SECONDS,
+            remaining: 0,
+        );
+    }
+
+    /**
+     * Total rows currently parked in `server_claims` (live + not-yet-reaped).
+     *
+     * Non-numeric/absent aggregate degrades to 0 exactly like the
+     * per-user quota reader above (assertWithinServerCap) — the count is
+     * cheap, re-checked on every insert, so a lost race costs at most one
+     * row past the floor, never one under.
+     */
+    private function countClaimRows(): int
+    {
+        /** @var list<array<string, mixed>> $countRows */
+        $countRows = $this->db->query('SELECT COUNT(*) AS cnt FROM server_claims', []);
+        /** @var mixed $count */
+        $count = $countRows[0]['cnt'] ?? null;
+        return is_numeric($count) ? (int) $count : 0;
     }
 
     /**
@@ -552,6 +691,14 @@ class ClaimRequestHandler
     /**
      * Find existing pending claim for this public key fingerprint.
      *
+     * M-HUB-13 (review hub__exploiter M2, retry pile-up): this used to read
+     * the SINGLE newest pending row over the whole table — one interleaved
+     * pairing from any other server and the retry's own row falls out of the
+     * view, dedupe misses, and every retry INSERTs a fresh claim row (the
+     * pile-up the review charged). The scan now covers a bounded newest-50
+     * window (justification at CLAIM_LOOKUP_WINDOW) and reuses the freshest
+     * fingerprint match inside it.
+     *
      * @param array<string, mixed> $publicKeyJwk
      *
      * @return array<string, mixed>|null Existing row or null.
@@ -563,7 +710,7 @@ class ClaimRequestHandler
         $rows = $this->db->query(
             'SELECT * FROM server_claims
              WHERE claimed_by IS NULL AND expires_at > :now
-             ORDER BY created_at DESC LIMIT 1',
+             ORDER BY created_at DESC LIMIT ' . self::CLAIM_LOOKUP_WINDOW,
             ['now' => time()],
         );
 
