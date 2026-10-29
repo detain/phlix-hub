@@ -227,8 +227,8 @@ final class CorsPolicy
     private function findHeader(Response $response, string $name): ?array
     {
         foreach ($response->headers as $key => $value) {
-            if (is_string($key) && strcasecmp($key, $name) === 0) {
-                return [$key, (string) $value];
+            if (strcasecmp($key, $name) === 0) {
+                return [$key, $value];
             }
         }
 
