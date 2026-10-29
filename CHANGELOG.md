@@ -6,6 +6,64 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-02: the leaf federation FrameDecoder is generation-reset — a link that tore mid-frame can no longer splice its residue into the next connection — 2026-10-29
+
+Review `hub__asphp`: `FederationPeerManager` is a process-lifetime singleton
+(one per federation worker, count=1) and constructed its binary
+`FrameDecoder` ONCE in the constructor (`:256`), reusing it at every
+`handleBinaryFrame()` decode across ALL connection generations. When a
+leaf→master link tore mid-frame (network flap, HELLO_ACK timeout,
+`closeLinkAndReschedule()` identity refusal), the partial bytes stayed
+buffered inside the decoder; the NEXT dial — a freshly authenticated,
+cryptographically verified channel — then fed its first frames onto the stale
+stream: the leftover header absorbed the new frames' bytes and delivered a
+SPLICED GARBAGE frame, swallowing the legitimate ones in between.
+
+Re-verified at HEAD ffb63d7d: still live — nothing on any teardown seam
+(`onClose`, `onError`, `failHelloTimeout`, `disconnectFromMaster`,
+`closeLinkAndReschedule`) calls `FrameDecoder::reset()`; the only buffer
+clears are the decoder's own pre-throw resets on invalid-type/overflow, which
+a torn-but-valid prefix never triggers. Estate-wide decoder audit:
+FederationRelayController (`:8805` master role) and ClientMountController
+(`:8803`) key their decoders PER CONNECTION (`spl_object_id`) and unset them
+on close — healthy, untouched (and the mount bridge has been fail-loud 1011
+since M-HUB-01); `Tunnel::serverDecoder` is per-Tunnel-instance — healthy.
+Only the leaf role shared one decoder across generations.
+
+Cure: `establishConnection()` calls `$this->decoder->reset()` at the head of
+every dial — the convergence seam of ALL generation transitions (bytes reach
+the decoder only via the `onMessage` closure this method binds, which is
+bound strictly after the reset), mirroring the class's own H-4 law in
+`sendHubHello()` ("a new ceremony starts untrusted — nothing carried over")
+stream-side, and the estate's latch-reset-first precedent (e225443). Recorded
+as law 8 in the class header.
+
+Tests: `FederationPeerManagerDecoderGenerationTest` — RED proven at parent:
+gen 1 tears with a 7-byte DATA header buffered, `disconnectFromMaster()`, the
+REAL `establishConnection()` dials gen 2 (Select loop, loopback URI, socket
+destroyed), a clean HEARTBEAT arrives on a recording mock: pre-fix the stale
+header consumed the heartbeat's bytes as its payload — the spliced garbage
+DATA frame hit the H-4 unverified-channel gate (`logFailedAuth` fired — the
+RED witness) and the heartbeat never answered; post-fix exactly one pong,
+zero audit noise, zero residue carried onward. Control pin: reset is
+per-GENERATION, not per-message — a frame legitimately split across two
+messages of the SAME live link still accumulates and answers once.
+
+Gates (venue note: host `mysqld` on :3306 is auth_socket-only and host
+swoole is a 6.0.2-dev build that CORE-DUMPS two hook suites — proven
+identically at clean parent worktree; lane ran its own docker mysql:8.0.43 on
+127.0.0.1:33170 and the full serial profile with swoole de-scoped):
+phpunit serial full Unit+Integration parent `5016 tests / 44117 assertions /
+3 errors / 30 skipped` → final `5018 / 44136 / 3 errors / 30 skipped /
+0 failures` (+2 tests exact; the 3 errors are the pre-existing host
+`Swoole\Coroutine`-absent RelayProxyBridge cases, identical both sides);
+CI-shape parallel runner parent-vs-final crash only the same two known
+host-swoole files; phpstan corpus = the 9 pre-existing venue errors at parent,
+ZERO new (own file-scoped run `[OK]`); `scripts/assert-phpcs-corpus.php`
+564 files 0 errors 0 warnings; PSR-12 + repo standard on changed files clean.
+`scripts/parallel/test-durations.json` re-blessed from the final serial junit
+(+1 entry, new-file duty per DurationCacheTracksSuiteTest).
+
 ### Fixed — M-HUB-01: the `:8803` client-mount WS now FAILS LOUD — declared unavailable in the multi-process topology — 2026-10-29
 
 Review `hub__asphp` M2: `ClientRelayWorker` (port `:8803`) runs as its own

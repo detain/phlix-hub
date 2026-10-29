@@ -62,6 +62,13 @@ use Workerman\Timer;
  *      pre-fork master dial cannot connect and its pcntl-armed chain would
  *      fork-poison every child's reconnect latch (2026-10-05 lane).
  *   7. Pushes local library share changes to master when connected
+ *   8. Per-generation stream isolation: the binary FrameDecoder is one
+ *      shared instance, so establishConnection() resets it at the head of
+ *      every dial — a link that tore mid-frame must never splice its
+ *      residue into the next connection's byte stream (the decoder is
+ *      reset-or-replaced nowhere else, and onClose is not guaranteed on
+ *      every teardown path, so the establish seam is the convergence
+ *      point of all generation transitions)
  *
  * @package Phlix\Hub\Federation
  */
@@ -131,6 +138,12 @@ class FederationPeerManager
 
     /**
      * Frame decoder for incoming binary frames.
+     *
+     * One instance for the object's lifetime, but GENERATION-scoped in
+     * effect: {@see self::establishConnection()} calls
+     * {@see FrameDecoder::reset()} at the head of every dial, so partial
+     * bytes from a link that tore mid-frame can never desynchronize the
+     * next connection's stream.
      *
      * @var FrameDecoder
      */
@@ -766,6 +779,18 @@ class FederationPeerManager
         if ($this->masterConnection !== null) {
             return;
         }
+
+        // Law 8 (class header): a new generation starts clean — the stream-side
+        // twin of the channelVerified reset in sendHubHello(). The manager is a
+        // process-lifetime singleton and the FrameDecoder accumulates partial
+        // frames, so a link that tore mid-frame left its residue in the shared
+        // buffer: the fresh, authenticated connection then spliced stale bytes
+        // into its first frames (garbage DATA delivered, real frames
+        // swallowed) until an overflow/invalid-type decode cleared the buffer
+        // by accident. Resetting HERE covers every teardown path — including
+        // closeLinkAndReschedule(), whose comment records that onClose may not
+        // have fired — and precedes the first byte the new socket can deliver.
+        $this->decoder->reset();
 
         if ($dialPlan['transport'] === 'ssl' && !$this->tlsExtensionAvailable()) {
             // Owner 2026-10-06 spec: fail LOUD at dial time, not later as an
