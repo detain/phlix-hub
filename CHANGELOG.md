@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-19: the server-detail payload ships ONE timestamp encoding — unix seconds everywhere — and `heartbeat_history[].received_at` is no longer provably always `0` — 2026-10-29
+
+Review `hub__gameux` M4: `GET /api/v1/me/servers/{id}` — the screen a user
+opens to answer "why is my server flaky on the TV?" — mixed three timestamp
+encodings in one payload. `server.last_seen_at` was the canonical leg (unix
+int via SQL-side `UNIX_TIMESTAMP()`); `relay_session.opened_at` passed the raw
+MySQL DATETIME string through (`SELECT *` + verbatim passthrough), landing on
+the wire as `"2026-10-28 14:03:22"` — no `T`, no offset, DB-session timezone
+implied, wrong session age on any viewer outside that zone; and
+`heartbeat_history[].received_at` was **destroyed**: the mapper's
+`is_numeric($v) ? (int) $v : 0` on a DATETIME string is `is_numeric(...) ===
+false`, so EVERY history row shipped `received_at: 0` — the dashboard rendered
+"0 seconds ago" ×20 — and the method had zero test coverage to catch it.
+Shipped: both DATETIME legs now convert SQL-side via `UNIX_TIMESTAMP(...)`,
+the hub's established idiom (ServerInfoHandler's `last_seen_at`, and
+RelaySessionManager's own idle probe already asked MySQL for
+`UNIX_TIMESTAMP(opened_at)`); `getActiveSession` trades `SELECT *` for the
+explicit column list, key-for-key identical; the wire boundary narrows numeric
+→ JSON int and anything non-numeric → `null` — an honest unknown, never the
+string and never the fake 0. `last_frame_at` (INT UNSIGNED unix, migration
+012) rides the same narrowing. Law pinned three ways: SQL-shape law-pins in
+`HeartbeatHandlerTest`/`RelaySessionManagerTest` (red on the parent shapes), a
+whole-payload wire test in the NEW `ServerDetailControllerTest` (every
+timestamp a JSON int; a legacy-shaped DATETIME source renders null; a
+regex tripwire fails the build on any `YYYY-MM-DD HH:MM:SS` reaching the
+body), and `openapi.yaml` documents the encoding on the operation. Zero wire
+codes touched; hub SPA reads none of these fields (`grep opened_at
+web-ui/src` = 0), the only in-repo consumer of the reshaped row.
+
 ### Fixed — M-HUB-14: the `:8805` federation link gets rate budgets on BOTH ends — a pre-DB connect gate on the master and one shared per-peer frame budget on both roles — 2026-10-29
 
 Review `hub__exploiter` M14 (r1 verdict REWORK-1: the design was prepped

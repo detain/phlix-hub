@@ -2416,6 +2416,15 @@ paths:
       summary: "Get one of my servers"
       description: |-
         Detail view for a single claimed server.
+
+        Timestamp encoding law (M-HUB-19): every timestamp in this payload —
+        `server.last_seen_at`, `relay_session.opened_at`,
+        `relay_session.last_frame_at`, and each
+        `heartbeat_history[].received_at` — is unix seconds as a JSON integer
+        (converted SQL-side via `UNIX_TIMESTAMP()`), never a raw MySQL
+        DATETIME string with an implied database-session timezone. A value
+        that cannot be expressed as unix seconds renders `null`, never a
+        placeholder `0`.
       x-phlix-middleware: [AuthMiddleware]
       parameters:
         - name: "id"

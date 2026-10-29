@@ -310,6 +310,15 @@ class RelaySessionManager
     /**
      * Get the active relay session for a server, if any.
      *
+     * M-HUB-19 encoding law: `opened_at` (a DATETIME column) is converted
+     * SQL-side to unix seconds — the same idiom the idle probe below this
+     * class already uses (`UNIX_TIMESTAMP(opened_at)`) — so the sole wire
+     * consumer, ServerDetailController's `relay_session.opened_at`, never
+     * ships a zone-implied DATETIME string. `last_frame_at` is already an
+     * INT UNSIGNED unix timestamp (migration 012). `closed_at` is carried
+     * for completeness but is always NULL: the WHERE filter admits only
+     * open sessions.
+     *
      * @param string $serverId Server UUID.
      *
      * @return array<string, mixed>|null Session record or null.
@@ -319,7 +328,10 @@ class RelaySessionManager
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM relay_sessions
+            'SELECT id, server_id, worker_node,
+                    UNIX_TIMESTAMP(opened_at) AS opened_at,
+                    closed_at, bytes_in, bytes_out, close_reason, last_frame_at
+             FROM relay_sessions
              WHERE server_id = :server_id AND closed_at IS NULL
              LIMIT 1',
             ['server_id' => $serverId],

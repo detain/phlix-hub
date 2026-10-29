@@ -119,6 +119,7 @@
         "tests/Unit/Http/Controllers/ServerClaimQuotaMessageTest.php": 0.001,
         "tests/Unit/Http/Controllers/ServerClaimRateLimitTest.php": 0.002,
         "tests/Unit/Http/Controllers/ServerControllerTest.php": 0.004,
+        "tests/Unit/Http/Controllers/ServerDetailControllerTest.php": 0.025,
         "tests/Unit/Http/Controllers/ServerListControllerTest.php": 0,
         "tests/Unit/Http/Controllers/ServerManageControllerTest.php": 0.002,
         "tests/Unit/Http/Controllers/ServerProxyAdmissionEnvelopeTest.php": 0.001,

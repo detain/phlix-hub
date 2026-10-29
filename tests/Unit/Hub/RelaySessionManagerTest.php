@@ -1030,4 +1030,69 @@ final class RelaySessionManagerTest extends TestCase
         $manager = new RelaySessionManager($db, $logger);
         self::assertSame(0, $manager->getUserThrottleBps('user-unlimited'));
     }
+
+    // ------------------------------------------------------------------
+    // M-HUB-19 — getActiveSession feeds the GET /api/v1/me/servers/{id}
+    // payload, where every timestamp must ship as unix seconds (the
+    // established hub idiom — this very class already asks MySQL for
+    // UNIX_TIMESTAMP(opened_at) in its idle probe). The old `SELECT *`
+    // leaked the raw DATETIME string onto the wire instead.
+    // ------------------------------------------------------------------
+
+    public function testGetActiveSessionConvertsOpenedAtSqlSideNotSelectStar(): void
+    {
+        $capturedSql = '';
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$capturedSql): array {
+                $capturedSql = $sql;
+                return [];
+            },
+        );
+
+        $manager = new RelaySessionManager($db, $this->createMock(StructuredLogger::class));
+        self::assertNull($manager->getActiveSession('server-1'));
+
+        self::assertStringNotContainsString('SELECT *', $capturedSql);
+        self::assertStringContainsString('UNIX_TIMESTAMP(opened_at) AS opened_at', $capturedSql);
+        self::assertStringContainsString('last_frame_at', $capturedSql);
+        self::assertStringContainsString('closed_at IS NULL', $capturedSql);
+    }
+
+    public function testGetActiveSessionKeepsEveryKeyTheDetailControllerReads(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            [
+                'id' => 'sess-1',
+                'server_id' => 'server-1',
+                'worker_node' => 'worker-a',
+                'opened_at' => '1762080000',
+                'closed_at' => null,
+                'bytes_in' => '10',
+                'bytes_out' => '20',
+                'close_reason' => null,
+                'last_frame_at' => '1762081000',
+            ],
+        ]);
+
+        $manager = new RelaySessionManager($db, $this->createMock(StructuredLogger::class));
+        $session = $manager->getActiveSession('server-1');
+
+        self::assertIsArray($session);
+        $wireKeys = [
+            'id',
+            'server_id',
+            'worker_node',
+            'opened_at',
+            'closed_at',
+            'bytes_in',
+            'bytes_out',
+            'close_reason',
+            'last_frame_at',
+        ];
+        foreach ($wireKeys as $key) {
+            self::assertArrayHasKey($key, $session);
+        }
+    }
 }

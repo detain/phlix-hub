@@ -849,4 +849,82 @@ final class HeartbeatHandlerTest extends TestCase
         self::assertStringContainsString('library_name', $overName);
         self::assertStringContainsString('256', $overName);
     }
+
+    // ------------------------------------------------------------------
+    // M-HUB-19 — the server-detail payload's one-law timestamp contract:
+    // received_at is converted SQL-side (the hub's established idiom for
+    // DATETIME columns: ServerInfoHandler's UNIX_TIMESTAMP(s.last_seen_at),
+    // RelaySessionManager's own UNIX_TIMESTAMP(opened_at) idle probe) and
+    // the mapper never trades a real value for the provable fake 0 that
+    // swallowed EVERY history row on the buggy parent (is_numeric of a
+    // "2026-10-28 14:03:22" string is false).
+    // ------------------------------------------------------------------
+
+    private function createHistoryHandler(Connection $db): HeartbeatHandler
+    {
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
+        $logger = $this->createMock(StructuredLogger::class);
+        return $this->createHandler($db, $jwtService, $logger);
+    }
+
+    public function testGetHeartbeatHistoryConvertsReceivedAtSqlSide(): void
+    {
+        $capturedSql = '';
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$capturedSql): array {
+                $capturedSql = $sql;
+                return [];
+            },
+        );
+
+        $this->createHistoryHandler($db)->getHeartbeatHistory('server-1', 5);
+
+        self::assertStringContainsString('UNIX_TIMESTAMP(received_at) AS received_at', $capturedSql);
+    }
+
+    public function testGetHeartbeatHistoryShipsReceivedAtAsUnixSecondsInt(): void
+    {
+        // MySQL emits the UNIX_TIMESTAMP() alias as a numeric string under
+        // emulated prepares; the history leg must narrow it to a JSON int.
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            [
+                'id' => 'hb-1',
+                'version' => '0.11.0',
+                'uptime_seconds' => '3600',
+                'active_sessions' => '2',
+                'active_transcodes' => '0',
+                'received_at' => '1762081234',
+            ],
+        ]);
+
+        $history = $this->createHistoryHandler($db)->getHeartbeatHistory('server-1', 20);
+
+        self::assertCount(1, $history);
+        self::assertSame(1762081234, $history[0]['received_at']);
+        self::assertSame(3600, $history[0]['uptime_seconds']);
+    }
+
+    public function testGetHeartbeatHistoryShipsNullNotZeroForNonNumericReceivedAt(): void
+    {
+        // If a raw DATETIME ever reaches the mapper (regression or DB anomaly)
+        // the honest wire value is null — an unknown — never the fake 0.
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            [
+                'id' => 'hb-1',
+                'version' => '0.11.0',
+                'uptime_seconds' => '3600',
+                'active_sessions' => '2',
+                'active_transcodes' => '0',
+                'received_at' => '2026-10-28 14:03:22',
+            ],
+        ]);
+
+        $history = $this->createHistoryHandler($db)->getHeartbeatHistory('server-1', 20);
+
+        self::assertNull($history[0]['received_at']);
+    }
 }

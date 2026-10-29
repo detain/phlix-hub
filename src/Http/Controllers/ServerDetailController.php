@@ -47,14 +47,15 @@ final class ServerDetailController
      *
      * @param array<string, string> $params Route parameters including `id`.
      *
-      * Response shape:
+      * Response shape (M-HUB-19 law — every timestamp is unix seconds as a
+      * JSON int, never a zone-implied MySQL DATETIME string):
       * {
-      *   "server": { "id", "server_name", "version", "status", "last_seen_at",
+      *   "server": { "id", "server_name", "version", "status", "last_seen_at" (unix int),
       *              "hostname_candidates": [], "relay_active", "subdomain", "fqdn" },
-      *   "relay_session": { "id", "worker_node", "opened_at", "bytes_in", "bytes_out",
-      *                      "last_frame_at" } | null,
+      *   "relay_session": { "id", "worker_node", "opened_at" (unix int|null), "bytes_in",
+      *                      "bytes_out", "last_frame_at" (unix int|null) } | null,
       *   "heartbeat_history": [{ "id", "version", "uptime_seconds", "active_sessions",
-      *                          "active_transcodes", "received_at" }],
+      *                          "active_transcodes", "received_at" (unix int|null) }],
       *   "tls_status": { "provisioned", "cert_path", "key_path", "needs_renewal",
       *                   "expiry_days_remaining" } | null
       * }
@@ -128,13 +129,25 @@ final class ServerDetailController
             'relay_session' => $relaySession !== null ? [
                 'id'          => $relaySession['id'],
                 'worker_node' => $relaySession['worker_node'],
-                'opened_at'  => $relaySession['opened_at'],
+                'opened_at'  => self::unixSeconds($relaySession['opened_at'] ?? null),
                 'bytes_in'   => $relaySession['bytes_in'],
                 'bytes_out'  => $relaySession['bytes_out'],
-                'last_frame_at' => $relaySession['last_frame_at'],
+                'last_frame_at' => self::unixSeconds($relaySession['last_frame_at'] ?? null),
             ] : null,
             'heartbeat_history' => $heartbeatHistory,
             'tls_status' => $tlsStatus,
         ]);
+    }
+
+    /**
+     * M-HUB-19 wire-boundary narrowing (mirrors ServerInfoHandler::rowToDto):
+     * a numeric value — unix seconds as emitted by MySQL's UNIX_TIMESTAMP()
+     * or stored in an INT UNSIGNED column — ships as a JSON int; anything
+     * non-numeric (a leaked zone-implied DATETIME string, an absent value)
+     * ships as null, never as the string and never as a fake 0.
+     */
+    private static function unixSeconds(mixed $value): ?int
+    {
+        return is_numeric($value) ? (int) $value : null;
     }
 }

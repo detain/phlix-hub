@@ -384,16 +384,27 @@ class HeartbeatHandler
     /**
      * Get recent heartbeat history for a server.
      *
+     * M-HUB-19 encoding law: `received_at` (a DATETIME column) is converted
+     * SQL-side via `UNIX_TIMESTAMP()` — the hub's established idiom for
+     * shipping timestamps as unix seconds (cf. ServerInfoHandler's
+     * `UNIX_TIMESTAMP(s.last_seen_at)` and this manager's own
+     * `UNIX_TIMESTAMP(opened_at)` idle probe). A non-numeric value (DB
+     * anomaly) yields null — an honest unknown — never the fake 0 that the
+     * old `is_numeric ? (int) : 0` mapper shipped for EVERY row, since a
+     * raw DATETIME string is never numeric.
+     *
      * @param string $serverId Server UUID.
      * @param int    $limit    Maximum number of rows to return.
      *
-     * @return list<array<string, mixed>>
+     * @return list<array<string, mixed>> Rows with `received_at` as
+     *                                    unix-seconds int|null.
      */
     public function getHeartbeatHistory(string $serverId, int $limit = 20): array
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, version, uptime_seconds, active_sessions, active_transcodes, received_at
+            'SELECT id, version, uptime_seconds, active_sessions, active_transcodes,
+                    UNIX_TIMESTAMP(received_at) AS received_at
              FROM server_heartbeats
              WHERE server_id = :server_id
              ORDER BY received_at DESC
@@ -404,6 +415,8 @@ class HeartbeatHandler
         /** @var list<array<string, mixed>> $result */
         $result = [];
         $int = fn (mixed $v): int => is_numeric($v) ? (int) $v : 0;
+        /** @var \Closure(mixed): ?int */
+        $unixOrNull = static fn (mixed $v): ?int => is_numeric($v) ? (int) $v : null;
         foreach ($rows as $row) {
             /** @var array<string, mixed> $typedRow */
             $typedRow = $row;
@@ -413,7 +426,7 @@ class HeartbeatHandler
                 'uptime_seconds'  => $int($typedRow['uptime_seconds'] ?? ''),
                 'active_sessions' => $int($typedRow['active_sessions'] ?? ''),
                 'active_transcodes' => $int($typedRow['active_transcodes'] ?? ''),
-                'received_at'     => $int($typedRow['received_at'] ?? ''),
+                'received_at'     => $unixOrNull($typedRow['received_at'] ?? null),
             ];
         }
         return $result;
