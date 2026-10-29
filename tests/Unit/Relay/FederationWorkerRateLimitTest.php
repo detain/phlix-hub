@@ -179,6 +179,40 @@ final class FederationWorkerRateLimitTest extends TestCase
     }
 
     /**
+     * The other half of the walk law: XFF is honoured ONLY from a trusted
+     * front. A raw peer outside the loopback default set (the managed
+     * deployment's trusted list) is untrusted, so its self-supplied header
+     * must be IGNORED and the bucket keyed on the actual peer — otherwise any
+     * direct attacker could farm fresh client IPs inside the header to mint
+     * unlimited buckets (the spoof-collapse this whole keying exists to
+     * deny). Mirrors ClientRelayWorkerTest's forged-XFF negative arm.
+     */
+    public function testConnectLimiterIgnoresXffFromUntrustedPeer(): void
+    {
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->method('getPeerById')->willReturn(['id' => self::HUB_ID]);
+
+        $recorder = new RecordingMountLimiter();
+        $worker = $this->worker([
+            FederationHubRepository::class => $hubRepo,
+            RateLimitProfiles::FEDERATION_CONNECT => $recorder,
+        ]);
+        $request = $this->upgradeRequest('/relay/federation/' . self::HUB_ID, [
+            'X-Forwarded-For' => '203.0.113.50',
+            'X-Real-IP'       => '203.0.113.51',
+        ]);
+
+        $connection = $this->connection('198.51.100.7');
+        $worker->onWebSocketConnect($connection, $request);
+
+        self::assertSame(
+            ['federation_connect:198.51.100.7'],
+            $recorder->hits,
+            'untrusted peer: key on the raw TCP peer, never on its forged headers',
+        );
+    }
+
+    /**
      * Fail-open law (identical to :8802/:8803): when the container cannot
      * provide the limiter, federation stays reachable — the connect proceeds
      * to normal validation, and exactly ONE named error line records the
