@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-24: README §Database schema is now the true, complete schema — `media_requests` was a filename, not a table, and 17 tables were unnamed — 2026-10-29
+
+Review `hub__writer` M-2: the section opened "The schema:" yet listed 19
+tables where disk has 35, and among the 19 it named `media_requests` — a
+table that has never existed (`migrations/011_media_requests.sql` creates
+`requests`; the string `media_requests` lives nowhere in `src/` but as that
+filename), so admin queries driven off the README failed with
+`Table 'phlix_hub.media_requests' doesn't exist`. It also described
+`federation_hubs` as "Peer hubs" when that table is the hub's own
+single-row identity (per `FederationHubRepository`); the real peer table
+`federation_peers` was unnamed even though `docs/websockets.md` and
+`openapi.yaml` both direct operators at it during the `:8805` handshake.
+The list is now grouped by subsystem and complete: all 35 migration-created
+tables — the auth-hardening pair, the MCP/OAuth credential stores, the
+federation six, the metrics trio, and the server-library and client-token
+tables — plus the runner-created `migrations` tracking table; the
+`requests` row carries the filename-vs-table inoculation note. Docs-only — no schema, code, wire
+or test change; the inventory was machine-checked
+(`grep CREATE TABLE migrations/*.sql` ↔ README section).
+
 ### Fixed — M-HUB-20: the master-side `:8805` frame classifier carried the leaf-side JSON-object bug — every `hub_hello` was misrouted to the binary decoder and the H-4 ceremony died on real sockets — 2026-10-29
 
 Review `hub__secnet` M-1: `FederationRelayController::isTextFrame()` decoded with

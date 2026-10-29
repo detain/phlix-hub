@@ -801,29 +801,56 @@ handshakes (:8802/:8803) reject with WS close code **1013** (Try Again Later) in
 
 ## Database schema
 
-Migrations live in [`migrations/`](migrations) and are applied in filename order. The schema:
+Migrations live in [`migrations/`](migrations) and are applied in filename order.
+The schema below is the complete inventory: the 35 tables the migrations create,
+grouped by subsystem, plus the `migrations` tracking table the runner creates
+for itself.
 
 | Table | Purpose |
 |-------|---------|
+| **Accounts and authentication** | |
 | `users` | Hub accounts (Argon2id passwords; unique email + username) |
-| `servers` | Claimed media servers and their operational state |
+| `invite_links` | Single-use signed invite links |
+| `login_rate_limit` | Shared, cross-worker login rate-limit buckets (one row per key; the only DB-backed limiter) |
+| `auth_signup_guard` | First-admin election mutex — a single-row INSERT serialises concurrent registrations, so exactly one first user can ever self-elect |
+| `auth_revoked_refresh_tokens` | Revocation registry: logouts record the `jti` of a presented refresh JWT, and token refresh refuses anything recorded here |
+| `mcp_tokens` | Personal Access Tokens for the MCP endpoint (`POST /mcp`) — user-scoped, space-delimited scopes, SHA-256 hash only at rest |
+| `oauth_clients` | Long-lived registry of OAuth 2.0 clients using the hub as authorization server (operator-managed) |
+| `oauth_consent_requests` | ~10-minute, single-use consent requests, consumed by the consent POST |
+| `oauth_authorization_codes` | ~60-second, single-use authorization codes, consumed by the token endpoint |
+| `oauth_tokens` | Access/refresh grants (1 hour / 30 days) — revocable, rotated on refresh |
+| **Servers and libraries** | |
+| `servers` | Claimed media servers and their operational state (status, JWKS, hostname candidates) |
 | `server_claims` | Pending/paired claim codes minted during pairing |
 | `server_heartbeats` | Recent heartbeats for liveness and clock-skew detection |
+| `server_libraries` | Libraries reported by servers via heartbeat |
+| `server_library_hashes` | SHA-256 over each server's canonical library list, so heartbeats skip redundant library re-upserts when the list is unchanged |
+| `shared_libraries` | Library grants from a server owner to another user |
+| `library_shares` | Per-library shares with read-only / read-write levels |
+| `dns_challenges` | DNS-01 challenge records for subdomain TLS |
+| **Relay** | |
 | `relay_sessions` | One row per open WebSocket relay session |
 | `relay_user_quotas` | Per-user relay byte usage + download/upload caps + `max_concurrent_streams` |
 | `relay_user_settings` | Durable per-user relay settings — the operator-configured bandwidth throttle (`throttle_bps`), which survives the monthly quota rollover |
-| `login_rate_limit` | Shared, cross-worker login rate-limit buckets (one row per key; the only DB-backed limiter) |
+| `client_relay_tokens` | Short-lived per-user, server-scoped relay bearer tokens — SHA-256 hash only at rest; the plaintext is returned exactly once at mint |
+| **Content requests** | |
+| `requests` | Jellyseerr-class request queue (pending → approved → available, or pending → rejected; approvals dispatch to Sonarr/Radarr). Note: the migration file is named `011_media_requests.sql` — the table it creates is `requests` |
+| **Federation** | |
+| `federation_hubs` | This hub's own identity and role (self-referential — exactly one row) |
+| `federation_peers` | Known peer hubs: URL, Ed25519 key, relay / admin-delegation flags, connection status — the table the `:8805` handshake in [`docs/websockets.md`](docs/websockets.md) requires a dialer to already appear in |
+| `federation_sessions` | Per-peer link sessions (heartbeat stamps, byte counters) |
+| `federation_library_shares` | Outbound library shares to peers (read / readwrite; pending / active / revoked) |
+| `federation_incoming_share_offers` | Share offers received from a peer hub, awaiting accept or reject |
+| `federation_admin_delegations` | Users acting with delegated admin authority on behalf of a peer hub |
+| **Telemetry, webhooks, settings** | |
 | `metrics_rollup` | Time-bucketed hub metrics incl. relay gauges/counters (`relay_pending_requests`, `relay_reply_drops`, `relay_error_503`/`504`, `relay_cancels`, latency histogram) |
-| `shared_libraries` | Library grants from a server owner to another user |
-| `library_shares` | Per-library shares with read-only / read-write levels |
-| `invite_links` | Single-use signed invite links |
+| `metrics_route_rollup` | Per-route traffic rollups from the same in-RAM flush |
+| `metrics_connections` | Live snapshot of currently active relay connections |
 | `webhooks` | User-defined HTTP callbacks for `phlix.*` event aliases |
-| `media_requests` | Jellyseerr-class request queue |
-| `dns_challenges` | DNS-01 challenge records for subdomain TLS |
-| `hub_settings` | Hub-wide configuration key/value settings |
-| `federation_hubs` | Peer hubs for hub-to-hub federation |
-| `federation_library_shares` | Libraries shared across federated hubs |
+| `hub_settings` | Hub-wide typed key/value configuration |
 | `audit_logs` | Audit trail of administrative actions |
+| **Runner** | |
+| `migrations` | Applied-migration ledger (filename + checksum) — created and maintained by `bin/phlix migrate` itself, not by a `.sql` file |
 
 ## HTTP API
 
