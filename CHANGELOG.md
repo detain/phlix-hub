@@ -6,6 +6,46 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-08 r2: the party lane's `@phlix/ui` seam premise corrected to the shipped export truth; true justification + two-producer cross-pins; copy-link hint + leaveParty send guard from r1 minors — 2026-10-29
+
+Review `hub__casualgamer` M8-r1 MAJOR-1: the M-HUB-08 entry below (and both
+shipped docblocks) claimed the vendored `@phlix/ui` "exports none of that
+member-facing surface at the package entry" with `hubRelay.d.ts` cited as an
+unexported subpath. Disk-false at the exact pin (v0.99.10):
+`node_modules/@phlix/ui/dist/index.d.ts:15-16` declares — and the runtime
+entry `dist/phlix-ui.js` exports (verified by bare-node `import('@phlix/ui')`:
+`HUB_SYNC_PLAY_PORT` → `8804`, `buildHubRelayUrl('https://hub.example.com',
+'srv-7')` → `wss://hub.example.com:8804/syncplay/srv-7`) —
+`openHubRelayConnection`, `closeHubRelayConnection`, `getHubRelaySocket`,
+`parsePendingCommandFrame`, `buildHubRelayUrl`, `HUB_SYNC_PLAY_PORT` and the
+`HubRelay` types. Only the `SyncPlayPage` COMPONENT is genuinely unexported.
+The historical entry stands verbatim (history rule); this corrects the record.
+`watchPartyWire.ts` keeps the re-stated dial law on its TRUE justification —
+the ui's `openHubRelayConnection` is a store-bound
+`pending_command`/`play_media` consumer that ignores every `syncplay_group_*`
+frame (wrong shape for party ops; the page owns its raw socket) — and the two
+8804 law producers are now pinned against EACH OTHER (new `node --test`
+cross-pins: port equality vs the entry, byte-identical URL output on four
+cases, an entry-declaration text pin, and a regression pin forbidding the
+false premise's return). Same-review cures: MINOR-1 — the copy-link hint said
+"the host holds the link"; every member receives the same `group_id` in
+`syncplay_group_state` and the readonly field shows the link to all, and the
+hint now says exactly that (test-pinned, false sentence regression-pinned);
+INFO-1 — the post-leave `syncplay_group_list` refresh send now rides the same
+`readyState === WebSocket.OPEN` guard as the leave send (counted pin: two
+sends, two guards); MINOR-3 — record-only: mint success is 201
+`{token, expires_at, server_id}` (`ClientRelayTokenController::mint`:98) — the
+r1 fix report's row said 200 `{token, expires_at}`; the shipped client reads
+`Response.ok`, so behavior never depended on it (corrected in the r2 fix log);
+MINOR-2 — headSha CI picture disclosed in the r2 fix log (the two inherited
+static-analysis reds are not lane-caused: zero `src/` diff). Zero `src/` PHP
+changes, zero openapi, zero new wire codes; web-ui `node --test` 114 → 120
+(+6 mine); SPA re-vendored in THIS commit (`node_modules` untouched —
+docblock/copy/template script changes moved the party chunk
+`index-C-XtuEtB.js` → `index-BhdI-X1t.js`; `vite build` deterministic ×2,
+aggregate md5 `36316c7776f4b530bbd1080317de8215` over the sorted per-file
+md5sums of every file under `public/assets/app`).
+
 ### Added — M-HUB-09: hub REST answers CORS preflights — default-deny, env-configured `Access-Control-Allow-Origin` — 2026-10-29
 
 Review `hub__crossfe` MAJOR-1: "Zero CORS coverage on hub REST while its own

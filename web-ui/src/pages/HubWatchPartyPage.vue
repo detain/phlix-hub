@@ -32,11 +32,15 @@
  * All frame parsing/building, link math and refusal sentences live in
  * `utils/watchPartyWire.ts` (pure, node-tested); this file only binds them.
  *
- * Package-boundary posture (same precedent as HubSharedWithMePage.vue and
- * HubSecuritySettingsPage.vue): the vendored @phlix/ui at the pin owns a
- * member-facing SyncPlay surface internally but exports none of it from the
- * package entry, so the hub page speaks the documented hub-relay dialect
- * directly instead of waiting on an upstream tag.
+ * Package-boundary posture: the vendored @phlix/ui at the pin (v0.99.10) DOES
+ * export the pure dial primitives at its package entry (`buildHubRelayUrl`,
+ * `HUB_SYNC_PLAY_PORT` — dist/index.d.ts:15-16), but its socket API
+ * `openHubRelayConnection` is a store-bound `pending_command`/`play_media`
+ * consumer that ignores the `syncplay_group_*` vocabulary — the wrong shape
+ * for party ops, which must own the raw socket. So the wire law lives
+ * hub-local in `utils/watchPartyWire.ts`, cross-pinned by tests against BOTH
+ * the PHP worker and the ui entry's exports. Only the ui's `SyncPlayPage`
+ * component is genuinely unexported at the pin.
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { ApiClient, ApiError, errMessage, useAuthStore } from '@phlix/ui';
@@ -330,8 +334,12 @@ function leaveParty(): void {
     if (socket !== null) {
         phase.value = 'lobby';
         // The rooms list is live state — refresh it rather than show a room
-        // that may have just emptied out.
-        socket.send(JSON.stringify(frameGroupList()));
+        // that may have just emptied out. The guard is symmetric with the
+        // leave send: a non-OPEN socket's send() is discarded (CONNECTING:
+        // InvalidStateError) — pinning OPEN makes the law explicit (r2 INFO-1).
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(frameGroupList()));
+        }
     }
     noteActivity('You left the party.');
 }
@@ -513,7 +521,8 @@ function selectLinkField(event: Event): void {
                 This browser blocked clipboard writes — the field above is selected; copy it manually.
             </p>
             <p v-else-if="!isHost" class="wp__hint">
-                The party was started by another of your devices; the host holds the link.
+                Every member of this party holds the same link — the field above is visible to
+                you too; click it to select and copy.
             </p>
 
             <div class="wp__row">

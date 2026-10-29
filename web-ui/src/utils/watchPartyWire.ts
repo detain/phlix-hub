@@ -13,11 +13,19 @@
  *  - Dial: `ws(s)://<hub-host>:8804/syncplay/{server_id}` — path regex
  *    `SyncPlayRelayWorker::parseServerId`
  *    `~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~`; port fixed by
- *    `SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port (mirrors
- *    `@phlix/ui` `buildHubRelayUrl`, whose `HUB_SYNC_PLAY_PORT = 8804` law this
- *    module re-states hub-local because the member-facing syncplay surface is
- *    not exported from the pinned package entry — package-boundary precedent,
- *    same one that forced HubSharedWithMePage and HubSecuritySettingsPage).
+ *    `SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port. The pinned
+ *    `@phlix/ui` (v0.99.10) DOES export this dial law at its package entry —
+ *    `buildHubRelayUrl(hubBaseUrl, serverId)` + `HUB_SYNC_PLAY_PORT = 8804`
+ *    (`dist/index.d.ts:15-16`; runtime entry `dist/phlix-ui.js`) — so this
+ *    module re-states the law by CHOICE, not necessity: the ui's socket API
+ *    `openHubRelayConnection` is a store-bound `pending_command`/`play_media`
+ *    consumer that ignores every `syncplay_group_*` frame (wrong shape for
+ *    party ops — this page owns its raw socket), and only the `SyncPlayPage`
+ *    COMPONENT is genuinely unexported at the pin. The duplication is pinned
+ *    both ways by `tests/watch-party.test.ts` — against the PHP `DEFAULT_PORT`
+ *    and against the ui entry's exports — so neither 8804 law producer can
+ *    drift silently. (r2: the premise that the seam was unexported was false
+ *    as first written — the export law above is the corrected record.)
  *  - Credential carrier: the `bearer,<token>` WebSocket subprotocol is the ONLY
  *    carrier a browser can use (S237; the relay echoes `Sec-WebSocket-Protocol:
  *    bearer` via `SyncPlayRelayWorker::BEARER_SUBPROTOCOL_ECHO`, so the 101

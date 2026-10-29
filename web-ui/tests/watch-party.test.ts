@@ -11,7 +11,9 @@
  *     `your_id` survives, opaque fan-outs are acknowledged without claims),
  *     the party-link path, refusal sentences (known codes curated, unknown
  *     codes verbatim + code — never a fake success), roster ordering, position
- *     and age math.
+ *     and age math. The copy-link hint is pinned to the TRUTH (every member
+ *     holds the same link — r2 MINOR-1) and every `socket.send` in
+ *     `leaveParty` to the OPEN guard (r2 INFO-1).
  *  2. WIRE-OF-COMPONENT + CROSS-LANGUAGE pins reading .vue / main.ts /
  *     docs / PHP as TEXT: the menu entry exists (a route nobody navigates to
  *     is the same defect in a different coat), both routes mount the hub-local
@@ -26,6 +28,14 @@
  *     wire-error code appears in the docs or the worker. A new server code or
  *     an invented client type reddens a NAMED assertion here instead of
  *     shipping a lie in the UI.
+ *  3. VENDORED-ENTRY cross-pins (r2, review M8-r1 MAJOR-1): the pinned
+ *     `@phlix/ui` DOES export the dial law at its entry
+ *     (`buildHubRelayUrl`/`HUB_SYNC_PLAY_PORT`, `dist/index.d.ts:15-16`) — the
+ *     hub-local re-statement is a CHOSEN posture (the ui socket API is a
+ *     store-bound pending-command consumer), so the two 8804 law producers
+ *     are pinned against EACH OTHER: port equality, byte-identical URL
+ *     output, and a regression pin that the false "unexported seam" premise
+ *     never returns in the shipped docblocks.
  *
  * Runtime: node's built-in test runner (`npm test`).
  *
@@ -57,6 +67,11 @@ import {
     formatAge,
 } from '../src/utils/watchPartyWire.ts';
 import type { PartyMember } from '../src/utils/watchPartyWire.ts';
+import {
+    HUB_SYNC_PLAY_PORT,
+    buildHubRelayUrl,
+    openHubRelayConnection,
+} from '@phlix/ui';
 
 const REPO = (rel: string): string =>
     readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), 'utf8');
@@ -390,5 +405,69 @@ describe('drift tripwires against the PHP + docs sources', () => {
                 `${code} is a wire vocabulary word`,
             );
         }
+    });
+});
+
+/* ================================================= vendored-entry pins ==== */
+/*
+ * r2 (review hub__casualgamer M8-r1 MAJOR-1): at the pin, @phlix/ui's entry
+ * DOES export the dial law. The hub-local re-statement is a chosen posture
+ * (openHubRelayConnection is a store-bound pending_command/play_media
+ * consumer — wrong shape for party ops), so the two 8804 law producers are
+ * hereafter pinned against EACH OTHER, not excused by a false necessity claim.
+ */
+
+describe('dial law vs the pinned @phlix/ui entry (r2 cross-pins)', () => {
+    it('HUB_SYNC_PLAY_PORT at the pin equals the hub-local RELAY_PORT', () => {
+        assert.equal(HUB_SYNC_PLAY_PORT, RELAY_PORT);
+    });
+
+    it('buildHubRelayUrl and buildRelayUrl produce identical dials', () => {
+        const cases = [
+            ['https://hub.example.com', 'srv-1'],
+            ['http://hub.lan:8443', 'srv/2'],
+            ['https://h', 'a?b'],
+            ['http://x.y:80', 'S e r v'],
+        ] as const;
+        for (const [base, id] of cases) {
+            assert.equal(
+                buildHubRelayUrl(base, id),
+                buildRelayUrl(base, id),
+                `dial law drift on (${base}, ${id})`,
+            );
+        }
+    });
+
+    it('the pin really exports the hubRelay seam the docblocks now claim', () => {
+        const dts = readFileSync(
+            fileURLToPath(new URL('../node_modules/@phlix/ui/dist/index.d.ts', import.meta.url)),
+            'utf8',
+        );
+        assert.match(
+            dts,
+            /export \{ openHubRelayConnection, closeHubRelayConnection, getHubRelaySocket, parsePendingCommandFrame, buildHubRelayUrl, HUB_SYNC_PLAY_PORT, \} from '\.\/api\/hubRelay';/,
+        );
+        assert.equal(typeof openHubRelayConnection, 'function');
+    });
+
+    it('the false seam premise never returns in the shipped docblocks (regression)', () => {
+        assert.equal(WIRE_SOURCE.includes('not exported from the pinned package entry'), false);
+        assert.equal(PAGE_SOURCE.includes('exports none of it from the'), false);
+        assert.match(WIRE_SOURCE, /dist\/index\.d\.ts:15-16/);
+    });
+
+    it('the copy-link hint tells the truth: every member holds the same link', () => {
+        assert.match(PAGE_SOURCE, /Every member of this party holds the same link/);
+        assert.equal(PAGE_SOURCE.includes('the host holds the link'), false);
+    });
+
+    it('every socket.send in leaveParty rides the readyState OPEN guard', () => {
+        const fn = PAGE_SOURCE.slice(
+            PAGE_SOURCE.indexOf('function leaveParty'),
+            PAGE_SOURCE.indexOf('function disconnect'),
+        );
+        assert.ok(fn.length > 0, 'leaveParty body found');
+        assert.equal((fn.match(/socket\.send/g) ?? []).length, 2);
+        assert.equal((fn.match(/readyState === WebSocket\.OPEN/g) ?? []).length, 2);
     });
 });
