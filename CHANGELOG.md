@@ -6,6 +6,70 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-06: Shared With Me surfaces hub-vantage liveness — dead buttons become honest states — 2026-10-29
+
+Review `hub__casualgamer` M3: a member's only action on a shared library
+was `window.open(access_urls…)` — hostnames copied VERBATIM from the
+owner's heartbeat-advertised `hostname_candidates_json`, with the single
+gate "is the array empty?". A NAT-hidden friend's server rendered as a
+permanently dead button that never explained itself. Cure adds zero new
+infrastructure: the hub already holds honest signals — `servers.status` +
+`last_seen_at` (HeartbeatHandler, DB clock per R19-04) and open
+`relay_sessions` rows (the verbatim EXISTS idiom of
+`ServerInfoHandler::getOwnerAndStatus`) — and the reaper's own
+`DEFAULT_OFFLINE_THRESHOLD_SECONDS` (180 s) defines estate "silent".
+
+NEW `src/Hub/ShareServerLiveness.php` — pure mapper
+status+lastSeen+relayActive → `reachable | unreachable | unknown`
+(disabled→unreachable; open tunnel→reachable; online+fresh→reachable;
+online past the reaper window→unreachable (pre-reaper truth);
+claiming/never-seen/foreign vocabulary→unknown — never false-live).
+`getSharedWithMe()` SQL gains the three signal columns (`UNIX_TIMESTAMP`
+epoch-vs-epoch, TZ-safe) and every incoming share payload gains the
+ADDITIVE trio `server_liveness` / `server_last_seen_at` /
+`server_relay_active` (`SharedLibraryDto` defaults to neutral unknown, so
+pre-existing 12-arg call sites are untouched). ZERO new wire codes —
+phlix-contracts registry untouched, errors.ts cites none of the changed
+files. `openapi.yaml` documents the real `{outgoing, incoming}` shape with
+a new `IncomingLibraryShare` schema carrying the enum + epistemic framing.
+
+SPA: the vendored `SharedWithMePage` lives in the pinned `@phlix/ui`
+tarball (v0.99.10) and cannot show per-share state, so `/app/shared-with-me`
+now mounts a hub-local `HubSharedWithMePage.vue` (HubPageHint wrapper
+idiom, plain HTML + theme-inherited scoped styles). Display law is a pure
+module (`web-ui/src/utils/shareLiveness.ts`, node-tested): unreachable or
+addressless shares DISABLE the Open button AND render the reason visibly
+(not hover-only); `unknown`/loading stays neutral — unverified is not
+disproven; reachable shows "Reachable from hub"/"Connected via relay"
+badges with the hub's last-seen timestamp. The label states the HUB's
+vantage, never a promise about the member's network path. `safeHref` is a
+byte-faithful port of the M-UI-11 blocklist (the v0.99.10 barrel predates
+the export; retirement note carried in-file).
+
+Tests: `ShareServerLivenessTest` 14 methods (truth table incl threshold
+boundary ±1 s, reaper-constant drift tripwire via reflection);
+`LibrarySharingHandlerTest` +4 (SQL-idiom law pin, reachable/unreachable
+pass-through incl emulate-prepares numeric-string shapes, absent-columns
+→ unknown); `SharedLibraryDtoTest` +1 (additive-defaults law); web-ui
+`node --test` 35→58 (23 new: truth table, badge registers, safeHref
+control-char obfuscation, wire-of-component source pins — removing the
+`:disabled` gate or the visible-reason binding reddens a NAMED pin,
+mutationally proven — and a cross-language TS↔PHP vocabulary tripwire).
+SPA rebuilt deterministically x2 (aggregate md5
+928fe4e15bb0f70b62b3c8fccc3bf6b8 on two consecutive builds, committed here);
+full Unit suite serial 4935 tests / 43286 assertions / 0 failures / 30
+skipped on the documented no-swoole venue (host swoole 6.0.2-dev core-dumps
+the serial monolith; the 3 swoole-only RelayProxyBridge cases error there
+and pass 17/17 on the default ini); S299 phpcs corpus 569 files 0 E / 0 W;
+phpstan error set byte-identical to the f85f48ec worktree baseline (zero
+errors in touched files).
+
+Member-side relay PROXYING is deliberately not shipped: the tunnel trust
+boundary is owner-gated (`ServerProxyController` `server.not_owned`), and
+widening it to collaborators is an owner-level architecture decision —
+the review's own prescription was honesty at the point of need, which is
+what landed.
+
 ### Fixed — M-HUB-05: the member-facing error channel now speaks human — all 46 failure envelopes of the share/invite controllers route through the canonical `Response::error` with `message` mirroring `error`, so the pinned client's `error`-first precedence can never surface "Conflict" — 2026-10-29
 
 Review `hub__casualgamer` M5: a member whose share hit the collaborator

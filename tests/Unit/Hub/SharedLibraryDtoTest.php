@@ -141,4 +141,32 @@ final class SharedLibraryDtoTest extends TestCase
         self::assertNull($dto->expiresAt);
         self::assertSame(1700000000, $dto->createdAt);
     }
+
+    public function testLivenessTrioDefaultsToNeutralUnknown(): void
+    {
+        // [review hub__casualgamer M3] the trio is ADDITIVE: pre-existing call
+        // sites (12-arg construction) keep compiling and the payload must carry
+        // a neutral 'unknown' — never a false-live default.
+        $dto = new SharedLibraryDto(
+            shareId: 'share-1',
+            ownerUserId: 'owner-1',
+            ownerName: 'Owner User',
+            serverId: 'server-1',
+            serverName: 'My Server',
+            libraryId: 'lib-1',
+            libraryName: 'My Movies',
+            libraryItemCount: 42,
+            permissionLevel: LibraryShare::PERMISSION_READ,
+            accessUrls: ['https://server.example.com'],
+        );
+
+        self::assertSame('unknown', $dto->serverLiveness);
+        self::assertNull($dto->serverLastSeenAt);
+        self::assertFalse($dto->serverRelayActive);
+
+        $payload = $dto->toPayload();
+        self::assertSame('unknown', $payload['server_liveness']);
+        self::assertNull($payload['server_last_seen_at']);
+        self::assertFalse($payload['server_relay_active']);
+    }
 }

@@ -424,6 +424,116 @@ final class LibrarySharingHandlerTest extends TestCase
         self::assertCount(0, $result);
     }
 
+    public function testGetSharedWithMeSqlCarriesTheHubVantageLivenessSignals(): void
+    {
+        // Law pin for the SQL itself [review hub__casualgamer M3]: the three
+        // signals must be read from rows the hub ALREADY maintains, in the
+        // estate's canonical idioms — `UNIX_TIMESTAMP()` for a TZ-safe epoch
+        // compare (getServersForUser precedent) and the verbatim relay EXISTS
+        // from ServerInfoHandler::getOwnerAndStatus().
+        $captured = null;
+        $this->db->method('query')->willReturnCallback(function (string $sql, array $params) use (&$captured) {
+            if (str_contains($sql, 'FROM library_shares ls')) {
+                $captured = $sql;
+            }
+            return [];
+        });
+
+        $this->handler->getSharedWithMe('collab-1');
+
+        self::assertIsString($captured);
+        self::assertStringContainsString('s.status AS server_status', $captured);
+        self::assertStringContainsString('UNIX_TIMESTAMP(s.last_seen_at) AS server_last_seen_at', $captured);
+        self::assertStringContainsString('SELECT 1 FROM relay_sessions r', $captured);
+        self::assertStringContainsString('r.server_id = s.id AND r.closed_at IS NULL', $captured);
+    }
+
+    public function testGetSharedWithMeDerivesReachableFromFreshHeartbeatAndOpenRelay(): void
+    {
+        // Values arrive as the strings/emulate-prepares shapes the hub's MySQL
+        // connection actually yields (ATTR_EMULATE_PREPARES=true era), so the
+        // numeric-string parse is part of the contract under test.
+        $seen = time() - 5;
+        $row = $this->livenessRow([
+            'server_status' => 'online',
+            'server_last_seen_at' => (string) $seen,
+            'server_relay_active' => 1,
+        ]);
+        $this->db->method('query')->willReturn([$row]);
+
+        $result = $this->handler->getSharedWithMe('collab-1');
+
+        self::assertCount(1, $result);
+        self::assertSame('reachable', $result[0]->serverLiveness);
+        self::assertTrue($result[0]->serverRelayActive);
+        $payload = $result[0]->toPayload();
+        self::assertSame('reachable', $payload['server_liveness']);
+        self::assertTrue($payload['server_relay_active']);
+        self::assertSame($seen, $payload['server_last_seen_at']);
+    }
+
+    public function testGetSharedWithMeDerivesUnreachableForStaleOnlineRow(): void
+    {
+        $row = $this->livenessRow([
+            'server_status' => 'online',
+            'server_last_seen_at' => time() - 3600,
+            'server_relay_active' => 0,
+        ]);
+        $this->db->method('query')->willReturn([$row]);
+
+        $result = $this->handler->getSharedWithMe('collab-1');
+
+        self::assertCount(1, $result);
+        self::assertSame('unreachable', $result[0]->serverLiveness);
+        self::assertFalse($result[0]->serverRelayActive);
+    }
+
+    public function testGetSharedWithMeIsNeutralUnknownWhenLivenessColumnsAreAbsent(): void
+    {
+        // Fail-soft law: a row without the trio (defensive — the shipped SQL
+        // always selects it) must degrade to UNKNOWN with the keys present,
+        // never to false-live.
+        $row = $this->livenessRow([]);
+        $this->db->method('query')->willReturn([$row]);
+
+        $result = $this->handler->getSharedWithMe('collab-1');
+
+        self::assertCount(1, $result);
+        self::assertSame('unknown', $result[0]->serverLiveness);
+        self::assertNull($result[0]->serverLastSeenAt);
+        self::assertFalse($result[0]->serverRelayActive);
+        $payload = $result[0]->toPayload();
+        self::assertArrayHasKey('server_liveness', $payload);
+        self::assertArrayHasKey('server_last_seen_at', $payload);
+        self::assertArrayHasKey('server_relay_active', $payload);
+    }
+
+    /**
+     * Minimal incoming-share row as getSharedWithMe() consumes it, with liveness
+     * columns layered on by each test.
+     *
+     * @param array<string, mixed> $livenessColumns
+     *
+     * @return array<string, mixed>
+     */
+    private function livenessRow(array $livenessColumns): array
+    {
+        return array_merge([
+            'id' => 'share-1',
+            'owner_user_id' => 'owner-1',
+            'collaborator_user_id' => 'collab-1',
+            'server_id' => 'server-1',
+            'library_id' => 'lib-1',
+            'library_name' => 'My Movies',
+            'permission_level' => 'read',
+            'created_at' => 1700000123,
+            'expires_at' => null,
+            'owner_name' => 'Owner User',
+            'server_name' => 'My Server',
+            'hostname_candidates_json' => '["https://server.example.com"]',
+        ], $livenessColumns);
+    }
+
     public function testIsServerOwnedByUserReturnsTrueWhenOwned(): void
     {
         $this->db->method('query')->willReturn([['id' => 'server-1']]);

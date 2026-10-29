@@ -1,10 +1,11 @@
-import { createPhlixApp, ServerDetailPage, FederationSharesPage, SharedWithMePage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, SecuritySettingsPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem } from '@phlix/ui';
+import { createPhlixApp, ServerDetailPage, FederationSharesPage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, SecuritySettingsPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem } from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
 import { messagesForLocale, resolveLocale } from './i18n';
 import HubMyServersPage from './pages/HubMyServersPage.vue';
 import HubFederationPage from './pages/HubFederationPage.vue';
 import HubManageSharesPage from './pages/HubManageSharesPage.vue';
+import HubSharedWithMePage from './pages/HubSharedWithMePage.vue';
 
 const app = createPhlixApp({
     // i18n seam (config-time, @phlix/ui R6.5c): resolve the boot locale ONCE at
@@ -96,7 +97,10 @@ const app = createPhlixApp({
         {
             path: '/app/shared-with-me',
             name: 'shared-with-me',
-            component: SharedWithMePage,
+            // Hub-local since the liveness rework [review hub__casualgamer M3]:
+            // the vendored shares page cannot show per-share hub-vantage state
+            // (package pin boundary); the hub page owns the honest render.
+            component: HubSharedWithMePage,
         },
         {
             path: '/app/invite-links',

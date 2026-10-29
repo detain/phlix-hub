@@ -33,6 +33,11 @@ final class SharedLibraryDto
      * @param array<int, string> $accessUrls  URLs to access the library (direct + relay).
      * @param int|null    $expiresAt         Unix timestamp when share expires, or null.
      * @param int|null    $createdAt         Unix timestamp when the share was created, or null.
+     * @param string      $serverLiveness    Hub-vantage reachability of the hosting server
+     *                                       (ShareServerLiveness::REACHABLE/UNREACHABLE/UNKNOWN).
+     *                                       Defaults to UNKNOWN: an absent signal must never read as false-live.
+     * @param int|null    $serverLastSeenAt  UNIX epoch of the server's last heartbeat, or null when never seen.
+     * @param bool        $serverRelayActive True when the server holds an open relay tunnel to the hub right now.
      */
     public function __construct(
         public readonly string $shareId,
@@ -47,6 +52,9 @@ final class SharedLibraryDto
         public readonly array $accessUrls,
         public readonly ?int $expiresAt = null,
         public readonly ?int $createdAt = null,
+        public readonly string $serverLiveness = ShareServerLiveness::UNKNOWN,
+        public readonly ?int $serverLastSeenAt = null,
+        public readonly bool $serverRelayActive = false,
     ) {
     }
 
@@ -78,6 +86,11 @@ final class SharedLibraryDto
             'access_urls' => $this->accessUrls,
             'created_at' => $this->createdAt,
             'expires_at' => $this->expiresAt,
+            // Hub-vantage liveness trio [review hub__casualgamer M3]: additive,
+            // trusted by the hub-local SPA; older consumers ignore unknown keys.
+            'server_liveness' => $this->serverLiveness,
+            'server_last_seen_at' => $this->serverLastSeenAt,
+            'server_relay_active' => $this->serverRelayActive,
         ];
     }
 }

@@ -362,7 +362,13 @@ class LibrarySharingHandler
                 ls.expires_at,
                 u.display_name AS owner_name,
                 s.server_name,
-                s.hostname_candidates_json
+                s.hostname_candidates_json,
+                s.status AS server_status,
+                UNIX_TIMESTAMP(s.last_seen_at) AS server_last_seen_at,
+                EXISTS(
+                    SELECT 1 FROM relay_sessions r
+                    WHERE r.server_id = s.id AND r.closed_at IS NULL
+                ) AS server_relay_active
              FROM library_shares ls
              JOIN users u ON u.id = ls.owner_user_id
              JOIN servers s ON s.id = ls.server_id
@@ -416,6 +422,28 @@ class LibrarySharingHandler
             /** @var mixed $rawServerName */
             $rawServerName = $row['server_name'] ?? null;
 
+            // Hub-vantage liveness of the hosting server [review hub__casualgamer M3].
+            // All three signals come from rows the hub already maintains — the
+            // heartbeat (HeartbeatHandler) and the reaper-visible relay tunnels
+            // (ServerInfoHandler::getOwnerAndStatus idiom, verbatim) — and the
+            // freshness law is the reaper's own constant (ShareServerLiveness).
+            // A missing column degrades to UNKNOWN, never to false-live.
+            /** @var mixed $rawServerStatus */
+            $rawServerStatus = $row['server_status'] ?? null;
+            /** @var mixed $rawLastSeen */
+            $rawLastSeen = $row['server_last_seen_at'] ?? null;
+            /** @var mixed $rawRelayActive */
+            $rawRelayActive = $row['server_relay_active'] ?? false;
+            $serverRelayActive = is_numeric($rawRelayActive)
+                ? (int) $rawRelayActive === 1
+                : (bool) $rawRelayActive;
+            $serverLiveness = ShareServerLiveness::derive(
+                status: is_string($rawServerStatus) ? $rawServerStatus : '',
+                lastSeenAt: is_numeric($rawLastSeen) ? (int) $rawLastSeen : null,
+                relayActive: $serverRelayActive,
+                now: time(),
+            );
+
             $shares[] = new SharedLibraryDto(
                 shareId: $share->id,
                 ownerUserId: $share->ownerUserId,
@@ -429,6 +457,9 @@ class LibrarySharingHandler
                 accessUrls: $hostnames,
                 expiresAt: $expiresAt,
                 createdAt: $createdAt,
+                serverLiveness: $serverLiveness,
+                serverLastSeenAt: is_numeric($rawLastSeen) ? (int) $rawLastSeen : null,
+                serverRelayActive: $serverRelayActive,
             );
         }
         return $shares;

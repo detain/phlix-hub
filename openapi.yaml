@@ -5318,6 +5318,65 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/LibraryShare"
+        outgoing:
+          type: array
+          items:
+            $ref: "#/components/schemas/LibraryShare"
+        incoming:
+          type: array
+          items:
+            $ref: "#/components/schemas/IncomingLibraryShare"
+      additionalProperties: true
+    IncomingLibraryShare:
+      type: object
+      description: |-
+        One row of `GET /api/v1/me/shares` → `incoming` (mirrors the hub's
+        `SharedLibraryDto::toPayload()`; dates are UNIX seconds).
+      properties:
+        share_id:
+          $ref: "#/components/schemas/Uuid"
+        owner_user_id:
+          $ref: "#/components/schemas/Uuid"
+        owner_name:
+          type: string
+        server_id:
+          $ref: "#/components/schemas/Uuid"
+        server_name:
+          type: string
+        library_id:
+          type: string
+        library_name:
+          type: string
+        library_item_count:
+          type: integer
+        permission_level:
+          type: string
+          enum: [read, readwrite]
+        access_urls:
+          type: array
+          items:
+            type: string
+          description: "The owner's heartbeat-advertised server URLs; may be empty (NAT-hidden owners advertise nothing)."
+        created_at:
+          type: [integer, "null"]
+        expires_at:
+          type: [integer, "null"]
+        server_liveness:
+          type: string
+          enum: [reachable, unreachable, unknown]
+          description: |-
+            HUB-VANTAGE reachability of the hosting server, derived from the hub's
+            own heartbeat/reaper/relay signals (never a promise about the reading
+            member's network path). `reachable` = fresh heartbeat or open relay
+            tunnel; `unreachable` = disabled, reaped-offline, or silent past the
+            reaper's 180 s law; `unknown` = no honest signal (never false-live).
+            [review hub__casualgamer M3]
+        server_last_seen_at:
+          type: [integer, "null"]
+          description: "UNIX epoch of the server's last heartbeat as stored by the hub; null when never seen."
+        server_relay_active:
+          type: boolean
+          description: "True while the server holds an open relay tunnel to this hub."
       additionalProperties: true
     InviteLink:
       type: object
