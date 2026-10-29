@@ -7,8 +7,10 @@ namespace Phlix\Hub\Tests\Unit\SyncPlay;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
+use Phlix\Hub\Relay\WebSocketCloseFrame;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use stdClass;
@@ -21,6 +23,7 @@ use function array_key_first;
 use function array_keys;
 use function array_reverse;
 use function count;
+use function file_get_contents;
 use function hash;
 use function implode;
 use function is_array;
@@ -29,6 +32,10 @@ use function json_decode;
 use function json_encode;
 use function microtime;
 use function round;
+use function token_get_all;
+
+use const T_COMMENT;
+use const T_DOC_COMMENT;
 
 /**
  * Unit tests for {@see SyncPlayRelayWorker} — the SyncPlay relay path (:8804).
@@ -141,9 +148,8 @@ final class SyncPlayRelayWorkerTest extends TestCase
         $request = $this->makeUpgradeRequest('/syncplay/server-a');
 
         $connection = $this->createMock(TcpConnection::class);
-        $connection->expects($this->once())->method('close')->with('', true);
-
         $worker->onWebSocketConnect($connection, $request);
+        $this->assertRejectedWithCloseFrame($connection, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
 
         // No client should have been registered for an unauthenticated connect.
         self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
@@ -157,9 +163,8 @@ final class SyncPlayRelayWorkerTest extends TestCase
         $request = $this->makeUpgradeRequest('/syncplay/server-a', 'never-minted');
 
         $connection = $this->createMock(TcpConnection::class);
-        $connection->expects($this->once())->method('close')->with('', true);
-
         $worker->onWebSocketConnect($connection, $request);
+        $this->assertRejectedWithCloseFrame($connection, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
 
         self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
     }
@@ -188,15 +193,52 @@ final class SyncPlayRelayWorkerTest extends TestCase
         self::assertSame('token-a', $request->get('token'), 'control: token is in the query string');
 
         $connection = $this->createMock(TcpConnection::class);
-        $connection->expects($this->once())->method('close')->with('', true);
-
         $worker->onWebSocketConnect($connection, $request);
+        $this->assertRejectedWithCloseFrame($connection, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
 
         self::assertSame(
             0,
             SyncPlayRelayWorker::getActiveConnectionCount(),
             'S237: a relay token in the query string authenticated a SyncPlay client',
         );
+    }
+
+    /**
+     * M-HUB-17 — a malformed dial path (no `server_id` segment) answers with the
+     * REAL WS close code 1011 (do-not-retry), not the silent 1006. 1013 would
+     * invite a reconnect loop against a failure only fixed by correcting the
+     * URL — the same doctrine `ClientMountController` records at its 1011 site.
+     */
+    public function testConnectWithMissingServerIdDeliversRealDoNotRetryCloseCode(): void
+    {
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect($connection, $this->makeUpgradeRequest('/syncplay'));
+
+        $this->assertRejectedWithCloseFrame($connection, SyncPlayRelayWorker::CLOSE_DO_NOT_RETRY);
+        self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
+    }
+
+    /**
+     * M-HUB-17 — an auth refusal delivers 4401 to a subprotocol-carrier client
+     * too, and — unlike the pre-port `close('', true)` — through the same
+     * two-phase path the :8802/:8803 lanes ship: the 101 completes, the close
+     * frame follows. The S355 no-echo law still holds (asserted by
+     * {@see testRejectedConnectDoesNotEchoASubprotocol()}).
+     */
+    public function testAuthRefusalDeliversRealUnauthorizedCloseCode(): void
+    {
+        $this->setServerOwner('server-a', 'user-a');
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $connection = $this->createMock(TcpConnection::class);
+        $worker->onWebSocketConnect(
+            $connection,
+            $this->makeUpgradeRequest('/syncplay/server-a', 'expired-or-foreign', 'header'),
+        );
+
+        $this->assertRejectedWithCloseFrame($connection, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
     }
 
     /**
@@ -517,8 +559,12 @@ final class SyncPlayRelayWorkerTest extends TestCase
     }
 
     /**
-     * S355 — a REJECTED connect must not echo anything: the handshake is
-     * aborted (close), so no 101 and no subprotocol line may leave the hub.
+     * S355 — a REJECTED connect must not echo anything. Since the M-HUB-17 port
+     * of the L-4 discipline, a pre-upgrade rejection COMPLETES the `101` before
+     * sending the close frame (a close code cannot ride a socket still in HTTP),
+     * so this guarantee matters more than it used to: the 101 the client parses
+     * must carry no `Sec-WebSocket-Protocol` line naming a protocol the hub
+     * never agreed to speak.
      */
     public function testRejectedConnectDoesNotEchoASubprotocol(): void
     {
@@ -526,11 +572,11 @@ final class SyncPlayRelayWorkerTest extends TestCase
         $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
 
         $connection = $this->createMock(TcpConnection::class);
-        $connection->expects($this->once())->method('close')->with('', true);
         $worker->onWebSocketConnect(
             $connection,
             $this->makeUpgradeRequest('/syncplay/server-a', 'never-minted', 'subprotocol'),
         );
+        $this->assertRejectedWithCloseFrame($connection, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
 
         self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
         self::assertSame(
@@ -1256,5 +1302,87 @@ final class SyncPlayRelayWorkerTest extends TestCase
         $raw = implode("\r\n", $lines) . "\r\n\r\n";
 
         return new WorkermanRequest($raw);
+    }
+
+    /**
+     * L-4 / M-HUB-17: assert a pre-upgrade rejection delivered a REAL WS close
+     * frame.
+     *
+     * The mocked TcpConnection has no completed handshake (`context` is null),
+     * so {@see WebSocketCloseFrame::reject()} must have armed
+     * `onWebSocketConnected` instead of closing early. Simulate Workerman
+     * finishing the `101` by invoking that callback, and assert the connection
+     * is then closed with the encoded close frame (raw). Mirrors the helper on
+     * `ClientRelayWorkerTest` — one discipline, asserted the same way.
+     */
+    private function assertRejectedWithCloseFrame(TcpConnection&MockObject $connection, int $code): void
+    {
+        $armed = $connection->onWebSocketConnected ?? null;
+        self::assertInstanceOf(
+            \Closure::class,
+            $armed,
+            'pre-upgrade rejection must arm onWebSocketConnected for a real close frame',
+        );
+
+        $connection->expects($this->once())
+            ->method('close')
+            ->with(WebSocketCloseFrame::bytes($code), true);
+
+        $armed($connection);
+    }
+
+    /**
+     * M-HUB-17 — structural pin: no EXECUTABLE statement in the :8804 worker
+     * rejects a client with the silent `close('', true)`/`close('')` shape.
+     *
+     * ## Why the guard reads tokens, and why it is file-scoped
+     *
+     * The L-4 defect class is defined by the SILENCE of the signal: a raw close
+     * with no WS close frame leaves every consumer (and every future arm) with
+     * nothing but the transport-level 1006. The S237 history shows defect
+     * classes at this surface migrate file-to-file uninvited, so the pin scans
+     * the WHOLE worker, not just the four arms M-HUB-17 converted — a future
+     * fifth rejection written as a silent close reddens it. Comments and doc
+     * blocks are stripped first: the file legitimately NAMES the old shape in
+     * prose explaining why it is gone.
+     *
+     * The relay-side survivors (`ClientRelayWorker`'s malformed-path and
+     * controller-unavailable arms) are pre-existing on their own surface and
+     * reported as residuals; widening this pin estate-wide is that follow-up's
+     * job, not a false green here.
+     */
+    public function testNoRejectionArmInSyncPlayWorkerClosesSilently(): void
+    {
+        $source = (new \ReflectionClass(SyncPlayRelayWorker::class))->getFileName();
+        self::assertIsString($source);
+
+        $codeOnly = '';
+        foreach (token_get_all(file_get_contents($source) ?: '') as $token) {
+            if (is_array($token)) {
+                if ($token[0] === T_COMMENT || $token[0] === T_DOC_COMMENT) {
+                    continue;
+                }
+                $codeOnly .= $token[1];
+                continue;
+            }
+            $codeOnly .= $token;
+        }
+
+        self::assertStringNotContainsString(
+            "close('', true)",
+            $codeOnly,
+            'M-HUB-17: a :8804 rejection arm closes silently again — every auth '
+            . 'refusal collapses back into the transport-level 1006 the device cannot act on',
+        );
+        self::assertStringNotContainsString(
+            'close(""), true',
+            $codeOnly,
+            'M-HUB-17: same law, double-quoted spelling',
+        );
+        self::assertStringNotContainsString(
+            "close('')",
+            $codeOnly,
+            'M-HUB-17: a close with no frame and no raw flag is equally silent',
+        );
     }
 }

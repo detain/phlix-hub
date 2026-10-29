@@ -6,6 +6,40 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-17: the `:8804` watch-party socket now answers every refusal with a REAL WS close code — the L-4 discipline the relay lanes shipped is ported to the SyncPlay surface — 2026-10-29
+
+Review `hub__gameux` M2: all rejection arms of `SyncPlayRelayWorker` were raw
+`close('', true)` calls — no WS close frame — so an expired relay token, a
+foreign `server_id`, a malformed dial path and a hub crash collapsed into the
+identical transport-level `1006` on the device, exactly where (a TV, a remote)
+"re-login" vs "do not retry" is the worst possible guess. `docs/websockets.md`
+already promised `:8804` authentication was "Identical to `:8803`" — true for
+the credential carrier, false for every failure signal.
+Shipped, zero new wire codes and zero protocol additions (4401/1011 are the
+codes the SAME socket family already emits and documents): the arms now go
+through the vendored two-phase `WebSocketCloseFrame::reject()` (finish the
+`101`, then send the encoded close frame — a close code cannot ride a socket
+still mid-HTTP, the L-4 lesson verbatim).
+Auth gate + both join-time guards → `CLOSE_UNAUTHORIZED` 4401 (reasons stay
+bundled into one code by design — an expired-vs-foreign-vs-revoked split would
+reopen the enrollment oracle the claim-code surface just paid to close);
+missing-`server_id` path → `CLOSE_DO_NOT_RETRY` 1011 (NOT 1013: waiting never
+cures a typo, the `ClientMountController` doctrine carried across).
+`docs/websockets.md` gains the `:8804` "Rejection close codes" section, with
+the honest caveats: 1013 has no emitter on this surface (no connect limiter —
+the inbound byte budget drops frames rather than closing), and subprotocol-
+carrier clients refused pre-echo still observe `1006` per the S355 no-echo law
+(true of `:8803`'s table identically — stated, not glossed).
+Tests: `SyncPlayRelayWorkerTest` +3 methods (+13 assertions, dir 110/671 →
+113/684 measured): malformed-path 1011 delivered, auth-refusal 4401 delivered,
+and a token-stripped structural pin — no EXECUTABLE silent close survives in
+the worker file (guards the future fifth arm; comment prose quoting the old
+shape is stripped, not exempted). The three pre-existing `close('', true)`
+pins were bug-encoding and are converted to real-frame assertions via the
+shared `assertRejectedWithCloseFrame` helper (byte-copied discipline from
+`ClientRelayWorkerTest`). Mutation-proven: each converted arm restored to a
+raw close → exactly the arms' pins redden (path: 2, auth: 6).
+
 ### Fixed — M-HUB-16: relay-proxy quota/stream refusals now emit the hub's own canonical flat envelope at an honest 429, and the bandwidth denial names its recovery instant as both `Retry-After` and body `retry_at` — 2026-10-29
 
 Review `hub__gameux` M1: the two most common "can't play" answers a living-room

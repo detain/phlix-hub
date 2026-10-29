@@ -301,6 +301,29 @@ the token's own expiry. This is why S2b dropped the form from `:8803`.
 > appending `?token=…` here was never authenticating; it must move the token to
 > a header or the `bearer` subprotocol.
 
+### Rejection close codes
+
+Since **M-HUB-17** the sentence above — "Identical to `:8803`" — is true for the
+failure signal too, not just the credential carrier. Refusals ride the same
+`WebSocketCloseFrame::reject()` discipline the relay lanes shipped for L-4: the
+`101` completes and a REAL WS close frame follows, so the close event carries a
+code instead of collapsing into a bare transport-level `1006`.
+
+| Code | Emitted by | Meaning — the device's remedy |
+| --- | --- | --- |
+| `4401` (`SyncPlayRelayWorker::CLOSE_UNAUTHORIZED`) | `onWebSocketConnect` auth gate + both join-time guards | No token / bad / expired token, token bound to a foreign `server_id`, revoked owner — all bundled into ONE code by design (an enumeration oracle stays closed, same law the claim-code surface obeys). Remedy: re-login / re-mint via `POST /api/v1/me/servers/{id}/relay-token`. |
+| `1011` (`SyncPlayRelayWorker::CLOSE_DO_NOT_RETRY`) | path with no `server_id` segment | Malformed dial URL. Do **not** reconnect-loop: 1013 "Try Again Later" is deliberately not used here, for the reason `ClientMountController` records at its own 1011 site — waiting never cures a typo. |
+
+`1013` has no emitter on this surface yet: `:8804` runs no connect-rate limiter
+at the hook (its per-connection inbound byte budget DROPS over-budget frames
+rather than closing the socket), so there is no throttle close to code.
+
+**Carrier caveat (true of `:8803`'s table as well).** A client that dials with
+the `bearer` subprotocol and is refused still sees `1006` in the browser's close
+event: the S355 no-echo law means the refused `101` selects no subprotocol, and
+WHATWG treats a no-selection answer as a fatal handshake error before the close
+frame can surface. Header-carrier clients observe the codes above verbatim.
+
 ### Two vocabularies, one socket (owner decision #14)
 
 This surface speaks **two message vocabularies** and never translates between them:

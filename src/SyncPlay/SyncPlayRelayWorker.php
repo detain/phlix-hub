@@ -20,6 +20,7 @@ use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\ClientRelayWorker;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\TokenBucket;
+use Phlix\Hub\Relay\WebSocketCloseFrame;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -92,6 +93,29 @@ final class SyncPlayRelayWorker
      * Default SyncPlay relay WS port.
      */
     public const DEFAULT_PORT = 8804;
+
+    /**
+     * Application close code for every authentication-class refusal on this
+     * surface: missing/bad/expired token, token bound to a foreign server,
+     * revoked owner. Mirrors {@see ClientRelayWorker::CLOSE_UNAUTHORIZED}
+     * (:8802/:8803) — the docs promise `:8804` authentication is "Identical to
+     * `:8803`", and since M-HUB-17 the failure signal carries that promise
+     * literally: a device sees 4401 and knows the answer is re-login.
+     *
+     * The reasons stay deliberately bundled into one code: splitting expired vs
+     * foreign vs revoked would hand an off-path probe a discriminating oracle
+     * over enrollment state (same law the claim-code surface obeys).
+     */
+    public const CLOSE_UNAUTHORIZED = 4401;
+
+    /**
+     * Do-not-retry close code for a malformed dial path (no `server_id`
+     * segment). RFC 1011, chosen for the reason `ClientMountController` records
+     * at its own 1011 site: 1013 "Try Again Later" invites endless reconnect
+     * loops against a failure that can only be cured by FIXING THE URL, never
+     * by waiting.
+     */
+    public const CLOSE_DO_NOT_RETRY = 1011;
 
     /**
      * The ONE subprotocol-id this hub speaks: the marker half of the S237
@@ -415,7 +439,8 @@ final class SyncPlayRelayWorker
             $logger->warning('SyncPlay: rejected connection, missing server_id in path', [
                 'path' => $request->path(),
             ]);
-            $connection->close('', true);
+            // M-HUB-17: real close frame, 1011 do-not-retry (see the constant).
+            WebSocketCloseFrame::reject($connection, self::CLOSE_DO_NOT_RETRY);
             return;
         }
 
@@ -608,13 +633,21 @@ final class SyncPlayRelayWorker
     /**
      * Reject an unauthenticated connection.
      *
+     * M-HUB-17: goes through {@see WebSocketCloseFrame::reject()} with
+     * {@see self::CLOSE_UNAUTHORIZED} — the same two-phase discipline the
+     * :8802/:8803 lanes shipped for this exact defect (L-4). A raw
+     * `close('', true)` here gave every auth failure the bare transport-level
+     * 1006, indistinguishable on the device from a wrong URL or a hub crash;
+     * 4401 names the remedy (re-login / re-mint the relay token) in the close
+     * event itself.
+     *
      * @param TcpConnection $connection The connection to close.
      *
      * @return void
      */
     private function rejectUnauthorized(TcpConnection $connection): void
     {
-        $connection->close('', true);
+        WebSocketCloseFrame::reject($connection, self::CLOSE_UNAUTHORIZED);
     }
 
     /**
@@ -1002,7 +1035,10 @@ final class SyncPlayRelayWorker
             $logger->warning('SyncPlay: rejected group_join from unauthenticated client', [
                 'client_id' => $client->clientId,
             ]);
-            $client->connection->close('', true);
+            // M-HUB-17: same auth-class refusal as the pre-101 gate, delivered
+            // as a real 4401 close frame (post-handshake, so the frame goes out
+            // on the wire immediately — every carrier sees the code).
+            WebSocketCloseFrame::reject($client->connection, self::CLOSE_UNAUTHORIZED);
             return;
         }
 
@@ -1429,13 +1465,14 @@ final class SyncPlayRelayWorker
     {
         // SV-4.7 twin for the canonical door: an unauthenticated socket must
         // not exist here at all (the pre-101 token gate is the real wall), so
-        // this is belt-and-suspenders — same close the bare join performs.
+        // this is belt-and-suspenders — same 4401 close the bare join performs
+        // (M-HUB-17 ported both doors to the mount's discipline).
         if ($client->userId === null) {
             $logger = LoggerFactory::get(LogChannels::RELAY);
             $logger->warning('SyncPlay: rejected canonical join from unauthenticated client', [
                 'client_id' => $client->clientId,
             ]);
-            $client->connection->close('', true);
+            WebSocketCloseFrame::reject($client->connection, self::CLOSE_UNAUTHORIZED);
 
             return;
         }
