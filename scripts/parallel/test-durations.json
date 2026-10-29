@@ -101,7 +101,6 @@
         "tests/Unit/Http/Controllers/ErrorPromotionFramesTest.php": 0.019,
         "tests/Unit/Http/Controllers/FederationControllerTest.php": 0.042,
         "tests/Unit/Http/Controllers/FederationDisabledGuardTest.php": 0.006,
-        "tests/Unit/Http/Controllers/FederationRelayControllerClassifierTest.php": 0.007,
         "tests/Unit/Http/Controllers/InviteExpirySettingTest.php": 0.004,
         "tests/Unit/Http/Controllers/InviteLinkControllerTest.php": 0.01,
         "tests/Unit/Http/Controllers/LibraryShareControllerTest.php": 0.007,
