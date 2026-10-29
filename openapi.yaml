@@ -2175,6 +2175,64 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  "/api/v1/me/password":
+    post:
+      operationId: "post_api_v1_me_password"
+      tags: ["Authentication"]
+      summary: "Change my password"
+      description: |-
+        Self-service password rotation for the authenticated account (M-HUB-07).
+        The caller must prove the CURRENT secret before any write happens, so a
+        stolen access token alone cannot lock the owner out of their own account.
+        Policy on the new secret is the registration policy (8-4096 chars).
+        A failed proof consumes one unit of the shared per-IP login budget, so
+        brute-forcing this endpoint is throttled exactly like repeated bad logins
+        (429 + `Retry-After` once exhausted). A wrong proof is 401
+        `auth.invalid_credentials` — indistinguishable from a failed login, and
+        an unknown account id fails the same way: this endpoint is no oracle.
+        Existing sessions are not revoked (they ride out the access-token TTL),
+        matching the admin reset path.
+      x-phlix-middleware: [AuthMiddleware]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - current_password
+                - new_password
+              properties:
+                current_password:
+                  type: string
+                  description: "Plain current secret, presented as ownership proof."
+                new_password:
+                  type: string
+                  minLength: 8
+                  maxLength: 4096
+                  description: "Plain replacement secret; hashed with Argon2ID."
+      responses:
+        "200":
+          description: "Password updated."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "400":
+          description: "Missing fields (`auth.missing_credentials`) or the new secret failed policy (`validation_failed`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   "/api/v1/me/requests":
     get:
       operationId: "get_api_v1_me_requests"

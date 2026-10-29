@@ -60,6 +60,7 @@ use Phlix\Hub\Http\Controllers\ServerListController;
 use Phlix\Hub\Http\Controllers\ServerManageController;
 use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Http\Controllers\SubdomainController;
+use Phlix\Hub\Http\Controllers\UserPasswordController;
 use Phlix\Hub\Http\Controllers\UserQuotaController;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Middleware\AlexaSignatureMiddleware;
@@ -95,6 +96,7 @@ use Workerman\Worker;
  *  - `POST /api/v1/auth/logout`    — JSON logout.
  *  - `POST /api/v1/auth/refresh`   — refresh access token.
  *  - `GET  /api/v1/me`             — current user JSON (protected).
+ *  - `POST /api/v1/me/password`    — self-service password change (protected).
  *
  * @package Phlix\Hub
  */
@@ -682,6 +684,13 @@ final class Application
         // admin set/view of caps.
         $this->registerUserQuotaRoutes();
 
+        // Self-service password change (M-HUB-07): the account owner's own
+        // rotation path, auth-gated, next to the other /api/v1/me self
+        // surfaces. Distinct from the admin-only reset under
+        // registerAdminUserRoutes() (which mints a random secret FOR another
+        // user); this one proves the current secret first.
+        $this->registerUserPasswordRoutes();
+
         // Metrics routes (admin-only API, S4).
         $this->registerMetricsRoutes();
 
@@ -987,6 +996,36 @@ final class Application
         $controller = $this->container->get(UserQuotaController::class);
         if (!$controller instanceof UserQuotaController) {
             throw new \RuntimeException('Container returned an unexpected UserQuotaController instance');
+        }
+        return $controller;
+    }
+
+    /**
+     * Self-service password change (M-HUB-07).
+     *
+     * `POST /api/v1/me/password` is registered in the member-auth group ONLY
+     * — never the admin group: the whole review finding was that the hub
+     * account had no path to rotate its own password (the sole reset lived
+     * under `/api/v1/admin/users/{id}/reset-password`, an admin action on
+     * other users). {@see \Phlix\Hub\Auth\AuthManager::changePassword()}
+     * requires a current-password proof before any write, so the auth gate
+     * plus that proof is the complete authorization model here.
+     */
+    private function registerUserPasswordRoutes(): void
+    {
+        $authMiddleware = $this->resolveAuthMiddleware();
+        $controller     = $this->resolveUserPasswordController();
+
+        $this->router->group('/api/v1/me', static function (Router $r) use ($controller): void {
+            $r->post('/password', static fn (Request $req): Response => $controller->changePassword($req));
+        }, [$authMiddleware]);
+    }
+
+    private function resolveUserPasswordController(): UserPasswordController
+    {
+        $controller = $this->container->get(UserPasswordController::class);
+        if (!$controller instanceof UserPasswordController) {
+            throw new \RuntimeException('Container returned an unexpected UserPasswordController instance');
         }
         return $controller;
     }

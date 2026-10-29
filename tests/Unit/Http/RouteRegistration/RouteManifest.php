@@ -126,6 +126,10 @@ final class RouteManifest
             \Phlix\Hub\Http\Middleware\AdminMiddleware::class,
             \Phlix\Hub\Http\Controllers\UserQuotaController::class,
         ],
+        'registerUserPasswordRoutes' => [
+            \Phlix\Hub\Http\Middleware\AuthMiddleware::class,
+            \Phlix\Hub\Http\Controllers\UserPasswordController::class,
+        ],
         'registerServerRoutes' => [
             \Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware::class,
             \Phlix\Hub\Http\Controllers\ServerClaimController::class,
@@ -457,6 +461,13 @@ final class RouteManifest
                 [
                     'method' => 'PUT', 'path' => '/api/v1/admin/users/{id}/throttle',
                     'url' => '/api/v1/admin/users/u-1/throttle', 'gate' => self::GATE_ADMIN,
+                ],
+            ],
+
+            'registerUserPasswordRoutes' => [
+                [
+                    'method' => 'POST', 'path' => '/api/v1/me/password', 'url' => '/api/v1/me/password',
+                    'gate' => self::GATE_AUTH_JSON,
                 ],
             ],
 

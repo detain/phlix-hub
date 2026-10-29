@@ -344,6 +344,12 @@ final class ErrorCodesContractTest extends TestCase
             . ' file passes a registered literal code (unchanged from the pre-M5 `'
             . "code' => …` envelopes), byte-pinned per arm by"
             . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\Controllers\\MemberErrorProseTest',
+        'Http/Controllers/UserPasswordController.php::errorFrame::error@2' =>
+            'hop: errorFrame(int $status, string $code, string $message) forwards its own'
+            . ' string-typed $code into (new Response())->error(...); every call site in that'
+            . ' file passes a registered literal code (auth.missing_credentials,'
+            . ' auth.invalid_credentials, validation_failed), each arm byte-pinned by'
+            . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\Controllers\\UserPasswordControllerTest',
         'Http/Middleware/AlexaSignatureMiddleware.php::reject::error@2' =>
             'hop: reject() emits (new Response())->error(400, $wireCode, $code) where $wireCode'
             . ' is a REJECTION_CODE_MAP value — registered dotted twins AND the whole frame'

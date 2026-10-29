@@ -6,6 +6,87 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-07: the hub account becomes manageable by its own owner — POST /api/v1/me/password (self-service password change) + a hub-local security page actually mounted and reachable — 2026-10-29
+
+Review `hub__casualgamer` M7: an owner could not change their own hub
+password anywhere. `src/Application.php` registered only
+`/api/v1/auth/{register,signup,login,logout,refresh}`; password reset lived
+exclusively under the ADMIN group (`POST /api/v1/admin/users/{id}/reset-password`,
+`[$authMiddleware, $adminMiddleware]`) — an admin action *on other users*.
+The SPA's second half was worse in a different direction: the route
+`/app/settings/security` existed but mounted the VENDORED `@phlix/ui`
+`SecuritySettingsPage` (v0.99.10), whose only calls are webauthn
+(`GET/DELETE /api/v1/me/webauthn/credentials`, `POST /api/v1/auth/webauthn/register/*`) —
+the hub serves ZERO webauthn endpoints and `ServerProxyController` has no
+webauthn allowlist, so every button was a 404 round-trip; and the hub menu
+carried no Security entry at all.
+
+Server: NEW `src/Auth/CurrentPasswordInvalidException.php` (typed,
+`SignupsDisabledException` shape) and `AuthManager::changePassword()` —
+proof-first order: rate-limit bucket → `verifyPassword` on the CURRENT
+password (failure: `logFailedAuth('password_change_current_invalid')` +
+typed exception, so a wrong current password can never even learn that the
+new one was weak) → the password policy EXTRACTED from `register()` into
+`assertPasswordPolicy()` (8..`MAX_PASSWORD_LENGTH`, both historical
+messages byte-ident — `register()` behavior unchanged by construction) →
+`UserRepository::update()` (the same `password_hash(PASSWORD_ARGON2ID)`
+idiom) → audit `user.password_changed` (`self_service` ctx) → info log.
+NEW `src/Http/Controllers/UserPasswordController.php` registered via
+`registerUserPasswordRoutes()` inside the `/api/v1/me` group behind
+`[$authMiddleware]` — NOT the admin group — with the `MeController`
+defensive `auth.required` 401 idiom. ZERO new wire error codes: every arm
+reuses registered vocabulary (`auth.invalid_credentials` / `auth.missing_credentials`
+/ `validation_failed`, verified against the contracts `error-codes.json`);
+the `ErrorCodesContractTest` +6 lines are `OPAQUE_CODE_FEEDS` INVENTORY
+rotation with every call-site arm byte-pinned by `UserPasswordControllerTest`.
+`openapi.yaml` documents the operation (`x-phlix-middleware: [AuthMiddleware]`,
+200/400/401/429) including the honest scope note the review's evidence
+demanded: other sessions' access tokens ride out their TTL — the hub's
+`RefreshTokenRevocationService` offers only per-jti `revoke()`, no bulk
+API — matching how `AdminUserController::resetPassword` behaves today.
+`RouteManifest` gained the `GATE_AUTH_JSON` row (anon⇒401 proven by the
+real-router `RegistrarAuthGateTest`).
+
+SPA: hub-local `web-ui/src/pages/HubSecuritySettingsPage.vue` now backs
+`/app/settings/security` (main.ts drops the vendored `SecuritySettingsPage`
+import), the menu gains a Security entry, and the pure
+`web-ui/src/utils/passwordForm.ts` module pre-flights the form client-side
+(current-password check first) and maps server codes to human sentences; a
+cross-language tripwire test fails if any mapped code drifts from the
+controller's actual `errorFrame` literals. The passkeys section ships the
+truth ("This hub does not offer passkey sign-in yet — …"), not a dead form.
+
+Tests: `AuthManagerPasswordChangeTest` (8: wrong-current refuses with the
+typed exception + audit + ZERO write; short/long new-password reject with
+the exact registration wording; success rotates the hash for that user id
+ONLY — other-account pin via id-scoped `expectOnce`) + `UserPasswordControllerTest`
+(7: every envelope arm + M2 sentence-in-`error` law + anon 401) + web-ui
+`node --test` 59→78 (19 new; disclosure per HUB-05: the web-ui node suite
+runs in NO CI today — pins here, wire CI when the venue lands).
+
+Gates: full `Unit,Integration` serial on this tree 5078 tests / 44839
+assertions / 0 failures / 30 skipped on the documented no-swoole venue —
+the sole 3 ERRORS are the known swoole-only `RelayProxyBridge` trio, green
+17/17 on the default ini (same disclosure as M-HUB-06); Integration half
+125 real-DB cases / 0 skipped / 0 failed (S173 floor 31, script's only red
+here is the 30 venue skips); `scripts/parallel/test-durations.json`
+re-blessed from the serial junit (265→267 unit entries); S299 phpcs corpus
+573 files 0 E / 0 W; phpcs PSR-12 clean on every touched file; phpstan
+CI-faithful error set byte-identical to the 5731fc79 worktree baseline
+(zero findings in touched files, both with/without swoole); SPA rebuilt
+from a FRESH `npm@11 ci` deterministically x2 (aggregate md5
+9e262ec61e550f11ce857703c8eb37f5, committed here) and the bundle carries
+the literals `/api/v1/me/password`, `app/settings/security` and the
+passkey truth sentence; `git diff --exit-code -- public/assets/app/` clean
+post-second-build (S253).
+
+Known residual (upstream, NOT hub-side hacked): the vendored
+`SettingsPage.vue` (@phlix/ui v0.99.10) mounted at createPhlixApp's DEFAULT
+`/app/settings` route still embeds `<SecuritySettingsPage/>` (the webauthn
+page) inline in its Security tab — hub cannot override that same-path
+default (extraRoutes push AFTER defaults), so the fix belongs in a phlix-ui
+tag + re-vendor cascade. Flagged as a ui rider.
+
 ### Fixed — M-HUB-06: Shared With Me surfaces hub-vantage liveness — dead buttons become honest states — 2026-10-29
 
 Review `hub__casualgamer` M3: a member's only action on a shared library

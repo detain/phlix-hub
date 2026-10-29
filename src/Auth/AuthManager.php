@@ -275,12 +275,7 @@ class AuthManager
         if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
             throw new InvalidArgumentException('Invalid email format');
         }
-        if (strlen($password) < 8) {
-            throw new InvalidArgumentException('Password must be at least 8 characters');
-        }
-        if (strlen($password) > self::MAX_PASSWORD_LENGTH) {
-            throw new InvalidArgumentException('Password must be at most 4096 characters');
-        }
+        self::assertPasswordPolicy($password);
 
         $this->checkSignupRateLimit($clientIp);
 
@@ -468,6 +463,109 @@ class AuthManager
     {
         $this->dummyPasswordHash ??= password_hash(bin2hex(random_bytes(16)), PASSWORD_ARGON2ID);
         password_verify($password, $this->dummyPasswordHash);
+    }
+
+    /**
+     * The single password-strength policy for every secret this hub persists:
+     * 8..{@see MAX_PASSWORD_LENGTH} characters. Shared verbatim between
+     * {@see register()} and {@see changePassword()} so the two paths can
+     * never drift apart and an account's own password ceiling differs from
+     * the ceiling it signed up under.
+     *
+     * Messages are the exact historical register() strings — byte-stable
+     * wire text for the 400 `validation_failed` frame.
+     *
+     * @throws InvalidArgumentException When the secret is too short or too long.
+     */
+    private static function assertPasswordPolicy(string $password): void
+    {
+        if (strlen($password) < 8) {
+            throw new InvalidArgumentException('Password must be at least 8 characters');
+        }
+        if (strlen($password) > self::MAX_PASSWORD_LENGTH) {
+            throw new InvalidArgumentException('Password must be at most 4096 characters');
+        }
+    }
+
+    /**
+     * Change an authenticated user's OWN password.
+     *
+     * The self-service counterpart of the admin-only
+     * `POST /api/v1/admin/users/{id}/reset-password`: the caller proves
+     * knowledge of the current secret BEFORE any write happens, so a stolen
+     * access token alone cannot lock the owner out of their own account
+     * (the proof-first order is the whole point — checking the new
+     * password's policy first would let an attacker who only holds a token
+     * learn policy details and, worse, rewrite the secret of any account
+     * whose token they captured).
+     *
+     * Gates, in order, mirroring {@see login()}'s limiter posture:
+     *
+     *  1. the shared login budget for this client IP is consulted first
+     *     (`peek`, no consumption) and every failed current-password proof
+     *     consumes one unit — a brute-force of THIS endpoint drains the
+     *     attacker's own login budget, exactly like repeated bad logins;
+     *     a successful change never clears the bucket (only a successful
+     *     LOGIN does — the budget is a login defence, not a courtesy);
+     *  2. current-password proof via {@see UserRepository::verifyPassword()}
+     *     — an unknown user id fails the same way (false), so the endpoint
+     *     is no account oracle;
+     *  3. {@see assertPasswordPolicy()} on the NEW secret (same 8..4096
+     *     ceiling and the same messages as registration).
+     *
+     * The write goes through {@see UserRepository::update()} — the one
+     * hashing path (Argon2ID minted inside the repository), so this method
+     * never touches a hash itself.
+     *
+     * Scope note (deliberate, matches the admin reset today): existing
+     * sessions are NOT revoked — access tokens ride out their TTL and
+     * refresh jti revocation has no per-user bulk API in
+     * {@see RefreshTokenRevocationService}. Rotating the secret stops
+     * FUTURE logins, which is what the self-service contract promises.
+     *
+     * Audit: the failure rides `logFailedAuth` with reason
+     * 'password_change_current_invalid' (auth-failure family, like logins);
+     * the success rides {@see AuditLogger::logAdminAction()} with action
+     * 'user.password_changed' — the generic audited-mutation recorder the
+     * sibling 'user.reset_password' admin path uses; `self_service` context
+     * distinguishes owner-initiated changes from admin-imposed ones. (No
+     * PSR-14 event: the shared package's Auth event set is
+     * Created/LoggedIn/LoggedOut only; adding one is a shared-repo seam
+     * this hub-local cure must not fork.)
+     *
+     * @param string $userId          Authenticated user id (from the JWT claim).
+     * @param string $currentPassword Plain current secret, presented as proof.
+     * @param string $newPassword     Plain replacement secret (8..4096 chars).
+     * @param string $clientIp        Real client IP the login limiter buckets on.
+     *
+     * @throws RateLimitException            When the client IP exceeded the login budget.
+     * @throws CurrentPasswordInvalidException When the proof does not verify.
+     * @throws InvalidArgumentException      When the new secret violates the policy.
+     */
+    public function changePassword(
+        string $userId,
+        string $currentPassword,
+        string $newPassword,
+        string $clientIp = '',
+    ): void {
+        $this->checkRateLimit($clientIp);
+
+        if ($userId === '' || !$this->userRepository->verifyPassword($userId, $currentPassword)) {
+            $this->recordFailedAttempt($clientIp);
+            $this->auditLogger->logFailedAuth('password_change_current_invalid', [
+                'user_id' => $userId,
+            ]);
+            throw new CurrentPasswordInvalidException('Current password is incorrect');
+        }
+
+        self::assertPasswordPolicy($newPassword);
+
+        $this->userRepository->update($userId, ['password' => $newPassword]);
+
+        $this->auditLogger->logAdminAction($userId, 'user.password_changed', $userId, [
+            'self_service' => true,
+        ]);
+        $this->logger->info('User password changed', ['user_id' => $userId]);
     }
 
     /**

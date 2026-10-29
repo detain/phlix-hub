@@ -93,6 +93,8 @@ use Phlix\Hub\Http\Controllers\RelayController;
 use Phlix\Hub\Http\Controllers\Stats\MetricsController;
 use Phlix\Hub\Relay\FederationWorker;
 use Phlix\Hub\Http\Controllers\RequestController;
+use Phlix\Hub\Auth\AuthManager;
+use Phlix\Hub\Http\Controllers\UserPasswordController;
 use Phlix\Hub\Http\Controllers\UserQuotaController;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsRepositoryInterface;
@@ -1248,6 +1250,17 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('sessionManager', get(RelaySessionManager::class))
                 ->parameter('users', get(UserRepository::class))
                 ->parameter('audit', get(AuditLogger::class)),
+
+            // Self-service password change (M-HUB-07): `POST /api/v1/me/password`
+            // for the authenticated owner, gated [auth] at the route group in
+            // Application::registerUserPasswordRoutes(). All proof/policy/audit
+            // logic lives in AuthManager::changePassword(); this controller is
+            // the frame mapper only.
+            UserPasswordController::class => factory(static function (
+                AuthManager $auth,
+            ): UserPasswordController {
+                return new UserPasswordController($auth);
+            })->parameter('auth', get(AuthManager::class)),
 
             // Shared admin console user-management API (hubby.md H1.3). Reuses
             // the existing UserRepository and AuditLogger; gated [auth, admin]

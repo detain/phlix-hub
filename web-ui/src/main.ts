@@ -1,4 +1,4 @@
-import { createPhlixApp, ServerDetailPage, FederationSharesPage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, SecuritySettingsPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem } from '@phlix/ui';
+import { createPhlixApp, ServerDetailPage, FederationSharesPage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem } from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
 import { messagesForLocale, resolveLocale } from './i18n';
@@ -6,6 +6,7 @@ import HubMyServersPage from './pages/HubMyServersPage.vue';
 import HubFederationPage from './pages/HubFederationPage.vue';
 import HubManageSharesPage from './pages/HubManageSharesPage.vue';
 import HubSharedWithMePage from './pages/HubSharedWithMePage.vue';
+import HubSecuritySettingsPage from './pages/HubSecuritySettingsPage.vue';
 
 const app = createPhlixApp({
     // i18n seam (config-time, @phlix/ui R6.5c): resolve the boot locale ONCE at
@@ -37,6 +38,10 @@ const app = createPhlixApp({
         { id: 'shared-with-me', label: 'Shared With Me', to: '/app/shared-with-me' },
         { id: 'invite-links', label: 'Invite Links', to: '/app/invite-links' },
         { id: 'requests', label: 'Requests', to: '/app/requests' },
+        // Self account security (M-HUB-07). Sits with the other personal
+        // surfaces (MCP tokens below), NOT behind the admin gate: the endpoint
+        // gates on the caller's own session + current-password proof.
+        { id: 'security', label: 'Security', to: '/app/settings/security' },
         // MCP personal-access tokens (S62 API / S243 UI). `createPhlixApp` mounts
         // the ROUTE for every `app: 'hub'` consumer, but menus are consumer-owned —
         // supplying `menu` above replaces the shell default — so without this line
@@ -67,7 +72,12 @@ const app = createPhlixApp({
         {
             path: '/app/settings/security',
             name: 'settings-security',
-            component: SecuritySettingsPage,
+            // Hub-local since [review hub__casualgamer M7]: the vendored
+            // SecuritySettingsPage only ever spoke webauthn — endpoints this
+            // hub does not serve — so every control on it was a guaranteed
+            // 404. The hub page owns the honest render (password rotation via
+            // POST /api/v1/me/password + a truthful passkeys statement).
+            component: HubSecuritySettingsPage,
         },
         // NOTE: this dynamic route MUST come after the static /app/servers route
         // Vue router matches in order — static routes first, then dynamic segments.
