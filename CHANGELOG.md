@@ -6,6 +6,58 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — M-HUB-08: watch parties become findable — `/app/watch-party` page + `/app/party/{server}/{code}` deep link + nav entry, riding ONLY the documented `:8804` canonical wire — 2026-10-29
+
+Review `hub__casualgamer` M5: "Watch parties — the hub's marquee feature
+for an end user — are invisible to the end user… I looked everywhere in the
+portal for my friend's party: no join screen, no room-code field, no link
+handler, no copy." All true at the tip: the portal never used the word
+party or room, mounted no syncplay surface, and the `:8804` relay's closed
+canonical catalog (docs/websockets.md) had ZERO browser consumers — the
+vendored `@phlix/ui` internal `hubRelay.ts` consumes `pending_command`
+frames only and none of that member-facing surface is exported at the
+package entry (same pin boundary as the M3/M7 pages).
+
+Cure is SPA-side, minimal-invention, wire-first. NEW
+`web-ui/src/utils/watchPartyWire.ts` (pure, node-tested): the dial law
+(`ws(s)://<hub-host>:8804/syncplay/{server_id}`, port pinned to
+`SyncPlayRelayWorker::DEFAULT_PORT` origin-port-never-wins, cross-checked
+against the PHP by test), the S237 bearer-subprotocol carrier (token never
+rides a URL — client-side re-pin tested), the four documented client ops
+(`syncplay_group_create`/`_join`/`_list`/`_leave`) and the typed inbound
+parse of `{group, your_id}` / `group_list` / `syncplay_info` /
+`syncplay_host_elect` / `syncplay_error` exactly as the hub frames them
+(`canonicalGroupPayload` second-scale stamps, ms position). NEW
+`web-ui/src/pages/HubWatchPartyPage.vue`: server picker off
+`GET /api/v1/me/servers`, per-attempt token mint
+(`POST /api/v1/me/servers/{id}/relay-token` — re-minted, never cached, 1h
+TTL law), start/join-by-name/leave/list live rooms, copy-link, roster and
+playback anchor. `main.ts` gains the `Watch Party` menu entry (personal
+surfaces, not the admin gate) and BOTH routes; the deep route is
+deliberately NOT `meta.public` (minting needs the session; the login
+round-trip lands back on the party). Zero new endpoints, zero new wire
+codes, zero `src/` changes, `openapi.yaml` untouched; every refusal renders
+its real reason visibly (mint `server.not_owned`, wire
+`syncplay.group_not_found`/`NOT_HOST`/…, `UNKNOWN_MESSAGE`,
+`hub.protocol_unsupported` — the sentence maps are tripwired against the
+controller and docs sources so drift reddens the named test, not the user).
+
+Honest scope, shipped in the page copy: hub rooms key on
+`(server_id, owner)`, so a party spans the OWNER ACCOUNT's devices — a
+friend on another account cannot join it yet (guest access is a hub
+capability still to come; reported to the owner reel, never faked as UI).
+Party names ARE the join codes (the hub mints no ticket —
+`group_id == group_name`, auto-create on join, first joiner hosts; the page
+says so instead of performing secrecy theatre).
+
+Measured: web-ui `node --test` suite 78 → 114 tests (+36, zero prior
+failures touched); SPA re-vendored under `public/assets/app` in THIS commit
+(`vite build` deterministic ×2, aggregate md5 `fa8c15303a9c039099fb4550f5d9d049`),
+satisfying the ci.yml SPA-freshness gate by footprint. Venue disclosure
+(carried from HUB-05): the web-ui suite runs in NO CI workflow — the tests
+are `npm test`-local only, so the cross-language tripwires above are the
+current teeth until a hub CI leg runs them.
+
 ### Fixed — M-HUB-07: the hub account becomes manageable by its own owner — POST /api/v1/me/password (self-service password change) + a hub-local security page actually mounted and reachable — 2026-10-29
 
 Review `hub__casualgamer` M7: an owner could not change their own hub

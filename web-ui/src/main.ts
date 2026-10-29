@@ -7,6 +7,7 @@ import HubFederationPage from './pages/HubFederationPage.vue';
 import HubManageSharesPage from './pages/HubManageSharesPage.vue';
 import HubSharedWithMePage from './pages/HubSharedWithMePage.vue';
 import HubSecuritySettingsPage from './pages/HubSecuritySettingsPage.vue';
+import HubWatchPartyPage from './pages/HubWatchPartyPage.vue';
 
 const app = createPhlixApp({
     // i18n seam (config-time, @phlix/ui R6.5c): resolve the boot locale ONCE at
@@ -36,6 +37,11 @@ const app = createPhlixApp({
         { id: 'federation-shares', label: 'Federation Shares', to: '/app/federation/shares', requiresAdmin: true },
         { id: 'manage-shares', label: 'Shares', to: '/app/shares' },
         { id: 'shared-with-me', label: 'Shared With Me', to: '/app/shared-with-me' },
+        // Watch parties (M-HUB-08, [review hub__casualgamer M5]): the :8804
+        // relay's rooms had ZERO portal surface — the review's "invisible
+        // marquee feature". Sits with the personal media surfaces, NOT behind
+        // the admin gate: the wire gates on the caller's own server ownership.
+        { id: 'watch-party', label: 'Watch Party', to: '/app/watch-party' },
         { id: 'invite-links', label: 'Invite Links', to: '/app/invite-links' },
         { id: 'requests', label: 'Requests', to: '/app/requests' },
         // Self account security (M-HUB-07). Sits with the other personal
@@ -111,6 +117,28 @@ const app = createPhlixApp({
             // the vendored shares page cannot show per-share hub-vantage state
             // (package pin boundary); the hub page owns the honest render.
             component: HubSharedWithMePage,
+        },
+        {
+            path: '/app/watch-party',
+            name: 'watch-party',
+            // Hub-local since [review hub__casualgamer M5] (M-HUB-08): the
+            // portal never surfaced the :8804 relay rooms at all. The page
+            // rides ONLY the documented wire (mint → bearer dial → canonical
+            // syncplay_* catalog); see utils/watchPartyWire.ts for the law.
+            component: HubWatchPartyPage,
+        },
+        // Deep party link — the review's missing "link handler". The server id
+        // rides the path because the relay dial is `/syncplay/{server_id}` and
+        // ownership is re-checked per (token, server); `props: true` feeds both
+        // into the same page, which auto-dials the join. NOT `meta.public`:
+        // minting a relay token needs the account session, and the shell's
+        // login round-trip returns here (AcceptInvitePage above is public
+        // because an invitee by definition has no session yet — different act).
+        {
+            path: '/app/party/:serverId/:code',
+            name: 'party-join',
+            component: HubWatchPartyPage,
+            props: true,
         },
         {
             path: '/app/invite-links',
