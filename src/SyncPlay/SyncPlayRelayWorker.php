@@ -28,6 +28,7 @@ use Workerman\Timer;
 use Workerman\Worker;
 
 use function array_merge;
+use function chr;
 use function count;
 use function explode;
 use function is_numeric;
@@ -57,6 +58,13 @@ use function trim;
  *
  * This is separate from the main relay tunnel (ports 8802/8803) which uses
  * binary frames. SyncPlay uses native WebSocket JSON frames.
+ *
+ * Liveness is server-driven since M-HUB-18: every
+ * `LIVENESS_PING_INTERVAL_SECONDS` the worker pings each socket and reaps
+ * silence past `LIVENESS_REAP_AFTER_SILENCE_SECONDS` with a 1013 close, so a
+ * half-open ghost (a dead HOST above all) is evicted — through this worker's
+ * own leave path, which elects a live host — instead of squatting on a room
+ * forever the way pure-TCP liveness allowed. See `docs/websockets.md` §:8804.
  *
  * ## Two vocabularies, one socket (owner decision #14)
  *
@@ -116,6 +124,55 @@ final class SyncPlayRelayWorker
      * by waiting.
      */
     public const CLOSE_DO_NOT_RETRY = 1011;
+
+    /**
+     * Server-originated liveness ping cadence on `:8804`, in seconds
+     * (M-HUB-18). Until this existed the surface had NO keepalive at all:
+     * liveness was pure TCP, and a half-open host (crashed device, cable out,
+     * NAT quietly dropped the mapping) stayed recorded in
+     * {@see self::$roomHosts} indefinitely, freezing every member's host-gated
+     * command behind a sender-only `NOT_HOST`. 30s mirrors the `:8802`
+     * IdleReaper window math — the estate's shipped liveness idiom — and the
+     * frame itself is a bare RFC ping: browser-grade stacks (the ui bundle,
+     * Tizen WebView, RN SocketRocket/OkHttp, Roku `Device.webSocket`) answer
+     * pings transparently inside the socket layer, so a healthy app that sends
+     * no traffic is never falsely penalised for being quiet.
+     */
+    public const LIVENESS_PING_INTERVAL_SECONDS = 30;
+
+    /**
+     * Silence budget before a socket is reaped, in seconds (M-HUB-18). The
+     * HB-0.1 coupling law from {@see \Phlix\Hub\Relay\IdleReaper} applies
+     * verbatim: the reap window MUST stay strictly greater than the ping
+     * interval so a client always gets its ping answer counted before eviction
+     * is even considered — 90s against the 30s cadence is the same 3x margin
+     * (two full missed-ping cycles of grace for a slow reconnect-free network).
+     * ANY inbound frame (data, ping, pong) refreshes the budget; only true
+     * silence costs anything. A reaped ghost host runs the SAME leave path a
+     * graceful disconnect would ({@see self::onClose()} → canonical host
+     * election), so the party elects a live host within ~90s of the old one
+     * dying instead of never.
+     */
+    public const LIVENESS_REAP_AFTER_SILENCE_SECONDS = 90;
+
+    /**
+     * RFC close code for a liveness reap: 1013 "Try Again Later" — the honest
+     * remedy for a socket the server gave up on IS to reconnect (a device
+     * whose path briefly flapped returns to its room with fresh state).
+     * Deliberate contrast with {@see self::CLOSE_DO_NOT_RETRY}: that code
+     * marks a failure reconnecting can NOT cure, this one marks exactly the
+     * failure it can.
+     */
+    public const CLOSE_LIVENESS_TIMEOUT = 1013;
+
+    /**
+     * The liveness probe itself: a FIN-only server→client WebSocket ping
+     * (opcode 0x9, empty payload, unmasked per RFC 6455 as required on the
+     * server side). Sent raw ({@see TcpConnection::send()} second arg) because
+     * this worker's `onMessage` pipeline is a JSON app protocol — the frame
+     * must not be re-framed as another text payload.
+     */
+    private const PING_FRAME = "\x89\x00";
 
     /**
      * The ONE subprotocol-id this hub speaks: the marker half of the S237
@@ -285,6 +342,13 @@ final class SyncPlayRelayWorker
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
         $worker->onWorkerStart = [$this, 'onWorkerStart'];
+        // M-HUB-18: control-frame handlers. Registering onWebSocketPing
+        // DISPLACES the vendor's auto-pong (Websocket::input() only answers a
+        // ping itself when no per-worker/per-connection callback is set), so
+        // {@see self::onWebSocketPing()} must re-answer — it does, and stamps
+        // liveness first. onWebSocketPong exists purely to see the answer.
+        $worker->onWebSocketPing = [$this, 'onWebSocketPing'];
+        $worker->onWebSocketPong = [$this, 'onWebSocketPong'];
 
         // Close DB connections in onWorkerStop (still in coroutine context) so
         // hooked PDO sockets aren't destroyed at RSHUTDOWN outside a coroutine.
@@ -296,6 +360,11 @@ final class SyncPlayRelayWorker
     /**
      * Worker start hook — set up the room cleanup timer and join the channel
      * broker so HTTP workers can push pending commands into this process.
+     *
+     * Since M-HUB-18 a SECOND resident timer is armed here: the liveness tick
+     * ({@see self::livenessTick()}), the server-originated ping/reap sweep that
+     * bounds how long a half-open ghost — a host in particular — can squat on
+     * a room the TCP layer cannot see is dead.
      *
      * The channel join is the S93 half: this worker is the ONLY process holding
      * the live client sockets ({@see self::$clients} is a per-process static), so
@@ -331,6 +400,13 @@ final class SyncPlayRelayWorker
                 }
             }
         });
+
+        // M-HUB-18: the liveness sweep — ping every socket, reap past-budget
+        // ghosts with a real 1013 close. Arming it HERE (not in start())
+        // mirrors the empty-room sweep above: it must run inside the live
+        // event loop of the count=1 relay worker, after the process has its
+        // own Timer namespace.
+        Timer::add(self::LIVENESS_PING_INTERVAL_SECONDS, [$this, 'livenessTick']);
 
         $logger = LoggerFactory::get(LogChannels::RELAY);
 
@@ -651,6 +727,101 @@ final class SyncPlayRelayWorker
     }
 
     /**
+     * The M-HUB-18 liveness sweep — the server-side half of "is this socket
+     * still a party".
+     *
+     * For every registered client: a silence at or past
+     * {@see self::LIVENESS_REAP_AFTER_SILENCE_SECONDS} earns a real close frame
+     * with {@see self::CLOSE_LIVENESS_TIMEOUT} (via the same
+     * {@see WebSocketCloseFrame::reject()} the auth refusals use, so the reap
+     * lands as an RFC close even mid-handshake); everything else is pinged to
+     * give it the next window to answer. The reap needs no separate election
+     * code: `reject()` closes the socket, `onClose()` runs, and the canonical
+     * leave path already elects the oldest remaining member and broadcasts
+     * `syncplay_host_elect` — a frozen party thaws on exactly the timer that
+     * proves the old host dead.
+     *
+     * Runs on the resident event loop; every branch is bounded and total by
+     * design — one raw write or one close per client, never a blocking call —
+     * because a throw here would kill the sole count=1 relay process
+     * (M-HUB-03 law, same as every handler on this surface).
+     *
+     * @return void
+     */
+    public function livenessTick(): void
+    {
+        $now = time();
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+
+        foreach (self::$clients as $client) {
+            if ($now - $client->lastSeenAt >= self::LIVENESS_REAP_AFTER_SILENCE_SECONDS) {
+                $logger->warning('SyncPlay liveness: reaping silent client', [
+                    'server_id' => $client->serverId,
+                    'client_id' => $client->clientId,
+                    'user_id' => $client->userId,
+                    'room' => $client->room,
+                    'silent_seconds' => $now - $client->lastSeenAt,
+                ]);
+                // Closing fires onClose() → member removal + host election.
+                WebSocketCloseFrame::reject($client->connection, self::CLOSE_LIVENESS_TIMEOUT);
+
+                continue;
+            }
+
+            // Raw write: the ping is a protocol control frame, not app data —
+            // `$raw = true` hands the bytes to the socket without the JSON text
+            // framing the vendor encoder would otherwise apply.
+            $client->connection->send(self::PING_FRAME, true);
+        }
+    }
+
+    /**
+     * Inbound WebSocket ping (opcode 0x9) — proof of life, then answer it.
+     *
+     * Registering this callback DISPLACES the vendor's built-in auto-pong
+     * (`Websocket::input()` only synthesizes the reply when no ping handler
+     * exists on the worker or connection), so the answer is ours to send: the
+     * RFC-correct pong echoing the ping payload, raw for the same framing
+     * reason as {@see self::livenessTick()}. A client that pings us is by
+     * definition not silent; stamping before answering is the whole contract.
+     *
+     * @param TcpConnection $connection The socket that pinged us.
+     * @param string        $pingData   The ping payload to echo back.
+     *
+     * @return void
+     */
+    public function onWebSocketPing(TcpConnection $connection, string $pingData): void
+    {
+        $client = self::$clients[spl_object_id($connection)] ?? null;
+        if ($client !== null) {
+            $client->lastSeenAt = time();
+        }
+
+        $connection->send("\x8a" . chr(strlen($pingData)) . $pingData, true);
+    }
+
+    /**
+     * Inbound WebSocket pong (opcode 0xa) — the answer to our liveness ping.
+     *
+     * Nothing to echo; the stamp IS the handler. A healthy-but-idle member
+     * keeps its socket at full silence budget by answering control frames
+     * inside its own stack, without its app ever writing a byte — which is why
+     * the reap never false-positives on quiet-but-connected parties.
+     *
+     * @param TcpConnection $connection The socket that answered.
+     * @param string        $pongData   The pong payload (our ping's, per RFC).
+     *
+     * @return void
+     */
+    public function onWebSocketPong(TcpConnection $connection, string $pongData): void
+    {
+        $client = self::$clients[spl_object_id($connection)] ?? null;
+        if ($client !== null) {
+            $client->lastSeenAt = time();
+        }
+    }
+
+    /**
      * Handle incoming SyncPlay message.
      *
      * SyncPlay messages are JSON with a 'type' field indicating the message kind.
@@ -668,6 +839,12 @@ final class SyncPlayRelayWorker
         if ($client === null) {
             return;
         }
+
+        // M-HUB-18: ANY well-formed inbound frame is proof of life — stamp the
+        // liveness budget BEFORE the throttle check, because a throttled client
+        // is a loud client, not a ghost: dropping its frame is fair, evicting
+        // it for "silence" it demonstrably did not produce would not be.
+        $client->lastSeenAt = time();
 
         // Audit M-3: charge the frame to the client's inbound budget BEFORE any
         // parsing or relay work, so junk costs the sender the same budget as

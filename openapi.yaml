@@ -4322,6 +4322,17 @@ x-phlix-websockets:
       was always null and EVERY :8804 connect was rejected. A client still sending `?token=` here
       was never authenticating and must move the token to a header or the bearer subprotocol.
     encoding: "JSON text frames"
+    liveness: >-
+      Server-originated since M-HUB-18, mirroring the :8802 window math: every live socket is
+      sent a bare WS ping (opcode 0x9, empty payload) every SyncPlayRelayWorker::
+      LIVENESS_PING_INTERVAL_SECONDS (30 s); silence at or past LIVENESS_REAP_AFTER_SILENCE_SECONDS
+      (90 s, the HB-0.1 coupling law's 3x margin over the cadence) is reaped with a REAL close
+      frame carrying 1013 — a transient path failure reconnecting cures, not 1011. ANY inbound
+      frame (data, ping, pong) refreshes the budget, including frames the per-connection byte
+      budget drops: a loud client is never evicted for silence it did not produce. Browser-class
+      client stacks answer the ping inside the socket layer, so healthy-quiet members need no app
+      code. A reaped ghost HOST closes through the ordinary leave path, so its room elects a live
+      host (syncplay_host_elect) within ~one reap window instead of freezing on NOT_HOST forever.
     timestamps: >-
       Every timestamp this hub STAMPS on this surface is UNIX MILLISECONDS, matching the
       syncplay transport clock contract (phlix-syncplay/SPEC.md §2): the `timestamp` on

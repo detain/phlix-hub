@@ -272,6 +272,7 @@
         "tests/Unit/SyncPlay/PendingCommandChannelRoundTripTest.php": 0.02,
         "tests/Unit/SyncPlay/PendingCommandDeliveryTest.php": 0.009,
         "tests/Unit/SyncPlay/SyncPlayClientTest.php": 0.001,
+        "tests/Unit/SyncPlay/SyncPlayLivenessTest.php": 0.01,
         "tests/Unit/SyncPlay/SyncPlayRelayCanonicalDialectTest.php": 0.034,
         "tests/Unit/SyncPlay/SyncPlayRelayFrameGuardTest.php": 0.004,
         "tests/Unit/SyncPlay/SyncPlayRelayWorkerTest.php": 0.022,

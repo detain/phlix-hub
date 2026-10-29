@@ -6,6 +6,47 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-18: `:8804` gets a server-originated liveness ping and a bounded silent-socket reap — a half-open ghost HOST can no longer freeze its watch party forever — 2026-10-29
+
+Review `hub__gameux` M3: the SyncPlay relay surface had **no keepalive at all** —
+liveness was pure TCP. A host whose device half-opened (crash, cable out, expired
+NAT mapping) stayed recorded in the room's host book indefinitely: the 60 s room
+sweep only drops EMPTY rooms, host transfer needs the dead host to send, and every
+member's host-gated command died behind a sender-only `NOT_HOST` — the party frozen
+until the ghost's socket happened to error. `docs/websockets.md` §:8804 documented
+exactly this as a known gap mirroring the `:8802` 30 s/90 s math, "not this
+document's to make" — this campaign dispatch is that owner-level call landing.
+Shipped: `SyncPlayClient::$lastSeenAt` (seeded at connect; stamped by ANY inbound
+frame — data, WS ping, or pong — and deliberately BEFORE the inbound-budget
+throttle, because a throttled client is a loud client, not a ghost);
+`SyncPlayRelayWorker::livenessTick()` armed on a second resident 30 s timer in
+`onWorkerStart()` — every live socket receives a bare RFC ping (`0x89`, empty
+payload, raw), silence at or past 90 s (`LIVENESS_REAP_AFTER_SILENCE_SECONDS`,
+the `IdleReaper` HB-0.1 coupling law's 3× margin over the cadence, pinned on the
+constants by test) is reaped through the M-HUB-17 `WebSocketCloseFrame::reject()`
+discipline with the new `CLOSE_LIVENESS_TIMEOUT = 1013` — reconnect IS the cure,
+the honest contrast with 1011's do-not-retry. No separate election code was
+needed: the reap closes the socket, `onClose()` runs, and the existing canonical
+leave elects the oldest remaining member and broadcasts `syncplay_host_elect` —
+the frozen party thaws within roughly one reap window of the host dying.
+Registering `onWebSocketPing` DISPLACES the vendor auto-pong
+(`Websocket::input()` only synthesizes the reply when no callback is set), so the
+handler re-answers with the RFC pong and stamps first; `onWebSocketPong` is
+stamp-only. Consumer safety: every real `:8804` client stack (ui bundle on
+Chromium/WebKit, RN SocketRocket/OkHttp, Roku `Device.webSocket`) answers WS
+pings inside the socket layer, so healthy-quiet members are never falsely
+reaped. Zero new contracts wire codes (close codes are this surface's documented
+WS surface; `1013` already estate-documented on `:8802`). Docs flipped from
+known-gap to shipped truth (glance table, close-code table, keepalive section)
+and `openapi.yaml` `x-phlix-websockets` :8804 gains a `liveness` entry. Tests:
+new `SyncPlayLivenessTest` (11: ping wire shape, ghost-only reap with the real
+1013 frame, 89s/90s boundary, data/ping/pong refresh paths, throttled-drop-is-
+life proof, displacement-corrected pong answer, coupling-law + close-code
+constant pins, and the payoff — reaped ghost host elects the remaining member);
+`PendingCommandChannelRoundTripTest` boot timer pin 1→2, the timer-callback
+helper now selects by interval, and the ARMED liveness callback is FIRED against
+a real client (ping the fresh, reap the stale — runtime-derived, not count-only).
+
 ### Fixed — M-HUB-12: the server-claim pairing endpoints get a rate budget, the per-guess audit-DB write is gone, and the guard is byte-invisible on every covered response — 2026-10-29
 
 Review `hub__exploiter` M1: `POST /api/v1/server-claims/new`, `GET

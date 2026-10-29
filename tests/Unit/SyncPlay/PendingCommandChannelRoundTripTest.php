@@ -9,14 +9,17 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\SyncPlay\ChannelPendingCommandPusher;
 use Phlix\Hub\SyncPlay\PendingCommandDispatcher;
 use Phlix\Hub\SyncPlay\PendingCommandProtocol;
+use Phlix\Hub\SyncPlay\SyncPlayClient;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\SyncPlay\RegistersSyncPlayClients;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
+use Closure;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
+use function abs;
 use function array_keys;
 use function glob;
 use function is_array;
@@ -26,7 +29,10 @@ use function is_file;
 use function json_encode;
 use function mkdir;
 use function rmdir;
+use function spl_object_id;
+use function sprintf;
 use function sys_get_temp_dir;
+use function time;
 use function uniqid;
 use function unlink;
 
@@ -666,11 +672,12 @@ final class PendingCommandChannelRoundTripTest extends TestCase
         $worker->onWorkerStart();
 
         self::assertSame(
-            1,
+            2,
             $this->pendingTimerTaskCount(),
-            'onWorkerStart() must still arm the 60s room-cleanup timer. Without it `self::$rooms` '
-            . 'grows without bound in a resident worker — and a failed channel join must not be '
-            . 'allowed to skip it either.',
+            'onWorkerStart() must arm BOTH resident timers: the 60s room-cleanup sweep (without it '
+            . '`self::$rooms` grows without bound in a resident worker) and the M-HUB-18 liveness '
+            . 'ping at 30s (without it a half-open ghost host freezes its party forever). A failed '
+            . 'channel join must not be allowed to skip either.',
         );
 
         // The surface itself is untouched by the failed join.
@@ -714,7 +721,7 @@ final class PendingCommandChannelRoundTripTest extends TestCase
         );
 
         $worker->onWorkerStart();
-        $callback = $this->armedTimerCallback();
+        $callback = $this->armedTimerCallback(60.0);
 
         $callback();
 
@@ -804,15 +811,18 @@ final class PendingCommandChannelRoundTripTest extends TestCase
     }
 
     /**
-     * The single callback Workerman's task table holds after `onWorkerStart()`.
+     * The callback Workerman's task table holds for the timer armed at
+     * `$intervalSeconds`.
      *
      * Pulled out of `Timer::$tasks` (shape `[runTime][timerId] = [callable,
-     * args, persistent, interval]`, `Timer.php:170`) so the timer can be FIRED
-     * rather than merely counted.
+     * args, persistent, interval]`, `Timer.php:170`) so a specific timer can be
+     * FIRED rather than merely counted. Since M-HUB-18 boot arms two timers, so
+     * the interval is the selection key — 60.0 is the room sweep, 30.0 is the
+     * liveness ping.
      *
      * @return callable(): void
      */
-    private function armedTimerCallback(): callable
+    private function armedTimerCallback(float $intervalSeconds): callable
     {
         $callbacks = [];
         foreach (self::readTimerArray('tasks') as $bucket) {
@@ -821,7 +831,12 @@ final class PendingCommandChannelRoundTripTest extends TestCase
             }
             /** @var mixed $task */
             foreach ($bucket as $task) {
-                if (is_array($task) && isset($task[0]) && is_callable($task[0])) {
+                if (
+                    is_array($task)
+                    && isset($task[0], $task[3])
+                    && is_callable($task[0])
+                    && abs((float) $task[3] - $intervalSeconds) < 0.001
+                ) {
                     $callbacks[] = $task[0];
                 }
             }
@@ -830,13 +845,63 @@ final class PendingCommandChannelRoundTripTest extends TestCase
         self::assertCount(
             1,
             $callbacks,
-            'exactly one timer callback must be armed for this test to fire the right one',
+            sprintf(
+                'exactly one timer callback must be armed at %.1fs for this test to fire the right one',
+                $intervalSeconds,
+            ),
         );
 
         /** @var callable(): void $callback */
         $callback = $callbacks[0];
 
         return $callback;
+    }
+
+    /**
+     * M-HUB-18 — the liveness timer boot arms must actually DO its job: not
+     * merely sit in the task table with a 30s interval. The registered callback
+     * is pulled out and FIRED against a real connected client, proving both
+     * directions of the sweep: a stale socket meets the 1013 reap path, a fresh
+     * one receives the raw wire ping. Constant edits that only touch the docs
+     * reddens here the moment the cadence and the selected interval disagree.
+     */
+    public function testTheArmedLivenessTimerActuallyPingsTheLivingAndReapsTheSilent(): void
+    {
+        $this->forceWorkermanRuntime();
+
+        $this->setServerOwner('srv-A', 'u-1');
+        $this->grantToken('tok-1a', 'u-1', 'srv-A');
+        $sink = [];
+        $this->connectSyncPlayClient('/syncplay/srv-A', 'tok-1a', $sink);
+        $connection = $this->lastSyncPlayConnection();
+
+        $worker = $this->syncPlayWorker();
+        $worker->onWorkerStart();
+
+        $tick = $this->armedTimerCallback((float) SyncPlayRelayWorker::LIVENESS_PING_INTERVAL_SECONDS);
+
+        // Fresh client: the armed callback must ping, not reap.
+        $tick();
+        self::assertSame("\x89\x00", $sink[0] ?? null, 'the boot-armed liveness timer must send the wire ping');
+        self::assertNull($connection->onWebSocketConnected ?? null, 'a fresh client must not be reaped');
+
+        // Same client, silence past the budget: the SAME armed callback reaps.
+        /** @var array<int, SyncPlayClient> $clients */
+        $clients = (new ReflectionClass(SyncPlayRelayWorker::class))->getStaticPropertyValue('clients');
+        $client = $clients[spl_object_id($connection)];
+        $client->lastSeenAt = time() - SyncPlayRelayWorker::LIVENESS_REAP_AFTER_SILENCE_SECONDS;
+
+        $tick();
+
+        // The mock never completed a real handshake, so reject() takes its
+        // documented pre-arm branch — the closure IS the queued 1013 close.
+        $armed = $connection->onWebSocketConnected ?? null;
+        self::assertInstanceOf(
+            Closure::class,
+            $armed,
+            'the liveness timer fired from boot did not reap the silent socket',
+        );
+        $armed($connection);
     }
 
     /**

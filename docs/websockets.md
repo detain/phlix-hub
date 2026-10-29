@@ -32,7 +32,7 @@ pings), so the story is stated per surface, traced from code:
 | --- | --- | --- | --- |
 | `:8802` | yes — hub pings every active tunnel every 30 s (`HubServicesProvider::startInMemoryReapers()`) | yes — `IdleReaper` closes a tunnel with no inbound frame for >90 s, scanning every 60 s | the server's own 30 s heartbeat (and ping echoes) is what keeps it alive |
 | `:8803` | none | none — and none can exist | every mount is refused with close `1011` in the deployed topology (M2 banner below); the socket never lives long enough to idle |
-| `:8804` | **none** | **none per socket** — only EMPTY rooms are swept (60 s timer) | reconnect-on-drop; `syncplay_time_ping` is the only app-level keepalive the vocabulary offers — see its section for the full duties and the known gap |
+| `:8804` | yes — every live socket is WS-pinged every 30 s (`SyncPlayRelayWorker::LIVENESS_PING_INTERVAL_SECONDS`, M-HUB-18) | yes — silence for ≥90 s is reaped with close `1013` (`LIVENESS_REAP_AFTER_SILENCE_SECONDS`, the same HB-0.1 3× window math as `IdleReaper`); a reaped host runs the normal leave path so the party elects a live host | none for liveness — any inbound frame (data, ping, pong) refreshes the budget, and browser-class stacks answer the server ping inside the socket layer; `syncplay_time_ping` remains the app-level clock keepalive |
 | `:8805` | the dialing (leaf) role sends `HEARTBEAT` every 15 s once verified; the master's listener consumes them (see the federation table below) | liveness-reaped at the session row: a heartbeat landing on an already-reaped session closes the zombie link with `DISCONNECTED` / `session_expired` | none beyond the handshake |
 | `:8097` | `phlix-server`'s socket — its liveness story is that repository's code, not this table | — | — |
 
@@ -313,10 +313,12 @@ code instead of collapsing into a bare transport-level `1006`.
 | --- | --- | --- |
 | `4401` (`SyncPlayRelayWorker::CLOSE_UNAUTHORIZED`) | `onWebSocketConnect` auth gate + both join-time guards | No token / bad / expired token, token bound to a foreign `server_id`, revoked owner — all bundled into ONE code by design (an enumeration oracle stays closed, same law the claim-code surface obeys). Remedy: re-login / re-mint via `POST /api/v1/me/servers/{id}/relay-token`. |
 | `1011` (`SyncPlayRelayWorker::CLOSE_DO_NOT_RETRY`) | path with no `server_id` segment | Malformed dial URL. Do **not** reconnect-loop: 1013 "Try Again Later" is deliberately not used here, for the reason `ClientMountController` records at its own 1011 site — waiting never cures a typo. |
+| `1013` (`SyncPlayRelayWorker::CLOSE_LIVENESS_TIMEOUT`) | liveness reap: silence ≥ 90 s past the last inbound frame (M-HUB-18) | The hub gave up on a socket that stopped answering. Transient by nature (half-open path, dropped NAT mapping, sleeping device) — reconnecting IS the remedy, which is exactly why this is 1013 and not 1011. |
 
-`1013` has no emitter on this surface yet: `:8804` runs no connect-rate limiter
-at the hook (its per-connection inbound byte budget DROPS over-budget frames
-rather than closing the socket), so there is no throttle close to code.
+There is still no connect-rate-limiter close on this surface: the
+per-connection inbound byte budget DROPS over-budget frames rather than closing
+the socket, so the only throttle-shaped signal is the drop itself. `1013` here
+belongs solely to the liveness reap.
 
 **Carrier caveat (true of `:8803`'s table as well).** A client that dials with
 the `bearer` subprotocol and is refused still sees `1006` in the browser's close
@@ -469,53 +471,50 @@ worker — and, through the verbatim relay, its whole room — to process.
 
 ### Keepalive, idle sockets and client duties
 
-This lane ships **no server-originated keepalive and no per-socket idle
-reap** — that is today's code, stated honestly, and it is the opposite
-direction from the `:8802` math above:
+Since **M-HUB-18** this surface runs a server-originated keepalive with a
+matching idle reap — the same 30 s / 90 s window math as `:8802`, deliberately
+imported so one law governs both sockets:
 
-- **Nothing pings you.** No timer on this worker sends a frame to an idle
-  client. Workerman's WS protocol layer answers an inbound control *ping*
-  frame with an automatic pong, but browser-class JS cannot emit WS-level
-  pings, so for this estate's real consumers the surface is ping-silent in
-  both directions unless the client drives an app-level frame.
-- **Nothing evicts you for silence.** The only timer here is the 60-second
-  sweep in `onWorkerStart()`, and it drops a room's bookkeeping **only when
-  the room is empty** (`count($clients) === 0`) — memory hygiene for
-  departed rooms, not a liveness mechanism. A silent member of a non-empty
-  room (a TV idling in a group) holds its seat indefinitely. The `:8802`
-  `IdleReaper` scans the relay-tunnel registry only; no `:8804` socket is
-  ever visible to it, so no client here can be false-reaped for being
-  quiet, and position-report traffic cannot be mistaken for a reap input.
-- **Ghost members are the honest cost.** A dead-but-silent client (half-open
-  behind an expired NAT mapping or Wi-Fi power-save) is *also* never reaped:
-  its roster entry — and the `client_left` / `syncplay_info` announcement
-  that depends on it — wait on a real close reaching `onClose()` (a TCP
-  FIN/RST, a WS close frame, or a failed write), which may surface only when
-  the room next writes toward that socket. Detection is opportunistic, not
-  bounded.
-- **What traffic updates.** Canonical join/leave, `syncplay_playback_*` and
-  `syncplay_host_transfer` frames refresh the ROOM-level `last_activity_at`
-  carried in `syncplay_group_state` (position reports included); chat,
-  typing and time-pings do not. That stamp is wire truth mirroring the
-  server's group-state shape — **nothing on this surface reads it for
-  reaping**; there is no per-connection activity counter to evict anyone.
-- **Client duties — the de-facto contract.** Reconnect-on-drop is the story:
-  treat the close event as the only authoritative disconnect signal. To
-  rejoin, dial again with the same relay token while it is valid (re-mint
-  via `POST /api/v1/me/servers/{id}/relay-token` once it is not) and send
-  `syncplay_group_join` — join implies leave, and the returned
-  `syncplay_group_state` re-anchors everything. While connected but quiet,
-  send `syncplay_time_ping` on a comfortable cadence: the echoed
-  `syncplay_time_pong` is the only hub→client proof the vocabulary offers,
-  and the frame keeps the NAT binding warm in both directions (well under a
-  typical consumer NAT's ~5-minute mapping expiry; 30 s matches the estate's
-  working cadence elsewhere).
-- **KNOWN GAP.** A server-originated ping on `:8804` with a matching
-  stale-socket reap — mirroring the `:8802` 30 s / 90 s window math, so
-  ghost retention became bounded the way tunnel retention already is — would
-  close this. It is not shipped here because adding a keepalive protocol to
-  a wire clients already speak is an owner-level decision, not this
-  document's to make.
+- **We ping you.** A liveness timer armed in `onWorkerStart()` sends every
+  registered socket a bare WebSocket *ping* (opcode 0x9, empty payload) every
+  `SyncPlayRelayWorker::LIVENESS_PING_INTERVAL_SECONDS` (30 s). Browser-class
+  consumers need no code for it: every real client stack on this surface (the
+  ui bundle on Chromium/WebKit, RN's SocketRocket/OkHttp, Roku
+  `Device.webSocket`) answers a WS ping inside the socket layer, so a healthy
+  app can stay silent at the app level and still be counted alive.
+- **Silence does evict — at a bounded point.** ANY inbound frame — data, ping,
+  pong — refreshes the client's `lastSeenAt`. Silence at or past
+  `LIVENESS_REAP_AFTER_SILENCE_SECONDS` (90 s) closes the socket with a real
+  `1013` close frame. The window is strictly greater than the ping cadence
+  (the `IdleReaper` HB-0.1 coupling law, same 3× margin): a client always gets
+  its answer counted before eviction is even considered. A throttled frame is
+  still traffic — the budget drop happens AFTER the stamp, so a loud client is
+  never evicted for silence it demonstrably did not produce.
+- **Ghost members are now bounded — and a ghost HOST is the whole point.**
+  Before M-HUB-18 a half-open host (dead device, expired NAT mapping) sat in
+  the room's host book forever: pure TCP liveness never notices, the 60-second
+  sweep only drops EMPTY rooms, and every member's host-gated command died
+  behind a sender-only `NOT_HOST` — the party frozen indefinitely. A reaped
+  ghost's close runs the SAME `onClose()` canonical leave a graceful
+  disconnect takes, so the oldest remaining member is elected and the room
+  hears `syncplay_host_elect` within roughly one reap window of the host dying.
+- **What traffic updates.** The liveness counter is per-connection and
+  refreshed by EVERY inbound frame — deliberately broader than the ROOM-level
+  `last_activity_at` carried in `syncplay_group_state`, which canonical
+  join/leave, `syncplay_playback_*` and `syncplay_host_transfer` frames refresh
+  (chat, typing and time-pings do not). That stamp stays wire truth mirroring
+  the server's group-state shape; nothing on this surface reaps on it. The two
+  counters answer different questions and are never conflated.
+- **Client duties.** Liveness itself: none — answering the server ping is
+  socket-layer work every supported consumer already does. The rest of the
+  de-facto contract is unchanged: treat the close event as the authoritative
+  disconnect signal; to rejoin after any drop (a 1013 reap included — that
+  code means "reconnect"), dial again with the same relay token while it is
+  valid (re-mint via `POST /api/v1/me/servers/{id}/relay-token` once it is
+  not) and send `syncplay_group_join` — join implies leave, and the returned
+  `syncplay_group_state` re-anchors everything. `syncplay_time_ping` on a
+  comfortable cadence remains the app-level clock sync and NAT warmth — now a
+  convenience, no longer the only keepalive the vocabulary offers.
 
 ---
 
@@ -563,12 +562,51 @@ other three.
 
 1. WS upgrade — parse `hub_id` from the path. A path that does not match is closed
    with reason `invalid_path`.
-2. The `hub_id` must already be a known peer in `federation_peers`; otherwise the
+2. Per-IP connect rate limit (see below) — over-budget upgrades are refused with a
+   real WS close frame `1013` BEFORE any `federation_peers` DB read.
+3. The `hub_id` must already be a known peer in `federation_peers`; otherwise the
    connection is closed with reason `Unknown hub`. There is no self-service
    enrollment on this socket — a peer is created through
    `POST /api/v1/me/federation/peers` first.
-3. On success the connection is handed to `FederationRelayController::onConnect()`;
-   later frames go to `onMessage()` and `onClose()`.
+4. On success the connection is handed to `FederationRelayController::onConnect()`;
+   later frames pass the per-peer frame budget (see below) and go to `onMessage()`;
+   `onClose()` runs on link end.
+
+### Rate limiting and close codes (M-HUB-14)
+
+Two limiter surfaces, both worker-local in-memory counters on the count=1
+federation worker — per-worker is global here, the same posture as `:8802`'s
+connect guard above. Neither limiter introduces HTTP semantics or new wire
+codes: WS≠HTTP, refusals are real close frames, and on the leaf leg a plain
+link drop.
+
+| Profile | Key | Default | Refusal |
+| --- | --- | --- | --- |
+| `rate_limiter.federation_connect` | `federation_connect:<trusted client ip>` | 10 per 60 s | close frame `1013`, before any DB read |
+| `rate_limiter.federation_frame` | `federation_frame:<remote peer hub id>` | 120 per 60 s | master side: close frame `1013`, before controller dispatch; leaf side: link drop → capped reconnect ladder re-dials |
+
+The client IP is the proxy-resolved address (the managed install fronts
+`:8805` through HAProxy, so the raw TCP peer is loopback — keying on it would
+collapse every leaf into one bucket). The frame bucket is per REMOTE peer hub
+id and ONE limiter instance serves both roles in the :8805 process (the
+worker installs it into `FederationPeerManager` at boot): a hub's traffic is
+budgeted identically whichever end of the pair counts it, and a reconnecting
+peer cannot reset its window inside it.
+
+Sizing law (pinned by `RateLimitProfilesTest`): a legitimate leaf dials at
+most once per minute (its backoff ladder caps at 60 s) and sustainably moves
+~4 heartbeat frames per minute per link, so both budgets sit an order of
+magnitude above legit traffic. The guard's purpose is to make refusal
+CHEAP — the connect limiter runs before the `federation_peers` SELECT it
+protects, and it is deliberately NOT DB-backed for that reason.
+
+When the container cannot provide a limiter, both guards fail OPEN
+(unlimited) with one named error line each — a limiter misconfiguration must
+never deny federation to paired hubs (identical to `:8802`/`:8803`).
+
+| Code | Meaning |
+| --- | --- |
+| `1013` (`FederationWorker::CLOSE_TRY_AGAIN_LATER`) | Connect or frame budget exceeded. Transient — the capped reconnect ladder re-dials after the window. **Not** an auth failure. |
 
 ### Signed handshake (JSON text frames)
 

@@ -14,6 +14,8 @@ namespace Phlix\Hub\SyncPlay;
 use Phlix\Hub\Relay\TokenBucket;
 use Workerman\Connection\TcpConnection;
 
+use function time;
+
 /**
  * Represents a SyncPlay client connection.
  *
@@ -69,6 +71,19 @@ final class SyncPlayClient
     public ?int $roomJoinedAt = null;
 
     /**
+     * UNIX seconds of the last INBOUND evidence of life on this socket — any
+     * data frame, WebSocket ping, or pong (stamped by
+     * {@see SyncPlayRelayWorker::onMessage()}, `onWebSocketPing`, and
+     * `onWebSocketPong`; seeded at connect). Feeds the M-HUB-18 liveness
+     * budget: a client silent past
+     * {@see SyncPlayRelayWorker::LIVENESS_REAP_AFTER_SILENCE_SECONDS} is a
+     * half-open ghost — the TCP socket stays writable forever without an app
+     * to answer, and a ghost HOST freezes its whole watch party on `NOT_HOST`
+     * because every room mutation routes through the recorded host.
+     */
+    public int $lastSeenAt;
+
+    /**
      * @param TcpConnection $connection   Workerman TCP connection.
      * @param string       $serverId    Server UUID this client belongs to.
      * @param string       $clientId    Unique client UUID assigned by hub.
@@ -84,5 +99,6 @@ final class SyncPlayClient
         public ?string $room = null,
         public string $displayName = 'Anonymous',
     ) {
+        $this->lastSeenAt = time();
     }
 }
