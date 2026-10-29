@@ -6,6 +6,85 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-03: the count=1 `:8804` relay worker survives a throwing frame handler — per-frame guard absorbs the fan-out throw, answers canonical sockets with the registered `HANDLER_ERROR`, keeps every room alive — 2026-10-29
+
+Review `hub__asphp`: `SyncPlayRelayWorker::onMessage()` guards its edges
+well (json_decode type check, typeless-frame drop, TokenBucket
+charge-before-parse) but the `switch ($type)` fan-out to
+`handleGroupJoin`/`handleCanonical*`/queue ops had NO top-level guard. The
+worker runs count=1, so an escaping throw reached Workerman's own catch,
+which calls `Worker::stopAll(250)` — ONE crafted frame from ONE member ended
+every relayed room on the hub.
+
+Cure: the switch is extracted VERBATIM into `dispatchType()` and the call
+site in `onMessage()` wraps exactly the fan-out in
+`catch (Throwable)` → `handleFrameFailure()`. The guard deliberately covers
+ONLY the fan-out — auth, budget and parse edges above stay outside it, so a
+connection-identity bug still escalates loudly instead of being mistaken for
+a bad frame. `handleFrameFailure()` logs one RELAY-channel error line
+carrying routing facts ONLY (frame type, server_id, client_id, exception
+text — never payload values, the estate's log-leak class), answers a
+CANONICAL socket with `{type: syncplay_error, error_code: HANDLER_ERROR,
+message: "Internal relay error", protocol_version: 1}` — the exact shape and
+registered code of the server's own `SyncPlayManager::handleMessage` catch
+(:8097 mirrors this same switch wrap; `HANDLER_ERROR` already ships in the
+contracts registry and the hub's vendored fixture, so ZERO new wire codes)
+— but NOT the server's exception-text echo: handler messages can carry
+internals and clients branch on `error_code`, never on debug prose. A
+bare-latched socket is answered with NOTHING: the hub's bare dialect has
+never had an error-frame path on this port, and inventing one now would
+violate the dialect-isolation law this worker's own refusals pin. The reply
+send is itself guarded — a failing error frame must not escalate back into
+the fan-out path. The connection is kept in every case: a thrower frame
+poisons itself, not its socket.
+
+Tests: `SyncPlayRelayFrameGuardTest` (3 tests, 26 assertions) — RED proven
+at parent: all three escape `JsonException: Inf and NaN cannot be JSON
+encoded` out of the unguarded HEAD worker. The throwers are REAL production
+paths, not mocks — payloads crafted to pass every parse edge and hit the
+handlers' own `json_encode(JSON_THROW_ON_ERROR)` (`1e999` decodes to float
+INF with no json_decode error; bare `time_sync` echoes `client_time` raw via
+`handleTimeSync`, canonical `syncplay_playback_queue` passes `media_info`
+through raw and the fan-out re-encode throws). Test 1: canonical offender
+absorbed, exactly one `HANDLER_ERROR` reply, roommate received NOTHING from
+the poison frame and still round-trips normally, both sockets alive, log
+carries type+server and never the payload canary. Test 2: bare socket
+log-and-drop stays SILENT on the wire, worker answers the NEXT frame.
+Test 3: an error reply whose socket died mid-send is swallowed by the inner
+catch — no escalation. Mutation teeth: delete the guard and all three
+redden; drop the canonical reply, invent a bare error frame, or strip the
+inner reply-failure catch and their tests redden.
+
+Gates (venue note, same disclosure M-HUB-02 recorded: host swoole is a
+6.0.2-dev build that CORE-DUMPS `CurlCertChainFetcherTimeoutTest` +
+`CuratedHookDeliveryProbeTest` — segfault EXIT=139 reproduced at a CLEAN
+parent worktree, order-dependent crash position; both pass/skip with swoole
+de-scoped, while RelayProxyBridge's 3 `Swoole\Coroutine` cases error OUT with
+swoole de-scoped — no single local ini set serves both; CI runs official
+swoole+uv and is the authoritative full-green): phpunit serial full Unit,
+host swoole IN, the two known host-crashers excluded identically both sides
+— parent `4817 tests / 42567 assertions / 1 skipped / exit 0` → final
+`4820 / 42594 / 1 skipped / exit 0` (+3 tests / +27 assertions exact);
+CI-shape no-swoole full Unit+Integration profile at final: `5021 tests`
+(= the published M-HUB-02-final 5018 + 3, DB-less skip-widening disclosed)
+feeding the duration bless; targeted new file `OK (3 tests, 26 assertions)`
+and `SyncPlay|Relay` set `OK (584 tests, 10181 assertions)`. RED proven at
+parent (detached worktree @ae670867 + the new file): all 3 escape
+`JsonException: Inf and NaN cannot be JSON encoded`; mutation-stripping the
+guard at HEAD reddens exactly the 3 tests (measured twice: 10157 vs 10181
+assertions across the filter set, other 581 untouched), md5-verified
+restore → green. phpstan corpus = the 9 pre-existing venue errors at parent
+(file list identical), ZERO new, both changed files clean;
+`scripts/assert-phpcs-corpus.php` 565 files (+1 = the new test file) 0
+errors 0 warnings; PSR-12 clean on both changed files. psalm not run locally
+(no venue image) — the job's known pre-existing red set (CoroutineHooks/
+HookDelivery, 4 errors, M-HUB-02-documented) inherits at parent.
+`scripts/parallel/test-durations.json` re-blessed from the final serial
+junit (+1 entry, 262 tracked, new-file duty per DurationCacheTracksSuiteTest
+— its 3 gate failures + the corpus-gate warning red measured pre-fix, green
+post).
+
+
 ### Fixed — M-HUB-02: the leaf federation FrameDecoder is generation-reset — a link that tore mid-frame can no longer splice its residue into the next connection — 2026-10-29
 
 Review `hub__asphp`: `FederationPeerManager` is a process-lifetime singleton

@@ -681,6 +681,41 @@ final class SyncPlayRelayWorker
             $client->canonical = true;
         }
 
+        // M-HUB-03 dispatch guard: this worker runs count=1 on :8804, so an
+        // uncaught throw from ANY handler kills the sole process and every
+        // relayed room with it. The fan-out below has no exhaustive type
+        // system behind it — wire payloads reach helpers (re-encode anchors,
+        // queue media_info) that json_encode(JSON_THROW_ON_ERROR) can reject
+        // even after the parse edges passed. The estate idiom is the server's
+        // own (:8097 `SyncPlayManager::handleMessage` wraps its whole switch
+        // the same way); the guard covers ONLY the fan-out — auth, budget and
+        // parse edges above stay outside it so a connection-identity bug
+        // still escalates loudly instead of being mistaken for a bad frame.
+        try {
+            $this->dispatchType($client, $type, $message, $data);
+        } catch (Throwable $frameFailure) {
+            $this->handleFrameFailure($client, $type, $frameFailure);
+        }
+    }
+
+    /**
+     * Fan one parsed frame out to its handler arm.
+     *
+     * Extracted verbatim from {@see self::onMessage()} so the caller can wrap
+     * exactly the switch in a per-frame guard. Throws are by design here:
+     * they mean "this one frame was unhandleable", and the caller converts
+     * them into a logged refusal plus (canonical sockets only) a
+     * `syncplay_error` reply — never into process death.
+     *
+     * @param SyncPlayClient       $client  The authenticated sender.
+     * @param string               $type    The frame's type name.
+     * @param array<string, mixed> $message The decoded frame.
+     * @param string               $data    The raw JSON, for verbatim relay.
+     *
+     * @return void
+     */
+    private function dispatchType(SyncPlayClient $client, string $type, array $message, string $data): void
+    {
         switch ($type) {
             case 'group_join':
                 // Room-family guard (owner #14 follow-up): a canonical-latched
@@ -840,6 +875,47 @@ final class SyncPlayRelayWorker
                 if ($client->room !== null) {
                     $this->broadcastToRoom($client->room, $data, $client->clientId);
                 }
+        }
+    }
+
+    /**
+     * Absorb one unhandleable frame: log, answer in the sender's dialect, live.
+     *
+     * The consequence M-HUB-03 removes: without this the throw escapes
+     * `onMessage()` and Workerman takes the count=1 :8804 worker down, so one
+     * crafted frame from one member ends every relayed room. The log line
+     * carries routing facts ONLY — frame type, server, client — never the
+     * payload (the estate's log-leak class; the exception text itself is safe
+     * here, e.g. "Inf and NaN cannot be JSON encoded"). The reply mirrors the
+     * server's :8097 answer to a throwing handler — registered code
+     * `HANDLER_ERROR` (contracts `SyncPlayErrorCode` legacy family, zero new
+     * wire codes) — but NOT the server's exception-text echo: handler messages
+     * can carry SQL or payload internals and clients branch on `error_code`,
+     * never on debug prose (SPEC §308). A bare-latched socket gets no frame:
+     * the hub's bare dialect has never had an error path on this port, and
+     * inventing one now to answer a throw would violate the dialect-isolation
+     * law this worker's own refusals pin. The reply send is itself guarded:
+     * a failing error frame must not escalate back into the fan-out path.
+     */
+    private function handleFrameFailure(SyncPlayClient $client, string $type, Throwable $failure): void
+    {
+        LoggerFactory::get(LogChannels::RELAY)->error('SyncPlay: relay message handler error', [
+            'type' => $type,
+            'server_id' => $client->serverId,
+            'client_id' => $client->clientId,
+            'error' => $failure->getMessage(),
+        ]);
+
+        if (!$client->canonical) {
+            return;
+        }
+
+        try {
+            $this->sendCanonicalError($client, 'HANDLER_ERROR', 'Internal relay error');
+        } catch (Throwable) {
+            // The error reply itself failed (dead socket, encoder rejecting a
+            // frame we no longer hold). Nothing is left to safely say; the
+            // original thrower is already on the RELAY channel above.
         }
     }
 
