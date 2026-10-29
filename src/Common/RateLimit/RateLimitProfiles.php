@@ -16,18 +16,21 @@ namespace Phlix\Hub\Common\RateLimit;
  * per-worker default thresholds.
  *
  * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount /
- * mcp / alexa / signup / server-claims) gets its OWN limiter instance registered
+ * mcp / alexa / signup / server-claims / federation-connect / federation-frame)
+ * gets its OWN limiter instance registered
  * under the matching `rate_limiter.<surface>` container id — a single shared
  * login-grade limiter is wrong for everything but login (HB-4.6).
  * {@see defaults()} maps each container id to the `config/server.php`
  * `rate_limit.<key>` override key plus the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER for seven of the ten surfaces. `proxy`, `heartbeat`,
+ * Thresholds are PER-WORKER for nine of the twelve surfaces. `proxy`, `heartbeat`,
  * `jwks`, `alexa` and `server_claims` are enforced on the `HUB_WORKERS` HTTP
  * workers, so each keeps an INDEPENDENT per-worker counter and the effective
  * soft-global limit is roughly `max × HUB_WORKERS` (mirrors HB-3.4);
- * `relay_connect` (the :8802 `RelayWorker`) and `client_mount` (the :8803
- * `ClientRelayWorker`) run on count=1 surfaces where per-worker == global.
+ * `relay_connect` (the :8802 `RelayWorker`), `client_mount` (the :8803
+ * `ClientRelayWorker`) and the two federation surfaces (the :8805
+ * `FederationWorker`, both roles) run on count=1 surfaces where per-worker ==
+ * global.
  *
  * ✅ `login`, `mcp` and `signup` are the EXCEPTIONS — all genuinely global; all
  * bound to the shared DB-backed {@see DbRateLimiter}. The `login` reasoning
@@ -48,7 +51,7 @@ namespace Phlix\Hub\Common\RateLimit;
  * (e.g. ~20 / 900 with 4 workers, first 429 near attempt ~9) while every surface
  * used the worker-local {@see RateLimiter} (HB-4.6 "Option B"). This closed the
  * one surface where per-worker weakening was a genuine brute-force concern; the
- * other six stay worker-local (soft-global) by design.
+ * other nine stay worker-local (soft-global) by design.
  *
  * @package Phlix\Hub\Common\RateLimit
  */
@@ -160,6 +163,59 @@ final class RateLimitProfiles
     public const string SERVER_CLAIMS = 'rate_limiter.server_claims';
 
     /**
+     * Container id for the federation (:8805) inbound-connect limiter, master
+     * role (review hub__exploiter M3, leg 2).
+     *
+     * PER-WORKER == GLOBAL: the `FederationWorker` is count=1 (production law
+     * documented on its own constructor — the push dispatcher subscribes the
+     * process-local connection map), so this worker-local {@see RateLimiter}
+     * enforces an actually-global budget. Deliberately NOT a DbRateLimiter:
+     * the limiter's whole purpose here is to refuse DB work CHEAPLY — every
+     * pre-throttle connect performed a `federation_peers` read and each
+     * accepted HELLO ceremony costs three session-row writes, so routing the
+     * guard through the same DB it protects would trade the write-amp for a
+     * read-amp.
+     *
+     * Keyed `federation_connect:<trusted client ip>` — the raw TCP peer under
+     * the managed install is the HAProxy loopback (82bd762d routed :8805
+     * through it too), so keying on the peer address would collapse every
+     * leaf hub into one bucket and turn the guard into a self-DoS lever.
+     * 10 / 60s: a legitimate leaf hub reconnects at most once per minute
+     * (the leaf backoff ladder CAPS at 60 s), so a whole CGNAT exit sharing
+     * up to ten neighbor hubs pairs without friction, while a
+     * connect→HELLO→never-auth→reconnect keyless write-amp loop is bounded
+     * at ten ceremonies/minute/IP.
+     */
+    public const string FEDERATION_CONNECT = 'rate_limiter.federation_connect';
+
+    /**
+     * Container id for the federation (:8805) frame-budget limiter, BOTH
+     * roles (review hub__exploiter M3, legs 1 + 3).
+     *
+     * ONE instance serves the master-side inbound server and the leaf-side
+     * outbound link: both live in the same count=1 :8805 worker process
+     * (`FederationWorker::onWorkerStart()` installs it into the peer
+     * manager), and every key is the REMOTE peer's hub id, so the two roles
+     * can never collide on a bucket — a hub is simultaneously at most one
+     * leaf's master and its own master's leaf under distinct ids.
+     *
+     * Keyed `federation_frame:<remote peer hub id>`, hit per deframed
+     * payload BEFORE any dispatch — on the master side before the
+     * {@see \Phlix\Hub\Http\Controllers\FederationRelayController} fan-out
+     * (which bounds the pre-verification per-frame warning + audit rows of
+     * leg 1 AND the unbounded `shares[]` inline-INSERT fan-out of leg 3 at
+     * one choke point), on the leaf side before parse+dispatch of master
+     * frames. 120 / 60s: legitimate traffic is heartbeat-dominated (one
+     * 15 s keepalive per link = 4/min) plus event-driven offer/revocation
+     * bursts and a 5-frame handshake ceremony; 120/min leaves an order of
+     * magnitude of headroom for a busy share-churn moment while capping a
+     * hostile-or-compromised PAIRED peer's frame flood (the gate class:
+     * needs admin-provisioned peer material, not an anonymous internet
+     * attacker) at one link-drop per window.
+     */
+    public const string FEDERATION_FRAME = 'rate_limiter.federation_frame';
+
+    /**
      * Map of `container id => {config key, default max, default window}`.
      *
      * `key` is the sub-key under `config/server.php`'s `rate_limit` section;
@@ -171,16 +227,18 @@ final class RateLimitProfiles
     public static function defaults(): array
     {
         return [
-            self::LOGIN         => ['key' => 'login',         'max' => 5,   'window' => 900],
-            self::PROXY         => ['key' => 'proxy',         'max' => 600, 'window' => 60],
-            self::HEARTBEAT     => ['key' => 'heartbeat',     'max' => 30,  'window' => 60],
-            self::JWKS          => ['key' => 'jwks',          'max' => 120, 'window' => 60],
-            self::RELAY_CONNECT => ['key' => 'relay_connect', 'max' => 10,  'window' => 60],
-            self::CLIENT_MOUNT  => ['key' => 'client_mount',  'max' => 30,  'window' => 60],
-            self::MCP           => ['key' => 'mcp',           'max' => 10,  'window' => 900],
-            self::ALEXA         => ['key' => 'alexa',         'max' => 60,  'window' => 60],
-            self::SIGNUP        => ['key' => 'signup',        'max' => 3,   'window' => 3600],
-            self::SERVER_CLAIMS => ['key' => 'server_claims', 'max' => 60,  'window' => 60],
+            self::LOGIN               => ['key' => 'login',               'max' => 5,   'window' => 900],
+            self::PROXY               => ['key' => 'proxy',               'max' => 600, 'window' => 60],
+            self::HEARTBEAT           => ['key' => 'heartbeat',           'max' => 30,  'window' => 60],
+            self::JWKS                => ['key' => 'jwks',                'max' => 120, 'window' => 60],
+            self::RELAY_CONNECT       => ['key' => 'relay_connect',       'max' => 10,  'window' => 60],
+            self::CLIENT_MOUNT        => ['key' => 'client_mount',        'max' => 30,  'window' => 60],
+            self::MCP                 => ['key' => 'mcp',                 'max' => 10,  'window' => 900],
+            self::ALEXA               => ['key' => 'alexa',               'max' => 60,  'window' => 60],
+            self::SIGNUP              => ['key' => 'signup',              'max' => 3,   'window' => 3600],
+            self::SERVER_CLAIMS       => ['key' => 'server_claims',       'max' => 60,  'window' => 60],
+            self::FEDERATION_CONNECT  => ['key' => 'federation_connect',  'max' => 10,  'window' => 60],
+            self::FEDERATION_FRAME    => ['key' => 'federation_frame',    'max' => 120, 'window' => 60],
         ];
     }
 }

@@ -43,8 +43,10 @@ use function DI\get;
  * (HB-4.6 Option B) — the per-worker in-memory limiter left the effective
  * login budget at ~`max × HUB_WORKERS`. Signup joined that set with the auth
  * audit fix (3): an anonymous 64 MiB-Argon2id surface must not get
- * `max × HUB_WORKERS` tries either. The remaining seven surfaces (server_claims
- * joined with the M-HUB-12 pairing cure) stay on the
+ * `max × HUB_WORKERS` tries either. The remaining nine surfaces (server_claims
+ * joined with the M-HUB-12 pairing cure, the two federation surfaces with
+ * M-HUB-14's :8805 limits — both enforced on count=1 workers, where the
+ * worker-local counter IS the global one) stay on the
  * worker-local in-memory {@see RateLimiter} (per-worker weakening is
  * acceptable there).
  *

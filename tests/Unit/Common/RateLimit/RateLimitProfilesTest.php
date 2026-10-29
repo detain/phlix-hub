@@ -64,18 +64,19 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.signup', RateLimitProfiles::SIGNUP);
     }
 
-    public function testDefaultsReturnsAllTenProfiles(): void
+    public function testDefaultsReturnsAllTwelveProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
-        // Ten since the M-HUB-12 pairing cure added `server_claims`. Nine
-        // since the auth audit added `signup` (eight since S91 added
-        // `alexa`, seven since S62 added `mcp`). This count
-        // is the whole reason the test exists: it turns "a profile was added but
-        // never given a config key or a default" into a red, so bumping the
-        // number without adding the matching `testDefaultsContains…Profile` below
-        // defeats it.
-        self::assertCount(10, $defaults);
+        // Twelve since M-HUB-14 added the two federation surfaces
+        // (`federation_connect`, `federation_frame`). Ten since the M-HUB-12
+        // pairing cure added `server_claims`. Nine since the auth audit added
+        // `signup` (eight since S91 added `alexa`, seven since S62 added
+        // `mcp`). This count is the whole reason the test exists: it turns
+        // "a profile was added but never given a config key or a default"
+        // into a red, so bumping the number without adding the matching
+        // `testDefaultsContains…Profile` below defeats it.
+        self::assertCount(12, $defaults);
     }
 
     public function testDefaultsContainsLoginProfile(): void
@@ -176,6 +177,51 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('server_claims', $defaults[RateLimitProfiles::SERVER_CLAIMS]['key']);
         self::assertSame(60, $defaults[RateLimitProfiles::SERVER_CLAIMS]['max']);
         self::assertSame(60, $defaults[RateLimitProfiles::SERVER_CLAIMS]['window']);
+    }
+
+    public function testDefaultsContainsFederationConnectProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::FEDERATION_CONNECT, $defaults);
+        self::assertSame('federation_connect', $defaults[RateLimitProfiles::FEDERATION_CONNECT]['key']);
+        self::assertSame(10, $defaults[RateLimitProfiles::FEDERATION_CONNECT]['max']);
+        self::assertSame(60, $defaults[RateLimitProfiles::FEDERATION_CONNECT]['window']);
+    }
+
+    public function testDefaultsContainsFederationFrameProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::FEDERATION_FRAME, $defaults);
+        self::assertSame('federation_frame', $defaults[RateLimitProfiles::FEDERATION_FRAME]['key']);
+        self::assertSame(120, $defaults[RateLimitProfiles::FEDERATION_FRAME]['max']);
+        self::assertSame(60, $defaults[RateLimitProfiles::FEDERATION_FRAME]['window']);
+    }
+
+    /**
+     * M-HUB-14: the two federation budgets sit an order of magnitude above
+     * the legitimate traffic they must never touch. A leaf hub reconnects at
+     * most once per minute (the dial backoff ladder CAPS at 60 s — one link
+     * per minute per IP is the worst legit case, ten is the budget) and
+     * sustainably moves four heartbeats per minute per link plus ceremony and
+     * event-driven offer bursts (120 is the budget). Bumping either default
+     * below its floor here redds this pin before it can strand a paired hub.
+     */
+    public function testFederationBudgetsGiveLegitPeersOrderOfMagnitudeHeadroom(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        // Legit worst case per IP: one re-dial per minute (capped ladder);
+        // the usable per-window budget (max-1 — the max-th hit trips) must
+        // carry at least three neighbour hubs' worth of that.
+        self::assertGreaterThanOrEqual(3, $defaults[RateLimitProfiles::FEDERATION_CONNECT]['max'] - 1);
+        // Heartbeat floor: 60/15 s = 4 frames/min/link; budget ≥ 20× that.
+        self::assertGreaterThanOrEqual(80, $defaults[RateLimitProfiles::FEDERATION_FRAME]['max'] - 1);
+        // Window law: both surfaces are per-MINUTE (the ladder and heartbeat
+        // math above is expressed in minutes).
+        self::assertSame(60, $defaults[RateLimitProfiles::FEDERATION_CONNECT]['window']);
+        self::assertSame(60, $defaults[RateLimitProfiles::FEDERATION_FRAME]['window']);
     }
 
     /**

@@ -6,6 +6,86 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-14: the `:8805` federation link gets rate budgets on BOTH ends — a pre-DB connect gate on the master and one shared per-peer frame budget on both roles — 2026-10-29
+
+Review `hub__exploiter` M14 (r1 verdict REWORK-1: the design was prepped
+in-review but never landed; this closes it as prepped). `:8805` was the hub's
+only unauthenticated DB-reading surface: `FederationWorker::
+onWebSocketConnect()` parsed `?id=<hub-uuid>` and ran `getPeerById()` for EVERY
+upgrade with no budget (a connect grind is a MySQL grind plus per-connection
+churn), and a REGISTERED peer could stream frames at the master — or the master
+at a leaf — with no bound at all. Shipped in the estate's `:8802` `RelayWorker`
+shape, zero new contracts wire codes (registry md5 `40c1da48` untouched; close
+1013 is the documented WS-surface retry code the relay lanes already use):
+
+- Two `RateLimitProfiles`: `FEDERATION_CONNECT` (10 req/60 s per TRUSTED client
+  IP — `TrustedProxyResolver` over raw-peer + XFF/X-Real-IP, the relay lanes'
+  keying law; per-worker in-memory on purpose, NOT DB-backed: legit peers
+  reconnect rarely and a write-back would just move the grind onto MySQL) and
+  `FEDERATION_FRAME` (120 frames/60 s keyed `federation_frame:<remote peer hub
+  id>` — one budget PER PEER, not global; profiles 10→12, env overrides
+  `PHLIX_HUB_RATELIMIT_FEDERATION_{CONNECT,FRAME}_{MAX,WINDOW}`, committed
+  config carries both).
+- Master side (`FederationWorker`): the connect budget runs AFTER the free
+  `invalid_path` guard and BEFORE the `getPeerById()` DB read — over budget
+  gets one RELAY-channel warning (remote_ip, reset_at) and
+  `WebSocketCloseFrame::reject()` with a REAL 1013 close frame (pre-upgrade-armed
+  when the refusal lands before the handshake completes); frames on a mapped
+  connection consume the peer's frame budget BEFORE controller dispatch,
+  over-budget refuses with the same 1013.
+- Leaf side (`FederationPeerManager`): `setReceiveFrameLimiter()` installs the
+  worker's SAME frame-limiter instance at `onWorkerStart()` (shared instance =
+  one budget per hub id across both roles; `FederationWorker` is count=1 so
+  there is exactly one of each), and the master downlink's `onMessage` closure
+  calls `guardIncomingFrame()` before parse/dispatch — over-budget logs the
+  refusal (master_peer_id, frame_bytes, reset_at) and DROPS the link once:
+  slot nulled, `close()` guarded, and the already-capped `scheduleReconnect()`
+  ladder (5→…→60 s park) IS the backoff; a close that throws is error-logged
+  and the ladder re-armed.
+- Both limiters FAIL OPEN when unresolvable (caught → one error line →
+  unlimited), matching the `RelayWorker` mount-limiter posture: a missing
+  profile must never lock the federation out. Unknown-connection frames and
+  un-limited leaf frames are byte-identical pass-throughs.
+- `docs/websockets.md` §:8805: lifecycle renumbered with the connect budget as
+  step 2 and a new "Rate limiting and close codes (M-HUB-14)" subsection —
+  profile table, trusted-IP keying, shared-instance, sizing and fail-open laws,
+  1013 close-code row.
+
+Tests: +23 Unit cases in 4 files — `FederationWorkerRateLimitTest` (8:
+1013-before-any-DB-read with the wire bytes pinned to `\x88\x02\x03\xf5` and
+the peer map proven populated, trusted-XFF keying not raw-peer, fail-open
+error-exactly-once, frame-budget refusal lands BEFORE controller dispatch via
+dispatch-marker payloads, per-peer not global, unknown-connection passthrough,
+frame fail-open, and the `onWorkerStart` install-before-bootstrap order with
+instance identity); `FederationPeerManagerFrameBudgetTest` (8: a SOURCE-SHAPE
+pin that the live `onMessage` closure calls `guardIncomingFrame()` before
+`handleMessage()` — the r1 defect class was exactly this wiring going missing
+while everything else looked shipped — per-peer key, single drop reusing the
+capped ladder with `frame_bytes` logged, refusal-after-teardown side-effect
+free, vacuity arms for null limiter/unset peer id, limiter retained by
+identity); `FederationRateLimitWiringTest` (4: DI-constructed knobs 10/60 and
+120/60, env-section overrides flow through, frame-limiter singleton law,
+committed `config/server.php` carries both surfaces); `RateLimitProfilesTest`
+10→12 with the staircase re-pinned and a headroom-law test. Mutation-proven:
+connect-limiter strip → 3 reds, frame-limiter strip → 3 reds, closure
+guard-unwrap → exactly the source-shape pin red, install-line removal → the
+order test red, profile-row removal → 3 reds + 3 errors; all restored green.
+Full Unit serial (5085/43989) in the documented no-swoole docker venue —
+host PHP 8.3.6 segfaults the suite mid-run on CLEAN parent-adjacent trees too
+(pre-existing venue defect named in the M-HUB-12 entry, re-observed here twice);
+badness set exactly the disclosed venue tax (RelayProxyBridge swoole-absence ×3,
+container-env McpE2EGate ×1), duration cache re-blessed from the same junit
+(276→279 entries, S468 guard green), phpstan CI-faithful tip == parent's
+9-error pre-existing family byte-identical, psalm both configs identical to parent
+(26 and 18 errors), S299 phpcs corpus 587 files 0 errors 0 warnings.
+DISCLOSED (pre-existing, NOT fixed here — scope): `FederationRelayController::
+isTextFrame()` calls `json_decode($data, false, 2)` — depth 2 — so a JSON
+OBJECT whose values nest (any hello carrying a `capabilities` array, per the
+docs' own handshake shape) decodes to null and the frame closes `invalid_frame`
+without dispatching; no existing test drives controller-level `onMessage`
+classification end-to-end, so the real-socket handshake path was never proven.
+Owner-lane follow-up.
+
 ### Fixed — M-HUB-18: `:8804` gets a server-originated liveness ping and a bounded silent-socket reap — a half-open ghost HOST can no longer freeze its watch party forever — 2026-10-29
 
 Review `hub__gameux` M3: the SyncPlay relay surface had **no keepalive at all** —

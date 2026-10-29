@@ -12,8 +12,11 @@ declare(strict_types=1);
 namespace Phlix\Hub\Relay;
 
 use Channel\Client as ChannelClient;
+use Phlix\Hub\Common\Http\TrustedProxyResolver;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationPushDispatcher;
@@ -45,12 +48,21 @@ use function trim;
  *
  * Connection lifecycle:
  *   1. WS upgrade — parse `hub_id` from the request path.
- *   2. Validate the hub_id is a known peer in federation_peers.
+ *   2. Rate-limit the inbound connect per TRUSTED client IP
+ *      ({@see RateLimitProfiles::FEDERATION_CONNECT}) — BEFORE any
+ *      `federation_peers` DB read — and refuse over budget with a WS close
+ *      frame 1013 ({@see self::CLOSE_TRY_AGAIN_LATER}).
+ *   3. Validate the hub_id is a known peer in federation_peers.
  *      On failure, close with reason "Unknown hub".
- *   3. On success, delegate to {@see FederationRelayController::onConnect()}.
- *   4. Subsequent text/binary frames dispatched to
- *      {@see FederationRelayController::onMessage()};
+ *   4. On success, delegate to {@see FederationRelayController::onConnect()}.
+ *   5. Subsequent text/binary frames are frame-budgeted per REMOTE peer hub
+ *      id ({@see RateLimitProfiles::FEDERATION_FRAME}, hit before dispatch)
+ *      and then dispatched to {@see FederationRelayController::onMessage()};
  *      close events go to {@see FederationRelayController::onClose()}.
+ *   6. The frame limiter instance is also installed into the
+ *      {@see FederationPeerManager} at {@see self::onWorkerStart()} so the
+ *      leaf-side outbound link in THIS process shares it (both roles, one
+ *      budget per remote peer — keys never collide across roles).
  *
  * @package Phlix\Hub\Relay
  */
@@ -62,12 +74,43 @@ final class FederationWorker
     public const DEFAULT_PORT = 8805;
 
     /**
+     * WS close code delivered on rate-limit rejection: RFC 6455's application
+     * code for "try again later" (1013), matching the :8802 {@see RelayWorker}
+     * and :8803 {@see ClientRelayWorker} connect-refusal posture (review
+     * hub__exploiter M3). A leaf hub treats a 1013 link end exactly like any
+     * other disconnect: its capped reconnect ladder re-dials after the
+     * limiter window rolls over.
+     */
+    public const CLOSE_TRY_AGAIN_LATER = 1013;
+
+    /**
      * Map of connection ID => hub ID, set at WS-connect time so later
      * message/close callbacks know which hub the connection belongs to.
      *
      * @var array<int, string>
      */
     private static array $connHubIds = [];
+
+    /**
+     * Inbound-connect limiter (master role), lazily resolved; null = the
+     * container could not provide one → connect limiting fails OPEN
+     * (unlimited), the deliberate trade-off of both sibling workers: a
+     * broken limiter must never deny federation to legitimate peers.
+     */
+    private ?RateLimiterInterface $connectLimiter = null;
+
+    /**
+     * Frame-budget limiter (both roles — see onWorkerStart's install into
+     * the peer manager), lazily resolved; null = fail OPEN (unlimited).
+     */
+    private ?RateLimiterInterface $frameLimiter = null;
+
+    /**
+     * Lazy proxy-trust resolver for the connect limiter's client-IP key
+     * (the :8805 listener sits behind the managed install's HAProxy, same
+     * as :8802/:8803 — see {@see ClientRelayWorker}'s resolve law).
+     */
+    private ?TrustedProxyResolver $trustedProxyResolver = null;
 
     /**
      * @param ContainerInterface $container   PSR-11 container for resolving services.
@@ -161,6 +204,17 @@ final class FederationWorker
             /** @var mixed $peerManager */
             $peerManager = $this->container->get(FederationPeerManager::class);
             if ($peerManager instanceof FederationPeerManager) {
+                // M-HUB-14 (review hub__exploiter M3, leaf role): the leaf
+                // link's inbound frame budget rides the SAME limiter instance
+                // this process uses for master-side inbound frames — this is
+                // the one container in the :8805 worker that owns both sides
+                // of the federation surface, and every key is a REMOTE peer
+                // hub id, so the two roles never share a bucket. Installing
+                // BEFORE bootstrapFromWorker() means the very first dialled
+                // link is already guarded. A null here (unresolvable limiter)
+                // is the documented fail-open: the setter accepts it and the
+                // leaf guard stays vacuous.
+                $peerManager->setReceiveFrameLimiter($this->frameLimiter());
                 $peerManager->bootstrapFromWorker();
             } else {
                 $logger->error('Federation boot: could not resolve the peer manager');
@@ -223,6 +277,39 @@ final class FederationWorker
             return;
         }
 
+        // M-HUB-14 (review hub__exploiter M3, leg 2): throttle inbound
+        // federation connects per TRUSTED client IP BEFORE the DB read. The
+        // unthrottled path paid a `federation_peers` SELECT per socket and,
+        // once the path validated, the controller's HELLO ceremony paid three
+        // session-row writes + a nonce mint + an Ed25519 signature per
+        // attempt — an anonymous (or victim-spoofed) connect→HELLO→never-
+        // auth→reconnect loop was pure write-amp. Keyed on the proxy-resolved
+        // IP (raw TCP peer is HAProxy loopback on the managed install),
+        // 10/60s: a legitimate leaf's capped backoff ladder re-dials at most
+        // once per minute, so CGNAT neighbours pair freely while the loop is
+        // starved. Over budget: one warning + close 1013, NO dispatch, NO DB
+        // read. Limiter failure fails OPEN (unlimited) by sibling law.
+        $limiter = $this->connectLimiter();
+        if ($limiter !== null) {
+            $this->trustedProxyResolver ??= new TrustedProxyResolver();
+            $clientIp = $this->trustedProxyResolver->resolve(
+                $connection->getRemoteIp(),
+                self::upgradeHeader($request, 'x-forwarded-for'),
+                self::upgradeHeader($request, 'x-real-ip'),
+            );
+
+            $state = $limiter->hit('federation_connect:' . $clientIp);
+            if ($state->limited) {
+                $logger->warning('Federation: inbound connect rate-limited', [
+                    'remote_ip' => $clientIp,
+                    'reset_at'  => $state->resetAt,
+                ]);
+                WebSocketCloseFrame::reject($connection, self::CLOSE_TRY_AGAIN_LATER);
+
+                return;
+            }
+        }
+
         // Validate hubId is a known peer
         try {
             $hubRepo = $this->container->get(FederationHubRepository::class);
@@ -279,6 +366,39 @@ final class FederationWorker
      */
     public function onMessage(TcpConnection $connection, string $data): void
     {
+        // M-HUB-14 (review hub__exploiter M3, legs 1+3): per-PEER frame
+        // budget at the master-side choke point, BEFORE dispatch. The
+        // controller's H-4 gate refuses pre-verification DATA with a warning
+        // + audit row per FRAME (leg 1: log/audit amp from any socket that
+        // reached validation) and post-verification offers fan out to
+        // unbounded inline INSERTs per `shares[]` element (leg 3) — one hit
+        // per payload, keyed on the REMOTE peer hub id registered at
+        // connect time, bounds both before they reach the handler. Frames on
+        // connections absent from the map (connect refused/error'd) keep the
+        // unchanged pass-through: the controller owns that lifecycle and
+        // bounds them itself. 120/60s is heartbeat-dominated headroom
+        // (4/min/link legit); over budget: one warning + close 1013, the
+        // leaf's ladder re-dials. Fails OPEN (unlimited) when unresolvable.
+        $hubId = self::$connHubIds[spl_object_id($connection)] ?? null;
+        if ($hubId !== null) {
+            $limiter = $this->frameLimiter();
+            if ($limiter !== null) {
+                $state = $limiter->hit('federation_frame:' . $hubId);
+                if ($state->limited) {
+                    LoggerFactory::get(LogChannels::RELAY)->warning(
+                        'Federation: inbound frame budget exceeded for peer',
+                        [
+                            'hub_id'   => $hubId,
+                            'reset_at' => $state->resetAt,
+                        ],
+                    );
+                    WebSocketCloseFrame::reject($connection, self::CLOSE_TRY_AGAIN_LATER);
+
+                    return;
+                }
+            }
+        }
+
         $controller = $this->resolveController();
         if ($controller === null) {
             $connection->close();
@@ -335,6 +455,84 @@ final class FederationWorker
     public static function getActiveConnectionCount(): int
     {
         return count(self::$connHubIds);
+    }
+
+    /**
+     * The inbound-connect limiter, lazily resolved (see
+     * {@see self::resolveConnectLimiter()} for the fail-open law).
+     */
+    private function connectLimiter(): ?RateLimiterInterface
+    {
+        return $this->connectLimiter ??= $this->resolveConnectLimiter();
+    }
+
+    /**
+     * The frame-budget limiter, lazily resolved — the SAME instance the leaf
+     * leg receives at {@see self::onWorkerStart()}.
+     */
+    private function frameLimiter(): ?RateLimiterInterface
+    {
+        return $this->frameLimiter ??= $this->resolveFrameLimiter();
+    }
+
+    /**
+     * Resolve the federation connect limiter from the container.
+     *
+     * Mirrors {@see \Phlix\Hub\SyncPlay\RelayWorker::resolveRelayConnectLimiter()}
+     * and {@see ClientRelayWorker}: any failure (no container entry, broken
+     * definition) yields null and the guard fails OPEN — the federation
+     * surface must stay reachable when the limiter itself is misconfigured;
+     * the alternative is a config typo denying federation to every paired
+     * hub.
+     */
+    private function resolveConnectLimiter(): ?RateLimiterInterface
+    {
+        try {
+            /** @var mixed $limiter */
+            $limiter = $this->container->get(RateLimitProfiles::FEDERATION_CONNECT);
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'Federation: connect rate limiter unavailable, failing open (unlimited)',
+                ['error' => $e->getMessage()],
+            );
+
+            return null;
+        }
+
+        return $limiter instanceof RateLimiterInterface ? $limiter : null;
+    }
+
+    /**
+     * Resolve the shared federation frame-budget limiter from the container
+     * (same fail-open law as {@see self::resolveConnectLimiter()}).
+     */
+    private function resolveFrameLimiter(): ?RateLimiterInterface
+    {
+        try {
+            /** @var mixed $limiter */
+            $limiter = $this->container->get(RateLimitProfiles::FEDERATION_FRAME);
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'Federation: frame rate limiter unavailable, failing open (unlimited)',
+                ['error' => $e->getMessage()],
+            );
+
+            return null;
+        }
+
+        return $limiter instanceof RateLimiterInterface ? $limiter : null;
+    }
+
+    /**
+     * Read an upgrade-request header as a plain string, null when absent or
+     * non-string (the Workerman Request header bag shape).
+     */
+    private static function upgradeHeader(WorkermanRequest $request, string $name): ?string
+    {
+        /** @var mixed $value */
+        $value = $request->header($name);
+
+        return is_string($value) ? $value : null;
     }
 
     /**

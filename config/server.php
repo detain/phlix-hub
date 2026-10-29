@@ -254,10 +254,11 @@ return [
     // Per-surface rate limiting (HB-4.6). Each surface gets its OWN RateLimiter
     // (see Phlix\Hub\Common\RateLimit\RateLimitProfiles); a single login-grade
     // 5/900 limiter is wrong for everything but login. Thresholds are PER-WORKER
-    // for five surfaces: proxy/heartbeat/jwks run across the HUB_WORKERS HTTP
-    // workers, so each keeps an independent per-worker counter and the soft-global
-    // limit is ~max × HUB_WORKERS (mirrors HB-3.4); relay_connect (:8802) and
-    // client_mount (:8803) run on count=1 surfaces (per-worker == global).
+    // for nine surfaces: proxy/heartbeat/jwks/alexa/server_claims run across the
+    // HUB_WORKERS HTTP workers, so each keeps an independent per-worker counter
+    // and the soft-global limit is ~max × HUB_WORKERS (mirrors HB-3.4);
+    // relay_connect (:8802), client_mount (:8803) and the two federation
+    // surfaces (:8805, both roles) run on count=1 surfaces (per-worker == global).
     // ✅ login, mcp and signup are the EXCEPTIONS — genuinely global: their
     // bindings are repointed to the shared DB-backed DbRateLimiter (table
     // login_rate_limit, migration 040_login_rate_limit), so ALL workers share
@@ -347,6 +348,33 @@ return [
             'signup'        => [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_SIGNUP_MAX', 3),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_SIGNUP_WINDOW', 3600),
+            ],
+            // :8805 federation inbound connects, master role (review
+            // hub__exploiter M3 leg 2): 10 / 60s keyed
+            // `federation_connect:<trusted client ip>` in FederationWorker.
+            // BEFORE the federation_peers DB read — a connect→HELLO→never-auth→
+            // reconnect loop costs 3 session writes + a nonce mint + an ACK
+            // signature per ceremony; a legit leaf reconnects ≤1/min (the dial
+            // backoff ladder caps at 60 s), so 10/min/IP is order-of-magnitude
+            // headroom that still starves the loop. Full reasoning:
+            // RateLimitProfiles::FEDERATION_CONNECT.
+            'federation_connect' => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_FEDERATION_CONNECT_MAX', 10),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_FEDERATION_CONNECT_WINDOW', 60),
+            ],
+            // :8805 federation frame budget, BOTH roles (review hub__exploiter
+            // M3 legs 1+3): 120 / 60s keyed `federation_frame:<remote peer hub
+            // id>` — one instance shared by the master-side listener and the
+            // leaf-side outbound link (the count=1 federation worker process
+            // owns both; keys are remote hub ids, no cross-role collision).
+            // Bounds pre-verification DATA audit-amp and the unbounded
+            // shares[] inline-INSERT fan-out at the choke point, before
+            // dispatch; legit traffic is heartbeat-dominated (4/min/link)
+            // with event-driven offer bursts. Full reasoning:
+            // RateLimitProfiles::FEDERATION_FRAME.
+            'federation_frame'   => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_MAX', 120),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_WINDOW', 60),
             ],
         ];
     })(),

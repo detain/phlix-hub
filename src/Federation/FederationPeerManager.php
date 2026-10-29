@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Federation;
 
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\LogChannels;
@@ -46,7 +47,10 @@ use Workerman\Timer;
  *      {@see FederationHandshake}).
  *   4. Sends HEARTBEAT (generic binary) every 15 seconds once verified
  *   5. Handles incoming DATA envelopes (library-share offers/revocations,
- *      ADMIN_DELEGATION payloads) — all refused before the channel is
+ *      ADMIN_DELEGATION payloads) — every inbound frame first passes the
+ *      shared :8805 frame budget ({@see self::guardIncomingFrame()}, review
+ *      hub__exploiter M3) BEFORE parse/dispatch, and payloads are refused
+ *      before the channel is
  *      verified (H-4 leaf-side gate); admin delegations additionally run
  *      validation-before-write against the authenticated channel identity
  *      and the local users table (R17-07)
@@ -195,6 +199,19 @@ class FederationPeerManager
      * @var string
      */
     private string $masterPeerId = '';
+
+    /**
+     * M-HUB-14 (review hub__exploiter M3, leaf role): inbound frame budget
+     * for the master link, installed once by {@see
+     * \Phlix\Hub\Relay\FederationWorker::onWorkerStart()} — the SAME shared
+     * `rate_limiter.federation_frame` instance the master-side listener uses,
+     * keyed `federation_frame:<remote peer hub id>` so the leaf's budget is
+     * the MASTER's per-link budget viewed from the other side. Null (never
+     * wired, or the container could not provide one) = unlimited: the
+     * documented fail-open of the whole federation limiter family — a broken
+     * limiter may not sever an established leaf link's traffic.
+     */
+    private ?RateLimiterInterface $receiveFrameLimiter = null;
 
     /**
      * H-4 leaf-side channel gate: true only after a SIGNED HELLO_ACK verified
@@ -750,6 +767,85 @@ class FederationPeerManager
     }
 
     /**
+     * Install the shared :8805 frame-budget limiter for the leaf leg.
+     *
+     * Called once from {@see \Phlix\Hub\Relay\FederationWorker::onWorkerStart()}
+     * with the SAME container instance the master-side listener hits — this
+     * manager has no container of its own (construction law: nine value
+     * collaborators, no service locator), so the wiring crosses at the single
+     * process that owns both roles. Passing null is legal and means
+     * "unlimited" (fail-open family law).
+     */
+    public function setReceiveFrameLimiter(?RateLimiterInterface $limiter): void
+    {
+        $this->receiveFrameLimiter = $limiter;
+    }
+
+    /**
+     * M-HUB-14 (review hub__exploiter M3, leaf role): budget ONE inbound
+     * frame from the master link before anything parses it.
+     *
+     * Returns true when the frame may proceed. When the shared per-peer
+     * budget is exhausted: one warning (carrying the frame's byte size for
+     * the flood forensics the master side cannot see from its own bucket)
+     * and the link is dropped — the plain-close {@see
+     * self::failHelloTimeout()} idiom, not a 1013 reject envelope: 1013 is
+     * the INBOUND-server refusal shape on :8805; on the outbound leg the
+     * honest refusal is drop-and-backoff, and destroy() fires onClose →
+     * {@see self::scheduleReconnect()}, whose capped ladder (60 s) re-dials
+     * precisely when the 60 s window rolls over. Self-healing by
+     * construction; the budget can never strand the link permanently.
+     *
+     * Vacuity arms pinned deliberately: null limiter (fail-open) or an
+     * empty {@see self::$masterPeerId} (no identity to key — belt for
+     * hand-built/ceremony-pre states where the guard cannot run meaningfully)
+     * both pass frames through unlimited.
+     *
+     * @internal Visible for tests (mirrors {@see self::failHelloTimeout()}'s
+     *           law); not part of the dial API — production calls come only
+     *           from the onMessage closure installed in
+     *           {@see self::establishConnection()}.
+     */
+    public function guardIncomingFrame(string $data): bool
+    {
+        $limiter = $this->receiveFrameLimiter;
+        if ($limiter === null || $this->masterPeerId === '') {
+            return true;
+        }
+
+        $state = $limiter->hit('federation_frame:' . $this->masterPeerId);
+        if (!$state->limited) {
+            return true;
+        }
+
+        LoggerFactory::get(LogChannels::RELAY)->warning(
+            'FederationPeerManager: inbound master frame budget exceeded — dropping link for backoff',
+            [
+                'master_peer_id' => $this->masterPeerId,
+                'frame_bytes'    => strlen($data),
+                'reset_at'       => $state->resetAt,
+            ],
+        );
+
+        $conn = $this->masterConnection;
+        $this->masterConnection = null;
+        try {
+            $conn?->close();
+        } catch (Throwable $e) {
+            // Same belt as failHelloTimeout(): a throw while tearing down a
+            // dying socket must not escape the frame callback — clear the
+            // slot and re-arm the ladder directly.
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'FederationPeerManager: frame-budget link teardown failed',
+                ['error' => $e->getMessage()],
+            );
+            $this->scheduleReconnect();
+        }
+
+        return false;
+    }
+
+    /**
      * Establish a new WebSocket connection to the master hub.
      *
      * The single AsyncTcpConnection construction site for master dials.
@@ -829,12 +925,18 @@ class FederationPeerManager
             $self->sendHubHello($hubConfigFinal);
         };
 
-        // On message — handle frames
+        // On message — budget, then handle frames. The guard runs BEFORE
+        // handleMessage so an over-budget frame is dropped without reaching
+        // ANY parse/dispatch path (drop-before-parse is the whole point of
+        // routing this at the closure: handleMessage's isTextFrame branch
+        // feeds the shared decoder and the controller fan-out immediately).
         $this->masterConnection->onMessage = function (
             /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn,
             string $data
         ): void {
-            $this->handleMessage($data);
+            if ($this->guardIncomingFrame($data)) {
+                $this->handleMessage($data);
+            }
         };
 
         // On close — schedule reconnect
