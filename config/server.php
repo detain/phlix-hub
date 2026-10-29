@@ -34,7 +34,7 @@ return [
     //   8802 relay-ws worker (server tunnels)       — Application relay site
     //   8803 client relay    (remote client sockets) — ClientRelayWorker::DEFAULT_PORT
     //   8804 syncplay relay  (watch-party clients)   — SyncPlayRelayWorker::DEFAULT_PORT
-    //   8805 federation link (hub-to-hub TLS)        — FederationWorker::DEFAULT_PORT
+    //   8805 federation link (hub-to-hub WS; wss:// opt-in) — FederationWorker::DEFAULT_PORT
     //   2206 channel broker  (cross-process RPC)     — RelayProxyProtocol::DEFAULT_CHANNEL_PORT
     'relay_port'        => $envInt('HUB_RELAY_PORT', 8802),
     'client_relay_port' => $envInt('HUB_CLIENT_RELAY_PORT', 8803),
@@ -215,6 +215,22 @@ return [
     // Default false = warn-only: one loud boot advisory when the socket comes
     // up ws://, byte-for-byte today's bind behavior plus the announcement.
     'relay_require_tls' => filter_var(($v = getenv('HUB_RELAY_REQUIRE_TLS')) !== false && $v !== '' ? $v : 'false', FILTER_VALIDATE_BOOLEAN),
+
+    // Federation worker (hub-to-hub :8805) TLS (wss://) settings — M22, the
+    // listen-side sibling of the relay block above (review hub__secnet M-3).
+    // The listener historically bound plaintext ws:// with no native TLS path
+    // at all, delegating link confidentiality to an upstream proxy nothing in
+    // the repo verifies. These keys give it the same tri-state as :8802:
+    // opt-in native wss:// (federation_tls + cert/key) and a fail-closed
+    // mandate (federation_require_tls) that refuses a plaintext bind outright;
+    // default false keeps warn-only with the boot advisory (estate law: a
+    // mandate flip moves both sides of a link in one wave, never one alone —
+    // and the managed install's proxy-terminated :8805 is the documented
+    // common production shape a default-on mandate would break).
+    'federation_tls' => filter_var(($v = getenv('HUB_FEDERATION_TLS')) !== false && $v !== '' ? $v : 'false', FILTER_VALIDATE_BOOLEAN),
+    'federation_tls_cert' => ($v = getenv('HUB_FEDERATION_TLS_CERT')) !== false && $v !== '' ? $v : null,
+    'federation_tls_key' => ($v = getenv('HUB_FEDERATION_TLS_KEY')) !== false && $v !== '' ? $v : null,
+    'federation_require_tls' => filter_var(($v = getenv('HUB_FEDERATION_REQUIRE_TLS')) !== false && $v !== '' ? $v : 'false', FILTER_VALIDATE_BOOLEAN),
 
     // Sonarr/Radarr endpoints used by the request UI.
     // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.

@@ -37,7 +37,12 @@ use function trim;
 /**
  * WebSocket worker that handles hub-to-hub federation connections.
  *
- * Leaf hubs connect via WSS to `ws://master-hub:8805/relay/federation/{hub_id}`.
+ * Leaf hubs connect to `ws://master-hub:8805/relay/federation/{hub_id}` —
+ * `wss://` only when `federation_tls` (HUB_FEDERATION_TLS) is enabled on this
+ * listener — see {@see self::tlsBootPosture()} for the bind-time TLS law
+ * (M22). The sentence above used to claim "connect via WSS" while the worker
+ * could only ever bind plaintext: confidentiality of the hub↔hub link was
+ * silently delegated to an upstream proxy nothing in the repo verified.
  * This worker is the master-side counterpart that accepts inbound WS
  * connections from federated leaf hubs.
  *
@@ -122,6 +127,14 @@ final class FederationWorker
      *        SyncPlay relay documents.
      * @param string             $channelHost `workerman/channel` broker host.
      * @param int                $channelPort `workerman/channel` broker port.
+     * @param bool               $useTls      Enable TLS (wss://) on the federation WS listener.
+     * @param string|null        $tlsCert     Path to TLS certificate file (PEM).
+     * @param string|null        $tlsKey      Path to TLS private key file (PEM).
+     * @param bool               $requireTls  M22 fail-closed posture: refuse to bind
+     *                                         plaintext ws:// when true and TLS is off
+     *                                         (config `federation_require_tls` /
+     *                                         HUB_FEDERATION_REQUIRE_TLS, mirroring the
+     *                                         :8802 sibling's relay_require_tls).
      */
     public function __construct(
         private readonly ContainerInterface $container,
@@ -129,19 +142,174 @@ final class FederationWorker
         private readonly int $count = 1,
         private readonly string $channelHost = '127.0.0.1',
         private readonly int $channelPort = RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
+        private readonly bool $useTls = false,
+        private readonly ?string $tlsCert = null,
+        private readonly ?string $tlsKey = null,
+        private readonly bool $requireTls = false,
     ) {
+    }
+
+    /**
+     * Bind-time TLS posture for the :8805 federation listener (M22).
+     *
+     * Mirrors the :8802 sibling law shipped at c32bb524 (review hub__secnet
+     * M21) on the federation surface, tri-state, same names for greppable
+     * parity:
+     *
+     *  - `secure`   — TLS configured; bind wss:// (opt-in native path).
+     *  - `advisory` — plaintext bind after ONE loud boot warning. This is the
+     *    documented common production shape (a managed install fronts :8805
+     *    through HAProxy and terminates TLS upstream), but the listener
+     *    cannot know its own topology, so the cleartext bind must announce
+     *    itself — review hub__secnet M-3.
+     *  - `refused`  — `require_tls` set without TLS; never bind. The H-4
+     *    ceremony is signature-based, yet nothing in its canonical strings
+     *    binds the TLS channel: an active on-path adversary on a plaintext
+     *    link relays both ceremony legs untouched, gets both hubs to mark
+     *    VERIFIED, and then reads and mutates every federation payload
+     *    (share offers' library metadata included). A mandated-secure
+     *    posture must not stand that listener up at all.
+     *
+     * The default stays warn-only by estate law — c32bb524 shipped the
+     * :8802 side exactly this way ("flip both sides in one wave, never one
+     * alone"), and a default-on mandate here would break the safe
+     * proxy-terminated topology the installer documents.
+     *
+     * @param bool $useTls     TLS configured on this listener (`federation_tls`).
+     * @param bool $requireTls Operator mandate (`federation_require_tls`).
+     *
+     * @return 'secure'|'advisory'|'refused'
+     */
+    public static function tlsBootPosture(bool $useTls, bool $requireTls): string
+    {
+        if ($useTls) {
+            return 'secure';
+        }
+
+        return $requireTls ? 'refused' : 'advisory';
+    }
+
+    /**
+     * The one-per-boot cleartext advisory text (M22).
+     *
+     * Wording duty: name WHAT travels in the clear (the H-4 ceremony and
+     * every federation payload afterwards), WHY the signature-based handshake
+     * does not save a cleartext link (nothing binds the canonical strings to
+     * the TLS channel — active on-path = transparent relay), when the
+     * plaintext bind IS the intended shape (managed-install HAProxy fronts
+     * and terminates upstream), and BOTH cures (HUB_FEDERATION_TLS to serve
+     * wss:// natively; HUB_FEDERATION_REQUIRE_TLS to make plaintext fail
+     * closed).
+     *
+     * @param int $port Bound federation port.
+     *
+     * @return string Warning text for the relay log channel.
+     */
+    public static function plaintextAdvisory(int $port): string
+    {
+        return 'SECURITY — federation listener :' . $port . ' is binding PLAINTEXT ws:// '
+            . '(federation_tls not enabled). The hub-to-hub link carries the H-4 handshake '
+            . 'and every federation payload afterwards in the clear; the ceremony is '
+            . 'signature-based, but nothing in its canonical strings binds the TLS channel, '
+            . 'so an ACTIVE on-path adversary rides a transparent relay: both ceremony legs '
+            . 'flow untouched, both hubs mark VERIFIED, and share offers\' library metadata '
+            . '(and all future payloads) are readable and mutable from then on. If this '
+            . 'master is fronted by the managed install\'s HAProxy (TLS terminates upstream, '
+            . '443 only at the firewall) the bind is loopback-side and this is the expected '
+            . 'shape — otherwise set HUB_FEDERATION_TLS=true (+ HUB_FEDERATION_TLS_CERT/KEY) '
+            . 'to serve wss:// natively. HUB_FEDERATION_REQUIRE_TLS=1 turns this advisory '
+            . 'into a fail-closed boot refusal.';
+    }
+
+    /**
+     * The fail-closed refusal text (M22): require_tls + plaintext = no bind.
+     *
+     * Named after the consequence at boot(): the exception leaves start() and
+     * lands in HubServicesProvider::boot()'s named skip trace (error_log
+     * "Federation worker skipped"), so the message itself must state what
+     * happened — no federation listener started — since that log line is the
+     * operator's only boot-time evidence. The fail-closed property holds: a
+     * mandated-secure hub never stands up a cleartext :8805.
+     *
+     * @param int $port Requested federation port.
+     *
+     * @return string RuntimeException message.
+     */
+    public static function plaintextRefusal(int $port): string
+    {
+        return 'Refusing to bind federation listener :' . $port . ' as PLAINTEXT ws:// because '
+            . 'federation_require_tls is enabled (HUB_FEDERATION_REQUIRE_TLS=1): the hub-to-hub '
+            . 'link would carry the H-4 ceremony and every federation payload in the clear, and '
+            . 'nothing in the ceremony binds the TLS channel. Federation inbound is NOT started. '
+            . 'Enable federation TLS (HUB_FEDERATION_TLS=true + HUB_FEDERATION_TLS_CERT/KEY), '
+            . 'or — only if this master is proxy-fronted with TLS terminated upstream, which '
+            . 'this listener cannot verify from inside — unset HUB_FEDERATION_REQUIRE_TLS to '
+            . 'return to warn-only behavior.';
     }
 
     /**
      * Start the federation WebSocket worker.
      *
      * @return Worker The configured worker instance.
+     *
+     * @throws \RuntimeException On the `refused` posture (M22): mandate set,
+     *         TLS off — thrown BEFORE any Worker/socket construction.
+     * @throws \InvalidArgumentException TLS on without cert/key (M22): the
+     *         named env vars are missing — thrown BEFORE any bind too, the
+     *         byte-shape of the :8802 sibling's cert law.
      */
     public function start(): Worker
     {
-        $worker = new Worker("websocket://0.0.0.0:{$this->port}");
+        // M22: bind-time TLS posture, mirroring the :8802 sibling —
+        // 'refused' throws before any socket exists, 'advisory' is the
+        // historical bind plus the loud announcement it never had. Under
+        // boot()'s skip catch the throw disables federation inbound
+        // (fail-closed by construction: no cleartext listener is ever
+        // bound) while the hub keeps serving its other surfaces.
+        $posture = self::tlsBootPosture($this->useTls, $this->requireTls);
+        if ($posture === 'refused') {
+            throw new \RuntimeException(self::plaintextRefusal($this->port));
+        }
+        if ($posture === 'advisory') {
+            LoggerFactory::get(LogChannels::RELAY)->warning(self::plaintextAdvisory($this->port));
+        }
+
+        // Workerman's Worker::__construct() types $socketContext as a non-nullable
+        // array, so default to an empty context (its own default for "no options")
+        // rather than null — passing null throws a TypeError on the non-TLS path.
+        $sslContext = [];
+
+        // Enable TLS (wss://) when configured; same server-context options as
+        // the :8802 relay listener family (M21 review i-row: ECDHE+AEAD only,
+        // secp384r1, compression off, security level 2).
+        if ($this->useTls) {
+            if ($this->tlsCert === null || $this->tlsKey === null) {
+                throw new \InvalidArgumentException(
+                    'TLS enabled for federation worker but HUB_FEDERATION_TLS_CERT and/or '
+                    . 'HUB_FEDERATION_TLS_KEY env vars are not set',
+                );
+            }
+            $sslContext = [
+                'ssl' => [
+                    'ciphers' => 'ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS',
+                    'ecdh_curve' => 'secp384r1',
+                    'disable_compression' => true,
+                    'security_level' => 2,
+                    'local_cert' => $this->tlsCert,
+                    'local_pk' => $this->tlsKey,
+                    'allow_self_signed' => true,
+                    'verify_peer' => false,
+                ],
+            ];
+        }
+
+        $worker = new Worker("websocket://0.0.0.0:{$this->port}", $sslContext);
         $worker->name = 'phlix-hub-federation-ws';
         $worker->count = $this->count;
+
+        if ($this->useTls) {
+            $worker->transport = 'ssl';
+        }
 
         $worker->onWorkerStart = [$this, 'onWorkerStart'];
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];

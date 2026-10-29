@@ -6,6 +6,57 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-22: the `:8805` federation listener gets the M21 posture law — native `wss://` opt-in, one loud plaintext advisory, a fail-closed mandate, and a docblock that no longer claims WSS — 2026-10-29
+
+Review `hub__secnet` M-3: unlike `:8802`, `:8805` had NO native TLS path at all
+— nothing to opt into — and no posture announcement whatsoever, while its own
+class docblock claimed "Leaf hubs connect via WSS" and `start()` could only
+ever bind plaintext `websocket://0.0.0.0`; `docs/websockets.md` delegated the
+link's confidentiality to "TLS terminates upstream", a topology nothing in the
+repo verifies from the listen side. The leaf DIAL is strict (519c0c0); if a
+firewall exposes raw `:8805` — a `--no-proxy` install is exactly that — the
+hub↔hub link is cleartext. The H-4 ceremony is signature-based, so passive
+capture reveals no key material, but nothing in its canonical strings binds
+the TLS channel: an ACTIVE on-path adversary gets a transparent relay, both
+ceremony legs flow untouched, both hubs mark VERIFIED, and every federation
+payload after that (share offers' library metadata included) is readable and
+mutable. The cure ships LISTEN-SIDE PARITY with the `:8802` sibling shipped at
+c32bb524 (M21), same names for greppable parity: `FederationWorker::tlsBootPosture()`
+— the pure `secure|advisory|refused` truth table — consulted in `start()`
+before any socket exists. The plaintext default now logs ONE loud `SECURITY`
+advisory on the relay channel (naming the transparent-relay risk, the
+HAProxy-fronted topology where a cleartext bind IS the intended shape, and
+both cure knobs); `federation_tls` (with `HUB_FEDERATION_TLS_CERT` /
+`HUB_FEDERATION_TLS_KEY`, byte-shape of the relay block) serves the listener
+as native `wss://` with the same ECDHE+AEAD server context as the relay trio —
+and TLS on without cert/key fails loud, named; new config knob
+`federation_require_tls` (`HUB_FEDERATION_REQUIRE_TLS`, default false — estate
+warn-only law: a default-on mandate would punish the documented
+proxy-terminated topology, and mandate flips move BOTH ends of a link in one
+wave, never one alone) turns the plaintext bind into a `RuntimeException`
+thrown before construction. Under `HubServicesProvider::boot()`'s named skip
+trace the mandate holds fail-closed — no cleartext federation socket is ever
+bound, the refusal text itself names the consequence and both exits, and the
+hub keeps serving its other surfaces (boot() law: federation may never take
+the hub down). The class docblock, `docs/websockets.md` `:8805` section, the
+`config/server.php` port-map comment, and the README env table carry the
+truth. `FederationWorkerTlsPostureTest` (14 tests) pins the truth table, both
+message-wording laws, the fail-closed throw, the logged-verbatim advisory, the
+silent secure path, the cert/key fail-loud, the config defaults, and the
+construction-site wiring — 13 of the 14 are red on the parent where behavior
+differs (the one green control pins the deliberately UNCHANGED default bind).
+Mutation matrix, all named-red, all restored: strip the advisory log → exactly
+1 red; strip the mandate from the posture → 2; flip the config default → 2;
+strip the provider's TLS-arg tail → 1; drop `transport='ssl'` → 1. Battery
+(docker venue): Unit+Integration 5271 tests / 45823 assertions, 0 failures /
+0 errors / 1 pre-existing named skip; `scripts/parallel/test-durations.json`
+re-blessed from one serial profile run per the S458 cache law. Zero new wire
+codes, zero migrations, vendored workerman untouched. OWNER REEL (disclosed,
+not silently shipped): flipping `federation_require_tls` — and its dial-side
+counterparts — to a secure default in one coordinated estate wave remains an
+owner call; this lane makes plaintext loud and refuse-able, exactly mirroring
+the ratified M21 posture.
+
 ### Fixed — M-HUB-24: README §Database schema is now the true, complete schema — `media_requests` was a filename, not a table, and 17 tables were unnamed — 2026-10-29
 
 Review `hub__writer` M-2: the section opened "The schema:" yet listed 19

@@ -1682,12 +1682,33 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ? $federationPortRaw
                 : (int) (is_numeric($federationPortRaw) ? $federationPortRaw : FederationWorker::DEFAULT_PORT);
 
+            // M22 (review hub__secnet M-3): the :8805 listener's TLS trio +
+            // fail-closed mandate, read with the same idiom Application::boot()
+            // uses for the :8802 relay keys. Defaults are the constructor's own
+            // (false/null/null/false), so with the config keys unset the bind
+            // behavior is byte-identical to today's — plus the advisory it
+            // never had.
+            /** @var bool $federationTls */
+            $federationTls = (bool) (is_array($appConfig) ? ($appConfig['federation_tls'] ?? false) : false);
+            /** @var string|null $federationTlsCert */
+            $federationTlsCert = is_array($appConfig) ? ($appConfig['federation_tls_cert'] ?? null) : null;
+            /** @var string|null $federationTlsKey */
+            $federationTlsKey = is_array($appConfig) ? ($appConfig['federation_tls_key'] ?? null) : null;
+            /** @var bool $federationRequireTls */
+            $federationRequireTls = (bool) (is_array($appConfig)
+                ? ($appConfig['federation_require_tls'] ?? false)
+                : false);
+
             $federationWorker = new FederationWorker(
                 $container,
                 $federationPort,
                 1,
                 '127.0.0.1',
                 $channelPort,
+                $federationTls,
+                $federationTlsCert,
+                $federationTlsKey,
+                $federationRequireTls,
             );
             // R14-01/R16-01: prepend the curated coroutine-hook step to this
             // worker's class-owned onWorkerStart. The wrap itself is master-
@@ -1700,6 +1721,12 @@ final class HubServicesProvider implements ServiceProviderInterface
             // operator who expects :8805 and gets nothing previously had zero
             // evidence of why. error_log writes to stderr under the daemon, which
             // is where Workerman's own output goes.
+            // M22 note: the require_tls plaintext refusal (FederationWorker::
+            // start() → RuntimeException) also exits through here — the mandate
+            // holds as fail-closed (no cleartext listener is ever bound; the
+            // refusal text itself names the skip), while the hub keeps serving
+            // its other surfaces, the boot() law federation may never take the
+            // hub down. The logged line carries the full actionable refusal.
             error_log('[phlix-hub] Federation worker skipped: ' . $e->getMessage());
         }
 

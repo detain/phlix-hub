@@ -549,8 +549,31 @@ certificate, set `PHLIX_FEDERATION_CA_BUNDLE` to an absolute PEM bundle path
 (unset = system trust store; set-but-unreadable = the dial is refused loudly).
 TLS dials additionally require the openssl PHP extension at runtime — without
 it the dial is refused with a log line naming the extension. This listener
-itself stays plaintext; TLS on the master side terminates upstream when the
-master advertises an `https://` / `wss://` URL.
+itself stays plaintext unless the master enables native TLS (see below); when
+the master advertises an `https://` / `wss://` URL, termination happens at its
+upstream proxy — a shape nothing in the repo can verify from the listen side,
+which is why the plaintext bind now announces itself.
+
+**Listener-side TLS posture (master accept end, M-HUB-22).** The `:8805`
+worker mirrors the `:8802` law (c32bb524): `federation_tls`
+(`HUB_FEDERATION_TLS`, with `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY`)
+serves the listener as native `wss://` with the same ECDHE+AEAD server context
+as the relay trio. With TLS unset the bind stays plaintext `ws://` — correct
+for the managed install, where HAProxy fronts this listener and terminates TLS
+upstream — but every boot then logs one loud `SECURITY` advisory on the relay
+channel: the hub-to-hub link carries the H-4 ceremony and all federation
+payloads (share offers' library metadata), the ceremony is signature-based yet
+nothing in its canonical strings binds the TLS channel, so an active on-path
+adversary on a raw-exposed `:8805` (a `--no-proxy` install is exactly that)
+relays both ceremony legs untouched, gets both hubs to mark VERIFIED, and
+reads/mutates everything after. `HUB_FEDERATION_REQUIRE_TLS=true`
+(`federation_require_tls`) turns the advisory into a **fail-closed refusal**:
+`FederationWorker::start()` throws before constructing the listener, so a
+mandated-secure hub never binds a cleartext federation socket (the skip is
+loud — the refusal text names the consequence and the exits). The warn-only
+default is deliberate estate posture: a mandate flip moves both ends of the
+link in one wave, never one alone, and the proxy-terminated topology must not
+be punished by default.
 
 **Getting there.** The managed installer routes `GET /relay/federation/…` on the shared
 HAProxy frontend (80/443) to this listener, so a master installed with `scripts/install.sh`
