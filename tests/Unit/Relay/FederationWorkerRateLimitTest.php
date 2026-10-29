@@ -278,11 +278,12 @@ final class FederationWorkerRateLimitTest extends TestCase
         ]);
 
         $invalidText = '[1,2]';
-        // (isTextFrame's law: only FLAT JSON arrays/scalars classify as text
-        // — `json_decode($data, false, 2)` answers objects with stdClass,
-        // which is neither array nor scalar. Genuine JSON-object payloads
-        // currently take the binary branch: a pre-existing controller quirk
-        // disclosed in the fixlog, NOT this lane's change.)
+        // (Text classification per M-HUB-20: JSON objects AND arrays decode
+        // assoc-first and classify as text; `[1,2]` is a flat-array payload
+        // chosen because it reaches the handler's shape guard ('Missing
+        // frame type') as the observable "dispatch reached the controller"
+        // marker. Handshake objects classify as text too since the
+        // classifier port; an array is simply the cheapest text refusal.)
 
         // First two frames are under budget (3rd hit is the limited one):
         // they reach the controller, which closes with its parse error —

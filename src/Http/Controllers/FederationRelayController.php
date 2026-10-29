@@ -159,9 +159,16 @@ final class FederationRelayController
     /**
      * Determine whether an incoming frame payload is a text (JSON) frame.
      *
-     * Text frames are JSON strings (UTF-8) that start with '{' or '['.
-     * Binary frames are the RelayFrame binary encoding (always start with a
-     * non-UTF-8 null byte in practice, or simply are not valid UTF-8 JSON).
+     * Text frames are valid UTF-8 JSON objects/arrays (the handshake
+     * messages are all JSON objects). The assoc flag is load-bearing:
+     * `json_decode(..., false)` hands back a stdClass for every object and
+     * an array-or-scalar acceptance test then silently misroutes EVERY
+     * hub_hello into the binary decoder — the master-side twin of the
+     * leaf-side defect fixed at 519c0c0 (`FederationPeerManager::isTextFrame`).
+     * Acceptance after assoc decoding is `is_array`, which covers both JSON
+     * objects and JSON arrays; bare scalars (`123`, `"x"`) are NOT handshake
+     * text and fall to the binary decoder, whose refusal is the honest path
+     * (the pre-fix `is_scalar` arm invited them into the handshake instead).
      *
      * @param string $data Raw frame payload.
      *
@@ -174,8 +181,9 @@ final class FederationRelayController
         }
 
         // Binary frames per the RelayFrame spec start with a 4-byte big-endian
-        // sequence number. If the first byte is 0x00 and the string is short,
-        // it's likely a binary frame. More reliably: check for valid UTF-8 JSON.
+        // sequence number: a 0x00 first byte with at least the 7-byte minimum
+        // frame header is a binary RelayFrame (the leaf-side twin keeps this
+        // exact guard).
         $firstByte = ord($data[0]);
 
         // If first byte is 0x00 and data is at least 7 bytes (minimum frame header),
@@ -184,11 +192,11 @@ final class FederationRelayController
             return false;
         }
 
-        // Otherwise check if it's valid UTF-8 JSON (starts with { or [)
+        // Otherwise it must parse as a JSON object/array to be handshake text.
         try {
             /** @var mixed $decoded */
-            $decoded = json_decode($data, false, 2);
-            return is_array($decoded) || is_scalar($decoded);
+            $decoded = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
+            return is_array($decoded);
         } catch (Throwable) {
             return false;
         }

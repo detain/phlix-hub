@@ -6,6 +6,41 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-20: the master-side `:8805` frame classifier carried the leaf-side JSON-object bug — every `hub_hello` was misrouted to the binary decoder and the H-4 ceremony died on real sockets — 2026-10-29
+
+Review `hub__secnet` M-1: `FederationRelayController::isTextFrame()` decoded with
+`json_decode($data, false, 2)` and accepted `is_array($decoded) || is_scalar($decoded)` —
+assoc=false hands back a `stdClass` for every JSON OBJECT, so each `hub_hello` (and every
+deeper-nested handshake envelope) failed acceptance, fell to `FrameDecoder`, tripped
+`InvalidFrameTypeException` on the JSON bytes, and closed the link as `invalid_frame`.
+The master end of the exact class 519c0c0 cured on the leaf side (`FederationPeerManager`);
+CI never caught it because the WS handshake tests drive the classification in-process with
+payloads shaped for the broken law — on any real socket the master refused its own protocol.
+Secondary defects in the same three lines: `is_scalar` invited bare scalars (`123`, `"x"`)
+into the handshake path (surviving as the misleading `Invalid frame payload` refusal), and
+depth=2 SILENTLY nulled deeper JSON objects — no throw, straight to the binary close.
+Cure ports the leaf-side idiom verbatim: assoc=true, depth 512, `JSON_THROW_ON_ERROR`,
+acceptance `is_array($decoded)` (covers objects AND arrays), the 0x00-prefix 7-byte
+binary-guard kept identical, docblock names the load-bearing flag and the 519c0c0 lineage;
+bare scalars now honestly fall to the binary decoder's refusal. New
+`FederationRelayControllerClassifierTest` (6 tests) drives the REAL controller over the REAL
+final `FederationFrameHandler`: flagship `{"type":"hub_hello"}` reaches the handler's
+`Invalid peer key` guard (parent: `invalid_frame`), a 3-level-nested object survives the
+classifier (parent: binary-closed), `12345678` binary-closes (parent: misrouted as text);
+three law-guards (`[1,2]` text, encoded HEARTBEAT binary-inert, empty-frame incomplete)
+hold green in both eras. Red-on-parent measured exactly 3/6. Truth pass on the
+`FederationWorkerRateLimitTest` comment block that had enshrined the broken classifier as
+"pre-existing controller quirk" (assertions unchanged — its `[1,2]` payload stays text in
+both eras). `FederationFrameHandler`'s own depth caps (2/4 per site, assoc=true, throwing)
+are its separate accepted law — out of scope, census-recorded. Socket-level master-accept
+E2E needs the DB-backed `FederationWorker` listener and stays a disclosed follow-up;
+`FederationMasterTlsDialTest` already proves WS text-frame delivery on real sockets for the
+same codec. No new wire codes, no migrations. Duration cache: this file's entry rides in as a
+one-line surgical add (0.01, measured from the serial Unit+Integration junit) — c32bb524's bless
+had transiently carried it while the file was untracked foreign-WIP, 6f6445df removed it as a
+stale key, and this commit restores it now that the file is tracked (precedent for the one-line
+shape: 6f6445df itself).
+
 ### Fixed — M-HUB-21: the `:8802` relay listener announces its plaintext bind and can refuse one — the credential-bearing cleartext default is now loud, enforceable, and documented honestly — 2026-10-29
 
 Review `hub__secnet` M-2: `:8802` bound `ws://0.0.0.0` by default
