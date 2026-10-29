@@ -48,6 +48,27 @@ info:
     message and frame catalogs are in `docs/websockets.md`, which also covers `phlix-server`'s own
     `:8097` SyncPlay/events socket.
 
+    ## Cross-origin (CORS)
+
+    The `:8800` REST surface is **default-deny cross-origin**. `src/Http/Router.php` answers every
+    `OPTIONS` preflight before route middleware runs (preflights carry no `Authorization` by spec);
+    a preflight succeeds only for an origin listed in `PHLIX_CORS_ALLOW_ORIGINS`
+    (comma-separated, exact lowercase origins, read once at worker boot — restart to change it).
+    With the variable unset nothing is allowlisted; a denied preflight is answered with the same
+    404 envelope as an unknown path, so probing from a disallowed origin cannot map the route
+    table. `Access-Control-Allow-Headers` mirrors the requested headers and
+    `Access-Control-Max-Age` is 600; `Access-Control-Allow-Credentials` is never emitted — hub
+    REST authenticates with bearer tokens, which CORS does not govern, and no browser-side
+    cross-origin read can ride a hub session cookie. Allowlisted origins also get
+    `Access-Control-Allow-Origin` on the actual (non-preflight) replies, and any response a
+    request with `Origin` can produce carries `Vary: Origin`; same-origin traffic sends no
+    `Origin` header and sees byte-identical responses.
+    Desktop hub-mode consumers (the packaged Windows client runs the same `@phlix/ui` bundle from
+    the `app://-` origin) need `app://-` in the list — deliberately not shipped pre-granted.
+    Caveats, stated honestly: the pre-router static-file fast path, the maintenance-mode 503, and
+    streamed relay bodies (`streamProducer` owns the whole wire response) sit outside this policy
+    and carry no CORS headers.
+
     ## Conventions
 
     Errors are a flat JSON envelope: `{"error": "<human text>", "code": "<machine code>"}`. Ids are

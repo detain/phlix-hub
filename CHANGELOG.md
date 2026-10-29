@@ -6,6 +6,50 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — M-HUB-09: hub REST answers CORS preflights — default-deny, env-configured `Access-Control-Allow-Origin` — 2026-10-29
+
+Review `hub__crossfe` MAJOR-1: "Zero CORS coverage on hub REST while its own
+vendored UI is wired to call" — true at the tip. The router keyed routes by
+method with no `OPTIONS` arm (`src/Http/Router.php`), so every preflight —
+mandatory for the `Authorization`-bearing / JSON-body calls the vendored
+`@phlix/ui` bundle makes — died at 404. The Windows client runs that same
+bundle from an `app://` origin against an absolute `https://` hub base
+(`phlix-windows-client` `resolveConfig.ts` hub mode), where Chromium enforces
+CORS: every hub-mode REST read failed while the CORS-exempt relay WebSockets
+kept working — the half-alive platform mode. Browser portal traffic is
+same-origin and needed nothing; RN/Tizen/Roku networking is not
+CORS-governed (verified read-only at each client).
+
+Cure is provider-side and documented. NEW `src/Http/CorsPolicy.php`: a
+default-deny allowlist parsed at the boundary from
+`PHLIX_CORS_ALLOW_ORIGINS` (comma-separated exact lowercase origins; a
+malformed entry — wildcard, path, space, uppercase — throws at construction,
+i.e. loud at worker boot, not silently inert at request time). `OPTIONS`
+short-circuits in `Router::dispatch()` BEFORE route middleware (preflights
+carry no `Authorization` by spec), answers 204 no-body with
+`Access-Control-Allow-Methods` naming exactly the verbs registered for the
+path, `Access-Control-Max-Age: 600`, a mirror of the requested headers, and
+`Vary: Origin`; `Access-Control-Allow-Origin` echoes the requesting origin
+only when allowlisted, and `Access-Control-Allow-Credentials` is NEVER
+emitted — hub REST authenticates with bearer tokens, and no cross-origin read
+can ride a hub cookie. Allowlisted origins also get ACAO on the ACTUAL
+replies (a preflight alone is not enough — Chromium re-checks the real
+response), including middleware short-circuit 401s, or the browser sees an
+opaque network error instead of the hub's own answer. Deny is silent by
+design: a disallowed-origin preflight gets the byte-identical 404 envelope as
+an unknown path — probing from a website cannot map the route table (the
+collections no-oracle law). Requests with no `Origin` header (same-origin,
+CLI, health probes) see byte-identical responses to the pre-CORS hub. Desktop
+hub-mode consumers need `app://-` in the list — deliberately operator opt-in,
+not pre-granted. `openapi.yaml` documents the policy incl. the honest
+caveats (static-file fast path, maintenance 503 and streamed relay bodies sit
+outside it); no new routes, no new wire codes. Tests: NEW
+`tests/Unit/Http/CorsPolicyTest.php` + `tests/Unit/Http/RouterCorsTest.php`
+(37 cases) incl. a middleware-call recorder proving `OPTIONS` runs zero
+route middleware, deny≡unknown-path indistinguishability, the exact preflight
+header set, decoration matrix and method-key regression; mutation probes:
+strip the short-circuit → 3 named reds, undecorate the 401 → 1, allow-all → 6.
+
 ### Added — M-HUB-10: every WS surface now has a written keepalive/liveness story, traced from code — 2026-10-29
 
 Review `hub__crossfe` MAJOR-2: client-facing WS surfaces (`:8803` mount,

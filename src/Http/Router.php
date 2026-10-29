@@ -20,6 +20,10 @@ use BadMethodCallException;
  * `[ControllerClass, 'method']` array handlers, and grouped routes
  * with shared middleware.
  *
+ * CORS: `OPTIONS` preflights are answered by the {@see CorsPolicy} (default-deny,
+ * env-configured) before middleware runs, and dispatched responses are decorated
+ * for allowlisted origins — see {@see self::dispatch()}.
+ *
  * @package Phlix\Hub\Http
  */
 class Router
@@ -37,6 +41,20 @@ class Router
     private array $groupMiddleware = [];
 
     private ?string $groupPrefix = null;
+
+    private CorsPolicy $cors;
+
+    /**
+     * @param CorsPolicy|null $corsPolicy cross-origin policy; when omitted it is
+     *                                    built from `PHLIX_CORS_ALLOW_ORIGINS`
+     *                                    (default-deny). Construction-time reads
+     *                                    the env once: resident workers pick the
+     *                                    list up at boot, restart to change it.
+     */
+    public function __construct(?CorsPolicy $corsPolicy = null)
+    {
+        $this->cors = $corsPolicy ?? CorsPolicy::fromEnvironment();
+    }
 
     /**
      * Register a GET route.
@@ -190,6 +208,15 @@ class Router
     /**
      * Dispatch a request to the matching route, or 404.
      *
+     * CORS preflights (`OPTIONS`) never carry `Authorization` — by spec the
+     * browser strips it — so they short-circuit here BEFORE any route
+     * middleware runs, and an allowlisted preflight can never be rejected by
+     * an auth gate that was never designed to see the browser's probe. Every
+     * dispatched response (handler result, middleware short-circuit, and the
+     * 404s) then passes through {@see CorsPolicy::decorate()} so the actual
+     * cross-origin reply is readable too. Requests with no `Origin` header
+     * see byte-identical responses to the pre-CORS router.
+     *
      * @param Request $request Incoming request.
      *
      * @return Response Response from the handler or a 404 response.
@@ -199,8 +226,12 @@ class Router
         $method = $request->method;
         $path = $request->path;
 
+        if ($method === 'OPTIONS') {
+            return $this->dispatchPreflight($request);
+        }
+
         if (!isset($this->routes[$method])) {
-            return $this->notFound();
+            return $this->cors->decorate($request, $this->notFound());
         }
 
         foreach ($this->routes[$method] as $pattern => $route) {
@@ -214,15 +245,66 @@ class Router
                     /** @var mixed $result */
                     $result = $middleware($request);
                     if ($result instanceof Response) {
-                        return $result;
+                        return $this->cors->decorate($request, $result);
                     }
                 }
 
-                return $this->callHandler($route['handler'], $request, $params);
+                return $this->cors->decorate($request, $this->callHandler($route['handler'], $request, $params));
             }
         }
 
-        return $this->notFound();
+        return $this->cors->decorate($request, $this->notFound());
+    }
+
+    /**
+     * Serve an OPTIONS request against the registered verbs for its path.
+     *
+     * Deny is silent by design: a preflight from an origin that is not
+     * allowlisted gets the exact same 404 envelope as a preflight for a path
+     * the hub does not know, so a probe from a disallowed website cannot map
+     * the hub's route table (the collections law — deny must not become an
+     * oracle). An OPTIONS with no `Origin` header is not a browser preflight
+     * at all — no fetch can send one without it — so it gets a truthful
+     * body-less 204 naming the verbs this path answers.
+     */
+    private function dispatchPreflight(Request $request): Response
+    {
+        $verbs = $this->verbsForPath($request->path);
+        if ($verbs === []) {
+            return $this->cors->decorate($request, $this->notFound());
+        }
+
+        $origin = $request->getHeader('Origin');
+        if ($origin !== null && $origin !== '' && !$this->cors->allowsOrigin($origin)) {
+            return $this->cors->decorate($request, $this->notFound());
+        }
+
+        return $this->cors->preflightResponse($request, $verbs);
+    }
+
+    /**
+     * Collect the HTTP verbs with a registered route matching `$path`
+     * (excluding `OPTIONS` itself, which the policy reports separately).
+     *
+     * @return list<string>
+     */
+    private function verbsForPath(string $path): array
+    {
+        $verbs = [];
+        foreach ($this->routes as $verb => $patterns) {
+            if ($verb === 'OPTIONS') {
+                continue;
+            }
+            foreach ($patterns as $pattern => $route) {
+                /** @var non-empty-string $pattern */
+                if (preg_match($pattern, $path) === 1) {
+                    $verbs[] = $verb;
+                    break;
+                }
+            }
+        }
+
+        return $verbs;
     }
 
     /**
