@@ -127,13 +127,41 @@ final class IdleReaper
      * would silently do nothing. The DB-only pruners live in
      * {@see startDbMaintenance()} and run on the maintenance worker instead.
      *
+     * ## S312 / C07 — the callback is GUARDED through {@see runTickGuarded()},
+     * and that is load-bearing here more than anywhere else in the hub
+     *
+     * {@see tick()} reaches the database twice — once per stale tunnel through
+     * `TunnelManager::closeTunnel()` → `Tunnel::close()` →
+     * `RelaySessionManager::closeSession()` (an UPDATE of the `relay_sessions`
+     * row), and once at the end through `RelaySessionManager::flushAll()` (one
+     * UPDATE per session with pending byte/last-frame accumulators). Arming the
+     * callback as a bare `[$this, 'tick']` meant a transient MySQL failure
+     * (restart, lock-wait timeout, pool-borrow exhaustion) with any stale
+     * tunnel or non-empty accumulator threw out of the timer into the event
+     * loop, where Workerman's installed error handler turns it into
+     * `Worker::stopAll(250, $exception)` — the same silent-zombie mechanism
+     * S312 measured for the maintenance sweep (see
+     * {@see startDbMaintenance()} and HubServicesProvider's federation-reaper
+     * comment). The difference is blast radius: this timer lives on the
+     * count=1 :8802 relay worker, so one DB blip killed it, dropped EVERY
+     * server tunnel estate-wide, and the master's immediate silent re-fork
+     * crash-cycled the worker once per interval for as long as the DB stayed
+     * sick.
+     *
+     * So the callback catches, reports and returns. The sweep is idempotent
+     * and periodic: a failed tick costs one reap window and the next tick
+     * $intervalSeconds later retries, with per-section catches inside
+     * {@see tick()} keeping as much of each pass effective as possible.
+     *
      * @return int Timer ID (can be passed to Timer::del() to cancel).
      */
     public function start(): int
     {
         $timerId = Timer::add(
             $this->intervalSeconds,
-            [$this, 'tick'],
+            function (): void {
+                $this->runTickGuarded();
+            },
         );
 
         $this->logger->debug('Relay: idle reaper started', [
@@ -142,6 +170,37 @@ final class IdleReaper
         ]);
 
         return $timerId;
+    }
+
+    /**
+     * Run one in-memory reaper tick so that NOTHING escapes to the event loop.
+     *
+     * This is what the timer armed by {@see start()} actually holds.
+     * {@see tick()} already guards each DB section itself; this wrapper is the
+     * last-resort catch for any other throw (a registry bug, a future call
+     * site added to the scan) so the count=1 relay worker can never be killed
+     * by its own reap pass — see {@see start()} for the S312/C07 law. The
+     * sweep is idempotent and periodic: an escaped failure costs one reap
+     * window and the next tick retries.
+     *
+     * Public so a test can invoke exactly what the timer holds without going
+     * through Workerman.
+     *
+     * @return int Number of tunnels that were reaped (0 when the tick failed
+     *             before completing; the failure is logged, never swallowed).
+     */
+    public function runTickGuarded(): int
+    {
+        try {
+            return $this->tick();
+        } catch (\Throwable $e) {
+            $this->logger->error('Relay: idle reaper tick failed', [
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+
+            return 0;
+        }
     }
 
     /**
@@ -269,7 +328,15 @@ final class IdleReaper
             }
         }
 
-        // Close stale tunnels after iteration is complete.
+        // Close stale tunnels after iteration is complete. Each close is
+        // individually guarded (S312/C07): closeTunnel() reaches the DB
+        // through Tunnel::close() -> RelaySessionManager::closeSession(), and
+        // one transient DB failure must neither kill the relay worker (an
+        // escaped throw becomes Worker::stopAll(250)) nor skip the REST of
+        // this pass. A failed close leaves that tunnel registered but no
+        // longer ACTIVE, and allTunnels() yields ACTIVE only — so the next
+        // tick never re-closes it (no double-delete) while the maintenance
+        // worker's reapStaleSessions() backstops the orphaned open DB row.
         foreach ($staleTunnels as $serverId => $tunnel) {
             $this->logger->info('Relay: reaping stale tunnel', [
                 'server_id' => $serverId,
@@ -279,8 +346,17 @@ final class IdleReaper
                 'reason' => 'timeout',
             ]);
 
-            $this->tunnelManager->closeTunnel($serverId, 'timeout');
-            $reapedCount++;
+            try {
+                $this->tunnelManager->closeTunnel($serverId, 'timeout');
+                $reapedCount++;
+            } catch (\Throwable $e) {
+                $this->logger->error('Relay: idle reaper failed to close stale tunnel', [
+                    'server_id' => $serverId,
+                    'tunnel_id' => $tunnel->getTunnelId(),
+                    'error' => $e->getMessage(),
+                    'exception' => $e::class,
+                ]);
+            }
         }
 
         if ($reapedCount > 0) {
@@ -300,7 +376,19 @@ final class IdleReaper
         // worker's separate RelaySessionManager instance would flush an empty
         // accumulator and the relay_sessions bytes_in/out + last_frame_at writes
         // would be lost.
-        $this->sessionManager?->flushAll();
+        //
+        // S312/C07: guarded, because the flush is DB I/O. flushSession()
+        // clears each accumulator BEFORE its UPDATE, so a failed flush loses
+        // at most that one bounded delta — never a double-count — and the
+        // sessions whose accumulators survived are retried by the next tick.
+        try {
+            $this->sessionManager?->flushAll();
+        } catch (\Throwable $e) {
+            $this->logger->error('Relay: idle reaper accumulator flush failed', [
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
 
         return $reapedCount;
     }

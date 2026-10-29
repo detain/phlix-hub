@@ -10,9 +10,11 @@ use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Relay\IdleReaper;
+use Phlix\Hub\Relay\TunnelInterface;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\ServerReaper;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use Throwable;
 use Workerman\MySQL\Connection;
 
@@ -159,6 +161,199 @@ final class MaintenanceSweepGuardTest extends TestCase
         $reaper->runDbMaintenanceGuarded(null);
 
         self::addToAssertionCount(1); // reached without a rethrow
+    }
+
+    // -----------------------------------------------------------------------
+    // IdleReaper::tick() — C07: the relay-worker reaper carried the SAME
+    // S312 hazard with the largest blast radius in the hub. It is armed on the
+    // count=1 :8802 relay child, and closeTunnel()/flushAll() reach the DB
+    // (Tunnel::close -> RelaySessionManager::closeSession; flushSession
+    // UPDATEs), so one transient MySQL failure with any stale tunnel or
+    // non-empty accumulator threw into the event loop -> stopAll(250) ->
+    // EVERY server tunnel estate-wide dropped, master silently re-forking and
+    // crash-cycling the worker once per interval while the DB stayed sick.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Helper: a stale tunnel as {@see IdleReaper::tick()} sees it.
+     */
+    private function staleTunnel(string $tunnelId): TunnelInterface
+    {
+        $tunnel = $this->createMock(TunnelInterface::class);
+        $tunnel->method('getTunnelId')->willReturn($tunnelId);
+        $tunnel->method('getLastFrameAt')->willReturn(1_700_000_000);
+        $tunnel->method('isStale')->willReturn(true);
+
+        return $tunnel;
+    }
+
+    /**
+     * Helper: a TunnelManagerInterface yielding exactly these tunnels.
+     *
+     * The return type keeps the MockObject intersection so PHPStan sees the
+     * PHPUnit fluent `method()` API rather than the bare interface.
+     *
+     * @param array<string, TunnelInterface> $tunnels
+     */
+    private function managerWithTunnels(
+        array $tunnels,
+    ): TunnelManagerInterface & \PHPUnit\Framework\MockObject\MockObject {
+        $manager = $this->createMock(TunnelManagerInterface::class);
+        $manager->method('allTunnels')->willReturn(
+            (static function () use ($tunnels): \Generator {
+                foreach ($tunnels as $serverId => $tunnel) {
+                    yield $serverId => $tunnel;
+                }
+            })(),
+        );
+
+        return $manager;
+    }
+
+    public function testIdleReaperTickDoesNotEscapeWhenCloseTunnelThrows(): void
+    {
+        $manager = $this->managerWithTunnels(['srv-a' => $this->staleTunnel('tun-a')]);
+        $manager->method('closeTunnel')->willThrowException($this->connectionRefused());
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(
+                self::stringContains('failed to close stale tunnel'),
+                self::callback(
+                    static fn (array $ctx): bool => ($ctx['server_id'] ?? null) === 'srv-a'
+                        && is_string($ctx['error'] ?? null)
+                        && str_contains($ctx['error'], 'Connection refused'),
+                ),
+            );
+
+        $reaper = new IdleReaper(
+            $manager,
+            $logger,
+            60,
+            90,
+            $this->createMock(RelaySessionManager::class),
+        );
+
+        // Pre-C07 this call propagated the PDOException straight out of the
+        // timer callback; now it returns, having reaped nothing.
+        self::assertSame(0, $reaper->tick());
+    }
+
+    public function testIdleReaperTickDoesNotEscapeWhenFlushAllThrows(): void
+    {
+        $sessions = $this->createMock(RelaySessionManager::class);
+        $sessions->method('flushAll')->willThrowException($this->connectionRefused());
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(
+                self::stringContains('accumulator flush failed'),
+                self::callback(
+                    static fn (array $ctx): bool => is_string($ctx['error'] ?? null)
+                        && str_contains($ctx['error'], 'Connection refused'),
+                ),
+            );
+
+        $reaper = new IdleReaper(
+            $this->managerWithTunnels([]),
+            $logger,
+            60,
+            90,
+            $sessions,
+        );
+
+        self::assertSame(0, $reaper->tick());
+    }
+
+    /**
+     * Interruption correctness (the reaping-semantics half of C07): a DB
+     * failure on ONE close must not skip the rest of the pass — tunnel B is
+     * still closed and counted, the byte-accumulator flush still runs, and
+     * only the FAILED close is excluded from the reaped count. No double
+     * delete across ticks is structurally impossible: a half-closed tunnel
+     * leaves the ACTIVE-only allTunnels() scan for ever (its registry entry
+     * is unset only on the success path, and its orphaned DB row is the
+     * documented job of the maintenance worker's reapStaleSessions()).
+     */
+    public function testIdleReaperTickKeepsReapingTheRestOfThePassWhenOneCloseFails(): void
+    {
+        $closed = [];
+        $manager = $this->managerWithTunnels([
+            'srv-a' => $this->staleTunnel('tun-a'),
+            'srv-b' => $this->staleTunnel('tun-b'),
+        ]);
+        $manager->method('closeTunnel')->willReturnCallback(
+            static function (string $serverId) use (&$closed): void {
+                if ($serverId === 'srv-a') {
+                    throw new PDOException('SQLSTATE[HY000] [2002] Connection refused');
+                }
+                $closed[] = $serverId;
+            },
+        );
+
+        $sessions = $this->createMock(RelaySessionManager::class);
+        $sessions->expects(self::once())->method('flushAll');
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::once())->method('error'); // only srv-a's failure
+
+        $reaper = new IdleReaper($manager, $logger, 60, 90, $sessions);
+
+        self::assertSame(1, $reaper->tick(), 'the failed close must not be counted, the good one must');
+        self::assertSame(['srv-b'], $closed, 'the pass must continue past the failing tunnel');
+    }
+
+    public function testIdleReaperRunTickGuardedSwallowsAnyOtherEscapeAndLogs(): void
+    {
+        // pruneDeadTunnels() is deliberately NOT section-guarded inside
+        // tick() — this throws PAST tick()'s guards, and only the wrapper the
+        // timer actually holds may catch it.
+        $manager = $this->createMock(TunnelManagerInterface::class);
+        $manager->method('pruneDeadTunnels')->willThrowException(
+            new RuntimeException('registry exploded'),
+        );
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(
+                self::stringContains('idle reaper tick failed'),
+                self::callback(
+                    static fn (array $ctx): bool => ($ctx['error'] ?? null) === 'registry exploded'
+                        && ($ctx['exception'] ?? null) === RuntimeException::class,
+                ),
+            );
+
+        $reaper = new IdleReaper(
+            $manager,
+            $logger,
+            60,
+            90,
+            $this->createMock(RelaySessionManager::class),
+        );
+
+        self::assertSame(0, $reaper->runTickGuarded());
+    }
+
+    /**
+     * The relay reaper's timer must be armed THROUGH the guard. Asserting the
+     * guard works says nothing about whether the arming site uses it — the
+     * same omission shape as {@see testTheFederationTimerIsArmedThroughTheGuard}
+     * pins for the federation sweep.
+     */
+    public function testTheIdleReaperTimerIsArmedThroughTheGuard(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2) . '/src/Relay/IdleReaper.php',
+        );
+
+        self::assertMatchesRegularExpression(
+            '/Timer::add\(\s*\$this->intervalSeconds,\s*function \(\): void \{\s*\$this->runTickGuarded\(\);/',
+            $source,
+            'IdleReaper::start() must arm the guarded tick, not a bare [$this, \'tick\']',
+        );
     }
 
     // -----------------------------------------------------------------------
