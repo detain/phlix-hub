@@ -258,12 +258,21 @@ Parsed by `SyncPlayRelayWorker::parseServerId()` with
 `~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~`.
 
 **Getting there.** The managed installer routes `GET /syncplay/…` on the shared HAProxy
-frontend (80/443) straight to this listener, so browser clients dial
-`wss://<hub-domain>/syncplay/{server_id}` and no firewall port is involved. On `--no-proxy`
-installs the installer opens `8804/tcp` in ufw (when ufw is active), which is what makes the
-plain `ws://<host>:8804/…` form above reachable. Behind any hand-rolled proxy, replicate the
-`/syncplay/` pass-through with HTTP/1.1 upgrade headers and an hour-scale read timeout — the
-hub's managed HAProxy defaults carry `timeout tunnel 1h`.
+frontend (80/443) straight to this listener — but no shipped browser client dials that
+route yet. The env block the managed install writes carries no `HUB_WS_URL`/`HUB_WS_PATH`,
+and the shipped dials default to the direct form: `@phlix/ui`'s legacy hub-relay law and
+the hub portal's own `buildRelayUrl` both build `ws(s)://<page-host>:8804/…` with the port
+fixed by `SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port (the portal bundle
+does not consult the seam). So on a managed install the browser path needs the operator to
+`ufw allow 8804/tcp` as well — which serves the plain `ws://<host>:8804/…` form from
+HTTP-served pages; `8804` is a plaintext listener, so an HTTPS-served page cannot complete
+a direct dial at all, and its only viable path (the same-origin
+`wss://<hub-domain>/syncplay/…` route) waits on the disclosed rider that wires shipped
+clients to dial it. On `--no-proxy` installs the installer opens `8804/tcp` in ufw (when
+ufw is active), which is what makes the plain `ws://<host>:8804/…` form above reachable.
+Behind any hand-rolled proxy, replicate the `/syncplay/` pass-through with HTTP/1.1
+upgrade headers and an hour-scale read timeout — the hub's managed HAProxy defaults carry
+`timeout tunnel 1h`.
 
 JSON text frames throughout — this surface does **not** use the binary frame
 format. Room state is held in the worker and messages are broadcast to every

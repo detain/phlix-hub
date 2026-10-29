@@ -324,11 +324,24 @@ directly. Open it on the firewall but don't put it behind the HAProxy 80/443 fro
 | `2206` | cross-process channel broker | loopback only | loopback only |
 
 Under the managed HAProxy the two relay WebSocket surfaces are **not** opened on the
-firewall: browser clients dial `wss://<domain>/syncplay/{server_id}` and federation leaves
-dial `wss://<master-domain>/relay/federation/{hub_id}` over the existing 443 frontend — no
-extra port, TLS included. `--no-proxy` installs instead open `8804`/`8805` in ufw (when it
-is active) so the plain `ws://<host>:8804` / `ws://<host>:8805` forms documented in
-[`docs/websockets.md`](docs/websockets.md) stay reachable.
+firewall — and from there their stories differ. Federation leaves ride the existing 443
+frontend end to end: a leaf's dial target is operator-configured, and the managed
+`/relay/federation/` route carries `wss://<master-domain>/relay/federation/{hub_id}` with
+no extra port, TLS included. Browser SyncPlay clients do **not** get that for free. The
+route exists, but nothing the managed installer emits steers a shipped browser onto it:
+the generated env block writes no `HUB_WS_URL`/`HUB_WS_PATH` (the ui seam — `HUB_WS_URL`
+is the master switch; a lone `HUB_WS_PATH` refines nothing), and the default dial law in
+both shipped paths is the legacy direct form `ws(s)://<page-host>:8804/syncplay/{server_id}`
+with the port fixed by `SyncPlayRelayWorker::DEFAULT_PORT` — the hub portal bundle never
+consults the seam at all. So on a managed install, browser watch parties require the
+operator to **also** `ufw allow 8804/tcp`; that completes the plain `ws://<host>:8804`
+form for HTTP-served pages (`8804` is a plaintext listener, so an HTTPS-served page's
+`wss://` direct dial cannot complete), and the full same-origin
+`wss://<domain>/syncplay/…` browser path — riding the managed route the way federation
+rides its own — needs a client wired to dial it: disclosed follow-up rider, not shipped.
+`--no-proxy` installs open `8804`/`8805` in ufw (when it is active), so the plain
+`ws://<host>:8804` / `ws://<host>:8805` forms documented in
+[`docs/websockets.md`](docs/websockets.md) are reachable there directly.
 
 If you'd rather use your own reverse proxy (nginx, Caddy, Traefik, etc.) instead of the
 managed HAProxy, pass `--no-proxy` to either install script. Each service then listens on its

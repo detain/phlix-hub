@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-11 r2: the managed-install `:8804` browser sentence corrected to shipped truth — the `/syncplay/` HAProxy route is real but no shipped browser client dials it; managed installs need `ufw allow 8804/tcp` for the plain-ws form, and the same-origin TLS browser path is a disclosed seam-wiring rider — 2026-10-29
+
+Review `hub__devops` M-HUB-11 r1 (MAJOR-1): the entry below asserts that under the
+managed HAProxy "browser clients dial `wss://<domain>/syncplay/{server_id}` … no extra
+port, TLS included". False on disk for every client this estate ships. The managed env
+heredoc (`scripts/install.sh`) writes zero `HUB_WS_URL`/`HUB_WS_PATH`, so
+`SharedUiController` injects `wsUrl: null`/`wsPath: null`; the `@phlix/ui` precedence law
+then "ships the legacy behavior unchanged" — `ws(s)://<page-host>:8804` with the port
+fixed by `SyncPlayRelayWorker::DEFAULT_PORT` — and the hub's own vendored portal bundle
+hard-codes that direct dial (`buildRelayUrl`; `watchPartyWire.ts`: "never the origin's
+port"; zero seam consumers in `web-ui/src`). The managed branch opens only 80/443/8802 in
+ufw, so the original browser symptom survives while the docs claimed the cure. Corrected
+forward (the entry below stays verbatim): README and `docs/websockets.md` now state the
+shipped reachability precisely — the `/syncplay/` route exists and serves clients that
+dial it (hand-rolled proxies can replicate it); browser watch parties on a managed
+install require the operator to also `ufw allow 8804/tcp`, which completes only the plain
+`ws://` form from HTTP-served pages (plaintext listener; an HTTPS-served page cannot
+complete a direct dial), and the full same-origin `wss://<domain>/syncplay/…` browser
+path awaits a follow-up rider (emit the seam env in the installer AND route the portal
+dial through it — bundle rebuild, out of scope here). The `:8805` federation managed
+claim stands independently verified TRUE (leaf dials are operator-configured and ride
+443). Docs-only: `scripts/install.sh` and all PHP untouched.
+
 ### Fixed — M-HUB-11: the managed install now reaches :8804 and :8805 — HAProxy routes `/syncplay/` and `/relay/federation/` on the existing frontends, `--no-proxy` opens both in ufw, docs carry the full port-reachability law — 2026-10-29
 
 Review `hub__devops` MAJ-1: the installer opened 80/443 + `:8802` and routed only
