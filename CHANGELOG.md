@@ -6,6 +6,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added — M-HUB-10: every WS surface now has a written keepalive/liveness story, traced from code — 2026-10-29
+
+Review `hub__crossfe` MAJOR-2: client-facing WS surfaces (`:8803` mount,
+`:8804` SyncPlay relay) have no heartbeat/keepalive story. Traced from code
+at this tip and documented, per surface, in `docs/websockets.md`: a new
+intro glance table plus a keepalive subsection in each port's section.
+
+Truth shipped (docs-only; NO new protocol invented): `:8802` carries the
+estate's one complete liveness loop (hub 30 s tunnel pings via
+`startInMemoryReapers()`, inbound-only `lastFrameAt` refresh, `IdleReaper`
+60 s scan / 90 s stale reap, the HB-0.1 window coupling). `:8803` is moot by
+construction — every mount is refused with close 1011 in the deployed
+topology (M2 banner), so no long-lived socket exists to keep alive or reap.
+`:8804` ships NO server-originated ping and NO per-socket idle reap — the
+60-second timer only sweeps EMPTY rooms; a silent-but-live member holds its
+seat indefinitely (the review's false-eviction worry does not apply:
+`IdleReaper` never sees `:8804` sockets and position reports refresh only the
+informational room-level `last_activity_at`, which nothing reads for
+reaping), while dead-but-silent members persist as ghosts until a real close
+reaches `onClose()` — opportunistic, not bounded. The client duty contract
+is written out: reconnect-on-drop, `syncplay_group_join` re-entry, and
+`syncplay_time_ping` as the only app-level keepalive the vocabulary offers
+(browser JS cannot send WS-level control pings; Workerman's automatic pong
+answers those it does receive). The known gap — a server-side ping + stale
+reap on `:8804` mirroring the `:8802` window math — is disclosed as
+owner-level protocol territory, not patched sideways. `:8805`'s glance row
+records the traced asymmetry: the dialing role heartbeats every 15 s once
+verified; the master's listener consumes them, and a heartbeat against an
+already-reaped session closes the zombie link with `session_expired`.
+
 ### Added — M-HUB-08: watch parties become findable — `/app/watch-party` page + `/app/party/{server}/{code}` deep link + nav entry, riding ONLY the documented `:8804` canonical wire — 2026-10-29
 
 Review `hub__casualgamer` M5: "Watch parties — the hub's marquee feature

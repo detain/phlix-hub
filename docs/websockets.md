@@ -22,6 +22,23 @@ that moves in code and not in the document fails the build.
 > `:8097` belongs to `phlix-server` and this repository's CI clones one checkout,
 > so nothing here asserts against it. It is documentation, not a contract test.
 
+### Keepalive at a glance
+
+What each socket does about idleness is part of its contract — the consumers
+differ in what their APIs can even send (browser-class JS cannot emit WS-level
+pings), so the story is stated per surface, traced from code:
+
+| Surface | Server-originated ping | Idle reap | Client duty |
+| --- | --- | --- | --- |
+| `:8802` | yes — hub pings every active tunnel every 30 s (`HubServicesProvider::startInMemoryReapers()`) | yes — `IdleReaper` closes a tunnel with no inbound frame for >90 s, scanning every 60 s | the server's own 30 s heartbeat (and ping echoes) is what keeps it alive |
+| `:8803` | none | none — and none can exist | every mount is refused with close `1011` in the deployed topology (M2 banner below); the socket never lives long enough to idle |
+| `:8804` | **none** | **none per socket** — only EMPTY rooms are swept (60 s timer) | reconnect-on-drop; `syncplay_time_ping` is the only app-level keepalive the vocabulary offers — see its section for the full duties and the known gap |
+| `:8805` | the dialing (leaf) role sends `HEARTBEAT` every 15 s once verified; the master's listener consumes them (see the federation table below) | liveness-reaped at the session row: a heartbeat landing on an already-reaped session closes the zombie link with `DISCONNECTED` / `session_expired` | none beyond the handshake |
+| `:8097` | `phlix-server`'s socket — its liveness story is that repository's code, not this table | — | — |
+
+Window math, close-path details and the honest gaps are in each port's own
+section below.
+
 ---
 
 ## The binary frame format (`:8802`, `:8803`, `:8805`)
@@ -128,6 +145,31 @@ An authentication failure is a `HELLO`-time `ERROR` frame with code
 always answers `501` with an `X-WS-Endpoint` header naming this socket. It is the
 path `phlix-server` derives from `config/relay.php`'s `hub_wss_url`.
 
+### Keepalive and idle reap
+
+This is the one client-facing lane with a complete, deliberate liveness loop:
+
+- **Hub → server:** every 30 seconds
+  `HubServicesProvider::startInMemoryReapers()` sends a `HEARTBEAT` (`0x06`,
+  ch 0) on every ACTIVE tunnel (`Tunnel::sendHeartbeat()`). It is a pure
+  probe — it deliberately does NOT refresh the sender's own liveness stamp.
+- **Server → hub:** the server dials on its own schedule too
+  (`PHLIX_RELAY_PING_INTERVAL`, server default 30 s) and echoes the hub's
+  pings, so every live tunnel lands an inbound frame at least every 30 s.
+- **The liveness marker:** only INBOUND frames refresh a tunnel's
+  `lastFrameAt` (`Tunnel::onHeartbeat()`). Any traffic counts — data frames
+  refresh it the same way — so the heartbeats exist purely for the
+  quiet-but-healthy tunnel, never as a tax on a busy one.
+- **The reap:** `IdleReaper` scans the live tunnel registry every
+  `DEFAULT_INTERVAL_SECONDS` (60 s) and closes any tunnel whose last inbound
+  frame is older than `DEFAULT_STALE_THRESHOLD_SECONDS` (90 s), reason
+  `timeout`.
+- **The coupling:** the reap window MUST stay strictly greater than the ping
+  interval (HB-0.1, pinned in the `IdleReaper` class docblock). 90 s against
+  a 30 s heartbeat gives ~3 probes of headroom: a healthy-but-quiet tunnel
+  is never false-reaped, and a half-open one is gone within a couple of
+  minutes.
+
 ---
 
 ## `:8803` — client mount
@@ -194,6 +236,15 @@ If a mount ever binds (see the M2 banner above — in the deployed topology
 none ever does), the socket carries `DATA` (`0x05`) in both directions on this
 client's channel id, plus `DISCONNECTED` (`0x07`) when the underlying server
 tunnel goes away and `ERROR` (`0x08`).
+
+### Keepalive
+
+Moot by construction in the deployed topology: the mount is refused inside
+the connect hook (close `1011`), so this surface never holds a long-lived
+socket — nothing to ping, nothing to reap, no idle story. If the surface is
+rebuilt (the owner-level architecture decision named in the banner above),
+the `:8802` heartbeat/reap window is the pattern this repository has already
+paid for, and it should cross to the client mount with it.
 
 ---
 
@@ -376,7 +427,55 @@ thereafter) rather than the socket being killed — an over-eager client
 recovers as the bucket refills. This bounds what one socket can force the
 worker — and, through the verbatim relay, its whole room — to process.
 
-Empty rooms are swept by a 60-second timer in `onWorkerStart()`.
+### Keepalive, idle sockets and client duties
+
+This lane ships **no server-originated keepalive and no per-socket idle
+reap** — that is today's code, stated honestly, and it is the opposite
+direction from the `:8802` math above:
+
+- **Nothing pings you.** No timer on this worker sends a frame to an idle
+  client. Workerman's WS protocol layer answers an inbound control *ping*
+  frame with an automatic pong, but browser-class JS cannot emit WS-level
+  pings, so for this estate's real consumers the surface is ping-silent in
+  both directions unless the client drives an app-level frame.
+- **Nothing evicts you for silence.** The only timer here is the 60-second
+  sweep in `onWorkerStart()`, and it drops a room's bookkeeping **only when
+  the room is empty** (`count($clients) === 0`) — memory hygiene for
+  departed rooms, not a liveness mechanism. A silent member of a non-empty
+  room (a TV idling in a group) holds its seat indefinitely. The `:8802`
+  `IdleReaper` scans the relay-tunnel registry only; no `:8804` socket is
+  ever visible to it, so no client here can be false-reaped for being
+  quiet, and position-report traffic cannot be mistaken for a reap input.
+- **Ghost members are the honest cost.** A dead-but-silent client (half-open
+  behind an expired NAT mapping or Wi-Fi power-save) is *also* never reaped:
+  its roster entry — and the `client_left` / `syncplay_info` announcement
+  that depends on it — wait on a real close reaching `onClose()` (a TCP
+  FIN/RST, a WS close frame, or a failed write), which may surface only when
+  the room next writes toward that socket. Detection is opportunistic, not
+  bounded.
+- **What traffic updates.** Canonical join/leave, `syncplay_playback_*` and
+  `syncplay_host_transfer` frames refresh the ROOM-level `last_activity_at`
+  carried in `syncplay_group_state` (position reports included); chat,
+  typing and time-pings do not. That stamp is wire truth mirroring the
+  server's group-state shape — **nothing on this surface reads it for
+  reaping**; there is no per-connection activity counter to evict anyone.
+- **Client duties — the de-facto contract.** Reconnect-on-drop is the story:
+  treat the close event as the only authoritative disconnect signal. To
+  rejoin, dial again with the same relay token while it is valid (re-mint
+  via `POST /api/v1/me/servers/{id}/relay-token` once it is not) and send
+  `syncplay_group_join` — join implies leave, and the returned
+  `syncplay_group_state` re-anchors everything. While connected but quiet,
+  send `syncplay_time_ping` on a comfortable cadence: the echoed
+  `syncplay_time_pong` is the only hub→client proof the vocabulary offers,
+  and the frame keeps the NAT binding warm in both directions (well under a
+  typical consumer NAT's ~5-minute mapping expiry; 30 s matches the estate's
+  working cadence elsewhere).
+- **KNOWN GAP.** A server-originated ping on `:8804` with a matching
+  stale-socket reap — mirroring the `:8802` 30 s / 90 s window math, so
+  ghost retention became bounded the way tunnel retention already is — would
+  close this. It is not shipped here because adding a keepalive protocol to
+  a wire clients already speak is an owner-level decision, not this
+  document's to make.
 
 ---
 
