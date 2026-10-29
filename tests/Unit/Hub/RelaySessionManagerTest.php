@@ -729,6 +729,72 @@ final class RelaySessionManagerTest extends TestCase
         self::assertSame(0, $result['maxConcurrentStreams']);
     }
 
+    /**
+     * M-HUB-16: a set-cap DENIAL names its recovery instant — the epoch of the
+     * first second of the NEXT monthly period, derived from the same
+     * calendar-month key the row is stored under. Expected computed via
+     * DateTimeImmutable (independent of the production strtotime path; the two
+     * agree until the month rolls, and both read one host clock).
+     */
+    public function testCheckUserQuotaDenialCarriesThePeriodRollRecoveryInstant(): void
+    {
+        $expectedRoll = (new \DateTimeImmutable('first day of next month 00:00:00'))->getTimestamp();
+
+        // DOWNLOAD cap denial carries it…
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        $db->method('query')->willReturn([[
+            'bytes_in' => '5242880',
+            'bytes_out' => '0',
+            'quota_bytes_in' => '5242880',
+            'quota_bytes_out' => '0',
+        ]]);
+        $manager = new RelaySessionManager($db, $logger);
+        $result = $manager->checkUserQuota('user-dl-over');
+
+        self::assertFalse($result['allowed']);
+        self::assertSame($expectedRoll, $result['retryAt']);
+        self::assertGreaterThan(time(), $result['retryAt'], 'the roll is in the future — recovery is not now');
+
+        // …and so does the UPLOAD cap denial.
+        $db2 = $this->createMock(Connection::class);
+        $db2->method('query')->willReturn([[
+            'bytes_in' => '0',
+            'bytes_out' => '5242880',
+            'quota_bytes_in' => '0',
+            'quota_bytes_out' => '5242880',
+        ]]);
+        $manager2 = new RelaySessionManager($db2, $logger);
+        self::assertSame($expectedRoll, $manager2->checkUserQuota('user-ul-over')['retryAt']);
+    }
+
+    /**
+     * M-HUB-16: an ALLOWED verdict carries no recovery instant (null) — the
+     * refusal shape must never fabricate a Retry-After for a state that is not
+     * a denial.
+     */
+    public function testCheckUserQuotaAllowedVerdictsCarryNoRecoveryInstant(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $noRow = $this->createMock(Connection::class);
+        $noRow->method('query')->willReturn([]);
+        self::assertNull(
+            (new RelaySessionManager($noRow, $logger))->checkUserQuota('user-none')['retryAt'],
+        );
+
+        $under = $this->createMock(Connection::class);
+        $under->method('query')->willReturn([[
+            'bytes_in' => '1',
+            'bytes_out' => '1',
+            'quota_bytes_in' => '5242880',
+            'quota_bytes_out' => '5242880',
+        ]]);
+        self::assertNull(
+            (new RelaySessionManager($under, $logger))->checkUserQuota('user-under')['retryAt'],
+        );
+    }
+
     public function testConcurrentStreamCounterIncrementsDecrementsAndBounds(): void
     {
         // HB-3.4 G3: the in-memory active-stream counter — increment on begin,

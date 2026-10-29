@@ -78,8 +78,12 @@ info:
 
     ## Conventions
 
-    Errors are a flat JSON envelope: `{"error": "<human text>", "code": "<machine code>"}`. Ids are
-    8-4-4-4-12 hex UUIDs stored as `CHAR(36)`.
+    Errors are a flat JSON envelope: `{"error": "<human text>", "code": "<machine code>"}`. Refusals
+    that predate the machine-code channel additionally mirror the human text in a top-level
+    `message` key; capacity refusals whose recovery instant is derivable (the relay-proxy
+    monthly-bandwidth denial, `quota.exceeded`) carry that absolute epoch as top-level
+    `retry_at` AND the matching `Retry-After` header. Ids are 8-4-4-4-12 hex UUIDs stored as
+    `CHAR(36)`.
 
     Three distinct credentials appear here. A **user** bearer token is HS256 and is what the SPA and
     clients send. An **enrollment JWT** is Ed25519 and is what an enrolled media server sends; its
@@ -2868,7 +2872,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          $ref: "#/components/responses/ProxyAdmissionDenied"
+        "503":
+          $ref: "#/components/responses/ProxyServerUnavailable"
+        "403":
+          description: "The method/path is not exposed through the relay proxy (`proxy.scope_denied`)."
     get:
       operationId: "get_api_v1_servers_id_proxy_path"
       tags: ["Server Proxy"]
@@ -2909,7 +2917,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          $ref: "#/components/responses/ProxyAdmissionDenied"
+        "503":
+          $ref: "#/components/responses/ProxyServerUnavailable"
+        "403":
+          description: "The method/path is not exposed through the relay proxy (`proxy.scope_denied`)."
     head:
       operationId: "head_api_v1_servers_id_proxy_path"
       tags: ["Server Proxy"]
@@ -2951,7 +2963,9 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          $ref: "#/components/responses/ProxyAdmissionDenied"
+        "503":
+          $ref: "#/components/responses/ProxyServerUnavailable"
     patch:
       operationId: "patch_api_v1_servers_id_proxy_path"
       tags: ["Server Proxy"]
@@ -2992,7 +3006,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          $ref: "#/components/responses/ProxyAdmissionDenied"
+        "503":
+          $ref: "#/components/responses/ProxyServerUnavailable"
+        "403":
+          description: "The method/path is not exposed through the relay proxy (`proxy.scope_denied`)."
     post:
       operationId: "post_api_v1_servers_id_proxy_path"
       tags: ["Server Proxy"]
@@ -3033,7 +3051,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          $ref: "#/components/responses/ProxyAdmissionDenied"
+        "503":
+          $ref: "#/components/responses/ProxyServerUnavailable"
+        "403":
+          description: "The method/path is not exposed through the relay proxy (`proxy.scope_denied`)."
     put:
       operationId: "put_api_v1_servers_id_proxy_path"
       tags: ["Server Proxy"]
@@ -3074,7 +3096,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          $ref: "#/components/responses/ProxyAdmissionDenied"
+        "503":
+          $ref: "#/components/responses/ProxyServerUnavailable"
+        "403":
+          description: "The method/path is not exposed through the relay proxy (`proxy.scope_denied`)."
   "/api/v1/servers/{id}/relay":
     post:
       operationId: "post_api_v1_servers_id_relay"
@@ -4594,6 +4620,65 @@ components:
           example:
             error: Too Many Requests
             code: rate_limited
+    ProxyAdmissionDenied:
+      description: >-
+        The hub refused admission on the relay proxy (M-HUB-16). The flat
+        `{error, code, message}` envelope carries one of three registered
+        discriminators: `rate_limited` — the per-surface proxy TokenBucket window
+        tripped centrally (Application::rateLimitResponse, Retry-After names the
+        window reset); `quota.exceeded` — the user's MONTHLY bandwidth cap is
+        spent, recovery is the next calendar period roll and is named twice:
+        `Retry-After` (seconds to the roll) and the absolute epoch `retry_at` in
+        the body, so a screen can render "resumes Nov 1"; `stream.limit` — the
+        per-user concurrent-stream cap is reached, and because the next free slot
+        is NOT derivable this shape deliberately carries no Retry-After/retry_at
+        (recovery time ships only where known). All three formerly rode
+        hand-rolled nested `{error: {code…}}` 503s; the flat envelope law and an
+        honest 429 are now the contract.
+      headers:
+        Retry-After:
+          description: >-
+            Seconds until the refusal can recover. Present for `rate_limited`
+            and `quota.exceeded`; absent for `stream.limit`. Never negative.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            quota_exceeded:
+              value:
+                error: User has reached their monthly download bandwidth quota.
+                code: quota.exceeded
+                message: User has reached their monthly download bandwidth quota.
+                retry_at: 1761955200
+            stream_limit:
+              value:
+                error: You have reached your maximum number of concurrent streams.
+                code: stream.limit
+                message: You have reached your maximum number of concurrent streams.
+            rate_limited:
+              value:
+                error: Too Many Requests
+                code: rate_limited
+    ProxyServerUnavailable:
+      description: >-
+        The relay path to the owning server is down — genuinely transient, so
+        503 stays honest here and retry-until-available is correct player
+        behaviour. `server.relay_unavailable`: the server is online
+        (heartbeating) but its reverse tunnel is not connected; `server.offline`:
+        the server is not heartbeating at all. Flat `{error, code, message}`
+        envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Server offline
+            code: server.offline
+            message: Server is offline.
   schemas:
     Error:
       type: object
@@ -4603,6 +4688,18 @@ components:
         error:
           type: string
           description: "Human-readable summary."
+        message:
+          type: string
+          description: >-
+            Legacy top-level mirror of the human text, carried by the refusals
+            written for pre-code readers (most controller frames; the bare
+            two-key `{error, code}` frame is also valid under this schema).
+        retry_at:
+          type: integer
+          description: >-
+            Absolute epoch second at which the refusal recovers, carried ONLY
+            where that instant is derivable — the relay-proxy monthly-bandwidth
+            `quota.exceeded` denial. Mirrors the `Retry-After` header.
         code:
           type: string
           description: >-

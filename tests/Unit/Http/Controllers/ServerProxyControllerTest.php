@@ -3238,10 +3238,11 @@ final class ServerProxyControllerTest extends TestCase
 
     /**
      * HB-3.4 G2/G4: a user over their monthly bandwidth quota is refused with
-     * 503 `quota.exceeded` BEFORE the request is forwarded — the quota gate runs
-     * for every admitted request (browse and stream alike).
+     * 429 `quota.exceeded` BEFORE the request is forwarded — the quota gate runs
+     * for every admitted request (browse and stream alike). M-HUB-16: the refusal
+     * rides the canonical flat envelope + the derivable period-roll recovery time.
      */
-    public function testOverQuotaUserReturns503QuotaExceededAndIsNotForwarded(): void
+    public function testOverQuotaUserReturns429QuotaExceededAndIsNotForwarded(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn([
@@ -3255,6 +3256,7 @@ final class ServerProxyControllerTest extends TestCase
             'allowed' => false,
             'reason' => 'User has reached their monthly download bandwidth quota.',
             'maxConcurrentStreams' => 0,
+            'retryAt' => strtotime(date('Y-m-01') . ' +1 month'),
         ]);
 
         $forwarded = false;
@@ -3268,19 +3270,25 @@ final class ServerProxyControllerTest extends TestCase
             ['id' => 'srv-1', 'path' => 'api/v1/libraries'],
         );
 
-        $this->assertSame(503, $response->statusCode);
+        $this->assertSame(429, $response->statusCode);
         $this->assertFalse($forwarded, 'An over-quota request must never reach the relay bridge.');
-        /** @var array{error?: array{code?: string, message?: string}} $body */
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
-        $this->assertSame('quota.exceeded', $body['error']['code'] ?? null);
+        $this->assertSame('quota.exceeded', $body['code'] ?? null, 'the discriminator rides the flat top-level code');
+        $this->assertIsString(
+            $body['error'] ?? null,
+            'error is the human text — never a nested object (openapi.yaml conventions)',
+        );
     }
 
     /**
      * HB-3.4 G3/G4: when a user is already streaming at their configured
-     * concurrent-stream maximum, a further stream is refused with 503
+     * concurrent-stream maximum, a further stream is refused with 429
      * `stream.limit` BEFORE any slot is occupied or anything forwarded.
+     * M-HUB-16: canonical flat envelope; NO Retry-After — the next free slot
+     * is not derivable, and the refusal never fabricates a recovery instant.
      */
-    public function testConcurrentStreamCapReachedReturns503StreamLimitAndIsNotForwarded(): void
+    public function testConcurrentStreamCapReachedReturns429StreamLimitAndIsNotForwarded(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn([
@@ -3296,6 +3304,7 @@ final class ServerProxyControllerTest extends TestCase
             'allowed' => true,
             'reason' => null,
             'maxConcurrentStreams' => 2,
+            'retryAt' => null,
         ]);
         $sessionManager->method('activeUserStreams')->willReturn(2);
         // The streaming branch must NOT issue a second row read: the separate
@@ -3314,13 +3323,19 @@ final class ServerProxyControllerTest extends TestCase
             $this->request('GET', 'user-1'),
             ['id' => 'srv-1', 'path' => 'hls/job-abc/seg-00007.ts'],
         );
-        // A refused stream returns a buffered 503 JSON error, not a producer.
+        // A refused stream returns a buffered 429 JSON error, not a producer.
         $this->assertNull($response->streamProducer, 'A capped stream must not return a streaming producer.');
-        $this->assertSame(503, $response->statusCode);
+        $this->assertSame(429, $response->statusCode);
         $this->assertFalse($forwarded, 'A capped stream must never reach the relay bridge.');
-        /** @var array{error?: array{code?: string, message?: string}} $body */
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
-        $this->assertSame('stream.limit', $body['error']['code'] ?? null);
+        $this->assertSame('stream.limit', $body['code'] ?? null, 'the discriminator rides the flat top-level code');
+        $this->assertIsString($body['error'] ?? null);
+        $this->assertArrayNotHasKey(
+            'Retry-After',
+            $response->headers,
+            'an underivable recovery instant must not be fabricated',
+        );
     }
 
     /**
@@ -6361,7 +6376,9 @@ final class ServerProxyControllerTest extends TestCase
      *
      * The gate is `RelaySessionManager::activeUserStreams()` measured against
      * the operator's `max_concurrent_streams`, enforced HUB-SIDE in
-     * {@see ServerProxyController::proxy()} → 503 `stream.limit`. It has to be
+     * {@see ServerProxyController::proxy()} → 429 `stream.limit` (M-HUB-16:
+     * canonical flat envelope; no Retry-After — the recovery instant is not
+     * derivable). It has to be
      * hub-side: `project_relay_auth_is_hub_side_only` records that phlix-server's
      * `AuthMiddleware` is a no-op for relayed requests, and the server's own
      * inline direct-play stream limit resolves a PROFILE from the server's user
@@ -6388,7 +6405,7 @@ final class ServerProxyControllerTest extends TestCase
         // ---- the REFUSAL ------------------------------------------------
         $denySessions = $this->createMock(RelaySessionManager::class);
         $denySessions->method('checkUserQuota')->willReturn(
-            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 2],
+            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 2, 'retryAt' => null],
         );
         $denySessions->method('activeUserStreams')->willReturn(2);
         $denySessions->expects(self::never())->method('beginUserStream');
@@ -6405,12 +6422,12 @@ final class ServerProxyControllerTest extends TestCase
         );
         $elapsedSeconds = (hrtime(true) - $startedAt) / 1e9;
 
-        $this->assertSame(503, $denied->statusCode);
-        /** @var array{error?: array{code?: string}} $body */
+        $this->assertSame(429, $denied->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($denied->body, true, 8, JSON_THROW_ON_ERROR);
         $this->assertSame(
             'stream.limit',
-            $body['error']['code'] ?? null,
+            $body['code'] ?? null,
             'the gate that refuses a relayed direct-play stream is the HUB-side concurrent-stream cap '
             . '(RelaySessionManager::activeUserStreams vs max_concurrent_streams), NOT anything in phlix-server',
         );
@@ -6464,8 +6481,9 @@ final class ServerProxyControllerTest extends TestCase
 
     /**
      * S247 AC — the bandwidth quota gate, likewise hub-side, likewise with a
-     * succeeding control. `RelaySessionManager::checkUserQuota()` → 503
-     * `quota.exceeded`, refused before the stream is admitted.
+     * succeeding control. `RelaySessionManager::checkUserQuota()` → 429
+     * `quota.exceeded` (M-HUB-16: canonical flat envelope + period-roll
+     * `Retry-After`/`retry_at`), refused before the stream is admitted.
      */
     public function testS247QuotaGateFiresOnTheRelayedByteStream(): void
     {
@@ -6481,6 +6499,7 @@ final class ServerProxyControllerTest extends TestCase
             'allowed' => false,
             'reason' => 'User has reached their monthly download bandwidth quota.',
             'maxConcurrentStreams' => 0,
+            'retryAt' => strtotime(date('Y-m-01') . ' +1 month'),
         ]);
         $overQuota->expects(self::never())->method('beginUserStream');
 
@@ -6494,16 +6513,16 @@ final class ServerProxyControllerTest extends TestCase
             ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
         );
 
-        $this->assertSame(503, $denied->statusCode);
-        /** @var array{error?: array{code?: string}} $body */
+        $this->assertSame(429, $denied->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($denied->body, true, 8, JSON_THROW_ON_ERROR);
-        $this->assertSame('quota.exceeded', $body['error']['code'] ?? null);
+        $this->assertSame('quota.exceeded', $body['code'] ?? null);
         $this->assertSame(0, $forwarded, 'an over-quota byte stream must never reach the relay bridge');
 
         // CONTROL: identical request, quota allowed → admitted and forwarded.
         $inQuota = $this->createMock(RelaySessionManager::class);
         $inQuota->method('checkUserQuota')->willReturn(
-            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0],
+            ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0, 'retryAt' => null],
         );
         $okForwarded = 0;
         $okBridge = null;

@@ -1047,14 +1047,11 @@ final class ServerProxyController
         // HB-3.4: check per-user bandwidth quota before forwarding.
         // Best-effort check: rejects users who are already over their monthly
         // upload cap. A refined per-request estimate may be added later.
+        // M-HUB-16: the refusal rides the canonical flat envelope at 429 with
+        // the derivable period-roll recovery time (see quotaRefusal()).
         $quotaCheck = $this->sessionManager->checkUserQuota($userId, 0);
         if (!$quotaCheck['allowed']) {
-            return (new Response())->status(503)->json([
-                'error' => [
-                    'code' => 'quota.exceeded',
-                    'message' => $quotaCheck['reason'] ?? 'Bandwidth quota exceeded.',
-                ],
-            ]);
+            return $this->quotaRefusal($quotaCheck);
         }
 
         $path = '/' . ltrim($params['path'] ?? '', '/');
@@ -1128,12 +1125,18 @@ final class ServerProxyController
                     'max_streams' => $maxStreams,
                 ]);
 
-                return (new Response())->status(503)->json([
-                    'error' => [
-                        'code' => 'stream.limit',
-                        'message' => 'You have reached your maximum number of concurrent streams.',
-                    ],
-                ]);
+                // M-HUB-16: canonical flat envelope at 429 — a concurrent-stream
+                // cap is a quota refusal, not hub unavailability (the server-side
+                // StreamLimitMiddleware precedes with 429 on the same concept).
+                // Its recovery instant is NOT derivable (a slot frees whenever a
+                // stream ends), so unlike the bandwidth refusal it carries no
+                // Retry-After/retry_at — recovery time ships only where known.
+                return (new Response())->error(
+                    429,
+                    'stream.limit',
+                    'You have reached your maximum number of concurrent streams.',
+                    ['message' => 'You have reached your maximum number of concurrent streams.'],
+                );
             }
 
             return $this->buildStreamingResponse(
@@ -1339,6 +1342,43 @@ final class ServerProxyController
         };
 
         return (new Response())->status(200)->stream($producer);
+    }
+
+    /**
+     * Build the canonical bandwidth-quota refusal (M-HUB-16).
+     *
+     * Monthly bandwidth exhaustion is a QUOTA, not hub unavailability, so it
+     * rides 429 (the server-side StreamLimitMiddleware precedes with 429 on the
+     * concurrent-stream sibling of this concept) inside the hub's flat
+     * `{error, code}` envelope — the shared `Response::error()` emit path that
+     * every client and the vendored SPA branch on, replacing the hand-rolled
+     * nested `['error' => ['code' => …]]` 503 that no documented reader could
+     * parse. Recovery IS derivable here: the calendar period rolls at the
+     * boundary `checkUserQuota()` returns as `retryAt`, and the refusal ships
+     * it in both shipped recovery shapes — the `Retry-After` header (seconds,
+     * never negative — the hub's Application::rateLimitResponse()/AuthController
+     * precedent) for transport-level retry policy, and the absolute `retry_at`
+     * epoch in the body for a screen that wants to render "resumes Nov 1".
+     * A verdict without a derivable instant (null) carries neither: recovery
+     * time is never fabricated.
+     *
+     * @param array{allowed: bool, reason: string|null, maxConcurrentStreams: int, retryAt: int|null} $quotaCheck
+     */
+    private function quotaRefusal(array $quotaCheck): Response
+    {
+        $reason = $quotaCheck['reason'] ?? 'Bandwidth quota exceeded.';
+        $retryAt = $quotaCheck['retryAt'];
+
+        $extra = ['message' => $reason];
+        if ($retryAt !== null) {
+            $extra['retry_at'] = $retryAt;
+        }
+
+        $response = (new Response())->error(429, 'quota.exceeded', $reason, $extra);
+
+        return $retryAt === null
+            ? $response
+            : $response->header('Retry-After', (string) max(0, $retryAt - time()));
     }
 
     /**
@@ -1766,11 +1806,14 @@ final class ServerProxyController
         // the direct-play byte stream is relayable now. Name the gates exactly:
         //  - CONCURRENT STREAMS are gated HUB-SIDE, by
         //    RelaySessionManager::activeUserStreams() against the operator's
-        //    `max_concurrent_streams`, in proxy() → 503 `stream.limit`. That
+        //    `max_concurrent_streams`, in proxy() → 429 `stream.limit`
+        //    (M-HUB-16: flat envelope; no Retry-After — the next free slot is
+        //    not derivable). That
         //    gate DOES fire on this path (pinned by a test, with a succeeding
         //    control beside it).
         //  - BANDWIDTH is gated hub-side too: RelaySessionManager::checkUserQuota()
-        //    → 503 `quota.exceeded`, plus the per-user TokenBucket rate cap the
+        //    → 429 `quota.exceeded` + `Retry-After`/`retry_at` at the period
+        //    roll (M-HUB-16), plus the per-user TokenBucket rate cap the
         //    ConnectionResponseSink paces the body against.
         //  - The PARENTAL RATING GATE FIRES FOR LINKED USERS. `Phlix\Media\RatingGate`
         //    lives in phlix-server and resolves a filter from that server's own

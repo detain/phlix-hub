@@ -6,6 +6,55 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-16: relay-proxy quota/stream refusals now emit the hub's own canonical flat envelope at an honest 429, and the bandwidth denial names its recovery instant as both `Retry-After` and body `retry_at` — 2026-10-29
+
+Review `hub__gameux` M1: the two most common "can't play" answers a living-room
+screen receives — monthly bandwidth spent, concurrent-stream cap reached — were
+the least machine-readable responses the hub emits: hand-rolled
+`status(503)->json({'error': {'code': …, 'message': …}})` bodies that nest the
+discriminator the openapi Conventions paragraph declares flat ("Errors are a
+flat JSON envelope: `{\"error\": \"<human text>\", \"code\": \"<machine code>\"}`"),
+ride a status whose retry-until-available semantics guarantees an infinite spin
+on a condition that cannot recover before the next calendar-month roll, and
+carry no recovery time at all. Shipped, zero new wire codes (contracts
+registry md5 `40c1da48` untouched — `quota.exceeded`, `stream.limit` are
+long-registered): `RelaySessionManager::checkUserQuota()` verdicts gained a
+`retryAt: int|null` arm — a set-cap denial carries the epoch of the first second
+of the next monthly period, derived from the same `DATE` period key the usage
+row is stored under (fail-loud `RuntimeException` if that derivation ever
+breaks); an allowed verdict carries null, never a fabricated wait. At the HTTP
+boundary both sites now ride `Response::error()` — the canonical emitter every
+sibling controller already uses: quota denial → **429** `quota.exceeded` with
+`Retry-After` (seconds, never negative, the shipped `Application::rateLimitResponse`
+header shape) plus absolute `retry_at` in the body so a screen can render
+"resumes Nov 1" instead of polling; stream cap → **429** `stream.limit` with
+NEITHER header nor field — the next free slot is not derivable and an honest
+absence is pinned as loudly as the positive (recovery time ships only where
+known). 503 stays where it is honest: the census siblings `server.relay_unavailable`
+and `server.offline` are genuine availability refusals and were already
+canonical-flat — untouched, now pinned beside the changed shapes. The
+`quota.exceeded` 409s on the claim/share/invite REST family were already
+compliant (`QuotaExceededWireTest`) and untouched. openapi.yaml: the six
+`/api/v1/servers/{id}/proxy/{path}` operations documented only 200/401/404/429
+(rate-limit)/502 — the 429 now refs a new `ProxyAdmissionDenied` response (all
+three discriminators, examples, and the conditional `Retry-After` header law),
+503 gains `ProxyServerUnavailable` (both availability codes), 403
+`proxy.scope_denied` gets documented on the five operations the `head` op
+already carried it on, `Error` schema documents the optional legacy `message`
+mirror and `retry_at`, and the Conventions law paragraph names the extras.
+Tests: the four nested-shape pins flipped to the new law (plus the two S247
+byte-stream twins), each proven red against the pre-fix tree;
+`ServerProxyAdmissionEnvelopeTest` (4) drives the real controller to the real
+status/headers/body triplet; `QuotaRefusalHttpEnvelopeIntegrationTest` (3,
+real MySQL against the migration-built `relay_user_quotas` table) checks the
+header and body name the same roll the stored period gives, computed
+independently via `DateTimeImmutable`. Production: 2 files; unit tests: 2
+modified + 1 new file; integration tests: 1 new file. The parallel duration
+cache carries a provisional hand entry for the new Unit file — the host venue
+cannot bless serially (two swoole/php-uv hook-probe files segfault on this
+box's PHP 8.3.6 at the identical test on pristine HEAD; CI builds php-uv and
+runs them green); the cache regenerates from CI-adjacent conditions on the
+next blessed run.
 ### Fixed — M-HUB-15: heartbeat `server_libraries` is now size-capped and self-pruning — reported sets are bounded (≤500 entries, fields within the CHAR(36)/VARCHAR(255) widths, rejected 400 at the HTTP boundary) and every accepted set prunes the rows the server no longer reports, ending the permanent per-enrolled-server growth a rotating or hostile server could force — 2026-10-29
 
 Review `hub__exploiter` M4: `libraries[]` rode the shared `HeartbeatDto` through with

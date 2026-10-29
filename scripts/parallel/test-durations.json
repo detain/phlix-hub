@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "5731fc79 serial junit",
+    "generatedFrom": "5731fc79 serial junit + hand entry for M-HUB-16 new file (provisional)",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.017,
         "tests/Health/HealthControllerTest.php": 0.014,
@@ -269,6 +269,7 @@
         "tests/Unit/SyncPlay/SyncPlayRelayCanonicalDialectTest.php": 0.047,
         "tests/Unit/SyncPlay/SyncPlayRelayFrameGuardTest.php": 0.004,
         "tests/Unit/SyncPlay/SyncPlayRelayWorkerTest.php": 0.022,
-        "tests/VersionTest.php": 0.003
+        "tests/VersionTest.php": 0.003,
+        "tests/Unit/Http/Controllers/ServerProxyAdmissionEnvelopeTest.php": 0.4
     }
 }

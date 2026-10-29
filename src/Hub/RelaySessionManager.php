@@ -13,6 +13,7 @@ namespace Phlix\Hub\Hub;
 
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
+use RuntimeException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
@@ -619,10 +620,18 @@ class RelaySessionManager
      * allowed and the concurrent cap is 0 (unlimited). A refined check accounting
      * for the estimated bytes of an in-flight request may be added later.
      *
+     * On DENIAL `retryAt` carries the epoch second the monthly period rolls
+     * ({@see self::quotaPeriodEnd()}) — the machine-readable recovery time the
+     * relay-proxy refusal rides as a `Retry-After` header + `retry_at` envelope
+     * field (M-HUB-16) so a TV can render "resumes Nov 1" instead of spinning on
+     * the verdict. On ALLOW (including the no-row best-effort pass) it is null:
+     * there is nothing to wait for, and the refusal shape never fabricates a
+     * recovery instant it does not know.
+     *
      * @param string $userId          Hub user UUID.
      * @param int    $additionalBytesOut Ignored in the simplified implementation.
      *
-     * @return array{allowed: bool, reason: string|null, maxConcurrentStreams: int}
+     * @return array{allowed: bool, reason: string|null, maxConcurrentStreams: int, retryAt: int|null}
      */
     public function checkUserQuota(string $userId, int $additionalBytesOut = 0): array
     {
@@ -642,7 +651,7 @@ class RelaySessionManager
 
         // No record means no quota set — allow, with the concurrent cap unlimited.
         if ($rows === []) {
-            return ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0];
+            return ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => 0, 'retryAt' => null];
         }
 
         /** @var array<string, mixed> $row */
@@ -664,6 +673,7 @@ class RelaySessionManager
                 'allowed' => false,
                 'reason' => 'User has reached their monthly download bandwidth quota.',
                 'maxConcurrentStreams' => $maxConcurrentStreams,
+                'retryAt' => $this->quotaPeriodEnd($periodStart),
             ];
         }
 
@@ -673,10 +683,16 @@ class RelaySessionManager
                 'allowed' => false,
                 'reason' => 'User has reached their monthly upload bandwidth quota.',
                 'maxConcurrentStreams' => $maxConcurrentStreams,
+                'retryAt' => $this->quotaPeriodEnd($periodStart),
             ];
         }
 
-        return ['allowed' => true, 'reason' => null, 'maxConcurrentStreams' => $maxConcurrentStreams];
+        return [
+            'allowed' => true,
+            'reason' => null,
+            'maxConcurrentStreams' => $maxConcurrentStreams,
+            'retryAt' => null,
+        ];
     }
 
     /**
@@ -856,5 +872,28 @@ class RelaySessionManager
     private function currentPeriodStart(): string
     {
         return date('Y-m-01');
+    }
+
+    /**
+     * The epoch second at which the monthly quota period that started on
+     * `$periodStart` rolls over — the instant a bandwidth-quota denial recovers.
+     *
+     * `relay_user_quotas` rows are keyed by the first day of a calendar month
+     * in the host PHP clock ({@see self::currentPeriodStart()}); the row for
+     * the NEW period does not exist until usage lands after the roll and
+     * {@see self::checkUserQuota()}'s no-row pass then allows, so recovery is
+     * exactly the first second of the next month in that same clock. The
+     * `Y-m-01` anchor makes `+1 month` overflow-free (every month has a day 1).
+     */
+    private function quotaPeriodEnd(string $periodStart): int
+    {
+        $epoch = strtotime($periodStart . ' +1 month');
+        if ($epoch === false) {
+            // Fail loud: a corrupt period key is a bug, never a runtime state
+            // to reason around.
+            throw new RuntimeException('Malformed quota period key: ' . $periodStart);
+        }
+
+        return $epoch;
     }
 }
