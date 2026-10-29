@@ -88,6 +88,20 @@ final class ServerController
             ]);
         }
 
+        // M-HUB-15: the shared DTO guarantees types, not sizes. The hub owns
+        // the size caps (they mirror server_libraries' column widths — see
+        // HeartbeatHandler::libraryListViolation). Oversized lists are rejected
+        // here with the SAME 400 envelope the parse-failure arm above uses: no
+        // new wire codes, nothing oversized ever reaches the write leg, and no
+        // rate-limit bucket or DB write is spent on a doomed beat.
+        $libraryViolation = HeartbeatHandler::libraryListViolation($heartbeat->libraries);
+        if ($libraryViolation !== null) {
+            return (new Response())->status(400)->json([
+                'error' => 'Bad Request',
+                'message' => $libraryViolation,
+            ]);
+        }
+
         $token = $request->bearerToken ?? '';
 
         try {

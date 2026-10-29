@@ -6,6 +6,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-15: heartbeat `server_libraries` is now size-capped and self-pruning — reported sets are bounded (≤500 entries, fields within the CHAR(36)/VARCHAR(255) widths, rejected 400 at the HTTP boundary) and every accepted set prunes the rows the server no longer reports, ending the permanent per-enrolled-server growth a rotating or hostile server could force — 2026-10-29
+
+Review `hub__exploiter` M4: `libraries[]` rode the shared `HeartbeatDto` through with
+type checks only (no count cap, no length caps), and `updateServerLibraries` upserted
+without ever deleting, so an enrolled server emitting fresh `library_id`s each beat
+accumulated `server_libraries` rows for its lifetime and oversized field values reached
+the DB blindly (payload-hash skip only defeated resends of the identical set). Shipped
+at the hub's own boundary, zero new wire codes: `HeartbeatHandler` now owns the single
+source of truth — `MAX_LIBRARY_COUNT` (500, a generous headroom over any real server)
+and `MAX_LIBRARY_ID_CHARS`/`MAX_LIBRARY_NAME_CHARS` pinned to the migration-031 column
+widths (CHAR(36)/VARCHAR(255), counted as utf8mb4 characters via `mb_strlen`, since the
+columns measure characters not bytes) — validated by `libraryListViolation()` which
+`ServerController::heartbeat` calls right after DTO parsing and answers with the SAME
+400 `{'error':'Bad Request','message':…}` envelope the strict-parse failures already
+use (repo precedent for oversized payloads: reject at the boundary, before any
+rate-limit bucket or DB write is spent). `updateServerLibraries` gained the missing
+delete leg: in the same heartbeat transaction, after upserting the accepted set, one
+`DELETE … WHERE server_id = :sid AND library_id NOT IN (<reported>)` (generated named
+placeholders, the `RelaySessionManager` precedent) prunes every stale row, so the cache
+mirrors the last accepted set and per-server storage is hard-bounded even under id
+rotation. Honest edges, documented in-product: a hash-equal beat still performs zero
+library-table writes (upserts, prune and hash-row update all skipped), and an empty
+reported list never prunes — the shared DTO cannot distinguish "no libraries" from
+"key omitted", so erasing on emptiness would wipe caches on every library-less beat;
+full clearance remains server deletion (FK `ON DELETE CASCADE`). The JWT identity law
+at `HeartbeatHandler:72` is untouched. Tests: 11 new (boundary 400s for each cap,
+at-cap acceptance, char-vs-byte law, schema-pin on the constants, prune fires with the
+exact keep-set, hash-equal zero-write sweep, direct `libraryListViolation` edge pins);
+mutation-proven — stripping the controller guard reddens the four cap tests, stubbing
+the DELETE reddens the prune test.
+
 ### Fixed — M-HUB-11 r2: the managed-install `:8804` browser sentence corrected to shipped truth — the `/syncplay/` HAProxy route is real but no shipped browser client dials it; managed installs need `ufw allow 8804/tcp` for the plain-ws form, and the same-origin TLS browser path is a disclosed seam-wiring rider — 2026-10-29
 
 Review `hub__devops` M-HUB-11 r1 (MAJOR-1): the entry below asserts that under the

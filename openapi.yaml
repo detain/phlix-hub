@@ -2760,7 +2760,11 @@ paths:
       summary: "Server heartbeat"
       description: |-
         Periodic liveness + inventory push from an enrolled server. Also feeds `server_libraries`, which
-        `GET /api/v1/me/libraries` reads.
+        `GET /api/v1/me/libraries` reads. The `libraries` list is bounded (at most 500 entries;
+        `library_id` ≤ 36 and `library_name` ≤ 255 utf8mb4 characters — the stored column widths): an
+        oversized list is rejected with 400 and nothing is written. Each accepted (changed) list replaces
+        the server's cached rows, pruning libraries the server no longer reports; an omitted or empty
+        list leaves the cache unchanged.
       x-phlix-middleware: [EnrollmentJwtMiddleware, HubProtocolMiddleware]
       parameters:
         - name: "id"

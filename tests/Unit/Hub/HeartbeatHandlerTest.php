@@ -662,4 +662,191 @@ final class HeartbeatHandlerTest extends TestCase
 
         self::assertSame(0, $result);
     }
+
+    // ---- M-HUB-15: server_libraries size caps + stale-row pruning ----
+
+    /**
+     * When a changed library set is accepted, stale cached rows must be pruned
+     * in the SAME transaction: the DELETE removes every server_libraries row
+     * whose library_id is NOT in the reported set. Without this an enrolled
+     * server (hostile or merely rotating ids) grows its rows forever.
+     */
+    public function testAcceptedLibrarySetPrunesStaleRowsInSameFlow(): void
+    {
+        $serverId = 'server-prune-test';
+
+        /** @var list<string> $statements */
+        $statements = [];
+        /** @var array<string, array<string, mixed>> $pruneParams */
+        $pruneParams = [];
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use ($serverId, &$statements, &$pruneParams): mixed {
+                $statements[] = $sql;
+                if (str_contains($sql, 'FOR UPDATE')) {
+                    return [['id' => $serverId]];
+                }
+                if (str_contains($sql, 'SELECT hash FROM server_library_hashes')) {
+                    // Differing hash → the set is accepted and the write leg runs.
+                    return [['hash' => '0000000000000000000000000000000000000000000000000000000000000000']];
+                }
+                if (str_contains($sql, 'DELETE FROM server_libraries')) {
+                    self::assertIsArray($params);
+                    $pruneParams = $params;
+                }
+                return [];
+            },
+        );
+
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
+        $logger = $this->createMock(StructuredLogger::class);
+        $handler = $this->createHandler($db, $jwtService, $logger);
+
+        $handler->handle($serverId, $jwtService->createEnrollmentJwt($serverId), new HeartbeatDto(
+            serverId: $serverId,
+            version: '0.11.0',
+            timestamp: time(),
+            uptimeSeconds: 100,
+            activeSessions: 0,
+            activeTranscodes: 0,
+            hostnameCandidates: [],
+            libraries: [
+                LibraryRef::fromPayload(['library_id' => 'lib-1', 'library_name' => 'Movies']),
+                LibraryRef::fromPayload(['library_id' => 'lib-2', 'library_name' => 'TV']),
+            ],
+        ));
+
+        $deleteSql = null;
+        foreach ($statements as $sql) {
+            if (str_contains($sql, 'DELETE FROM server_libraries')) {
+                $deleteSql = $sql;
+            }
+        }
+        self::assertIsString($deleteSql, 'Accepted library sets must prune stale server_libraries rows.');
+        self::assertStringContainsString('NOT IN', $deleteSql);
+        // Generated named placeholders, one per reported library (RelaySessionManager precedent).
+        self::assertSame(2, substr_count($deleteSql, ':keep_library_id_'));
+
+        // The prune is scoped to this server and keeps exactly the reported ids.
+        self::assertSame($serverId, $pruneParams['server_id'] ?? null);
+        $keepIds = [];
+        foreach ($pruneParams as $key => $value) {
+            if (str_starts_with((string) $key, 'keep_library_id_')) {
+                $keepIds[] = $value;
+            }
+        }
+        sort($keepIds);
+        self::assertSame(['lib-1', 'lib-2'], $keepIds);
+    }
+
+    /**
+     * The hash-equal skip must stay a FULL write skip: no upserts, no prune
+     * DELETE, no hash-row update. A beat identical to the accepted one changes
+     * nothing to prune.
+     */
+    public function testHashEqualBeatWritesNothingToLibraryTables(): void
+    {
+        $serverId = 'server-hash-skip-no-writes';
+
+        /** @var list<string> $libraryTableStatements */
+        $libraryTableStatements = [];
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use ($serverId, &$libraryTableStatements): mixed {
+                if (str_contains($sql, 'FOR UPDATE')) {
+                    return [['id' => $serverId]];
+                }
+                if (str_contains($sql, 'SELECT hash FROM server_library_hashes')) {
+                    // Same hash the handler computes for [lib-1(Movies), lib-2(TV)].
+                    return [['hash' => '198d10dca935fcae916a75f62b275ac247c3a8a582fa62422b43ab2629d764e6']];
+                }
+                if (str_contains($sql, 'server_libraries') || str_contains($sql, 'server_library_hashes')) {
+                    $libraryTableStatements[] = $sql;
+                }
+                return [];
+            },
+        );
+
+        $keyManager = new Ed25519KeyManager($this->tmpDir . '/key.pem');
+        $jwtService = new EnrollmentJwtService($keyManager, 'https://hub.example.com');
+        $logger = $this->createMock(StructuredLogger::class);
+        $handler = $this->createHandler($db, $jwtService, $logger);
+
+        $handler->handle($serverId, $jwtService->createEnrollmentJwt($serverId), new HeartbeatDto(
+            serverId: $serverId,
+            version: '0.11.0',
+            timestamp: time(),
+            uptimeSeconds: 100,
+            activeSessions: 0,
+            activeTranscodes: 0,
+            hostnameCandidates: [],
+            libraries: [
+                LibraryRef::fromPayload(['library_id' => 'lib-1', 'library_name' => 'Movies']),
+                LibraryRef::fromPayload(['library_id' => 'lib-2', 'library_name' => 'TV']),
+            ],
+        ));
+
+        // The ONLY tolerated statement is the hash SELECT above (it matches
+        // 'server_library_hashes'); every other library-table touch is a write.
+        foreach ($libraryTableStatements as $sql) {
+            self::assertStringStartsWith(
+                'SELECT hash FROM server_library_hashes',
+                $sql,
+                'Hash-equal beats must perform zero library writes (upsert, prune DELETE, or hash update).',
+            );
+        }
+    }
+
+    public function testLibraryListViolationAcceptsListsAtEveryLimit(): void
+    {
+        $atCap = [];
+        for ($i = 0; $i < HeartbeatHandler::MAX_LIBRARY_COUNT; $i++) {
+            $atCap[] = LibraryRef::fromPayload([
+                'library_id' => str_repeat('i', 36),
+                'library_name' => str_repeat('n', 255),
+            ]);
+        }
+
+        self::assertNull(HeartbeatHandler::libraryListViolation([]));
+        self::assertNull(HeartbeatHandler::libraryListViolation($atCap));
+    }
+
+    public function testLibraryListViolationRejectsOverCount(): void
+    {
+        $over = [];
+        for ($i = 0; $i <= HeartbeatHandler::MAX_LIBRARY_COUNT; $i++) {
+            $over[] = LibraryRef::fromPayload(['library_id' => 'lib-' . $i, 'library_name' => 'L']);
+        }
+
+        $violation = HeartbeatHandler::libraryListViolation($over);
+
+        self::assertIsString($violation);
+        self::assertStringContainsString('500 entries', $violation);
+        self::assertStringContainsString((string) count($over), $violation);
+    }
+
+    public function testLibraryListViolationRejectsOversizedFieldsByCharacterCount(): void
+    {
+        $overId = HeartbeatHandler::libraryListViolation([
+            LibraryRef::fromPayload(['library_id' => str_repeat('i', 37), 'library_name' => 'Movies']),
+        ]);
+        self::assertIsString($overId);
+        self::assertStringContainsString('library_id', $overId);
+        self::assertStringContainsString('36', $overId);
+
+        // 255 CJK chars = 765 bytes but 255 utf8mb4 characters → legal.
+        self::assertNull(HeartbeatHandler::libraryListViolation([
+            LibraryRef::fromPayload(['library_id' => 'lib-1', 'library_name' => str_repeat('あ', 255)]),
+        ]));
+
+        $overName = HeartbeatHandler::libraryListViolation([
+            LibraryRef::fromPayload(['library_id' => 'lib-1', 'library_name' => str_repeat('あ', 256)]),
+        ]);
+        self::assertIsString($overName);
+        self::assertStringContainsString('library_name', $overName);
+        self::assertStringContainsString('256', $overName);
+    }
 }

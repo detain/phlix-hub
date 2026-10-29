@@ -231,4 +231,154 @@ final class ServerControllerTest extends TestCase
         self::assertSame(404, $response->statusCode);
         self::assertStringContainsString('SERVER_NOT_FOUND', $response->body);
     }
+
+    // ---- M-HUB-15: heartbeat library-list size caps at the HTTP boundary ----
+
+    /**
+     * Minimal valid heartbeat body; callers override `libraries`.
+     *
+     * @param list<array{library_id: string, library_name: string}> $libraries
+     * @return array<string, mixed>
+     */
+    private function heartbeatBodyWithLibraries(array $libraries): array
+    {
+        return [
+            'serverId' => 'srv-1',
+            'version' => '1.0.0',
+            'timestamp' => time(),
+            'uptimeSeconds' => 100,
+            'activeSessions' => 0,
+            'activeTranscodes' => 0,
+            'libraries' => $libraries,
+        ];
+    }
+
+    /**
+     * @param list<array{library_id: string, library_name: string}> $libraries
+     */
+    private function postHeartbeat(HeartbeatHandler $heartbeat, array $libraries): \Phlix\Hub\Http\Response
+    {
+        $controller = new ServerController(
+            $heartbeat,
+            $this->createMock(ServerInfoHandler::class),
+            $this->createMock(DeregisterHandler::class),
+            $this->createMock(RenewHandler::class),
+        );
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->path = '/api/v1/servers/srv-1/heartbeat';
+        $request->headers['Accept-Phlix-Protocol'] = 'v1';
+        $request->serverId = 'srv-1';
+        $request->bearerToken = 'enrollment-jwt';
+        $request->body = $this->heartbeatBodyWithLibraries($libraries);
+
+        return $controller->heartbeat($request, ['id' => 'srv-1']);
+    }
+
+    /**
+     * M-HUB-15 pin: the boundary caps are schema-honest and generous. 36/255 are
+     * the exact character widths of server_libraries.library_id CHAR(36) /
+     * library_name VARCHAR(255) (migration 031); the count cap is 500 (a ~5x
+     * headroom over any realistic single-server library count, documented).
+     */
+    public function testHeartbeatLibraryCapConstantsMatchSchema(): void
+    {
+        self::assertSame(500, HeartbeatHandler::MAX_LIBRARY_COUNT);
+        self::assertSame(36, HeartbeatHandler::MAX_LIBRARY_ID_CHARS);
+        self::assertSame(255, HeartbeatHandler::MAX_LIBRARY_NAME_CHARS);
+    }
+
+    public function testHeartbeatRejectsLibraryListOverCountCapWith400(): void
+    {
+        $libraries = [];
+        for ($i = 0; $i <= HeartbeatHandler::MAX_LIBRARY_COUNT; $i++) {
+            $libraries[] = ['library_id' => 'lib-' . $i, 'library_name' => 'Lib ' . $i];
+        }
+
+        $heartbeat = $this->createMock(HeartbeatHandler::class);
+        $heartbeat->expects(self::never())->method('handle');
+
+        $response = $this->postHeartbeat($heartbeat, $libraries);
+
+        self::assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($response->body, true);
+        // Envelope byte-shape follows the existing strict-DTO parse-failure arm:
+        // 'error' => 'Bad Request' + descriptive 'message'. No new wire codes.
+        self::assertSame('Bad Request', $decoded['error'] ?? null);
+        self::assertIsString($decoded['message'] ?? null);
+        self::assertStringContainsString('500 entries', (string) $decoded['message']);
+    }
+
+    public function testHeartbeatAcceptsLibraryListAtCountCap(): void
+    {
+        $libraries = [];
+        for ($i = 0; $i < HeartbeatHandler::MAX_LIBRARY_COUNT; $i++) {
+            $libraries[] = ['library_id' => 'lib-' . $i, 'library_name' => 'Lib ' . $i];
+        }
+
+        $heartbeat = $this->createMock(HeartbeatHandler::class);
+        $heartbeat->expects(self::once())->method('handle');
+
+        $response = $this->postHeartbeat($heartbeat, $libraries);
+
+        self::assertSame(200, $response->statusCode);
+    }
+
+    public function testHeartbeatRejectsOversizedLibraryNameWith400(): void
+    {
+        $heartbeat = $this->createMock(HeartbeatHandler::class);
+        $heartbeat->expects(self::never())->method('handle');
+
+        $response = $this->postHeartbeat($heartbeat, [
+            ['library_id' => 'lib-1', 'library_name' => str_repeat('x', 256)],
+        ]);
+
+        self::assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($response->body, true);
+        self::assertSame('Bad Request', $decoded['error'] ?? null);
+        $message = $decoded['message'] ?? null;
+        self::assertIsString($message);
+        self::assertStringContainsString('library_name', $message);
+        self::assertStringContainsString('255', $message);
+    }
+
+    public function testHeartbeatRejectsOversizedLibraryIdWith400(): void
+    {
+        $heartbeat = $this->createMock(HeartbeatHandler::class);
+        $heartbeat->expects(self::never())->method('handle');
+
+        $response = $this->postHeartbeat($heartbeat, [
+            ['library_id' => str_repeat('i', 37), 'library_name' => 'Movies'],
+        ]);
+
+        self::assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($response->body, true);
+        $message = $decoded['message'] ?? null;
+        self::assertIsString($message);
+        self::assertStringContainsString('library_id', $message);
+    }
+
+    /**
+     * The caps are MySQL-character counts (utf8mb4 CHAR/VARCHAR measure chars),
+     * not byte counts: a 255-cJK-char name is 765 bytes and stays legal;
+     * 256 chars crosses the line.
+     */
+    public function testHeartbeatLibraryNameCapCountsCharactersNotBytes(): void
+    {
+        $atLimit = $this->createMock(HeartbeatHandler::class);
+        $atLimit->expects(self::once())->method('handle');
+        self::assertSame(200, $this->postHeartbeat($atLimit, [
+            ['library_id' => 'lib-1', 'library_name' => str_repeat('あ', 255)],
+        ])->statusCode);
+
+        $overLimit = $this->createMock(HeartbeatHandler::class);
+        $overLimit->expects(self::never())->method('handle');
+        self::assertSame(400, $this->postHeartbeat($overLimit, [
+            ['library_id' => 'lib-1', 'library_name' => str_repeat('あ', 256)],
+        ])->statusCode);
+    }
 }

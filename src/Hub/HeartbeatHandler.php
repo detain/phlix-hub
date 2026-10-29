@@ -29,11 +29,39 @@ use Workerman\MySQL\Connection;
  *   2. Finds the server by serverId.
  *   3. Updates servers.last_seen_at, status='online', version,
  *      hostname_candidates_json, heartbeat_interval.
+ *   4. Syncs the cached server_libraries set (bounded by the
+ *      MAX_LIBRARY_* caps enforced at the HTTP boundary; stale rows
+ *      pruned whenever an accepted set changes).
  *
  * @package Phlix\Hub\Hub
  */
 class HeartbeatHandler
 {
+    /**
+     * M-HUB-15: hard cap on how many libraries one heartbeat may report.
+     *
+     * A real server exposes a handful of libraries; 500 is a ~5x headroom over
+     * any realistic worst case while keeping the accepted set a BOUNDED amount
+     * of upsert work per beat. Together with the stale-row prune in
+     * {@see self::updateServerLibraries()} this makes server_libraries growth
+     * per enrolled server finite: rows ≤ MAX_LIBRARY_COUNT at all times.
+     */
+    public const MAX_LIBRARY_COUNT = 500;
+
+    /**
+     * M-HUB-15: maximum CHARACTER count of a reported library_id, pinned to the
+     * server_libraries.library_id column width CHAR(36) (migration 031).
+     * utf8mb4 columns measure in characters, so the check counts characters
+     * (mb_strlen), not bytes.
+     */
+    public const MAX_LIBRARY_ID_CHARS = 36;
+
+    /**
+     * M-HUB-15: maximum CHARACTER count of a reported library_name, pinned to
+     * the server_libraries.library_name column width VARCHAR(255) (migration 031).
+     */
+    public const MAX_LIBRARY_NAME_CHARS = 255;
+
     /**
      * @param Connection           $db         MySQL connection.
      * @param EnrollmentJwtService $jwtService JWT validation service.
@@ -46,6 +74,56 @@ class HeartbeatHandler
         private readonly StructuredLogger $logger,
         private readonly RateLimiterInterface $rateLimiter,
     ) {
+    }
+
+    /**
+     * Boundary check for the heartbeat libraries list (M-HUB-15).
+     *
+     * The shared HeartbeatDto guarantees TYPES only; the hub owns the SIZE
+     * limits because they are properties of its own storage schema. The single
+     * HTTP boundary (ServerController::heartbeat) calls this after DTO parsing
+     * and answers 400 Bad Request on a violation, so nothing oversized ever
+     * reaches updateServerLibraries() and the write leg may trust its input.
+     *
+     * @param list<LibraryRef> $libraries
+     *
+     * @return string|null A descriptive violation message, or null when the
+     *                     list is within every limit.
+     */
+    public static function libraryListViolation(array $libraries): ?string
+    {
+        if (count($libraries) > self::MAX_LIBRARY_COUNT) {
+            return sprintf(
+                'Heartbeat "libraries" exceeds the maximum of %d entries (got %d).',
+                self::MAX_LIBRARY_COUNT,
+                count($libraries),
+            );
+        }
+
+        foreach ($libraries as $index => $ref) {
+            $idChars = mb_strlen($ref->libraryId, 'UTF-8');
+            if ($idChars > self::MAX_LIBRARY_ID_CHARS) {
+                return sprintf(
+                    'Heartbeat library at index %d: "library_id" exceeds the maximum length of %d characters (got %d).',
+                    $index,
+                    self::MAX_LIBRARY_ID_CHARS,
+                    $idChars,
+                );
+            }
+
+            $nameChars = mb_strlen($ref->libraryName, 'UTF-8');
+            if ($nameChars > self::MAX_LIBRARY_NAME_CHARS) {
+                return sprintf(
+                    'Heartbeat library at index %d: "library_name" '
+                    . 'exceeds the maximum length of %d characters (got %d).',
+                    $index,
+                    self::MAX_LIBRARY_NAME_CHARS,
+                    $nameChars,
+                );
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -166,14 +244,34 @@ class HeartbeatHandler
     }
 
     /**
-     * Update the cached libraries for a server.
+     * Update the cached libraries for a server — upsert the reported set AND
+     * prune rows the server no longer reports (M-HUB-15).
      *
      * Computes a SHA-256 hash of the library list (sorted by libraryId) and
      * compares it against the last stored hash. When the hash matches the
-     * previous heartbeat's hash, all individual library upserts are skipped.
+     * previous heartbeat's hash, ALL library-table writes are skipped (no
+     * upserts, no prune, no hash-row update) — the cached set is provably
+     * already exactly what was reported.
+     *
+     * When the hash differs, the accepted set is written in the caller's
+     * transaction: every reported library is upserted, then a single DELETE
+     * prunes every server_libraries row whose library_id was NOT reported.
+     * The cache therefore always mirrors the last accepted set, and per-server
+     * growth is hard-bounded: the HTTP boundary caps the reported list via
+     * {@see self::libraryListViolation()} (count ≤ MAX_LIBRARY_COUNT, fields
+     * within the column widths), so a hostile server rotating unique ids each
+     * beat churns a bounded window instead of accumulating rows forever.
+     *
+     * Honest edge of the story: an EMPTY reported list never reaches here (the
+     * caller skips it), because the shared DTO cannot distinguish "server
+     * reported no libraries" from "server omitted the key" — treating omission
+     * as an erasure would wipe caches on every library-less beat. A server that
+     * genuinely drops all its libraries keeps the last cached rows until the
+     * next non-empty report or until server deletion (FK ON DELETE CASCADE).
      *
      * @param string          $serverId  Server UUID.
-     * @param list<LibraryRef> $libraries Library list.
+     * @param list<LibraryRef> $libraries Library list (non-empty; pre-checked
+     *                                    against the size caps at the boundary).
      */
     private function updateServerLibraries(string $serverId, array $libraries): void
     {
@@ -208,6 +306,26 @@ class HeartbeatHandler
                 ],
             );
         }
+
+        // M-HUB-15: prune stale rows — every cached library this server did NOT
+        // report is removed, in the same transaction as the upserts above.
+        // Generated named placeholders (one per reported id) follow the
+        // RelaySessionManager NOT IN precedent; the list is guaranteed
+        // non-empty by both the caller and the boundary caps.
+        /** @var array<string, string> $pruneParams */
+        $pruneParams = ['server_id' => $serverId];
+        $keepPlaceholders = [];
+        foreach ($libraries as $index => $ref) {
+            $key = 'keep_library_id_' . $index;
+            $keepPlaceholders[] = ':' . $key;
+            $pruneParams[$key] = $ref->libraryId;
+        }
+        $this->db->query(
+            'DELETE FROM server_libraries
+             WHERE server_id = :server_id
+               AND library_id NOT IN (' . implode(', ', $keepPlaceholders) . ')',
+            $pruneParams,
+        );
 
         // Persist the new hash so the next heartbeat can skip upserts when unchanged.
         $this->db->query(
