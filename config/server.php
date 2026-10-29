@@ -323,6 +323,19 @@ return [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_ALEXA_MAX', 60),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_ALEXA_WINDOW', 60),
             ],
+            // Server-claim pairing surfaces (review hub__exploiter M1): 60
+            // requests / 60s PER BUCKET, keyed `server_claims:{new,status,claim}:<trusted ip>`
+            // in ServerClaimController. PER-WORKER (soft-global) — the alexa
+            // posture, deliberately NOT the DB-backed login posture: the status
+            // poll is UUID-bearer (2^122, unguessable; the bucket caps flood
+            // cost only), the claim POST is authenticated (grinding ~2^40 codes
+            // against a 600 s TTL at <=60xHUB_WORKERS/min is centuries), and a
+            // DB-backed counter would add a row-write per 2 s poll to the very
+            // hot path this endpoint serves. Full reasoning: RateLimitProfiles::SERVER_CLAIMS.
+            'server_claims' => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_SERVER_CLAIMS_MAX', 60),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_SERVER_CLAIMS_WINDOW', 60),
+            ],
             // Account signup (auth audit fix 3): 3 attempts / hour, keyed
             // `auth:signup:<ip>` in AuthManager. Shared DB-backed (DbRateLimiter,
             // same store as login) so the budget is global across HTTP workers —

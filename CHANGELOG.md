@@ -6,6 +6,49 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-12: the server-claim pairing endpoints get a rate budget, the per-guess audit-DB write is gone, and the guard is byte-invisible on every covered response — 2026-10-29
+
+Review `hub__exploiter` M1: `POST /api/v1/server-claims/new`, `GET
+/server-claims/{id}` and `POST /server-claims/claim` had NO limiter while the
+claim path discriminated unknown/expired/used codes AND every refused guess
+persisted a permanent `audit_logs` row — an authenticated caller could grind
+the pairing space and make the DB pay for each miss.
+Shipped: a `SERVER_CLAIMS` rate profile (60 req/60 s PER ACTION per IP —
+`server_claims:{new,status,claim}:<ip>`; per-worker in-memory limiter, the
+Alexa posture, since pairing is low-volume; env overrides
+`PHLIX_HUB_RATELIMIT_SERVER_CLAIMS_{MAX,WINDOW}`); `ServerClaimController::
+assertPairingBudget()` runs after the free guard-shaped 400s and before any DB
+work, throwing `RateLimitException` OUTSIDE the handlers'
+`InvalidArgumentException` catches so the central `Application::
+rateLimitResponse()` 429 envelope maps it — zero new wire codes.
+De-amplification: the four refusal arms of `ClaimRequestHandler` now write a
+file-log `warning` (event `auth_failure`, SCREAMING reason, fingerprint — no
+plaintext code) instead of an `audit_logs` row; the DB records exactly two
+things — the successful claim (`AuditLogger::logServerClaim()`) and the
+budget-TRIP transition (one `claim_code_rate_limited` row per window, on
+`count === limit`, not per miss). The 404/410/409 `claim.*` code split REMAINS:
+it is registered contract surface (`@phlix/contracts` errors.ts, registry md5
+`40c1da48`; `@phlix/ui` `claimServer.ts` renders distinct pairing UX) —
+disclosed in the `mapError` docblock; what IS pinned uniform is the frame
+SHAPE `{error, code, message}` with no arm leaking extra fields.
+Tests: five new unit files (32 cases — real-clock throttle + per-action
+isolation + central envelope + audit-once; oracle key-set/byte identity
+incl. poll-unknown ≡ poll-expired; PHP-DI wiring-target identity;
+no-`logFailedAuth`-per-refusal arms; wired-vs-pre-M12 envelope BYTE identity
+across all 15 covered arms with an anti-vacuity consumption proof) and
+`RateLimitProfilesTest` 9→10; `ClaimCodeNormRealDbTest` extended with the
+success-persists-one-row / refusals-persist-none proof over real MySQL
+(13 integration tests over the touched path re-run green at this tree).
+Mutation-proven end to end: budget-strip → 5 reds, `>=` trip-gate → 1, audit
+re-add per arm → 1, ctor-param delete → 1, wrong bucket retarget → 1,
+wired-path header leak → exactly the 8 denial arms, success-payload leak →
+exactly 1. Full Unit serial (5050/43827) ran in the documented no-swoole
+docker venue — host PHP 8.3.6 (custom build 2026-10-19) segfaults the suite
+on the CLEAN PARENT too (pre-existing venue defect); badness set was exactly
+the known venue tax (swoole-family skips, pre-bless S468, container-env
+McpE2E leg — each individually attributed), duration cache blessed from the
+same junit (275 entries).
+
 ### Fixed — M-HUB-17: the `:8804` watch-party socket now answers every refusal with a REAL WS close code — the L-4 discipline the relay lanes shipped is ported to the SyncPlay surface — 2026-10-29
 
 Review `hub__gameux` M2: all rejection arms of `SyncPlayRelayWorker` were raw

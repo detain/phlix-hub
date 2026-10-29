@@ -54,22 +54,28 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.alexa', RateLimitProfiles::ALEXA);
     }
 
+    public function testServerClaimsProfileExists(): void
+    {
+        self::assertSame('rate_limiter.server_claims', RateLimitProfiles::SERVER_CLAIMS);
+    }
+
     public function testSignupProfileExists(): void
     {
         self::assertSame('rate_limiter.signup', RateLimitProfiles::SIGNUP);
     }
 
-    public function testDefaultsReturnsAllNineProfiles(): void
+    public function testDefaultsReturnsAllTenProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
-        // Nine since the auth audit added `signup` (eight since S91 added
+        // Ten since the M-HUB-12 pairing cure added `server_claims`. Nine
+        // since the auth audit added `signup` (eight since S91 added
         // `alexa`, seven since S62 added `mcp`). This count
         // is the whole reason the test exists: it turns "a profile was added but
         // never given a config key or a default" into a red, so bumping the
         // number without adding the matching `testDefaultsContains…Profile` below
         // defeats it.
-        self::assertCount(9, $defaults);
+        self::assertCount(10, $defaults);
     }
 
     public function testDefaultsContainsLoginProfile(): void
@@ -160,6 +166,44 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('signup', $defaults[RateLimitProfiles::SIGNUP]['key']);
         self::assertSame(3, $defaults[RateLimitProfiles::SIGNUP]['max']);
         self::assertSame(3600, $defaults[RateLimitProfiles::SIGNUP]['window']);
+    }
+
+    public function testDefaultsContainsServerClaimsProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::SERVER_CLAIMS, $defaults);
+        self::assertSame('server_claims', $defaults[RateLimitProfiles::SERVER_CLAIMS]['key']);
+        self::assertSame(60, $defaults[RateLimitProfiles::SERVER_CLAIMS]['max']);
+        self::assertSame(60, $defaults[RateLimitProfiles::SERVER_CLAIMS]['window']);
+    }
+
+    /**
+     * M-HUB-12: the pairing budget is sized between the surfaces — generous
+     * enough that the shipped pairing CLI (GET status poll every 2 s = 30
+     * requests/min/IP, spread over workers) never trips on legitimate use,
+     * bounded enough that a claim-code grind is hundreds of guesses against a
+     * ~2^40 space, not line rate. If someone tunes it to login-grade the
+     * pairing flow breaks; proxy-grade would make the limiter decorative.
+     */
+    public function testTheServerClaimsBudgetSitsBetweenPollerTrafficAndProxyGenerosity(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        $claims = $defaults[RateLimitProfiles::SERVER_CLAIMS];
+        $proxy = $defaults[RateLimitProfiles::PROXY];
+
+        // 30 polls/min/IP must fit with slack (per worker).
+        self::assertGreaterThanOrEqual(
+            60,
+            $claims['max'] * (60 / $claims['window']),
+            'the pairing CLI polls every 2 s — a budget under 30/min/IP would 429 legitimate enrollment',
+        );
+        self::assertLessThan(
+            $proxy['max'] * (60 / $proxy['window']),
+            $claims['max'] * (60 / $claims['window']),
+            'server-claims must stay materially tighter than the HLS-burst proxy budget',
+        );
     }
 
     /**

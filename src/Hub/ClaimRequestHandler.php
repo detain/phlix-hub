@@ -193,6 +193,25 @@ class ClaimRequestHandler
     /**
      * Claim a server using a claim code.
      *
+     * SECURITY POSTURE (review hub__exploiter M1, M-HUB-12): this method is
+     * the claim-code guess surface. Its per-attempt cost is deliberately
+     * asymmetric:
+     *
+     *  - A REFUSED guess (empty / unknown / expired / already-claimed) writes
+     *    a file-log warning ONLY. It used to write a permanent `audit_logs`
+     *    row per guess through {@see AuditLogger::logFailedAuth()} — an
+     *    attacker-paced INSERT rate against a retained table. The row that
+     *    DOES persist is the successful claim ({@see
+     *    AuditLogger::logServerClaim()}) plus the rate-limit transition
+     *    (ServerClaimController), so the trail records events, not attempts.
+     *  - The guess RATE is bounded upstream by the SERVER_CLAIMS limiter
+     *    (`server_claims:claim:<ip>`, ServerClaimController::assertPairingBudget)
+     *    before this method is ever reached.
+     *  - The three refusal frames stay contract-registered-distinct (404/410/
+     *    409, errors.ts claim.* trio; @phlix/ui renders distinct copy from
+     *    them) but byte-identical in SHAPE — see the mapError docblock on
+     *    ServerClaimController for the full oracle-disclosure.
+     *
      * @param string $claimCode The claim code (e.g. "ABCD-1234").
      * @param string $userId    The user claiming the server.
      *
@@ -206,8 +225,18 @@ class ClaimRequestHandler
         // like "dr4q 7axb" or "dr4q-7axb" normalises to "DR4Q7AXB".
         $normalizedCode = strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $claimCode));
         if ($normalizedCode === '') {
-            $this->audit->logFailedAuth('CLAIM_CODE_INVALID', [
-                'claim_code_fp' => self::claimCodeFingerprint($claimCode),
+            // M12 de-amplification: every failed LOOKUP below is a file-log
+            // warning, NOT an audit_logs row. Per-guess DB writes made the
+            // grind attacker-paced on disk (one INSERT into a retained table
+            // per wrong code, review hub__exploiter M1); the security-relevant
+            // events that DO persist are the successful claim (logServerClaim)
+            // and the first limiter trip per window (ServerClaimController).
+            // Correlation per code survives via the R20-04 fingerprint in the
+            // file channel; operators grep `.logs/audit.log`, the table stays
+            // truthful about things that actually happened.
+            $this->logger->warning('Server claim refused: empty claim code', [
+                'event' => 'auth_failure',
+                'reason' => 'CLAIM_CODE_INVALID',
             ]);
             throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
         }
@@ -242,7 +271,9 @@ class ClaimRequestHandler
             );
 
             if (empty($rows)) {
-                $this->audit->logFailedAuth('CLAIM_CODE_NOT_FOUND', [
+                $this->logger->warning('Server claim refused: unknown claim code', [
+                    'event' => 'auth_failure',
+                    'reason' => 'CLAIM_CODE_NOT_FOUND',
                     'claim_code_fp' => self::claimCodeFingerprint($normalizedCode),
                 ]);
                 throw new InvalidArgumentException('CLAIM_CODE_NOT_FOUND');
@@ -254,13 +285,17 @@ class ClaimRequestHandler
             $claimedBy = $row['claimed_by'] ?? null;
 
             if ($expiresAt < $now) {
-                $this->audit->logFailedAuth('CLAIM_CODE_EXPIRED', [
+                $this->logger->warning('Server claim refused: expired claim code', [
+                    'event' => 'auth_failure',
+                    'reason' => 'CLAIM_CODE_EXPIRED',
                     'claim_code_fp' => self::claimCodeFingerprint($normalizedCode),
                 ]);
                 throw new InvalidArgumentException('CLAIM_CODE_EXPIRED');
             }
             if ($claimedBy !== null) {
-                $this->audit->logFailedAuth('CLAIM_CODE_ALREADY_CLAIMED', [
+                $this->logger->warning('Server claim refused: already-claimed claim code', [
+                    'event' => 'auth_failure',
+                    'reason' => 'CLAIM_CODE_ALREADY_CLAIMED',
                     'claim_code_fp' => self::claimCodeFingerprint($normalizedCode),
                     'claimed_by' => $claimedBy,
                 ]);
@@ -360,6 +395,12 @@ class ClaimRequestHandler
             // R20-04: fingerprint only — the pairing secret stays out of logs.
             'claim_code_fp' => self::claimCodeFingerprint($normalizedCode),
         ]);
+
+        // M12: this is the ONE claim event that persists to audit_logs. The
+        // failed guesses above are file-log-only by design (per-guess DB rows
+        // were an attacker-paced disk-growth vector); a server attaching to
+        // an account is the security-relevant transition worth keeping.
+        $this->audit->logServerClaim($userId, $serverId, self::claimCodeFingerprint($normalizedCode));
 
         return [
             'enrollment_jwt' => $enrollmentJwt,

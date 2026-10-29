@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Integration\Hub;
 
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Hub\AuditLogRepository;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Hub\Ed25519KeyManager;
 use Phlix\Hub\Tests\Support\RealDatabaseTestCase;
@@ -195,6 +196,85 @@ final class ClaimCodeNormRealDbTest extends RealDatabaseTestCase
         );
         self::assertLessThan(5, abs(self::intField($server[0], 'drift')));
         self::assertLessThan(5, abs(self::intField($server[0], 'age')));
+    }
+
+    /**
+     * M-HUB-12 (review hub__exploiter M1) through the REAL engine: the
+     * success transition persists exactly one `server_claim` row in
+     * audit_logs (carrying only the R20-04 fingerprint), while failed
+     * guesses — before and after — persist NOTHING. This is the
+     * attacker-paced disk-growth vector made measurable: N guesses cannot
+     * multiply permanent rows. Refusals still leave their file-log signal
+     * (php://memory below is the proof surface the unit suite pins; here we
+     * pin the DB side).
+     */
+    public function testSuccessfulClaimPersistsOneAuditRowAndRefusalsPersistNone(): void
+    {
+        $userId = $this->insertUser();
+        $this->insertClaimRow('claim-norm-audit', 'DR4Q-7AXB');
+
+        $memoryLogger = new StructuredLogger('test', [
+            'handlers' => ['stream' => ['type' => 'stream', 'path' => 'php://memory', 'level' => 'debug']],
+            'processors' => [],
+        ]);
+        $handler = new ClaimRequestHandler(
+            $this->db,
+            new Ed25519KeyManager($this->tmpDir . '/key.pem'),
+            $memoryLogger,
+            new AuditLogger($memoryLogger, new AuditLogRepository($this->db)),
+            'https://hub.example.com',
+        );
+
+        // A refusal before the success: no DB row.
+        try {
+            $handler->handleClaimCode('QQQQ-9999', $userId);
+            self::fail('expected unknown claim code refusal');
+        } catch (\InvalidArgumentException $refusal) {
+            self::assertSame('CLAIM_CODE_NOT_FOUND', $refusal->getMessage());
+        }
+        $afterRefusal = $this->serverClaimAuditRows();
+        self::assertSame([], $afterRefusal);
+
+        // The transition: exactly one row, fingerprint-only context.
+        $result = $handler->handleClaimCode('DR4Q-7AXB', $userId);
+        $rows = $this->serverClaimAuditRows();
+        if (!isset($rows[0])) {
+            self::fail('expected exactly one server_claim audit row after the success');
+        }
+        self::assertCount(1, $rows);
+        self::assertSame($userId, self::stringField($rows[0], 'user_id'));
+        self::assertSame((string) $result['server_id'], self::stringField($rows[0], 'resource'));
+        self::assertSame(1, self::intField($rows[0], 'success'));
+        $context = (string) self::stringField($rows[0], 'context_json');
+        self::assertStringContainsString(
+            ClaimRequestHandler::claimCodeFingerprint('DR4Q7AXB'),
+            $context,
+        );
+        self::assertStringNotContainsString('DR4Q-7AXB', $context);
+
+        // Refusals after the success keep the count at one (redeemed code →
+        // already-claimed arm, still file-log-only).
+        try {
+            $handler->handleClaimCode('QQQQ-9999', $userId);
+            self::fail('expected unknown claim code refusal');
+        } catch (\InvalidArgumentException $refusal) {
+            self::assertSame('CLAIM_CODE_NOT_FOUND', $refusal->getMessage());
+        }
+        $afterRefusals = $this->serverClaimAuditRows();
+        self::assertCount(1, $afterRefusals);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function serverClaimAuditRows(): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            'SELECT user_id, resource, success, context_json FROM audit_logs'
+                . " WHERE event = 'server_claim' ORDER BY id",
+        );
+        return $rows;
     }
 
     /**

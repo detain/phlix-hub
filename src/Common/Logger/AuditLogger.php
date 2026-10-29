@@ -159,6 +159,40 @@ class AuditLogger
     }
 
     /**
+     * Record a successful server claim (M-HUB-12).
+     *
+     * The persisted claim event deliberately sits on the SUCCESS, not the
+     * failed guesses: `ClaimRequestHandler::handleClaimCode` writes file-log
+     * warnings only for refusals (per-guess audit_logs rows were an
+     * attacker-paced disk-growth vector — review hub__exploiter M1). A server
+     * enrolling into a user's account is the security-relevant transition, so
+     * that is what the permanent trail carries. The claim-code fingerprint
+     * rides along (R20-04 law: never the plaintext code), correlating the row
+     * with the file-log refusal/creation chain.
+     *
+     * @param string $userId              User who claimed the server.
+     * @param string $serverId            Newly enrolled server id.
+     * @param string $claimCodeFingerprint R20-04 fingerprint of the redeemed code.
+     */
+    public function logServerClaim(string $userId, string $serverId, string $claimCodeFingerprint): void
+    {
+        $this->logger->info('Server claim succeeded', [
+            'event' => 'server_claim',
+            'user_id' => $userId,
+            'server_id' => $serverId,
+            'claim_code_fp' => $claimCodeFingerprint,
+        ]);
+
+        $this->auditRepo?->log(
+            event: 'server_claim',
+            userId: $userId,
+            resource: $serverId,
+            success: true,
+            context: ['claim_code_fp' => $claimCodeFingerprint],
+        );
+    }
+
+    /**
      * Record an admin-initiated action on a target resource (HUB-A09-2).
      *
      * @param string               $userId   Admin user id performing the action.

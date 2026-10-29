@@ -679,9 +679,17 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             ServerClaimController::class => factory(static function (
                 ClaimRequestHandler $handler,
+                RateLimiterInterface $claimsLimiter,
+                AuditLogger $audit,
             ): ServerClaimController {
-                return new ServerClaimController($handler);
-            })->parameter('handler', get(ClaimRequestHandler::class)),
+                // M12: the pairing surfaces ship WITH the budget guard and the
+                // transition-audit writer — the nullable params on the
+                // controller are a unit-test seam, not a production option
+                // (pinned by ServerClaimRateLimitWiringTest).
+                return new ServerClaimController($handler, $claimsLimiter, $audit);
+            })->parameter('handler', get(ClaimRequestHandler::class))
+                ->parameter('claimsLimiter', get(RateLimitProfiles::SERVER_CLAIMS))
+                ->parameter('audit', get(AuditLogger::class)),
 
             ServerController::class => factory(static function (
                 HeartbeatHandler $heartbeatHandler,

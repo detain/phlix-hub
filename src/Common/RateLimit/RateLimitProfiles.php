@@ -16,18 +16,18 @@ namespace Phlix\Hub\Common\RateLimit;
  * per-worker default thresholds.
  *
  * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount /
- * mcp / alexa / signup) gets its OWN limiter instance registered under the matching
- * `rate_limiter.<surface>` container id — a single shared login-grade limiter
- * is wrong for everything but login (HB-4.6). {@see defaults()} maps each
- * container id to the `config/server.php` `rate_limit.<key>` override key plus
- * the per-worker default `{max, window}`.
+ * mcp / alexa / signup / server-claims) gets its OWN limiter instance registered
+ * under the matching `rate_limiter.<surface>` container id — a single shared
+ * login-grade limiter is wrong for everything but login (HB-4.6).
+ * {@see defaults()} maps each container id to the `config/server.php`
+ * `rate_limit.<key>` override key plus the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER for six of the nine surfaces. `proxy`, `heartbeat`,
- * `jwks` and `alexa` are enforced on the `HUB_WORKERS` HTTP workers, so each
- * keeps an INDEPENDENT per-worker counter and the effective soft-global limit is
- * roughly `max × HUB_WORKERS` (mirrors HB-3.4); `relay_connect` (the :8802
- * `RelayWorker`) and `client_mount` (the :8803 `ClientRelayWorker`) run on
- * count=1 surfaces where per-worker == global.
+ * Thresholds are PER-WORKER for seven of the ten surfaces. `proxy`, `heartbeat`,
+ * `jwks`, `alexa` and `server_claims` are enforced on the `HUB_WORKERS` HTTP
+ * workers, so each keeps an INDEPENDENT per-worker counter and the effective
+ * soft-global limit is roughly `max × HUB_WORKERS` (mirrors HB-3.4);
+ * `relay_connect` (the :8802 `RelayWorker`) and `client_mount` (the :8803
+ * `ClientRelayWorker`) run on count=1 surfaces where per-worker == global.
  *
  * ✅ `login`, `mcp` and `signup` are the EXCEPTIONS — all genuinely global; all
  * bound to the shared DB-backed {@see DbRateLimiter}. The `login` reasoning
@@ -127,6 +127,39 @@ final class RateLimitProfiles
     public const string SIGNUP = 'rate_limiter.signup';
 
     /**
+     * Container id for the server-claim pairing surfaces (review hub__exploiter M1).
+     *
+     * PER-WORKER (soft-global), the {@see ALEXA} posture, NOT the login/mcp/signup
+     * DB-backed posture — and the distinction is deliberate. The three
+     * `/api/v1/server-claims/*` endpoints each guard a DIFFERENT secret:
+     * `POST …/new` and `GET …/{claimId}` are public but their bearer IS the
+     * claim id (a UUIDv4, ~2^122 — unguessable by repetition, so no counter
+     * hardens a guess; the bucket only caps the cost of an anonymous flood
+     * against a public endpoint that INSERTs rows / polls the DB per hit),
+     * while `POST …/claim` is already behind {@see \Phlix\Hub\Http\Middleware\AuthMiddleware}
+     * — its guesser is an AUTHENTICATED user, attributable and account-metered,
+     * and an 8-char code over a 32-char alphabet is ~2^40 with a 600 s TTL, so
+     * even a line-rate grind is centuries against the window. A per-worker
+     * ×HUB_WORKERS multiplier therefore does NOT reopen a credential-guess path
+     * (unlike login, whose credential is unbounded-lifetime and user-chosen);
+     * it only multiplies a flood-cost bound by the worker count, which is
+     * exactly the trade {@see ALEXA} already makes for the same reason.
+     *
+     * ONE limiter instance serves all three endpoints, keyed per action:
+     * `server_claims:new:<ip>`, `server_claims:status:<ip>`,
+     * `server_claims:claim:<ip>` (trusted-proxy-resolved IP — the raw peer is
+     * the HAProxy loopback). Per-action keys keep the generous poll budget of
+     * `status` (the pairing CLI polls every 2 s = 30/min) from being burned by
+     * `claim`/`new` traffic on the same IP, without needing three profiles.
+     * 60 / 60s per bucket per worker: 2 concurrent CLI pollers fit with slack
+     * (requests round-robin across workers, so the practical ceiling is higher);
+     * an attacker's sustained guess rate is bounded at roughly
+     * `60 × HUB_WORKERS` codes/minute/IP — ≈3,456,000 guesses per 10-minute
+     * claim window against a 1,099,511,627,776-code space.
+     */
+    public const string SERVER_CLAIMS = 'rate_limiter.server_claims';
+
+    /**
      * Map of `container id => {config key, default max, default window}`.
      *
      * `key` is the sub-key under `config/server.php`'s `rate_limit` section;
@@ -147,6 +180,7 @@ final class RateLimitProfiles
             self::MCP           => ['key' => 'mcp',           'max' => 10,  'window' => 900],
             self::ALEXA         => ['key' => 'alexa',         'max' => 60,  'window' => 60],
             self::SIGNUP        => ['key' => 'signup',        'max' => 3,   'window' => 3600],
+            self::SERVER_CLAIMS => ['key' => 'server_claims', 'max' => 60,  'window' => 60],
         ];
     }
 }

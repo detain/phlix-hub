@@ -11,6 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\Request;
@@ -21,18 +24,73 @@ use Phlix\Shared\Hub\ClaimRequest;
  * Handles server claim endpoints.
  *
  * POST /api/v1/server-claims/new    — server initiates pairing (public)
+ * GET  /api/v1/server-claims/{claimId} — server polls pairing status (public)
  * POST /api/v1/server-claims/claim  — user claims a server (auth required)
+ *
+ * All three surfaces are budget-guarded per trusted client IP by the
+ * {@see RateLimitProfiles::SERVER_CLAIMS} limiter (review hub__exploiter M1):
+ * each request consumes one unit of its action bucket
+ * (`server_claims:{new,status,claim}:<ip>`) BEFORE any handler/DB work runs,
+ * and a tripped bucket answers through the central {@see RateLimitException}
+ * mapping — 429 + `Retry-After` + `{error, code: 'rate_limited'}` (the same
+ * registered envelope login/mcp/alexa/jwks use; no new wire codes).
  *
  * @package Phlix\Hub\Http\Controllers
  */
 final class ServerClaimController
 {
     /**
-     * @param ClaimRequestHandler $handler Claim request handler.
+     * @param ClaimRequestHandler       $handler        Claim request handler.
+     * @param RateLimiterInterface|null $claimsLimiter  SERVER_CLAIMS profile limiter;
+     *        null (unit tests, unbooted pool wiring) disables the budget — the
+     *        pre-M12 behavior, pinned by the wiring-guard test so the real
+     *        container can NEVER ship the null again (same fail-open-with-guard
+     *        precedent as AuthManager's nullable signup limiter).
+     * @param AuditLogger|null          $audit          Writes exactly ONE audit_logs
+     *        row per limiter transition into "over budget" (first refusal of the
+     *        window); null = file-channel-only, same degradation as above.
      */
     public function __construct(
         private readonly ClaimRequestHandler $handler,
+        private readonly ?RateLimiterInterface $claimsLimiter = null,
+        private readonly ?AuditLogger $audit = null,
     ) {
+    }
+
+    /**
+     * Consume one unit of this action's per-IP pairing budget.
+     *
+     * @param string $action Bucket name: new | status | claim.
+     *
+     * @throws RateLimitException Over budget — mapped to the central 429 by
+     *         {@see \Phlix\Hub\Application} (the jwks/proxy central-mapping path;
+     *         this throw deliberately happens OUTSIDE the methods'
+     *         InvalidArgumentException catches so it can never be folded into
+     *         a generic error frame).
+     */
+    private function assertPairingBudget(string $action, Request $request): void
+    {
+        if ($this->claimsLimiter === null) {
+            return;
+        }
+
+        // Trusted-proxy-aware real client IP — NOT the raw peer, which is the
+        // HAProxy loopback for every request and would collapse the limiter
+        // into one global bucket (mirrors HubJwksController / AuthController).
+        $ip = $request->getTrustedClientIp() ?: 'unknown';
+        $state = $this->claimsLimiter->hit('server_claims:' . $action . ':' . $ip);
+        if (!$state->limited) {
+            return;
+        }
+
+        if ($state->count === $state->limit) {
+            $this->audit?->logFailedAuth('claim_code_rate_limited', ['surface' => $action]);
+        }
+
+        throw new RateLimitException(
+            resetAt: $state->resetAt,
+            remaining: 0,
+        );
     }
 
     /**
@@ -64,6 +122,10 @@ final class ServerClaimController
             ]);
         }
 
+        // Free guard-shaped 400s above cost the flood nothing; every request
+        // that reaches DB work (the claim-row INSERT) pays the budget.
+        $this->assertPairingBudget('new', $request);
+
         try {
             $response = $this->handler->handleNewClaim($claimRequest);
             return (new Response())->json($response->toPayload());
@@ -90,6 +152,8 @@ final class ServerClaimController
                 'message' => 'claim id is required',
             ]);
         }
+
+        $this->assertPairingBudget('status', $request);
 
         return (new Response())->json($this->handler->getClaimStatus($claimId));
     }
@@ -118,6 +182,10 @@ final class ServerClaimController
             ]);
         }
 
+        // The guess path: every attempt that reaches the claim-code lookup
+        // pays this bucket (review hub__exploiter M1 — the grind bound).
+        $this->assertPairingBudget('claim', $request);
+
         try {
             $result = $this->handler->handleClaimCode($claimCode, $userId);
             return (new Response())->json([
@@ -132,6 +200,24 @@ final class ServerClaimController
 
     /**
      * Map an error code string to an HTTP status + body.
+     *
+     * STATE-ORACLE POSTURE (review hub__exploiter M1, honest disclosure): the
+     * `claim.*` trio answers 404 / 410 / 409 with three DISTINCT registered
+     * codes. That is contract-law bound: @phlix/contracts errors.ts registers
+     * claim.code_not_found / claim.code_expired / claim.code_already_claimed
+     * (registry md5 40c1da48 frozen — no new or collapsed codes from a client
+     * repo), and the pinned consumer @phlix/ui src/api/claimServer.ts maps all
+     * three to distinct user-facing kinds ("That claim code has expired.
+     * Generate a new one on your server." is real pairing UX). Collapsing them
+     * into one deny frame would break both. The oracle therefore REMAINS for a
+     * caller that is already AUTHENTICATED (POST /claim sits behind
+     * AuthMiddleware) and is capped at `60 × HUB_WORKERS` guesses/minute/IP by
+     * the SERVER_CLAIMS limiter against a ~2^40 code space with 600 s TTL; the
+     * per-guess `audit_logs` write that made grinding disk-cheap is gone
+     * (ClaimRequestHandler de-amplification). What every arm DOES keep
+     * byte-identical is the frame SHAPE: `{error, code, message}` — no arm
+     * carries extra fields (no claim owner, no expiry timestamp, no row ids),
+     * pinned by ServerClaimOracleUniformityTest.
      */
     private function mapError(string $code): Response
     {

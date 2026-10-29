@@ -43,7 +43,8 @@ use function DI\get;
  * (HB-4.6 Option B) — the per-worker in-memory limiter left the effective
  * login budget at ~`max × HUB_WORKERS`. Signup joined that set with the auth
  * audit fix (3): an anonymous 64 MiB-Argon2id surface must not get
- * `max × HUB_WORKERS` tries either. The remaining six surfaces stay on the
+ * `max × HUB_WORKERS` tries either. The remaining seven surfaces (server_claims
+ * joined with the M-HUB-12 pairing cure) stay on the
  * worker-local in-memory {@see RateLimiter} (per-worker weakening is
  * acceptable there).
  *
@@ -122,9 +123,11 @@ final class CommonServicesProvider implements ServiceProviderInterface
                 // pooled 'mysql' one (autowired via Connection::class — bound to
                 // ConnectionPool::getConnection('mysql') in CoreServicesProvider),
                 // NOT the dedicated 'txn' connection: these are single-statement
-                // reads/writes, not a multi-statement transaction. The other six
-                // (non-abuse-amplifying) surfaces stay worker-local in-memory
-                // below.
+                // reads/writes, not a multi-statement transaction. The other
+                // seven surfaces stay worker-local in-memory below — server_claims
+                // among them deliberately (its guesser is an authenticated,
+                // account-metered user against a ~2^40/600s space; see the
+                // SERVER_CLAIMS const docblock for the full alexa-posture law).
                 $definitions[$id] = factory(
                     static function (Connection $db) use ($spec, $rateLimit, $rateLimitOverride): DbRateLimiter {
                         /** @var array{max: int, window: int} $eff */
