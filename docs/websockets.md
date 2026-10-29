@@ -116,7 +116,16 @@ Mounted at the bare root; there is no path to parse. The media server dials
 `config/server.php` can enable TLS on this listener (`relay_tls`,
 `relay_tls_cert`, `relay_tls_key`), in which case it is `wss://`. Unlike `:8803`,
 this listener is **not** fronted by HAProxy, so `TrustedProxyResolver` sees the
-real peer address directly.
+real peer address directly — and nothing else fronts it either: with `relay_tls`
+unset the socket comes up **plaintext `ws://` by default**, which means the HELLO
+(enrollment JWT) and every relayed byte travel unencrypted. At boot the relay
+worker therefore logs a loud `SECURITY` advisory on the relay channel once per
+start when it binds cleartext, and `HUB_RELAY_REQUIRE_TLS=true`
+(`relay_require_tls`) turns that into a **fail-closed refusal**: the hub will not
+stand up a credential-bearing cleartext listener when the operator has mandated
+TLS. This is the listen-side mirror of the server's `PHLIX_RELAY_REQUIRE_TLS`
+dial-side knob (phlix-server `config/relay.php`); the warn-only default is
+deliberate estate posture — flip both sides in one wave, never one alone.
 
 ### Handshake
 

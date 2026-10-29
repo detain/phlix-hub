@@ -37,9 +37,11 @@ use function spl_object_id;
 /**
  * WebSocket worker that handles server-to-hub relay tunnel connections.
  *
- * Servers connect via WSS to ws://hub:8802 and send a JSON HELLO message
- * as their first message. The worker then registers the connection with
- * TunnelManager and hands off message handling to the appropriate Tunnel.
+ * Servers connect to ws://hub:8802 (wss:// when `relay_tls` is enabled —
+ * see {@see self::tlsBootPosture()} for the bind-time TLS law) and send a
+ * JSON HELLO message as their first message. The worker then registers the
+ * connection with TunnelManager and hands off message handling to the
+ * appropriate Tunnel.
  *
  * @package Phlix\Hub\Relay
  */
@@ -90,6 +92,11 @@ final class RelayWorker
      * @param bool                $useTls      Enable TLS (wss://) on the relay WebSocket.
      * @param string|null         $tlsCert     Path to TLS certificate file (PEM).
      * @param string|null         $tlsKey      Path to TLS private key file (PEM).
+     * @param bool                $requireTls  M21 fail-closed posture: refuse to bind
+     *                                         plaintext ws:// when true and TLS is off
+     *                                         (config `relay_require_tls` /
+     *                                         HUB_RELAY_REQUIRE_TLS, mirroring the
+     *                                         server's PHLIX_RELAY_REQUIRE_TLS).
      */
     public function __construct(
         private readonly ContainerInterface $container,
@@ -100,7 +107,87 @@ final class RelayWorker
         private readonly bool $useTls = false,
         private readonly ?string $tlsCert = null,
         private readonly ?string $tlsKey = null,
+        private readonly bool $requireTls = false,
     ) {
+    }
+
+    /**
+     * Bind-time TLS posture for the :8802 listener (M21).
+     *
+     * Mirrors the server-side R17-01 tri-state (warn-only by default,
+     * fail-closed when the operator mandates TLS) on the LISTEN end of the
+     * same tunnel:
+     *
+     *  - `secure`   — TLS configured; bind wss:// (today's opt-in path).
+     *  - `advisory` — plaintext default; bind ws:// after ONE loud boot
+     *    warning (the shipped bind behavior plus the missing announcement).
+     *  - `refused`  — `require_tls` set without TLS; never bind. The HELLO
+     *    carries each media server's Ed25519 enrollment JWT — a durable
+     *    bearer credential for its tunnel — and every relayed HTTP byte
+     *    rides the same socket, so a mandated-secure posture must not stand
+     *    up a credential-bearing cleartext listener at all.
+     *
+     * The default stays warn-only by estate law: the server sibling shipped
+     * `PHLIX_RELAY_REQUIRE_TLS` default-off ("today's warn-only behavior",
+     * phlix-server config/relay.php), so the hub listener does not
+     * unilaterally flip majors-tier defaults here.
+     *
+     * @param bool $useTls     TLS configured on this listener (`relay_tls`).
+     * @param bool $requireTls Operator mandate (`relay_require_tls`).
+     *
+     * @return 'secure'|'advisory'|'refused'
+     */
+    public static function tlsBootPosture(bool $useTls, bool $requireTls): string
+    {
+        if ($useTls) {
+            return 'secure';
+        }
+
+        return $requireTls ? 'refused' : 'advisory';
+    }
+
+    /**
+     * The one-per-boot cleartext advisory text (M21).
+     *
+     * Wording duty: it must name WHAT travels in the clear (enrollment JWT +
+     * relayed HTTP), WHY it matters (JWT = durable tunnel bearer; this
+     * listener is NOT HAProxy-fronted), and BOTH cures (HUB_RELAY_TLS to
+     * secure the listener; HUB_RELAY_REQUIRE_TLS here or
+     * PHLIX_RELAY_REQUIRE_TLS on servers to make plaintext fail closed).
+     *
+     * @param int $port Bound relay port.
+     *
+     * @return string Warning text for the relay log channel.
+     */
+    public static function plaintextAdvisory(int $port): string
+    {
+        return 'SECURITY — relay listener :' . $port . ' is binding PLAINTEXT ws:// '
+            . '(relay_tls not enabled). The HELLO carries each media server\'s Ed25519 '
+            . 'enrollment JWT — a durable bearer credential for that server\'s tunnel — '
+            . 'and every relayed request/response afterwards, in the clear; an on-path '
+            . 'capturer can re-play it to displace the incumbent. Unlike :8803 this '
+            . 'listener is NOT fronted by HAProxy. Set HUB_RELAY_TLS=true '
+            . '(+ HUB_RELAY_TLS_CERT/KEY) to serve wss://, and/or PHLIX_RELAY_REQUIRE_TLS=1 '
+            . 'on the servers so they refuse plaintext dials. HUB_RELAY_REQUIRE_TLS=1 here '
+            . 'turns this advisory into a fail-closed boot refusal.';
+    }
+
+    /**
+     * The fail-closed refusal text (M21): require_tls + plaintext = no bind.
+     *
+     * @param int $port Requested relay port.
+     *
+     * @return string RuntimeException message.
+     */
+    public static function plaintextRefusal(int $port): string
+    {
+        return 'Refusing to bind relay listener :' . $port . ' as PLAINTEXT ws:// because '
+            . 'relay_require_tls is enabled (HUB_RELAY_REQUIRE_TLS=1). The :8802 tunnel '
+            . 'carries enrollment JWTs and relayed HTTP in the clear and is not '
+            . 'proxy-fronted; under require_tls the hub will not start a '
+            . 'credential-bearing cleartext listener. Enable TLS (HUB_RELAY_TLS=true + '
+            . 'HUB_RELAY_TLS_CERT/KEY) or unset HUB_RELAY_REQUIRE_TLS to return to '
+            . 'warn-only behavior.';
     }
 
     /**
@@ -123,6 +210,18 @@ final class RelayWorker
      */
     public function start(): Worker
     {
+        // M21: bind-time TLS posture. 'refused' throws before any socket
+        // exists (the exception propagates out of Application::boot — no
+        // try/catch wraps this construction site); 'advisory' is today's
+        // default bind path plus the loud announcement it never had.
+        $posture = self::tlsBootPosture($this->useTls, $this->requireTls);
+        if ($posture === 'refused') {
+            throw new \RuntimeException(self::plaintextRefusal($this->port));
+        }
+        if ($posture === 'advisory') {
+            LoggerFactory::get(LogChannels::RELAY)->warning(self::plaintextAdvisory($this->port));
+        }
+
         // Workerman's Worker::__construct() types $socketContext as a non-nullable
         // array, so default to an empty context (its own default for "no options")
         // rather than null — passing null throws a TypeError on the non-TLS path.

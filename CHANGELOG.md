@@ -6,6 +6,41 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-21: the `:8802` relay listener announces its plaintext bind and can refuse one — the credential-bearing cleartext default is now loud, enforceable, and documented honestly — 2026-10-29
+
+Review `hub__secnet` M-2: `:8802` bound `ws://0.0.0.0` by default
+(`relay_tls ?? false`), docs confirmed the listener is NOT HAProxy-fronted,
+and the boot was SILENT about it — while the HELLO carries each media
+server's Ed25519 enrollment JWT, a durable bearer credential for its tunnel
+whose capture lets an on-path replay displace the incumbent through the
+validated-reconnect path. The TLS ctx itself (ECDHE+AESGCM/CHACHA20,
+secp384r1, security_level 2) was never the defect; the missing posture was.
+The estate already answers this class: the server side shipped R17-01 —
+`PHLIX_RELAY_REQUIRE_TLS` default-off with a dial-time advisory, fail-closed
+only on mandate (phlix-server `config/relay.php:57`,
+`RelayConsumer::refusePlaintextUnderRequireTls`). A single-hub default flip
+would split the two ends of one tunnel, so the cure ships LISTEN-SIDE PARITY,
+not a unilateral flip. Shipped: `RelayWorker::tlsBootPosture()` — the pure
+`secure|advisory|refused` truth table — consulted in `start()` before any
+socket exists: the plaintext default now logs ONE loud relay-channel warning
+naming the JWT risk, the no-proxy admission, and every escape hatch
+(`HUB_RELAY_TLS` / `HUB_RELAY_REQUIRE_TLS` / server-side
+`PHLIX_RELAY_REQUIRE_TLS`); new config knob `relay_require_tls`
+(`HUB_RELAY_REQUIRE_TLS`, default false — the same warn-only default as the
+server) makes a mandated-secure hub THROW at boot instead of binding a
+credential-bearing cleartext listener; the self-contradictory class docblock
+("connect via WSS to ws://hub:8802") and the `docs/websockets.md` `:8802`
+section now carry the truth. `RelayWorkerTlsPostureTest` (12 tests) pins the
+truth table, both message-wording laws, the fail-closed throw, the
+logged-verbatim advisory, the silent secure path, and the config default —
+10 of the 12 are red on the parent where behavior differs (the two
+remaining are controls pinning the deliberately UNCHANGED default-bind and
+TLS-opt-in paths). `scripts/parallel/test-durations.json` re-blessed from
+one serial profile run per the S458 cache law. OWNER REEL (disclosed, not
+silently shipped): whether BOTH ends eventually flip to default-secure in
+one coordinated estate wave remains an owner call; this lane makes plaintext
+loud and refuse-able, exactly mirroring the server's ratified posture.
+
 ### Fixed — M-HUB-19: the server-detail payload ships ONE timestamp encoding — unix seconds everywhere — and `heartbeat_history[].received_at` is no longer provably always `0` — 2026-10-29
 
 Review `hub__gameux` M4: `GET /api/v1/me/servers/{id}` — the screen a user

@@ -206,6 +206,15 @@ return [
     'relay_tls' => filter_var(($v = getenv('HUB_RELAY_TLS')) !== false && $v !== '' ? $v : 'false', FILTER_VALIDATE_BOOLEAN),
     'relay_tls_cert' => ($v = getenv('HUB_RELAY_TLS_CERT')) !== false && $v !== '' ? $v : null,
     'relay_tls_key' => ($v = getenv('HUB_RELAY_TLS_KEY')) !== false && $v !== '' ? $v : null,
+    // M21: listener-side mirror of the server's fail-closed knob
+    // (phlix-server config/relay.php `require_tls` / PHLIX_RELAY_REQUIRE_TLS,
+    // R17-01). When true (HUB_RELAY_REQUIRE_TLS=1), RelayWorker::start()
+    // REFUSES to bind :8802 plaintext — the tunnel carries each server's
+    // Ed25519 enrollment JWT (a durable tunnel bearer) and all relayed HTTP
+    // in the clear, and, unlike :8803, is not fronted by HAProxy.
+    // Default false = warn-only: one loud boot advisory when the socket comes
+    // up ws://, byte-for-byte today's bind behavior plus the announcement.
+    'relay_require_tls' => filter_var(($v = getenv('HUB_RELAY_REQUIRE_TLS')) !== false && $v !== '' ? $v : 'false', FILTER_VALIDATE_BOOLEAN),
 
     // Sonarr/Radarr endpoints used by the request UI.
     // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.

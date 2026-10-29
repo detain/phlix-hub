@@ -2433,6 +2433,12 @@ final class Application
         $relayTlsCert = $this->config['relay_tls_cert'] ?? null;
         /** @var string|null $relayTlsKey */
         $relayTlsKey = $this->config['relay_tls_key'] ?? null;
+        // M21: listener-side mirror of the server's PHLIX_RELAY_REQUIRE_TLS
+        // (config/relay.php require_tls). true + plaintext => start() throws
+        // before binding (loud boot failure, never a silent cleartext
+        // listener); default false keeps warn-only with the boot advisory.
+        /** @var bool $relayRequireTls */
+        $relayRequireTls = (bool) ($this->config['relay_require_tls'] ?? false);
         $relayWorker = new RelayWorker(
             $this->container,
             $relayPort,
@@ -2442,6 +2448,7 @@ final class Application
             $relayTls,
             $relayTlsCert,
             $relayTlsKey,
+            $relayRequireTls,
         );
         // R14-01/R16-01: the relay worker's own onWorkerStart is set inside
         // RelayWorker::start() (a file outside this lane), so prepend the

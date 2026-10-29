@@ -39,7 +39,9 @@ namespace Phlix\Hub\Common\Http;
  *
  * The hub is fronted by HAProxy over loopback: HTTP → `127.0.0.1:8800` and the
  * client relay WS → `127.0.0.1:8803` (both carrying `option forwardfor`), while
- * the server tunnel on `:8802` is a DIRECT TLS listener (NOT proxied). For the
+ * the server tunnel on `:8802` is a DIRECT listener (NOT proxied; it serves
+ * `wss://` only when `relay_tls` is enabled — see
+ * {@see \Phlix\Hub\Relay\RelayWorker::tlsBootPosture()}, M21). For the
  * proxied surfaces the peer the hub observes is therefore always `127.0.0.1`,
  * and HAProxy appends the real client as the RIGHTMOST XFF entry. The default
  * trusted set is therefore LOOPBACK ONLY. Adding RFC1918 ranges by default would
