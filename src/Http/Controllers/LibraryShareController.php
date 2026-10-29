@@ -20,10 +20,22 @@ use Phlix\Hub\Http\Response;
 /**
  * API controller for library sharing endpoints.
  *
+ * Every failure here is shown to a signed-in member in the portal, so every
+ * envelope goes through {@see self::memberError()} — human sentence in
+ * `error`, registered machine code in `code`, `message` mirroring `error`.
+ *
  * @package Phlix\Hub\Http\Controllers
  */
 final class LibraryShareController
 {
+    /**
+     * Fail-safe copy for pass-through arms whose handler exception carries no
+     * message at all. The pinned portal client renders the `error` field
+     * verbatim even when it is the empty string, so the wire must never ship
+     * one (review hub__casualgamer M5).
+     */
+    private const GENERIC_PROBLEM = 'Something went wrong on the hub. Please try again.';
+
     /**
      * @param LibrarySharingHandler $handler Library sharing handler.
      */
@@ -33,24 +45,39 @@ final class LibraryShareController
     }
 
     /**
+     * Canonical member-facing error envelope.
+     *
+     * The portal's pinned client (`extractError` in @phlix/ui
+     * `src/api/client.ts`) checks `error` before `message`, so the human
+     * sentence lives in `error`; `code` carries the registered
+     * `@phlix/contracts` machine code (contracts law — stable codes, free
+     * text). `message` mirrors `error` so the same sentence renders under
+     * either client precedence. Whitespace-only pass-through messages are
+     * normalized to {@see self::GENERIC_PROBLEM}.
+     */
+    private function memberError(int $status, string $code, string $message): Response
+    {
+        $human = trim($message);
+        if ($human === '') {
+            $human = self::GENERIC_PROBLEM;
+        }
+
+        return (new Response())->error($status, $code, $human, ['message' => $human]);
+    }
+
+    /**
      * `POST /api/v1/me/shares` — create a new library share.
      */
     public function createShare(Request $request): Response
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'auth.required',
-            ]);
+            return $this->memberError(401, 'auth.required', 'Sign in to share your libraries');
         }
 
         $body = $request->body;
         if ($body === []) {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'invalid_body',
-            ]);
+            return $this->memberError(400, 'invalid_body', 'A request body is required');
         }
 
         /** @var mixed $email */
@@ -65,31 +92,23 @@ final class LibraryShareController
         $permission = $body['permission'] ?? LibraryShare::PERMISSION_READ;
 
         if (!is_string($email) || $email === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'missing_collaborator_email',
-            ]);
+            return $this->memberError(
+                400,
+                'missing_collaborator_email',
+                'Enter the email address of the person you want to share with',
+            );
         }
 
         if (!is_string($serverId) || $serverId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'missing_server_id',
-            ]);
+            return $this->memberError(400, 'missing_server_id', 'Select which server the library lives on');
         }
 
         if (!is_string($libraryId) || $libraryId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'missing_library_id',
-            ]);
+            return $this->memberError(400, 'missing_library_id', 'Select which library to share');
         }
 
         if (!is_string($libraryName) || $libraryName === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'missing_library_name',
-            ]);
+            return $this->memberError(400, 'missing_library_name', 'Give the shared library a name');
         }
 
         try {
@@ -108,44 +127,25 @@ final class LibraryShareController
             // W5 share quota: discriminated by message before the generic 409
             // (share_exists) arm — both carry code 409.
             if ($e->getMessage() === 'SERVER_SHARE_CAP_REACHED') {
-                return (new Response())->status(409)->json([
-                    'error' => 'Conflict',
-                    'code' => 'quota.exceeded',
-                    'message' => 'This server has reached its collaborator limit',
-                ]);
+                return $this->memberError(
+                    409,
+                    'quota.exceeded',
+                    'This server has reached its collaborator limit',
+                );
             }
             if ($code === 404) {
-                return (new Response())->status(404)->json([
-                    'error' => 'Not Found',
-                    'code' => 'user_not_found',
-                    'message' => 'No user found with that email address',
-                ]);
+                return $this->memberError(404, 'user_not_found', 'No user found with that email address');
             }
             if ($code === 403) {
-                return (new Response())->status(403)->json([
-                    'error' => 'Forbidden',
-                    'code' => 'not_server_owner',
-                    'message' => 'You do not own this server',
-                ]);
+                return $this->memberError(403, 'not_server_owner', 'You do not own this server');
             }
             if ($code === 409) {
-                return (new Response())->status(409)->json([
-                    'error' => 'Conflict',
-                    'code' => 'share_exists',
-                    'message' => 'This library is already shared with that user',
-                ]);
+                return $this->memberError(409, 'share_exists', 'This library is already shared with that user');
             }
             if ($code === 400) {
-                return (new Response())->status(400)->json([
-                    'error' => 'Bad Request',
-                    'code' => 'invalid_request',
-                    'message' => $e->getMessage(),
-                ]);
+                return $this->memberError(400, 'invalid_request', $e->getMessage());
             }
-            return (new Response())->status(500)->json([
-                'error' => 'Internal Server Error',
-                'code' => 'unknown_error',
-            ]);
+            return $this->memberError(500, 'unknown_error', self::GENERIC_PROBLEM);
         }
     }
 
@@ -156,10 +156,7 @@ final class LibraryShareController
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'auth.required',
-            ]);
+            return $this->memberError(401, 'auth.required', 'Sign in to see your shares');
         }
 
         $outgoing = $this->handler->getSharesForOwner($userId);
@@ -180,18 +177,12 @@ final class LibraryShareController
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'auth.required',
-            ]);
+            return $this->memberError(401, 'auth.required', 'Sign in to remove a share');
         }
 
         $shareId = $params['id'] ?? '';
         if ($shareId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'missing_share_id',
-            ]);
+            return $this->memberError(400, 'missing_share_id', 'Select the share you want to remove');
         }
 
         try {
@@ -200,22 +191,12 @@ final class LibraryShareController
         } catch (InvalidArgumentException $e) {
             $code = $e->getCode();
             if ($code === 404) {
-                return (new Response())->status(404)->json([
-                    'error' => 'Not Found',
-                    'code' => 'share_not_found',
-                ]);
+                return $this->memberError(404, 'share_not_found', 'That share no longer exists');
             }
             if ($code === 403) {
-                return (new Response())->status(403)->json([
-                    'error' => 'Forbidden',
-                    'code' => 'not_share_owner',
-                    'message' => 'You do not own this share',
-                ]);
+                return $this->memberError(403, 'not_share_owner', 'You do not own this share');
             }
-            return (new Response())->status(500)->json([
-                'error' => 'Internal Server Error',
-                'code' => 'unknown_error',
-            ]);
+            return $this->memberError(500, 'unknown_error', self::GENERIC_PROBLEM);
         }
     }
 
@@ -228,35 +209,23 @@ final class LibraryShareController
     {
         $userId = $request->userId ?? '';
         if ($userId === '') {
-            return (new Response())->status(401)->json([
-                'error' => 'Unauthorized',
-                'code' => 'auth.required',
-            ]);
+            return $this->memberError(401, 'auth.required', 'Sign in to update a share');
         }
 
         $shareId = $params['id'] ?? '';
         if ($shareId === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'missing_share_id',
-            ]);
+            return $this->memberError(400, 'missing_share_id', 'Select the share you want to change');
         }
 
         $body = $request->body;
         if ($body === []) {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'invalid_body',
-            ]);
+            return $this->memberError(400, 'invalid_body', 'A request body is required');
         }
 
         /** @var mixed $permission */
         $permission = $body['permission'] ?? null;
         if (!is_string($permission)) {
-            return (new Response())->status(400)->json([
-                'error' => 'Bad Request',
-                'code' => 'missing_permission',
-            ]);
+            return $this->memberError(400, 'missing_permission', 'Choose a permission level for this share');
         }
 
         try {
@@ -266,29 +235,15 @@ final class LibraryShareController
         } catch (InvalidArgumentException $e) {
             $code = $e->getCode();
             if ($code === 404) {
-                return (new Response())->status(404)->json([
-                    'error' => 'Not Found',
-                    'code' => 'share_not_found',
-                ]);
+                return $this->memberError(404, 'share_not_found', 'That share no longer exists');
             }
             if ($code === 403) {
-                return (new Response())->status(403)->json([
-                    'error' => 'Forbidden',
-                    'code' => 'not_share_owner',
-                    'message' => 'You do not own this share',
-                ]);
+                return $this->memberError(403, 'not_share_owner', 'You do not own this share');
             }
             if ($code === 400) {
-                return (new Response())->status(400)->json([
-                    'error' => 'Bad Request',
-                    'code' => 'invalid_permission',
-                    'message' => $e->getMessage(),
-                ]);
+                return $this->memberError(400, 'invalid_permission', $e->getMessage());
             }
-            return (new Response())->status(500)->json([
-                'error' => 'Internal Server Error',
-                'code' => 'unknown_error',
-            ]);
+            return $this->memberError(500, 'unknown_error', self::GENERIC_PROBLEM);
         }
     }
 }

@@ -6,6 +6,62 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-05: the member-facing error channel now speaks human — all 46 failure envelopes of the share/invite controllers route through the canonical `Response::error` with `message` mirroring `error`, so the pinned client's `error`-first precedence can never surface "Conflict" — 2026-10-29
+
+Review `hub__casualgamer` M5: a member whose share hit the collaborator
+cap was shown the bare HTTP reason phrase "Conflict". Root cause is a
+channel inversion: the pinned `@phlix/ui` client `extractError`
+(`src/api/client.ts`) returns `payload.error` BEFORE `payload.message`,
+while the hub's hand-written `status()->json()` arms parked the HTTP
+phrase in `error` and the human sentence in `message`. The client is not
+hub-editable (pinned v0.99.10 remote tarball; hub tracks only web-ui's 17
+own files), so the cure is the wire — the review's own alternate fix,
+"put the sentence in `error`, always". Every guard and handler arm of
+`LibraryShareController` and `InviteLinkController` (46 sites) now flows
+through one private `memberError()` builder per controller:
+`(new Response())->error($status, $registeredCode, $human, ['message' => $human])`.
+`message` mirrors `error` so the sentence renders identically under
+either client precedence; the pass-through arms (`invalid_request`,
+`invalid_invite`, `invalid_permission`, `invite_expired_or_exhausted`)
+normalize a whitespace-only handler message to a fail-safe sentence
+because the pinned client's `typeof === 'string'` test renders an empty
+`error` verbatim — the member channel must never ship one. ZERO new wire
+codes: the code multiset is byte-identical HEAD vs tip (46 = 46,
+perl-extracted and diffed), every code already registry-registered; the
+machine-facing claim envelopes (`ServerClaimController`) stay untouched
+under the M-HUB-04 string-matching law, and their wire tests stayed green
+unmodified. Census consequence: the two `memberError()` builders are new
+opaque feeds into the swept helper, enumerated in
+`ErrorCodesContractTest::OPAQUE_CODE_FEEDS` with `hop:` reasons (added
+from the measured red the enumerator itself raised).
+
+New `MemberErrorProseTest` (16 methods) pins every arm: statusCode, the
+exact registered code, the byte-exact human sentence, `error === message`,
+key order `error,code,message`, a non-empty `error`, and an HTTP-phrase
+reject list {Conflict, Bad Request, Not Found, Gone, Unauthorized,
+Forbidden, Internal Server Error, Unprocessable Entity}. Teeth: planting
+'Conflict' back into the share quota arm reddened exactly one test;
+restored, green. The era controller suites and the quota wire-law suite
+asserted status/code/message only and passed unmodified. New
+`web-ui/tests/error-envelope.test.ts` pins the client side: `extractError`
+still checks `error` before `message` (source-text pin — a ui precedence
+change reddens it and forces a hub re-probe), the empty-string trap, and
+fixture resolution to human prose for every post-cure envelope class.
+
+Measured gates (no-swoole venue, M-HUB-04 precedent): FULL Unit serial
+4900 tests/42711 assertions → tip 4916/43242/0 failures/30 skips (delta
+exactly +16T/+531A — the new suite); the 3 errors are the swoole-only
+`RelayProxyBridgeTest` trio, 17/17 green singly on default ini, CI's
+official swoole+uv suite authoritative. S468 duration cache re-blessed
+from the tip serial junit (264 entries, +1 = the new test file). phpstan
+level 9: zero errors in all four changed PHP files (the 9 pre-existing
+host php-uv errors sit in untouched files). phpcs PSR-12 AND the repo
+ruleset: 0 errors / 0 warnings on changed files; the S299 corpus gate
+went red on three planted line-length warnings mid-lane and green after
+the fix — the gate counts warnings. `web-ui` `npm test`: 31 → 35 pass.
+SPA untouched by proof: `git diff` over `web-ui/src/` and
+`public/assets/` is 0 lines, so the conditional rebuild law does not fire.
+
 ### Fixed — M-HUB-04: the MyServers hint no longer promises a refusal string the pinned bundle never renders; the two HTTP-409 claim refusals are pinned distinguishable end to end — 2026-10-29
 
 Review `hub__casualgamer` M1: a member claiming at their quota was told

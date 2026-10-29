@@ -332,6 +332,18 @@ final class ErrorCodesContractTest extends TestCase
             'hop: errorFrame(int $status, string $code, string $message) forwards its own'
             . ' string-typed $code parameter into (new Response())->error(...) — the inner'
             . ' variable hop inherits the direct call-site sweep at errorFrame@2 above',
+        'Http/Controllers/InviteLinkController.php::memberError::error@2' =>
+            'hop: memberError(int $status, string $code, string $message) forwards its own'
+            . ' string-typed $code into (new Response())->error(...); every call site in that'
+            . ' file passes a registered literal code (unchanged from the pre-M5 `'
+            . "code' => …` envelopes), byte-pinned per arm by"
+            . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\Controllers\\MemberErrorProseTest',
+        'Http/Controllers/LibraryShareController.php::memberError::error@2' =>
+            'hop: memberError(int $status, string $code, string $message) forwards its own'
+            . ' string-typed $code into (new Response())->error(...); every call site in that'
+            . ' file passes a registered literal code (unchanged from the pre-M5 `'
+            . "code' => …` envelopes), byte-pinned per arm by"
+            . ' \\Phlix\\Hub\\Tests\\Unit\\Http\\Controllers\\MemberErrorProseTest',
         'Http/Middleware/AlexaSignatureMiddleware.php::reject::error@2' =>
             'hop: reject() emits (new Response())->error(400, $wireCode, $code) where $wireCode'
             . ' is a REJECTION_CODE_MAP value — registered dotted twins AND the whole frame'
