@@ -157,6 +157,18 @@ final class ServerClaimController
                 'CLAIM_CODE_ALREADY_CLAIMED',
                 ['message' => 'Claim code has already been used'],
             ),
+            // M-HUB-04 wire law: this frame is honest end to end — the
+            // registered `quota.exceeded` code plus the human sentence in
+            // `message` ship byte-exact (pinned by QuotaExceededWireTest and
+            // ServerClaimQuotaMessageTest). The user-visible "already
+            // claimed" mislabel is NOT produced here: the pinned @phlix/ui
+            // claim layer resolves its failure kind from a code table that
+            // lacks `quota.exceeded`, so this 409 falls to its status-keyed
+            // already-claimed copy until the ui tag carries the mapping
+            // (cure owed to that repo; contracts law freezes the code, so
+            // reshaping status/code here would break every registered
+            // consumer). Hub half: never let a default message table
+            // overwrite the sentence in `error()` — that reds the suite.
             'SERVER_CAP_REACHED' => (new Response())->error(
                 409,
                 'quota.exceeded',

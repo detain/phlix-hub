@@ -6,6 +6,59 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-04: the MyServers hint no longer promises a refusal string the pinned bundle never renders; the two HTTP-409 claim refusals are pinned distinguishable end to end — 2026-10-29
+
+Review `hub__casualgamer` M1: a member claiming at their quota was told
+"already claimed". Re-measured at the tip, the review's server-side premise
+is FALSE: `ServerClaimController::mapError` emits the quota arm as the
+registered `quota.exceeded` code with 'Server quota reached for this
+account' riding `message`, and `Response::error` merges
+`['error'=>…,'code'=>…] + $extra` — the left-hand registered pair structurally
+wins, no default table can clobber it. The residual mislabel is CLIENT-side:
+the pinned `@phlix/ui` `claimServer.ts` resolves failure kind from a code
+table that lacks `quota.exceeded`, so the 409 falls to its status-keyed
+'already_claimed' copy — that cure belongs to the ui repo + tag cascade
+(contracts law freezes the hub's status/code; reshaping here would break
+every registered consumer). The genuinely hub-owned defect was the promise
+itself: `web-ui/src/pages/HubMyServersPage.vue` told members a refused claim
+arrives with “Server quota reached” — copy the vendored bundle never emits
+(grep-proven: the parent-served `index-BGYDJAxx.js` carries the quoted
+string verbatim). The hint now describes the CAUSE (a correct code refused
+anyway ⇒ the `server.max_servers_per_user` cap) — wording that stays true
+before and after the ui mapping lands.
+
+Hub half of the law pinned by the new `ServerClaimQuotaMessageTest`
+(4 tests, 19 assertions): both 409 arms render byte-exact registered frames,
+they stay distinguishable on `message`/`code`/`error` simultaneously, and
+the `error()` merge precedence is asserted so any future default-message
+clobber reddens the suite instead of mislabelling members. Teeth proven by
+two mutations in a scratch parent checkout: merging extras LAST (clobber)
+kills the precedence pin; copying the already-claimed sentence into the
+quota arm (the exact regression class this review names) kills 2 tests. The
+S468 duration cache carries the new file (`DurationCacheTracksSuiteTest`
+reds on inventory drift — 3 reds demonstrated on the parent cache with only
+the new file added, so the rotation is load-bearing, not churn). The SPA was
+rebuilt from the committed lockfile (`npm@11 ci && vue-tsc && vite build`):
+58 chunk/map pairs rotate on content hash, `index-CjtIAQuW.js` replaces
+`index-BGYDJAxx.js` (+manifest +index.html refs), and the on-disk artefacts
+are byte-reproducible — a second clean build leaves the 210-file tree at the
+same aggregate md5 `4ede0548d9d00937c73d1caff451b365`, satisfying the S253
+gate premise locally. ZERO new wire codes.
+
+Measured gates (no-swoole venue — host swoole 6.0.2-dev segfaults
+`CuratedHookDeliveryProbeTest`, reproduced exit 139): FULL Unit serial
+parent 4896 tests/42691 assertions/3 env-errors/30 skips → tip
+4900/42711/3/30 (delta exactly +4T/+20A: 19 from the new suite, 1 from
+`CoverageMetadataPolicyTest` iterating one more tracked file); the 3 env
+errors are the swoole-only `RelayProxyBridgeTest` trio, 17/17 green run
+singly on default ini, and CI's official swoole+uv suite is authoritative.
+phpstan level 9: tip and parent carry the SAME 9 pre-existing host-env
+errors (missing php-uv), zero in touched files. phpcs PSR-12 AND the repo
+ruleset: exit 0 on both changed PHP files. `web-ui` `npm test`: 31 pass.
+The "2 of 3 servers used" usage readout the review also asks for needs a
+vendored-`MyServersPage` render change (payload-only bytes today would ship
+dead) and rides the same ui cascade.
+
 ### Fixed — M-HUB-03: the count=1 `:8804` relay worker survives a throwing frame handler — per-frame guard absorbs the fan-out throw, answers canonical sockets with the registered `HANDLER_ERROR`, keeps every room alive — 2026-10-29
 
 Review `hub__asphp`: `SyncPlayRelayWorker::onMessage()` guards its edges
