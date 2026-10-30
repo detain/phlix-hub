@@ -78,7 +78,10 @@ You can use the public Hub or run your own — the same codebase powers both.
   with read-only or read/write permission levels.
 - **Invite links** — single-use, signed invite links that grant library access to a recipient.
 - **Hub-to-hub federation** — federate with peer hubs to share libraries across hubs, with
-  per-peer sessions and admin delegation.
+  per-peer sessions and admin delegation. Honest limit: delegation is currently local
+  bookkeeping only — `createAdminDelegation` writes the DB row plus an audit entry, but the
+  master-side wire push is not implemented, so no `admin_delegation` frame ever reaches the
+  peer today (the reserved envelope is documented as such on `:8805` in the OpenAPI spec).
 - **Media requests** — a Jellyseerr-class request queue. Users request movies/series; admins
   approve, and the Hub talks to Sonarr/Radarr to fulfil them.
 - **Web UI & admin console** — the hub's front door is a Vue SPA (the shared `@phlix/ui` design
@@ -129,7 +132,18 @@ Supporting pieces:
 
 ## Requirements
 
-- **PHP 8.3+** with the `pcntl`, `posix`, `json`, `mbstring`, `curl`, and `sodium` extensions
+- **PHP 8.3+**. Nine extensions are hard boot gates — the hub refuses to start without them
+  (`scripts/assert-required-extensions.php`, each entry citing the exact symbol the code calls):
+  `openssl`, `curl`, `sodium`, `mbstring`, `json`, `hash`, `filter`, `ctype`, `posix`.
+  `openssl` is additionally what makes any TLS dial (federation `wss://`/`https://` masters,
+  relay TLS) possible at runtime — without it those paths fail loud, not silent.
+- **`pcntl`** — not boot-gated (Workerman requires it for process management rather than hub
+  source calling it directly; it ships with Ubuntu's `php-cli` package).
+- **Swoole + php-uv are recommended, not required.** They enable Workerman's coroutine runtime;
+  the hub runs without them but logs an explicit `Swoole extension not detected — coroutine
+  runtime will not be active` warning at boot. `scripts/install.sh` compiles both from source;
+  the manual package list below deliberately omits them (apt has no php-swoole on the supported
+  releases) — build them or use `ghcr.io/detain/phlix-base`, which carries PHP 8.3 + Swoole + php-uv.
 - **MySQL 8.0+** (or MariaDB 10.6+)
 - **Composer 2**
 - A POSIX host (Linux recommended; Workerman uses `pcntl`/`posix` for process management)
@@ -747,7 +761,12 @@ development fallbacks.
 #### Security & posture envs
 
 Verified against `config/` and the consuming classes; each default preserves shipped behaviour.
-Where a live `hub_settings` twin exists (admin-console override, no restart), it is named.
+Where a live `hub_settings` twin exists (admin-console override), it is named. Exactly two
+twin'd keys carry `restart: true` in the vendored schema (`@phlix/shared` `hub-settings.schema.json`):
+`server.metrics.enabled` and `server.rate_limit` — for those, the admin-console value is read at
+boot per worker, so changing it needs a restart to take effect (all other twins are live-per-request).
+The same law cuts the other way for rate limiting: `server.rate_limit` (a JSON override) merges over
+the `PHLIX_HUB_RATELIMIT_*` envs below, so when it is set the env defaults are NOT the whole truth.
 
 | Variable | Default | What it does / unblocks |
 |----------|---------|-------------------------|
@@ -779,35 +798,47 @@ only behind a reverse proxy or port map that breaks same-origin:
 #### Rate limiting ([`config/server.php`](config/server.php) `rate_limit`)
 
 Each abuse-prone surface has its own rate limiter (a single login-grade limiter is wrong for
-everything but login). Five surfaces use a per-worker in-memory limiter; **`login` alone is
-shared and DB-backed** (see the per-worker caveat below). Every threshold is env-overridable;
-absent keys fall back to the defaults below. HTTP surfaces that trip return **429** with a
-`Retry-After` header and `{"error":"Too Many Requests","code":"rate_limited"}`; the WebSocket
-handshakes (:8802/:8803) reject with WS close code **1013** (Try Again Later) instead.
+everything but login). Thirteen profiles exist in three custody postures: **`login`, `mcp`, and
+`signup` are shared and DB-backed**; six HTTP surfaces (`proxy`, `heartbeat`, `jwks`, `alexa`,
+`server_claims`, `invite_redeem`) use per-worker in-memory limiters (soft-global — see the caveat
+below); the four `count=1`-worker surfaces (`relay_connect`, `client_mount`, `federation_connect`,
+`federation_frame`) are per-worker too, but per-worker *is* global there. Every threshold is
+env-overridable; absent keys fall back to the defaults below. HTTP surfaces that trip return
+**429** with a `Retry-After` header and `{"error":"Too Many Requests","code":"rate_limited"}`; the
+WebSocket handshakes (:8802/:8803/:8805) reject with WS close code **1013** (Try Again Later) instead.
 
 | Variable | Default | Surface / key |
 |----------|---------|---------------|
 | `PHLIX_HUB_RATELIMIT_CAP` | `10000` | Max distinct keys tracked per limiter (memory ceiling) |
-| `PHLIX_HUB_RATELIMIT_LOGIN_MAX` / `_LOGIN_WINDOW` | `5` / `900` | Login attempts, keyed by identity |
+| `PHLIX_HUB_RATELIMIT_LOGIN_MAX` / `_LOGIN_WINDOW` | `5` / `900` | Login attempts, keyed by identity — **DB-backed, global** |
+| `PHLIX_HUB_RATELIMIT_MCP_MAX` / `_MCP_WINDOW` | `10` / `900` | MCP personal-access-token auth failures, keyed `mcp:auth:*` — **DB-backed, global** |
+| `PHLIX_HUB_RATELIMIT_SIGNUP_MAX` / `_SIGNUP_WINDOW` | `3` / `3600` | Account signup attempts, keyed `auth:signup:<ip>` — **DB-backed, global**, counts successes too |
 | `PHLIX_HUB_RATELIMIT_PROXY_MAX` / `_PROXY_WINDOW` | `600` / `60` | Relay proxy, keyed `proxy:{userId}` (hit after the auth gate; generous for HLS bursts) |
 | `PHLIX_HUB_RATELIMIT_HEARTBEAT_MAX` / `_HEARTBEAT_WINDOW` | `30` / `60` | Server heartbeat, keyed `heartbeat:{serverId}` (after JWT validation) |
 | `PHLIX_HUB_RATELIMIT_JWKS_MAX` / `_JWKS_WINDOW` | `120` / `60` | `/.well-known/jwks.json`, keyed `jwks:{ip}` |
-| `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP |
-| `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP |
+| `PHLIX_HUB_RATELIMIT_ALEXA_MAX` / `_ALEXA_WINDOW` | `60` / `60` | Alexa skill endpoint, keyed `alexa:<trusted ip>` (flood-cost cap only — Amazon's RSA signature is the credential) |
+| `PHLIX_HUB_RATELIMIT_SERVER_CLAIMS_MAX` / `_SERVER_CLAIMS_WINDOW` | `60` / `60` | Server-claim pairing trio, keyed `server_claims:{new,status,claim}:<trusted ip>` |
+| `PHLIX_HUB_RATELIMIT_INVITE_REDEEM_MAX` / `_INVITE_REDEEM_WINDOW` | `20` / `60` | Invite-link redemption, keyed `invite_redeem:{userId}` (attributable member; bounds the burn+share write chain) |
+| `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP — `count=1` worker, truly global |
+| `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP — `count=1` worker, truly global |
+| `PHLIX_HUB_RATELIMIT_FEDERATION_CONNECT_MAX` / `_FEDERATION_CONNECT_WINDOW` | `10` / `60` | :8805 inbound federation connects (master role), keyed `federation_connect:<trusted ip>` — `count=1` worker, truly global |
+| `PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_MAX` / `_FEDERATION_FRAME_WINDOW` | `120` / `60` | :8805 federation frames, both roles, keyed `federation_frame:<remote peer hub id>` — `count=1` worker, truly global |
 | `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` | Trusted proxy IPs/CIDRs used to resolve the real client address for the IP-keyed limiters (`src/Common/Http/TrustedProxyResolver.php`) — a forgeable leftmost `X-Forwarded-For` is never trusted |
 
 > **Per-worker vs global caveat.** Most thresholds are enforced **per worker process**. The
-> :8802/:8803 relay workers are `count=1`, so per-worker == global for `relay_connect` /
-> `client_mount`. `proxy`, `heartbeat`, and `jwks` run across `HUB_WORKERS` HTTP workers, so
-> their effective soft-global limit is roughly `max × HUB_WORKERS` — a documented, accepted
-> tradeoff (a strict global cap for these would require a shared store, Redis/DB, and is future
-> work).
+> :8802/:8803/:8805 relay and federation workers are `count=1`, so per-worker == global for
+> `relay_connect` / `client_mount` / `federation_connect` / `federation_frame`. `proxy`,
+> `heartbeat`, `jwks`, `alexa`, `server_claims`, and `invite_redeem` run across `HUB_WORKERS`
+> HTTP workers, so their effective soft-global limit is roughly `max × HUB_WORKERS` — a
+> documented, accepted tradeoff (a strict global cap for these would require a shared store,
+> Redis/DB, and is future work).
 >
-> **`login` is the exception — it is genuinely global.** Its bucket is backed by the shared
-> `login_rate_limit` DB table (migration `040_login_rate_limit`), so ALL HTTP workers share one
-> counter per key and the **5/900 budget is actually 5/900** — not the `~5 × HUB_WORKERS / 900`
-> (≈20/900 with 4 workers, first 429 near attempt ~9) it was when every surface was worker-local
-> (HB-4.6 "Option B").
+> **`login`, `mcp`, and `signup` are the exceptions — they are genuinely global.** Their buckets
+> are backed by the shared `login_rate_limit` DB table (migration `040_login_rate_limit`), so ALL
+> HTTP workers share one counter per key and the **5/900, 10/900, and 3/3600 budgets are actually
+> 5/900, 10/900, and 3/3600** — not the `~max × HUB_WORKERS` shape (≈20/900 with 4 workers, first
+> 429 near attempt ~9) login had before HB-4.6 "Option B" moved credential-guessing surfaces onto
+> the shared store.
 
 ### Database ([`config/database.php`](config/database.php))
 

@@ -386,11 +386,13 @@ final class RelaySessionManagerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
 
-        /** @var list<array{sql: string, params: mixed}> $calls */
+        /** @var list<array{sql: string, params: array<string, mixed>}> $calls */
         $calls = [];
         $db->method('query')->willReturnCallback(
             function (string $sql, $params = null) use (&$calls): void {
-                $calls[] = ['sql' => $sql, 'params' => $params];
+                /** @var array<string, mixed> $bind */
+                $bind = is_array($params) ? $params : [];
+                $calls[] = ['sql' => $sql, 'params' => $bind];
             },
         );
 
@@ -422,11 +424,13 @@ final class RelaySessionManagerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
 
-        /** @var list<array{sql: string, params: mixed}> $calls */
+        /** @var list<array{sql: string, params: array<string, mixed>}> $calls */
         $calls = [];
         $db->method('query')->willReturnCallback(
             function (string $sql, $params = null) use (&$calls): void {
-                $calls[] = ['sql' => $sql, 'params' => $params];
+                /** @var array<string, mixed> $bind */
+                $bind = is_array($params) ? $params : [];
+                $calls[] = ['sql' => $sql, 'params' => $bind];
             },
         );
 

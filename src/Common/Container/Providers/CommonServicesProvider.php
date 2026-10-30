@@ -130,6 +130,8 @@ final class CommonServicesProvider implements ServiceProviderInterface
                 // among them deliberately (its guesser is an authenticated,
                 // account-metered user against a ~2^40/600s space; see the
                 // SERVER_CLAIMS const docblock for the full alexa-posture law).
+                // invite_redeem joins the server_claims class when it landed
+                // (minors campaign M-HUB-21): authenticated, member-keyed.
                 $definitions[$id] = factory(
                     static function (Connection $db) use ($spec, $rateLimit, $rateLimitOverride): DbRateLimiter {
                         /** @var array{max: int, window: int} $eff */

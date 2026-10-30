@@ -4479,7 +4479,12 @@ x-phlix-websockets:
       is the mutual Ed25519 proof-of-key handshake below: the master signs HELLO_ACK with its hub
       keypair, the leaf verifies it against the master's registered public_key, then the leaf proves
       possession of its registered key over the ack's single-use nonce. The channel is VERIFIED only
-      after both proofs; every sync payload is dropped and audited before that. The worker is started
+      after both proofs; every sync payload is dropped and audited before that. Handshake frames
+      negotiate the protocol via an optional `protocol_version` field: absent means legacy version 1,
+      a present value other than 1 is refused on both legs with reason `protocol_version_mismatch`
+      (master: before any state or audit write; leaf: loud close + backoff). A pending handshake
+      whose `hub_hello_auth` never arrives ages out after 30 s — the next heartbeat on that link
+      closes it with DISCONNECTED {reason: hello_auth_timeout}. The worker is started
       pre-fork from HubServicesProvider::boot(), because a Workerman Worker must be constructed
       before runAll().
     encoding: >-
@@ -4489,8 +4494,8 @@ x-phlix-websockets:
       wire types: reserved in the vendored Phlix\Shared\Relay\RelayFrameType enum, never emitted,
       ignored on receipt.
     messages:
-      - "text hub_hello — leaf→master: {type,hub_id,hub_name,public_key,role:'leaf',capabilities}"
-      - "text hub_hello_ack — master→leaf: {type,session_id,master_hub_id,role:'master',capabilities,nonce,signature}; signature = Ed25519 over 'phlix-federation/hello-ack/v1\\n{session_id}\\n{master_hub_id}\\n{nonce}' by the master hub key"
+      - "text hub_hello — leaf→master: {type,protocol_version,hub_id,hub_name,public_key,role:'leaf',capabilities}; protocol_version optional — absent = legacy v1, present ≠ 1 refused 'protocol_version_mismatch' before any state read"
+      - "text hub_hello_ack — master→leaf: {type,protocol_version,session_id,master_hub_id,role:'master',capabilities,nonce,signature}; protocol_version = 1 on the wire (absent on acks from legacy masters is accepted); signature = Ed25519 over 'phlix-federation/hello-ack/v1\\n{session_id}\\n{master_hub_id}\\n{nonce}' by the master hub key"
       - "text hub_hello_auth — leaf→master: {type,leaf_hub_id,session_id,signature}; signature = Ed25519 over 'phlix-federation/hello-auth/v1\\n{session_id}\\n{nonce}\\n{leaf_hub_id}' by the leaf hub key registered on the peer row; nonce is single-use, and the proof is bound to its carrier socket — a replay over a superseded connection is refused ('handshake_stale_connection') without burning the live ceremony's nonce"
       - "0x05 DATA envelope, JSON payload {shares:[{id,peer_id,library_id,library_name,permission,status}]} — leaf↔master (emitted AND accepted in BOTH directions: the master pushes its offers down via FederationMasterPusher::pushOffer and the post-hello replay; the leaf pushes its offers up via FederationPeerManager::pushLibraryShare); refused pre-verification on both roles"
       - "0x05 DATA envelope, JSON payload {share_id} — leaf↔master, offer revoked (emitted by either side: pushRevocation on the master side, FederationPeerManager::pushLibraryShareRevoked on the leaf side; accepted by both handlers); refused pre-verification"

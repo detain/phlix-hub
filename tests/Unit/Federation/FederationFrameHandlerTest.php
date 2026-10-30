@@ -46,6 +46,13 @@ final class FederationFrameHandlerTest extends TestCase
      */
     private array $sentFrames = [];
 
+    /**
+     * close() call count per recording connection (spl_object_id keyed).
+     *
+     * @var array<int, int>
+     */
+    private array $closeCounts = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -302,14 +309,25 @@ final class FederationFrameHandlerTest extends TestCase
         $conn = $this->createMock(ConnectionInterface::class);
         $id = spl_object_id($conn);
         $this->sentFrames[$id] = [];
+        $this->closeCounts[$id] = 0;
         $conn->method('send')->willReturnCallback(
             function (string $data) use ($id): void {
                 $this->sentFrames[$id][] = $data;
             },
         );
-        $conn->method('close');
+        $conn->method('close')->willReturnCallback(
+            function () use ($id): void {
+                $this->closeCounts[$id]++;
+            },
+        );
 
         return $conn;
+    }
+
+    /** How many times the given recording connection was closed. */
+    private function closeCountOf(ConnectionInterface $conn): int
+    {
+        return $this->closeCounts[spl_object_id($conn)] ?? 0;
     }
 
     /**
@@ -993,6 +1011,122 @@ final class FederationFrameHandlerTest extends TestCase
         $handler->handleBinaryFrame('leaf-hub-1', '', 6);
 
         self::assertFalse($this->realConnMgr->isConnected('leaf-hub-1'), 'Zombie link must be unmapped');
+    }
+
+    /**
+     * Minors campaign M-HUB-11: a HELLO claiming a protocol version this
+     * build does not speak is refused at the very TOP of handleHubHello —
+     * before the peer-key lookup, before any session/peer write, and with NO
+     * audit row (pre-auth frames must not amplify DB writes).
+     */
+    public function testHubHelloRefusesMismatchedVersionWithoutStateReads(): void
+    {
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->expects(self::never())->method('getPeerByPublicKey');
+        $hubRepo->expects(self::never())->method('updatePeerStatus');
+        $sessions = $this->createMock(FederationSessionManager::class);
+        $sessions->expects(self::never())->method('registerSession');
+        $sessions->expects(self::never())->method('beginHandshake');
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->expects(self::never())->method('logHubConnect');
+
+        $conn = $this->recordingConnection();
+        $handler = $this->handler($hubRepo, $sessions, null, $audit);
+        $result = $handler->handleTextFrame(
+            'leaf-hub-1',
+            '{"type":"hub_hello","protocol_version":2,"public_key":"valid_key","hub_id":"leaf-hub-1"}',
+            $conn,
+        );
+
+        self::assertSame('protocol_version_mismatch', $result);
+        self::assertSame([], $this->textFramesOf($conn), 'A refused HELLO must never answer with an ACK');
+    }
+
+    /**
+     * Minors campaign M-HUB-11: the negotiation is EXACT — a string "1" is
+     * not the integer 1. Sloppy encoders get the same loud refusal.
+     */
+    public function testHubHelloRefusesNonIntegerVersion(): void
+    {
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->expects(self::never())->method('getPeerByPublicKey');
+
+        $conn = $this->recordingConnection();
+        $handler = $this->handler($hubRepo);
+        $result = $handler->handleTextFrame(
+            'leaf-hub-1',
+            '{"type":"hub_hello","protocol_version":"1","public_key":"valid_key","hub_id":"leaf-hub-1"}',
+            $conn,
+        );
+
+        self::assertSame('protocol_version_mismatch', $result);
+    }
+
+    /**
+     * Minors campaign M-HUB-11, positive legs: an ABSENT version is legacy v1
+     * and proceeds (every pre-versioning test in this file pins that shape);
+     * an EXPLICIT version 1 proceeds too, and the master's ACK answers with
+     * the negotiated version so the leaf can apply the same law.
+     */
+    public function testHubHelloAcceptsExplicitVersionAndEchoesItOnAck(): void
+    {
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->method('getPeerByPublicKey')->willReturn($this->peerRow('connected'));
+        $hubRepo->method('getHubConfig')->willReturn(['id' => 'master-hub-1']);
+
+        $sessions = $this->createMock(FederationSessionManager::class);
+        $sessions->method('registerSession')->willReturn('session-uuid-1');
+        $sessions->expects(self::once())->method('beginHandshake');
+
+        $conn = $this->recordingConnection();
+        $this->realConnMgr->addConnection('leaf-hub-1', $conn);
+
+        $handler = $this->handler($hubRepo, $sessions);
+        $result = $handler->handleTextFrame(
+            'leaf-hub-1',
+            '{"type":"hub_hello","protocol_version":1,'
+                . '"public_key":"valid_key","hub_id":"leaf-hub-1","hub_name":"Leaf"}',
+            $conn,
+        );
+
+        self::assertNull($result, 'An explicit v1 HELLO must be accepted exactly like a legacy one');
+
+        $ack = $this->lastAckOf($conn);
+        self::assertSame(
+            FederationHandshake::PROTOCOL_VERSION,
+            $ack[FederationHandshake::PROTOCOL_VERSION_FIELD] ?? null,
+            'The ACK must carry the negotiated protocol version',
+        );
+    }
+
+    /**
+     * Minors campaign M-HUB-11: a heartbeat arriving while the peer's
+     * `hub_hello_auth` proof has aged out means a half-open ceremony — the
+     * socket lives but the channel will never verify. The master abandons the
+     * handshake and closes the link with DISCONNECTED {hello_auth_timeout};
+     * touchHeartbeat must never refresh a session behind a dead ceremony.
+     */
+    public function testHeartbeatOnStalePendingHandshakeClosesHalfOpenCeremony(): void
+    {
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->method('getPeerById')->willReturn($this->peerRow('connected'));
+
+        $sessions = $this->createMock(FederationSessionManager::class);
+        $sessions->method('isPendingHandshakeStale')->with('peer-1')->willReturn(true);
+        $sessions->expects(self::once())->method('abandonHandshakesForPeer')->with('peer-1');
+        $sessions->expects(self::never())->method('touchHeartbeatByPeerId');
+
+        $conn = $this->recordingConnection();
+        $this->realConnMgr->addConnection('leaf-hub-1', $conn);
+
+        $handler = $this->handler($hubRepo, $sessions);
+        $handler->handleBinaryFrame('leaf-hub-1', '', 6); // HEARTBEAT = 0x06
+
+        self::assertFalse($this->realConnMgr->isConnected('leaf-hub-1'), 'Half-open link must be unmapped');
+        self::assertSame(1, $this->closeCountOf($conn), 'the half-open socket must be closed exactly once');
+        $frames = $this->binaryFramesOf($conn);
+        self::assertCount(1, $frames, 'Exactly one DISCONNECTED frame expected');
+        self::assertStringContainsString('hello_auth_timeout', $frames[0]);
     }
 
     // ------------------------------------------------------------ close paths

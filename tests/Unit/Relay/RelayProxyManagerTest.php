@@ -2656,7 +2656,11 @@ final class RelayProxyManagerTest extends TestCase
         // The migration-036 histogram is documented as first-byte only, so END
         // records NOTHING more — exactly ONE observation per request (H-R8 fix:
         // total round-trip is no longer blended into the latency histogram).
-        $this->assertSame(1, $this->relayLatencyObservationCount($registry));
+        // Local re-read: the registry IS mutated by the frames above, so the
+        // count is bound to a distinct expression rather than re-folding the
+        // pre-frame assertion's pure-call shape.
+        $observationsAfterEnd = $this->relayLatencyObservationCount($registry);
+        $this->assertSame(1, $observationsAfterEnd);
     }
 
     public function testStreamingRequestRecordsOnlyFirstByteLatencyNotStreamDuration(): void

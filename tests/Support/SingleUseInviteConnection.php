@@ -105,6 +105,17 @@ final class SingleUseInviteConnection extends Connection
             return 0;
         }
 
+        // Minors campaign M-HUB-21 refund arm: `use_count = use_count - 1`
+        // guarded at zero — decrements iff the counter is above zero and
+        // reports affected rows like a real UPDATE would.
+        if (str_contains($sql, 'UPDATE invite_links') && str_contains($sql, 'use_count - 1')) {
+            if ($this->useCount > 0) {
+                $this->useCount--;
+                return 1;
+            }
+            return 0;
+        }
+
         if (str_contains($sql, 'SELECT * FROM invite_links')) {
             if (!$this->exists) {
                 return [];

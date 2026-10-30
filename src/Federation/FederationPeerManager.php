@@ -1050,6 +1050,7 @@ class FederationPeerManager
 
         $payload = json_encode([
             'type' => 'hub_hello',
+            FederationHandshake::PROTOCOL_VERSION_FIELD => FederationHandshake::PROTOCOL_VERSION,
             'hub_id' => $hubId,
             'hub_name' => $hubName,
             'public_key' => $publicKey,
@@ -1178,6 +1179,19 @@ class FederationPeerManager
         $peerName = is_string($masterPeer['name'] ?? null) ? $masterPeer['name'] : 'master';
         /** @var string $masterPublicKey */
         $masterPublicKey = is_string($masterPeer['public_key'] ?? null) ? $masterPeer['public_key'] : '';
+
+        // Minors campaign M-HUB-11: version gate BEFORE proof parsing — a
+        // master speaking a protocol this build does not implement is refused
+        // outright (the refusal is about the FRAME, not any claim inside it),
+        // with the same loud close + audit + backoff as every other ack
+        // refusal. An absent field is a legacy v1 master and proceeds.
+        /** @var mixed $rawAckVersion */
+        $rawAckVersion = $msg[FederationHandshake::PROTOCOL_VERSION_FIELD] ?? null;
+        if (!FederationHandshake::acceptsProtocolVersion($rawAckVersion)) {
+            $this->refuseHelloAck($hubId, $peerName, $ackHubId, 'protocol_version_mismatch');
+
+            return;
+        }
 
         // H-4: proof before claims. A signed handshake is the ONLY thing that
         // makes this ack the master's word — until it verifies, not one of

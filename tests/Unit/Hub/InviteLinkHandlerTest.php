@@ -340,6 +340,109 @@ final class InviteLinkHandlerTest extends TestCase
         self::assertArrayNotHasKey(':token_hash', $updates[0]['params']);
     }
 
+    /**
+     * Minors campaign M-HUB-21: when a GRANT step fails AFTER the atomic
+     * burn (here: the share cap tripping inside shareLibrary), the burned use
+     * must be refunded — the failed redeem costs nothing and the link stays
+     * redeemable. Pins the original error propagates unchanged, the refund
+     * UPDATE shape, and the counter back where it started.
+     */
+    public function testGrantFailureAfterBurnRefundsTheUse(): void
+    {
+        $db = new SingleUseInviteConnection(maxUses: 1, useCount: 0);
+
+        $sharing = $this->createMock(LibrarySharingHandler::class);
+        $sharing->method('shareLibrary')->willThrowException(
+            new InvalidArgumentException('SERVER_SHARE_CAP_REACHED', 409),
+        );
+        $handler = new InviteLinkHandler($db, $sharing, $this->createMock(StructuredLogger::class));
+
+        try {
+            $handler->redeemInviteLink($this->opaqueInviteToken(), 'redeemer-1');
+            self::fail('The original cap failure must propagate');
+        } catch (InvalidArgumentException $e) {
+            self::assertSame(409, $e->getCode());
+            self::assertSame('SERVER_SHARE_CAP_REACHED', $e->getMessage());
+        }
+
+        self::assertSame(0, $db->useCount(), 'a failed redeem must leave the invite un-burned');
+
+        $refund = array_values(array_filter(
+            $db->calls,
+            static fn (array $call): bool => str_contains($call['sql'], 'use_count - 1'),
+        ));
+        self::assertCount(1, $refund, 'exactly one refund UPDATE issued');
+        self::assertStringContainsString('UPDATE invite_links', $refund[0]['sql']);
+        self::assertStringContainsString('use_count > 0', $refund[0]['sql'], 'the refund is bounded at zero');
+        self::assertArrayHasKey('token_hash', $refund[0]['params']);
+    }
+
+    /**
+     * Minors campaign M-HUB-21, worst leg: if the REFUND statement itself
+     * fails, the user still gets the ORIGINAL error (the refund failure must
+     * never mask it), and the refund failure is logged loudly.
+     */
+    public function testRefundFailureMasksNothingAndPropagatesOriginalError(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            static function (string $sql, $params = null) {
+                if (str_contains($sql, 'SELECT * FROM invite_links')) {
+                    return [[
+                        'owner_user_id' => 'owner-1',
+                        'server_id' => 'server-1',
+                        'library_id' => 'lib-1',
+                        'permission' => 'read',
+                        'max_uses' => 1,
+                        'use_count' => 0,
+                        'expires_at' => null,
+                    ]];
+                }
+                if (str_contains($sql, 'use_count = use_count + 1')) {
+                    return 1; // the burn claims successfully
+                }
+                if (str_contains($sql, 'use_count - 1')) {
+                    throw new \RuntimeException('refund statement exploded');
+                }
+                if (str_contains($sql, 'FROM servers')) {
+                    return [['server_name' => 'Test Server']];
+                }
+                if (str_contains($sql, 'FROM library_shares')) {
+                    return [['library_name' => 'Test Library']];
+                }
+                if (str_contains($sql, 'FROM users')) {
+                    return [['email' => 'redeemer@example.com']];
+                }
+
+                return [];
+            },
+        );
+
+        $sharing = $this->createMock(LibrarySharingHandler::class);
+        $sharing->method('shareLibrary')->willThrowException(
+            new InvalidArgumentException('SERVER_SHARE_CAP_REACHED', 409),
+        );
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::once())->method('error')->with(
+            self::stringContains('refund FAILED'),
+            self::callback(
+                static fn (array $context): bool => ($context['original_error'] ?? '') === 'SERVER_SHARE_CAP_REACHED'
+                    && str_contains((string) ($context['error'] ?? ''), 'exploded'),
+            ),
+        );
+
+        $handler = new InviteLinkHandler($db, $sharing, $logger);
+
+        try {
+            $handler->redeemInviteLink($this->opaqueInviteToken(), 'redeemer-1');
+            self::fail('The original cap failure must propagate over the refund failure');
+        } catch (InvalidArgumentException $e) {
+            self::assertSame(409, $e->getCode());
+            self::assertSame('SERVER_SHARE_CAP_REACHED', $e->getMessage());
+        }
+    }
+
     /** Zero affected rows ⇒ rejection with the exhausted 410 error. */
     public function testRedemptionRejectedWhenAlreadyExhausted(): void
     {

@@ -279,8 +279,9 @@ return [
     // Per-surface rate limiting (HB-4.6). Each surface gets its OWN RateLimiter
     // (see Phlix\Hub\Common\RateLimit\RateLimitProfiles); a single login-grade
     // 5/900 limiter is wrong for everything but login. Thresholds are PER-WORKER
-    // for nine surfaces: proxy/heartbeat/jwks/alexa/server_claims run across the
-    // HUB_WORKERS HTTP workers, so each keeps an independent per-worker counter
+    // for ten surfaces: proxy/heartbeat/jwks/alexa/server_claims/invite_redeem
+    // run across the HUB_WORKERS HTTP workers, so each keeps an independent
+    // per-worker counter
     // and the soft-global limit is ~max × HUB_WORKERS (mirrors HB-3.4);
     // relay_connect (:8802), client_mount (:8803) and the two federation
     // surfaces (:8805, both roles) run on count=1 surfaces (per-worker == global).
@@ -401,6 +402,17 @@ return [
             'federation_frame'   => [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_MAX', 120),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_WINDOW', 60),
+            ],
+            // Invite-link redemption (minors campaign M-HUB-21): 20 / 60s PER
+            // MEMBER, keyed `invite_redeem:<userId>` in InviteLinkController —
+            // authenticated surface, server-claims posture (per-worker soft
+            // global), NOT DB-backed: the bucket caps the SELECT + burn UPDATE
+            // + share-write chain cost one attributable member can charge the
+            // DB, and races against other members' last invite use. Full
+            // reasoning: RateLimitProfiles::INVITE_REDEEM.
+            'invite_redeem'      => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_INVITE_REDEEM_MAX', 20),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_INVITE_REDEEM_WINDOW', 60),
             ],
         ];
     })(),

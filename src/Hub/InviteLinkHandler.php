@@ -14,6 +14,7 @@ namespace Phlix\Hub\Hub;
 use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -222,23 +223,38 @@ class InviteLinkHandler
             throw new InvalidArgumentException('Invite link has been exhausted', 410);
         }
 
-        $serverName = $this->getServerName($serverId);
-        /** @var string $libraryName */
-        $libraryName = $libraryId !== null ? $this->getLibraryName($serverId, $libraryId) : 'All Libraries';
+        try {
+            $serverName = $this->getServerName($serverId);
+            /** @var string $libraryName */
+            $libraryName = $libraryId !== null ? $this->getLibraryName($serverId, $libraryId) : 'All Libraries';
 
-        $redeemerEmail = $this->getUserEmail($redeemerUserId);
-        if ($redeemerEmail === null) {
-            throw new InvalidArgumentException('User not found', 404);
+            $redeemerEmail = $this->getUserEmail($redeemerUserId);
+            if ($redeemerEmail === null) {
+                throw new InvalidArgumentException('User not found', 404);
+            }
+
+            $share = $this->sharingHandler->shareLibrary(
+                ownerId: $ownerId,
+                collaboratorEmail: $redeemerEmail,
+                serverId: $serverId,
+                libraryId: $libraryId ?? '',
+                libraryName: $libraryName,
+                permission: $permission,
+            );
+        } catch (Throwable $e) {
+            // Minors campaign M-HUB-21: the burn above is the ONLY persisted
+            // fact if any grant step fails — a server-row rename, a deleted
+            // user, or the share-cap 409 all used to leave the use consumed
+            // with nothing granted: the invite died on an error the redeemer
+            // could not act on. Refund the increment before rethrowing, so a
+            // failed redeem costs nothing and the (still-valid) link may be
+            // retried. The refund is a conditional decrement bounded at zero:
+            // it can never underflow the counter, and a refund that itself
+            // fails is logged loudly — the ORIGINAL error always propagates.
+            $this->refundInviteUse($tokenHash, $e);
+
+            throw $e;
         }
-
-        $share = $this->sharingHandler->shareLibrary(
-            ownerId: $ownerId,
-            collaboratorEmail: $redeemerEmail,
-            serverId: $serverId,
-            libraryId: $libraryId ?? '',
-            libraryName: $libraryName,
-            permission: $permission,
-        );
 
         $this->logger->info('Invite link redeemed', [
             'owner_id' => $ownerId,
@@ -249,6 +265,45 @@ class InviteLinkHandler
         ]);
 
         return $share;
+    }
+
+    /**
+     * Give a use back to an invite whose redemption failed after the atomic
+     * burn (minors campaign M-HUB-21).
+     *
+     * Best-effort by law: any failure here is logged and swallowed so the
+     * caller's original exception — the actual user-facing problem — is what
+     * propagates. The `use_count > 0` guard makes the decrement un-underflow-
+     * able even against a concurrent refund of the same row.
+     *
+     * @param string   $tokenHash sha256 of the invite token (the row key).
+     * @param Throwable $failure   The original error, for the log context.
+     *
+     * @return void
+     */
+    private function refundInviteUse(string $tokenHash, Throwable $failure): void
+    {
+        try {
+            /** @var mixed $refundResult */
+            $refundResult = $this->db->query(
+                'UPDATE invite_links
+                    SET use_count = use_count - 1
+                 WHERE token_hash = :token_hash
+                   AND use_count > 0',
+                ['token_hash' => $tokenHash],
+            );
+            $refunded = is_numeric($refundResult) ? (int) $refundResult : 0;
+
+            $this->logger->warning('Invite redemption failed after burn — use refunded', [
+                'error' => $failure->getMessage(),
+                'refunded' => $refunded === 1,
+            ]);
+        } catch (Throwable $refundFailure) {
+            $this->logger->error('Invite use refund FAILED — invite may be one use short', [
+                'error' => $refundFailure->getMessage(),
+                'original_error' => $failure->getMessage(),
+            ]);
+        }
     }
 
     /**

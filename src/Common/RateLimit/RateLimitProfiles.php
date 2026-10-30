@@ -16,15 +16,17 @@ namespace Phlix\Hub\Common\RateLimit;
  * per-worker default thresholds.
  *
  * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount /
- * mcp / alexa / signup / server-claims / federation-connect / federation-frame)
+ * mcp / alexa / signup / server-claims / federation-connect / federation-frame /
+ * invite-redeem)
  * gets its OWN limiter instance registered
  * under the matching `rate_limiter.<surface>` container id — a single shared
  * login-grade limiter is wrong for everything but login (HB-4.6).
  * {@see defaults()} maps each container id to the `config/server.php`
  * `rate_limit.<key>` override key plus the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER for nine of the twelve surfaces. `proxy`, `heartbeat`,
- * `jwks`, `alexa` and `server_claims` are enforced on the `HUB_WORKERS` HTTP
+ * Thresholds are PER-WORKER for ten of the thirteen surfaces. `proxy`, `heartbeat`,
+ * `jwks`, `alexa`, `server_claims` and `invite_redeem` are enforced on the
+ * `HUB_WORKERS` HTTP
  * workers, so each keeps an INDEPENDENT per-worker counter and the effective
  * soft-global limit is roughly `max × HUB_WORKERS` (mirrors HB-3.4);
  * `relay_connect` (the :8802 `RelayWorker`), `client_mount` (the :8803
@@ -216,6 +218,27 @@ final class RateLimitProfiles
     public const string FEDERATION_FRAME = 'rate_limiter.federation_frame';
 
     /**
+     * Container id for the invite-link redemption limiter (minors campaign
+     * M-HUB-21).
+     *
+     * PER-WORKER (soft-global), the {@see SERVER_CLAIMS} `claim` posture — and
+     * deliberately NOT the DB-backed login/mcp/signup posture: this surface is
+     * fully AUTHENTICATED (AuthMiddleware first, 401 without a member) and
+     * keyed by the redeemer's OWN user id (`invite_redeem:<userId>`), so the
+     * attacker class is one attributable member, not an anonymous guesser.
+     * The budget caps the cost the redeem path charges the DB per request —
+     * the `token_hash` SELECT, the conditional burn UPDATE, and a
+     * `shareLibrary` write chain — against token-space grinding (a 64-hex
+     * token is ~2^256, unguessable; the bucket exists to bound flood cost and
+     * any member's ability to burn OTHERS' invite inventories by racing their
+     * last use). 20 / 60s per member: no legitimate human redeems more than a
+     * couple of invites a minute; the ×HUB_WORKERS multiplier of a
+     * user-keyed bucket bounds one member's sustained rate, which stays far
+     * under any real abuse shape.
+     */
+    public const string INVITE_REDEEM = 'rate_limiter.invite_redeem';
+
+    /**
      * Map of `container id => {config key, default max, default window}`.
      *
      * `key` is the sub-key under `config/server.php`'s `rate_limit` section;
@@ -239,6 +262,7 @@ final class RateLimitProfiles
             self::SERVER_CLAIMS       => ['key' => 'server_claims',       'max' => 60,  'window' => 60],
             self::FEDERATION_CONNECT  => ['key' => 'federation_connect',  'max' => 10,  'window' => 60],
             self::FEDERATION_FRAME    => ['key' => 'federation_frame',    'max' => 120, 'window' => 60],
+            self::INVITE_REDEEM       => ['key' => 'invite_redeem',       'max' => 20,  'window' => 60],
         ];
     }
 }

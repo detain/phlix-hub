@@ -33,6 +33,20 @@ use Workerman\MySQL\Connection;
 class FederationSessionManager
 {
     /**
+     * How long a pending `hub_hello_auth` proof may stay outstanding before the
+     * master treats the ceremony as dead (minors campaign M-HUB-11).
+     *
+     * The leaf arms its own 10-second ACK watchdog (FederationPeerManager::
+     * HELLO_ACK_TIMEOUT_SECONDS); 30 s = that bound times three, giving WAN
+     * round-trip headroom while still guaranteeing a stuck half-open ceremony
+     * retires instead of squatting until the session reaper. Checked on the
+     * consume path and from the heartbeat arm — the leaf that received our
+     * ACK but never sent its proof keeps heartbeating (the socket is alive),
+     * and only this staleness rule closes the link.
+     */
+    public const int PENDING_HANDSHAKE_TIMEOUT_SECONDS = 30;
+
+    /**
      * session UUID → pending handshake state, in-process (master side only).
      *
      * Lives here — not in the frame handler — because the handshake is
@@ -40,7 +54,7 @@ class FederationSessionManager
      * Bounded: at most one entry per peer (beginHandshake prunes the peer's
      * earlier attempts), and every teardown path abandons the peer's entry.
      *
-     * @var array<string, array{peer_id: string, nonce: string}>
+     * @var array<string, array{peer_id: string, nonce: string, begun_at: int}>
      */
     private array $pendingHandshakes = [];
 
@@ -254,6 +268,7 @@ class FederationSessionManager
         $this->pendingHandshakes[$sessionId] = [
             'peer_id' => $peerId,
             'nonce' => $nonce,
+            'begun_at' => time(),
         ];
     }
 
@@ -264,18 +279,59 @@ class FederationSessionManager
      * which is what makes a replayed `hub_hello_auth` fail: there is no second read
      * of a live nonce.
      *
-     * @param string $sessionId Session UUID carried by the leaf's `hub_hello_auth`.
+     * An entry older than {@see PENDING_HANDSHAKE_TIMEOUT_SECONDS} is also
+     * removed and reported as absent (minors campaign M-HUB-11): a ceremony
+     * whose proof never arrived must not stay pending indefinitely, and the
+     * expiry check lives here so the burn path can never re-adopt a dead one.
      *
-     * @return array{peer_id: string, nonce: string}|null Pending state, or null
-     *                                                     when no handshake is pending.
+     * @param string   $sessionId Session UUID carried by the leaf's `hub_hello_auth`.
+     * @param int|null $now       Clock override for tests (epoch seconds); null = time().
+     *
+     * @return array{peer_id: string, nonce: string, begun_at: int}|null Pending state,
+     *         or null when no handshake is pending or the pending one has aged out.
      */
-    public function consumeHandshake(string $sessionId): ?array
+    public function consumeHandshake(string $sessionId, ?int $now = null): ?array
     {
         $pending = $this->pendingHandshakes[$sessionId] ?? null;
 
         unset($this->pendingHandshakes[$sessionId]);
 
+        if ($pending === null) {
+            return null;
+        }
+
+        $age = ($now ?? time()) - $pending['begun_at'];
+        if ($age > self::PENDING_HANDSHAKE_TIMEOUT_SECONDS) {
+            return null; // Aged-out ceremony: indistinguishable from never-begin — proof refused loudly upstream.
+        }
+
         return $pending;
+    }
+
+    /**
+     * Is this peer's pending handshake aged past the ceremony timeout?
+     *
+     * Used by the master's heartbeat arm to close half-open links whose leaf
+     * received the signed ACK but never completed `hub_hello_auth` (minors
+     * campaign M-HUB-11). Peers with no pending handshake (verified channels,
+     * or never-helloed sockets) are never stale by this rule.
+     *
+     * @param string   $peerId Local peer row UUID.
+     * @param int|null $now    Clock override for tests (epoch seconds); null = time().
+     *
+     * @return bool True when a pending ceremony for this peer has aged out.
+     */
+    public function isPendingHandshakeStale(string $peerId, ?int $now = null): bool
+    {
+        $cutoff = ($now ?? time()) - self::PENDING_HANDSHAKE_TIMEOUT_SECONDS;
+
+        foreach ($this->pendingHandshakes as $state) {
+            if ($state['peer_id'] === $peerId && $state['begun_at'] < $cutoff) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

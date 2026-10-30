@@ -104,9 +104,14 @@ final class CoroutineHooks
         $mask = SwooleRuntime::runtimeHookMask($config);
         $sample = self::deliver($mask);
 
+        // Strict false-check (not `?:`): getmypid() is int|false, and `false ?: -1`
+        // would also swallow a literal 0 pid while tripping
+        // RiskyTruthyFalsyComparison under psalm.
+        $pid = getmypid();
+
         self::log(sprintf(
             '[phlix] hub worker #%d coroutine hook allowlist DELIVERED: mask=0x%04x, probe %d ticks / %.0f ms',
-            (int) (getmypid() ?: -1),
+            $pid === false ? -1 : $pid,
             $mask,
             $sample['ticks'],
             $sample['blocked_ms']

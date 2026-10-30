@@ -348,7 +348,14 @@ final class FederationSessionManagerTest extends TestCase
         $manager = new FederationSessionManager($db, $logger);
         $manager->beginHandshake('sess-1', 'peer-1', 'nonce-abc');
 
-        self::assertSame(['peer_id' => 'peer-1', 'nonce' => 'nonce-abc'], $manager->consumeHandshake('sess-1'));
+        $pending = $manager->consumeHandshake('sess-1');
+        self::assertIsArray($pending);
+        self::assertSame('peer-1', $pending['peer_id']);
+        self::assertSame('nonce-abc', $pending['nonce']);
+        // Minors campaign M-HUB-11: ceremonies are age-stamped; the field is
+        // part of the consumed shape (the frame handler rides peer_id/nonce).
+        self::assertIsInt($pending['begun_at']);
+        self::assertLessThanOrEqual(1, time() - $pending['begun_at']);
         // Single-use: a second read (the replay vector) finds nothing.
         self::assertNull($manager->consumeHandshake('sess-1'), 'handshake nonce must be consumed exactly once');
     }
@@ -376,10 +383,10 @@ final class FederationSessionManagerTest extends TestCase
         $manager->beginHandshake('sess-new', 'peer-1', 'nonce-new');
 
         self::assertNull($manager->consumeHandshake('sess-old'), 'stale handshake must be abandoned');
-        self::assertSame(
-            ['peer_id' => 'peer-1', 'nonce' => 'nonce-new'],
-            $manager->consumeHandshake('sess-new'),
-        );
+        $pending = $manager->consumeHandshake('sess-new');
+        self::assertIsArray($pending);
+        self::assertSame('peer-1', $pending['peer_id']);
+        self::assertSame('nonce-new', $pending['nonce']);
     }
 
     public function testAbandonHandshakesForPeerClearsOnlyThatPeer(): void
@@ -416,5 +423,67 @@ final class FederationSessionManagerTest extends TestCase
         $manager->closeSession('sess-1');
 
         self::assertNull($manager->consumeHandshake('sess-1'), 'closing a session must burn its handshake');
+    }
+
+    /**
+     * Minors campaign M-HUB-11: a ceremony whose `hub_hello_auth` never lands
+     * must not stay pending forever. Past the timeout, consume reports it
+     * absent — a very late proof is refused exactly like a replay — and the
+     * aged entry is burned either way.
+     */
+    public function testConsumeHandshakeReportsAgedOutCeremonyAsAbsent(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        $db->expects(self::never())->method('query');
+
+        $manager = new FederationSessionManager($db, $logger);
+        $manager->beginHandshake('sess-1', 'peer-1', 'n');
+
+        $future = time() + FederationSessionManager::PENDING_HANDSHAKE_TIMEOUT_SECONDS + 1;
+        self::assertNull($manager->consumeHandshake('sess-1', $future), 'aged handshake is dead on arrival');
+        self::assertNull($manager->consumeHandshake('sess-1'), 'the aged entry must be burned, not left squatting');
+    }
+
+    /**
+     * Boundary pin (inclusive window): exactly at the timeout age the ceremony
+     * is still alive — refusal starts only when the age EXCEEDS the bound,
+     * mirroring the stale-check cutoff.
+     */
+    public function testConsumeHandshakeAllowsCeremonyAtTheTimeoutBoundary(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        $db->expects(self::never())->method('query');
+
+        $manager = new FederationSessionManager($db, $logger);
+        $manager->beginHandshake('sess-1', 'peer-1', 'n');
+
+        $boundary = time() + FederationSessionManager::PENDING_HANDSHAKE_TIMEOUT_SECONDS;
+        self::assertNotNull($manager->consumeHandshake('sess-1', $boundary));
+    }
+
+    /**
+     * Minors campaign M-HUB-11, staleness probe: per-peer, age-aware, and
+     * cleared by abandon — the exact queries the heartbeat arm depends on.
+     */
+    public function testIsPendingHandshakeStaleTracksAgeAndPeer(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        $db->expects(self::never())->method('query');
+
+        $manager = new FederationSessionManager($db, $logger);
+        $manager->beginHandshake('sess-a', 'peer-a', 'n-a');
+
+        self::assertFalse($manager->isPendingHandshakeStale('peer-a'), 'fresh ceremony is not stale');
+        self::assertFalse($manager->isPendingHandshakeStale('peer-none'), 'no pending is never stale');
+
+        $future = time() + FederationSessionManager::PENDING_HANDSHAKE_TIMEOUT_SECONDS + 1;
+        self::assertTrue($manager->isPendingHandshakeStale('peer-a', $future), 'aged ceremony is stale');
+        self::assertFalse($manager->isPendingHandshakeStale('peer-b', $future), 'staleness is per-peer');
+
+        $manager->abandonHandshakesForPeer('peer-a');
+        self::assertFalse($manager->isPendingHandshakeStale('peer-a', $future), 'abandon clears staleness');
     }
 }

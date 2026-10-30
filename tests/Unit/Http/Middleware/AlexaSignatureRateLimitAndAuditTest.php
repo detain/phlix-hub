@@ -138,8 +138,13 @@ final class AlexaSignatureRateLimitAndAuditTest extends RouteRegistrationTestCas
         // Client A spends its budget. These are unsigned requests, so each one
         // is a 400 from the signature gate — which is what proves the limiter
         // let them THROUGH rather than short-circuiting from the first hit.
-        self::assertSame(400, self::statusOf($gate($this->proxied(self::CLIENT_A))));
-        self::assertSame(400, self::statusOf($gate($this->proxied(self::CLIENT_A))));
+        // Distinct locals per call: the gate is STATEFUL (each hit consumes
+        // window budget), so the two requests must not read as one foldable
+        // pure expression to static analysis.
+        $through1 = $gate($this->proxied(self::CLIENT_A));
+        self::assertSame(400, self::statusOf($through1));
+        $through2 = $gate($this->proxied(self::CLIENT_A));
+        self::assertSame(400, self::statusOf($through2));
 
         $limited = $gate($this->proxied(self::CLIENT_A));
         self::assertNotNull($limited);

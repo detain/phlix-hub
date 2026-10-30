@@ -152,8 +152,8 @@ final class HookDelivery
             throw new HookDeliveryException(sprintf(
                 'hook-delivery probe cannot open its local listener (errno %d: %s) — refusing to '
                 . 'report delivery it did not measure',
-                (int) $errno,
-                (string) $errstr
+                $errno,
+                $errstr
             ));
         }
 

@@ -1001,6 +1001,8 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             InviteLinkController::class => factory(static function (
                 InviteLinkHandler $handler,
+                RateLimiterInterface $redeemLimiter,
+                AuditLogger $audit,
             ) use ($inviteExpiryBoot): InviteLinkController {
                 return new InviteLinkController(
                     $handler,
@@ -1012,8 +1014,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                         0,
                         31536000,
                     ),
+                    // M-HUB-21: per-member redeem budget + once-per-window audit.
+                    $redeemLimiter,
+                    $audit,
                 );
-            })->parameter('handler', get(InviteLinkHandler::class)),
+            })->parameter('handler', get(InviteLinkHandler::class))
+                ->parameter('redeemLimiter', get(RateLimitProfiles::INVITE_REDEEM))
+                ->parameter('audit', get(AuditLogger::class)),
 
             LibraryController::class => factory(static function (
                 LibrarySharingHandler $sharingHandler,

@@ -6,6 +6,73 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min42 (M-HUB-11, M-HUB-14, M-HUB-15, M-HUB-21, M-HUB-45, M-HUB-46, M-HUB-52): the untimed half-open federation ceremony and its un-negotiated wire version, the burn-without-refund invite redeem and its missing limiter, and four README truth gaps — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min42, seven live items cured
+(M-HUB-50 verified stale — the :8804/:8805 reachability prose was already
+cured at 82bd762d et al., ancestry-proven from the review base 6076559e):
+
+- **M-HUB-11** — the federation handshake gained the two missing protocol
+  guarantees. (a) *Version negotiation*: `FederationHandshake::PROTOCOL_VERSION`
+  (1) now rides both the leaf `hub_hello` and the master `hub_hello_ack`
+  payloads; a receiving side refuses a mismatched version with snake_case
+  reason `protocol_version_mismatch` (master side BEFORE any peer-table read —
+  a pre-auth mismatch logs a warning and writes no audit row; leaf side
+  before the proof-fields gate). An absent field means a legacy v1 peer and
+  is accepted, so the wire stays backward compatible. (b) *Ceremony
+  timeout*: `FederationSessionManager::beginHandshake()` now stamps
+  `begun_at`; `consumeHandshake()` treats a ceremony older than
+  `PENDING_HANDSHAKE_TIMEOUT_SECONDS` (30s — the leaf's own 10s
+  `HELLO_ACK_TIMEOUT` ×3 WAN headroom) as burned, and the master's HEARTBEAT
+  handler closes a half-open ceremony (leaf heartbeating without ever sending
+  its proof) with `DISCONNECTED {reason:"hello_auth_timeout"}` instead of
+  refreshing a session whose channel can never verify. Both zombie closes
+  share one `closeZombieLink()` helper. +10 tests, mutation-proven: gate
+  strips M1/M2 and payload-drop M5 each redden exactly their pins.
+  `openapi.yaml`/`docs/websockets.md` carry the shapes and the law.
+- **M-HUB-21** — invite redemption no longer burns on a failed grant.
+  `InviteLinkHandler::redeemInviteLink()` wraps the post-burn steps (server/
+  library/user lookups, `shareLibrary`) and refunds the use
+  (`use_count - 1`, bounded `use_count > 0`) whenever any of them throws,
+  logging the refund; if even the refund fails the original error still
+  propagates (loud `error` log, no masking). The endpoint also gains its own
+  budget: `rate_limiter.invite_redeem` (20/60s per member,
+  `PHLIX_HUB_RATELIMIT_INVITE_REDEEM_{MAX,WINDOW}`), keyed
+  `invite_redeem:<userId>`, enforced in `InviteLinkController::redeem()` via
+  the central `RateLimitException` → 429 path (no new wire codes) with a
+  once-transition `invite_redeem_rate_limited` audit. Thirteen profiles now.
+  +6 tests; refund-strip and gate-strip mutations redden exactly their pins.
+- **M-HUB-14 / M-HUB-45 / M-HUB-46 / M-HUB-15** — README truth pass. The
+  rate-limiting section counted five surfaces where the config ships
+  thirteen, claimed `login` alone was DB-backed (truth: `login`, `mcp` and
+  `signup` share the `login_rate_limit` store) and omitted the
+  `MCP`/`ALEXA`/`SERVER_CLAIMS`/`SIGNUP`/`FEDERATION_{CONNECT,FRAME}` env
+  rows entirely; all rows, the three-custody-posture doctrine and the
+  soft-global caveat now match `config/server.php`. The Security & posture
+  intro's "admin-console override, no restart" blanket names the two
+  schema `restart: true` twins (`server.metrics.enabled`,
+  `server.rate_limit`) and discloses that `server.rate_limit` merges OVER
+  the env table. The Requirements section lists the nine boot-gated
+  extensions from `scripts/assert-required-extensions.php`, gives `pcntl`
+  its honest Workerman-level status, and states the Swoole/php-uv OPTIONAL
+  degraded-fallback law (the boot warning, the installer's source build,
+  and the phlix-base image) that previously lived only in a quote block.
+- **M-HUB-52** — the federation feature bullet now discloses that admin
+  delegation is local bookkeeping until the master-side push exists:
+  `createAdminDelegation` writes the DB row + audit only, and the reserved
+  `admin_delegation` envelope never appears on the wire today (mirrors the
+  ratified openapi `:8805` text).
+- **Forward-fix of inherited static-analysis reds at 02f053b8** (the W-min41
+  tip's CI run 41026414147 was RED: 9 PHPStan + 4 Psalm):
+  `FederationFrameHandler::handleTextFrame()` returned a void handler's call
+  from a `string|null` match (master-side `hub_hello_ack` is now folded into
+  the ignore-default arm — behavior-identical); `AlexaSignatureRateLimitAndAuditTest`,
+  `RelaySessionManagerTest` and `RelayProxyManagerTest` gained the
+  distinct-expression/typed-recorder rewrites PHPStan's pure-call folding and
+  mixed-offset rules demanded; `CoroutineHooks` swapped `getmypid() ?: -1`
+  for a strict `=== false` check and `HookDelivery` dropped two casts Psalm
+  proved redundant.
+
 ### Fixed — minors W-min41 (M-HUB-03, M-HUB-18, M-HUB-42, M-HUB-44, M-HUB-47, M-HUB-51): the unguarded heartbeat-tick body, the installer's hardcoded gate ports and their false "no env override exists" comments, the `x-phlix-websockets` miscount, the stale `portSource` authorities, and upstream/downstream off the ratified vocabulary — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min41, six live items cured in-repo

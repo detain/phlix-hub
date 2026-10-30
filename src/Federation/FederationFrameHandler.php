@@ -150,8 +150,11 @@ final class FederationFrameHandler
 
         return match ($type) {
             'hub_hello' => $this->handleHubHello($hubId, $decoded),
-            'hub_hello_ack' => $this->handleHubHelloAck($hubId, $decoded),
             'hub_hello_auth' => $this->handleHelloAuth($hubId, $decoded, $connection),
+            // 'hub_hello_ack' is deliberately NOT dispatched here: the master
+            // never receives ACKs from itself (leaf-side handling lives in
+            // FederationPeerManager::handleHelloAck()), so an inbound ACK on
+            // this role is ignored exactly like an unknown frame.
             default => null, // Unknown text frames are ignored
         };
     }
@@ -206,6 +209,24 @@ final class FederationFrameHandler
      */
     private function handleHubHello(string $leafHubId, array $decoded): ?string
     {
+        // Minors campaign M-HUB-11: version gate FIRST — before the key
+        // lookup, before identity reconciliation, before any state read. A
+        // peer claiming a protocol this build does not speak is refused with
+        // a logger warning only: pre-auth frames must not write audit rows
+        // (a churned socket could amplify DB writes), and the refusal string
+        // travels back through the controller's close path as a machine
+        // reason. An absent field is legacy (version 1) and proceeds.
+        /** @var mixed $rawVersion */
+        $rawVersion = $decoded[FederationHandshake::PROTOCOL_VERSION_FIELD] ?? null;
+        if (!FederationHandshake::acceptsProtocolVersion($rawVersion)) {
+            $this->log()->warning('Federation HELLO rejected: unsupported protocol version', [
+                'route_hub_id' => $leafHubId,
+                'claimed_version' => json_encode($rawVersion, JSON_THROW_ON_ERROR),
+            ]);
+
+            return 'protocol_version_mismatch';
+        }
+
         /** @var mixed $rawPublicKey */
         $rawPublicKey = $decoded['public_key'] ?? null;
         /** @var mixed $rawHubId */
@@ -440,23 +461,6 @@ final class FederationFrameHandler
     }
 
     /**
-     * Handle `hub_hello_ack` from master hub (leaf side handler).
-     *
-     * On the master hub this is a no-op — the master never receives this
-     * from itself. Included for protocol completeness.
-     *
-     * @param string            $hubId   Peer hub UUID.
-     * @param array<string, mixed> $decoded Decoded JSON payload.
-     *
-     * @return void
-     */
-    private function handleHubHelloAck(string $hubId, array $decoded): void
-    {
-        // Master hub does not receive `hub_hello_ack` from other hubs.
-        // Leaf-side handling lives in FederationPeerManager::handleHelloAck().
-    }
-
-    /**
      * Handle a HEARTBEAT (0x06) frame.
      *
      * H-2: the heartbeat must refresh the session row ADDRESSED BY PEER —
@@ -468,7 +472,11 @@ final class FederationFrameHandler
      * DISCONNECTED and drops the WS so the leaf reconnects and re-hellos
      * instead of lingering as a zombie. (The reaper itself runs in a
      * different process and cannot close sockets; this is the in-process
-     * detection point.)
+     * detection point.) The same arm also retires a STALE pending handshake
+     * — a leaf heartbeating mid-ceremony past
+     * {@see FederationSessionManager::PENDING_HANDSHAKE_TIMEOUT_SECONDS}
+     * gets DISCONNECTED{hello_auth_timeout} and re-hellos clean
+     * (minors campaign M-HUB-11).
      *
      * @param string $hubId Peer hub UUID (from route param).
      *
@@ -489,6 +497,23 @@ final class FederationFrameHandler
         /** @var string $peerId */
         $peerId = $peer['id'];
 
+        // Minors campaign M-HUB-11: a half-open ceremony must not linger. The
+        // leaf that received our signed ACK but never sent `hub_hello_auth`
+        // keeps heartbeating — the SOCKET is alive but the CHANNEL never was
+        // verified, and touchHeartbeat would happily keep refreshing a session
+        // that nothing may flow on (unverified links drop DATA). Retire the
+        // ceremony and close the link; the leaf re-hellos on its next tick.
+        if ($this->sessions->isPendingHandshakeStale($peerId)) {
+            $this->log()->warning('Federation heartbeat on stale pending handshake — closing half-open ceremony', [
+                'peer_id' => $peerId,
+                'route_hub_id' => $hubId,
+            ]);
+            $this->sessions->abandonHandshakesForPeer($peerId);
+            $this->closeZombieLink($conn, 'hello_auth_timeout');
+
+            return;
+        }
+
         if ($this->sessions->touchHeartbeatByPeerId($peerId)) {
             return;
         }
@@ -498,10 +523,27 @@ final class FederationFrameHandler
             'route_hub_id' => $hubId,
         ]);
 
+        $this->closeZombieLink($conn, 'session_expired');
+    }
+
+    /**
+     * Shared heartbeat-teardown path (minors campaign M-HUB-11): send a
+     * DISCONNECTED frame carrying the machine reason, unmap the connection
+     * identity-scoped, and close the socket. Both dead-link arms (reaped
+     * session, stale half-open ceremony) converge here so the wire and the
+     * unmap order can never drift between them.
+     *
+     * @param ConnectionInterface $conn   The zombie WS connection.
+     * @param string              $reason Machine-readable disconnect reason.
+     *
+     * @return void
+     */
+    private function closeZombieLink(ConnectionInterface $conn, string $reason): void
+    {
         $frame = $this->encoder->encode(
             RelayFrameType::DISCONNECTED,
             0,
-            json_encode(['reason' => 'session_expired'], JSON_THROW_ON_ERROR),
+            json_encode(['reason' => $reason], JSON_THROW_ON_ERROR),
         );
 
         $this->connMgr->removeConnectionByConn($conn);
@@ -651,6 +693,7 @@ final class FederationFrameHandler
 
         $payload = json_encode([
             'type' => 'hub_hello_ack',
+            FederationHandshake::PROTOCOL_VERSION_FIELD => FederationHandshake::PROTOCOL_VERSION,
             'session_id' => $sessionId,
             'master_hub_id' => $masterHubId,
             'role' => 'master',

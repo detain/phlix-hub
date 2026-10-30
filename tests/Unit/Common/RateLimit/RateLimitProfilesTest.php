@@ -64,19 +64,37 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.signup', RateLimitProfiles::SIGNUP);
     }
 
-    public function testDefaultsReturnsAllTwelveProfiles(): void
+    public function testDefaultsReturnsAllThirteenProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
-        // Twelve since M-HUB-14 added the two federation surfaces
-        // (`federation_connect`, `federation_frame`). Ten since the M-HUB-12
+        // Thirteen since the minors campaign M-HUB-21 added `invite_redeem`.
+        // Twelve since the MAJORS-campaign M-HUB-14 added the two federation
+        // surfaces (`federation_connect`, `federation_frame`) — same-numbered
+        // namespaces differ; this line disambiguates them on purpose.
+        // Ten since the M-HUB-12
         // pairing cure added `server_claims`. Nine since the auth audit added
         // `signup` (eight since S91 added `alexa`, seven since S62 added
         // `mcp`). This count is the whole reason the test exists: it turns
         // "a profile was added but never given a config key or a default"
         // into a red, so bumping the number without adding the matching
         // `testDefaultsContains…Profile` below defeats it.
-        self::assertCount(12, $defaults);
+        self::assertCount(13, $defaults);
+    }
+
+    /**
+     * Minors campaign M-HUB-21: invite redemption gets its own member-keyed
+     * budget — 20 / 60s, config key `invite_redeem`.
+     */
+    public function testDefaultsContainsInviteRedeemProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::INVITE_REDEEM, $defaults);
+        self::assertSame('rate_limiter.invite_redeem', RateLimitProfiles::INVITE_REDEEM);
+        self::assertSame('invite_redeem', $defaults[RateLimitProfiles::INVITE_REDEEM]['key']);
+        self::assertSame(20, $defaults[RateLimitProfiles::INVITE_REDEEM]['max']);
+        self::assertSame(60, $defaults[RateLimitProfiles::INVITE_REDEEM]['window']);
     }
 
     public function testDefaultsContainsLoginProfile(): void

@@ -52,6 +52,24 @@ use function strtolower;
  */
 final class FederationHandshake
 {
+    /**
+     * Federation wire protocol version this build speaks, carried on the
+     * handshake frames as `protocol_version`.
+     *
+     * Negotiation law (M-HUB-11): the field is OPTIONAL on the wire for
+     * backward compatibility. A peer that omits it is treated as speaking
+     * version 1 (every hub released before this constant exists does exactly
+     * that). A peer that SENDS a value other than this constant is refused
+     * on both legs with reason `protocol_version_mismatch` — silence is
+     * legacy, disagreement is not. Bumping this constant without adding a
+     * compatibility path deliberately breaks links with older builds: that
+     * is the point of negotiating rather than hoping.
+     */
+    public const PROTOCOL_VERSION = 1;
+
+    /** Wire key carrying {@see PROTOCOL_VERSION} on `hub_hello` and `hub_hello_ack`. */
+    public const PROTOCOL_VERSION_FIELD = 'protocol_version';
+
     /** Domain-separation prefix for the `hub_hello_ack` proof (never on the wire). */
     private const HELLO_ACK_DOMAIN = 'phlix-federation/hello-ack/v1';
 
@@ -63,6 +81,29 @@ final class FederationHandshake
 
     /** Detached Ed25519 signature length in bytes (sodium SIGNED_BYTES). */
     private const SIGNATURE_BYTES = 64;
+
+    /**
+     * Decide whether a handshake frame's claimed protocol version is acceptable.
+     *
+     * Implements the single negotiation law shared by the master and leaf
+     * legs: an ABSENT field (null) is a legacy peer speaking version 1 and is
+     * accepted; a PRESENT field must equal {@see PROTOCOL_VERSION} exactly —
+     * anything else (wrong number, string, float, object) is a disagreement
+     * and is refused. Hand-built test payloads omitting the field stay green
+     * by this rule; forged or future-versioned payloads trip it.
+     *
+     * @param mixed $rawValue Raw `protocol_version` value from the decoded frame (null when absent).
+     *
+     * @return bool True when the frame's version may proceed through the handshake.
+     */
+    public static function acceptsProtocolVersion(mixed $rawValue): bool
+    {
+        if ($rawValue === null) {
+            return true; // Legacy peer — the field simply did not exist before versioning.
+        }
+
+        return $rawValue === self::PROTOCOL_VERSION;
+    }
 
     /**
      * Generate a fresh handshake nonce (32 random bytes, base64url, no padding).

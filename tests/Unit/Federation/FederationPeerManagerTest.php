@@ -775,6 +775,102 @@ final class FederationPeerManagerTest extends TestCase
         $this->manager->disconnectFromMaster();
     }
 
+    /**
+     * Minors campaign M-HUB-11: a master claiming a protocol version this
+     * build does not speak is refused on the FRAME law — before the proof
+     * fields are even consulted — with the same loud close + audited refusal
+     * + backoff every other ack refusal gets, and zero state adoption.
+     */
+    public function testHelloAckWithMismatchedProtocolVersionIsRefusedBeforeProof(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
+        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn($this->masterPeerRow(
+            base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+            'the-real-master-uuid',
+        ));
+        $this->hubRepo->expects(self::never())->method('setPeerLeafHubId');
+        $this->sessions->expects(self::never())->method('registerSession');
+        $this->audit->expects(self::once())
+            ->method('logHubConnect')
+            ->with(self::anything(), self::anything(), self::anything(), false, 'protocol_version_mismatch');
+
+        $ack = $this->signedAck(sodium_crypto_sign_secretkey($this->masterKp), 's1', 'the-real-master-uuid');
+        $ack[FederationHandshake::PROTOCOL_VERSION_FIELD] = FederationHandshake::PROTOCOL_VERSION + 1;
+        $this->invokeHandleHelloAck($ack);
+
+        self::assertNull($this->readProperty('sessionId'), 'Mismatched-version ack must not adopt the session');
+        self::assertFalse((bool) $this->readProperty('channelVerified'));
+    }
+
+    /**
+     * Minors campaign M-HUB-11, positive leg: an ack explicitly carrying THIS
+     * protocol version verifies and completes the ceremony exactly like the
+     * legacy (field-absent) acks the other tests drive — presence must not
+     * itself be treated as a disagreement.
+     */
+    public function testHelloAckWithMatchingProtocolVersionCompletesCeremony(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
+        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn($this->masterPeerRow(
+            base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+            'master-uuid-77',
+        ));
+        $this->sessions->method('registerSession')->willReturn('local-sess-1');
+        $this->audit->expects(self::once())
+            ->method('logHubConnect')
+            ->with(self::anything(), self::anything(), self::anything(), true);
+
+        $ack = $this->signedAck(sodium_crypto_sign_secretkey($this->masterKp), 'master-sess-9', 'master-uuid-77');
+        $ack[FederationHandshake::PROTOCOL_VERSION_FIELD] = FederationHandshake::PROTOCOL_VERSION;
+        $this->invokeHandleHelloAck($ack);
+
+        self::assertSame('master-sess-9', $this->readProperty('sessionId'));
+        $this->manager->disconnectFromMaster();
+    }
+
+    /**
+     * Minors campaign M-HUB-11 wire pin: the leaf's `hub_hello` must carry
+     * the negotiated protocol version on the wire (the master-side legacy
+     * acceptance is pinned in FederationFrameHandlerTest).
+     */
+    public function testSendHubHelloCarriesProtocolVersionOnTheWire(): void
+    {
+        $this->hubRepo->method('getHubConfig')->willReturn([
+            'id' => 'own-leaf-id',
+            'name' => 'Leaf',
+            'public_key' => 'leaf-pub-key',
+        ]);
+
+        /** @var list<string> $sent */
+        $sent = [];
+        $conn = $this->createMock(AsyncTcpConnection::class);
+        $conn->method('send')->willReturnCallback(
+            static function (string $data) use (&$sent): bool {
+                $sent[] = $data;
+                return true;
+            },
+        );
+        $property = new ReflectionProperty($this->manager, 'masterConnection');
+        $property->setAccessible(true);
+        $property->setValue($this->manager, $conn);
+
+        $method = new ReflectionMethod($this->manager, 'sendHubHello');
+        $method->setAccessible(true);
+        $method->invoke($this->manager, $this->hubRepo->getHubConfig());
+
+        self::assertCount(1, $sent);
+        /** @var array<string, mixed> $hello */
+        $hello = json_decode($sent[0], true, 4, JSON_THROW_ON_ERROR);
+        self::assertSame('hub_hello', $hello['type']);
+        self::assertSame(
+            FederationHandshake::PROTOCOL_VERSION,
+            $hello[FederationHandshake::PROTOCOL_VERSION_FIELD] ?? null,
+            'hub_hello must advertise the negotiated protocol version',
+        );
+    }
+
     // -------------------------------------- pre-verification DATA gate (H-4)
 
     /**

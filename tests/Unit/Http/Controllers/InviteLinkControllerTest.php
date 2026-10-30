@@ -7,11 +7,16 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
+use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Http\Controllers\InviteLinkController;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Tests\Support\RecordingRateLimiter;
 
 /**
  * Unit tests for {@see InviteLinkController}.
@@ -385,5 +390,162 @@ final class InviteLinkControllerTest extends TestCase
         $payload = json_decode($response->body, true);
         self::assertIsArray($payload);
         self::assertSame('invite_expired_or_exhausted', $payload['code']);
+    }
+
+    // --- minors campaign M-HUB-21: invite_redeem budget ---------------------
+
+    /**
+     * A member-keyed hit is issued BEFORE the handler runs, and a not-limited
+     * verdict passes redemption through untouched.
+     */
+    public function testRedeemIssuesMemberKeyedLimiterHitBeforeHandler(): void
+    {
+        $recorder = new RecordingRateLimiter();
+        $controller = new InviteLinkController($this->handler, null, $recorder);
+
+        $this->handler->expects(self::once())->method('redeemInviteLink')
+            ->with('tok-1', 'user-1')
+            ->willReturn(new LibraryShare(
+                id: 'share-1',
+                ownerUserId: 'owner-1',
+                collaboratorUserId: 'user-1',
+                serverId: 'server-1',
+                libraryId: 'lib-1',
+                libraryName: 'My Library',
+                permissionLevel: 'read',
+                createdAt: time(),
+            ));
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/tok-1/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $response = $controller->redeem($request, ['token' => 'tok-1']);
+
+        self::assertSame(201, $response->statusCode);
+        self::assertSame(['invite_redeem:user-1'], $recorder->hits);
+    }
+
+    /**
+     * A limited verdict throws the central RateLimitException (Application
+     * renders the 429 envelope — no new wire codes) and NEVER reaches the
+     * handler, so no burn can happen through a rate-limited redeem.
+     */
+    public function testRedeemRateLimitedThrowsBeforeHandlerAndAuditsOnceTransition(): void
+    {
+        $limiter = new class implements RateLimiterInterface {
+            public function hit(string $key): RateLimitState
+            {
+                return new RateLimitState(count: 20, remaining: 0, resetAt: time() + 30, limited: true, limit: 20);
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                return new RateLimitState(0, 0, 0, false, 20);
+            }
+        };
+
+        $audit = $this->createMock(AuditLogger::class);
+        // count === limit is the once-transition arm: audited on the trip.
+        $audit->expects(self::once())->method('logFailedAuth')
+            ->with('invite_redeem_rate_limited', ['user_id' => 'user-1']);
+
+        $controller = new InviteLinkController($this->handler, null, $limiter, $audit);
+        $this->handler->expects(self::never())->method('redeemInviteLink');
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/tok-1/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        try {
+            $controller->redeem($request, ['token' => 'tok-1']);
+            self::fail('The limiter trip must surface as RateLimitException');
+        } catch (RateLimitException $e) {
+            self::assertSame(0, $e->remaining);
+            self::assertGreaterThan(time(), $e->resetAt, 'the window reset stamp must be in the future');
+        }
+    }
+
+    /**
+     * Past the once-transition (count > limit) the trip stays hard but the
+     * audit log is not re-written per hammering request.
+     */
+    public function testRedeemRateLimitAuditsOnlyTheOnceTransition(): void
+    {
+        $limiter = new class implements RateLimiterInterface {
+            public int $count = 21;
+
+            public function hit(string $key): RateLimitState
+            {
+                return new RateLimitState(
+                    count: $this->count++,
+                    remaining: 0,
+                    resetAt: time() + 30,
+                    limited: true,
+                    limit: 20,
+                );
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                return new RateLimitState(0, 0, 0, false, 20);
+            }
+        };
+
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->expects(self::never())->method('logFailedAuth');
+
+        $controller = new InviteLinkController($this->handler, null, $limiter, $audit);
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/tok-1/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        $trips = 0;
+        for ($i = 0; $i < 2; $i++) {
+            try {
+                $controller->redeem($request, ['token' => 'tok-1']);
+            } catch (RateLimitException) {
+                $trips++;
+            }
+        }
+
+        self::assertSame(2, $trips, 'every over-limit redeem attempt must be refused');
+    }
+
+    /**
+     * Null limiter (unbooted pool, tests) = unlimited fail-open with the
+     * guard documented at the constructor — redeem proceeds.
+     */
+    public function testRedeemWithoutLimiterProceedsUnlimited(): void
+    {
+        $this->handler->expects(self::once())->method('redeemInviteLink')->willReturn(new LibraryShare(
+            id: 'share-1',
+            ownerUserId: 'owner-1',
+            collaboratorUserId: 'user-1',
+            serverId: 'server-1',
+            libraryId: '',
+            libraryName: 'All Libraries',
+            permissionLevel: 'read',
+            createdAt: time(),
+        ));
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links/tok-1/redeem';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+
+        self::assertSame(201, $this->controller->redeem($request, ['token' => 'tok-1'])->statusCode);
     }
 }

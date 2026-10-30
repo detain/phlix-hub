@@ -37,7 +37,7 @@ pings), so the story is stated per surface, traced from code:
 | `:8802` | yes — hub pings every active tunnel every 30 s (`HubServicesProvider::startInMemoryReapers()`) | yes — `IdleReaper` closes a tunnel with no inbound frame for >90 s, scanning every 60 s | the server's own 30 s heartbeat (and ping echoes) is what keeps it alive |
 | `:8803` | none | none — and none can exist | every mount is refused with close `1011` in the deployed topology (M2 banner below); the socket never lives long enough to idle |
 | `:8804` | yes — every live socket is WS-pinged every 30 s (`SyncPlayRelayWorker::LIVENESS_PING_INTERVAL_SECONDS`, M-HUB-18) | yes — silence for ≥90 s is reaped with close `1013` (`LIVENESS_REAP_AFTER_SILENCE_SECONDS`, the same HB-0.1 3× window math as `IdleReaper`); a reaped host runs the normal leave path so the party elects a live host | none for liveness — any inbound frame (data, ping, pong) refreshes the budget, and browser-class stacks answer the server ping inside the socket layer; `syncplay_time_ping` remains the app-level clock keepalive |
-| `:8805` | the dialing (leaf) role sends `HEARTBEAT` every 15 s once verified; the master's listener consumes them (see the federation table below) | liveness-reaped at the session row: a heartbeat landing on an already-reaped session closes the zombie link with `DISCONNECTED` / `session_expired` | none beyond the handshake |
+| `:8805` | the dialing (leaf) role sends `HEARTBEAT` every 15 s once verified; the master's listener consumes them (see the federation table below) | liveness-reaped at the session row: a heartbeat landing on an already-reaped session closes the zombie link with `DISCONNECTED` / `session_expired`; a heartbeat landing while a `hub_hello_auth` proof has been pending for over 30 s closes it with `DISCONNECTED` / `hello_auth_timeout` | none beyond the handshake |
 | `:8097` | `phlix-server`'s socket — its liveness story is that repository's code, not this table | — | — |
 
 Window math, close-path details and the honest gaps are in each port's own
@@ -673,18 +673,26 @@ nothing. All three handshake messages ride JSON **text** WebSocket frames (never
 binary `0x09`/`0x0A`, which are retired wire types):
 
 1. **`hub_hello`** — leaf → master:
-   `{"type":"hub_hello","hub_id":...,"hub_name":...,"public_key":...,"role":"leaf","capabilities":[...]}`.
+   `{"type":"hub_hello","protocol_version":1,"hub_id":...,"hub_name":...,"public_key":...,"role":"leaf","capabilities":[...]}`.
    The master resolves `hub_id` to a peer row and replies; the leaf's
    self-declared `public_key` is never trusted as proof.
+   `protocol_version` is the negotiated wire version (minors campaign M-HUB-11):
+   an ABSENT field means a legacy build speaking version 1 and is accepted; a
+   present value other than `1` is refused with `protocol_version_mismatch`
+   BEFORE the key lookup or any state/audit write (logger warning only —
+   pre-auth frames must not write audit rows).
 2. **`hub_hello_ack`** — master → leaf:
-   `{"type":"hub_hello_ack","session_id":...,"master_hub_id":...,"role":"master","capabilities":[...],"nonce":...,"signature":...}`.
+   `{"type":"hub_hello_ack","protocol_version":1,"session_id":...,"master_hub_id":...,"role":"master","capabilities":[...],"nonce":...,"signature":...}`.
    `nonce` is fresh per session (base64url, 32 random bytes). `signature` is
    base64 Ed25519 over the canonical string
    `phlix-federation/hello-ack/v1\n{session_id}\n{master_hub_id}\n{nonce}`,
    signed with the **master hub's** keypair (`Ed25519KeyManager`). The leaf
    verifies against the master's `public_key` it holds for that peer and
    cross-checks the identity bindings; verification failure closes the link and
-   arms the reconnect backoff.
+   arms the reconnect backoff. The leaf applies the same version law to the
+   ack — a mismatched `protocol_version` is refused (`protocol_version_mismatch`,
+   loud close + backoff) before the proof fields are read; the ACK signature
+   covers session/id/nonce only, not the version field.
 3. **`hub_hello_auth`** — leaf → master:
    `{"type":"hub_hello_auth","leaf_hub_id":...,"session_id":...,"signature":...}`.
    `signature` is base64 Ed25519 over
@@ -695,7 +703,12 @@ binary `0x09`/`0x0A`, which are retired wire types):
    The proof is also bound to its **carrier socket**: a late AUTH delivered
    over a connection the master already superseded is refused as
    `handshake_stale_connection` — before the nonce burn — and can never verify
-   the replacement link.
+   the replacement link. A pending ceremony is additionally time-bounded
+   (minors campaign M-HUB-11): after 30 s an unconsumed handshake is dead on
+   arrival (`consumeHandshake()` reports it absent, so a very late proof is
+   refused like a replay), and the master's heartbeat arm closes the half-open
+   link with `DISCONNECTED` `{reason: hello_auth_timeout}` so the leaf
+   re-hellos instead of squatting unverified forever.
 
 Both ends derive the canonical strings from the one shared helper,
 `Phlix\Hub\Federation\FederationHandshake`, so the two sides cannot drift.

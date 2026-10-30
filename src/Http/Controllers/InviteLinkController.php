@@ -12,6 +12,9 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use InvalidArgumentException;
+use Phlix\Hub\Auth\RateLimitException;
+use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
@@ -51,10 +54,23 @@ final class InviteLinkController
      *        `invite.default_expiry_seconds` (HubSettingsResolvers::int, bounds
      *        0..31536000, fail-safe to the boot default). Null (tests, unbooted
      *        pool) keeps the historical 7-day literal.
+     * @param RateLimiterInterface|null $redeemLimiter INVITE_REDEEM profile
+     *        limiter (minors campaign M-HUB-21); null (unit tests, unbooted
+     *        pool) disables the budget — the pre-M-HUB-21 behavior, and the
+     *        container can never ship the null because
+     *        {@see \Phlix\Hub\Tests\Unit\Common\Container\Providers\InviteLinkRedeemWiringTest}
+     *        pins the factory wiring at the definition level (same
+     *        fail-open-with-guard precedent as
+     *        ServerClaimController::$claimsLimiter).
+     * @param AuditLogger|null  $audit                 Writes exactly ONE
+     *        audit_logs row per limiter transition into "over budget"; null =
+     *        file-channel-only.
      */
     public function __construct(
         private readonly InviteLinkHandler $handler,
         private readonly mixed $defaultExpiryResolver = null,
+        private readonly ?RateLimiterInterface $redeemLimiter = null,
+        private readonly ?AuditLogger $audit = null,
     ) {
     }
 
@@ -96,6 +112,40 @@ final class InviteLinkController
         }
 
         return $resolver();
+    }
+
+    /**
+     * Consume one unit of this member's redeem budget (minors campaign M-HUB-21).
+     *
+     * Keyed by the AUTHENTICATED user id — not the IP: the redeem surface is
+     * member-only (401 before this point), so the threat is one attributable
+     * member grinding the burn path, and their identity is the stable bucket.
+     *
+     * @throws RateLimitException Over budget — mapped to the central 429 by
+     *         {@see \Phlix\Hub\Application}; deliberately thrown OUTSIDE the
+     *         handler try/catch so it can never fold into a generic frame, and
+     *         BEFORE any token-hash DB work (the whole point is to refuse that
+     *         cost cheaply).
+     */
+    private function assertRedeemBudget(string $userId): void
+    {
+        if ($this->redeemLimiter === null) {
+            return;
+        }
+
+        $state = $this->redeemLimiter->hit('invite_redeem:' . $userId);
+        if (!$state->limited) {
+            return;
+        }
+
+        if ($state->count === $state->limit) {
+            $this->audit?->logFailedAuth('invite_redeem_rate_limited', ['user_id' => $userId]);
+        }
+
+        throw new RateLimitException(
+            resetAt: $state->resetAt,
+            remaining: 0,
+        );
     }
 
     /**
@@ -229,6 +279,9 @@ final class InviteLinkController
         if ($token === '') {
             return $this->memberError(400, 'missing_token', 'This invite link is missing its token');
         }
+
+        // M-HUB-21: budget AFTER the cheap shape gates, BEFORE any DB work.
+        $this->assertRedeemBudget($userId);
 
         try {
             /** @var LibraryShare $share */
