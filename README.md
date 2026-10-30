@@ -247,6 +247,54 @@ Let's Encrypt certificate. If a release adds new `HUB_*` env vars, append them t
 `/etc/phlix-hub.env` yourself — anything the code expects but doesn't find falls back to its
 documented default.
 
+## Backing up and restoring
+
+The Hub has exactly **three pieces of state**. A backup that does not carry all
+three together is not a backup — restoring a database against a different
+secret/key pair (or a fresh install's auto-generated key) produces a hub that
+starts cleanly and then fails closed in ways that look like data loss.
+
+| Piece | Where | What breaking it costs |
+|-------|-------|------------------------|
+| **Database** | MySQL schema `phlix_hub` (credentials in `/etc/phlix-hub.env`) | Every server registration, user, claim code, invite, share, quota row, federation peer/key registration, rate-limit history, audit trail and the migration ledger. Restore **only onto a schema migrated to the same or a newer code version** (the `migrations` table checksums files; see *Database migrations* above). |
+| **JWT session secret** | `HUB_JWT_SECRET` inside `/etc/phlix-hub.env` (chmod 600) | Signs every access/refresh token (`config/auth.php`; ≥32 bytes). If it is lost, changed, or the env file is restored from a different era, **every issued session becomes unverifiable**: all users are logged out at once and refresh tokens cannot save them. When the var is missing entirely, `AuthServicesProvider` falls back to a process-local random secret — tokens die on every restart, so never run production without it. |
+| **Hub signing key** | `config/hub-signing-key.pem`, mode **0600**, auto-generated on first boot by `HubServicesProvider` → `Ed25519KeyManager` (path override: `hub_signing_key_path` in `config/server.php`) | The hub's Ed25519 identity. It signs enrollment artifacts servers present on pairing and is the master-side key in the federation mutual proof-of-key ceremony. If it is lost and a fresh one is generated, **already-registered servers fail verification** (re-pair them) and **federation peers whose leaf keys were registered under the old identity refuse the hub** until trust is re-established with each peer. |
+
+Everything else is derived and safe to lose: `.logs/`, `var/` (Smarty
+compile/cache, DI container cache, Swoole HOME lock, Workerman pid/status), and
+`public/assets/app/` is a committed build.
+
+Backup (cron-friendly, keeps the trio in one archive):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+STAMP=$(date +%F_%H%M)
+DEST=/var/backups/phlix-hub/$STAMP; mkdir -p "$DEST"
+# 1. Database (consistent snapshot without locking tables).
+mysqldump --single-transaction --routines phlix_hub | gzip > "$DEST/hub-db.sql.gz"
+# 2. Environment (contains HUB_JWT_SECRET + DB credentials) and 3. signing key.
+install -m 600 /etc/phlix-hub.env               "$DEST/phlix-hub.env"
+install -m 600 /opt/phlix-hub/config/hub-signing-key.pem "$DEST/hub-signing-key.pem"
+find /var/backups/phlix-hub -maxdepth 1 -type d -mtime +14 -exec rm -rf {} +
+```
+
+Restore, in the order that keeps every boot gate happy:
+
+1. Stop the service (`systemctl stop phlix-hub`).
+2. Create the schema and reload: `mysql phlix_hub < hub-db.sql.gz`.
+3. Put `phlix-hub.env` at `/etc/phlix-hub.env` **before** first boot (mode 600,
+   owned by root — the service reads it via `EnvironmentFile`), and the key at
+   `config/hub-signing-key.pem` **before** first boot (mode 600, owned by the
+   service user) — the auto-generators only fire when the file is absent, and a
+   pre-existing valid file is always kept.
+4. `systemctl start phlix-hub`, then `curl -fs http://127.0.0.1:8800/health`.
+
+If the JWT secret or the signing key cannot be recovered, generate replacements
+(new 64-char hex secret; delete the key file to auto-regenerate) and accept the
+consequences above: mass re-login, and re-pairing of servers / re-trusting of
+federation peers.
+
 ## Uninstalling
 
 `scripts/install.sh --uninstall` removes an existing install. By default it is **interactive**
@@ -412,7 +460,7 @@ php bin/phlix oauth:client:disable    # disable a client (add --revoke-tokens to
 
 ## Production install on Ubuntu
 
-These steps target **Ubuntu 22.04 / 24.04**. Run as a sudo-capable user.
+These steps target **Ubuntu 24.04**. On 22.04 the distro PHP is 8.1, which predates the Hub's 8.3 floor — the guidance below is to move to 24.04 (or newer) rather than pull in a third-party PHP build. Run as a sudo-capable user.
 
 ### 1. System packages
 
@@ -553,21 +601,90 @@ it after a successful apply is a no-op.
 
 ### 6. Run as a systemd service
 
+`scripts/install.sh` is the **canonical generator** of the unit file — it writes the
+full hardened definition below (service user, port gate, graceful reload, resource
+limits, sandbox). If you install by hand, mirror it; the inline copy here is kept
+current with the template in `scripts/install.sh` (step 6, "systemd service").
+
 ```bash
 sudo tee /etc/systemd/system/phlix-hub.service >/dev/null <<'EOF'
 [Unit]
 Description=Phlix Hub
+Documentation=https://docs.phlix.media
 After=network.target mysql.service
+Wants=mysql.service
+StartLimitIntervalSec=500
+# Burst of 10 (not 5): with the ExecStartPre port gate below each failed start
+# attempt takes up to ~93 s, so 5 failures would fit inside a 500 s window and
+# trip start-limit-hit — leaving the hub down until a manual reset-failed.
+StartLimitBurst=10
 
 [Service]
 Type=simple
-User=www-data
-Group=www-data
-EnvironmentFile=/etc/phlix-hub.env
+User=phlix-hub
+Group=phlix-hub
 WorkingDirectory=/opt/phlix-hub
+EnvironmentFile=/etc/phlix-hub.env
+# Swoole's RemoteObject bridge writes a lock to $HOME/.swoole; the system user
+# has no home, so point HOME at a writable path inside the install root.
+Environment="HOME=/opt/phlix-hub/var"
+# Restart-race gate (2026-07-10 incident): the OLD master can hold its listen
+# sockets for seconds-to-minutes after SIGTERM; without this wait the new
+# master throws "Address already in use" and crash-loops. Waits up to 90 s for
+# :8802/:8803/:8804/:8805/:2206 (the config/server.php defaults) to be free.
+# If you move HUB_RELAY_PORT, HUB_CLIENT_RELAY_PORT, HUB_SYNCPLAY_PORT,
+# HUB_FEDERATION_PORT or HUB_CHANNEL_PORT, update the gate's values to match.
+ExecStartPre=/usr/bin/env bash /opt/phlix-hub/scripts/wait-for-free-ports.sh -t 90 8800 8802 8803 8804 8805 2206
 ExecStart=/usr/bin/php /opt/phlix-hub/start.php start
+# GRACEFUL reload: Workerman arms its SIGKILL timer only for SIGUSR1, so
+# SIGUSR2 (Worker.php:1390/$gracefulStop) is the reload that does NOT cut live
+# relay tunnels and in-flight HLS. POST /api/v1/admin/restart sends the same
+# signal, so 'systemctl reload' and the in-app Restart button behave alike.
+# (The pid file lives at /opt/phlix-hub/var/hub.pid — do NOT point
+# HUB_PID_FILE at /var/run: the sandbox below cannot write there.)
+ExecReload=/bin/kill -SIGUSR2 $MAINPID
+ExecStop=/bin/kill -SIGTERM $MAINPID
 Restart=on-failure
-RestartSec=5
+RestartSec=3s
+TimeoutStopSec=30
+# Must cover the up-to-90 s ExecStartPre port gate plus worker boot.
+TimeoutStartSec=120
+# Swoole 6's io_uring loop pins locked memory; the 8 MB RLIMIT_MEMLOCK default
+# makes io_uring init fail with ENOMEM and workers intermittently drop conns.
+LimitMEMLOCK=infinity
+# systemd does NOT read /etc/security/limits.conf: this line is what the daemon
+# gets. The relay surfaces run on count=1 workers — ONE process holds a socket
+# per paired server AND per connected client — so the 1024 soft default stops
+# accepting tunnels with "Too many open files" long before anything else binds.
+LimitNOFILE=1048576
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=phlix-hub
+# Sandbox hardening. The install root stays READ-ONLY; every runtime write is
+# pinned under ReadWritePaths: .logs/ (app/error/hub/relay/audit + workerman
+# logs), var/ (Swoole HOME lock, Smarty compile/cache, the DI container compile
+# dir, config/ needs write for the Ed25519 hub signing key — HubServicesProvider
+# writes config/hub-signing-key.pem, mode 0600 — Workerman pid/status files).
+# NOTE: MemoryDenyWriteExecute (breaks PHP JIT/opcache), PrivateDevices and
+# SystemCallFilter (io_uring is syscall-sensitive) are deliberately NOT set.
+# The optional DNS-alias feature (StaticZoneManager) defaults its zone dir
+# under /home/phlix/data — ProtectHome hides it; enablement must repoint
+# 'dns_zone_dir' into a path listed here.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/phlix-hub/.logs /opt/phlix-hub/var /opt/phlix-hub/config
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
 
 [Install]
 WantedBy=multi-user.target
@@ -795,6 +912,16 @@ only behind a reverse proxy or port map that breaks same-origin:
 | `HUB_WS_URL` | unset → `null` | Explicit WS base origin (`ws(s)://host[:port]`, **no path**). Grammar-validated; an invalid value fails soft to `null` |
 | `HUB_WS_PATH` | unset → `null` | Single absolute socket path (e.g. `/syncplay`). Grammar-validated; invalid → `null` |
 
+#### Runtime files & container cache
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `HUB_PID_FILE` | `var/hub.pid` (under the project root) | Workerman master PID file. `start.php` assigns it to `Worker::$pidFile`; the hardened systemd unit keeps it writable via `ReadWritePaths` — do NOT point it at `/var/run` (the sandbox cannot write there and `POST /api/v1/admin/restart` would 500) |
+| `HUB_STATUS_FILE` | `var/hub.status` (under the project root) | Declared in `config/server.php` (`$envStr('HUB_STATUS_FILE', …)`) for Workerman's status-snapshot convention; **no consumer in `src/` today** — honest census entry, not a live dial |
+| `HUB_MAINTENANCE_HEARTBEAT_FILE` | `var/maintenance-heartbeat.json` | S312 liveness record of the SEPARATE-FORK maintenance worker: written from inside the guarded sweep callback, read by `/health` — a crash-looping sweeper stops reporting `healthy` within `HUB_MAINTENANCE_STALE_SECONDS`. Must stay on a filesystem shared between the forks (not a private tmpfs) |
+| `HUB_MAINTENANCE_STALE_SECONDS` | `180` | Seconds without a COMPLETED maintenance sweep before `/health` calls the maintenance worker down (default = 3× `config/process.php`'s `maintenance.poll_seconds`) |
+| `PHLIX_HUB_CONTAINER_COMPILE` | unset (off) | Truthy (`1`/`true`/`yes`/`on`) enables PHP-DI's compiled-container cache (`src/Common/Container/ContainerFactory.php::shouldCompile()`), writing to `var/cache` — a production startup-speed dial; leave off in development so definition edits take effect immediately |
+
 #### Rate limiting ([`config/server.php`](config/server.php) `rate_limit`)
 
 Each abuse-prone surface has its own rate limiter (a single login-grade limiter is wrong for
@@ -826,6 +953,7 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 | `PHLIX_HUB_RATELIMIT_FEDERATION_CONNECT_MAX` / `_FEDERATION_CONNECT_WINDOW` | `10` / `60` | :8805 inbound federation connects (master role), keyed `federation_connect:<trusted ip>` — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_MAX` / `_FEDERATION_FRAME_WINDOW` | `120` / `60` | :8805 federation frames, both roles, keyed `federation_frame:<remote peer hub id>` — `count=1` worker, truly global |
 | `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` | Trusted proxy IPs/CIDRs used to resolve the real client address for the IP-keyed limiters (`src/Common/Http/TrustedProxyResolver.php`) — a forgeable leftmost `X-Forwarded-For` is never trusted |
+| `PHLIX_FEDERATION_CA_BUNDLE` | unset | TLS trust-anchor selection for federation **dials** (this hub as leaf connecting to an `https://`/`wss://` master): absolute path to a PEM bundle that replaces the system store as verification anchor. Set it when the master serves a private-CA certificate; an unreadable path fails LOUD at dial (never a silent system-store fallback). `src/Federation/FederationPeerManager.php` (`buildMasterDialPlan`) — see also `docs/websockets.md`
 
 > **Per-worker vs global caveat.** Most thresholds are enforced **per worker process**. The
 > :8802/:8803/:8805 relay and federation workers are `count=1`, so per-worker == global for
@@ -841,6 +969,24 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 > 5/900, 10/900, and 3/3600** — not the `~max × HUB_WORKERS` shape (≈20/900 with 4 workers, first
 > 429 near attempt ~9) login had before HB-4.6 "Option B" moved credential-guessing surfaces onto
 > the shared store.
+
+### Metrics ([`config/metrics.php`](config/metrics.php))
+
+The relay-side metrics accumulators and their MySQL rollups. These knobs tune COLLECTION;
+what they feed is the admin-gated REST surface `GET /api/v1/admin/metrics/`
+(`snapshot` / `history` / `connections` / `routes` — see `src/Application.php`,
+`registerMetricsRoutes()`) — **not** a Prometheus scrape endpoint. The `enabled` flag has a
+live twin in the vendored settings schema: `server.metrics.enabled` (`restart: true` — read
+at boot per worker).
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `PHLIX_HUB_METRICS_ENABLED` | `true` | Master on/off — `false` no-ops every collector call (zero per-request overhead) |
+| `PHLIX_HUB_METRICS_FLUSH_INTERVAL` | `5` | Seconds between the relay worker's in-memory→MySQL flushes |
+| `PHLIX_HUB_METRICS_BUCKET_SECONDS` | `10` | Time-bucket granularity for rollup rows (aligned to `floor(ts / N) * N`) |
+| `PHLIX_HUB_METRICS_RETENTION_DAYS` | `7` | Days of rollup rows the flush service retains before pruning |
+| `PHLIX_HUB_METRICS_CONNECTION_TTL` | `15` | Seconds an untouched connection row is kept before pruning (live-connection view freshness) |
+| `PHLIX_HUB_METRICS_ROUTE_CAP` | `200` | Max distinct (method, route) pairs tracked per bucket; further routes fold into one `__other__` bucket so a high-cardinality URL space cannot blow up memory |
 
 ### Database ([`config/database.php`](config/database.php))
 
@@ -1080,31 +1226,56 @@ HUB_TEST_DB_USER=root HUB_TEST_DB_PASSWORD=root HUB_TEST_DB_NAME=phlix_hub_test 
 The named database must already exist (the tests create tables, not schemas).
 Expect roughly 15 s per test: each one re-applies all 35 migrations.
 
-CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci.yml):
+CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci.yml) —
+**twelve jobs** — and the image pair ships in a second workflow
+([docker.yml](.github/workflows/docker.yml)). The full set, honestly enumerated (M-HUB-20:
+this list previously claimed eight checks and omitted four jobs, the whole Docker workflow,
+and the nightly trigger):
 
-- Composer validation
-- PHP_CodeSniffer (PSR-12)
-- PHPStan (level 9)
-- Psalm (errorLevel 1)
-- PHPUnit (with coverage uploaded to Codecov) — provisions a `mysql:8.0` service,
-  applies the migration chain to it, and runs **both** suites
-- **Zero-skip gate** — `scripts/assert-integration-tests-ran.php` reads PHPUnit's
-  JUnit report and fails the build if any test skipped without an explicit,
-  justified `ALLOWED_SKIPS` entry (to date exactly one: the no-swoole noop case in
-  `CoroutineHooksTest`, whose branch is unreachable on the swoole-loading CI
-  venue), or if fewer than 31 real-database tests executed — 31 is the enforced
-  MIN floor, not the suite size; the Integration suite currently runs 125 cases.
-  ⚠ A skipped test is not a neutral absence: PHPUnit exits `0` with *"OK, but
-  some tests were skipped!"*, so before this gate a missing MySQL service made
-  every integration test — 31 at the time — skip on every run while the check
-  stayed green
-- **Real MCP client SSE session (S329)** — the `mcp-e2e` job boots the real hub
-  on `:8800` against the MySQL service, mints PATs through the real
-  `McpTokenService`, and drives the official `@modelcontextprotocol/sdk` client
-  through initialise → tools/list → one tool call → clean close. A JUnit gate
-  (`scripts/assert-mcp-e2e-ran.php`) fails when any required case is absent,
-  skipped, or asserted nothing — never a bare green.
-- Composer security audit
+- **Composer Validation** (`composer-validate`) — `composer validate --strict`.
+- **OpenAPI Description** (`openapi`, S66) — Redocly (version-pinned) lints `openapi.yaml`
+  for structural validity only; whether the spec still *matches the route table* is a
+  different question, answered by `OpenApiSpecMatchesRouterTest` inside the phpunit job.
+- **Server Route Snapshot Currency** (`snapshot-currency`) — the vendored route snapshot's
+  `source_sha` must still resolve against phlix-server master
+  (`scripts/check-route-snapshot-currency.php`).
+- **PHP CodeSniffer (PSR-12)** (`phpcs`) — asserts every security-path PHP extension is
+  loaded (S258), then runs PHPCS over the whole corpus with an asserted file count (S299).
+- **PHPStan** (`phpstan`) — level 9.
+- **Psalm** (`psalm`) — errorLevel 1.
+- **PHPUnit** (`phpunit`) — provisions a `mysql:8.0` service, applies the migration chain
+  to it, and runs **both** suites through the S458 parallel runner (coverage uploaded to
+  Codecov). The suite output then faces the **S173 zero-skip gate** —
+  `scripts/assert-integration-tests-ran.php` reads PHPUnit's JUnit report and fails the
+  build if any test skipped without an explicit, justified `ALLOWED_SKIPS` entry (to date
+  exactly one: the no-swoole noop case in `CoroutineHooksTest`, whose branch is unreachable
+  on the swoole-loading CI venue), or if fewer than 31 real-database tests executed — 31 is
+  the enforced MIN floor, not the suite size (the current real-DB count is printed by the
+  gate itself). ⚠ A skipped test is not a neutral absence: PHPUnit exits `0` with *"OK, but
+  some tests were skipped!"*, so before this gate a missing MySQL service made every
+  integration test — 31 at the time — skip on every run while the check stayed green.
+- **Security Audit** (`composer-audit`) — Composer dependency audit.
+- **Real MCP client SSE session** (`mcp-e2e`, S329) — boots the real hub on `:8800` against
+  the MySQL service, mints PATs through the real `McpTokenService`, and drives the official
+  `@modelcontextprotocol/sdk` client through initialise → tools/list → one tool call → clean
+  close. A JUnit gate (`scripts/assert-mcp-e2e-ran.php`) fails when any required case is
+  absent, skipped, or asserted nothing — never a bare green.
+- **Cross-Repo Path Contract** (`cross-repo-paths`) — paths that sibling repositories cite
+  into this tree still exist here.
+- **UI Pin Skew** (`ui-pin-skew`, S181) — compares the `@phlix/*` pins this repo and its
+  sibling consumers resolved to. Because pins go stale on OTHER repositories' clocks, this
+  workflow additionally runs on a **nightly `schedule`** (`17 3 * * *`) — a check that only
+  fires when this repo moves misses its own defect class. The schedule is workflow-level, so
+  a nightly run re-executes all twelve jobs unchanged.
+- **SPA Bundle Build + Compare Gate** (`spa-bundle`, S253) — a fresh build of `web-ui/` on
+  the pinned Node must byte-match the committed `public/assets/app/` tree. This is the gate
+  that makes "what you serve is what's in git" true.
+
+The Docker workflow (S300) builds this repo's own image on this repo's PRs: **boot first,
+publish second** — `docker-boot-gate` boots the freshly built image against a throwaway
+MySQL and asserts it actually serves `/health` (a `docker build` never executes
+ENTRYPOINT, so build-green alone once shipped an image that exited 2 on `docker run`),
+and only then does `docker-build` publish it.
 
 ## Project structure
 

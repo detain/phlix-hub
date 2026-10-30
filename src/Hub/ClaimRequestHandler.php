@@ -122,8 +122,22 @@ class ClaimRequestHandler
      * Enforce `server.max_servers_per_user` before a claim INSERTs a server.
      *
      * No resolver wired, or an effective cap of 0 → unlimited (the historical
-     * behavior). Throws the wire-mapped 'SERVER_CAP_REACHED' code string
-     * (ServerClaimController::mapError → 409 quota.exceeded).
+     * behavior — and the unlimited path issues ZERO extra statements, pinned
+     * by ClaimServerCapTest). Throws the wire-mapped 'SERVER_CAP_REACHED'
+     * code string (ServerClaimController::mapError → 409 quota.exceeded).
+     *
+     * M-HUB-24 (review hub__exploiter minor #4): the count is only as honest
+     * as the lock protecting it. The claim's `SELECT … FOR UPDATE` locks ONE
+     * `server_claims` row — two concurrent claims of DIFFERENT codes by the
+     * same user lock disjoint rows and would both count the same stale
+     * servers set. This method therefore takes a lock on the user's `users`
+     * PK row immediately before counting: every capped claim transaction
+     * acquires that lock in the same order (claim row → user row → count),
+     * so the loser of a race waits for the winner's COMMIT and its COUNT
+     * (a fresh read view under both RR and RC — the read view is established
+     * at this first consistent read, strictly after the lock was acquired)
+     * includes the just-landed server. This repo has no other `users … FOR
+     * UPDATE` writer, so the anchor cannot participate in a lock cycle.
      */
     private function assertWithinServerCap(string $userId): void
     {
@@ -136,6 +150,16 @@ class ClaimRequestHandler
         if ($cap <= 0) {
             return;
         }
+
+        // Serialization anchor for the per-user server-count invariant (see
+        // docblock). The authenticated userId always has a users row at this
+        // point (AuthMiddleware resolved the session from it); if a raw-SQL
+        // operator ever deleted the row mid-claim, the PK gap lock still
+        // serializes same-id contenders and the count below stays honest.
+        $this->db->query(
+            'SELECT id FROM users WHERE id = :uid FOR UPDATE',
+            ['uid' => $userId],
+        );
 
         /** @var list<array<string, mixed>> $countRows */
         $countRows = $this->db->query(
@@ -354,12 +378,13 @@ class ClaimRequestHandler
             // pre-setting behavior byte-for-byte. Counted inside the claim's
             // FOR UPDATE transaction and checked against ALL status values
             // (online/offline/claiming/disabled — same denominator as the My
-            // Servers listing). Honest caveat: two DIFFERENT claim codes
-            // claimed concurrently by the same user can each pass this count
-            // before either INSERT lands (the FOR UPDATE locks the claim row,
-            // not the servers count) — a rare, self-correcting overshoot of
-            // at most the concurrent-claim count on a quota guard, not a
-            // billing-strict invariant. Documented, not defended.
+            // Servers listing). M-HUB-24: the cross-code race that the old
+            // comment described as "documented, not defended" is now
+            // defended — assertWithinServerCap() takes the claim's per-user
+            // serialization lock (`users` PK row, FOR UPDATE) before the
+            // count, so N concurrent claims of different codes by one user
+            // serialize on that anchor and at most cap − (already committed)
+            // servers land.
             $this->assertWithinServerCap($userId);
 
             $serverId = $this->generateUuid();

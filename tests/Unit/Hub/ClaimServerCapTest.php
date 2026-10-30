@@ -191,4 +191,59 @@ final class ClaimServerCapTest extends TestCase
         $this->expectExceptionMessage('SERVER_CAP_REACHED');
         $handler->handleClaimCode('DR4Q-7AXB', 'user-1');
     }
+
+    /**
+     * M-HUB-24: the capped path must take the per-user serialization lock
+     * (`SELECT id FROM users … FOR UPDATE`) AFTER the claim-row lock and
+     * BEFORE the server-count SELECT. An implementation that counts first and
+     * locks after would keep the cross-code overshoot this lock exists to
+     * close while still issuing every statement — only the ORDER is the law.
+     */
+    public function testCappedClaimLocksUserRowAfterClaimRowAndBeforeCount(): void
+    {
+        $this->seedFlow(1);
+
+        $this->handler(static fn (): int => 2)->handleClaimCode('DR4Q-7AXB', 'user-1');
+
+        $claimIdx  = -1;
+        $lockIdx   = -1;
+        $countIdx  = -1;
+        foreach ($this->statements as $i => $sql) {
+            if ($claimIdx === -1 && str_contains($sql, 'FROM server_claims WHERE claim_code_norm')) {
+                $claimIdx = $i;
+            }
+            if ($lockIdx === -1 && str_contains($sql, 'FROM users WHERE id = :uid FOR UPDATE')) {
+                $lockIdx = $i;
+            }
+            if ($countIdx === -1 && str_contains($sql, 'COUNT(*) AS cnt FROM servers')) {
+                $countIdx = $i;
+            }
+        }
+
+        self::assertGreaterThanOrEqual(0, $claimIdx, 'claim-row lock statement issued');
+        self::assertGreaterThanOrEqual(0, $lockIdx, 'users-row serialization lock issued');
+        self::assertGreaterThanOrEqual(0, $countIdx, 'server count issued');
+        self::assertGreaterThan($claimIdx, $lockIdx, 'user lock follows the claim-row lock (claim → user order)');
+        self::assertGreaterThan($lockIdx, $countIdx, 'the count runs strictly AFTER the serialization lock');
+    }
+
+    /**
+     * M-HUB-24 defaults law, lock half: with no resolver (or cap 0) the cap
+     * machinery must stay statement-invisible — not even the users lock.
+     */
+    public function testUnlimitedPathsIssueNoUserLockStatement(): void
+    {
+        $this->seedFlow(null);
+        $this->handler(null)->handleClaimCode('DR4Q-7AXB', 'user-1');
+        foreach ($this->statements as $sql) {
+            self::assertStringNotContainsString('FROM users', $sql, 'no-resolver path is lock-free');
+        }
+
+        $this->statements = [];
+        $this->seedFlow(50);
+        $this->handler(static fn (): int => 0)->handleClaimCode('DR4Q-7AXB', 'user-1');
+        foreach ($this->statements as $sql) {
+            self::assertStringNotContainsString('FROM users', $sql, 'cap-0 path is lock-free');
+        }
+    }
 }

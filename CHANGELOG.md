@@ -6,6 +6,56 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min44 (M-HUB-13, M-HUB-16, M-HUB-19, M-HUB-20, M-HUB-24): the env vars the config reference never listed, the systemd unit that shipped unhardened in the README, the three-piece backup story nobody wrote, the CI inventory that counted a workflow family which no longer exists — and the server-cap COUNT that raced under concurrency — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min44, five live items, all cured:
+
+- **M-HUB-24** — `ClaimRequestHandler::assertWithinServerCap()` now takes a
+  `FOR UPDATE` lock on the claiming user's `users` row AFTER the claim-row
+  lock and BEFORE the cap `COUNT`, inside the claim ceremony's existing
+  transaction. Two concurrent claims by the same user previously both counted
+  the pre-image of the other's uncommitted `servers` INSERT and both landed —
+  the cap could be exceeded on the `enrolled_at`-vs-NOW window the docblock
+  had only *documented*. Lock order is claim-row → users-PK → count everywhere
+  (no other writer FOR-UPDATEs `users`, so no cycle); the read view the COUNT
+  consumes is established after lock acquisition, correct under both RR and
+  RC. Refusals roll back and stay byte-identical; unlimited paths (no cap
+  resolver, cap ≤ 0) issue zero lock statements. Pinned by two
+  `ClaimServerCapTest` order-law unit tests (statement-index scan, mutation
+  proven: swapping lock/count order reddens exactly one) and a real-MySQL
+  `ServerClaimCapLockRealDbTest` pair: a holder transaction on the users row
+  makes the second claim block to 1205 and persist nothing, the post-commit
+  retry is refused by the cap itself (`SERVER_CAP_REACHED`), and a cap refusal
+  never strands an open transaction.
+- **M-HUB-13** — the Configuration reference now lists every env var the hub
+  actually reads: the six `PHLIX_HUB_METRICS_*` dials (`config/metrics.php`),
+  `HUB_PID_FILE`, `HUB_STATUS_FILE` (recorded honestly: a config-only surface
+  with no consumer in `src/` today), `HUB_MAINTENANCE_HEARTBEAT_FILE` +
+  `HUB_MAINTENANCE_STALE_SECONDS`, `PHLIX_HUB_CONTAINER_COMPILE`, and
+  `PHLIX_FEDERATION_CA_BUNDLE` (the anchor-select dial the TLS lanes shipped;
+  previously only in `docs/websockets.md`).
+- **M-HUB-16** — README §6's hand-written unit was a pre-hardening fossil
+  (`www-data`, no start gate, no fd/memlock limits, crash-loop-prone reload).
+  It now mirrors the canonical `scripts/install.sh` template: the
+  `wait-for-free-ports.sh` ExecStartPre restart-race gate (2026-07-10
+  incident), SIGUSR2 graceful reload identity with the in-app restart
+  endpoint, `LimitNOFILE`/`LimitMEMLOCK` rationale (count=1 relay workers,
+  Swoole io_uring), `StartLimitBurst=10`, `Environment=HOME`, and the full
+  sandbox set with honest notes on what is deliberately NOT set. The §5
+  target line now says Ubuntu 24.04, with the 8.3-floor reason for dropping
+  22.04.
+- **M-HUB-19** — new "Backing up and restoring" README section: the hub's
+  state is exactly three pieces (the `phlix_hub` database, `HUB_JWT_SECRET` in
+  `/etc/phlix-hub.env`, `config/hub-signing-key.pem` 0600), what losing each
+  one costs (all sessions invalid / servers re-pair + federation re-trust),
+  a cron-ready backup script, and the restore order that keeps every boot gate
+  happy.
+- **M-HUB-20** — the README CI inventory enumerated a workflow family that no
+  longer exists. It now truthfully lists the 12 push jobs + the two-job
+  Docker pair + the nightly S181 run, and corrects the openapi job's role
+  (structural validity only — the route-match law lives in
+  `OpenApiSpecMatchesRouterTest`, which CI runs inside phpunit).
+
 ### Fixed — minors W-min43 (M-HUB-09, M-HUB-25, M-HUB-31, M-HUB-33, M-HUB-37): the pretty-printed REST wire, the share-cap bypass through reactivation, the :8804 docblock that described a door that does not exist, the two liveness truths the spec conflated, and the un-throttled pre-auth connect flood — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min43, five live items, all cured:
