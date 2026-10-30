@@ -122,7 +122,7 @@ class RequestManager
      * past any genuine watchlist batch and the time-window limiter already
      * caps the rate.
      */
-    public const MAX_PENDING_REQUESTS_PER_USER = 50;
+    public const int MAX_PENDING_REQUESTS_PER_USER = 50;
 
     /**
      * Find a pending request by the SAME member for the SAME target
@@ -144,6 +144,7 @@ class RequestManager
      */
     public function findPendingDuplicate(string $userId, string $type, int $tmdbId, ?int $season, ?int $episode): ?array
     {
+        /** @var mixed $rows */
         $rows = $this->db->query(
             'SELECT * FROM requests
              WHERE user_id = :user_id
@@ -162,6 +163,7 @@ class RequestManager
             ]
         );
 
+        /** @var mixed $firstRow */
         $firstRow = is_array($rows) ? ($rows[0] ?? null) : null;
 
         return is_array($firstRow) ? $this->hydrateRequest($firstRow) : null;
@@ -172,6 +174,7 @@ class RequestManager
      */
     public function countPendingForUser(string $userId): int
     {
+        /** @var mixed $countRows */
         $countRows = $this->db->query(
             'SELECT COUNT(*) AS cnt FROM requests WHERE user_id = :uid AND status = \'pending\'',
             ['uid' => $userId],
