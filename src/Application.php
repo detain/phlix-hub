@@ -137,6 +137,21 @@ final class Application
     private const array DENIED_STATIC_EXTENSIONS = ['php', 'map', 'tpl'];
 
     /**
+     * M-HUB-30: the hub's GLOBAL inbound HTTP body cap (1 MiB, declared — not
+     * the vendor's silent 10 MB default). Enforced twice on purpose:
+     * `Http::input()` refuses (own 413) any headers+body over the cap BEFORE
+     * parsing, because {@see self::startHttpServer()} pins `maxPackageSize`
+     * per accepted connection; and the dispatch boundary re-checks the
+     * materialized bytes with a clean hub-shaped `invalid_payload` 413 so the
+     * law is hub-owned, testable, and independent of the framing path
+     * (chunked bodies included). Every legitimate portal/API payload (claim,
+     * share, settings, heartbeat, Alexa directive) is kilobytes — megabyte
+     * payloads are probes, and this is the substrate-bound the
+     * `McpController` 256 KB self-limit already practices estate-wide.
+     */
+    public const int MAX_REQUEST_BODY_BYTES = 1048576;
+
+    /**
      * True when a resolved static path must not be served (R20-03).
      *
      * Public + static so the predicate is unit-pinnable — the decision lives
@@ -268,6 +283,23 @@ final class Application
                 'error' => 'This hub is under maintenance. Try again shortly.',
                 'code'  => 'provider_unavailable',
             ]);
+    }
+
+    /**
+     * M-HUB-30: the hub-owned half of the global body cap — refuses (413,
+     * registered `invalid_payload`) any request whose MATERIALIZED body
+     * exceeds {@see self::MAX_REQUEST_BODY_BYTES}. Pure so tests drive it
+     * directly; the framing half is the per-connection `maxPackageSize` pin
+     * in the HTTP worker, which stops over-cap bytes before parse.
+     */
+    private static function bodyCapViolation(WorkermanRequest $request): ?Response
+    {
+        if (strlen($request->rawBody()) > self::MAX_REQUEST_BODY_BYTES) {
+            return (new Response())
+                ->error(413, 'invalid_payload', 'Request body too large');
+        }
+
+        return null;
     }
 
     /**
@@ -2003,6 +2035,17 @@ final class Application
         $worker->count = $workers;
         $worker->name = 'phlix-hub-http';
 
+        // M-HUB-30: the hub's global HTTP body cap, pinned ONTO every inbound
+        // connection rather than inherited from the vendor default (which this
+        // release of Workerman sets to 10 MB via $defaultMaxPackageSize — the
+        // public claim endpoints made that the de-facto materialization
+        // bound). The protocol refuses (with its own 413) any request whose
+        // headers+body exceed the cap BEFORE the body is ever parsed, so the
+        // bound lives at the boundary, not inside a handler's memory.
+        $worker->onConnect = static function (TcpConnection $connection): void {
+            $connection->maxPackageSize = self::MAX_REQUEST_BODY_BYTES;
+        };
+
         // Close DB connections in onWorkerStop (still in coroutine context) so
         // hooked PDO sockets aren't destroyed at RSHUTDOWN outside a coroutine.
         \Phlix\Hub\Common\Database\ConnectionPool::armWorkerStopCleanup($worker);
@@ -2251,6 +2294,18 @@ final class Application
                         $connection->send($resp);
                         return;
                     }
+                }
+
+                // 1a-bis. M-HUB-30 global body cap on the materialized bytes.
+                //     The protocol pin usually refuses earlier (with the
+                //     vendor's own 413) — this is the hub-owned, testable
+                //     boundary law answering with the hub's error envelope.
+                $bodyViolation = self::bodyCapViolation($request);
+                if ($bodyViolation !== null) {
+                    $status = 413;
+                    $connection->send($bodyViolation->toWorkermanResponse());
+
+                    return;
                 }
 
                 // 1b. Maintenance-mode gate (hub.maintenance_mode, W5). Only

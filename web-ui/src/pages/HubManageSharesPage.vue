@@ -4,9 +4,16 @@
  *
  * Documents the collaborator quota whose 409 would otherwise look like a
  * generic share failure, and the reactivate-exemption semantics.
+ *
+ * M-HUB-05 [review hub__casualgamer m2]: the list-and-revoke page below had no
+ * create door — `POST /api/v1/me/shares` was API-only and first-time sharers
+ * had to detour through Invite Links. The ShareLibraryCard mounted here is
+ * that door (hub-local: the vendored page is a package-pin boundary, and the
+ * card needs no ui seams — it rides the documented endpoints directly).
  */
 import { ManageSharesPage } from '@phlix/ui';
 import HubPageHint from '../components/HubPageHint.vue';
+import ShareLibraryCard from '../components/ShareLibraryCard.vue';
 </script>
 
 <template>
@@ -26,6 +33,7 @@ import HubPageHint from '../components/HubPageHint.vue';
             already sharing another library of the same server, or returning after a revoke,
             never count against it.
         </HubPageHint>
+        <ShareLibraryCard />
         <ManageSharesPage />
     </div>
 </template>

@@ -7,7 +7,16 @@
     <title>Phlix Hub</title>
   </head>
   <body>
-    <div id="phlix-app"></div>
+    <div id="phlix-app">
+      <!-- Boot placeholder: the Vue app replaces this on mount (M-HUB-10).
+           A browser below the declared floor (`build.target` in vite.config.ts
+           — ≈Chrome/Edge 107+, Safari 16+, Firefox 104+) never runs the module
+           script, so it reads this instead of a silent white screen. -->
+      <noscript><p><strong>Phlix Hub needs JavaScript enabled.</strong></p></noscript>
+      <p>Loading Phlix Hub… if this message stays, this browser is below the
+      portal's support floor (Chrome/Edge 107+, Safari 16+, Firefox 104+ or
+      newer).</p>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

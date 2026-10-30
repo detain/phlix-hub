@@ -6,6 +6,46 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min47 (M-HUB-05, M-HUB-10, M-HUB-30): a create door for shares, a declared browser floor, and a hub-wide body cap — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min47, three items, all cured in-hub.
+
+- **M-HUB-05** — the Shares page could only list and revoke: `POST /api/v1/me/shares`
+  existed API-only, and creating a grant meant detouring to Invite Links and hoping
+  the recipient signed up. A hub-local `ShareLibraryCard.vue` (mounted in the
+  `HubManageSharesPage` wrapper above the vendored list) rides only endpoints the hub
+  already serves — `GET /api/v1/me/servers`, `GET /api/v1/me/libraries?server_id=`,
+  `POST /api/v1/me/shares` — with the server's own permission vocabulary
+  (`read`/`readwrite`) and curated sentences for the four refusals `createShare`
+  answers with; the unregistered-email refusal routes to the invite-link door
+  instead of dead-ending. Wire law lives in pure `utils/shareCreate.ts`
+  (parse boundary, exact payload keys); `web-ui/tests/share-create.test.ts`
+  cross-pins curated codes ⊆ controller `memberError` set, the collaborator-limit
+  sentence ≡ `QuotaFrames::COLLABORATORS_TEXT`, option values ≡ the `LibraryShare`
+  constants, and the called endpoints against the registered router paths.
+- **M-HUB-10** — the portal had no declared browser floor: an empty mount div plus
+  Vite's *default* target meant a below-floor browser rendered a silent white page.
+  `web-ui/vite.config.ts` now declares `build.target: 'baseline-widely-available'`
+  explicitly (≈Chrome/Edge 107+, Safari 16+, Firefox 104+ — the Vite 8.1.5 default
+  pinned as a decision, so a future major moving the floor is a reviewable edit),
+  and both index shells (template + committed served bundle) carry a boot
+  placeholder + `<noscript>` line naming the floor; the Vue mount replaces the
+  placeholder, a browser that cannot run it reads WHY. SPA rebuilt ×2 (aggregate
+  md5 equal — S253 gate posture). Pinned by `tests/Unit/Http/SpaBrowserFloorTest.php`
+  (red on the pre-cure tree, green on the cure — honest before/after recorded in
+  the W-min47 report) and the README's spa-bundle gate section.
+- **M-HUB-30** — nothing bounded inbound HTTP bodies: every `/api/v1` payload (the
+  claim trio is PUBLIC) was materialized per the vendored Workerman
+  `$defaultMaxPackageSize` — 10 MB per request, a paid-by-the-hub heap window.
+  `Application::MAX_REQUEST_BODY_BYTES` (1 MiB — every real hub payload is
+  kilobytes) is now enforced twice: the HTTP worker's `onConnect` sets
+  `maxPackageSize` so over-cap bytes never get parsed, and a dispatch-boundary
+  guard answers the registered `invalid_payload` code with a clean 413 before the
+  maintenance gate and before any handler reads the body (zero new wire codes).
+  `tests/Unit/Http/HttpRequestBodyCapTest.php` pins the value, the predicate at
+  boundary (at-cap passes, cap+1 refused), the wiring order, and a constructed
+  `TcpConnection` showing the 10 MB vendor default the cure displaces.
+
 ### Fixed — minors W-min46 (M-HUB-02, M-HUB-23, M-HUB-27, M-HUB-28, M-HUB-36, M-HUB-38, M-HUB-39, M-HUB-41): a closed tunnel whose backpressure timers outlived it, an unthrottled request queue, an existence oracle on the proxy, and the :8804 wire that accepted everything — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min46, eight items, all cured in-hub.

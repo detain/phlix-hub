@@ -75,7 +75,9 @@ You can use the public Hub or run your own — the same codebase powers both.
 - **Subdomain allocation** — each enrolled server can be assigned `&lt;subdomain&gt;.&lt;public-domain&gt;`
   for clean, per-server URLs.
 - **Library sharing** — share a specific library on one of your servers with another Hub user,
-  with read-only or read/write permission levels.
+  with read-only or read/write permission levels. The **Shares** page carries the direct door
+  (share instantly with a registered collaborator) above the list-and-revoke view; for people
+  without an account yet, **Invite Links** create the account and the share in one step.
 - **Invite links** — single-use, signed invite links that grant library access to a recipient.
 - **Hub-to-hub federation** — federate with peer hubs to share libraries across hubs, with
   per-peer sessions and admin delegation. Honest limit: delegation is currently local
@@ -972,6 +974,14 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 > 429 near attempt ~9) login had before HB-4.6 "Option B" moved credential-guessing surfaces onto
 > the shared store.
 
+> **Inbound body cap (M-HUB-30).** Every HTTP connection to the hub is bounded at **1 MiB**
+> (`Application::MAX_REQUEST_BODY_BYTES`): the per-connection `maxPackageSize` is set in the
+> HTTP worker's `onConnect` (the vendored Workerman default of 10 MB would let a probe make
+> the hub materialize 10 MB per request on PUBLIC claim endpoints), and the dispatch boundary
+> answers an over-cap body with **413** and the registered `invalid_payload` code — before the
+> maintenance gate and before any route handler reads it. Relay (:8802/:8803), SyncPlay (:8804)
+> and federation (:8805) frames carry their own smaller documented bounds (`docs/websockets.md`).
+
 ### Metrics ([`config/metrics.php`](config/metrics.php))
 
 The relay-side metrics accumulators and their MySQL rollups. These knobs tune COLLECTION;
@@ -1272,6 +1282,12 @@ and the nightly trigger):
 - **SPA Bundle Build + Compare Gate** (`spa-bundle`, S253) — a fresh build of `web-ui/` on
   the pinned Node must byte-match the committed `public/assets/app/` tree. This is the gate
   that makes "what you serve is what's in git" true.
+- **Browser floor (M-HUB-10)** — the portal bundle targets
+  `build.target: 'baseline-widely-available'` (≈Chrome/Edge 107+, Safari 16+, Firefox
+  104+), DECLARED in `web-ui/vite.config.ts` rather than inherited from a Vite default.
+  The served shell carries a boot placeholder + `<noscript>` notice, so a below-floor
+  browser reads an explanation instead of a white screen. TV surfaces are separate
+  packaged clients and never load this bundle.
 
 The Docker workflow (S300) builds this repo's own image on this repo's PRs: **boot first,
 publish second** — `docker-boot-gate` boots the freshly built image against a throwaway
