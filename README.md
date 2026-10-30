@@ -403,6 +403,13 @@ form for HTTP-served pages (`8804` is a plaintext listener, so an HTTPS-served p
 `wss://` direct dial cannot complete), and the full same-origin
 `wss://<domain>/syncplay/…` browser path — riding the managed route the way federation
 rides its own — needs a client wired to dial it: disclosed follow-up rider, not shipped.
+One manual escape hatch does ship today, though: hand-set `HUB_WS_URL=wss://<hub-domain>`
+with `HUB_WS_PATH=/syncplay` in `/etc/phlix-hub.env` (both grammar-validated per the env
+table below; `HUB_WS_URL` stays the master switch) and restart `phlix-hub`, and
+`SharedUiController` grammar-validates both (invalid values fail soft to unset) into the
+shell's `window.__PHLIX__.wsUrl/wsPath` bootstrap — seam-aware `@phlix/ui` clients served
+by the hub then dial the managed 443 route instead of the legacy direct port. The hub
+portal bundle keeps dialing direct regardless: it never consults the seam.
 `--no-proxy` installs open `8804`/`8805` in ufw (when it is active), so the plain
 `ws://<host>:8804` / `ws://<host>:8805` forms documented in
 [`docs/websockets.md`](docs/websockets.md) are reachable there directly.

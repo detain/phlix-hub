@@ -6,6 +6,39 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — riders W12 R-HUB-12: the SyncPlay seam discussion now states the manual escape hatch that ships today — hand-setting `HUB_WS_URL` + `HUB_WS_PATH` in `/etc/phlix-hub.env` steers seam-aware clients onto the managed route without the rider — 2026-10-31
+
+- **The observation.** Review M-HUB-11__r2 (m1): the rider framing —
+  "nothing the managed installer emits steers a shipped browser onto it" —
+  kept every printed sentence true, but the docs omitted the today-existing
+  MANUAL door: an operator who hand-sets `HUB_WS_URL` + `HUB_WS_PATH` in
+  `/etc/phlix-hub.env` gets ui-seam clients onto the managed `/syncplay/`
+  route WITHOUT the disclosed bundle-wiring rider (only the hub portal's own
+  bundle still couldn't — it never consults the seam, already documented
+  law). "A future touch could state the manual-env option." This is that touch.
+- **The cure (prose-only, two files).** The seam paragraph in README.md
+  (managed-HAProxy SyncPlay section) and the "Getting there" paragraph in
+  `docs/websockets.md` each gained the escape-hatch sentences: the two vars,
+  `/etc/phlix-hub.env`, the restart requirement (the systemd unit sources the
+  file via `EnvironmentFile` — install.sh), the fail-soft grammar-validation
+  law with a pointer to the README env tables, and the explicit
+  seam-aware-vs-portal-bundle split. No existing sentence was moved or
+  reworded; the installer-emits framing stays true because the new prose
+  names itself as the manual (non-installer) path.
+- **Truth probes at tip before writing.** `getenv('HUB_WS_URL')` at
+  `SharedUiController::configuredSocketBaseUrl()` :248 and
+  `getenv('HUB_WS_PATH')` at `configuredSocketBasePath()` :284; emission as
+  `window.__PHLIX__.wsUrl/wsPath` in the shell bootstrap (:131-:132, :148);
+  invalid → `null` fail-soft (grammar + port-range check, docblock-stated);
+  `ENV_FILE=/etc/phlix-hub.env` and `EnvironmentFile=${ENV_FILE}` at
+  install.sh :29/:1832. No test pins the touched paragraphs (the seam's test
+  coverage, `SharedUiControllerCspTest`, pins the CODE behavior).
+- **Gates.** Docs-only diff — zero PHP, zero openapi touch (contract freeze
+  held: the registry/manifest/scope md5s cannot move on a markdown diff);
+  `SharedUiControllerCspTest` re-run green (39 tests, 136 assertions) to attest the prose
+  matches the pinned seam behavior; markdown paragraph flow verified
+  (insertions mid-paragraph, no fence/heading/table structure moved).
+
 ### Fixed — riders W11 R-HUB-11: the managed-install domain is validated before it reaches the HAProxy fragment — 2026-10-31
 
 - **The ask.** Review M-HUB-11__r1 minor m3 logged the pre-existing gap

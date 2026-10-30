@@ -311,7 +311,14 @@ does not consult the seam). So on a managed install the browser path needs the o
 HTTP-served pages; `8804` is a plaintext listener, so an HTTPS-served page cannot complete
 a direct dial at all, and its only viable path (the same-origin
 `wss://<hub-domain>/syncplay/…` route) waits on the disclosed rider that wires shipped
-clients to dial it. On `--no-proxy` installs the installer opens `8804/tcp` in ufw (when
+clients to dial it. That rider is not the only door: a manual escape hatch works today —
+hand-set `HUB_WS_URL=wss://<hub-domain>` with `HUB_WS_PATH=/syncplay` in
+`/etc/phlix-hub.env` and restart the hub; `SharedUiController` grammar-validates both
+(invalid values fail soft to unset; the `README.md` env tables state the grammar) and
+emits them into the shell's `window.__PHLIX__.wsUrl/wsPath` bootstrap, which seam-aware
+`@phlix/ui` clients consult before the legacy derivation — they ride the managed route,
+while the hub portal bundle still dials direct (it never consults the seam).
+On `--no-proxy` installs the installer opens `8804/tcp` in ufw (when
 ufw is active), which is what makes the plain `ws://<host>:8804/…` form above reachable.
 Behind any hand-rolled proxy, replicate the `/syncplay/` pass-through with HTTP/1.1
 upgrade headers and an hour-scale read timeout — the hub's managed HAProxy defaults carry
