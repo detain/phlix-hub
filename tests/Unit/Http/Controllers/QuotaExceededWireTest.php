@@ -45,8 +45,14 @@ final class QuotaExceededWireTest extends TestCase
         self::assertSame(409, $response->statusCode);
         $body = self::arrayNode(json_decode((string) $response->body, true));
         self::assertSame('quota.exceeded', $body['code']);
-        self::assertSame('SERVER_CAP_REACHED', $body['error'], 'legacy literal parks in the text field');
+        // M-HUB-35 rotated this pin: the error field carries the human
+        // sentence (renderers read it — the SCREAMING machine literal was
+        // the worst of both worlds), and the frame says WHICH cap answered
+        // and WHEN the answer changes.
+        self::assertSame('Server quota reached for this account', $body['error']);
         self::assertSame('Server quota reached for this account', $body['message']);
+        self::assertSame('server_count', $body['quota_kind']);
+        self::assertSame('on_release', $body['quota_reset']);
     }
 
     public function testShareControllerMapsCollaboratorCapTo409Quota(): void
@@ -74,6 +80,9 @@ final class QuotaExceededWireTest extends TestCase
         $body = self::arrayNode(json_decode((string) $response->body, true));
         self::assertSame('quota.exceeded', $body['code']);
         self::assertSame('This server has reached its collaborator limit', $body['message']);
+        // M-HUB-35: the collaborators arm of the same code discriminates.
+        self::assertSame('collaborators', $body['quota_kind'] ?? null);
+        self::assertSame('on_release', $body['quota_reset'] ?? null);
     }
 
     public function testInviteRedeemSurfacesTheSameQuotaWire(): void

@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Federation;
 
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Workerman\Connection\ConnectionInterface;
 
 /**
@@ -64,6 +66,44 @@ final class FederationConnectionManager
      * @var array<string, int>
      */
     private array $verifiedConns = [];
+
+    /**
+     * M-HUB-01: outbound frames Workerman REFUSED to take (its `send()`
+     * returned false: the socket is closing/closed or its send buffer hit
+     * `sendBufferLimit` — the 1 MB default silently dropped federation
+     * pushes while every caller believed them delivered). Process-local
+     * like the connection map above; a warning log attributes each drop to
+     * its hub, this counter makes the loss observable in aggregate.
+     */
+    private int $droppedOutboundFrames = 0;
+
+    /**
+     * M-HUB-01: total outbound frames this process refused-and-counted.
+     */
+    public function getDroppedOutboundFrames(): int
+    {
+        return $this->droppedOutboundFrames;
+    }
+
+    /**
+     * M-HUB-01: record one refused frame — counter plus an attributed
+     * warning. Workerman's verdict contract (vendor TcpConnection::send):
+     * true = fully flushed, null = accepted into the send buffer (arrives or
+     * the socket dies later), FALSE = dropped here and now. Only false is a
+     * loss THIS call owns, so only false is counted.
+     */
+    private function noteOutboundDrop(string $hubId, string $context): void
+    {
+        ++$this->droppedOutboundFrames;
+        LoggerFactory::get(LogChannels::RELAY)->warning(
+            'FederationConnectionManager: outbound frame dropped',
+            [
+                'hub_id' => $hubId,
+                'context' => $context,
+                'total_dropped' => $this->droppedOutboundFrames,
+            ],
+        );
+    }
 
     /**
      * Register a new leaf hub connection.
@@ -226,8 +266,13 @@ final class FederationConnectionManager
      */
     public function broadcastToAll(string $data): void
     {
-        foreach ($this->connections as $conn) {
-            $conn->send($data);
+        foreach ($this->connections as $hubId => $conn) {
+            // M-HUB-01: Workerman returns false when it REFUSED the frame
+            // (closing socket or full send buffer) — count + attribute each
+            // such loss instead of broadcasting into a silent void.
+            if ($conn->send($data) === false) {
+                $this->noteOutboundDrop((string) $hubId, 'broadcast');
+            }
         }
     }
 
@@ -237,7 +282,13 @@ final class FederationConnectionManager
      * @param string $hubId Leaf hub UUID.
      * @param string $data  Serialised frame bytes.
      *
-     * @return bool True if the hub was connected and the frame was sent.
+     * @return bool HONEST delivery verdict (M-HUB-01): false when the hub
+     *              is not connected OR Workerman refused the frame outright
+     *              (closed socket / send buffer at `sendBufferLimit` — such
+     *              losses are counted and warning-logged); true when the
+     *              socket flushed the bytes or took them into its send
+     *              buffer (buffered frames arrive or the link dies — the
+     *              link death itself is outside this call's knowledge).
      */
     public function sendTo(string $hubId, string $data): bool
     {
@@ -246,7 +297,11 @@ final class FederationConnectionManager
             return false;
         }
 
-        $conn->send($data);
+        if ($conn->send($data) === false) {
+            $this->noteOutboundDrop($hubId, 'direct');
+            return false;
+        }
+
         return true;
     }
 

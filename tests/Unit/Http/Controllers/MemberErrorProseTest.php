@@ -56,14 +56,19 @@ final class MemberErrorProseTest extends TestCase
     /**
      * Assert the canonical member-facing envelope.
      *
-     * @param array<string, string> $expect Key order pinned: error, code, message.
+     * @param array<string, string> $expect  Key order pinned: error, code, message.
+     * @param array<string, string> $extras  M-HUB-35: the quota.exceeded arms ride a
+     *                                       discriminator tail (quota_kind,
+     *                                       quota_reset) AFTER the canonical trio —
+     *                                       exact-key-set law kept, extended, never
+     *                                       relaxed.
      */
-    private static function assertEnvelope(Response $response, int $status, array $expect): void
+    private static function assertEnvelope(Response $response, int $status, array $expect, array $extras = []): void
     {
         self::assertSame($status, $response->statusCode);
 
         $body = self::arrayNode(json_decode((string) $response->body, true));
-        self::assertSame(['error', 'code', 'message'], array_keys($body));
+        self::assertSame(['error', 'code', 'message', ...array_keys($extras)], array_keys($body));
 
         $error = self::stringNode($body['error']);
         $message = self::stringNode($body['message']);
@@ -73,6 +78,10 @@ final class MemberErrorProseTest extends TestCase
         self::assertSame($error, $message, 'message mirrors error');
         self::assertNotContains($error, self::HTTP_PHRASES, 'members never see bare HTTP phrases');
         self::assertNotSame('', $error, 'the member channel never ships an empty error');
+
+        foreach ($extras as $key => $value) {
+            self::assertSame($value, self::stringNode($body[$key]), "discriminator '{$key}' rides the quota frame");
+        }
     }
 
     /**
@@ -162,7 +171,13 @@ final class MemberErrorProseTest extends TestCase
     public function testCreateShareHandlerArmsSpeakHuman(): void
     {
         $cases = [
-            ['SERVER_SHARE_CAP_REACHED', 409, 'quota.exceeded', 'This server has reached its collaborator limit'],
+            [
+                'SERVER_SHARE_CAP_REACHED',
+                409,
+                'quota.exceeded',
+                'This server has reached its collaborator limit',
+                ['quota_kind' => 'collaborators', 'quota_reset' => 'on_release'],
+            ],
             ['no such user', 404, 'user_not_found', 'No user found with that email address'],
             ['not yours', 403, 'not_server_owner', 'You do not own this server'],
             ['already shared', 409, 'share_exists', 'This library is already shared with that user'],
@@ -175,7 +190,8 @@ final class MemberErrorProseTest extends TestCase
             ['unrouted boom', 999, 'unknown_error', self::GENERIC_PROBLEM],
         ];
 
-        foreach ($cases as [$throw, $throwCode, $code, $error]) {
+        foreach ($cases as $case) {
+            [$throw, $throwCode, $code, $error] = $case;
             $handler = $this->createMock(LibrarySharingHandler::class);
             $handler->method('shareLibrary')
                 ->willThrowException(new InvalidArgumentException($throw, $throwCode));
@@ -185,6 +201,7 @@ final class MemberErrorProseTest extends TestCase
                 $controller->createShare(self::request('POST', '/api/v1/me/shares', 'owner-1', self::shareBody())),
                 $throwCode === 999 ? 500 : $throwCode,
                 ['code' => $code, 'error' => $error],
+                $case[4] ?? [],
             );
         }
     }
@@ -436,7 +453,13 @@ final class MemberErrorProseTest extends TestCase
     public function testRedeemHandlerArmsSpeakHuman(): void
     {
         $cases = [
-            ['SERVER_SHARE_CAP_REACHED', 409, 'quota.exceeded', 'This server has reached its collaborator limit'],
+            [
+                'SERVER_SHARE_CAP_REACHED',
+                409,
+                'quota.exceeded',
+                'This server has reached its collaborator limit',
+                ['quota_kind' => 'collaborators', 'quota_reset' => 'on_release'],
+            ],
             ['That invite is not valid', 400, 'invalid_invite', 'That invite is not valid'],
             ['gone link', 404, 'invite_link_not_found', 'That invite link no longer exists'],
             [
@@ -449,7 +472,8 @@ final class MemberErrorProseTest extends TestCase
             ['unrouted boom', 999, 'unknown_error', self::GENERIC_PROBLEM],
         ];
 
-        foreach ($cases as [$throw, $throwCode, $code, $error]) {
+        foreach ($cases as $case) {
+            [$throw, $throwCode, $code, $error] = $case;
             $handler = $this->createMock(InviteLinkHandler::class);
             $handler->method('redeemInviteLink')
                 ->willThrowException(new InvalidArgumentException($throw, $throwCode));
@@ -462,6 +486,7 @@ final class MemberErrorProseTest extends TestCase
                 ),
                 $throwCode === 999 ? 500 : $throwCode,
                 ['code' => $code, 'error' => $error],
+                $case[4] ?? [],
             );
         }
     }

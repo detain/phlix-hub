@@ -19,6 +19,7 @@ use Phlix\Hub\Hub\InviteLink;
 use Phlix\Hub\Hub\InviteLinkHandler;
 use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Response;
 
 /**
@@ -88,15 +89,18 @@ final class InviteLinkController
      * @param int    $status  HTTP status code.
      * @param string $code    Registered stable machine code.
      * @param string $message Human-facing sentence (pass-through allowed).
+     * @param array<string, scalar> $extra Additional wire keys merged AFTER
+     *                                      `message` (M-HUB-35 quota
+     *                                      discriminators).
      */
-    private function memberError(int $status, string $code, string $message): Response
+    private function memberError(int $status, string $code, string $message, array $extra = []): Response
     {
         $human = trim($message);
         if ($human === '') {
             $human = self::GENERIC_PROBLEM;
         }
 
-        return (new Response())->error($status, $code, $human, ['message' => $human]);
+        return (new Response())->error($status, $code, $human, ['message' => $human] + $extra);
     }
 
     /**
@@ -293,10 +297,14 @@ final class InviteLinkController
             // W5 share quota surfaced through redeem: discriminated by
             // message before the generic 409 (share_exists) arm.
             if ($e->getMessage() === 'SERVER_SHARE_CAP_REACHED') {
+                // M-HUB-35: converges on the same share choke as share
+                // create, so it ships the same frame — discriminators and
+                // all.
                 return $this->memberError(
                     409,
                     'quota.exceeded',
-                    'This server has reached its collaborator limit',
+                    QuotaFrames::COLLABORATORS_TEXT,
+                    QuotaFrames::discriminator(QuotaFrames::KIND_COLLABORATORS, QuotaFrames::RESET_ON_RELEASE),
                 );
             }
             if ($code === 400) {

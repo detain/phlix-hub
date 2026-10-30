@@ -15,6 +15,7 @@ use InvalidArgumentException;
 use Phlix\Hub\Hub\LibraryShare;
 use Phlix\Hub\Hub\LibrarySharingHandler;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Response;
 
 /**
@@ -54,15 +55,19 @@ final class LibraryShareController
      * text). `message` mirrors `error` so the same sentence renders under
      * either client precedence. Whitespace-only pass-through messages are
      * normalized to {@see self::GENERIC_PROBLEM}.
+     *
+     * @param array<string, scalar> $extra Additional wire keys merged AFTER
+     *                                      `message` (M-HUB-35 quota
+     *                                      discriminators).
      */
-    private function memberError(int $status, string $code, string $message): Response
+    private function memberError(int $status, string $code, string $message, array $extra = []): Response
     {
         $human = trim($message);
         if ($human === '') {
             $human = self::GENERIC_PROBLEM;
         }
 
-        return (new Response())->error($status, $code, $human, ['message' => $human]);
+        return (new Response())->error($status, $code, $human, ['message' => $human] + $extra);
     }
 
     /**
@@ -127,10 +132,14 @@ final class LibraryShareController
             // W5 share quota: discriminated by message before the generic 409
             // (share_exists) arm — both carry code 409.
             if ($e->getMessage() === 'SERVER_SHARE_CAP_REACHED') {
+                // M-HUB-35: same discriminator law as the claim-cap frame —
+                // which cap, and when it changes (removing a collaborator,
+                // not the clock).
                 return $this->memberError(
                     409,
                     'quota.exceeded',
-                    'This server has reached its collaborator limit',
+                    QuotaFrames::COLLABORATORS_TEXT,
+                    QuotaFrames::discriminator(QuotaFrames::KIND_COLLABORATORS, QuotaFrames::RESET_ON_RELEASE),
                 );
             }
             if ($code === 404) {

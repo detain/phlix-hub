@@ -6,6 +6,81 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min45 (M-HUB-01, M-HUB-22, M-HUB-26, M-HUB-29, M-HUB-32, M-HUB-35): federation sends that lied about delivery, an unthrottled credential-mint endpoint, closed federation sessions nobody ever deleted, an incoming share sink that trusted its peer's strings, a 503 without Retry-After, and quota frames only machines could read — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min45, eight items: six cured, one
+routed (`M-HUB-34` — the camelCase lives in `phlix-shared`'s DTO, outside
+this repo), one stale (`M-HUB-40` — the pending-handshake timeout already
+shipped with the M-HUB-11 cure at `ead30f75`).
+
+- **M-HUB-01** — every federation outbound `send()` discarded Workerman's
+  verdict, and `FederationConnectionManager::sendTo()` returned `true`
+  unconditionally after the call while two callers treated that bool as
+  delivery proof: frames dropped at the 1 MB `sendBufferLimit` (or on a
+  closing socket) were invisible on BOTH sides of the link. Both managers
+  now interpret the vendor contract honestly — `false` = refused now (counted
+  in a process-local `getDroppedOutboundFrames()` counter and warning-logged
+  with hub/context attribution), `null` = buffered (not this call's loss, not
+  counted), `true` = flushed — across all six leaf push sites (`hub_hello`,
+  `hub_hello_auth`, share offer, share revoked, both heartbeat paths) and the
+  master's `broadcastToAll`/`sendTo`. `sendTo()`'s docblock now states what
+  the bool actually means. Three manager-level tests plus three leaf tests,
+  mutation-proven (a no-count mutation reddens exactly the drop expectations).
+- **M-HUB-22** — `POST /api/v1/me/servers/{id}/relay-token` minted 256-bit
+  bearer credentials with NO rate bound and no bound on how many could stand
+  at once. It now rides the new `CLIENT_RELAY_TOKEN` profile (10/60s keyed
+  `client_relay_token:<userId>`, the invite-redeem member-keyed precedent;
+  profile count rotates fourteen→fifteen in the class header, README, and
+  `RateLimitProfilesTest`), spent BEFORE the ownership lookup so over-budget
+  traffic costs no DB read; the boundary transition audits
+  `relay_token_mint_rate_limited` once. `ClientRelayTokenService::mint()`
+  additionally caps the STANDING population at `MAX_ACTIVE_TOKENS_PER_SCOPE`
+  (20) per (user, server): the newest wins, overflow is REVOKED (never
+  deleted — audit legibility), batch-bounded, and the just-minted row is
+  excluded explicitly against same-second `created_at` ties. Overflow mints
+  audit `relay_token.prune_overflow`. `ClientRelayTokenMintWiringTest` guards
+  the PHP-DI optional-parameter trap (S62 law) so the limiter can never ship
+  unwired again.
+- **M-HUB-26** — `FederationSessionManager::reapDeadSessions()` only flips
+  `alive = 0`; closed session rows were never deleted, so `federation_sessions`
+  grew monotonically on a long-lived hub. `ServerReaper` gained a fourth tick
+  sweep, `sweepDeadFederationSessions()`: two-phase (SELECT expired closed
+  ids by retention, DELETE by primary-key IN-list) with the same 7-day
+  retention shape as the heartbeat sweep and deadlock retry, batch-bounded at
+  1000 rows. Deliberately NOT a dial: the reaper has no retention knobs and a
+  zero-retention env footgun buys nothing. Unit shape pins + a real-MySQL
+  sweep test (mutation-proven: dropping the `alive = 0` predicate reddens it).
+- **M-HUB-29** — `handleIncomingOffer()` persisted ANY string a peer offered
+  as `id`/`peer_id`/`library_id`, any `permission`, and any-length library
+  name — a verified channel was trusted as a schema validator. The sink now
+  parses at the boundary: UUID-shaped ids, permission within
+  `{read, readwrite}`, library name trimmed and ≤ 255 bytes, refusing with a
+  warning log + counter-free drop (throwing would tear down the verified
+  channel over one malformed frame) BEFORE any query. `accept`/`reject`
+  UPDATEs gained `AND status = 'pending'` so a double-response can no longer
+  flip a decided offer. The M-5 law (upsert never resets a local decision)
+  is untouched and re-pinned.
+- **M-HUB-32** — the maintenance-mode 503 carried no `Retry-After`; HTTP
+  clients (and the hub's own 429 law) deserve a retry hint. The gate's
+  response moved into a single `Application::maintenanceResponse()` emitter
+  with `Retry-After: 60` (the admin flag is a bool — no ETA exists; 60s
+  matches the hub's own timer cadence), body byte-identical to before.
+  Pinned at both the Response and the converted Workerman-response level.
+- **M-HUB-35** — quota refusals were machine-readable only: the claim arm
+  repeated `SERVER_CAP_REACHED` in the human `message` slot, and the three
+  distinct quota kinds (server-count / collaborators / bandwidth) were
+  indistinguishable on the wire without knowing which endpoint answered. New
+  `QuotaFrames` SSOT adds the `quota_kind` + `quota_reset` discriminators to
+  every `quota.exceeded` frame (claim: `server_count`/`on_release`; share and
+  invite caps: `collaborators`/`on_release`; bandwidth proxy: `bandwidth`/
+  `period`) and humanizes the claim arm's `error` field to the same text the
+  `message` carries. The claim-code trio (`CLAIM_CODE_*`) keeps its
+  documented SCREAMING shape — this cure is scoped to the quota family.
+  Envelope pin tests rotated WITH attribution; `memberError()` grew an
+  additive `$extra` parameter (key order pinned: `error, code, message,`
+  discriminators). No new wire codes: `quota.exceeded` already exists in the
+  frozen registry.
+
 ### Fixed — minors W-min44 (M-HUB-13, M-HUB-16, M-HUB-19, M-HUB-20, M-HUB-24): the env vars the config reference never listed, the systemd unit that shipped unhardened in the README, the three-piece backup story nobody wrote, the CI inventory that counted a workflow family which no longer exists — and the server-cap COUNT that raced under concurrency — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min44, five live items, all cured:

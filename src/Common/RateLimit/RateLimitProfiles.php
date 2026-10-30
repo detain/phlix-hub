@@ -17,15 +17,17 @@ namespace Phlix\Hub\Common\RateLimit;
  *
  * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount /
  * mcp / alexa / signup / server-claims / federation-connect / federation-frame /
- * invite-redeem / syncplay-mount)
+ * invite-redeem / syncplay-mount / client-relay-token)
  * gets its OWN limiter instance registered
  * under the matching `rate_limiter.<surface>` container id — a single shared
  * login-grade limiter is wrong for everything but login (HB-4.6).
  * {@see defaults()} maps each container id to the `config/server.php`
  * `rate_limit.<key>` override key plus the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER for eleven of the fourteen surfaces. `proxy`, `heartbeat`,
- * `jwks`, `alexa`, `server_claims` and `invite_redeem` are enforced on the
+ * Thresholds are PER-WORKER for twelve of the fifteen surfaces (count rotated by
+ * M-HUB-22, which added `client_relay_token`). `proxy`, `heartbeat`,
+ * `jwks`, `alexa`, `server_claims`, `invite_redeem` and `client_relay_token`
+ * are enforced on the
  * `HUB_WORKERS` HTTP
  * workers, so each keeps an INDEPENDENT per-worker counter and the effective
  * soft-global limit is roughly `max × HUB_WORKERS` (mirrors HB-3.4);
@@ -270,6 +272,24 @@ final class RateLimitProfiles
     public const string INVITE_REDEEM = 'rate_limiter.invite_redeem';
 
     /**
+     * M-HUB-22 (review hub__exploiter minor #2): `POST /me/servers/{id}/
+     * relay-token` — the mint ceremony.
+     *
+     * Pre-cure the route was registered BARE in the auth group: every
+     * authenticated member could mint unbounded short-lived relay
+     * credentials, each one a table row and a live bearer artifact. Same
+     * posture as {@see INVITE_REDEEM}, and same reasoning: fully
+     * authenticated, keyed by the member's OWN id (`client_relay_token:
+     * <userId>`), so the attacker class is one attributable member; the
+     * budget bounds per-request DB cost (INSERT + overflow sweep) and, with
+     * the service-side active-token cap, one member's standing population of
+     * live credentials per (user, server) scope. 10 / 60s: a client re-mints
+     * on expiry and a user has a handful of servers; nobody legitimately
+     * mints more than a couple per minute.
+     */
+    public const string CLIENT_RELAY_TOKEN = 'rate_limiter.client_relay_token';
+
+    /**
      * Map of `container id => {config key, default max, default window}`.
      *
      * `key` is the sub-key under `config/server.php`'s `rate_limit` section;
@@ -295,6 +315,7 @@ final class RateLimitProfiles
             self::FEDERATION_CONNECT  => ['key' => 'federation_connect',  'max' => 10,  'window' => 60],
             self::FEDERATION_FRAME    => ['key' => 'federation_frame',    'max' => 120, 'window' => 60],
             self::INVITE_REDEEM       => ['key' => 'invite_redeem',       'max' => 20,  'window' => 60],
+            self::CLIENT_RELAY_TOKEN  => ['key' => 'client_relay_token',  'max' => 10,  'window' => 60],
         ];
     }
 }

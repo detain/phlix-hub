@@ -313,11 +313,16 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ClientRelayTokenService $tokens,
                 ServerInfoHandler $serverInfo,
                 AuditLogger $audit,
+                RateLimiterInterface $mintLimiter,
             ): ClientRelayTokenController {
-                return new ClientRelayTokenController($tokens, $serverInfo, $audit);
+                return new ClientRelayTokenController($tokens, $serverInfo, $audit, $mintLimiter);
             })->parameter('tokens', get(ClientRelayTokenService::class))
                 ->parameter('serverInfo', get(ServerInfoHandler::class))
-                ->parameter('audit', get(AuditLogger::class)),
+                ->parameter('audit', get(AuditLogger::class))
+                // M-HUB-22: mint budget binds to the dedicated profile — the
+                // loop in CommonServicesProvider registers it from
+                // RateLimitProfiles::defaults().
+                ->parameter('mintLimiter', get(RateLimitProfiles::CLIENT_RELAY_TOKEN)),
 
             // --- OAuth 2.0 Authorization Server (S92) -----------------------
             // Built once and shared: nothing wired here is Alexa-specific. The
@@ -1331,9 +1336,13 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             FederationLibraryShareRepository::class => factory(static function (
                 Connection $db,
+                StructuredLogger $logger,
             ): FederationLibraryShareRepository {
-                return new FederationLibraryShareRepository($db);
-            })->parameter('db', get(Connection::class)),
+                // The logger is the M-HUB-29 offer-refusal channel: the sink
+                // must name the peer whose frames it is dropping.
+                return new FederationLibraryShareRepository($db, $logger);
+            })->parameter('db', get(Connection::class))
+                ->parameter('logger', get(StructuredLogger::class)),
 
             FederationAdminDelegationRepository::class => factory(static function (
                 Connection $db,

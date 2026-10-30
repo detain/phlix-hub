@@ -56,6 +56,22 @@ use function time;
 final class ClientRelayTokenService
 {
     /**
+     * M-HUB-22: active (unrevoked, unexpired) relay tokens allowed to stand
+     * per (user, server) scope. The newest wins; older overflow is revoked
+     * at mint time. 20 comfortably exceeds any real client topology (a
+     * household of browsers/phones on one server) while capping the standing
+     * credential population one member can hold.
+     */
+    public const MAX_ACTIVE_TOKENS_PER_SCOPE = 20;
+
+    /**
+     * Overflow rows revoked per {@see capActiveTokens()} call — drains a
+     * legacy pre-cap scope over successive mints without one unbounded
+     * IN-list (see the method docblock).
+     */
+    private const CAP_SWEEP_BATCH_SIZE = 1000;
+
+    /**
      * Default token lifetime in seconds (1 hour) when no override is given.
      */
     public const int DEFAULT_TTL_SECONDS = 3600;
@@ -91,8 +107,10 @@ final class ClientRelayTokenService
      * @param string $userId   Hub user UUID the token authenticates as.
      * @param string $serverId Server UUID the token is scoped to.
      *
-     * @return array{token: string, expires_at: int} The plaintext token and
-     *         its absolute Unix expiry timestamp.
+     * @return array{token: string, expires_at: int, pruned: int} The plaintext
+     *         token, its absolute Unix expiry timestamp, and how many older
+     *         active tokens the M-HUB-22 scope cap just revoked (for the
+     *         caller's audit trail).
      *
      * @since S2a
      */
@@ -115,7 +133,82 @@ final class ClientRelayTokenService
             ],
         );
 
-        return ['token' => $token, 'expires_at' => $expiresAt];
+        // M-HUB-22: bound the STANDING credential population per (user,
+        // server). The controller's rate profile bounds the MINT RATE; this
+        // cap bounds what a member can have live at once — the blast radius
+        // of a leaked/abused scope and the table's growth, independent of the
+        // window arithmetic. Best-effort by design: it runs AFTER the INSERT
+        // so a pruning failure can never eat a legitimate mint, and
+        // pruneExpiredTokens() plus the hard expires_at still retire rows.
+        // Returns the count for the caller's audit trail.
+        $pruned = $this->capActiveTokens($userId, $serverId, $id);
+
+        return ['token' => $token, 'expires_at' => $expiresAt, 'pruned' => $pruned];
+    }
+
+    /**
+     * Revoke everything active in a (user, server) scope except the newest
+     * {@see MAX_ACTIVE_TOKENS_PER_SCOPE} rows, never touching the row just
+     * minted.
+     *
+     * The just-minted `$freshId` is excluded explicitly: rows minted inside
+     * the same second share a `created_at` and tie-break randomly (uuid ids),
+     * so "newest 20" without the exclusion could revoke the token the caller
+     * is about to hand out. Ordering the OTHER rows newest-first and skipping
+     * the newest 19 (`OFFSET 19`) keeps total active at 20; the 1000-row
+     * batch bound lets a legacy pre-cap scope drain across successive mints
+     * without one unbounded DELETE...WHERE id IN (huge) statement.
+     *
+     * Revoking (setting `revoked_at`) rather than deleting keeps the audit
+     * story legible: a cap eviction is distinguishable from the later
+     * hard-delete the expired/revoked sweep performs.
+     */
+    private function capActiveTokens(string $userId, string $serverId, string $freshId): int
+    {
+        /** @var mixed $rows */
+        $rows = $this->db->query(
+            'SELECT id FROM client_relay_tokens
+             WHERE user_id = :uid AND server_id = :sid
+               AND revoked_at IS NULL
+               AND expires_at > NOW()
+               AND id != :fresh
+             ORDER BY created_at DESC, id DESC
+             LIMIT ' . self::CAP_SWEEP_BATCH_SIZE . ' OFFSET ' . (self::MAX_ACTIVE_TOKENS_PER_SCOPE - 1),
+            ['uid' => $userId, 'sid' => $serverId, 'fresh' => $freshId],
+        );
+
+        $ids = [];
+        if (is_array($rows)) {
+            /** @var list<array<string, mixed>> $rows */
+            foreach ($rows as $row) {
+                /** @var mixed $rawId */
+                $rawId = $row['id'] ?? null;
+                if (is_string($rawId) && $rawId !== '') {
+                    $ids[] = $rawId;
+                }
+            }
+        }
+
+        if ($ids === []) {
+            return 0;
+        }
+
+        $placeholders = [];
+        $params = [];
+        foreach ($ids as $i => $id) {
+            $key = 'id_' . $i;
+            $placeholders[] = ':' . $key;
+            $params[$key] = $id;
+        }
+
+        /** @var mixed $result */
+        $result = $this->db->query(
+            'UPDATE client_relay_tokens SET revoked_at = NOW() WHERE id IN ('
+                . implode(', ', $placeholders) . ')',
+            $params,
+        );
+
+        return is_numeric($result) ? (int) $result : 0;
     }
 
     /**

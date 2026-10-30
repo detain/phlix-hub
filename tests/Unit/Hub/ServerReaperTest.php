@@ -430,7 +430,7 @@ final class ServerReaperTest extends TestCase
         self::assertFalse($deleteIssued, 'No DELETE should run when nothing is expired');
     }
 
-    public function testTickCallsBothMaintenanceMethods(): void
+    public function testTickCallsEveryMaintenanceSweep(): void
     {
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
@@ -446,6 +446,9 @@ final class ServerReaperTest extends TestCase
                 if (str_starts_with(ltrim($sql), 'SELECT id FROM audit_logs')) {
                     return [['id' => 'bbb']];
                 }
+                if (str_starts_with(ltrim($sql), 'SELECT id FROM federation_sessions')) {
+                    return [['id' => 'ccc']];
+                }
                 return 1;
             },
         );
@@ -453,11 +456,15 @@ final class ServerReaperTest extends TestCase
         $reaper = new ServerReaper($db, $logger, 60, 180, 7);
         $reaper->tick();
 
-        // tick() should call markStaleServersOffline, sweepHeartbeats and
-        // sweepAuditLogs (R19-11).
+        // tick() should call markStaleServersOffline, sweepHeartbeats,
+        // sweepAuditLogs (R19-11) and sweepDeadFederationSessions (M-HUB-26).
+        // Renamed from testTickCallsBothMaintenanceMethods when the third and
+        // fourth sweeps landed; the positive-assertion shape is the point —
+        // a new sweep joining the tick must be visible here.
         $hasOfflineUpdate = false;
         $hasDelete = false;
         $hasAuditDelete = false;
+        $hasFederationDelete = false;
         foreach ($sqlCalls as $sql) {
             if (str_contains($sql, "status = 'offline'")) {
                 $hasOfflineUpdate = true;
@@ -468,11 +475,87 @@ final class ServerReaperTest extends TestCase
             if (str_contains($sql, 'DELETE FROM audit_logs')) {
                 $hasAuditDelete = true;
             }
+            if (str_contains($sql, 'DELETE FROM federation_sessions')) {
+                $hasFederationDelete = true;
+            }
         }
 
         self::assertTrue($hasOfflineUpdate, 'Expected an UPDATE to mark servers offline');
         self::assertTrue($hasDelete, 'Expected a DELETE from server_heartbeats');
         self::assertTrue($hasAuditDelete, 'Expected a DELETE from audit_logs');
+        self::assertTrue($hasFederationDelete, 'Expected a DELETE from federation_sessions (M-HUB-26)');
+    }
+
+    public function testSweepDeadFederationSessionsSelectsClosedExpiredIdsThenDeletesByPrimaryKey(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $selectSql = '';
+        $selectParams = null;
+        $deleteSql = '';
+        $deleteParams = null;
+        $db->method('query')->willReturnCallback(
+            function (
+                string $sql,
+                $params = null
+            ) use (
+                &$selectSql,
+                &$selectParams,
+                &$deleteSql,
+                &$deleteParams
+            ): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    $selectSql = $sql;
+                    $selectParams = $params;
+                    return [['id' => 'sess-1'], ['id' => 'sess-2']];
+                }
+                $deleteSql = $sql;
+                $deleteParams = $params;
+                return 2;
+            },
+        );
+
+        $reaper = new ServerReaper($db, $logger);
+        $count = $reaper->sweepDeadFederationSessions();
+
+        self::assertSame(2, $count);
+        // The predicate must only ever target CLOSED sessions — a live row is
+        // the peer manager's, and this sweep has no business erasing it.
+        self::assertStringContainsString('FROM federation_sessions', $selectSql);
+        self::assertStringContainsString('alive = 0', $selectSql);
+        self::assertStringContainsString(
+            'last_heartbeat_at < NOW() - INTERVAL :retention DAY',
+            $selectSql,
+        );
+        self::assertStringContainsString('ORDER BY id', $selectSql);
+        self::assertSame(
+            ['retention' => ServerReaper::DEFAULT_FEDERATION_SESSION_RETENTION_DAYS],
+            $selectParams,
+        );
+        self::assertStringContainsString('DELETE FROM federation_sessions WHERE id IN (:id_0, :id_1)', $deleteSql);
+        self::assertSame(['id_0' => 'sess-1', 'id_1' => 'sess-2'], $deleteParams);
+    }
+
+    public function testSweepDeadFederationSessionsSkipsDeleteWhenNothingExpired(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $deleteIssued = false;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$deleteIssued): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    return [];
+                }
+                $deleteIssued = true;
+                return 0;
+            },
+        );
+
+        $reaper = new ServerReaper($db, $logger);
+        self::assertSame(0, $reaper->sweepDeadFederationSessions());
+        self::assertFalse($deleteIssued, 'No DELETE should run when nothing is expired');
     }
 
     public function testGettersReturnConfiguredValues(): void

@@ -21,6 +21,7 @@ use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Hub\ServerInfoDto;
 use Workerman\Connection\TcpConnection;
@@ -1369,7 +1370,11 @@ final class ServerProxyController
         $reason = $quotaCheck['reason'] ?? 'Bandwidth quota exceeded.';
         $retryAt = $quotaCheck['retryAt'];
 
-        $extra = ['message' => $reason];
+        // M-HUB-35: the bandwidth arm of the same registered code says so —
+        // and unlike the caps it DOES have an epoch: the calendar period,
+        // already derivable via retry_at/Retry-After when known.
+        $extra = ['message' => $reason]
+            + QuotaFrames::discriminator(QuotaFrames::KIND_BANDWIDTH, QuotaFrames::RESET_PERIOD);
         if ($retryAt !== null) {
             $extra['retry_at'] = $retryAt;
         }

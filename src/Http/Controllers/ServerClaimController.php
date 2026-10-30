@@ -16,6 +16,7 @@ use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Hub\ClaimRequestHandler;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
+use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Hub\ClaimRequest;
@@ -269,23 +270,30 @@ final class ServerClaimController
                 'CLAIM_CODE_ALREADY_CLAIMED',
                 ['message' => 'Claim code has already been used'],
             ),
-            // M-HUB-04 wire law: this frame is honest end to end — the
-            // registered `quota.exceeded` code plus the human sentence in
-            // `message` ship byte-exact (pinned by QuotaExceededWireTest and
-            // ServerClaimQuotaMessageTest). The user-visible "already
-            // claimed" mislabel is NOT produced here: the pinned @phlix/ui
-            // claim layer resolves its failure kind from a code table that
-            // lacks `quota.exceeded`, so this 409 falls to its status-keyed
-            // already-claimed copy until the ui tag carries the mapping
-            // (cure owed to that repo; contracts law freezes the code, so
-            // reshaping status/code here would break every registered
-            // consumer). Hub half: never let a default message table
-            // overwrite the sentence in `error()` — that reds the suite.
+            // M-HUB-04 wire law (kept) + M-HUB-35 completion: this frame is
+            // honest END TO END — the registered `quota.exceeded` code, the
+            // human sentence in BOTH text fields (`error` pre-fix parked the
+            // SCREAMING machine literal, which user-facing renderers read),
+            // and the `quota_kind`/`quota_reset` discriminators that tell any
+            // client WHICH cap answered and WHEN it changes (caps are not
+            // time-based: reset is 'on_release', never an invented epoch).
+            // Pinned by QuotaExceededWireTest and ServerClaimQuotaMessageTest
+            // — the frames rotate together with this emitter, by law. The
+            // CLAIM_CODE_* neighbours deliberately keep the legacy SCREAMING
+            // `error` field (claim-trio shape law, outside this ask). The
+            // user-visible "already claimed" mislabel is still NOT produced
+            // here: the pinned @phlix/ui claim layer resolves its failure
+            // kind from a code table that lacks `quota.exceeded`, so this 409
+            // falls to its status-keyed already-claimed copy until the ui tag
+            // carries the mapping (cure owed to that repo; contracts law
+            // freezes the code, so reshaping status/code here would break
+            // every registered consumer).
             'SERVER_CAP_REACHED' => (new Response())->error(
                 409,
                 'quota.exceeded',
-                'SERVER_CAP_REACHED',
-                ['message' => 'Server quota reached for this account'],
+                QuotaFrames::SERVER_COUNT_TEXT,
+                ['message' => QuotaFrames::SERVER_COUNT_TEXT]
+                    + QuotaFrames::discriminator(QuotaFrames::KIND_SERVER_COUNT, QuotaFrames::RESET_ON_RELEASE),
             ),
             'HUB_PROTOCOL_UNSUPPORTED' => (new Response())->error(
                 400,

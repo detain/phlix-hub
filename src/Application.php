@@ -111,6 +111,17 @@ final class Application
     private const int STATIC_FILE_MEMO_MAX = 4096;
 
     /**
+     * M-HUB-32: `Retry-After` seconds on the maintenance 503. The hub gives
+     * no ETA for maintenance mode (it is an admin bool), so this is a policy
+     * nudge: 60 s matches the hub's own 60 s timer cadence — long enough that
+     * a retrying client cannot hammer the gate during a real deploy, short
+     * enough that a mis-toggled maintenance flag resolves within a minute of
+     * the flip for every client that obeys the header (RFC 9110 allows
+     * Retry-After on 503 precisely as this "try again later" hint).
+     */
+    private const int MAINTENANCE_RETRY_AFTER_SECONDS = 60;
+
+    /**
      * Extensions the static-file fast path must NEVER serve (R20-03).
      *
      *  - `php`  — never hand out raw script sources through the static leg;
@@ -237,6 +248,26 @@ final class Application
             ->status(429)
             ->header('Retry-After', (string) $e->retryAfterSeconds())
             ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
+    }
+
+    /**
+     * Build the canonical HTTP 503 envelope for maintenance mode
+     * (M-HUB-32): same law as {@see rateLimitResponse()} — the body says
+     * "come back later", so the headers must say WHEN. Pre-fix the gate sent
+     * status + JSON only, leaving well-behaved clients (and the estate's own
+     * retry logic) to invent a backoff — right up the retry-storm alley during
+     * the exact window the hub asks for calm. Shared by the dispatch gate and
+     * exercised directly by tests.
+     */
+    public static function maintenanceResponse(): Response
+    {
+        return (new Response())
+            ->status(503)
+            ->header('Retry-After', (string) self::MAINTENANCE_RETRY_AFTER_SECONDS)
+            ->json([
+                'error' => 'This hub is under maintenance. Try again shortly.',
+                'code'  => 'provider_unavailable',
+            ]);
     }
 
     /**
@@ -2234,15 +2265,7 @@ final class Application
                 //     MaintenanceGate docblock for the posture rationale.
                 if (str_starts_with($path, '/api/') && $maintenanceGate->shouldBlock($path)) {
                     $status = 503;
-                    $connection->send(
-                        (new Response())
-                            ->status(503)
-                            ->json([
-                                'error' => 'This hub is under maintenance. Try again shortly.',
-                                'code'  => 'provider_unavailable',
-                            ])
-                            ->toWorkermanResponse(),
-                    );
+                    $connection->send(self::maintenanceResponse()->toWorkermanResponse());
 
                     return;
                 }

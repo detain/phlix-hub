@@ -10,6 +10,7 @@ use Workerman\MySQL\Connection;
 
 use function hash;
 use function preg_match;
+use function str_contains;
 use function strlen;
 use function strtoupper;
 use function time;
@@ -27,11 +28,15 @@ final class ClientRelayTokenServiceTest extends TestCase
 
         /** @var array<string, mixed> $captured */
         $captured = [];
-        $db->expects($this->once())
+        // M-HUB-22: mint now issues the INSERT plus the scope-cap SELECT.
+        $db->expects($this->exactly(2))
             ->method('query')
             ->willReturnCallback(function (string $sql, array $params) use (&$captured): array {
-                $this->assertStringContainsString('INSERT INTO client_relay_tokens', $sql);
-                $captured = $params;
+                if (str_contains($sql, 'INSERT INTO client_relay_tokens')) {
+                    $captured = $params;
+                    return [];
+                }
+                $this->assertStringContainsString('SELECT id FROM client_relay_tokens', $sql);
                 return [];
             });
 
@@ -152,7 +157,10 @@ final class ClientRelayTokenServiceTest extends TestCase
         /** @var array<string, mixed> $captured */
         $captured = [];
         $db->method('query')->willReturnCallback(function (string $sql, array $params) use (&$captured): array {
-            $captured = $params;
+            // M-HUB-22: capture the INSERT params only (the cap SELECT follows).
+            if (str_contains($sql, 'INSERT INTO client_relay_tokens')) {
+                $captured = $params;
+            }
             return [];
         });
 
@@ -314,5 +322,103 @@ final class ClientRelayTokenServiceTest extends TestCase
 
         $service = new ClientRelayTokenService($db);
         $this->assertSame(0, $service->pruneExpiredTokens());
+    }
+
+    /**
+     * M-HUB-22: the standing credential population per (user, server) is
+     * bounded at mint time. Pin the cap query's shape: active rows only
+     * (unrevoked AND unexpired), the just-minted row excluded, newest-first
+     * ordering, and the batch/OFFSET arithmetic that keeps exactly
+     * MAX_ACTIVE_TOKENS_PER_SCOPE alive.
+     */
+    public function testMintIssuesScopeCapSelectWithExpectedShape(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $selectSql = null;
+        $selectParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$selectSql, &$selectParams): array {
+                if (str_contains($sql, 'SELECT id FROM client_relay_tokens')) {
+                    $selectSql = $sql;
+                    $selectParams = $params;
+                }
+                return [];
+            },
+        );
+
+        $service = new ClientRelayTokenService($db);
+        $result = $service->mint('user-1', 'srv-1');
+
+        self::assertSame(0, $result['pruned'], 'no overflow rows => nothing revoked');
+        self::assertIsString($selectSql);
+        self::assertStringContainsString('revoked_at IS NULL', $selectSql);
+        self::assertStringContainsString('expires_at > NOW()', $selectSql);
+        self::assertStringContainsString('id != :fresh', $selectSql);
+        self::assertStringContainsString('ORDER BY created_at DESC, id DESC', $selectSql);
+        self::assertStringContainsString(
+            'LIMIT 1000 OFFSET ' . (ClientRelayTokenService::MAX_ACTIVE_TOKENS_PER_SCOPE - 1),
+            $selectSql,
+        );
+        self::assertIsArray($selectParams);
+        self::assertSame('user-1', $selectParams['uid']);
+        self::assertSame('srv-1', $selectParams['sid']);
+    }
+
+    /**
+     * M-HUB-22: overflow rows are REVOKED (set revoked_at), not deleted, with
+     * each id bound individually; the count surfaces in the mint result for
+     * the controller's audit trail.
+     */
+    public function testMintRevokesOverflowRowsAndReportsPrunedCount(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $updateSql = null;
+        $updateParams = null;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params) use (&$updateSql, &$updateParams) {
+                if (str_contains($sql, 'SELECT id FROM client_relay_tokens')) {
+                    return [['id' => 'old-1'], ['id' => 'old-2']];
+                }
+                if (str_contains($sql, 'UPDATE client_relay_tokens SET revoked_at = NOW()')) {
+                    $updateSql = $sql;
+                    $updateParams = $params;
+                    return 2;
+                }
+                return [];
+            },
+        );
+
+        $service = new ClientRelayTokenService($db);
+        $result = $service->mint('user-1', 'srv-1');
+
+        self::assertSame(2, $result['pruned']);
+        self::assertIsString($updateSql);
+        self::assertStringContainsString('WHERE id IN (:id_0, :id_1)', $updateSql);
+        self::assertIsArray($updateParams);
+        self::assertSame('old-1', $updateParams['id_0']);
+        self::assertSame('old-2', $updateParams['id_1']);
+    }
+
+    /**
+     * M-HUB-22: with no overflow rows the cap issues NO UPDATE — a normal
+     * mint must stay at exactly two statements (INSERT + SELECT).
+     */
+    public function testMintWithoutOverflowIssuesNoRevokeUpdate(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $statements = [];
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$statements): array {
+                $statements[] = $sql;
+                return [];
+            },
+        );
+
+        $service = new ClientRelayTokenService($db);
+        $service->mint('user-1', 'srv-1');
+
+        self::assertCount(2, $statements);
+        self::assertStringContainsString('INSERT INTO client_relay_tokens', $statements[0]);
+        self::assertStringContainsString('SELECT id FROM client_relay_tokens', $statements[1]);
     }
 }

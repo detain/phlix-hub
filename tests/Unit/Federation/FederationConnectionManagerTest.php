@@ -6,8 +6,16 @@ namespace Phlix\Hub\Tests\Unit\Federation;
 
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Federation\FederationConnectionManager;
 use Workerman\Connection\ConnectionInterface;
+
+use function bin2hex;
+use function file_get_contents;
+use function file_put_contents;
+use function mkdir;
+use function random_bytes;
+use function sys_get_temp_dir;
 
 /**
  * Unit tests for {@see FederationConnectionManager}.
@@ -287,6 +295,31 @@ final class FederationConnectionManagerTest extends TestCase
     }
 
     /**
+     * M-HUB-01: point LoggerFactory at a per-test file so drop warnings are
+     * assertable and never land in the repo's .logs/. Mirrors the
+     * FederationPeerManagerTest harness.
+     */
+    private function withFileLogger(): string
+    {
+        $dir = sys_get_temp_dir() . '/phlix-hub-fed-connlog-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700, true);
+        file_put_contents(
+            $dir . '/logger.php',
+            "<?php return ['default' => 'mem', 'handlers' => ['mem' => "
+                . "['type' => 'stream', 'path' => '" . $dir . "/relay.log', 'level' => 'debug']]];",
+        );
+        LoggerFactory::reset();
+        LoggerFactory::init($dir . '/logger.php');
+
+        return $dir;
+    }
+
+    protected function tearDown(): void
+    {
+        LoggerFactory::reset();
+    }
+
+    /**
      * Create a mock connection with a specific object ID.
      */
     private function createMockConnection(int $objectId): ConnectionInterface&MockObject
@@ -302,5 +335,69 @@ final class FederationConnectionManagerTest extends TestCase
         );
 
         return $conn;
+    }
+
+    /**
+     * M-HUB-01: Workerman's `send() === false` means the frame was REFUSED
+     * (closed socket or the send buffer hit sendBufferLimit). sendTo must
+     * report that honestly, count it, and warning-log it — the pre-cure
+     * code returned true unconditionally after the unchecked call.
+     */
+    public function testSendToReportsCountsAndLogsRefusedFrame(): void
+    {
+        $dir = $this->withFileLogger();
+
+        $manager = new FederationConnectionManager();
+        $conn = $this->createMock(ConnectionInterface::class);
+        $conn->method('send')->willReturn(false);
+        $manager->addConnection('hub-1', $conn);
+
+        self::assertFalse($manager->sendTo('hub-1', 'data'));
+        self::assertSame(1, $manager->getDroppedOutboundFrames());
+
+        $log = (string) file_get_contents($dir . '/relay.log');
+        self::assertStringContainsString('outbound frame dropped', $log);
+        self::assertStringContainsString('hub-1', $log);
+        self::assertStringContainsString('direct', $log);
+    }
+
+    /**
+     * M-HUB-01: a null verdict is BUFFERED — not a loss this call owns —
+     * so it must not be counted (the socket either flushes or dies later).
+     */
+    public function testSendToTreatsBufferedNullVerdictAsDelivered(): void
+    {
+        $this->withFileLogger();
+
+        $manager = new FederationConnectionManager();
+        $conn = $this->createMock(ConnectionInterface::class);
+        $conn->method('send')->willReturn(null);
+        $manager->addConnection('hub-1', $conn);
+
+        self::assertTrue($manager->sendTo('hub-1', 'data'));
+        self::assertSame(0, $manager->getDroppedOutboundFrames());
+    }
+
+    /**
+     * M-HUB-01: broadcast counts each refused recipient individually —
+     * one healthy leaf plus one dead socket = exactly one attributed drop.
+     */
+    public function testBroadcastToAllCountsEachRefusedRecipient(): void
+    {
+        $dir = $this->withFileLogger();
+
+        $manager = new FederationConnectionManager();
+        $healthy = $this->createMockConnection(1);
+        $dead = $this->createMock(ConnectionInterface::class);
+        $dead->method('send')->willReturn(false);
+
+        $manager->addConnection('hub-healthy', $healthy);
+        $manager->addConnection('hub-dead', $dead);
+        $manager->broadcastToAll('data');
+
+        self::assertSame(1, $manager->getDroppedOutboundFrames());
+        $log = (string) file_get_contents($dir . '/relay.log');
+        self::assertStringContainsString('hub-dead', $log);
+        self::assertStringNotContainsString('hub-healthy', $log);
     }
 }

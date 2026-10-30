@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Federation;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Workerman\MySQL\Connection;
 
@@ -15,6 +16,16 @@ use Workerman\MySQL\Connection;
  */
 final class FederationLibraryShareRepositoryTest extends TestCase
 {
+    // M-HUB-29 rotated the incoming-offer happy-path fixtures from labels
+    // like 'incoming-offer-1' to REAL UUIDs: the sink now parses its wire
+    // fields (CHAR(36) columns hold UUIDs minted by the origin hub), so a
+    // fixture that wants the INSERT leg must speak the wire shape. Local-
+    // trust methods (createOutgoingShare, getIncomingOfferById, delete…)
+    // are not wire sinks and keep their labels.
+    private const OFFER_UUID = 'aaaaaaaa-1111-4222-8333-444444444444';
+    private const PEER_UUID  = 'bbbbbbbb-1111-4222-8333-444444444444';
+    private const LIB_UUID   = 'cccccccc-1111-4222-8333-444444444444';
+
     public function testCreateOutgoingShareInsertsShare(): void
     {
         $db = $this->createMock(Connection::class);
@@ -190,7 +201,12 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('UPDATE federation_incoming_share_offers'),
+                // M-HUB-29: the decision UPDATE must be atomic on the
+                // pending state, not merely read-guarded by the controller.
+                self::logicalAnd(
+                    self::stringContains('UPDATE federation_incoming_share_offers'),
+                    self::stringContains("AND status = 'pending'"),
+                ),
                 self::callback(function (array $params) {
                     return $params['id'] === 'offer-accept'
                         && $params['status'] === 'accepted'
@@ -210,7 +226,10 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('UPDATE federation_incoming_share_offers'),
+                self::logicalAnd(
+                    self::stringContains('UPDATE federation_incoming_share_offers'),
+                    self::stringContains("AND status = 'pending'"),
+                ),
                 self::callback(function (array $params) {
                     return $params['id'] === 'offer-reject'
                         && $params['status'] === 'rejected'
@@ -232,9 +251,9 @@ final class FederationLibraryShareRepositoryTest extends TestCase
             ->with(
                 self::stringContains('INSERT INTO federation_incoming_share_offers'),
                 self::callback(function (array $params) {
-                    return $params['id'] === 'incoming-offer-1'
-                        && $params['peer_id'] === 'peer-offer'
-                        && $params['library_id'] === 'lib-offer'
+                    return $params['id'] === self::OFFER_UUID
+                        && $params['peer_id'] === self::PEER_UUID
+                        && $params['library_id'] === self::LIB_UUID
                         && $params['library_name'] === 'Shared Library'
                         && $params['permission'] === 'readwrite';
                 })
@@ -243,9 +262,9 @@ final class FederationLibraryShareRepositoryTest extends TestCase
 
         $repo = new FederationLibraryShareRepository($db);
         $repo->handleIncomingOffer([
-            'id' => 'incoming-offer-1',
-            'peer_id' => 'peer-offer',
-            'library_id' => 'lib-offer',
+            'id' => self::OFFER_UUID,
+            'peer_id' => self::PEER_UUID,
+            'library_id' => self::LIB_UUID,
             'library_name' => 'Shared Library',
             'permission' => 'readwrite',
         ]);
@@ -309,9 +328,9 @@ final class FederationLibraryShareRepositoryTest extends TestCase
 
         $repo = new FederationLibraryShareRepository($db);
         $repo->handleIncomingOffer([
-            'id' => 'offer-no-perm',
-            'peer_id' => 'peer-offer',
-            'library_id' => 'lib-offer',
+            'id' => self::OFFER_UUID,
+            'peer_id' => self::PEER_UUID,
+            'library_id' => self::LIB_UUID,
             'library_name' => 'Library',
             // permission missing - should default to 'read'
         ]);
@@ -337,9 +356,9 @@ final class FederationLibraryShareRepositoryTest extends TestCase
 
         $repo = new FederationLibraryShareRepository($db);
         $repo->handleIncomingOffer([
-            'id' => 'offer-dup',
-            'peer_id' => 'peer-offer',
-            'library_id' => 'lib-offer',
+            'id' => self::OFFER_UUID,
+            'peer_id' => self::PEER_UUID,
+            'library_id' => self::LIB_UUID,
             'library_name' => 'Library',
             'permission' => 'read',
         ]);
@@ -347,6 +366,86 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $capturedSql);
         self::assertStringNotContainsString('status = VALUES(status)', $capturedSql);
         self::assertStringNotContainsString('status', $capturedSql);
+    }
+
+    // ------------------------------------------------------------------
+    // M-HUB-29 — the sink parses: malformed wire offers are refused
+    // without reaching SQL, loudly in the relay log, channel stays up.
+    // ------------------------------------------------------------------
+
+    public function testHandleIncomingOfferRefusesNonUuidIdsWithoutQuery(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::never())->method('query');
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::once())
+            ->method('warning')
+            ->with(
+                self::stringContains('offer refused'),
+                self::callback(static fn (array $c): bool => ($c['reason'] ?? '') !== ''
+                    && ($c['peer_id'] ?? '') === 'not-a-uuid'),
+            );
+
+        $repo = new FederationLibraryShareRepository($db, $logger);
+        $repo->handleIncomingOffer([
+            'id' => self::OFFER_UUID,
+            'peer_id' => 'not-a-uuid',
+            'library_id' => self::LIB_UUID,
+            'library_name' => 'Library',
+            'permission' => 'read',
+        ]);
+    }
+
+    public function testHandleIncomingOfferRefusesUnknownPermission(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::never())->method('query');
+
+        $repo = new FederationLibraryShareRepository($db);
+        $repo->handleIncomingOffer([
+            'id' => self::OFFER_UUID,
+            'peer_id' => self::PEER_UUID,
+            'library_id' => self::LIB_UUID,
+            'library_name' => 'Library',
+            'permission' => 'sudo',
+        ]);
+    }
+
+    public function testHandleIncomingOfferRefusesOversizedLibraryName(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::never())->method('query');
+
+        $repo = new FederationLibraryShareRepository($db);
+        $repo->handleIncomingOffer([
+            'id' => self::OFFER_UUID,
+            'peer_id' => self::PEER_UUID,
+            'library_id' => self::LIB_UUID,
+            'library_name' => str_repeat('x', 256),
+            'permission' => 'read',
+        ]);
+    }
+
+    public function testHandleIncomingOfferTrimsLibraryNameBeforeStoring(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::anything(),
+                self::callback(static fn (array $p): bool => $p['library_name'] === 'Shared Library'),
+            )
+            ->willReturn([]);
+
+        $repo = new FederationLibraryShareRepository($db);
+        $repo->handleIncomingOffer([
+            'id' => self::OFFER_UUID,
+            'peer_id' => self::PEER_UUID,
+            'library_id' => self::LIB_UUID,
+            'library_name' => "  Shared Library\t \n",
+            'permission' => 'read',
+        ]);
     }
 
     public function testDeleteIncomingOfferRemovesRowScopedByPeer(): void

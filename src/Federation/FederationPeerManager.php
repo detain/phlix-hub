@@ -107,6 +107,56 @@ class FederationPeerManager
     private ?AsyncTcpConnection $masterConnection = null;
 
     /**
+     * M-HUB-01: leaf→master frames Workerman REFUSED to take (send() ===
+     * false: closing socket or the 1 MB sendBufferLimit reached). Before
+     * this counter existed every such loss was invisible: all six push
+     * sites discarded the verdict and the master simply never received the
+     * share offer / heartbeat / handshake frame. Process-local; each drop
+     * also warning-logs with its context.
+     */
+    private int $droppedOutboundFrames = 0;
+
+    /**
+     * M-HUB-01: total leaf→master outbound frames refused this process.
+     */
+    public function getDroppedOutboundFrames(): int
+    {
+        return $this->droppedOutboundFrames;
+    }
+
+    /**
+     * M-HUB-01: interpret one Workerman send() verdict.
+     *
+     * Vendor contract (TcpConnection::send): true = flushed to the socket,
+     * null = taken into the send buffer (delivered later or the link dies —
+     * not this call's loss), false = REFUSED now (closed or buffer full).
+     * Only false is counted-and-logged; the verdict is passed through so
+     * callers that care can branch on it.
+     *
+     * @param bool|null $verdict  the raw send() return.
+     * @param string    $context  what was being sent (log attribution).
+     *
+     * @return bool true when Workerman took the frame at all.
+     */
+    private function trackOutboundSend(?bool $verdict, string $context): bool
+    {
+        if ($verdict !== false) {
+            return true;
+        }
+
+        ++$this->droppedOutboundFrames;
+        LoggerFactory::get(LogChannels::RELAY)->warning(
+            'FederationPeerManager: outbound frame dropped',
+            [
+                'context' => $context,
+                'total_dropped' => $this->droppedOutboundFrames,
+            ],
+        );
+
+        return false;
+    }
+
+    /**
      * Current reconnect delay in seconds (exponential backoff).
      *
      * @var int
@@ -722,7 +772,7 @@ class FederationPeerManager
         ], JSON_THROW_ON_ERROR);
 
         $frame = $this->encoder->encode(RelayFrameType::DATA, 0, $payload);
-        $this->masterConnection->send($frame);
+        $this->trackOutboundSend($this->masterConnection->send($frame), 'library_share_offer');
     }
 
     /**
@@ -743,7 +793,7 @@ class FederationPeerManager
         ], JSON_THROW_ON_ERROR);
 
         $frame = $this->encoder->encode(RelayFrameType::DATA, 0, $payload);
-        $this->masterConnection->send($frame);
+        $this->trackOutboundSend($this->masterConnection->send($frame), 'library_share_revoked');
     }
 
     /**
@@ -1058,7 +1108,7 @@ class FederationPeerManager
             'capabilities' => ['library_shares', 'relay', 'admin_delegation'],
         ], JSON_THROW_ON_ERROR);
 
-        $this->masterConnection->send($payload);
+        $this->trackOutboundSend($this->masterConnection->send($payload), 'hub_hello');
     }
 
     /**
@@ -1294,7 +1344,7 @@ class FederationPeerManager
             'signature' => $signature,
         ], JSON_THROW_ON_ERROR);
 
-        $this->masterConnection->send($payload);
+        $this->trackOutboundSend($this->masterConnection->send($payload), 'hub_hello_auth');
     }
 
     /**
@@ -1381,7 +1431,7 @@ class FederationPeerManager
         }
 
         $frame = $this->encoder->encode(RelayFrameType::HEARTBEAT, 0, '');
-        $this->masterConnection->send($frame);
+        $this->trackOutboundSend($this->masterConnection->send($frame), 'heartbeat');
 
         // H-2: the LOCAL mirror session row is addressed by peer id — the
         // master's session UUID (kept in $this->sessionId for diagnostics)
@@ -1776,7 +1826,7 @@ class FederationPeerManager
         }
 
         $frame = $this->encoder->encode(RelayFrameType::HEARTBEAT, 0, '');
-        $this->masterConnection->send($frame);
+        $this->trackOutboundSend($this->masterConnection->send($frame), 'heartbeat');
 
         // H-2: refresh the LOCAL mirror session row by peer id (see
         // handleHeartbeat for why the master's session UUID matches nothing

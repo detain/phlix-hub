@@ -64,10 +64,12 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.signup', RateLimitProfiles::SIGNUP);
     }
 
-    public function testDefaultsReturnsAllFourteenProfiles(): void
+    public function testDefaultsReturnsAllFifteenProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
+        // Fifteen since the minors campaign M-HUB-22 added
+        // `client_relay_token` (the mint budget).
         // Fourteen since the minors campaign M-HUB-37 added `syncplay_mount`
         // (the :8804 pre-auth connect limiter).
         // Thirteen since the minors campaign M-HUB-21 added `invite_redeem`.
@@ -81,7 +83,7 @@ final class RateLimitProfilesTest extends TestCase
         // "a profile was added but never given a config key or a default"
         // into a red, so bumping the number without adding the matching
         // `testDefaultsContains…Profile` below defeats it.
-        self::assertCount(14, $defaults);
+        self::assertCount(15, $defaults);
     }
 
     /**
@@ -98,6 +100,21 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('syncplay_mount', $defaults[RateLimitProfiles::SYNCPLAY_MOUNT]['key']);
         self::assertSame(30, $defaults[RateLimitProfiles::SYNCPLAY_MOUNT]['max']);
         self::assertSame(60, $defaults[RateLimitProfiles::SYNCPLAY_MOUNT]['window']);
+    }
+
+    /**
+     * Minors campaign M-HUB-22: relay-token mint gets its own member-keyed
+     * budget — 10 / 60s, config key `client_relay_token`.
+     */
+    public function testDefaultsContainsClientRelayTokenProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::CLIENT_RELAY_TOKEN, $defaults);
+        self::assertSame('rate_limiter.client_relay_token', RateLimitProfiles::CLIENT_RELAY_TOKEN);
+        self::assertSame('client_relay_token', $defaults[RateLimitProfiles::CLIENT_RELAY_TOKEN]['key']);
+        self::assertSame(10, $defaults[RateLimitProfiles::CLIENT_RELAY_TOKEN]['max']);
+        self::assertSame(60, $defaults[RateLimitProfiles::CLIENT_RELAY_TOKEN]['window']);
     }
 
     /**

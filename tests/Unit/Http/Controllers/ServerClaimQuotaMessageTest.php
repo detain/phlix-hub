@@ -40,14 +40,19 @@ final class ServerClaimQuotaMessageTest extends TestCase
     use DecodedJsonAssertions;
 
     /**
-     * Registered quota frame (contracts: quota.exceeded). The legacy
-     * SCREAMING literal parks byte-identical in `error` per the W3
-     * emit-wave law; the human sentence rides `message`.
+     * Registered quota frame (contracts: quota.exceeded). M-HUB-35
+     * completed the honest frame: the human sentence rides BOTH text
+     * fields (`error` used to park the SCREAMING literal here), followed
+     * by the quota discriminator tail — which cap answered, and that a
+     * cap clears on release, never on a timer. Key order is load-bearing
+     * (assertSame on the decoded array).
      */
     private const QUOTA_FRAME = [
-        'error' => 'SERVER_CAP_REACHED',
+        'error' => 'Server quota reached for this account',
         'code' => 'quota.exceeded',
         'message' => 'Server quota reached for this account',
+        'quota_kind' => 'server_count',
+        'quota_reset' => 'on_release',
     ];
 
     /**

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Federation;
 
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 /**
@@ -23,8 +24,24 @@ use Workerman\MySQL\Connection;
  */
 class FederationLibraryShareRepository
 {
+    /**
+     * Wire-facing shape law for every id in an incoming offer (M-HUB-29).
+     *
+     * `id`, `peer_id` and `library_id` land in CHAR(36) columns whose values
+     * are minted as UUID v4 by the ORIGIN hub; anything else is a malformed
+     * or hostile frame, not data to coerce. Same pattern as
+     * {@see \Phlix\Hub\Http\Controllers\FederationController}'s peer-id
+     * route guard — the boundary parses, the SQL below never re-validates.
+     */
+    private const UUID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
+
+    /** VARCHAR(255) on `library_name`; MySQL counts CHARACTERS, bytes are the
+     *  conservative bound we can check without a collation-aware strlen. */
+    private const MAX_LIBRARY_NAME_BYTES = 255;
+
     public function __construct(
         private readonly Connection $db,
+        private readonly ?StructuredLogger $logger = null,
     ) {
     }
 
@@ -194,10 +211,17 @@ class FederationLibraryShareRepository
      */
     public function acceptIncomingOffer(string $id, string $userId): void
     {
+        // `status = 'pending'` is the atomically-enforced decision boundary:
+        // two admins responding simultaneously (or a response racing a peer
+        // re-push/revocation) settle exactly one UPDATE. The controller's
+        // read-then-act 409 pre-check stays — it produces the friendly
+        // error — but it is no longer the only thing standing between a race
+        // and a clobbered decision (M-HUB-29).
         $this->db->query(
-            'UPDATE federation_incoming_share_offers
+            "UPDATE federation_incoming_share_offers
              SET status = :status, accepted_by = :accepted_by, responded_at = NOW()
-             WHERE id = :id',
+             WHERE id = :id
+               AND status = 'pending'",
             [
                 'id' => $id,
                 'status' => 'accepted',
@@ -216,10 +240,12 @@ class FederationLibraryShareRepository
      */
     public function rejectIncomingOffer(string $id, string $userId): void
     {
+        // Atomic pending guard, identical law to acceptIncomingOffer (M-HUB-29).
         $this->db->query(
-            'UPDATE federation_incoming_share_offers
+            "UPDATE federation_incoming_share_offers
              SET status = :status, accepted_by = :accepted_by, responded_at = NOW()
-             WHERE id = :id',
+             WHERE id = :id
+               AND status = 'pending'",
             [
                 'id' => $id,
                 'status' => 'rejected',
@@ -262,10 +288,36 @@ class FederationLibraryShareRepository
         $id = is_string($rawId) ? $rawId : '';
         $peerId = is_string($rawPeerId) ? $rawPeerId : '';
         $libraryId = is_string($rawLibraryId) ? $rawLibraryId : '';
-        $libraryName = is_string($rawLibraryName) ? $rawLibraryName : '';
-        $permission = is_string($rawPermission) ? $rawPermission : 'read';
+        $libraryName = is_string($rawLibraryName) ? trim($rawLibraryName) : '';
+        $permission = is_string($rawPermission) && $rawPermission !== ''
+            ? $rawPermission
+            : 'read';
 
-        if ($id === '' || $peerId === '' || $libraryId === '') {
+        // M-HUB-29: this is a WIRE SINK — a peer hub (or anything that has
+        // forged a frame past the verified-channel gates) supplies every byte
+        // below. Pre-fix, only emptiness was checked, so a hostile offer
+        // reached the SQL as a guaranteed PDOException (non-UUID strings over
+        // 36 chars or violating the FK/ENUM/NOT-NULL surface) thrown into the
+        // frame handler, or — with a non-strict sql_mode venue — as silently
+        // truncated garbage stored as trusted rows. The sink now PARSES: bad
+        // shape means refuse the offer loudly in the relay log and keep the
+        // channel alive; nothing downstream re-validates what lands here.
+        if (
+            !preg_match(self::UUID_PATTERN, $id)
+            || !preg_match(self::UUID_PATTERN, $peerId)
+            || !preg_match(self::UUID_PATTERN, $libraryId)
+        ) {
+            $this->refuseOffer('malformed offer id (id/peer_id/library_id must be UUIDs)', $id, $peerId, $libraryId);
+            return;
+        }
+
+        if ($permission !== 'read' && $permission !== 'readwrite') {
+            $this->refuseOffer('unknown permission in offer', $id, $peerId, $libraryId);
+            return;
+        }
+
+        if ($libraryName === '' || strlen($libraryName) > self::MAX_LIBRARY_NAME_BYTES) {
+            $this->refuseOffer('library_name empty or oversized in offer', $id, $peerId, $libraryId);
             return;
         }
 
@@ -315,5 +367,25 @@ class FederationLibraryShareRepository
                 'peer_id' => $peerId,
             ],
         );
+    }
+
+    /**
+     * Loud refusal of a malformed incoming offer (M-HUB-29).
+     *
+     * Deliberately a warning-and-drop, not a throw: the callers are the two
+     * verified-channel frame sinks ({@see FederationFrameHandler} and
+     * {@see FederationPeerManager}); an exception there would tear down a
+     * live, mutually-authenticated federation link over one bad frame worth
+     * less than the link. The identity fields are echoed so operators can
+     * attribute repeat abuse to a peer.
+     */
+    private function refuseOffer(string $reason, string $id, string $peerId, string $libraryId): void
+    {
+        $this->logger?->warning('Federation incoming share offer refused', [
+            'reason' => $reason,
+            'offer_id' => $id,
+            'peer_id' => $peerId,
+            'library_id' => $libraryId,
+        ]);
     }
 }

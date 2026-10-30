@@ -1385,4 +1385,58 @@ final class FederationPeerManagerTest extends TestCase
         $method->setAccessible(true);
         $method->invoke($this->manager, $payload);
     }
+
+    /**
+     * Attach a fake master socket whose send() answers with a fixed verdict.
+     */
+    private function attachSendVerdictConnection(?bool $verdict): void
+    {
+        $conn = $this->createMock(AsyncTcpConnection::class);
+        $conn->method('send')->willReturn($verdict);
+        $property = new ReflectionProperty($this->manager, 'masterConnection');
+        $property->setAccessible(true);
+        $property->setValue($this->manager, $conn);
+    }
+
+    /**
+     * M-HUB-01: a refused leaf→master send (Workerman false: closed socket
+     * or full send buffer) is COUNTED — before the cure all six push sites
+     * discarded the verdict and the loss was invisible.
+     */
+    public function testRefusedMasterSendIsCounted(): void
+    {
+        $this->attachSendVerdictConnection(false);
+
+        $this->manager->pushLibraryShareRevoked('share-uuid-1');
+
+        self::assertSame(1, $this->manager->getDroppedOutboundFrames());
+    }
+
+    /**
+     * M-HUB-01: the null verdict is BUFFERED (arrives or the link dies
+     * later) — counting it would cry wolf at ordinary backpressure.
+     */
+    public function testBufferedNullSendVerdictIsNotCounted(): void
+    {
+        $this->attachSendVerdictConnection(null);
+
+        $this->manager->pushLibraryShareRevoked('share-uuid-1');
+
+        self::assertSame(0, $this->manager->getDroppedOutboundFrames());
+    }
+
+    /**
+     * M-HUB-01: the count accumulates across frame kinds (offer + revoke
+     * both refused = 2) so an operator sees total loss, not just the last.
+     */
+    public function testDropCounterAccumulatesAcrossFrameKinds(): void
+    {
+        $this->attachSendVerdictConnection(false);
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
+
+        $this->manager->pushLibraryShare('share-uuid-1', 'lib-1', 'Movies', 'read');
+        $this->manager->pushLibraryShareRevoked('share-uuid-1');
+
+        self::assertSame(2, $this->manager->getDroppedOutboundFrames());
+    }
 }

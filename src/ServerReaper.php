@@ -32,6 +32,12 @@ use Workerman\Timer;
  *    sweep, on the same timer (no second periodic worker, no new fork-time
  *    scheduling surface).
  *
+ *  - M-HUB-26: purges CLOSED federation session rows (`federation_sessions`
+ *    with `alive = 0`) older than the retention window. The federation
+ *    session reaper marks rows dead; nothing deleted them, so every
+ *    handshake-then-drop cycle left a permanent row. Same two-phase keyed
+ *    delete as the heartbeat sweep.
+ *
  * All tasks run on the same timer. The reaper is started from
  * {@see HubServicesProvider::boot()}.
  *
@@ -94,6 +100,27 @@ final class ServerReaper
      * @var int
      */
     private const AUDIT_SWEEP_BATCH_SIZE = 1000;
+
+    /**
+     * Federation session rows (alive = 0) are deleted once their
+     * `last_heartbeat_at` is older than this many days (M-HUB-26).
+     *
+     * Not a config dial on purpose: the value only has to comfortably exceed
+     * the longest incident-investigation lookback for "when did this peer
+     * last talk to us", and 7 days is what the heartbeat sweep already ships
+     * with. A dial invites the zero-retention mass-delete footgun
+     * {@see normalizeRetentionDays()} exists to defuse.
+     *
+     * @var int
+     */
+    public const DEFAULT_FEDERATION_SESSION_RETENTION_DAYS = 7;
+
+    /**
+     * Maximum closed-session rows purged per {@see sweepDeadFederationSessions()} call.
+     *
+     * @var int
+     */
+    private const FEDERATION_SESSION_SWEEP_BATCH_SIZE = 1000;
 
     /**
      * Hard ceiling (~100 years) for any retention window in days.
@@ -271,6 +298,7 @@ final class ServerReaper
         $this->markStaleServersOffline();
         $this->sweepHeartbeats();
         $this->sweepAuditLogs();
+        $this->sweepDeadFederationSessions();
     }
 
     /**
@@ -493,6 +521,101 @@ final class ServerReaper
                     throw $e;
                 }
                 $this->logger->debug('ServerReaper: audit sweep deadlock, retrying', [
+                    'attempt' => $attempt,
+                    'max_retries' => $maxRetries,
+                    'error' => $e->getMessage(),
+                ]);
+                usleep(50000 * $attempt);
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * Delete CLOSED federation session rows older than the retention window
+     * (M-HUB-26).
+     *
+     * {@see \Phlix\Hub\Federation\FederationSessionManager::reapDeadSessions()}
+     * marks stale sessions `alive = 0`; nothing ever removed them. On a hub
+     * with flapping federation peers that is one permanent row per
+     * handshake-then-drop cycle. Rows with `alive = 1` are NEVER touched by
+     * this sweep — a live session's `last_heartbeat_at` is old only when the
+     * reaper itself is behind, and purging a live row would erase the
+     * session the peer manager still counts on.
+     *
+     * Two-phase keyed delete (deadlock avoidance), exactly as in
+     * {@see sweepHeartbeats()}: a non-locking PK-ordered SELECT of expired
+     * ids, then `DELETE ... WHERE id IN (...)` by PRIMARY KEY. The predicate
+     * rides `idx_last_heartbeat`; the `alive = 0` filter is checked per row.
+     * `last_heartbeat_at` is never rewritten once a row is dead, so the
+     * cutoff is stable — no row re-enters the window.
+     *
+     * @return int Number of rows deleted.
+     */
+    public function sweepDeadFederationSessions(): int
+    {
+        $maxRetries = 3;
+
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                /** @var mixed $rows */
+                $rows = $this->db->query(
+                    'SELECT id FROM federation_sessions
+                     WHERE alive = 0
+                       AND last_heartbeat_at < NOW() - INTERVAL :retention DAY
+                     ORDER BY id
+                     LIMIT ' . self::FEDERATION_SESSION_SWEEP_BATCH_SIZE,
+                    ['retention' => self::DEFAULT_FEDERATION_SESSION_RETENTION_DAYS],
+                );
+
+                $ids = [];
+                if (is_array($rows)) {
+                    /** @var list<array<string, mixed>> $rows */
+                    foreach ($rows as $row) {
+                        /** @var mixed $rawId */
+                        $rawId = $row['id'] ?? null;
+                        if (is_string($rawId) && $rawId !== '') {
+                            $ids[] = $rawId;
+                        }
+                    }
+                }
+
+                // Nothing expired — no lock-taking DELETE needed.
+                if ($ids === []) {
+                    return 0;
+                }
+
+                // Phase 2: delete exactly those rows by PRIMARY KEY. Colon-free
+                // named placeholders (workerman/mysql prepends `:`).
+                $placeholders = [];
+                $params = [];
+                foreach ($ids as $i => $id) {
+                    $key = 'id_' . $i;
+                    $placeholders[] = ':' . $key;
+                    $params[$key] = $id;
+                }
+
+                /** @var mixed $result */
+                $result = $this->db->query(
+                    'DELETE FROM federation_sessions WHERE id IN (' . implode(', ', $placeholders) . ')',
+                    $params,
+                );
+                $count = is_numeric($result) ? (int) $result : 0;
+
+                if ($count > 0) {
+                    $this->logger->info('ServerReaper: federation session sweep complete', [
+                        'deleted' => $count,
+                        'retention_days' => self::DEFAULT_FEDERATION_SESSION_RETENTION_DAYS,
+                    ]);
+                }
+
+                return $count;
+            } catch (\PDOException $e) {
+                if ($attempt === $maxRetries || strpos($e->getMessage(), 'Deadlock') === false) {
+                    throw $e;
+                }
+                $this->logger->debug('ServerReaper: federation session sweep deadlock, retrying', [
                     'attempt' => $attempt,
                     'max_retries' => $maxRetries,
                     'error' => $e->getMessage(),
