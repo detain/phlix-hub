@@ -6,6 +6,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — rider W16 R-HUB-16: the claim body cap's docblock states its true scope — the byte floor guards the public `newClaim` POST only; the sibling `claim()` is deliberately uncapped (r1's "claim POSTs" plural was phrasing overscope, adjudicated in M-HUB-13__r2 minor-1) — 2026-10-30
+
+- **The ask.** Rider R-HUB-16 (from fixlog/M-HUB-13__r2.md non-blocking
+  minor-1): the r1 ask said "claim POSTs" (plural) but only `newClaim`
+  carries `MAX_CLAIM_BODY_BYTES`; mirroring the cap onto `claim()` was
+  offered "for uniformity", not as security debt. The reviewer's own
+  conviction was phrasing — `claim()` is AuthMiddleware-guarded, extracts the
+  scalar `claim_code` and pays the 60/60s bucket before any DB work, leaving
+  no list-walk/INSERT-amplification surface for a cap to bind; M2's actual
+  charge (public `/new`) is fully closed.
+- **The cure (prose-truth leg, minimal per the ask's "optionally").** The
+  constant's docblock now names the endpoint it guards and records the
+  decline of the optional mirror with its reasoning; `claim()`'s docblock
+  carries the matching cross-reference so a future reader cannot re-misread
+  the scope at the sibling path. Zero bytes of behavior: the 400 `invalid_payload`
+  envelope, the `Request body exceeds 16384 bytes.` message and every wire
+  contract are untouched; the openapi and the frozen contract trio were not
+  edited (md5s cannot move — docblocks are not wire).
+- **Gates.** `php -l` clean; diff is provably comment-only (every changed
+  line matches the docblock pattern). Targeted `--filter
+  'ServerClaim|ClaimRequest|ClaimAudit'`: 75 tests / 1778 assertions,
+  Skipped 2 (pre-existing venue skips), exit 0. phpcs bare PSR12 and
+  `phpcs.xml.dist` on the changed file both rc 0; S299 corpus gate 603 files
+  0E/0W. Contracts `verify:cites` remains the parked re-anchor debt (76-red
+  era, owner-disclosed by the W15 landing same law); this change adds +10
+  net lines to `ServerClaimController.php` above the cited arms, handing the
+  next currency sweep a slightly larger but strictly mechanical shift. S439
+  respected (no phlix-server unit run in flight); own-port docker MySQL was
+  never needed — no integration DB site matched the filter. TZ: runs landed
+  22:5x–23:0x UTC, outside the 00:00–04:00Z skew window.
+
 ### Fixed — rider W15 R-HUB-15: the `syncplay_playback_sync` echo's `member_id` stamp typed `?? null` into a NON-NULLABLE wire field — the fallback now stamps `''`, the value the shared client already degrades to — 2026-10-30
 
 - **The ask.** Rider R-HUB-15 (from fixlog M-SYNCPLAY-08__r1 O3): "hub

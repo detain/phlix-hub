@@ -41,10 +41,17 @@ use Phlix\Shared\Hub\ClaimRequest;
 final class ServerClaimController
 {
     /**
-     * Claim-surface body cap (M-HUB-13, review hub__exploiter M2: no body cap
-     * at the claim surface; Workerman materializes every body per
+     * Public-newClaim body cap (M-HUB-13, review hub__exploiter M2 charged
+     * "no body cap at the claim surface" — the plural was r1 phrasing
+     * overscope: this floor guards ONLY the public POST /server-claims/new,
+     * the endpoint M2 actually named. The authed sibling claim() carries no
+     * mirror, by adjudicated design, not oversight: AuthMiddleware-gated,
+     * scalar claim_code extraction, 60/60s bucket paid before any DB work —
+     * no list-walk/INSERT-amplification surface remains for a cap to bind
+     * [M-HUB-13__r2 minor-1; optional uniformity mirror declined, R-HUB-16]).
+     * Workerman materializes every body per
      * Content-Length before routing, so the parse boundary is where the bill
-     * gets refused). 16 KiB = the largest legal claim payload (serverName 255
+     * gets refused. 16 KiB = the largest legal claim payload (serverName 255
      * + version 32 + Ed25519 JWK + 16×253-byte hostname candidates, ~2× for
      * JSON escaping ≈ 8.5 KB) with a 2× margin at a power-of-two boundary,
      * ≈ 400× the ~40-byte
@@ -188,7 +195,10 @@ final class ServerClaimController
     /**
      * `POST /api/v1/server-claims/claim` — user claims a server.
      *
-     * Requires user auth (userId must be set by AuthMiddleware).
+     * Requires user auth (userId must be set by AuthMiddleware). Deliberately
+     * outside MAX_CLAIM_BODY_BYTES: the byte floor guards the public newClaim
+     * POST only — this path extracts the scalar claim_code and pays the
+     * pairing budget before DB work (see the constant's R-HUB-16 note).
      */
     public function claim(Request $request): Response
     {
