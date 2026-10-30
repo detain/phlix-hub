@@ -204,7 +204,13 @@ final class CoroutineHooksTest extends TestCase
 
         // Invoke the property exactly the way Workerman does: ($cb)($worker).
         $callback = $worker->onWorkerStart;
-        self::assertIsCallable($callback);
+        // is_callable guard, not assertIsCallable: where an earlier assertNull
+        // has narrowed the property's modeled type, psalm (tests at L5)
+        // intersects the assertion-style narrowing to `never`
+        // (InvalidFunctionCall). The guard states the same law and re-types.
+        if (!is_callable($callback)) {
+            self::fail('wrap() must leave a callable onWorkerStart on the worker');
+        }
         $callback($worker);
 
         self::assertSame(['enforce:2a', 'original'], $order);
@@ -221,8 +227,15 @@ final class CoroutineHooksTest extends TestCase
 
         CoroutineHooks::wrap($worker, []);
 
+        /** @var mixed $callback */
         $callback = $worker->onWorkerStart;
-        self::assertIsCallable($callback);
+        // instanceof guard rather than assertIsCallable/is_callable: the
+        // assertNull above makes psalm model the re-read property as null, and
+        // only an instanceof narrowing actually re-types it (tests at L5
+        // InvalidFunctionCall "never as callable").
+        if (!$callback instanceof \Closure) {
+            self::fail('wrap() must leave a Closure onWorkerStart on a worker that had none');
+        }
         $callback($worker);
 
         self::assertSame([SwooleRuntime::safeHookFlags()], $this->deliveredMasks);
@@ -253,7 +266,13 @@ final class CoroutineHooksTest extends TestCase
         CoroutineHooks::wrap($worker, []);
 
         $callback = $worker->onWorkerStart;
-        self::assertIsCallable($callback);
+        // is_callable guard, not assertIsCallable: where an earlier assertNull
+        // has narrowed the property's modeled type, psalm (tests at L5)
+        // intersects the assertion-style narrowing to `never`
+        // (InvalidFunctionCall). The guard states the same law and re-types.
+        if (!is_callable($callback)) {
+            self::fail('wrap() must leave a callable onWorkerStart on the worker');
+        }
         $callback($worker);
 
         self::assertSame(['enforce', 'enforce', 'class-callback'], $order);

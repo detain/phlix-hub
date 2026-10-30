@@ -34,6 +34,7 @@
         "tests/Unit/Common/Container/Providers/FederationRateLimitWiringTest.php": 0.003,
         "tests/Unit/Common/Container/Providers/HttpServicesProviderTest.php": 0.002,
         "tests/Unit/Common/Container/Providers/HubServicesProviderTest.php": 0.078,
+        "tests/Unit/Common/Container/Providers/InviteLinkRedeemWiringTest.php": 0.004,
         "tests/Unit/Common/Container/Providers/MetricsServicesProviderTest.php": 0.007,
         "tests/Unit/Common/Container/Providers/RateLimitSurfaceMergeTest.php": 0.002,
         "tests/Unit/Common/Container/Providers/ServerClaimRateLimitWiringTest.php": 0.004,

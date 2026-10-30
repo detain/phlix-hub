@@ -121,12 +121,16 @@ final class FederationUserProbeWiringTest extends TestCase
         /** @var mixed $probe */
         $probe = $property->getValue($manager);
 
-        self::assertInstanceOf(
-            Closure::class,
-            $probe,
-            'R17-07: production MUST wire the users-table probe — the consumer'
-            . ' fails closed when null, so a missing wiring degrades silently',
-        );
+        // instanceof guard, not PHPUnit::assertInstanceOf: psalm (tests at L5)
+        // does not carry the assertion's narrowing into ReflectionFunction's
+        // Closure parameter, and the guard states the same law with an
+        // early-exit (code-philosophy Law 1) while typing $probe for analysis.
+        if (!$probe instanceof Closure) {
+            self::fail(
+                'R17-07: production MUST wire the users-table probe — the consumer'
+                . ' fails closed when null, so a missing wiring degrades silently',
+            );
+        }
 
         $reflection = new ReflectionFunction($probe);
         self::assertGreaterThanOrEqual(
