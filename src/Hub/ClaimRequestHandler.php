@@ -601,8 +601,9 @@ class ClaimRequestHandler
         // shape. Empties included: a zero-length "hostname" is not advertise
         // material, it is payload filler. Marker maps to 400 invalid_payload
         // (ServerClaimController::mapError), the endpoint's registered
-        // shape-reject frame — NOT the legacy 'Invalid …' strings that ride
-        // the 500 default arm.
+        // shape-reject frame — the same family the legacy
+        // 'Invalid server_name'/'Invalid version' markers joined at
+        // R-HUB-14 (they used to fall through to the 500 default arm).
         if (count($request->hostnameCandidates) > self::MAX_HOSTNAME_CANDIDATES) {
             throw new InvalidArgumentException('HOSTNAME_CANDIDATES_INVALID');
         }

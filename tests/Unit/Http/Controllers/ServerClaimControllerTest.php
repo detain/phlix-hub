@@ -274,6 +274,51 @@ final class ServerClaimControllerTest extends TestCase
         self::assertStringContainsString('hostnameCandidates', $frame['message']);
     }
 
+    public function testNewClaimMapsLegacyFieldMarkersToInvalidPayloadFrame(): void
+    {
+        // R-HUB-14 wire pin: the two legacy field-boundary markers from
+        // ClaimRequestHandler::validateClaimRequest ('Invalid server_name',
+        // 'Invalid version') must answer through their own mapError arm —
+        // 400 invalid_payload, the endpoint's registered shape-reject
+        // family — never folded into the 500 default. Red per marker if the
+        // arm is stripped.
+        foreach (['Invalid server_name', 'Invalid version'] as $marker) {
+            $handler = $this->createMock(ClaimRequestHandler::class);
+            $handler->method('handleNewClaim')
+                ->willThrowException(new \InvalidArgumentException($marker));
+            $controller = new ServerClaimController($handler);
+
+            $request = new Request();
+            $request->method = 'POST';
+            $request->path = '/api/v1/server-claims/new';
+            $request->headers['Accept-Phlix-Protocol'] = 'v1';
+            $request->body = [
+                // Exactly the shape that trips the handler's bounds today:
+                // empty strings pass the shared parser (type-check only) and
+                // meet the private validateClaimRequest refusal.
+                'serverName' => '',
+                'version' => '',
+                'publicKeysJwk' => [
+                    'kty' => 'OKP',
+                    'crv' => 'Ed25519',
+                    'x' => 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+                ],
+                'hostnameCandidates' => ['nas.lan'],
+                'protocolVersion' => 'v1',
+            ];
+
+            $response = $controller->newClaim($request);
+
+            self::assertSame(400, $response->statusCode, $marker);
+            $frame = json_decode($response->body, true);
+            self::assertIsArray($frame);
+            self::assertSame('invalid_payload', $frame['code'], $marker);
+            self::assertSame('Bad Request', $frame['error'], $marker);
+            self::assertStringContainsString('serverName must be 1-255 bytes', $frame['message'], $marker);
+            self::assertStringContainsString('version must be 1-32 bytes', $frame['message'], $marker);
+        }
+    }
+
     public function testAggregateFloorRateLimitBubblesToCentralMappingUntouched(): void
     {
         // M-HUB-13 pass-through pin: the floor's RateLimitException must NOT

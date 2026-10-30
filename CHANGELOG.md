@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — rider W14 R-HUB-14: the legacy `Invalid server_name`/`Invalid version` markers rode mapError's 500 default arm — one added `invalid_payload` arm makes payload-shape refusals answer 400 as the endpoint's registered family — 2026-10-30
+
+- **The ask.** Rider R-HUB-14 (queue): "one-arm mapError addition owed to
+  minors sweep" — fixlog M-HUB-13__r2 #5 had named exactly this residual:
+  `ClaimRequestHandler::validateClaimRequest` throws the two legacy field
+  markers (`serverName` empty or > 255 bytes; `version` empty or > 32
+  bytes) and `ServerClaimController::mapError`'s match carried no arm for
+  them, so a caller payload-shape refusal answered `HUB_INTERNAL_ERROR`.
+- **The cure.** One mapError arm beside its M-HUB-13
+  `HOSTNAME_CANDIDATES_INVALID` neighbour: both markers now answer
+  `400 invalid_payload` / `Bad Request` naming the bounds — the family the
+  endpoint's `fromPayload` catch already speaks; zero new wire codes, frame
+  shape unchanged. `testNewClaimMapsLegacyFieldMarkersToInvalidPayloadFrame`
+  pins both markers through the real route (red per marker if the arm is
+  stripped); the handler's neighbour comment sheds its now-false "NOT the
+  legacy … strings that ride the 500 default arm" contrast; the
+  `/server-claims/new` openapi prose lists the two field bounds among the
+  `400 invalid_payload` set (prose-only — schema/type/path/enum untouched,
+  per the 4578711f/9589773e precedent).
+
 ### Fixed — riders W13 R-HUB-13: the managed installer now SEEDS the SyncPlay seam — domain-bound installs emit `HUB_WS_URL` + `HUB_WS_PATH` so seam-aware clients ride the managed route with no operator step; the portal-bundle wiring stays the disclosed rider it was scoped to be — 2026-10-31
 
 - **The ask.** Review M-HUB-11__r2 (seam-rider): "emit the seam env in the

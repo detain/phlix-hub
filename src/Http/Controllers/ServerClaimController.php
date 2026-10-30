@@ -319,6 +319,21 @@ final class ServerClaimController
                 'Bad Request',
                 ['message' => 'hostnameCandidates exceed the pairing bounds'],
             ),
+            // R-HUB-14 (minors sweep): the two legacy field markers from
+            // ClaimRequestHandler::validateClaimRequest rode the 500 default
+            // below — a caller payload-shape refusal answering
+            // HUB_INTERNAL_ERROR. One addition: they join the same
+            // registered `invalid_payload` family the fromPayload catch and
+            // the HOSTNAME_CANDIDATES_INVALID neighbour speak (zero new wire
+            // codes, same {error,code,message} shape). The bounds are the
+            // handler's: serverName non-empty ≤ 255 bytes, version non-empty
+            // ≤ 32 bytes.
+            'Invalid server_name', 'Invalid version' => (new Response())->error(
+                400,
+                'invalid_payload',
+                'Bad Request',
+                ['message' => 'serverName must be 1-255 bytes; version must be 1-32 bytes'],
+            ),
             default => (new Response())->error(
                 500,
                 'hub.internal_error',
