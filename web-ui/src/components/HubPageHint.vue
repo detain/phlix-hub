@@ -3,7 +3,7 @@
  * Hub-local contextual page hint (W5 / plan §9 PageHint pass).
  *
  * The shared `PageHint` component in @phlix/ui is not exported from the
- * package surface at the vendored v0.99.9 pin (internal hashed chunk only),
+ * package surface at the vendored v0.99.10 pin (internal hashed chunk only),
  * so the hub's three shell pages carry a minimal hub-side equivalent until
  * upstream exports the real one — at which point these wrappers swap the
  * import and this component retires. Contract mirrors the ui pattern:

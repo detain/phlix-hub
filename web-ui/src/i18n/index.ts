@@ -13,7 +13,7 @@
  * from this client (the estate i18n audit finding this wiring closes).
  *
  * Unlike the vendored-bundle clients (Tizen, Windows), this consumer's
- * `@phlix/ui` pin (the `v0.99.5` release tag) SHIPS the locale bundles
+ * `@phlix/ui` pin (the `v0.99.10` release tag) SHIPS the locale bundles
  * from its main entry — `LOCALE_MESSAGES` / `ES_MESSAGES`…`JA_MESSAGES` /
  * `PhlixLocaleCode` — so there is nothing to re-vendor: the ui package IS the
  * catalog SSOT here, and ui upgrades flow through the pin.

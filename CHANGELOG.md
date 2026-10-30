@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min48 (M-HUB-12): the i18n docblock's own pin coordinate, made self-enforcing — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min48, closing the hub minors vein
+(W-min40..48).
+
+- **M-HUB-12** — `web-ui/src/i18n/index.ts` described its own `@phlix/ui` pin
+  as "the `v0.99.5` release tag" while `web-ui/package.json` pins `v0.99.10`;
+  the wiring it documents was verified good, only the coordinate prose had
+  drifted through two re-pin cascades — and this is precisely the file a
+  platform integrator reads to decide which locales ship where. The same
+  sweep found one sibling drift (`HubPageHint.vue` claiming "the vendored
+  v0.99.9 pin"; its package-boundary claim re-verified true at v0.99.10 —
+  `PageHint` is still a hashed-chunk-only export there, absent from
+  `dist/index.d.ts`). Both coordinates are now current, and the rot class is
+  pinned by a new tripwire, `web-ui/tests/ui-pin-currency.test.ts`: every
+  version-coordinate line in each named docblock must equal the tag parsed
+  from `package.json`, so the next cascade that bumps the pin without
+  refreshing the prose reddens `npm test`. Red-then-green measured: against
+  the stale tree the two new tests failed naming both drifted lines
+  (v0.99.5 / v0.99.9 vs pin v0.99.10); after the cure, web-ui suite 134 →
+  **136 pass / 0 fail** (+2 exact). Because the src comments live verbatim in
+  the bundle's sourcemap `sourcesContent`, the served SPA was rebuilt from the
+  committed lockfile (npm11 venue) and re-vendored: 59 chunk renames (import-
+  hash cascade, content-hash prefixes unchanged — the min47 precedent shape),
+  210 files on disk == 210 tracked, determinism ×2 aggregate md5
+  `e9896f47613ddb065c4b128d91d74bfa`; zero PHP diff, so the contract-freeze
+  fixtures (route-manifest `91579683…`, error-codes `40c1da48…`) are
+  byte-ident and openapi/route/error-code wire law is untouched.
+
 ### Fixed — minors W-min47 (M-HUB-05, M-HUB-10, M-HUB-30): a create door for shares, a declared browser floor, and a hub-wide body cap — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min47, three items, all cured in-hub.
