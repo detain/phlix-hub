@@ -33,21 +33,21 @@ use Workerman\Timer;
  *   1. Connects to master hub's WS endpoint at
  *      `{scheme}://{master-host}[:{port}]/relay/federation/{leaf_hub_id}` —
  *      scheme and port come from the configured peer URL (M-8).
- *   2. Sends HUB_HELLO JSON frame on connect
- *   3. Handles HUB_HELLO_ACK (stores session; cross-checks the reported
+ *   2. Sends the `hub_hello` JSON text frame on connect
+ *   3. Handles `hub_hello_ack` (stores session; cross-checks the reported
  *      `master_hub_id` against the master peer's bound identity when one is
  *      known, binding it on first use). H-4: the ack is CRYPTOGRAPHICALLY
  *      verified first — its Ed25519 signature over the canonical
  *      {session_id, master_hub_id, nonce} string must check against the
  *      master peer row's registered public key before ANY of its claims are
  *      trusted; a forged/unsigned ack closes the link with backoff. On
- *      acceptance the leaf answers with HELLO_AUTH, proving possession of
+ *      acceptance the leaf answers with `hub_hello_auth`, proving possession of
  *      THIS hub's registered private key over {session_id, nonce,
  *      leaf_hub_id} (canonicals shared with the master via
  *      {@see FederationHandshake}).
  *   4. Sends HEARTBEAT (generic binary) every 15 seconds once verified
  *   5. Handles incoming DATA envelopes (library-share offers/revocations,
- *      ADMIN_DELEGATION payloads) — every inbound frame first passes the
+ *      admin-delegation payloads) — every inbound frame first passes the
  *      shared :8805 frame budget ({@see self::guardIncomingFrame()}, review
  *      hub__exploiter M3) BEFORE parse/dispatch, and payloads are refused
  *      before the channel is
@@ -79,7 +79,7 @@ use Workerman\Timer;
 class FederationPeerManager
 {
     /**
-     * Seconds to wait for HELLO_ACK after TCP connect before declaring the
+     * Seconds to wait for `hub_hello_ack` after TCP connect before declaring the
      * link a zombie and dropping it so the reconnect path re-runs the
      * handshake (M-6 — previously isConnected() was true forever while the
      * master silently ignored a half-registered leaf).
@@ -168,7 +168,7 @@ class FederationPeerManager
     private ?int $heartbeatTimerId = null;
 
     /**
-     * Stored session ID from HELLO_ACK handshake.
+     * Stored session ID from `hub_hello_ack` handshake.
      *
      * @var string|null
      */
@@ -183,7 +183,7 @@ class FederationPeerManager
     private ?int $reconnectTimerId = null;
 
     /**
-     * Active HELLO_ACK timeout timer ID (Workerman).
+     * Active `hub_hello_ack` timeout timer ID (Workerman).
      *
      * @var int|null
      */
@@ -214,8 +214,8 @@ class FederationPeerManager
     private ?RateLimiterInterface $receiveFrameLimiter = null;
 
     /**
-     * H-4 leaf-side channel gate: true only after a SIGNED HELLO_ACK verified
-     * against the master peer's registered key AND this leaf's HELLO_AUTH proof
+     * H-4 leaf-side channel gate: true only after a SIGNED `hub_hello_ack` verified
+     * against the master peer's registered key AND this leaf's `hub_hello_auth` proof
      * was sent. Every inbound DATA payload (offers, shares, admin-delegation)
      * is refused while false — transport liveness authorises nothing. Reset at
      * the start of every ceremony and on any link teardown.
@@ -230,7 +230,7 @@ class FederationPeerManager
      * @param FederationLibraryShareRepository $libraryShares Library shares repository.
      * @param FederationAdminDelegationRepository $adminDel     Admin delegation repository.
      * @param AuditLogger                       $audit         Audit logger.
-     * @param Ed25519KeyManager                 $keyManager    This leaf's Ed25519 keypair (HELLO_AUTH proof).
+     * @param Ed25519KeyManager                 $keyManager    This leaf's Ed25519 keypair (`hub_hello_auth` proof).
      * @param (callable(): bool)|null           $enabledResolver LIVE reader of
      *        `federation.enabled` (HubSettingsResolvers::bool, fail-safe to the
      *        boot flag); null keeps the pre-W5 always-on dial behavior.
@@ -367,7 +367,7 @@ class FederationPeerManager
 
         // C-1(1): dial ELIGIBLE peers (pending/connected/disconnected), not
         // 'connected' ones — status 'connected' only ever appears AFTER a
-        // successful HELLO-ACK, so filtering on it could never bootstrap or
+        // successful `hub_hello_ack`, so filtering on it could never bootstrap or
         // recover a link.
         $peers = $this->hubRepo->getDialablePeers();
         if ($peers === []) {
@@ -915,7 +915,7 @@ class FederationPeerManager
         $hubConfigFinal = $hubConfig;
         $self = $this;
 
-        // On successful connect — send HELLO
+        // On successful connect — send `hub_hello`
         $this->masterConnection->onConnect = static function (
             /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn
         ) use (
@@ -972,7 +972,7 @@ class FederationPeerManager
             return;
         }
 
-        // M-6: TCP up ≠ handshake done. If no HELLO_ACK lands within the
+        // M-6: TCP up ≠ handshake done. If no `hub_hello_ack` lands within the
         // timeout the link is a zombie (isConnected() true, session absent,
         // master already moved on) — drop it so onClose re-runs the handshake.
         $connForTimeout = $this->masterConnection;
@@ -989,7 +989,7 @@ class FederationPeerManager
     }
 
     /**
-     * HELLO_ACK timeout fired: log and close the half-open connection.
+     * `hub_hello_ack` timeout fired: log and close the half-open connection.
      *
      * @param AsyncTcpConnection $conn Connection that failed to complete the handshake.
      *
@@ -1025,7 +1025,7 @@ class FederationPeerManager
     }
 
     /**
-     * Send the HUB_HELLO JSON text frame to the master hub.
+     * Send the `hub_hello` JSON text frame to the master hub.
      *
      * @param array<string, mixed> $hubConfig This hub's configuration.
      *
@@ -1107,8 +1107,8 @@ class FederationPeerManager
     }
 
     /**
-     * Handle HUB_HELLO_ACK — verify the master's signature, then establish
-     * the session, answer with our own HELLO_AUTH proof, start heartbeat.
+     * Handle `hub_hello_ack` — verify the master's signature, then establish
+     * the session, answer with our own `hub_hello_auth` proof, start heartbeat.
      *
      * M-8: the ack's `master_hub_id` is cross-checked against the master
      * peer's bound identity (`leaf_hub_id`, migration 046). A mismatch means
@@ -1226,7 +1226,7 @@ class FederationPeerManager
     }
 
     /**
-     * Loud, audited refusal of a HELLO_ACK that failed the H-4 proof or the
+     * Loud, audited refusal of a `hub_hello_ack` that failed the H-4 proof or the
      * M-8 identity cross-check — drops the link and arms exponential backoff.
      *
      * @param string $hubId    This leaf's hub UUID.
@@ -1248,7 +1248,7 @@ class FederationPeerManager
     }
 
     /**
-     * Send HELLO_AUTH — the leaf's proof-of-key over the canonical
+     * Send `hub_hello_auth` — the leaf's proof-of-key over the canonical
      * {session_id, nonce, leaf_hub_id} string (H-4 ceremony, leaf leg).
      *
      * The master verifies this against OUR public key as registered on its
@@ -1285,7 +1285,7 @@ class FederationPeerManager
 
     /**
      * Close the current leaf→master link and let the reconnect path retry
-     * (used by the ack identity refusal and the HELLO_ACK timeout).
+     * (used by the ack identity refusal and the `hub_hello_ack` timeout).
      *
      * @return void
      */
@@ -1382,7 +1382,7 @@ class FederationPeerManager
     }
 
     /**
-     * Handle a HUB_DISCONNECTED frame from master.
+     * Handle a DISCONNECTED (0x07) frame from master.
      *
      * @param string $payload Frame payload (JSON {reason}).
      *
@@ -1498,7 +1498,7 @@ class FederationPeerManager
      * local FK (the master peer row we dialed) — M-5.
      *
      * The wire value is the master's OWN hub id; it is used only to
-     * cross-check against the bound identity from HELLO_ACK. A mismatch is
+     * cross-check against the bound identity from `hub_hello_ack`. A mismatch is
      * refused loudly instead of writing an offer against the wrong peer row.
      *
      * @param array<array-key, mixed> $offer Offer as received (JSON-decoded,
@@ -1568,7 +1568,7 @@ class FederationPeerManager
      *
      * Wire-law for this RESERVED envelope (docs/websockets.md `:8805` DATA
      * table): the frame's `peer_id` carries the MASTER's own hub uuid — the
-     * identity the signed HELLO_ACK ceremony bound onto the master peer row —
+     * identity the signed `hub_hello_ack` ceremony bound onto the master peer row —
      * and it is used ONLY as a cross-check. Every write stamps the LOCAL
      * channel peer row id (`masterPeerId`), never a frame-carried string, so
      * a delegation can neither bind to nor dangle away from a row this
@@ -1725,7 +1725,7 @@ class FederationPeerManager
     }
 
     /**
-     * Start the heartbeat timer — sends HUB_HEARTBEAT every 15 seconds.
+     * Start the heartbeat timer — sends the generic HEARTBEAT (0x06) every 15 seconds.
      *
      * @return void
      */
@@ -1793,7 +1793,7 @@ class FederationPeerManager
     }
 
     /**
-     * Cancel the armed HELLO_ACK timeout (handshake completed or link gone).
+     * Cancel the armed `hub_hello_ack` timeout (handshake completed or link gone).
      *
      * @return void
      */

@@ -30,17 +30,18 @@ use function strtolower;
 /**
  * Canonical byte strings + Ed25519 proofs for the federation handshake (H-4).
  *
- * Peer identity used to be knowledge-of-identifier: HELLO carried a
+ * Peer identity used to be knowledge-of-identifier: `hub_hello` carried a
  * self-declared `public_key` string, and any hub that knew that (public)
  * value completed the handshake. This class is the SINGLE definition of the
  * material each side signs, so master and leaf can never drift:
  *
- *   - HELLO_ACK proof:  master signs {session_id, master_hub_id, nonce}
- *                       with its own Ed25519 hub key.
- *   - HELLO_AUTH proof: leaf signs {session_id, nonce, leaf_hub_id} with
- *                       the private half of its REGISTERED public_key, and
- *                       echoes the master's fresh per-session nonce back —
- *                       binding the proof to exactly one handshake session.
+ *   - `hub_hello_ack` proof:  master signs {session_id, master_hub_id, nonce}
+ *                             with its own Ed25519 hub key.
+ *   - `hub_hello_auth` proof: leaf signs {session_id, nonce, leaf_hub_id} with
+ *                             the private half of its REGISTERED public_key,
+ *                             and echoes the master's fresh per-session nonce
+ *                             back — binding the proof to exactly one
+ *                             handshake session.
  *
  * Both proofs are sodium "detached" Ed25519 signatures, base64-encoded on
  * the wire. Verification keys are read from the peer rows' `public_key`
@@ -51,10 +52,10 @@ use function strtolower;
  */
 final class FederationHandshake
 {
-    /** Domain-separation prefix for the HELLO_ACK proof (never on the wire). */
+    /** Domain-separation prefix for the `hub_hello_ack` proof (never on the wire). */
     private const HELLO_ACK_DOMAIN = 'phlix-federation/hello-ack/v1';
 
-    /** Domain-separation prefix for the HELLO_AUTH proof (never on the wire). */
+    /** Domain-separation prefix for the `hub_hello_auth` proof (never on the wire). */
     private const HELLO_AUTH_DOMAIN = 'phlix-federation/hello-auth/v1';
 
     /** Ed25519 verification key length in bytes (sodium SIGNED_PUBLICKEYBYTES). */
@@ -66,9 +67,9 @@ final class FederationHandshake
     /**
      * Generate a fresh handshake nonce (32 random bytes, base64url, no padding).
      *
-     * The nonce is minted by the master at HELLO time, lives in the session's
+     * The nonce is minted by the master at `hub_hello` time, lives in the session's
      * pending-handshake state, and is consumed (single-use) when the leaf's
-     * HELLO_AUTH proof is checked — replays of a completed proof fail.
+     * `hub_hello_auth` proof is checked — replays of a completed proof fail.
      *
      * @return string Nonce token.
      */
@@ -78,7 +79,7 @@ final class FederationHandshake
     }
 
     /**
-     * Canonical bytes a master signs for HELLO_ACK: {session_id, master_hub_id, nonce}.
+     * Canonical bytes a master signs for `hub_hello_ack`: {session_id, master_hub_id, nonce}.
      *
      * @param string $sessionId  Federation session UUID minted for this handshake.
      * @param string $masterHubId Master hub's own federation_hubs.id ('' when unconfigured).
@@ -92,10 +93,10 @@ final class FederationHandshake
     }
 
     /**
-     * Canonical bytes a leaf signs for HELLO_AUTH: {session_id, nonce, leaf_hub_id}.
+     * Canonical bytes a leaf signs for `hub_hello_auth`: {session_id, nonce, leaf_hub_id}.
      *
-     * @param string $sessionId  Session UUID from the verified HELLO_ACK.
-     * @param string $nonce      Nonce echoed from that same HELLO_ACK.
+     * @param string $sessionId  Session UUID from the verified `hub_hello_ack`.
+     * @param string $nonce      Nonce echoed from that same `hub_hello_ack`.
      * @param string $leafHubId  This leaf's own federation_hubs.id.
      *
      * @return string Exact byte string fed to the Ed25519 signer.

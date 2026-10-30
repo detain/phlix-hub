@@ -29,7 +29,8 @@ use function spl_object_id;
  * The connection is validated at WS upgrade time by the owning
  * {@see FederationWorker}. Once connected, this controller:
  *   - Stores the connection in {@see FederationConnectionManager}
- *   - Dispatches text frames (HELLO) to {@see FederationFrameHandler::handleTextFrame()}
+ *   - Dispatches handshake text frames (inbound `hub_hello` /
+ *     `hub_hello_auth`) to {@see FederationFrameHandler::handleTextFrame()}
  *   - Dispatches binary frames (HEARTBEAT, etc.) to {@see FederationFrameHandler::handleBinaryFrame()}
  *
  * @package Phlix\Hub\Http\Controllers
@@ -82,8 +83,9 @@ final class FederationRelayController
      * Handle an incoming WebSocket message from a federation peer.
      *
      * Detects text vs binary by checking the first byte (null byte = binary
-     * frame prefix per the RelayFrame wire format). Text frames carry
-     * HELLO/HELLO_ACK JSON; binary frames carry relay frames (HEARTBEAT, etc.).
+     * frame prefix per the RelayFrame wire format). Text frames carry the
+     * `hub_hello`-family handshake JSON (`hub_hello` / `hub_hello_auth` inbound);
+     * binary frames carry relay frames (HEARTBEAT, etc.).
      *
      * @param ConnectionInterface $connection WS connection that received the frame.
      * @param string              $data       Raw frame payload.
@@ -105,7 +107,7 @@ final class FederationRelayController
         // Binary relay frames: first byte is \x00 (the encoded seq number starts with 0x00 often)
         // More precisely: check if the payload is valid UTF-8 JSON starting with '{'
         if ($this->isTextFrame($data)) {
-            // The arriving connection object rides along: the H-4 HELLO_AUTH
+            // The arriving connection object rides along: the H-4 `hub_hello_auth`
             // proof is bound to its carrier socket, so the handler can refuse
             // a proof delivered over a superseded connection.
             $error = $this->frameHandler->handleTextFrame($hubId, $data, $connection);

@@ -277,7 +277,7 @@ final class FederationController
      * and the WS-upgrade gate only resolves connections whose path segment
      * matches a registered row via getPeerById(). Without a pre-bind, a
      * brand-new peer's first dial has nothing to match and is rejected
-     * before HUB_HELLO can ever carry the binding — a chicken-and-egg dead
+     * before `hub_hello` can ever carry the binding — a chicken-and-egg dead
      * end for operator-created rows.
      */
     public function createPeer(Request $request): Response

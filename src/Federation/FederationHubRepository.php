@@ -122,8 +122,8 @@ class FederationHubRepository
      *   1. `id`         — the row's primary key, minted by the LOCAL hub when
      *                     the peer was added via the admin API.
      *   2. `leaf_hub_id` — the peer's OWN `federation_hubs.id`, learned from
-     *                     the peer itself (HUB_HELLO's `hub_id` on the master,
-     *                     HELLO_ACK's `master_hub_id` on the leaf; see
+     *                     the peer itself (`hub_hello`'s `hub_id` on the master,
+     *                     `hub_hello_ack`'s `master_hub_id` on the leaf; see
      *                     {@see FederationFrameHandler::handleHubHello()} and
      *                     {@see FederationPeerManager::handleHelloAck()}).
      *
@@ -240,7 +240,7 @@ class FederationHubRepository
      * suspended peer.
      *
      * C-1(1): dialing only 'connected' peers was self-contradictory because
-     * 'connected' is written only AFTER a HELLO-ACK over an already-dialed
+     * 'connected' is written only AFTER a `hub_hello_ack` over an already-dialed
      * connection, so a freshly created ('pending') peer was never dialed and
      * a dropped ('disconnected') peer never came back. Liveness is tracked by
      * the session layer; the dial loop iterates eligibility.
@@ -260,7 +260,7 @@ class FederationHubRepository
 
     /**
      * Bind a peer to the hub-identity UUID it reports for itself (migration
-     * 046). Called from HUB_HELLO handling on the master and from HELLO_ACK
+     * 046). Called from `hub_hello` handling on the master and from `hub_hello_ack`
      * handling on the leaf; also the seam for a future pairing API to
      * pre-bind an identity before the first dial.
      *

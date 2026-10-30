@@ -23,9 +23,9 @@ use Workerman\MySQL\Connection;
  *   - Track heartbeats and bytes sent/received per session
  *   - Close sessions gracefully
  *   - Reap stale dead sessions
- *   - Hold the single-use HELLO_ACK nonce of each pending handshake (H-4):
- *     the master mints a fresh nonce per session at HELLO, and consumes it
- *     exactly once when verifying the leaf's HELLO_AUTH proof. A replayed
+ *   - Hold the single-use `hub_hello_ack` nonce of each pending handshake (H-4):
+ *     the master mints a fresh nonce per session at `hub_hello`, and consumes it
+ *     exactly once when verifying the leaf's `hub_hello_auth` proof. A replayed
  *     proof therefore has no live nonce left to satisfy.
  *
  * @package Phlix\Hub\Federation
@@ -124,7 +124,7 @@ class FederationSessionManager
      * Touch the heartbeat of the peer's LIVE session, addressed by peer.
      *
      * H-2: callers on the frame paths only know the PEER identity (the WS
-     * route/HELLO carries hub UUIDs, never the session UUID minted by
+     * route/`hub_hello` carries hub UUIDs, never the session UUID minted by
      * registerSession). The old code fed a hub UUID to touchHeartbeat(),
      * whose WHERE clause is `id = :id`, so every heartbeat updated 0 rows
      * and the reaper killed live links after 60s.
@@ -235,15 +235,15 @@ class FederationSessionManager
     }
 
     /**
-     * Record the single-use HELLO_ACK nonce minted for a fresh handshake (H-4).
+     * Record the single-use `hub_hello_ack` nonce minted for a fresh handshake (H-4).
      *
-     * Called by the master immediately before sending the signed HELLO_ACK;
+     * Called by the master immediately before sending the signed `hub_hello_ack`;
      * the nonce lives in the pending-handshake state until {@see consumeHandshake()}
-     * verifies the leaf's HELLO_AUTH proof exactly once.
+     * verifies the leaf's `hub_hello_auth` proof exactly once.
      *
      * @param string $sessionId Session UUID this handshake belongs to.
      * @param string $peerId    Local peer row UUID the session addresses.
-     * @param string $nonce     Fresh nonce embedded in the signed HELLO_ACK.
+     * @param string $nonce     Fresh nonce embedded in the signed `hub_hello_ack`.
      *
      * @return void
      */
@@ -261,10 +261,10 @@ class FederationSessionManager
      * Consume a session's pending handshake exactly once (H-4).
      *
      * The entry is removed whether or not the caller's proof later verifies,
-     * which is what makes a replayed HELLO_AUTH fail: there is no second read
+     * which is what makes a replayed `hub_hello_auth` fail: there is no second read
      * of a live nonce.
      *
-     * @param string $sessionId Session UUID carried by the leaf's HELLO_AUTH.
+     * @param string $sessionId Session UUID carried by the leaf's `hub_hello_auth`.
      *
      * @return array{peer_id: string, nonce: string}|null Pending state, or null
      *                                                     when no handshake is pending.

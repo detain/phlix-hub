@@ -25,10 +25,11 @@ use function json_decode;
 use function json_encode;
 
 /**
- * Handles incoming HUB_* frames on the master hub.
+ * Handles incoming federation frames on the master hub.
  *
- * Parses JSON text frames for HELLO and binary frames for HEARTBEAT,
- * HUB_DISCONNECTED and DATA (library-share offers pushed by a leaf).
+ * Parses JSON text frames for the handshake (`hub_hello` and
+ * `hub_hello_auth`) and binary frames for HEARTBEAT (0x06), DISCONNECTED (0x07),
+ * and DATA (0x05) envelopes (library-share offers pushed by a leaf).
  *
  * Identity model (C-1(3)): every WS route carries a hub-identity UUID in
  * the path; {@see FederationHubRepository::getPeerById()} resolves it
@@ -39,16 +40,16 @@ use function json_encode;
  *
  * H-4 mutual proof-of-key: knowing a peer's public_key/identifiers is NOT
  * authentication — anyone can replay them. The handshake is now a signed
- * ceremony: HELLO_ACK carries a fresh session nonce plus an Ed25519
+ * ceremony: `hub_hello_ack` carries a fresh session nonce plus an Ed25519
  * signature over the canonical ACK string made with THIS hub's keypair, and
- * the leaf must answer with HELLO_AUTH signing {session_id, nonce,
+ * the leaf must answer with `hub_hello_auth` signing {session_id, nonce,
  * leaf_hub_id} with the private key belonging to its REGISTERED public_key.
  * Only after that proof verifies does the channel flip to VERIFIED in the
  * connection manager; until then every DATA payload (offers, shares,
  * admin-delegation) is dropped and audited. Canonical byte strings live in
  * {@see FederationHandshake} so both roles sign/verify the exact same form —
  * and the leaf's proof must arrive on the very socket still registered for
- * that peer: a late HELLO_AUTH replayed over a superseded connection is
+ * that peer: a late `hub_hello_auth` replayed over a superseded connection is
  * refused ('handshake_stale_connection'), never stamped onto the replacement.
  *
  * @package Phlix\Hub\Federation
@@ -58,7 +59,7 @@ final class FederationFrameHandler
     private FrameEncoder $encoder;
 
     /**
-     * Statuses from which a HUB_HELLO is accepted. 'pending' is the first
+     * Statuses from which a `hub_hello` is accepted. 'pending' is the first
      * hello; 'connected' re-attaches after a crash that never fired onClose
      * (registerSession retires the stale live row); 'disconnected' is the
      * normal reconnect after a clean drop or a reap. 'suspended' is the
@@ -105,12 +106,12 @@ final class FederationFrameHandler
     }
 
     /**
-     * Handle an incoming text frame (HELLO / HELLO_ACK / ERROR).
+     * Handle an incoming text frame (`hub_hello` / `hub_hello_ack` / `hub_hello_auth`).
      *
      * Returns null to keep the connection open, or a string error message
      * to send back and close the connection.
      *
-     * The ARRIVING connection object is threaded through: the H-4 HELLO_AUTH
+     * The ARRIVING connection object is threaded through: the H-4 `hub_hello_auth`
      * proof is bound to its carrier socket (identity-of-proof-carrier), so
      * the handler must know WHICH connection delivered the bytes instead of
      * re-resolving by hubId and stamping whatever is registered now.
@@ -190,10 +191,10 @@ final class FederationFrameHandler
     }
 
     /**
-     * Handle HUB_HELLO from a connecting (or reconnecting) leaf hub.
+     * Handle `hub_hello` from a connecting (or reconnecting) leaf hub.
      *
      * Validates the peer key lookup, cross-checks/binds the reported hub
-     * identity, registers the session, and answers with a SIGNED HELLO_ACK
+     * identity, registers the session, and answers with a SIGNED `hub_hello_ack`
      * carrying a fresh single-use nonce (H-4). Share pushes and the
      * connect-audit are deferred to {@see handleHelloAuth()} — the channel
      * is transport-only until the leaf proves possession of its key.
@@ -220,7 +221,7 @@ final class FederationFrameHandler
             return 'Invalid peer key';
         }
 
-        // L-6: the leaf's own hub id is mandatory in HELLO — it is the value
+        // L-6: the leaf's own hub id is mandatory in `hub_hello` — it is the value
         // the master binds to federation_peers.leaf_hub_id and the anchor of
         // the whole identity reconciliation (C-1(3)). Checked AFTER the key
         // lookup so an unknown key still fails as 'Invalid peer key'.
@@ -281,13 +282,13 @@ final class FederationFrameHandler
             : '';
 
         // H-4: mint a fresh single-use nonce for this ceremony. The leaf
-        // signs it back in HELLO_AUTH; consumeHandshake() retires it, so a
+        // signs it back in `hub_hello_auth`; consumeHandshake() retires it, so a
         // replayed proof can never re-verify. registerSession above already
         // abandoned any handshake pending for this peer.
         $nonce = FederationHandshake::newNonce();
         $this->sessions->beginHandshake($sessionId, $peerId, $nonce);
 
-        // Send SIGNED HELLO_ACK (master's proof of key possession).
+        // Send SIGNED `hub_hello_ack` (master's proof of key possession).
         $this->sendHelloAck(
             $conn,
             $sessionId,
@@ -296,13 +297,13 @@ final class FederationFrameHandler
             ['library_shares', 'relay', 'admin_delegation'],
         );
 
-        // Shares/audit wait for the leaf's HELLO_AUTH proof — until the
+        // Shares/audit wait for the leaf's `hub_hello_auth` proof — until the
         // channel flips VERIFIED the link is inert (handleDataFrame drops).
         return null;
     }
 
     /**
-     * Handle HELLO_AUTH from a leaf — the leaf half of the H-4 ceremony.
+     * Handle `hub_hello_auth` from a leaf — the leaf half of the H-4 ceremony.
      *
      * The leaf proves possession of the private key belonging to its
      * REGISTERED public key by signing the canonical
@@ -421,7 +422,7 @@ final class FederationFrameHandler
     }
 
     /**
-     * One loud, audited refusal path for failed HELLO_AUTH proofs.
+     * One loud, audited refusal path for failed `hub_hello_auth` proofs.
      *
      * @param string $peerId Local federation_peers.id.
      * @param string $peerName Peer display name.
@@ -439,7 +440,7 @@ final class FederationFrameHandler
     }
 
     /**
-     * Handle HUB_HELLO_ACK from master hub (leaf side handler).
+     * Handle `hub_hello_ack` from master hub (leaf side handler).
      *
      * On the master hub this is a no-op — the master never receives this
      * from itself. Included for protocol completeness.
@@ -451,12 +452,12 @@ final class FederationFrameHandler
      */
     private function handleHubHelloAck(string $hubId, array $decoded): void
     {
-        // Master hub does not receive HELLO_ACK from other hubs.
+        // Master hub does not receive `hub_hello_ack` from other hubs.
         // Leaf-side handling lives in FederationPeerManager::handleHelloAck().
     }
 
     /**
-     * Handle a HUB_HEARTBEAT frame.
+     * Handle a HEARTBEAT (0x06) frame.
      *
      * H-2: the heartbeat must refresh the session row ADDRESSED BY PEER —
      * the old code passed the hub UUID to touchHeartbeat() which matches on
@@ -518,7 +519,7 @@ final class FederationFrameHandler
     }
 
     /**
-     * Handle a HUB_DISCONNECTED frame (leaf says goodbye).
+     * Handle a DISCONNECTED (0x07) frame (leaf says goodbye).
      *
      * @param string $hubId   Peer hub UUID.
      * @param string $payload Frame payload (JSON {reason}).
@@ -619,7 +620,7 @@ final class FederationFrameHandler
     }
 
     /**
-     * Send a SIGNED HELLO_ACK to a newly connected leaf hub (H-4 master leg).
+     * Send a SIGNED `hub_hello_ack` to a newly connected leaf hub (H-4 master leg).
      *
      * The signature is an Ed25519 detached signature (base64) over the
      * canonical ACK string {@see FederationHandshake::helloAckCanonical()},
@@ -670,7 +671,7 @@ final class FederationFrameHandler
      * meaningless as a foreign key in the other's.
      *
      * Misdelivery guard: the query filters on the LOCAL peer row this
-     * connection resolved to at HELLO. An unfiltered push used to broadcast
+     * connection resolved to at `hub_hello`. An unfiltered push used to broadcast
      * every leaf's shares to every connecting peer, rewriting each offer's
      * identity to the wrong target — shares meant for A landing in B's
      * offer inbox.

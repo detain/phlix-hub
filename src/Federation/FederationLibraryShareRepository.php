@@ -47,7 +47,7 @@ class FederationLibraryShareRepository
         string $permission,
     ): void {
         // Status is stamped 'active' at creation: the ENUM default 'pending'
-        // left rows invisible to every active-share push (HELLO sync and
+        // left rows invisible to every active-share push (`hub_hello` sync and
         // live create-push alike) and nothing ever flipped them — a share
         // could never converge. Revocation moves the row to 'revoked'.
         $this->db->query(

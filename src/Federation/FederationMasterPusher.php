@@ -171,7 +171,7 @@ class FederationMasterPusher
     /**
      * Goodbye a peer's live WS before its row is deleted (deletePeer path).
      *
-     * Sends HUB_DISCONNECTED{reason:'peer_deleted'}, unmaps the connection,
+     * Sends a DISCONNECTED (0x07) frame with reason 'peer_deleted', unmaps the connection,
      * and closes the socket so the leaf treats the link as torn down rather
      * than silently holding a frame-pipe to a removed peer. No-op success
      * when the peer has no live connection.

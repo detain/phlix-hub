@@ -76,6 +76,36 @@ tables — plus the runner-created `migrations` tracking table; the
 `requests` row carries the filename-vs-table inoculation note. Docs-only — no schema, code, wire
 or test change; the inventory was machine-checked
 (`grep CREATE TABLE migrations/*.sql` ↔ README section).
+### Fixed — M-HUB-25: federation src prose stopped speaking the RETIRED binary names — every docblock/comment that labeled a live frame now uses the shipped wire labels (`hub_hello`/`hub_hello_ack`/`hub_hello_auth`, `HEARTBEAT (0x06)`, `DISCONNECTED (0x07)`, `DATA (0x05)` envelopes) — 2026-10-29
+
+Review `hub__writer` M3: the H-5-era envelope law is emphatic in the docs
+(`docs/websockets.md` frame table: `0x09`–`0x0F` "**RETIRED** — never emitted";
+`openapi.yaml` x-phlix-websockets notes repeat it) — but the `src/Federation/`
+prose still named the live frames with the dead SCREAMING types. The worst site
+contradicted itself two screens apart: `FederationPeerManager::startHeartbeatTimer()`
+said "sends HUB_HEARTBEAT every 15 seconds" while its own `sendHeartbeat()`
+docblock declared "not the retired HUB_HEARTBEAT (0x0B) type" — a maintainer
+reading the header could legitimately have re-implemented `0x0B`.
+
+Comment/docblock-only cure across the nine federation-surface files: renamed
+live-frame labels to the shipped forms the code actually emits — the handshake
+JSON text discriminators (`'type' => 'hub_hello'`, `'hub_hello_ack'`,
+`'hub_hello_auth'` at the send sites; the master's `match ($type)` arms confirm
+the inbound set, so the stale `(HELLO / HELLO_ACK / ERROR)` signature docblock
+became the true three-label list), the generic binary `HEARTBEAT (0x06)` /
+`DISCONNECTED (0x07)` (dispatch truth: `RelayFrameType::HEARTBEAT` /
+`RelayFrameType::DISCONNECTED`), and `ADMIN_DELEGATION payloads` →
+admin-delegation payloads riding `DATA (0x05)` envelopes.
+
+Deliberately NOT touched: the `src/Relay/` HELLO/HELLO_ACK family (a DIFFERENT
+live handshake, JSON text labeled `HELLO_ACK` per the docs' own frame table —
+renaming it would itself lie); runtime log/refusal strings (behavior-bearing —
+`FederationFrameHandlerTest` pins `'HELLO_AUTH verification failed'` byte-exact);
+code identifiers (`HELLO_ACK_TIMEOUT_SECONDS`, `sendHelloAck()`, …); and the
+honest retired-cites (`not the retired HUB_HEARTBEAT (0x0B)`,
+`RelayFrameType::HUB_HEARTBEAT in phlix-shared`) which document the retirement
+rather than perpetuate it. Zero code-path change: `phpunit --filter Federation`
+413 tests / 1528 assertions unchanged.
 
 ### Fixed — M-HUB-20: the master-side `:8805` frame classifier carried the leaf-side JSON-object bug — every `hub_hello` was misrouted to the binary decoder and the H-4 ceremony died on real sockets — 2026-10-29
 
