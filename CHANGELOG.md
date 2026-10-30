@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-26: README endpoint-table subdomain row carried the bare path the router never registered — cured to `/api/v1/servers/{id}/subdomain`, whole-table row-by-row audit closed — 2026-10-29
+
+The Servers table row documented `POST`/`DELETE /servers/{id}/subdomain`; the shipped
+registration spells the prefix on both verbs (`src/Application.php:1273` / `:1282`,
+`openapi.yaml` `/api/v1/servers/{id}/subdomain`; phlix-server's `SubdomainClient`
+addresses the same literal, pinned cross-repo by `HubServerPathContractTest`) — copy-pasting
+the row 404s, and it was the only row in the section omitting the prefix every sibling
+spells. The row's Notes gained `(enrollment JWT)`: the routes register ungated and
+`SubdomainController` authenticates the enrollment JWT in-controller
+(`Authorization` header → `EnrollmentJwtService::validateEnrollmentJwt`), the same
+annotation the adjacent heartbeat/info rows carry. Because a single wrong row can hide
+siblings, the whole HTTP API section (every table, both notes, the Relay (WebSocket)
+port/mount rows) was re-audited row-by-row — 48 rows, 47 already truthful against the
+composed router (`:375`–`:1929` registrations incl. the group prefixes, and the
+documented `''`-plus-`'/'` trailing-slash dual registrations), the one defect above,
+zero missing relative links. Docs-only: no `src/`, no wire codes, no `openapi.yaml`,
+no SPA bundle touched.
+
 ### Fixed — M-HUB-23: the README §7 nginx example now serves the client mount it promises — the `/client/` leg lands, with the declared-unavailable posture disclosed in-block — 2026-10-29
 
 Review `hub__writer` M1: §7's prose lists the client mount (`8803`,

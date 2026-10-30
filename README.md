@@ -912,7 +912,7 @@ page paths before they redirect to `/app`).
 | `GET` | `/api/v1/me/servers/{id}/access-info` | Connection info (protected) |
 | `POST` | `/api/v1/servers/{id}/heartbeat` | Server liveness (enrollment JWT) |
 | `GET` | `/api/v1/servers/{id}/info` | Server metadata (enrollment JWT) |
-| `POST`/`DELETE` | `/servers/{id}/subdomain` | Allocate / revoke subdomain |
+| `POST`/`DELETE` | `/api/v1/servers/{id}/subdomain` | Allocate / revoke subdomain (enrollment JWT) |
 
 ### Sharing, invites & requests
 
