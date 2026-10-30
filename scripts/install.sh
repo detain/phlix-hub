@@ -1814,6 +1814,15 @@ EnvironmentFile=${ENV_FILE}
 # Point HOME at a writable install path (\${INSTALL_PATH}/var) so the lock lands
 # there. (Mirrors the phlix-server fix.)
 Environment="HOME=${INSTALL_PATH}/var"
+# Cross-origin desktop access (optional; M-HUB-09): the Windows client's
+# hub-mode renderer runs the same UI bundle at origin app://- against this
+# hub's https base, so its REST calls are cross-origin for the browser
+# engine. Unset, the hub denies all CORS (the shipped default); uncomment to
+# grant the desktop origin. The position law applies - this opens public
+# control endpoints to preflight, not authed REST (authed routes answer the
+# auth challenge first, before any CORS grant). See the README's
+# 'Security & posture envs' table and openapi.yaml 'Cross-origin (CORS)'.
+#Environment="PHLIX_CORS_ALLOW_ORIGINS=app://-"
 # Restart-race gate (2026-07-10 incident): on restart the OLD master can
 # hold its listen sockets for seconds-to-minutes after SIGTERM. If the new
 # master starts before they're released, Worker::runAll() throws

@@ -630,6 +630,15 @@ EnvironmentFile=/etc/phlix-hub.env
 # Swoole's RemoteObject bridge writes a lock to $HOME/.swoole; the system user
 # has no home, so point HOME at a writable path inside the install root.
 Environment="HOME=/opt/phlix-hub/var"
+# Cross-origin desktop access (optional; M-HUB-09): the Windows client's
+# hub-mode renderer runs the same UI bundle at origin app://- against this
+# hub's https base, so its REST calls are cross-origin for the browser
+# engine. Unset, the hub denies all CORS (the shipped default); uncomment to
+# grant the desktop origin. The position law applies — this opens public
+# control endpoints to preflight, not authed REST (authed routes answer the
+# auth challenge first, before any CORS grant). See 'Security & posture
+# envs' below and openapi.yaml 'Cross-origin (CORS)'.
+#Environment="PHLIX_CORS_ALLOW_ORIGINS=app://-"
 # Restart-race gate (2026-07-10 incident): the OLD master can hold its listen
 # sockets for seconds-to-minutes after SIGTERM; without this wait the new
 # master throws "Address already in use" and crash-loops. Waits up to 90 s for
@@ -899,6 +908,7 @@ the `PHLIX_HUB_RATELIMIT_*` envs below, so when it is set the env defaults are N
 | `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` | `null` | PEM paths for the `:8805` TLS context above |
 | `HUB_FEDERATION_REQUIRE_TLS` | `false` | Fail-closed `:8805` bind mandate, the federation sibling of `HUB_RELAY_REQUIRE_TLS` above: `true` makes `FederationWorker::start()` throw before constructing the listener when TLS is off — no cleartext federation socket is ever bound (federation inbound stays down, the hub serves the rest). `false` = warn-only. Keep unset on managed installs, where HAProxy fronts `:8805` and terminates TLS upstream |
 | `HUB_COOKIE_INSECURE` | unset | Drops `Secure` from session cookies — **local plain-HTTP development only** |
+| `PHLIX_CORS_ALLOW_ORIGINS` | unset — **deny-all** | Cross-origin allowlist for the hub's REST HTTP surface (`src/Http/CorsPolicy.php`, read once at router construction — boot-scoped, changes need a hub restart): comma-separated **exact lowercase origins** (`PHLIX_CORS_ALLOW_ORIGINS=https://hub.example.com,app://-`); a malformed entry — wildcard, uppercase, path, whitespace — fails LOUD at boot instead of silently denying at runtime. Allowlisted origins earn the `OPTIONS` 204 preflight and an `Access-Control-Allow-Origin` echo on actual replies; `Access-Control-Allow-Credentials` is never emitted (hub REST is bearer-auth, and a cross-origin cookie ride is exactly what this posture refuses). A disallowed-origin preflight is byte-identical to an unknown-path 404 — a probe cannot map the route table. `app://-` is the origin the desktop (Electron Windows client) hub-mode renderer presents — add it when the hub serves packaged desktop clients. Honest scope limit (the position law, M-HUB-09 r2/r3): `OPTIONS` on AUTHED routes runs the auth chain before any CORS grant, so this knob opens cross-origin reach for the **public** control endpoints (health, auth, server-claims trio); authed desktop hub-mode REST deliberately stays beyond browser-CORS reach there — its live cross-origin work rides the CORS-exempt relay WebSockets (`:8802`–`:8804`). The same-origin `/app` portal needs nothing: same-origin fetches never preflight. Full policy text in `openapi.yaml` §"Cross-origin (CORS)" |
 | `HUB_WS_HOST` | falls back to `HUB_PUBLIC_DOMAIN`, then `your-hub-host` | Host advertised in the `X-WS-Endpoint` steer when a plain HTTP GET hits the `:8802`/`:8803` WebSocket mounts — host only: the steer's `ws://` scheme and default port are fixed, not proxy/port-aware |
 | `HUB_REQUESTS_AUTO_APPROVE` | `false` | Auto-approves freshly filed media requests (best-effort, after the `pending` row lands). Live twin: `requests.auto_approve` |
 | `HUB_INVITE_DEFAULT_EXPIRY` | `604800` (7 days) | Default invite lifetime in seconds when the creator omits `expires_in`; `0` = never expire. An explicit body value always wins. Live twin: `invite.default_expiry_seconds` |

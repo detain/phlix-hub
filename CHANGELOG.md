@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — riders W9b R-HUB-09: the deploy surfaces document the CORS allowlist knob — 2026-10-31
+
+- **The ask.** M-HUB-09__fix's own closing line deferred it: "docs/systemd
+  unit templates gain the knob, or a windows-client follow-up" — rider
+  R-HUB-09 (orchestrator chose the provider-side docs option). Truth at the
+  venue: `PHLIX_CORS_ALLOW_ORIGINS` lived only in code
+  (`src/Http/CorsPolicy.php`) and `openapi.yaml` §"Cross-origin (CORS)"; the
+  README's Security & posture envs table and BOTH systemd unit templates
+  (the README inline copy and its canonical generator, `scripts/install.sh`)
+  never named it — an operator following the deploy docs could not discover
+  that desktop hub-mode CORS is a documented, opt-in knob.
+- **The cure (docs+template prose only; zero PHP).** Posture-table row:
+  default-deny semantics, comma-separated exact-lowercase grammar, LOUD-at-
+  boot malformed-entry rule, boot-scoped restart requirement, echo-never-
+  wildcard + never-credentials posture, the deny≡unknown-path 404
+  no-oracle law, the `app://-` desktop hint, and the honest scope limit —
+  the position law means the knob opens cross-origin preflight for the
+  PUBLIC control endpoints, not authed REST (authed routes answer the auth
+  challenge first; desktop authed traffic rides the CORS-exempt relay
+  WebSockets; the same-origin `/app` portal never preflights and needs
+  nothing). Both `[Service]` blocks gained a commented
+  `#Environment="PHLIX_CORS_ALLOW_ORIGINS=app://-"` exemplar with the same
+  posture note — commented, so the shipped default stays deny-all.
+- **Gates.** `bash -n scripts/install.sh` green; targeted phpunit
+  `--filter 'HubRestart|Cors'` green (the restart test's ExecReload/unit
+  assertions re-executed against the final heredoc bytes); diff surgical
+  (README +10, install.sh +9, CHANGELOG only) — no code paths, no wire,
+  no openapi, contracts law untouched by scope.
+
 ### Fixed — riders W8 R-HUB-08: the relay-token mint `@return` names the whole 201 payload — 2026-10-30
 
 - **The truth.** M-HUB-08__r2 (Notes) disclosed it: `ClientRelayTokenController::mint()`'s
