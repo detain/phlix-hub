@@ -57,6 +57,67 @@ final class RequestManagerTest extends TestCase
         self::assertSame('pending', $result['status']);
     }
 
+    public function testFindPendingDuplicateMatchesPendingScopedWithNullSentinels(): void
+    {
+        /** @var list<array{sql: string, params: array<string, mixed>}> $seen */
+        $seen = [];
+        $this->db->expects(self::once())
+            ->method('query')
+            ->willReturnCallback(static function (string $sql, mixed $params) use (&$seen): array {
+                $seen[] = ['sql' => $sql, 'params' => is_array($params) ? $params : []];
+                return [self::row(['id' => 'dup-1', 'user_id' => 'u1', 'season' => null, 'episode' => 3])];
+            });
+
+        $found = $this->manager->findPendingDuplicate('u1', 'series', 77, null, 3);
+
+        self::assertNotNull($found);
+        self::assertSame('dup-1', $found['id']);
+        self::assertNull($found['season']);
+        self::assertSame(3, $found['episode']);
+
+        $sql = $seen[0]['sql'];
+        $flat = (string) preg_replace('/\s+/', ' ', $sql);
+        self::assertStringContainsString("status = 'pending'", str_replace("\n", ' ', $flat));
+        self::assertStringContainsString('COALESCE(season, -2147483648) = COALESCE(:season, -2147483648)', $sql);
+        self::assertStringContainsString('COALESCE(episode, -2147483648) = COALESCE(:episode, -2147483648)', $sql);
+        self::assertStringContainsString('LIMIT 1', $sql);
+        self::assertSame(
+            ['user_id', 'type', 'tmdb_id', 'season', 'episode'],
+            array_keys($seen[0]['params']),
+            'the dedup probe binds exactly its five predicates — and each named'
+            . ' placeholder appears ONCE (vendor forbids repeats)',
+        );
+        self::assertNull($seen[0]['params']['season']);
+        self::assertSame(3, $seen[0]['params']['episode']);
+    }
+
+    public function testFindPendingDuplicateReturnsNullWhenNoRowMatches(): void
+    {
+        $this->db->method('query')->willReturn([]);
+        self::assertNull($this->manager->findPendingDuplicate('u1', 'movie', 1, null, null));
+    }
+
+    public function testCountPendingForUserReadsThePendingCount(): void
+    {
+        $captured = '';
+        $this->db->expects(self::once())
+            ->method('query')
+            ->willReturnCallback(static function (string $sql) use (&$captured): array {
+                $captured = $sql;
+                return [['cnt' => 7]];
+            });
+
+        self::assertSame(7, $this->manager->countPendingForUser('u1'));
+        self::assertStringContainsString('COUNT(*) AS cnt', $captured);
+        self::assertStringContainsString("status = 'pending'", (string) preg_replace('/\s+/', ' ', $captured));
+    }
+
+    public function testCountPendingForUserDegradesToZeroOnGarbageResult(): void
+    {
+        $this->db->method('query')->willReturn('not-a-result-set');
+        self::assertSame(0, $this->manager->countPendingForUser('u1'));
+    }
+
     public function testCreateSeriesRequestWithSeasonAndEpisode(): void
     {
         $this->db->expects(self::exactly(2))

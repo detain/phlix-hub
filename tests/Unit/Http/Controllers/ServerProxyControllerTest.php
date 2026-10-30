@@ -305,7 +305,7 @@ final class ServerProxyControllerTest extends TestCase
         $this->assertSame(404, $response->statusCode);
     }
 
-    public function testNotOwnedReturns403(): void
+    public function testNotOwnedReturns404ByteIdenticalWithUnknown(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn([
@@ -319,7 +319,11 @@ final class ServerProxyControllerTest extends TestCase
             $this->request('GET', 'user-1'),
             ['id' => 'srv-1', 'path' => 'api/v1/libraries']
         );
-        $this->assertSame(403, $response->statusCode);
+        // M-HUB-27 rotation (was 403 server.not_owned): foreign ownership now
+        // answers the byte-identical 404 server.not_found — the proxy surface
+        // never confirms that an id EXISTS.
+        $this->assertSame(404, $response->statusCode);
+        $this->assertStringContainsString('server.not_found', $response->body);
     }
 
     public function testOnlineServerWithoutRelayTunnelReturns503RelayUnavailable(): void
@@ -1771,12 +1775,14 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * Ownership is enforced BEFORE the scope gate: a streaming path against a
-     * server the user does not own returns 403 `server.not_owned` (not
-     * `proxy.scope_denied`) and is never forwarded — the widened allowlist does
-     * not weaken the ownership boundary.
+     * Ownership is enforced BEFORE the scope gate — but answers the estate's
+     * byte-identical-404 law (M-HUB-27): a streaming path against a server the
+     * user does not own returns the SAME 404 `server.not_found` envelope an
+     * unknown id gets (never 403 `server.not_owned` — that was an existence
+     * oracle), is not `proxy.scope_denied`, and is never forwarded. The
+     * widened allowlist does not weaken the ownership boundary.
      */
-    public function testStreamingPathOnUnownedServerReturns403NotOwned(): void
+    public function testStreamingPathOnUnownedServerReturnsByteIdentical404(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn([
@@ -1798,11 +1804,23 @@ final class ServerProxyControllerTest extends TestCase
             ['id' => 'srv-1', 'path' => 'hls/job-abc/master.m3u8'],
         );
 
-        $this->assertSame(403, $response->statusCode);
+        $this->assertSame(404, $response->statusCode);
         $this->assertFalse($forwarded, 'Unowned server → nothing may be forwarded, even for a streaming path.');
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
-        $this->assertSame('server.not_owned', $body['code'] ?? null);
+        $this->assertSame('server.not_found', $body['code'] ?? null);
+
+        // The law is BYTE identity, not just the code: fold in the
+        // unknown-server leg on the same controller and diff the envelopes.
+        $ghost = $this->createMock(ServerInfoHandler::class);
+        $ghost->method('getOwnerAndStatus')->willReturn(null);
+        $ghostResponse = $this->controller($ghost, $this->bridge(static function (): void {
+        }))->proxy(
+            $this->request('GET', 'user-1'),
+            ['id' => 'srv-1', 'path' => 'hls/job-abc/master.m3u8'],
+        );
+        $this->assertSame($ghostResponse->statusCode, $response->statusCode);
+        $this->assertSame($ghostResponse->body, $response->body);
     }
 
     /**
@@ -2660,12 +2678,13 @@ final class ServerProxyControllerTest extends TestCase
     }
 
     /**
-     * Ownership runs BEFORE the scope gate: a valid transcode-start POST against
-     * a server the user does not own returns 403 `server.not_owned` (not
-     * `proxy.scope_denied`) and is never forwarded — the new write does not
-     * weaken the ownership boundary.
+     * Ownership runs BEFORE the scope gate — and, per the byte-identical-404
+     * law (M-HUB-27), a valid transcode-start POST against a server the user
+     * does not own answers the same 404 `server.not_found` an unknown id gets
+     * (never 403 `server.not_owned`), is not `proxy.scope_denied`, and is
+     * never forwarded — the new write does not weaken the ownership boundary.
      */
-    public function testTranscodeStartPostOnUnownedServerReturns403NotOwned(): void
+    public function testTranscodeStartPostOnUnownedServerReturnsByteIdentical404(): void
     {
         $info = $this->createMock(ServerInfoHandler::class);
         $info->method('getOwnerAndStatus')->willReturn([
@@ -2687,11 +2706,11 @@ final class ServerProxyControllerTest extends TestCase
             ['id' => 'srv-1', 'path' => 'api/v1/media/item-123/transcode'],
         );
 
-        $this->assertSame(403, $response->statusCode);
+        $this->assertSame(404, $response->statusCode);
         $this->assertFalse($forwarded, 'Unowned server → the transcode-start POST may not be forwarded.');
         /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
-        $this->assertSame('server.not_owned', $body['code'] ?? null);
+        $this->assertSame('server.not_found', $body['code'] ?? null);
     }
 
     /**

@@ -11,8 +11,11 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Requests\RequestManager;
@@ -37,16 +40,20 @@ use Phlix\Hub\Requests\RequestNotification;
 final class RequestController
 {
     /**
-     * @param RequestManager      $manager      Request lifecycle manager.
-     * @param RequestNotification $notification Notification side-channel.
-     * @param UserRepository      $users        Used for admin gating.
-     * @param AuditLogger         $audit        Audit logger for admin actions.
+     * @param RequestManager          $manager       Request lifecycle manager.
+     * @param RequestNotification     $notification  Notification side-channel.
+     * @param UserRepository          $users         Used for admin gating.
+     * @param AuditLogger             $audit         Audit logger for admin actions.
+     * @param RateLimiterInterface|null $createLimiter CLIENT_REQUEST_CREATE profile
+         *                                             (M-HUB-23 per-member create budget);
+     *                                             null venue behaves pre-cure.
      */
     public function __construct(
         private readonly RequestManager $manager,
         private readonly RequestNotification $notification,
         private readonly UserRepository $users,
         private readonly AuditLogger $audit,
+        private readonly ?RateLimiterInterface $createLimiter = null,
     ) {
     }
 
@@ -105,6 +112,38 @@ final class RequestController
         $posterUrl = is_string($posterRaw) ? $posterRaw : null;
         $season = is_numeric($seasonRaw) ? (int) $seasonRaw : null;
         $episode = is_numeric($episodeRaw) ? (int) $episodeRaw : null;
+
+        // M-HUB-23: the per-member create budget is spent BEFORE any queue
+        // read — over-budget traffic must not cost the DB the dedup probe or
+        // the cap COUNT. RateLimitException escapes to the central 429 +
+        // Retry-After mapping (Application::rateLimitResponse() law), the
+        // same posture as the relay-token mint budget (M-HUB-22).
+        $this->assertCreateBudget($userId);
+
+        // M-HUB-23: dedup — a pending request for this exact target already
+        // exists; echo it back (200, the status openapi declares for this
+        // operation) with no new row and no second admin notification. 201
+        // would claim a creation that did not happen.
+        $duplicate = $this->manager->findPendingDuplicate($userId, $typeRaw, $tmdbId, $season, $episode);
+        if ($duplicate !== null) {
+            return (new Response())->status(200)->json([
+                'request' => $duplicate,
+                'message' => 'Request already pending.',
+            ]);
+        }
+
+        // M-HUB-23: standing pending cap. The refusal rides the ALREADY
+        // REGISTERED `quota.exceeded` code plus its additive discriminator
+        // pair (QuotaFrames law, M-HUB-35) — kind `requests`, reset
+        // `on_release` (the block clears when the admin works the queue).
+        if ($this->manager->countPendingForUser($userId) >= RequestManager::MAX_PENDING_REQUESTS_PER_USER) {
+            return (new Response())->status(409)->json([
+                'error' => QuotaFrames::REQUESTS_TEXT,
+                'code' => 'quota.exceeded',
+                'message' => QuotaFrames::REQUESTS_TEXT,
+                ...QuotaFrames::discriminator(QuotaFrames::KIND_REQUESTS, QuotaFrames::RESET_ON_RELEASE),
+            ]);
+        }
 
         $result = $this->manager->createRequest(
             $userId,
@@ -396,5 +435,36 @@ final class RequestController
             'error' => 'Unauthorized',
             'code'  => 'auth.required',
         ]);
+    }
+
+    /**
+     * The M-HUB-23 create budget: {@see \Phlix\Hub\Common\RateLimit\RateLimitProfiles::CLIENT_REQUEST_CREATE},
+     * keyed on the AUTHENTICATED MEMBER (`client_request_create:<userId>`) —
+     * user-keyed for the same reasons as the relay-token mint precedent
+     * ({@see \Phlix\Hub\Http\Controllers\ClientRelayTokenController}): the
+     * abuse vector is one attributable member pumping admin-queue rows.
+     * A null limiter (hand-wired unit venue) behaves exactly pre-cure by
+     * documented choice; the audit fires exactly once at the boundary
+     * transition (`count === limit`), never on every over-budget request.
+     */
+    private function assertCreateBudget(string $userId): void
+    {
+        if ($this->createLimiter === null) {
+            return;
+        }
+
+        $state = $this->createLimiter->hit('client_request_create:' . $userId);
+        if (!$state->limited) {
+            return;
+        }
+
+        if ($state->count === $state->limit) {
+            $this->audit->logFailedAuth('request_create_rate_limited', ['user_id' => $userId]);
+        }
+
+        throw new RateLimitException(
+            resetAt: $state->resetAt,
+            remaining: 0,
+        );
     }
 }

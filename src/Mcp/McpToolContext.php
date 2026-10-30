@@ -64,8 +64,10 @@ use function ltrim;
  *  1. 401 when no user id is present;
  *  2. the `rate_limiter.proxy` user-keyed limiter;
  *  3. 404 `server.not_found` for an unknown server;
- *  4. **403 `server.not_owned` when the server belongs to somebody else** —
- *     the acceptance criterion this step exists for;
+ *  4. **404 `server.not_found` byte-identical for a foreign-owned server** —
+ *     the isolation refusal this step exists for; the answer deliberately
+ *     does not distinguish "exists, not yours" from "does not exist"
+ *     (M-HUB-27, the estate's byte-identical-404 law — no existence oracle);
  *  5. 503 when the relay tunnel is not connected, and the bandwidth quota check;
  *  6. dot-segment / encoded-traversal rejection;
  *  7. `BROWSE_SCOPE_ALLOWLIST` / `BROWSE_SCOPE_PATTERNS` / `SCOPE_DENY_PATTERNS`.

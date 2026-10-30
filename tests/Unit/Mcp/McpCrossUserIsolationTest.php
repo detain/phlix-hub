@@ -60,9 +60,9 @@ use function sprintf;
  * through {@see McpToolRegistry::call()} and asserts, per tool:
  *
  *  - the four server-scoped tools forward the caller's `server_id` into the
- *    production ownership gate — 403 `server.not_owned` for another user's
- *    server, 404 `server.not_found` for one that does not exist (so the 403 is a
- *    real ownership decision, not a blanket refusal);
+ *    production ownership gate — since M-HUB-27 an other user's server and a
+ *    nonexistent one both answer the byte-identical 404 `server.not_found`
+ *    (existence must not leak), never a blanket refusal of another shape;
  *  - `ListServersTool::call()` asks the handler for the TOKEN's user id and no
  *    other, which is the acceptance criterion of this step.
  *
@@ -90,8 +90,9 @@ final class McpCrossUserIsolationTest extends TestCase
 
     /**
      * Every tool that reaches a media server must refuse user A's token when the
-     * named server belongs to user B — with the proxy's own 403
-     * `server.not_owned`, produced by the production ownership check.
+     * named server belongs to user B — with the proxy's byte-identical 404
+     * `server.not_found` (M-HUB-27: foreign-owned and unknown are one shape),
+     * produced by the production ownership check.
      *
      * Driven through {@see McpToolRegistry::call()} rather than by calling the
      * tool object directly, because the registry is the production entry point
@@ -111,25 +112,26 @@ final class McpCrossUserIsolationTest extends TestCase
         $outcome = $registry->call($tool, $arguments, $context);
 
         self::assertSame(
-            403,
+            404,
             $outcome['status'],
             sprintf(
                 'Tool "%s" did NOT refuse a server owned by another user. This is the whole point of '
                 . 'S62: every tool call must re-derive the token holder and go through '
-                . 'ServerProxyController::proxy(), whose ownership check answers 403 server.not_owned.',
+                . 'ServerProxyController::proxy(), whose ownership check answers the byte-identical 404 '
+                . 'server.not_found (M-HUB-27: foreign misses are indistinguishable from missing ones).',
                 $tool,
             ),
         );
-        self::assertSame('server.not_owned', $outcome['payload']['code'] ?? null);
+        self::assertSame('server.not_found', $outcome['payload']['code'] ?? null);
     }
 
     /**
-     * The same tools must answer 404 for a server that does not exist — proving
-     * the 403 above is a real ownership decision and not "everything is refused".
-     *
-     * A test that only ever saw refusals could not tell a working gate from a
-     * broken proxy. This is the succeeding-control-beside-it half: two DIFFERENT
-     * refusals from two different branches.
+     * The same tools must answer 404 `server.not_found` for a server that does
+     * not exist either — since M-HUB-27 that is the LAW, not an accident: the
+     * foreign-owned and unknown shapes are byte-identical, so neither branch may
+     * leak the other's reason. A test that only ever saw one scenario could not
+     * tell a working gate from a blanket refusal; this pins the second branch
+     * independently of the first.
      *
      * @dataProvider serverScopedToolProvider
      *

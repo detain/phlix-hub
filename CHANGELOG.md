@@ -6,6 +6,82 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min46 (M-HUB-02, M-HUB-23, M-HUB-27, M-HUB-28, M-HUB-36, M-HUB-38, M-HUB-39, M-HUB-41): a closed tunnel whose backpressure timers outlived it, an unthrottled request queue, an existence oracle on the proxy, and the :8804 wire that accepted everything — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min46, eight items, all cured in-hub.
+
+- **M-HUB-02** — `Tunnel::onServerClose()` cancelled only the global drain
+  timer; the per-episode server/client backpressure timers (30 s one-shots)
+  stayed armed and retained the CLOSED tunnel through their closures, and the
+  armed `onBufferDrain` hooks outlived the socket. `onServerClose()` now runs
+  the full release the `close()` path already performed — both episode timers
+  cancelled, the server-side drain hook cleared, the throttle counter reset —
+  and `notifyClientsDisconnected()` nulls each client's `onBufferDrain`
+  alongside its throttle-drain cancel. Pinned by an armed-episode
+  `onServerClose` test asserting both timer ids null and zero pending
+  timer tasks; mutation-proven (stripping the cancels reddens exactly it).
+- **M-HUB-23** — `POST /api/v1/me/requests` let any member pump the admin
+  queue without bound: no rate profile, no dedup, no standing cap. Creates
+  now ride a new `client_request_create` profile (20/60s member-keyed,
+  profile count rotates fifteen→sixteen in the class header, README and
+  `RateLimitProfilesTest`; spent BEFORE the queue reads so over-budget traffic
+  costs no DB work, boundary transition audits `request_create_rate_limited`
+  once), an exact `(user, type, tmdb_id, season, episode)` pending-duplicate
+  probe answers 200 with the existing row instead of inserting a second, and
+  a standing `MAX_PENDING_REQUESTS_PER_USER` (50) refuses with the quota
+  frame (`quota.exceeded`, kind `requests`, reset-on-release) — zero new wire
+  codes (429 and 409 are already declared for the route in the openapi).
+  Wiring-guard test pins the DI target; four SQL-shape tests pin the probe
+  (sentinel `COALESCE` on both nullable columns, five single-use named
+  placeholders) and the count degrade path.
+- **M-HUB-27** — the proxy answered foreign-owned servers with 403
+  `server.not_owned` and unknown ids with 404 `server.not_found` — the
+  estate's byte-identical-404 law, broken into an existence oracle on every
+  scoped media path. The ownership arm now answers the same 404 shape the
+  ghost arm produces, in the same ordering (before the scope gate and
+  liveness), and the rotated tests diff the two responses BYTE-for-BYTE.
+  `McpToolContext`'s gate list, the MCP isolation suite and the Alexa
+  gateway suite (production path through the same proxy) rotated with the
+  law; `ServerManageController::deleteServer` keeps its 403 — different
+  surface, different contract, pinned as before.
+- **M-HUB-28** — :8804 rooms were unbounded: a member could grow any room's
+  roster (and every fan-out it produced) without limit. Joins on BOTH
+  dialects now refuse at `MAX_ROOM_MEMBERS` (50) — the canonical socket gets
+  the server's exact `syncplay.group_full` / "Group is full" frame, the bare
+  dialect gets silence plus a log line (its protocol has no error path), and
+  attempts still charge the per-socket byte budget.
+- **M-HUB-36** — over-budget frames vanished with zero feedback, so a client
+  awaiting an ack could not distinguish "throttled" from "lost". The first
+  trip of an episode now answers a CANONICAL socket once per connection with
+  the registered `rate_limited` code, riding the log latch's edge — floods
+  can never double their own wire volume; bare sockets stay silent per
+  dialect law (already logged once).
+- **M-HUB-38** — `display_name` and chat `message` landed on the room verbatim:
+  unbounded length, control characters, ANSI included. Display names are now
+  stripped of every C0/C1 control char, trimmed, fall back when nothing
+  survives, and cap at 128 chars; chat text keeps tab/newline, strips the
+  rest, and caps at 2000 — truncate, never refuse, sanitize before the
+  blank-drop check, and the cap counts characters not bytes.
+- **M-HUB-39** — the unknown-bare-type relay seam forwarded any unrecognised
+  non-`syncplay_*` frame verbatim to the room, so members could forge the
+  hub's OWN response vocabulary (`room_state`, `client_joined`,
+  `client_left`, `time_sync_reply`) — spoofed member rosters and fake time
+  offsets, with the receiver unable to tell hub copies from forged ones. The
+  seam now silently refuses the four hub-owned names (extension relay for
+  everything else preserved; the canonical-prefixed floor already covered
+  `syncplay_*`).
+- **M-HUB-41** — the client-message decode ran with PHP's default 512-frame
+  nesting while every sibling path bounds depth (HELLO 2, federation 4).
+  Inbound decode now caps at `MAX_INBOUND_JSON_DEPTH` (16 — two orders above
+  the deepest realistic state frame, below adversarial cost); over-depth
+  parses fail into the existing malformed-drop path, pinned with a rejected
+  17-deep flood plus a passing 10-deep control.
+- Docs: `docs/websockets.md` gained the inbound wire-policy section (budget
+  feedback, room cap, value bounds, seam refusal list) and the frame-table
+  rows for the join/chat vocabularies moved with the law.
+- Venue: duration cache re-blessed from the serial Unit junit; the estate
+  static-analysis gates (phpstan, psalm src + tests) run clean at this tip.
+
 ### Fixed — minors W-min45 (M-HUB-01, M-HUB-22, M-HUB-26, M-HUB-29, M-HUB-32, M-HUB-35): federation sends that lied about delivery, an unthrottled credential-mint endpoint, closed federation sessions nobody ever deleted, an incoming share sink that trusted its peer's strings, a 503 without Retry-After, and quota frames only machines could read — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min45, eight items: six cured, one

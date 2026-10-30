@@ -670,6 +670,21 @@ final class Tunnel implements TunnelInterface
             $this->drainTimerId = null;
         }
 
+        // M-HUB-02: cancel the episode-scoped backpressure safety timers too —
+        // close() does exactly this, and onServerClose previously cancelled only
+        // the grace timer. Every armed one-shot Timer::add() callback holds a
+        // strong $this reference in the Workerman timer wheel until it fires
+        // (up to BACKPRESSURE_WAIT_SECONDS), so a tunnel whose server vanished
+        // mid-episode was retained — with its socket graph via the $this capture —
+        // for that window, then fired inertly. Cancelling frees the tunnel at
+        // once and removes the stale-callback class entirely; the counters are
+        // reset alongside so no residual episode state outlives the tunnel.
+        $this->cancelClientBackpressureTimer();
+        $this->cancelServerBackpressureTimer();
+        $this->serverWs->onBufferDrain = null;
+        $this->serverBackpressureCount = 0;
+        $this->clientBackpressureActive = false;
+
         // Close all client connections with TYPE_DISCONNECTED
         $this->notifyClientsDisconnected('server_closed');
 
@@ -1799,8 +1814,12 @@ final class Tunnel implements TunnelInterface
         foreach ($this->clientConnections as $client) {
             /** @var ClientConnection $client */
             // Cancel any per-client throttle drain timer (S42) before teardown so
-            // no stale timer fires on a discarded tunnel/connection.
+            // no stale timer fires on a discarded tunnel/connection. Disarm the
+            // backpressure drain handler (M-HUB-02) as well: it captures $this,
+            // and a congested client's closure would otherwise pin the tunnel
+            // until the (already closed) socket's Connection object is collected.
             $this->cancelThrottleDrain($client);
+            $client->clientWs->onBufferDrain = null;
             $client->sendRaw($encoded);
             $client->close();
         }

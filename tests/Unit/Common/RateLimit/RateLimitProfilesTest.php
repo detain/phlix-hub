@@ -64,10 +64,12 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.signup', RateLimitProfiles::SIGNUP);
     }
 
-    public function testDefaultsReturnsAllFifteenProfiles(): void
+    public function testDefaultsReturnsAllSixteenProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
+        // Sixteen since the minors campaign M-HUB-23 added
+        // `client_request_create` (the media-request create budget).
         // Fifteen since the minors campaign M-HUB-22 added
         // `client_relay_token` (the mint budget).
         // Fourteen since the minors campaign M-HUB-37 added `syncplay_mount`
@@ -83,7 +85,7 @@ final class RateLimitProfilesTest extends TestCase
         // "a profile was added but never given a config key or a default"
         // into a red, so bumping the number without adding the matching
         // `testDefaultsContains…Profile` below defeats it.
-        self::assertCount(15, $defaults);
+        self::assertCount(16, $defaults);
     }
 
     /**
@@ -115,6 +117,23 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('client_relay_token', $defaults[RateLimitProfiles::CLIENT_RELAY_TOKEN]['key']);
         self::assertSame(10, $defaults[RateLimitProfiles::CLIENT_RELAY_TOKEN]['max']);
         self::assertSame(60, $defaults[RateLimitProfiles::CLIENT_RELAY_TOKEN]['window']);
+    }
+
+    /**
+     * Minors campaign M-HUB-23: media-request creation gets its own
+     * member-keyed budget — 20 / 60s, config key `client_request_create`,
+     * paired with the manager-side pending dedup and the
+     * MAX_PENDING_REQUESTS_PER_USER standing cap at the controller.
+     */
+    public function testDefaultsContainsClientRequestCreateProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::CLIENT_REQUEST_CREATE, $defaults);
+        self::assertSame('rate_limiter.client_request_create', RateLimitProfiles::CLIENT_REQUEST_CREATE);
+        self::assertSame('client_request_create', $defaults[RateLimitProfiles::CLIENT_REQUEST_CREATE]['key']);
+        self::assertSame(20, $defaults[RateLimitProfiles::CLIENT_REQUEST_CREATE]['max']);
+        self::assertSame(60, $defaults[RateLimitProfiles::CLIENT_REQUEST_CREATE]['window']);
     }
 
     /**

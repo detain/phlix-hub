@@ -54,9 +54,9 @@ use function ltrim;
  * Because they call the real `ServerProxyController::proxy()`, every gate that
  * controller already applies applies here too, in its own order and without being
  * restated: the 401 when no user id is present, the `rate_limiter.proxy`
- * user-keyed limiter, 404 `server.not_found`, **403 `server.not_owned` when the
- * server belongs to somebody else**, the 503 when the relay tunnel is down, the
- * bandwidth-quota check, dot-segment / encoded-traversal rejection, and finally
+ * user-keyed limiter, 404 `server.not_found` — including the M-HUB-27
+ * byte-identical-404 for **a server that belongs to somebody else** — the
+ * 503 when the relay tunnel is down, the bandwidth-quota check, dot-segment / encoded-traversal rejection, and finally
  * `BROWSE_SCOPE_ALLOWLIST` / `BROWSE_SCOPE_PATTERNS` / `SCOPE_DENY_PATTERNS`.
  *
  * ⚠ That last gate is why these methods take no free-form path. The skill reaches

@@ -427,7 +427,7 @@ Client → hub:
 
 | `type` | Meaning |
 | --- | --- |
-| `group_join` | Join a room. Answered with `room_state`; the *other* members get `client_joined` — never the joiner. |
+| `group_join` | Join a room. Answered with `room_state`; the *other* members get `client_joined` — never the joiner. A full room (M-HUB-28, 50 members) drops the join silently (warning-logged; no bare error frames). `display_name` is control-char stripped and truncated to 128 codepoints (M-HUB-38); non-string → `Anonymous`. |
 | `group_leave` | Leave the current room. Remaining members get `client_left`. |
 | `playback_play` | Relay "play" to the room. |
 | `playback_pause` | Relay "pause" to the room. |
@@ -457,13 +457,13 @@ name gets `syncplay_error` `UNKNOWN_MESSAGE`, matching `:8097`'s strictness):
 
 | `type` | Meaning |
 | --- | --- |
-| `syncplay_group_create` | Open (or re-enter) the owner-scoped shadow room named by `group_name` (default `New Group`). First member is host. Answered with `syncplay_group_state` (`{group, your_id}`); other members get `syncplay_info`. |
-| `syncplay_group_join` | Same as create but keyed by `group_id` (must be a non-empty string, else `syncplay.group_not_found`). Join implies leave — moving rooms is one operation. `password_hash` is accepted and **ignored** (see the auth note above). |
+| `syncplay_group_create` | Open (or re-enter) the owner-scoped shadow room named by `group_name` (default `New Group`). First member is host. Answered with `syncplay_group_state` (`{group, your_id}`); other members get `syncplay_info`. A re-enter into a full room (M-HUB-28) → `syncplay.group_full`; `member_name` capped as on join (M-HUB-38), non-string → `Host`. |
+| `syncplay_group_join` | Same as create but keyed by `group_id` (must be a non-empty string, else `syncplay.group_not_found`). Join implies leave — moving rooms is one operation. A full room (M-HUB-28, 50 members) → `syncplay.group_full` / "Group is full" (the server's own refusal). `member_name` is control-char stripped and truncated to 128 codepoints (M-HUB-38); non-string → `User`. `password_hash` is accepted and **ignored** (see the auth note above). |
 | `syncplay_group_leave` | Leave the current group. The leaver gets an `syncplay_info` ack; remaining members get a fresh `syncplay_group_state` (and `syncplay_host_elect` first, if the host left). Roomless → `syncplay_error` `syncplay.leave_failed`. |
 | `syncplay_playback_play` / `_pause` / `_seek` | **Host-only** control (non-host → `syncplay_error` `NOT_HOST`). The host's `play` is acked to it and relayed to the others; `pause`/`seek` go to the others only — the `:8097` law, deliberately opposite the bare sender-included echo above. Outbound frames carry no `group_id` (server shape). |
 | `syncplay_playback_sync` | State report relayed to **every** member including the reporter, carrying the room truth: current anchor `position`, `current_media_id`, `is_playing`, `member_id` = the host, and the hub's `server_time` in **unix ms** (documented deviation: `:8097` answers this in seconds — SPEC §2's ms law governs here). |
 | `syncplay_playback_queue` | **Host-only** queue replacement, normalized all-or-nothing (string `media_id` required; `media_info` keeps only string keys) and capped at 1000. Over-cap → `syncplay_error` `syncplay.queue_limit_exceeded` with the stored queue **unchanged**; accepted → `syncplay_group_state`-independent `syncplay_playback_queue` broadcast to all. |
-| `syncplay_chat` | Relayed to every member including the sender, stamped with authoritative `member_id`/`member_name`; a blank message is silently dropped; roomless → `NOT_IN_GROUP`. |
+| `syncplay_chat` | Relayed to every member including the sender, stamped with authoritative `member_id`/`member_name`; the message is control-char stripped and truncated to 2000 codepoints (M-HUB-38) before a blank message is silently dropped; roomless → `NOT_IN_GROUP`. |
 | `syncplay_typing` | Relayed to the **other** members only. Roomless is silently ignored (server's shape). |
 | `syncplay_host_transfer` | The server's guard ladder verbatim: `NOT_IN_GROUP` → `NOT_HOST` → `INVALID_NEW_HOST` → `MEMBER_NOT_FOUND` → `SAME_HOST`; success broadcasts `syncplay_group_state` to all. |
 | `syncplay_group_list` | Direct reply `{groups: [{id, name, member_count, has_password: false, current_media, is_playing}], count}` listing only the connection's own `(server_id, owner)` shadow rooms. |
@@ -510,12 +510,28 @@ Separate dialects, deliberately separate echo semantics — see SPEC §9.1.
 **Each dialect has its own floor.** The legacy catalog above is a *floor, not a
 closed set*: `SyncPlayRelayWorker::onMessage()` relays any unrecognised but
 *properly-named bare* `type` verbatim to the rest of the room, so bare clients can
-agree on extensions without the hub knowing about them. The canonical catalog is a
+agree on extensions without the hub knowing about them — with one exception
+(M-HUB-39): the four names the hub itself emits as bare *responses*
+(`room_state`, `client_joined`, `client_left`, `time_sync_reply`) are never
+relayed inbound; a member sending one is forging a hub-shaped announcement and
+the frame is dropped. The canonical catalog is a
 *closed set* of 19 (SPEC §3): any unknown `syncplay_*` name is refused with
 `syncplay_error` `UNKNOWN_MESSAGE` — a mistyped room op must never fan out through
 a relay as if it were an extension. In either dialect, a frame that is not a JSON
-object, or carries a missing or non-string `type`, is **malformed and dropped** —
+object, carries a missing or non-string `type`, or nests deeper than
+`SyncPlayRelayWorker::MAX_INBOUND_JSON_DEPTH` (16 — audit M-HUB-41: the parse
+itself is sender-controlled work) is **malformed and dropped** —
 never relayed. Junk must not become fan-out.
+
+**Rooms and values are bounded (audits M-HUB-28/M-HUB-38).** A relay room holds at
+most `SyncPlayRelayWorker::MAX_ROOM_MEMBERS` (50 — the exact `GroupState::MAX_MEMBERS`
+cap phlix-server enforces on `:8097`); a canonical join into a full room is refused
+with the server's own `syncplay.group_full` / "Group is full", a bare one is dropped
+after a RELAY-channel warning (the bare dialect has no error frames). Member-supplied
+display names are control-character stripped and capped at 128 codepoints (over-cap
+truncated, empty-after-strip takes the documented `Anonymous`/`Host`/`User` fallback);
+relayed chat messages are stripped of every control character except tab/newline and
+truncated at 2000 codepoints before the blank-check.
 
 **Every connection carries an inbound byte budget** (`TokenBucket`, sized per
 process from `SyncPlayRelayWorker::INBOUND_RATE_BYTES_PER_SECOND` /
@@ -523,7 +539,14 @@ process from `SyncPlayRelayWorker::INBOUND_RATE_BYTES_PER_SECOND` /
 bucket starts full, so a connection's first frames are never throttled; past
 the budget, inbound frames are dropped (logged once per connection, silently
 thereafter) rather than the socket being killed — an over-eager client
-recovers as the bucket refills. This bounds what one socket can force the
+recovers as the bucket refills. Since M-HUB-36 the first throttle episode
+also answers a CANONICAL socket once per connection with `syncplay_error`
+carrying the contracts-registered `rate_limited` code (no new wire codes) —
+a client stuck behind the budget no longer has to guess
+between "throttled" and "lost"; bare sockets stay silent (no error-frame
+path), and the reply rides the log latch's edge, so a flood can never double
+its own wire volume.
+This bounds what one socket can force the
 worker — and, through the verbatim relay, its whole room — to process.
 
 ### Keepalive, idle sockets and client duties

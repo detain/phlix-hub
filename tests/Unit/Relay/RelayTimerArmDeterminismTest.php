@@ -58,6 +58,8 @@ use Workerman\Connection\TcpConnection;
  * | `Tunnel.php` | `armClientBackpressureTimer()` | `1358-60` | `1354` + `cancelClientBackpressureTimer()` `1376-80` |
  * | `Tunnel.php` | `armServerBackpressureTimer()` | `1547-49` | `1543` + `cancelServerBackpressureTimer()` `1565-69` |
  * | `Tunnel.php` | `beginDrain()` | `1921-1922` | `1917` + `close()` `1811-1815` + `onServerClose()` `654-658` |
+ * | `Tunnel.php` | `onServerClose()` backpressure-episode cancel (M-HUB-02) | — |
+ *   `testOnServerCloseCancelsArmedBackpressureEpisodeTimers()` |
  * | `ClientRelayWorker.php` | `onWorkerStart()` | `277-280` | `244`, `267`, `268`, `276` |
  * | `RelayProxyManager.php` | `__construct()` | `186` | `183` |
  *
@@ -286,6 +288,36 @@ final class RelayTimerArmDeterminismTest extends TestCase
 
         self::assertNull($this->readPrivate($tunnel, 'drainTimerId'), 'onServerClose() must clear the grace timer id');
         self::assertSame(0, $this->pendingTimerTaskCount());
+    }
+
+    /**
+     * M-HUB-02: an armed episode safety timer keeps the CLOSED tunnel strongly
+     * reachable in the Workerman timer wheel until it fires (up to 30s).
+     * onServerClose() — like close() — must cancel BOTH episode timers so the
+     * tunnel is released at once; no residual pending task may survive.
+     */
+    public function testOnServerCloseCancelsArmedBackpressureEpisodeTimers(): void
+    {
+        $this->forceWorkermanRuntime();
+
+        $tunnel = $this->throttleTunnel();
+        $this->invokePrivate($tunnel, 'armClientBackpressureTimer');
+        $this->invokePrivate($tunnel, 'armServerBackpressureTimer');
+        self::assertIsInt($this->readPrivate($tunnel, 'clientBackpressureTimerId'));
+        self::assertIsInt($this->readPrivate($tunnel, 'serverBackpressureTimerId'));
+        self::assertSame(2, $this->pendingTimerTaskCount());
+
+        $tunnel->onServerClose();
+
+        self::assertNull(
+            $this->readPrivate($tunnel, 'clientBackpressureTimerId'),
+            'onServerClose() must cancel the client-episode timer (M-HUB-02)'
+        );
+        self::assertNull(
+            $this->readPrivate($tunnel, 'serverBackpressureTimerId'),
+            'onServerClose() must cancel the server-episode timer (M-HUB-02)'
+        );
+        self::assertSame(0, $this->pendingTimerTaskCount(), 'no stale timer may retain the closed tunnel');
     }
 
     // ---- ClientRelayWorker::onWorkerStart metrics timers ------------------

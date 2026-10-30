@@ -1015,7 +1015,18 @@ final class ServerProxyController
         }
 
         if ($owner['userId'] !== $userId) {
-            return (new Response())->error(403, 'server.not_owned', 'Forbidden');
+            // M-HUB-27: byte-identical-404 law (the estate's collections
+            // precedent) — a foreign-owned server must be indistinguishable
+            // from a nonexistent one. Answering 403 `server.not_owned` here
+            // let any member probe arbitrary ids and read back WHICH servers
+            // exist (404 vs 403), an existence oracle over the whole id space.
+            // The `server.not_owned` code itself stays registered for the
+            // surfaces where the owner is already known from context (e.g.
+            // relay-token mint's explicit ownership leg); on this discovery
+            // surface existence is never confirmed. Ordering law unchanged:
+            // this refusal still runs BEFORE the scope gate and relay-liveness
+            // checks, and nothing is forwarded.
+            return (new Response())->error(404, 'server.not_found', 'Not Found');
         }
 
         if (!$owner['relayActive']) {

@@ -925,9 +925,9 @@ only behind a reverse proxy or port map that breaks same-origin:
 #### Rate limiting ([`config/server.php`](config/server.php) `rate_limit`)
 
 Each abuse-prone surface has its own rate limiter (a single login-grade limiter is wrong for
-everything but login). Fifteen profiles exist in three custody postures: **`login`, `mcp`, and
-`signup` are shared and DB-backed**; seven HTTP surfaces (`proxy`, `heartbeat`, `jwks`, `alexa`,
-`server_claims`, `invite_redeem`, `client_relay_token`) use per-worker in-memory limiters (soft-global — see the caveat
+everything but login). Sixteen profiles exist in three custody postures: **`login`, `mcp`, and
+`signup` are shared and DB-backed**; eight HTTP surfaces (`proxy`, `heartbeat`, `jwks`, `alexa`,
+`server_claims`, `invite_redeem`, `client_relay_token`, `client_request_create`) use per-worker in-memory limiters (soft-global — see the caveat
 below); the five `count=1`-worker surfaces (`relay_connect`, `client_mount`,
 `syncplay_mount`, `federation_connect`, `federation_frame`) are per-worker too,
 but per-worker *is* global there. Every threshold is
@@ -948,6 +948,7 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 | `PHLIX_HUB_RATELIMIT_SERVER_CLAIMS_MAX` / `_SERVER_CLAIMS_WINDOW` | `60` / `60` | Server-claim pairing trio, keyed `server_claims:{new,status,claim}:<trusted ip>` |
 | `PHLIX_HUB_RATELIMIT_INVITE_REDEEM_MAX` / `_INVITE_REDEEM_WINDOW` | `20` / `60` | Invite-link redemption, keyed `invite_redeem:{userId}` (attributable member; bounds the burn+share write chain) |
 | `PHLIX_HUB_RATELIMIT_CLIENT_RELAY_TOKEN_MAX` / `_CLIENT_RELAY_TOKEN_WINDOW` | `10` / `60` | Client relay-token mint (`POST /me/servers/{id}/relay-token`), keyed `client_relay_token:{userId}` — attributable member; with the service-side cap of 20 active tokens per (user, server) scope this bounds both mint rate and standing credentials (M-HUB-22) |
+| `PHLIX_HUB_RATELIMIT_CLIENT_REQUEST_CREATE_MAX` / `_CLIENT_REQUEST_CREATE_WINDOW` | `20` / `60` | Media-request creation (`POST /me/requests`), keyed `client_request_create:{userId}` — attributable member; paired with the pending dedup echo and the 50-pending standing cap on the member's queue (M-HUB-23) |
 | `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_SYNCPLAY_MOUNT_MAX` / `_SYNCPLAY_MOUNT_WINDOW` | `30` / `60` | :8804 SyncPlay pre-auth connect (WS), keyed `syncplay_mount:<real ip>` — `count=1` worker, truly global; runs before the token lookup so a flood can't convert into DB work |
@@ -959,7 +960,7 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 > **Per-worker vs global caveat.** Most thresholds are enforced **per worker process**. The
 > :8802/:8803/:8805 relay and federation workers are `count=1`, so per-worker == global for
 > `relay_connect` / `client_mount` / `federation_connect` / `federation_frame`. `proxy`,
-> `heartbeat`, `jwks`, `alexa`, `server_claims`, `invite_redeem`, and `client_relay_token` run across `HUB_WORKERS`
+> `heartbeat`, `jwks`, `alexa`, `server_claims`, `invite_redeem`, `client_relay_token`, and `client_request_create` run across `HUB_WORKERS`
 > HTTP workers, so their effective soft-global limit is roughly `max × HUB_WORKERS` — a
 > documented, accepted tradeoff (a strict global cap for these would require a shared store,
 > Redis/DB, and is future work).

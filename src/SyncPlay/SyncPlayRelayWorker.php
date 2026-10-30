@@ -34,10 +34,13 @@ use function array_merge;
 use function chr;
 use function count;
 use function explode;
+use function in_array;
 use function is_numeric;
 use function is_string;
 use function json_decode;
+use function mb_substr;
 use function microtime;
+use function preg_replace;
 use function round;
 use function spl_object_id;
 use function sprintf;
@@ -95,6 +98,20 @@ use function trim;
  * either direction. Nothing is translated: a mixed room hears each speaker in
  * its own tongue only (deliberate — zero live bare consumers; a translator
  * would be unverifiable fiction). `pending_command` is dialect-agnostic.
+ *
+ * ## Inbound wire policy (minors campaign, M-HUB-28/36/38/39/41)
+ *
+ * Every frame charges the per-client inbound budget BEFORE any parsing; the
+ * parse bounds nesting at {@see self::MAX_INBOUND_JSON_DEPTH}; member-supplied
+ * display names and chat text are sanitized and capped at the boundary
+ * ({@see self::sanitizeDisplayName()}, {@see self::sanitizeChatText()}); rooms
+ * hold at most {@see self::MAX_ROOM_MEMBERS} (the server's cap, the server's
+ * refusal words on the canonical door); the dispatch default relays unknown
+ * names but NEVER the hub's own bare response vocabulary (no member can forge
+ * a `room_state`); and an over-budget drop announces itself once per
+ * connection to a canonical socket (the registered `rate_limited` code) while
+ * staying silent
+ * on a bare one, per the dialect law above.
  *
  * @package Phlix\Hub\SyncPlay
  */
@@ -242,6 +259,54 @@ final class SyncPlayRelayWorker
      * fail-loud with the stored queue UNTOUCHED, exactly like the server.
      */
     public const CANONICAL_MAX_QUEUE_SIZE = 1000;
+
+    /**
+     * Member ceiling for one relay room — mirrors phlix-server
+     * `GroupState::MAX_MEMBERS = 50` (cited both ways, same-number law as
+     * {@see self::CANONICAL_MAX_QUEUE_SIZE}). A relay that admitted past the
+     * server cap would fan state to members the :8097 group itself would
+     * have refused; the refusal message copies the server's exact prose.
+     */
+    public const MAX_ROOM_MEMBERS = 50;
+
+    /**
+     * Stored display-name ceiling (codepoints). The server keeps no display
+     * name of its own for relay-latched members, so the hub stores and echoes
+     * what it is given — unbounded, that is a memory/echo amplifier under
+     * member control (audit M-HUB-38). Truncation (not refusal) keeps
+     * interop with clients that never learned a validation error.
+     */
+    public const MAX_DISPLAY_NAME_CHARS = 128;
+
+    /**
+     * Relayed chat-message ceiling (codepoints). The server retains the last
+     * 100 messages with no length bound; the hub relays without retaining,
+     * but a member must still not be able to dial a frame size through this
+     * mount (audit M-HUB-38, twin reasoning to the display-name cap).
+     */
+    public const MAX_CHAT_MESSAGE_CHARS = 2000;
+
+    /**
+     * JSON nesting depth accepted for inbound frames (audit M-HUB-41). The
+     * realistic SyncPlay payload nests (group_state.members, queue items'
+     * media_info) stay under ~8; sibling mounts decode at 2 (Tunnel) and 4
+     * (federation handshake), and the default 512 turns a 20-deep frame into
+     * recursive parser work the sender controls. Deeper than this is refused
+     * at the parse edge, before any budget-free handler path runs.
+     */
+    public const MAX_INBOUND_JSON_DEPTH = 16;
+
+    /**
+     * Bare-vocabulary frame names the hub EMITS (room_state, client_joined,
+     * client_left, time_sync_reply — the complete `type` inventory this
+     * worker sends in the bare dialect). Inbound frames carrying them are
+     * dropped by the dispatch default: the extension seam relays UNKNOWN
+     * names, never hub-shaped RESPONSES, or a member could forge a fake
+     * roster/join announcement to the whole room (audit M-HUB-39). The
+     * canonical mirror of this floor already exists (the `syncplay_*`
+     * server-only-type arm); this closes the bare half.
+     */
+    private const HUB_OWNED_BARE_TYPES = ['room_state', 'client_joined', 'client_left', 'time_sync_reply'];
 
     /**
      * Active SyncPlay client connections keyed by connection ID.
@@ -976,15 +1041,38 @@ final class SyncPlayRelayWorker
         // stream). Null bucket = disabled budget (diagnostics).
         $bucket = $client->inboundBucket;
         if ($bucket !== null && !$bucket->canSpend()) {
+            // M-HUB-36: a DROPPED frame used to be invisible to its own
+            // sender — a canonical client stuck behind the budget could not
+            // tell "throttled" from "network ate my frames". Answer exactly
+            // once per connection on the same edge the log latch takes (a
+            // per-frame reply would double the flood's wire volume — the
+            // amplification class the budget exists to remove), in the
+            // sender's dialect. Bare sockets stay silent: the hub's bare
+            // dialect has no error-frame path (handleFrameFailure doctrine).
+            $firstTrip = !$client->inboundThrottleLogged;
             $this->logInboundThrottleOnce($client);
+            if ($firstTrip && $client->canonical) {
+                try {
+                    $this->sendCanonicalError(
+                        $client,
+                        'rate_limited',
+                        'You are sending too fast; frames are being dropped'
+                    );
+                } catch (Throwable) {
+                    // Dead socket mid-reply: the drop is already the message.
+                }
+            }
 
             return;
         }
         $bucket?->spend((float) strlen($data));
 
         // Parse SyncPlay JSON message
+        // M-HUB-41: bound the nesting the parser will walk (see
+        // MAX_INBOUND_JSON_DEPTH); over-depth fails the decode and takes the
+        // existing malformed-drop path below unchanged.
         /** @var array<string, mixed>|null $message */
-        $message = json_decode($data, true);
+        $message = json_decode($data, true, self::MAX_INBOUND_JSON_DEPTH);
         if (!is_array($message)) {
             return;
         }
@@ -1199,6 +1287,19 @@ final class SyncPlayRelayWorker
                     break;
                 }
 
+                // M-HUB-39: the hub's own bare RESPONSE names are not an
+                // extension. A member sending `room_state`/`client_joined`/
+                // `client_left`/`time_sync_reply` is forging hub-shaped
+                // announcements — the seam relays unfamiliar names, never
+                // the vocabulary the mount itself speaks. Silent drop: this
+                // is inbound garbage, not a request the dialect can answer
+                // (bare sockets have no error path; for a canonical sender
+                // the drop is at least no forgery, and inventing a bare-code
+                // refusal reply breaks the latch law this arm sits in).
+                if (in_array($type, self::HUB_OWNED_BARE_TYPES, true)) {
+                    break;
+                }
+
                 // Unrecognised but properly-typed message — the documented
                 // extension seam: relay verbatim to the REST of the room (the
                 // sender already holds the frame; echoing it back buys noise).
@@ -1258,6 +1359,9 @@ final class SyncPlayRelayWorker
      * would hand a flooding client a log-noise amplifier, the very failure
      * class the budget exists to remove. The latch lives on the client, so it
      * costs nothing after the first trip and disappears with the socket.
+     * (M-HUB-36's one-shot canonical WIRE announcement rides the same edge
+     * at the call site in {@see self::onMessage()} — one reply per
+     * connection, never one per dropped frame.)
      *
      * @param SyncPlayClient $client The throttled client.
      *
@@ -1363,12 +1467,26 @@ final class SyncPlayRelayWorker
         // a control/broadcast never crosses the (server_id, owner) boundary.
         $scopedRoom = self::scopedRoomKey($client, $clientRoom);
 
+        // M-HUB-28: the room holds at most MAX_ROOM_MEMBERS — the server's
+        // own group cap, so a client cannot build a relay room :8097 would
+        // never have admitted. The bare dialect has no error frames (see the
+        // latch law in dispatchType): the refusal is silent on the wire, and
+        // the joiner learns it from the absent client_joined fan-out. The
+        // attempt still charged the inbound budget before dispatch, so a
+        // retry loop is a throttling loop, not a log-amplification vector.
+        if (isset(self::$rooms[$scopedRoom]) && count(self::$rooms[$scopedRoom]) >= self::MAX_ROOM_MEMBERS) {
+            $logger->warning('SyncPlay: rejected group_join, room is full', [
+                'client_id' => $client->clientId,
+                'room' => $clientRoom,
+                'server_id' => $client->serverId,
+            ]);
+
+            return;
+        }
+
         // Join new room (keyed by the scoped key, never the raw client string)
         $client->room = $scopedRoom;
-        /** @var mixed $messageDisplayName */
-        $messageDisplayName = $message['display_name'] ?? null;
-        $displayName = is_string($messageDisplayName) ? $messageDisplayName : 'Anonymous';
-        $client->displayName = $displayName;
+        $client->displayName = self::sanitizeDisplayName($message['display_name'] ?? null, 'Anonymous');
 
         if (!isset(self::$rooms[$scopedRoom])) {
             self::$rooms[$scopedRoom] = [];
@@ -1665,6 +1783,51 @@ final class SyncPlayRelayWorker
     }
 
     /**
+     * Sanitize a client-supplied display name at the wire boundary
+     * (audit M-HUB-38). One-line identity: EVERY C0/C1 control character —
+     * including tab/CR/LF — is stripped so a name can never smuggle line
+     * breaks into fan-out frames or logs, then the value is trimmed and
+     * capped at {@see self::MAX_DISPLAY_NAME_CHARS} codepoints. A
+     * non-string, or a string left empty by sanitizing, takes the caller's
+     * documented fallback (the pre-existing 'Anonymous'/'Host'/'User' law,
+     * unchanged). Subjects arrive through json_decode, which already
+     * guarantees valid UTF-8, so the `/u` pass cannot fail; the null-arm is
+     * belt defense that degrades to the fallback, never to a throw.
+     */
+    private static function sanitizeDisplayName(mixed $value, string $fallback): string
+    {
+        if (!is_string($value)) {
+            return $fallback;
+        }
+
+        $clean = trim((string) preg_replace('/[\x00-\x1F\x7F-\x9F]/u', '', $value));
+        if ($clean === '') {
+            return $fallback;
+        }
+
+        return mb_substr($clean, 0, self::MAX_DISPLAY_NAME_CHARS);
+    }
+
+    /**
+     * Sanitize a relayed chat message at the wire boundary (audit M-HUB-38,
+     * twin of {@see self::sanitizeDisplayName()}). Chat legitimately carries
+     * horizontal and vertical whitespace, so tab/LF/CR SURVIVE while the
+     * rest of C0/C1 is stripped; the message is then capped at
+     * {@see self::MAX_CHAT_MESSAGE_CHARS} codepoints by truncation, not
+     * refusal. A non-string yields '' and takes the caller's existing
+     * silent-empty path. No trim here — the caller owns emptiness policy.
+     */
+    private static function sanitizeChatText(mixed $value): string
+    {
+        if (!is_string($value)) {
+            return '';
+        }
+
+        $stripped = (string) preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/u', '', $value);
+        return mb_substr($stripped, 0, self::MAX_CHAT_MESSAGE_CHARS);
+    }
+
+    /**
      * Numeric coercion at the wire boundary (mirrors the server's private
      * `intFromMixed`): numeric-ish values (int or decimal string) become
      * ints, anything else takes the documented default.
@@ -1792,13 +1955,25 @@ final class SyncPlayRelayWorker
 
         /** @var mixed $nameField */
         $nameField = $message['member_name'] ?? null;
-        $displayName = is_string($nameField) ? $nameField : ($isCreate ? 'Host' : 'User');
+        $displayName = self::sanitizeDisplayName($nameField, $isCreate ? 'Host' : 'User');
 
         if ($client->room !== null) {
             $this->handleCanonicalLeave($client);
         }
 
         $scopedRoom = self::scopedRoomKey($client, $friendly);
+
+        // M-HUB-28: the server's group cap, mirrored — and answered in its
+        // own words: `syncplay.group_full` / 'Group is full' are exactly
+        // phlix-server SyncPlayManager::joinGroup()'s refusal (code + prose),
+        // so a client that already branches on it needs no relay branch.
+        // Checked AFTER the leave: a member re-homing frees its own slot.
+        if (isset(self::$rooms[$scopedRoom]) && count(self::$rooms[$scopedRoom]) >= self::MAX_ROOM_MEMBERS) {
+            $this->sendCanonicalError($client, 'syncplay.group_full', 'Group is full');
+
+            return;
+        }
+
         if (!isset(self::$rooms[$scopedRoom])) {
             self::$rooms[$scopedRoom] = [];
         }
@@ -2123,7 +2298,10 @@ final class SyncPlayRelayWorker
 
         /** @var mixed $messageField */
         $messageField = $message['message'] ?? null;
-        $text = is_string($messageField) ? $messageField : '';
+        // M-HUB-38 (twin of the display-name cap): bound what one member can
+        // dial at every other member. Sanitizing BEFORE the empty check means
+        // a control-chars-only message takes the existing silent drop.
+        $text = self::sanitizeChatText($messageField);
         if (trim($text) === '') {
             return;
         }

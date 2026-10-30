@@ -115,6 +115,76 @@ class RequestManager
     }
 
     /**
+     * The M-HUB-23 standing cap: how many PENDING requests one member may
+     * hold. Reaching it refuses new creates (409 `quota.exceeded` with the
+     * `requests` discriminator) until rows leave the queue via the admin
+     * approve/reject path — bounded queue pressure, not punishment: 50 is far
+     * past any genuine watchlist batch and the time-window limiter already
+     * caps the rate.
+     */
+    public const MAX_PENDING_REQUESTS_PER_USER = 50;
+
+    /**
+     * Find a pending request by the SAME member for the SAME target
+     * (type + tmdb_id + season + episode) — the M-HUB-23 dedup probe.
+     *
+     * NULL season/episode are matched with a COALESCE sentinel rather than
+     * per-column IS-NULL arms: the vendored MySQL client forbids repeating a
+     * named placeholder within one statement. A member who literally submits
+     * season/episode = -2147483648 could collide with the NULL sentinel and
+     * be deduped against a NULL-season row; the failure mode is a duplicate
+     * being suppressed, never data loss, so the sentinel stands.
+     *
+     * Advisory-honest TOCTOU: two concurrent creates of the same brand-new
+     * target can both miss this probe and both land (no UNIQUE index on the
+     * queue — adding one is a migration beyond a minors ask). The per-member
+     * time-window limiter bounds that race to a handful of rows.
+     *
+     * @return array<string,mixed>|null The hydrated pending row, or null when none exists.
+     */
+    public function findPendingDuplicate(string $userId, string $type, int $tmdbId, ?int $season, ?int $episode): ?array
+    {
+        $rows = $this->db->query(
+            'SELECT * FROM requests
+             WHERE user_id = :user_id
+               AND type = :type
+               AND tmdb_id = :tmdb_id
+               AND status = \'pending\'
+               AND COALESCE(season, -2147483648) = COALESCE(:season, -2147483648)
+               AND COALESCE(episode, -2147483648) = COALESCE(:episode, -2147483648)
+             LIMIT 1',
+            [
+                'user_id' => $userId,
+                'type'    => $type,
+                'tmdb_id' => $tmdbId,
+                'season'  => $season,
+                'episode' => $episode,
+            ]
+        );
+
+        $firstRow = is_array($rows) ? ($rows[0] ?? null) : null;
+
+        return is_array($firstRow) ? $this->hydrateRequest($firstRow) : null;
+    }
+
+    /**
+     * Count the member's PENDING requests (M-HUB-23 standing cap).
+     */
+    public function countPendingForUser(string $userId): int
+    {
+        $countRows = $this->db->query(
+            'SELECT COUNT(*) AS cnt FROM requests WHERE user_id = :uid AND status = \'pending\'',
+            ['uid' => $userId],
+        );
+        /** @var mixed $firstCount */
+        $firstCount = is_array($countRows) ? ($countRows[0] ?? null) : null;
+        /** @var mixed $count */
+        $count = is_array($firstCount) ? ($firstCount['cnt'] ?? null) : null;
+
+        return is_numeric($count) ? (int) $count : 0;
+    }
+
+    /**
      * Create a new media request.
      *
      * @param string      $userId    User UUID submitting the request.

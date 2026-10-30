@@ -48,7 +48,8 @@ use function str_starts_with;
  *
  * **(a) The user id is the gateway's, never the caller's.** Driven by giving the
  * gateway a user who does NOT own the server: the production ownership gate must
- * answer 403 and nothing must reach the bridge. A gateway that took its identity
+ * answer the byte-identical 404 (M-HUB-27) and nothing must reach the bridge. A
+ * gateway that took its identity
  * from anywhere else would have to be handed it, and there is no such path.
  *
  * **(b) Only two server paths are ever reached.** The exact forwarded path is
@@ -62,7 +63,7 @@ use function str_starts_with;
  * tiny header set that contains neither. Without the control, "the headers are
  * absent" would be indistinguishable from "the proxy strips them anyway".
  *
- * **(d) A non-200 is surfaced, not swallowed.** 404, 403 and a non-JSON body all
+ * **(d) A non-200 is surfaced, not swallowed.** 404, 503 and a non-JSON body all
  * come back with their real status rather than being flattened into a cheerful
  * empty success.
  *
@@ -175,8 +176,10 @@ final class AlexaMediaGatewayTest extends TestCase
      * The production ownership gate is reached with the CONSTRUCTOR's user id.
      *
      * The succeeding control is the search test above, which runs the identical
-     * call with an owner who matches and gets a 200 — so this 403 is
-     * attributable to the identity and not to the harness being broken.
+     * call with an owner who matches and gets a 200 — so this 404 is
+     * attributable to the identity and not to the harness being broken. Since
+     * M-HUB-27 the ownership arm is the byte-identical-404 law: a foreign-owned
+     * server is indistinguishable from a nonexistent one on the wire.
      */
     public function testTheGatewaysUserIsTheOneTheOwnershipGateJudges(): void
     {
@@ -186,8 +189,8 @@ final class AlexaMediaGatewayTest extends TestCase
 
         $result = $gateway->search(self::SERVER_ID, 'Inception', 5);
 
-        self::assertSame(403, $result['status']);
-        self::assertSame('server.not_owned', $result['payload']['code'] ?? null);
+        self::assertSame(404, $result['status']);
+        self::assertSame('server.not_found', $result['payload']['code'] ?? null);
         self::assertSame([], $forwarded, 'nothing may reach the relay for a server the user does not own');
     }
 

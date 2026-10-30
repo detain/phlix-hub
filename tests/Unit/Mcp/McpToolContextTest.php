@@ -310,9 +310,10 @@ final class McpToolContextTest extends TestCase
      * `proxyPost()` runs as the TOKEN's user, exactly as `proxyGet()` does — a
      * write cannot be aimed at somebody else's server.
      *
-     * The refusal asserted is 403 `server.not_owned`, which is a DIFFERENT gate
-     * from the 404 for an unknown server, so this is a decision and not a
-     * blanket no.
+     * The refusal asserted is the proxy's 404 `server.not_found`: in this
+     * harness the id has no `servers` row, and since M-HUB-27 the ownership arm
+     * answers that same byte-identical shape anyway, so the write path can
+     * distinguish nothing more than the read path could.
      */
     public function testAPostToAnotherUsersServerIsRefusedByOwnership(): void
     {

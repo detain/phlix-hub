@@ -1138,7 +1138,13 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('manager', get(RequestManager::class))
                 ->parameter('notification', get(RequestNotification::class))
                 ->parameter('users', get(UserRepository::class))
-                ->parameter('audit', get(AuditLogger::class)),
+                ->parameter('audit', get(AuditLogger::class))
+                // M-HUB-23: create budget binds to the dedicated profile — the
+                // loop in CommonServicesProvider registers it from
+                // RateLimitProfiles::defaults(). PHP-DI skips the defaulted
+                // ctor param, so the explicit binding is load-bearing
+                // (S62 law; pinned by RequestCreateLimiterWiringTest).
+                ->parameter('createLimiter', get(RateLimitProfiles::CLIENT_REQUEST_CREATE)),
 
             ServerDetailController::class => factory(static function (
                 ServerInfoHandler $serverInfo,

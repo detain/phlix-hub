@@ -290,6 +290,22 @@ final class RateLimitProfiles
     public const string CLIENT_RELAY_TOKEN = 'rate_limiter.client_relay_token';
 
     /**
+     * M-HUB-23 (review hub__exploiter minor #3): `POST /api/v1/me/requests` —
+     * media-request creation.
+     *
+     * Pre-cure any member could pump admin-queue rows and notification/log
+     * volume at will: the route was bare in the auth group with no per-member
+     * bound, no dedup and no standing cap. Same user-keyed posture as
+     * {@see CLIENT_RELAY_TOKEN} (every caller already carries membership; an
+     * IP key would collapse NAT'd households and be trivially refilled).
+     * 20 / 60s is generous for genuine browsing (a member queueing a watchlist
+     * in one sitting) while bounding sustained row production by orders of
+     * magnitude; the manager-side pending dedup + standing cap close the
+     * per-target and total-queue vectors the time window alone cannot.
+     */
+    public const string CLIENT_REQUEST_CREATE = 'rate_limiter.client_request_create';
+
+    /**
      * Map of `container id => {config key, default max, default window}`.
      *
      * `key` is the sub-key under `config/server.php`'s `rate_limit` section;
@@ -316,6 +332,7 @@ final class RateLimitProfiles
             self::FEDERATION_FRAME    => ['key' => 'federation_frame',    'max' => 120, 'window' => 60],
             self::INVITE_REDEEM       => ['key' => 'invite_redeem',       'max' => 20,  'window' => 60],
             self::CLIENT_RELAY_TOKEN  => ['key' => 'client_relay_token',  'max' => 10,  'window' => 60],
+            self::CLIENT_REQUEST_CREATE => ['key' => 'client_request_create', 'max' => 20, 'window' => 60],
         ];
     }
 }
