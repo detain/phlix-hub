@@ -271,7 +271,7 @@ final class FederationConnectionManager
             // (closing socket or full send buffer) — count + attribute each
             // such loss instead of broadcasting into a silent void.
             if ($conn->send($data) === false) {
-                $this->noteOutboundDrop((string) $hubId, 'broadcast');
+                $this->noteOutboundDrop($hubId, 'broadcast');
             }
         }
     }

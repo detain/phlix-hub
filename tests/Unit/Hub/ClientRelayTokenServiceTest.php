@@ -372,7 +372,9 @@ final class ClientRelayTokenServiceTest extends TestCase
     public function testMintRevokesOverflowRowsAndReportsPrunedCount(): void
     {
         $db = $this->createMock(Connection::class);
+        /** @var string|null $updateSql */
         $updateSql = null;
+        /** @var array<string, string>|null $updateParams */
         $updateParams = null;
         $db->method('query')->willReturnCallback(
             function (string $sql, array $params) use (&$updateSql, &$updateParams) {

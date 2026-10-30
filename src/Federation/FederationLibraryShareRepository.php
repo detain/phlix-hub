@@ -33,11 +33,11 @@ class FederationLibraryShareRepository
      * {@see \Phlix\Hub\Http\Controllers\FederationController}'s peer-id
      * route guard — the boundary parses, the SQL below never re-validates.
      */
-    private const UUID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
+    private const string UUID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
 
     /** VARCHAR(255) on `library_name`; MySQL counts CHARACTERS, bytes are the
      *  conservative bound we can check without a collation-aware strlen. */
-    private const MAX_LIBRARY_NAME_BYTES = 255;
+    private const int MAX_LIBRARY_NAME_BYTES = 255;
 
     public function __construct(
         private readonly Connection $db,
