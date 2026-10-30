@@ -301,23 +301,26 @@ Parsed by `SyncPlayRelayWorker::parseServerId()` with
 `~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~`.
 
 **Getting there.** The managed installer routes `GET /syncplay/…` on the shared HAProxy
-frontend (80/443) straight to this listener — but no shipped browser client dials that
-route yet. The env block the managed install writes carries no `HUB_WS_URL`/`HUB_WS_PATH`,
-and the shipped dials default to the direct form: `@phlix/ui`'s legacy hub-relay law and
-the hub portal's own `buildRelayUrl` both build `ws(s)://<page-host>:8804/…` with the port
-fixed by `SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port (the portal bundle
-does not consult the seam). So on a managed install the browser path needs the operator to
-`ufw allow 8804/tcp` as well — which serves the plain `ws://<host>:8804/…` form from
-HTTP-served pages; `8804` is a plaintext listener, so an HTTPS-served page cannot complete
-a direct dial at all, and its only viable path (the same-origin
-`wss://<hub-domain>/syncplay/…` route) waits on the disclosed rider that wires shipped
-clients to dial it. That rider is not the only door: a manual escape hatch works today —
-hand-set `HUB_WS_URL=wss://<hub-domain>` with `HUB_WS_PATH=/syncplay` in
-`/etc/phlix-hub.env` and restart the hub; `SharedUiController` grammar-validates both
-(invalid values fail soft to unset; the `README.md` env tables state the grammar) and
-emits them into the shell's `window.__PHLIX__.wsUrl/wsPath` bootstrap, which seam-aware
-`@phlix/ui` clients consult before the legacy derivation — they ride the managed route,
-while the hub portal bundle still dials direct (it never consults the seam).
+frontend (80/443) straight to this listener, and — since R-HUB-13 — a domain-bound
+managed install also seeds the ui seam that dials it: `HUB_WS_URL`
+(`wss://<hub-domain>` under TLS, `ws://<hub-domain>` on the plain-HTTP managed frontend —
+always the scheme of the frontend actually built) plus `HUB_WS_PATH=/syncplay` land in
+`/etc/phlix-hub.env`, `SharedUiController` grammar-validates both (invalid values fail
+soft to unset; the `README.md` env tables state the grammar) into the shell's
+`window.__PHLIX__.wsUrl/wsPath` bootstrap, and seam-aware `@phlix/ui` clients ride the
+managed route with no operator step. The hub portal bundle does **not** consult the seam:
+its `buildRelayUrl`, like `@phlix/ui`'s legacy hub-relay law wherever the bootstrap is
+absent, builds the direct form `ws(s)://<page-host>:8804/…` with the port fixed by
+`SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port — so dials made by that
+bundle still need the operator to `ufw allow 8804/tcp` as well, which serves the plain
+`ws://<host>:8804/…` form from HTTP-served pages; `8804` is a plaintext listener, so an
+HTTPS-served page cannot complete a direct dial at all, and its only viable path (the
+same-origin `wss://<hub-domain>/syncplay/…` route) is live for seam-aware clients while
+the portal bundle waits on the disclosed bundle-wiring rider (a web-ui rebuild, out of
+the installer's scope). Installs the installer never seeds — no-domain managed and
+`--no-proxy` boxes, where it cannot name an origin clients will actually reach — keep the
+hand-set door: the same two vars in `/etc/phlix-hub.env` and a restart (a non-empty
+operator value is never overwritten).
 On `--no-proxy` installs the installer opens `8804/tcp` in ufw (when
 ufw is active), which is what makes the plain `ws://<host>:8804/…` form above reachable.
 Behind any hand-rolled proxy, replicate the `/syncplay/` pass-through with HTTP/1.1

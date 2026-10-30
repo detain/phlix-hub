@@ -953,6 +953,34 @@ EOF
   } > "$fragment"
 }
 
+# Seed the ui WebSocket seam env (R-HUB-13, review M-HUB-11__r2 seam-rider):
+# SharedUiController reads HUB_WS_URL / HUB_WS_PATH into the shell's
+# window.__PHLIX__.wsUrl/wsPath bootstrap, and seam-aware @phlix/ui clients
+# then dial the managed /syncplay/ route instead of the legacy direct :8804
+# form. A domain-bound managed install HAS that route (the fragment above
+# routes it), so the installer now emits the pair automatically — the scheme
+# follows the FINAL TLS state (certbot may have failed by call time), which
+# is why this runs after the certbot chain, not from the env heredoc.
+# Blank-domain managed installs and --no-proxy boxes are never seeded:
+# there the installer cannot name an origin clients actually reach, and the
+# documented direct-port path (with the hand-set door) stays the law.
+# phlix_ensure_env_key leaves an operator's non-empty value untouched. The
+# hostname re-check is defense in depth mirroring the fragment writer's
+# choke guard; unreachable today (that writer has already died on a bad
+# $DOMAIN before this call), a silently skipped seed = legacy behavior.
+# Args: <mode tls|http> <domain or empty>
+phlix_ensure_syncplay_seam_env_hub() {
+  local mode="$1" dom="$2"
+  [ -n "$dom" ] || return 0
+  phlix_valid_hostname "$dom" || return 0
+  local scheme="ws"
+  [ "$mode" = "tls" ] && scheme="wss"
+  phlix_ensure_env_key "$ENV_FILE" HUB_WS_URL "${scheme}://${dom}" \
+    "Explicit WS base origin for the ui seam (window.__PHLIX__.wsUrl); grammar per README env table."
+  phlix_ensure_env_key "$ENV_FILE" HUB_WS_PATH "/syncplay" \
+    "Socket base path for the ui seam (window.__PHLIX__.wsPath); the managed route this install built."
+}
+
 # Validate and reload haproxy (used after every rebuild).
 phlix_haproxy_reload() {
   [ "$SKIP_HAPROXY" = "yes" ] && return 0
@@ -2043,6 +2071,14 @@ CRON
 else
   log "Writing phlix-hub HAProxy fragment (plain HTTP)"
   phlix_haproxy_write_fragment_hub http "$DOMAIN"
+fi
+
+# TLS_ENABLED is final here (the certbot-failure branch flipped it), so the
+# seeded scheme matches the frontend the fragments actually built.
+if [ "$TLS_ENABLED" = "yes" ]; then
+  phlix_ensure_syncplay_seam_env_hub tls "$DOMAIN"
+else
+  phlix_ensure_syncplay_seam_env_hub http "$DOMAIN"
 fi
 
 log "Rebuilding /etc/haproxy/haproxy.cfg from Phlix fragments"

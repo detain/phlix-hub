@@ -6,6 +6,57 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — riders W13 R-HUB-13: the managed installer now SEEDS the SyncPlay seam — domain-bound installs emit `HUB_WS_URL` + `HUB_WS_PATH` so seam-aware clients ride the managed route with no operator step; the portal-bundle wiring stays the disclosed rider it was scoped to be — 2026-10-31
+
+- **The ask.** Review M-HUB-11__r2 (seam-rider): "emit the seam env in the
+  installer AND route the portal dial through it — bundle rebuild, out of
+  scope here." This lane lands the installer half; the bundle half stays
+  disclosed (portal rebuild, v0.99.12 wave) — the rider named it out of
+  scope at birth and the queue title repeats the exclusion. R-HUB-12's
+  manual-door paragraphs stay true as the door for the classes the
+  installer does not seed; only the "writes no `HUB_WS_URL`/`HUB_WS_PATH`"
+  framing flips, forward-corrected here and in the two docs sections.
+- **The cure.** `scripts/install.sh`: new `phlix_ensure_syncplay_seam_env_hub
+  <mode tls|http> <domain or empty>` (mirrors the fragment writer's
+  signature), called once inside the managed branch right after the
+  certbot/fragment chain — deliberately NOT from the env heredoc, because
+  the certbot-failure branch flips `TLS_ENABLED` after the heredoc wrote
+  the file; at the call site the state is final, so the seeded scheme
+  matches the frontend the fragments actually built: `wss://<domain>` under
+  TLS, `ws://<domain>` on plain-HTTP managed (the managed frontend that
+  actually routes it, not an assumed 443), with `HUB_WS_PATH=/syncplay` —
+  the path the fragment genuinely serves. Emission goes through
+  `phlix_ensure_env_key`, the same non-destructive idempotent primitive the
+  HUB_RELAY_TLS* block uses: an operator's non-empty value is never
+  overwritten, re-runs are no-ops. Never seeded, by design: blank-domain
+  managed and `--no-proxy` installs — the installer cannot name an origin
+  clients actually reach there, and seeding a wrong-but-valid URL would
+  strand seam-aware clients worse than the legacy direct law. The internal
+  `phlix_valid_hostname` re-check is defense in depth mirroring the
+  fragment writer's choke guard: unreachable today (that writer dies on a
+  bad `$DOMAIN` long before this call), a skipped seed is legacy behavior.
+- **Docs forward-corrections.** README.md's managed-HAProxy SyncPlay
+  paragraph and `docs/websockets.md`'s "Getting there" now state the three
+  classes — seeded (domain-bound managed), never-seeded (no-domain managed,
+  `--no-proxy`, with the hand-set door), and the portal bundle that
+  consults no seam until the bundle rider lands; the env table's
+  `HUB_WS_URL`/`HUB_WS_PATH` defaults name the seed. Historical entries are
+  verbatim (history rule) — this entry is the forward correction.
+- **Gates.** Shell + markdown only — zero PHP, zero openapi touch (the
+  frozen contract artifacts cannot move on this diff, and none tried);
+  `bash -n` OK; shellcheck parity vs parent: identical 67-line report,
+  identical code census. NEW extracted-function probes over the shipped
+  installer text (R-HUB-11 precedent): 13 legs — tls→`wss://`, http→
+  `ws://`, both comments carried, blank domain writes nothing, newline
+  injection refused with the file byte-identical, operator value preserved
+  while only the missing path appends (no dup), second run a byte-noop,
+  blank `KEY=` healed not duplicated, certbot-flip realism — all green;
+  mutation teeth: neutering the scheme branch reddens the tls leg.
+  `SharedUiControllerCspTest` re-run green (39 tests, 136 assertions)
+  attesting the seeded values are exactly what `configuredSocketBaseUrl/Path`
+  grammar accepts. phpstan/psalm N/A (no PHP changed); S439 honored
+  (targeted attestation only, no suites run concurrently).
+
 ### Fixed — riders W12 R-HUB-12: the SyncPlay seam discussion now states the manual escape hatch that ships today — hand-setting `HUB_WS_URL` + `HUB_WS_PATH` in `/etc/phlix-hub.env` steers seam-aware clients onto the managed route without the rider — 2026-10-31
 
 - **The observation.** Review M-HUB-11__r2 (m1): the rider framing —

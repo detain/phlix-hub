@@ -391,25 +391,32 @@ Under the managed HAProxy the two relay WebSocket surfaces are **not** opened on
 firewall — and from there their stories differ. Federation leaves ride the existing 443
 frontend end to end: a leaf's dial target is operator-configured, and the managed
 `/relay/federation/` route carries `wss://<master-domain>/relay/federation/{hub_id}` with
-no extra port, TLS included. Browser SyncPlay clients do **not** get that for free. The
-route exists, but nothing the managed installer emits steers a shipped browser onto it:
-the generated env block writes no `HUB_WS_URL`/`HUB_WS_PATH` (the ui seam — `HUB_WS_URL`
-is the master switch; a lone `HUB_WS_PATH` refines nothing), and the default dial law in
-both shipped paths is the legacy direct form `ws(s)://<page-host>:8804/syncplay/{server_id}`
-with the port fixed by `SyncPlayRelayWorker::DEFAULT_PORT` — the hub portal bundle never
-consults the seam at all. So on a managed install, browser watch parties require the
-operator to **also** `ufw allow 8804/tcp`; that completes the plain `ws://<host>:8804`
-form for HTTP-served pages (`8804` is a plaintext listener, so an HTTPS-served page's
-`wss://` direct dial cannot complete), and the full same-origin
-`wss://<domain>/syncplay/…` browser path — riding the managed route the way federation
-rides its own — needs a client wired to dial it: disclosed follow-up rider, not shipped.
-One manual escape hatch does ship today, though: hand-set `HUB_WS_URL=wss://<hub-domain>`
-with `HUB_WS_PATH=/syncplay` in `/etc/phlix-hub.env` (both grammar-validated per the env
-table below; `HUB_WS_URL` stays the master switch) and restart `phlix-hub`, and
-`SharedUiController` grammar-validates both (invalid values fail soft to unset) into the
-shell's `window.__PHLIX__.wsUrl/wsPath` bootstrap — seam-aware `@phlix/ui` clients served
-by the hub then dial the managed 443 route instead of the legacy direct port. The hub
-portal bundle keeps dialing direct regardless: it never consults the seam.
+no extra port, TLS included. Browser SyncPlay clients now split. The route
+exists, and on a domain-bound managed install the installer itself steers a
+seam-aware browser onto it
+(R-HUB-13): the generated env block gains `HUB_WS_URL` — `wss://<domain>`
+under TLS, `ws://<domain>` on the plain-HTTP managed frontend, always
+matching the frontend the fragments actually built (certbot-failure fallback
+included) — and `HUB_WS_PATH=/syncplay` (the ui seam — `HUB_WS_URL` is the
+master switch; a lone `HUB_WS_PATH` refines nothing), and
+`SharedUiController` grammar-validates both (invalid values fail soft to
+unset) into the shell's `window.__PHLIX__.wsUrl/wsPath` bootstrap —
+seam-aware `@phlix/ui` clients served by the hub then dial the managed route
+with no operator step at all. The hub portal bundle never consults the seam:
+its dial law stays the legacy direct form
+`ws(s)://<page-host>:8804/syncplay/{server_id}` with the port fixed by
+`SyncPlayRelayWorker::DEFAULT_PORT`. Watch parties dialed by that bundle
+therefore still require the operator to **also** `ufw allow 8804/tcp`; that
+completes the plain `ws://<host>:8804` form for HTTP-served pages (`8804` is
+a plaintext listener, so an HTTPS-served page's `wss://` direct dial cannot
+complete — the managed route is the only viable door there, and the portal
+bundle reaches it only once the disclosed bundle-wiring rider lands).
+No-domain managed installs and `--no-proxy` boxes are never seeded — there
+the installer cannot name an origin clients will actually reach — and the
+manual escape hatch stays theirs: hand-set `HUB_WS_URL=wss://<hub-domain>`
+with `HUB_WS_PATH=/syncplay` in `/etc/phlix-hub.env` (both grammar-validated
+per the env table below; the installer never overwrites a non-empty value)
+and restart `phlix-hub`.
 `--no-proxy` installs open `8804`/`8805` in ufw (when it is active), so the plain
 `ws://<host>:8804` / `ws://<host>:8805` forms documented in
 [`docs/websockets.md`](docs/websockets.md) are reachable there directly.
@@ -928,8 +935,8 @@ only behind a reverse proxy or port map that breaks same-origin:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HUB_WS_URL` | unset → `null` | Explicit WS base origin (`ws(s)://host[:port]`, **no path**). Grammar-validated; an invalid value fails soft to `null` |
-| `HUB_WS_PATH` | unset → `null` | Single absolute socket path (e.g. `/syncplay`). Grammar-validated; invalid → `null` |
+| `HUB_WS_URL` | unset → `null`; seeded `ws(s)://<domain>` by `install.sh` on domain-bound managed installs | Explicit WS base origin (`ws(s)://host[:port]`, **no path**). Grammar-validated; an invalid value fails soft to `null` |
+| `HUB_WS_PATH` | unset → `null`; seeded `/syncplay` there | Single absolute socket path (e.g. `/syncplay`). Grammar-validated; invalid → `null` |
 
 #### Runtime files & container cache
 
