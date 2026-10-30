@@ -40,6 +40,7 @@ RELAY_PORT="8802"
 CLIENT_RELAY_PORT="8803"
 SYNCPLAY_PORT="8804"   # matches HUB_SYNCPLAY_PORT default in config/server.php
 FEDERATION_PORT="8805" # matches HUB_FEDERATION_PORT default in config/server.php
+CHANNEL_PORT="2206"    # matches HUB_CHANNEL_PORT default in config/server.php
 HUB_WORKERS="4"
 
 DOMAIN=""               # public hostname; enables TLS when set with --admin-email
@@ -1402,13 +1403,16 @@ do_update() {
   if [ -f "$SERVICE_FILE" ] && ! grep -q 'wait-for-free-ports' "$SERVICE_FILE" 2>/dev/null; then
     log "Adding restart-race port gate (ExecStartPre) to systemd unit"
     local gate_hub_port="${env_hub_port:-8800}"
-    # Relay/channel ports are fixed defaults in src/Application.php +
-    # HubServicesProvider (no env override exists): 8802 servers, 8803
-    # clients, 8804 syncplay, 8805 federation, 2206 channel broker.
+    # Relay/channel ports are the config/server.php defaults the workers
+    # fall back to: 8802 servers, 8803 clients, 8804 syncplay, 8805
+    # federation, 2206 channel broker. HUB_RELAY_PORT, HUB_CLIENT_RELAY_PORT,
+    # HUB_SYNCPLAY_PORT, HUB_FEDERATION_PORT and HUB_CHANNEL_PORT override
+    # them at runtime (EnvironmentFile); the gate below burns the installer's
+    # values — move a port via env and update it to match.
     sed -i "\\|^ExecStart=|i\\
 # Restart-race gate: wait for the OLD master to release its listen ports\\
 # before booting (see scripts/wait-for-free-ports.sh + install.sh template).\\
-ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t 90 ${gate_hub_port} 8802 8803 8804 8805 2206" "$SERVICE_FILE"
+ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t 90 ${gate_hub_port} ${RELAY_PORT} ${CLIENT_RELAY_PORT} ${SYNCPLAY_PORT} ${FEDERATION_PORT} ${CHANNEL_PORT}" "$SERVICE_FILE"
     # TimeoutStartSec must cover the up-to-90 s gate; RestartSec=3 s retries
     # promptly; StartLimitBurst=10 so slow-release loops (~93 s/attempt)
     # cannot trip start-limit-hit inside StartLimitIntervalSec=500.
@@ -1739,6 +1743,15 @@ HUB_PUBLIC_DOMAIN=${PUBLIC_DOMAIN}
 # URL). Defaults to https://\${HUB_PUBLIC_DOMAIN}; uncomment to override
 # the scheme/host (e.g. a non-standard port or http for a private LAN hub).
 #HUB_BASE_URL=https://${PUBLIC_DOMAIN}
+# Relay listen ports (the config/server.php defaults the workers fall back
+# to; uncomment to move one at runtime). NOTE: the unit's ExecStartPre
+# restart-race gate burns the installer's values — change one here and
+# update the gate in the unit to match, then `systemctl daemon-reload`.
+#HUB_RELAY_PORT=${RELAY_PORT}
+#HUB_CLIENT_RELAY_PORT=${CLIENT_RELAY_PORT}
+#HUB_SYNCPLAY_PORT=${SYNCPLAY_PORT}
+#HUB_FEDERATION_PORT=${FEDERATION_PORT}
+#HUB_CHANNEL_PORT=${CHANNEL_PORT}
 
 HUB_DB_HOST=${DB_HOST}
 HUB_DB_PORT=${DB_PORT}
@@ -1805,16 +1818,19 @@ Environment="HOME=${INSTALL_PATH}/var"
 # hold its listen sockets for seconds-to-minutes after SIGTERM. If the new
 # master starts before they're released, Worker::runAll() throws
 # "Address already in use" and the unit crash-loops while the hub is down.
-# Wait (up to 90 s) for :HTTP + relay WS workers (:8802 servers, :8803
-# clients, :8804 syncplay, :8805 federation — fixed defaults in
-# src/Application.php + HubServicesProvider) + :2206 channel broker to be
-# free before booting. On timeout the script still exits 0 — the bind then
+# Wait (up to 90 s) for :HTTP + relay WS workers to be free before booting:
+# :8802 servers, :8803 clients, :8804 syncplay, :8805 federation and
+# :2206 channel broker — the config/server.php defaults Application and
+# HubServicesProvider fall back to. HUB_RELAY_PORT, HUB_CLIENT_RELAY_PORT,
+# HUB_SYNCPLAY_PORT, HUB_FEDERATION_PORT and HUB_CHANNEL_PORT move them at
+# runtime; update this gate's values to match if you do. On timeout the
+# script still exits 0 — the bind then
 # fails fast and Restart=on-failure sends us back through this gate.
 # NOTE: SO_REUSEPORT (Workerman \$reusePort) is deliberately NOT used as an
 # alternative fix — during the stop/start overlap BOTH masters would accept
 # on the same ports, splitting relay tunnels and WS sessions between a dying
 # process and the new one. This ExecStartPre gate is the correct fix.
-ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t 90 ${HUB_PORT} ${RELAY_PORT} ${CLIENT_RELAY_PORT} ${SYNCPLAY_PORT} ${FEDERATION_PORT} 2206
+ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t 90 ${HUB_PORT} ${RELAY_PORT} ${CLIENT_RELAY_PORT} ${SYNCPLAY_PORT} ${FEDERATION_PORT} ${CHANNEL_PORT}
 # start.php is the Workerman bootstrap (webman-style — see start.php
 # for the full pattern). public/index.php no longer exists; public/ is
 # a pure document root containing only static assets + templates.

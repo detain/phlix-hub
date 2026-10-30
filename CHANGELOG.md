@@ -6,6 +6,53 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min41 (M-HUB-03, M-HUB-18, M-HUB-42, M-HUB-44, M-HUB-47, M-HUB-51): the unguarded heartbeat-tick body, the installer's hardcoded gate ports and their false "no env override exists" comments, the `x-phlix-websockets` miscount, the stale `portSource` authorities, and upstream/downstream off the ratified vocabulary — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min41, six live items cured in-repo
+(M-HUB-08 verified stale — cured at ea2fdb54, ancestry-proven; M-HUB-07
+verified `@phlix/ui`-owned — routed):
+
+- **M-HUB-03** — `HubServicesProvider::startInMemoryReapers()` wrapped only
+  the timer-ARM calls in try/catch; the tunnel-heartbeat `Timer::add` closure
+  body (`foreach allTunnels() → sendHeartbeat()`) ran unguarded on the worker
+  event loop while its own docblock claimed every timer was "guarded" — one
+  throwing tunnel would take the tick (and per Workerman the worker) down.
+  The body moves into `tickTunnelHeartbeats(iterable, StructuredLogger): int`
+  with a per-tunnel catch-and-`error`-log (the same
+  catches-reports-returns law `IdleReaper`'s tick already ships); the closure
+  just calls it. +3 unit tests (all-ping, one-failing-siblings-continue,
+  empty no-op); guard-stripped mutation reddens exactly the siblings test.
+- **M-HUB-18 / M-HUB-47** — `scripts/install.sh`'s systemd port gate burned
+  literal `2206` in both templates while its comments (legacy patcher and
+  fresh template alike) claimed the relay/channel ports were "fixed defaults
+  … no env override exists" — false since R14-15: `config/server.php` reads
+  `HUB_RELAY_PORT` / `HUB_CLIENT_RELAY_PORT` / `HUB_SYNCPLAY_PORT` /
+  `HUB_FEDERATION_PORT` / `HUB_CHANNEL_PORT`. The installer gains a
+  `CHANNEL_PORT="2206"` constant (matching its siblings), every gate now
+  interpolates the installer's five port vars instead of baking literals,
+  both comment blocks state the config-defaults/env-override truth with the
+  duty to keep the gate in sync, and the generated env file carries the five
+  knobs commented-out for discovery with the same warning. `hub_deploy.md`'s
+  two gate mentions gain the matching honesty.
+- **M-HUB-42** — `openapi.yaml`'s info text said the root `x-phlix-websockets`
+  extension "describes the four WebSocket surfaces" — the extension carries
+  FIVE entries (four hub surfaces plus the cross-referenced `phlix-server`
+  `:8097` entry). The sentence now counts itself honestly.
+- **M-HUB-44** — three `portSource` fields cited only `*::DEFAULT_PORT` class
+  constants, but the runtime authority is `config/server.php`
+  (`client_relay_port` / `syncplay_port` / `federation_port`, env-overridable)
+  with the constants as fallback — the `:8802` entry already said so. All
+  three now use the config-authority idiom, and `docs/websockets.md`'s pin
+  description stops claiming the router test pins "the PHP that defines" each
+  port: it pins the DEFAULTS (constants + the `relay_port` literal scrape),
+  and env-moved ports are outside the pin by design.
+- **M-HUB-51** — the federation revocation envelope's emitting roles were
+  documented as "downstream" / "upstream" in both `openapi.yaml` and
+  `docs/websockets.md`, vocabulary the ratified federation law reserves for
+  infra English; the ratified pair is master/leaf (as the `Direction` column
+  and every sibling line already say). Both cells now read "on the master
+  side" / "on the leaf side".
+
 ### Fixed — minors W-min40 (M-HUB-17, M-HUB-43, M-HUB-48, M-HUB-49, M-HUB-53, M-HUB-54): the Docker log discovery gap, the undefined bare-host dial, the broken in-product doc cite, the fixed-scheme `X-WS-Endpoint` steer, uncharacterized close-reason registers, and the limiter-key comment lie — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min40, six live items cured in-repo:

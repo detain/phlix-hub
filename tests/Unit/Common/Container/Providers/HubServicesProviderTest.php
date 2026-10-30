@@ -6,16 +6,19 @@ namespace Phlix\Hub\Tests\Unit\Common\Container\Providers;
 
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Health\MaintenanceHeartbeat;
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Relay\IdleReaper;
+use Phlix\Hub\Relay\TunnelInterface;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\ServerReaper;
 use Phlix\Hub\Tests\Support\Container\RecordingThrowingContainer;
 use Phlix\Hub\Tests\Support\Container\RecordingWrongTypeContainer;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 /**
  * Covers the HB-2.6 DATA-LOCALITY split of the periodic reaper wiring:
@@ -273,6 +276,58 @@ final class HubServicesProviderTest extends TestCase
                 ),
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // M-HUB-03: the tunnel keepalive sweep guards its BODY per tunnel.
+    // Arming was always try/caught; the callback foreach was not — one send
+    // throwing (dead socket, half-closed handle, framer fault) escaped into
+    // the relay worker's event loop and starved the sibling tunnels that
+    // share the tick. tickTunnelHeartbeats() is the extracted, testable body.
+    // ------------------------------------------------------------------
+
+    public function testHeartbeatTickPingsEveryLiveTunnel(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::never())->method('error');
+
+        $first = $this->createMock(TunnelInterface::class);
+        $first->expects(self::once())->method('sendHeartbeat');
+        $second = $this->createMock(TunnelInterface::class);
+        $second->expects(self::once())->method('sendHeartbeat');
+
+        self::assertSame(2, HubServicesProvider::tickTunnelHeartbeats([$first, $second], $logger));
+    }
+
+    public function testHeartbeatTickContainsOneFailingTunnelAndStillPingsTheSiblings(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(
+                self::stringContains('tunnel-heartbeat tick failed'),
+                self::arrayHasKey('error'),
+            );
+
+        $broken = $this->createMock(TunnelInterface::class);
+        $broken->method('sendHeartbeat')
+            ->willThrowException(new RuntimeException('simulated dead socket'));
+
+        $sibling = $this->createMock(TunnelInterface::class);
+        $sibling->expects(self::once())->method('sendHeartbeat');
+
+        // The RuntimeException must NOT escape the tick: if the per-tunnel
+        // guard regressed, it propagates out of this call and the test fails
+        // loudly (and the sibling's expectation goes unsatisfied).
+        self::assertSame(1, HubServicesProvider::tickTunnelHeartbeats([$broken, $sibling], $logger));
+    }
+
+    public function testHeartbeatTickOnEmptyRegistryIsANoOp(): void
+    {
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->expects(self::never())->method('error');
+
+        self::assertSame(0, HubServicesProvider::tickTunnelHeartbeats([], $logger));
     }
 
     /**

@@ -157,7 +157,8 @@ sudo systemctl restart phlix-hub
 ```
 
 The unit (installed by `scripts/install.sh`) manages the Workerman master, its env file, and an
-`ExecStartPre` free-ports gate across `8800/8802/8803/8804/8805/2206`. The old manual
+`ExecStartPre` free-ports gate across `8800/8802/8803/8804/8805/2206` (installer defaults — each
+relay port is env-overridable via `HUB_*_PORT`; move one and update the unit's gate to match). The old manual
 `ps | kill` / `pkill -f` / `nohup php start.php start` flow bypasses all of that — it races the
 free-ports gate, drops the restart backoff, and runs a daemon you then have to babysit. If the
 host is *not* systemd-managed, the blessed foreground form is
@@ -224,7 +225,8 @@ tail -20 /opt/phlix-hub/.logs/error-$(date +%Y-%m-%d).log
 
 ### Port already in use on restart
 
-The unit's `ExecStartPre` waits for `8800/8802/8803/8804/8805/2206` to free, so a restart that
+The unit's `ExecStartPre` waits for `8800/8802/8803/8804/8805/2206` to free (the installer's
+values — env-moved `HUB_*_PORT` ports need the gate updated to match), so a restart that
 hangs there usually means a **stray process outside systemd** (leftover from the old manual
 flow). Find it with `ss -ltnp | grep -E ':(8800|8802|8803|8804|8805|2206)'`, stop the stray
 properly (`php start.php stop` from `/opt/phlix-hub` with the env sourced), then

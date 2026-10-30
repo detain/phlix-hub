@@ -60,6 +60,7 @@ use Phlix\Hub\Relay\IdleReaper;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyManager;
 use Phlix\Hub\Relay\RelayProxyProtocol;
+use Phlix\Hub\Relay\TunnelInterface;
 use Phlix\Hub\Relay\TunnelManager;
 use Phlix\Hub\Relay\TunnelManagerInterface;
 use Phlix\Hub\Runtime\CoroutineHooks;
@@ -1782,7 +1783,9 @@ final class HubServicesProvider implements ServiceProviderInterface
      * by {@see startDbMaintenanceTimers()}.
      *
      * Each timer is armed independently and guarded, so one unavailable service
-     * never blocks the others.
+     * never blocks the others — and the heartbeat sweep's BODY is guarded too,
+     * per tunnel, via {@see tickTunnelHeartbeats()} (same catches-reports-returns
+     * law as {@see IdleReaper}'s own tick).
      *
      * @param ContainerInterface $container Relay-worker-local PSR-11 container.
      *
@@ -1814,16 +1817,50 @@ final class HubServicesProvider implements ServiceProviderInterface
             if ($tunnelManager instanceof TunnelManager) {
                 Timer::add(
                     30,
-                    static function () use ($tunnelManager): void {
-                        foreach ($tunnelManager->allTunnels() as $tunnel) {
-                            $tunnel->sendHeartbeat();
-                        }
+                    static function () use ($tunnelManager, $logger): void {
+                        self::tickTunnelHeartbeats($tunnelManager->allTunnels(), $logger);
                     },
                 );
             }
         } catch (\Throwable $e) {
             $logger->error('Maintenance: failed to start tunnel-heartbeat timer', ['error' => $e->getMessage()]);
         }
+    }
+
+    /**
+     * One :8802 tunnel-keepalive sweep: ping every live tunnel (X9).
+     *
+     * The try/catch is PER TUNNEL and sits INSIDE the sweep on purpose: the
+     * {@see IdleReaper} law (a timer callback catches, reports and returns)
+     * applies to the timer BODY as well as to its arming — one tunnel whose
+     * send throws (dead socket, half-closed handle, framer fault) must never
+     * abort the callback and starve the sibling tunnels' keepalives that
+     * share this tick, nor surface an uncaught error into the event loop.
+     *
+     * Extracted from the {@see startInMemoryReapers()} closure so the guard
+     * is unit-testable without a running event loop.
+     *
+     * @param iterable<TunnelInterface> $tunnels Live-registry view from {@see TunnelManagerInterface::allTunnels()}.
+     * @param StructuredLogger          $logger  Relay channel the sweep reports on.
+     *
+     * @return int Count of tunnels pinged successfully (telemetry/tests).
+     */
+    public static function tickTunnelHeartbeats(iterable $tunnels, StructuredLogger $logger): int
+    {
+        $pinged = 0;
+
+        foreach ($tunnels as $tunnel) {
+            try {
+                $tunnel->sendHeartbeat();
+                $pinged++;
+            } catch (\Throwable $e) {
+                $logger->error('Maintenance: tunnel-heartbeat tick failed for one tunnel', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $pinged;
     }
 
     /**

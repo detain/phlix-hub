@@ -44,9 +44,9 @@ info:
     - **`:8804` WebSocket** — SyncPlay rooms relayed between clients.
     - **`:8805` WebSocket** — hub-to-hub federation (master side).
 
-    The four WebSocket surfaces are described under the root `x-phlix-websockets` extension; their
-    message and frame catalogs are in `docs/websockets.md`, which also covers `phlix-server`'s own
-    `:8097` SyncPlay/events socket.
+    The four hub WebSocket surfaces are described under the root `x-phlix-websockets`
+    extension, which carries a fifth, cross-referenced entry for `phlix-server`'s own
+    `:8097` SyncPlay/events socket; message and frame catalogs are in `docs/websockets.md`.
 
     ## Cross-origin (CORS)
 
@@ -4266,7 +4266,7 @@ x-phlix-websockets:
   - name: "Client mount"
     repo: phlix-hub
     port: 8803
-    portSource: "Phlix\\Hub\\Relay\\ClientRelayWorker::DEFAULT_PORT"
+    portSource: "config/server.php `client_relay_port` (default 8803, env HUB_CLIENT_RELAY_PORT); Application::run() falls back to ClientRelayWorker::DEFAULT_PORT"
     url: "ws://hub.phlix.tv:8803/client/{server_id}"
     path: "/client/{server_id}"
     pathPattern: "~^/client/([^/?#]+)/?(?:[?#].*)?$~"
@@ -4309,7 +4309,7 @@ x-phlix-websockets:
   - name: "SyncPlay relay"
     repo: phlix-hub
     port: 8804
-    portSource: "Phlix\\Hub\\SyncPlay\\SyncPlayRelayWorker::DEFAULT_PORT"
+    portSource: "config/server.php `syncplay_port` (default 8804, env HUB_SYNCPLAY_PORT); Application::run() falls back to SyncPlayRelayWorker::DEFAULT_PORT"
     url: "ws://hub.phlix.tv:8804/syncplay/{server_id}"
     path: "/syncplay/{server_id}"
     pathPattern: "~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~"
@@ -4467,7 +4467,7 @@ x-phlix-websockets:
   - name: "Hub federation"
     repo: phlix-hub
     port: 8805
-    portSource: "Phlix\\Hub\\Relay\\FederationWorker::DEFAULT_PORT"
+    portSource: "config/server.php `federation_port` (default 8805, env HUB_FEDERATION_PORT); HubServicesProvider falls back to FederationWorker::DEFAULT_PORT"
     url: "ws://master-hub.example:8805/relay/federation/{hub_id}"
     path: "/relay/federation/{hub_id}"
     pathPattern: "~^/relay/federation/([^/?#]+)/?(?:[?#].*)?$~"
@@ -4493,7 +4493,7 @@ x-phlix-websockets:
       - "text hub_hello_ack — master→leaf: {type,session_id,master_hub_id,role:'master',capabilities,nonce,signature}; signature = Ed25519 over 'phlix-federation/hello-ack/v1\\n{session_id}\\n{master_hub_id}\\n{nonce}' by the master hub key"
       - "text hub_hello_auth — leaf→master: {type,leaf_hub_id,session_id,signature}; signature = Ed25519 over 'phlix-federation/hello-auth/v1\\n{session_id}\\n{nonce}\\n{leaf_hub_id}' by the leaf hub key registered on the peer row; nonce is single-use, and the proof is bound to its carrier socket — a replay over a superseded connection is refused ('handshake_stale_connection') without burning the live ceremony's nonce"
       - "0x05 DATA envelope, JSON payload {shares:[{id,peer_id,library_id,library_name,permission,status}]} — leaf↔master (emitted AND accepted in BOTH directions: the master pushes its offers down via FederationMasterPusher::pushOffer and the post-hello replay; the leaf pushes its offers up via FederationPeerManager::pushLibraryShare); refused pre-verification on both roles"
-      - "0x05 DATA envelope, JSON payload {share_id} — leaf↔master, offer revoked (emitted by either side: pushRevocation downstream, FederationPeerManager::pushLibraryShareRevoked upstream; accepted by both handlers); refused pre-verification"
+      - "0x05 DATA envelope, JSON payload {share_id} — leaf↔master, offer revoked (emitted by either side: pushRevocation on the master side, FederationPeerManager::pushLibraryShareRevoked on the leaf side; accepted by both handlers); refused pre-verification"
       - "0x05 DATA envelope, JSON payload {user_id,peer_id,action:'grant'|'revoke'} — RESERVED: master→leaf admin delegation. The leaf consumer is implemented, verified-channel-gated, and validated-before-write (FederationPeerManager::handleAdminDelegation): peer_id must equal the channel's ceremony-bound hub uuid and is used only as a cross-check — writes stamp the LOCAL peer row id — and user_id must resolve in the receiving hub's users table (R17-07); refusals audit a snake_case reason and persist nothing. The master-side producer is NOT implemented — createAdminDelegation writes only the DB row plus audit (FederationMasterPusher has no delegation push) — so this envelope never appears on the wire today"
       - "0x06 HEARTBEAT — either direction, keep-alive, channel 0 (federation liveness rides the generic type; 0x0B is retired)"
       - "0x07 DISCONNECTED — either direction, clean close, JSON {reason} (0x0F is retired)"

@@ -16,8 +16,12 @@ The four hub surfaces are also declared under the `x-phlix-websockets` extension
 in `openapi.yaml`. They are not OpenAPI `paths`: the `:8802` tunnel mounts at the
 bare root, and that path key (`/`) already belongs to the `:8800` HTTP redirect
 into the SPA. `tests/Unit/Http/RouteRegistration/OpenApiSpecMatchesRouterTest.php`
-pins each hub surface's declared port against the PHP that defines it, so a port
-that moves in code and not in the document fails the build.
+pins each hub surface's declared port against the DEFAULT that defines it — the
+`DEFAULT_PORT` class constants and the `relay_port` literal fallback scraped out
+of `src/Application.php` — so a default that moves in code and not in the
+document fails the build. An operator env-moved port (`HUB_RELAY_PORT` et al.)
+is outside the pin by design: the document declares defaults, and it says so in
+each surface's `portSource`.
 
 > `:8097` belongs to `phlix-server` and this repository's CI clones one checkout,
 > so nothing here asserts against it. It is documentation, not a contract test.
@@ -713,7 +717,7 @@ frame types — there are no federation-specific binary types in use:
 | Envelope | Direction | JSON payload | Meaning |
 | --- | --- | --- | --- |
 | `DATA` (`0x05`) ch 0 | both → both | `{"shares":[{"id","peer_id","library_id","library_name","permission","status"}]}` | Federated library offers created/changed. **Emitted and accepted in BOTH directions**: the master pushes its offers down (`FederationMasterPusher::pushOffer`, plus the post-hello replay) and the leaf pushes its own up (`FederationPeerManager::pushLibraryShare`); each receiver surfaces them at `GET /api/v1/me/federation/library-shares/incoming`. |
-| `DATA` (`0x05`) ch 0 | both → both | `{"share_id":...}` | An offer was withdrawn — emitted by either side (`pushRevocation` downstream, `pushLibraryShareRevoked` upstream), accepted by both handlers. |
+| `DATA` (`0x05`) ch 0 | both → both | `{"share_id":...}` | An offer was withdrawn — emitted by either side (`pushRevocation` on the master side, `pushLibraryShareRevoked` on the leaf side), accepted by both handlers. |
 | `DATA` (`0x05`) ch 0 | reserved: master → leaf | `{"user_id":...,"peer_id":...,"action":"grant"|"revoke"}` | An admin delegation grant/revoke. **Receive-only forward-compat path**: the leaf consumer is implemented and verified-gated (`FederationPeerManager::handleAdminDelegation`), and since R17-07 validates before writing — the frame `peer_id` must equal the channel's ceremony-bound hub uuid (cross-check only; writes stamp the LOCAL peer row id) and `user_id` must resolve in this hub's `users` table, else the payload is refused with a snake_case audit reason and zero persistence. The master-side producer is NOT implemented — `createAdminDelegation` writes only the DB row and audit — so this envelope is never emitted today. |
 | `HEARTBEAT` (`0x06`) ch 0 | both → both | empty | keep-alive every 15 s once verified |
 | `DISCONNECTED` (`0x07`) ch 0 | either → either | `{"reason":...}` | clean close (e.g. `peer_deleted`) |
