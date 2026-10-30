@@ -18,6 +18,7 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use function array_keys;
 use function array_merge;
 use function array_search;
+use function array_values;
 use function count;
 use function end;
 use function hash;
@@ -358,6 +359,58 @@ final class SyncPlayRelayCanonicalDialectTest extends TestCase
             self::assertSame('party', $syncs[0]['group_id']);
             $this->assertUnixMs($syncs[0]['server_time'], 'hub-stamped server_time keeps the ms law');
         }
+    }
+
+    public function testPlaybackSyncEchoOnAHostlessRoomStillCarriesAStringMemberId(): void
+    {
+        // R-HUB-15: PlaybackSyncPayload.member_id is a NON-NULLABLE string
+        // (phlix-syncplay src/messages.ts:329) — contrast group_state's
+        // host_id, where `string | null` is the declared law (:158) and the
+        // emitter there correctly stays put. The join/leave/elect invariant
+        // keeps a host on every room with members (join stamps the first
+        // member; leave re-elects while members remain; an emptied room
+        // loses the whole entry), so the hostless state is only reachable
+        // defensively — reach into the static map anyway and pin that the
+        // echo CAN NEVER put null on this wire. '' is the value the shared
+        // client already degrades a non-string stamp to (`senderId ?? ''`,
+        // phlix-syncplay src/client.ts:1435): meaning preserved, contract
+        // honoured. [review riders W15]
+        $worker = $this->makeWorker();
+        $sinkA = [];
+        $connA = $this->authedClient($worker, 'token-a', $sinkA);
+        $worker->onMessage($connA, $this->canonicalFrame('syncplay_group_create', ['group_name' => 'party']));
+        $aId = $this->yourIdOf($sinkA);
+        $sinkB = [];
+        $connB = $this->authedClient($worker, 'token-b', $sinkB);
+        $worker->onMessage($connB, $this->canonicalFrame('syncplay_group_join', ['group_id' => 'party']));
+
+        $hosts = new \ReflectionProperty(SyncPlayRelayWorker::class, 'roomHosts');
+        /** @var array<string, string> $map */
+        $map = $hosts->getValue();
+        self::assertSame([$aId], array_values($map), 'the two-member room host is the creator');
+        $hosts->setValue(null, []);
+
+        $worker->onMessage($connB, $this->canonicalFrame('syncplay_playback_sync', ['position' => 555]));
+
+        $syncs = $this->sinkFramesOfType($sinkB, 'syncplay_playback_sync');
+        self::assertCount(1, $syncs, 'the hostless echo still reaches the reporter (S291 family law)');
+        self::assertSame('', $syncs[0]['member_id'], 'the stamp degrades to empty-string, never null');
+        self::assertSame('party', $syncs[0]['group_id']);
+        self::assertSame(0, $syncs[0]['position'], 'no play happened: the room anchor (not the reported 555) echoes');
+        self::assertFalse($syncs[0]['is_playing']);
+
+        foreach ($sinkA as $raw) {
+            if (str_contains($raw, '"type":"syncplay_playback_sync"')) {
+                self::assertStringContainsString(
+                    '"member_id":""',
+                    $raw,
+                    'the raw JSON carries "" — no null on the wire',
+                );
+            }
+        }
+        $echoA = $this->sinkFramesOfType($sinkA, 'syncplay_playback_sync');
+        self::assertCount(1, $echoA, 'every member sees the same contract-shaped echo');
+        self::assertSame('', $echoA[0]['member_id']);
     }
 
     public function testLateJoinerStateCarriesTheLiveAnchor(): void

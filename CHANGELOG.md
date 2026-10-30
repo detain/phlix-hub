@@ -6,6 +6,52 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — rider W15 R-HUB-15: the `syncplay_playback_sync` echo's `member_id` stamp typed `?? null` into a NON-NULLABLE wire field — the fallback now stamps `''`, the value the shared client already degrades to — 2026-10-30
+
+- **The ask.** Rider R-HUB-15 (from fixlog M-SYNCPLAY-08__r1 O3): "hub
+  stamps `member_id` as `$roomHosts[$room] ?? null` — can wire-null while
+  PlaybackSyncPayload.member_id is `string`". The contract is explicit:
+  phlix-syncplay `src/messages.ts:329` declares `member_id: string` with no
+  null arm (contrast `group_state`'s `host_id: string | null` at :158 —
+  that emitter is legally nullable and stays exactly as it is). The stale
+  :1674 coordinate had moved; the live stamp site is
+  `handleCanonicalPlaybackSync`.
+- **The reachability, honestly stated.** The join/leave/elect invariant
+  keeps a host on every room with members — the first joiner is stamped
+  host, a host's leave re-elects while members remain, and an emptied room
+  loses the whole entry — so the null arm was a DEAD branch that typed a
+  contract-violating shape into the builder, not a live wire defect.
+  The client-side degradation law (`senderId ?? ''`, phlix-syncplay
+  `src/client.ts:1435`) already absorbed it; this cure moves the truth
+  onto the wire instead of into the consumer.
+- **The cure.** `?? null → ?? ''` at the one stamp site, with the law
+  recorded in the method docblock. Meaning-preserving for every consumer
+  (`''` is exactly what a degraded non-string stamp already became),
+  contract-conforming on the wire. One new pin reaches into the static
+  map via reflection to force the defensive state and asserts the echo —
+  decoded AND raw-JSON (`"member_id":""`, never `null`) — reaches every
+  member; red at parent ("Failed asserting that null is identical to
+  ''"). The rider's server-side twin (phlix-server `SyncPlayManager`
+  echoes `getHostId(): ?string` and CAN wire-null) is out of this repo's
+  custody — reported to the orchestrator, not touched here.
+- **Gates.** Contract trio frozen and byte-verified (error-codes 40c1da48,
+  route-manifest 91579683, mcp-scopes 8c92c070; S280 parity + claim-oracle
+  tests re-run green 9/41). S439 serial targeted only: canonical dialect
+  file 32→33 tests / 417 assertions exit 0; SyncPlay unit family
+  139/894 exit 0. S299 phpcs corpus 603 files 0E/0W; bare PSR12 on both
+  changed files exit 0; phpstan full corpus [OK]; psalm (docker
+  php:8.4-cli venue, `--network=host`) shows the SAME 8 test-file baseline
+  errors at the expected +1/+53 line shifts — zero introduced, zero in the
+  touched src file. contracts `verify:cites` drift count unmoved by this
+  change (76 at parent tree = 76 at tip tree; no cite names
+  SyncPlayRelayWorker.php — the set is the standing hub/server re-anchor
+  debt, disclosed for the contracts lane). No DB was needed: the
+  `phlix_rh15*` scratch venue never fired. Docs/openapi prose untouched —
+  "`member_id` = the host" stays true for every ordinarily-reachable
+  state. TZ-window note: runs at 22:1x–22:4x UTC, outside the 00:00–04:00
+  host-vs-MySQL date-skew window; the targeted suites are clock-neutral
+  unit tests anyway.
+
 ### Fixed — rider W14 R-HUB-14: the legacy `Invalid server_name`/`Invalid version` markers rode mapError's 500 default arm — one added `invalid_payload` arm makes payload-shape refusals answer 400 as the endpoint's registered family — 2026-10-30
 
 - **The ask.** Rider R-HUB-14 (queue): "one-arm mapError addition owed to

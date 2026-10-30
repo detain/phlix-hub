@@ -2168,6 +2168,17 @@ final class SyncPlayRelayWorker
      * this relay keeps its own pinned ms law (see {@see self::nowMs()}) for
      * every value IT stamps — the hub has never emitted a seconds `server_time`
      * and will not start by borrowing a server bug-shape.
+     *
+     * The `member_id` stamp is a NON-NULLABLE string on the wire
+     * (phlix-syncplay `src/messages.ts:329`; contrast `group_state`'s
+     * `host_id: string | null` at :158, where null IS legal — that emitter
+     * stays as it is). The join/leave/elect law keeps a host on every
+     * room-with-members, so the fallback arm is unreachable through ordinary
+     * frames; it existed to type a wire-violating `null` into a dead branch.
+     * It now stamps `''` — the value the shared client already degrades any
+     * non-string stamp to (`senderId ?? ''`, phlix-syncplay `src/client.ts:1435`),
+     * so the cure is meaning-preserving for every consumer and contract-
+     * conforming on the wire [review riders W15, R-HUB-15].
      */
     private function handleCanonicalPlaybackSync(SyncPlayClient $client): void
     {
@@ -2182,7 +2193,7 @@ final class SyncPlayRelayWorker
         $anchor = self::$roomPlayback[$room] ?? null;
 
         $this->broadcastCanonical($room, self::canonicalFrame('syncplay_playback_sync', [
-            'member_id' => self::$roomHosts[$room] ?? null,
+            'member_id' => self::$roomHosts[$room] ?? '',
             'group_id' => self::friendlyFromScoped($client, $room),
             'current_media_id' => $anchor['media_id'] ?? null,
             'position' => isset($anchor['position']) ? (int) $anchor['position'] : 0,
