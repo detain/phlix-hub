@@ -322,7 +322,8 @@ return [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX', 10),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_RELAY_CONNECT_WINDOW', 60),
             ],
-            // :8803 client-mount (WS) — keyed by IP (+ serverId).
+            // :8803 client-mount (WS) — keyed by IP only
+            // (`client_mount:<ip>`, ClientRelayWorker::onWebSocketConnect).
             'client_mount'  => [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX', 30),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_WINDOW', 60),

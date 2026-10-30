@@ -151,8 +151,14 @@ An authentication failure is a `HELLO`-time `ERROR` frame with code
 `unauthorized`, not a close code.
 
 `POST /api/v1/servers/{id}/relay` on the HTTP surface is a **signpost only**: it
-always answers `501` with an `X-WS-Endpoint` header naming this socket. It is the
-path `phlix-server` derives from `config/relay.php`'s `hub_wss_url`.
+always answers `501` with an `X-WS-Endpoint` header pointing at this socket.
+The steer is built from `HUB_WS_HOST` (falling back to `HUB_PUBLIC_DOMAIN`,
+then the `your-hub-host` placeholder) with a **fixed** `ws://` scheme and the
+**fixed default port** `8802` — neither tracks a TLS-terminating proxy nor a
+`HUB_RELAY_PORT` that has been env-moved. Behind either of those deployment
+shapes, read the header as a host hint only and set the server's
+`config/relay.php` `hub_wss_url` explicitly; it is that URL `phlix-server`
+actually dials.
 
 ### Keepalive and idle reap
 
@@ -539,9 +545,15 @@ this worker is the master-side listener.
 
 **Dial-side schemes (leaf → master).** The configured peer URL may be
 `https://` / `wss://` (a master behind a TLS-terminating proxy — the common
-production shape), `http://` / `ws://` (plaintext), or a bare host.
-`FederationPeerManager::buildMasterDialPlan()` maps TLS peers onto the
-workerman WSS-client idiom — a `ws://` URI with `transport = 'ssl'` and a
+production shape), `http://` / `ws://` (plaintext), or a bare host. A bare
+host is defined by what it is NOT: any scheme outside the plaintext `http`/`ws`
+pair — and no scheme at all — selects TLS (the legacy secure-by-default
+fallback), so `hub.example.com` dials exactly like `https://hub.example.com`.
+`FederationPeerManager::buildMasterDialPlan()` maps those TLS peers onto the
+workerman WSS-client idiom: the URI is always rebuilt as
+`ws://<host>[:<port>]/relay/federation/<leaf_hub_id>` from the parsed host and
+port (a bare host without a port carries none, so the dial lands on the
+transport default — 443 for TLS, not 8805), with `transport = 'ssl'` and a
 strict stream context (`verify_peer`, `verify_peer_name`, `SNI_enabled`,
 `peer_name` from the configured host). Verification is strict by design: no
 `verify_peer = false` escape hatch ships. For a master with a private-CA
@@ -603,6 +615,15 @@ other three.
 4. On success the connection is handed to `FederationRelayController::onConnect()`;
    later frames pass the per-peer frame budget (see below) and go to `onMessage()`;
    `onClose()` runs on link end.
+
+**Close-reason conventions.** The close **code** is the machine contract (the
+table below pins the only coded refusal, `1013`); the **reason text** riding
+the frame is a diagnostic, and it follows two registers. Snake_case tokens —
+`invalid_path`, `internal_error` — are stable identifiers: safe to log-match
+and grep, they are never branch-on contracts for peers. Capitalized free prose
+— `Unknown hub` — is a human-facing sentence, not a stable identifier, and may
+be reworded without notice. Clients and tooling must key behavior on the code
+alone and treat every reason string as advisory.
 
 ### Rate limiting and close codes (M-HUB-14)
 

@@ -696,6 +696,21 @@ docker exec phlix-hub php /var/www/html/scripts/run-migrations.php
 Point `HUB_DB_HOST` at a reachable MySQL instance (a linked container, `host.docker.internal`, or
 an external host).
 
+**Logs.** The application writes rotating files under `.logs/` inside the container —
+`app.log`, `error.log`, `hub.log`, `relay.log`, `audit.log` (5 channels, 30 rotations each;
+see [`config/logger.php`](config/logger.php)) — **not** stdout. `docker logs phlix-hub`
+therefore shows only the entrypoint banners and Workerman's own console output
+(Workerman's internal log file is the sixth neighbor there, `HUB_WORKERMAN_LOG`,
+default `.logs/workerman.log`). To follow the application:
+
+```bash
+docker exec phlix-hub tail -f /var/www/html/.logs/app.log
+```
+
+`.logs/` lives in the image's workdir (`/var/www/html`), so it is replaced on every
+container re-creation — mount a volume (`-v phlix-hub-logs:/var/www/html/.logs`) to
+retain logs across upgrades.
+
 ## Configuration reference
 
 All settings are environment variables, read in [`config/`](config). Defaults shown are the
@@ -746,7 +761,7 @@ Where a live `hub_settings` twin exists (admin-console override, no restart), it
 | `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` | `null` | PEM paths for the `:8805` TLS context above |
 | `HUB_FEDERATION_REQUIRE_TLS` | `false` | Fail-closed `:8805` bind mandate, the federation sibling of `HUB_RELAY_REQUIRE_TLS` above: `true` makes `FederationWorker::start()` throw before constructing the listener when TLS is off — no cleartext federation socket is ever bound (federation inbound stays down, the hub serves the rest). `false` = warn-only. Keep unset on managed installs, where HAProxy fronts `:8805` and terminates TLS upstream |
 | `HUB_COOKIE_INSECURE` | unset | Drops `Secure` from session cookies — **local plain-HTTP development only** |
-| `HUB_WS_HOST` | falls back to `HUB_PUBLIC_DOMAIN`, then `your-hub-host` | Host advertised in the `X-WS-Endpoint` steer when a plain HTTP GET hits the `:8802`/`:8803` WebSocket mounts |
+| `HUB_WS_HOST` | falls back to `HUB_PUBLIC_DOMAIN`, then `your-hub-host` | Host advertised in the `X-WS-Endpoint` steer when a plain HTTP GET hits the `:8802`/`:8803` WebSocket mounts — host only: the steer's `ws://` scheme and default port are fixed, not proxy/port-aware |
 | `HUB_REQUESTS_AUTO_APPROVE` | `false` | Auto-approves freshly filed media requests (best-effort, after the `pending` row lands). Live twin: `requests.auto_approve` |
 | `HUB_INVITE_DEFAULT_EXPIRY` | `604800` (7 days) | Default invite lifetime in seconds when the creator omits `expires_in`; `0` = never expire. An explicit body value always wins. Live twin: `invite.default_expiry_seconds` |
 

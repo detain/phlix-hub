@@ -6,6 +6,55 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min40 (M-HUB-17, M-HUB-43, M-HUB-48, M-HUB-49, M-HUB-53, M-HUB-54): the Docker log discovery gap, the undefined bare-host dial, the broken in-product doc cite, the fixed-scheme `X-WS-Endpoint` steer, uncharacterized close-reason registers, and the limiter-key comment lie — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min40, six live items cured in-repo:
+
+- **M-HUB-17** — the README Docker section documented config volumes and
+  migrations but never said where the logs are: five rotating channels
+  (`app/error/hub/relay/audit.log`) live under `/var/www/html/.logs` **inside
+  the container**, `docker logs` shows only the entrypoint banners and
+  Workerman's console output (`HUB_WORKERMAN_LOG`'s default is the sixth
+  neighbor `.logs/workerman.log`), and `.logs/` is re-created on every
+  container re-creation. The section gained a **Logs.** block with the tail
+  example and the `-v phlix-hub-logs:/var/www/html/.logs` persistence note.
+- **M-HUB-43** — `docs/websockets.md` listed "or a bare host" among the dial
+  schemes without defining it. `FederationPeerManager::buildMasterDialPlan()`
+  treats any scheme outside the plaintext `http`/`ws` pair — including none —
+  as TLS, and always rebuilds the URI as
+  `ws://<host>[:<port>]/relay/federation/<leaf_hub_id>` from the parsed
+  parts; a bare host without a port therefore dials the transport default
+  (443 for TLS), not 8805. The paragraph now states exactly that.
+- **M-HUB-48** — `FederationPeerManager::sendHeartbeatToMaster()`'s docblock
+  cited a `docs/websockets.md` heading ("Federation wire types 0x09-0x0F —
+  RETIRED") and a "line 64 of the frame-type table" that do not exist. The
+  cite now names the two real anchors: the "Federation envelope law"
+  paragraph and the "Frame type catalog" table.
+- **M-HUB-49** — the `:8802` signpost prose said the `X-WS-Endpoint` header
+  "names this socket", implying deployment-awareness. `RelayController`
+  builds it from `HUB_WS_HOST` (fallback `HUB_PUBLIC_DOMAIN`, then the
+  placeholder) with a fixed `ws://` scheme and the fixed default port —
+  neither tracks a TLS-terminating proxy nor an env-moved `HUB_RELAY_PORT`.
+  Both the doc paragraph and the README `HUB_WS_HOST` row now disclose the
+  host-only semantics and point clients at an explicit `hub_wss_url`.
+- **M-HUB-53** — the federation lifecycle quoted machine tokens
+  (`invalid_path`, `internal_error`) and capitalized prose (`Unknown hub`)
+  side by side without characterizing the difference. A **Close-reason
+  conventions** paragraph now states the law: the close *code* is the machine
+  contract; snake_case reasons are stable log-matchable identifiers;
+  capitalized free prose is a human diagnostic that may be reworded without
+  notice, and nothing may branch on reason text.
+- **M-HUB-54** — `config/server.php`'s `client_mount` limiter comment claimed
+  the key was "IP (+ serverId)"; `ClientRelayWorker::onWebSocketConnect()`
+  hits `client_mount:<ip>` — IP only. The comment now matches the shipped
+  key, naming the producer.
+
+Also in this batch's review scope: M-HUB-04 and M-HUB-06 verified as
+`@phlix/ui`-owned renderer behaviors (the hub wire already carries the
+library name in `LibraryShare::toPayload()`; the pages and the refresh-failure
+handling live in the ui package) — recorded for routing, not cured here.
+Docs/comment-only diff: no behavior, no wire, no `openapi.yaml` change.
+
 ### Fixed — M-HUB-26: README endpoint-table subdomain row carried the bare path the router never registered — cured to `/api/v1/servers/{id}/subdomain`, whole-table row-by-row audit closed — 2026-10-29
 
 The Servers table row documented `POST`/`DELETE /servers/{id}/subdomain`; the shipped
