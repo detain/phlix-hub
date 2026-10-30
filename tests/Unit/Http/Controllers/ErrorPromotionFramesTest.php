@@ -36,9 +36,8 @@ use function json_decode;
 use function json_encode;
 use function strtr;
 
-use const JSON_PRETTY_PRINT;
-use const JSON_THROW_ON_ERROR;
 use const JSON_UNESCAPED_SLASHES;
+use const JSON_THROW_ON_ERROR;
 
 /**
  * Frame-contract pins for the W3 emit-wave: every promoted error frame must
@@ -350,9 +349,9 @@ final class ErrorPromotionFramesTest extends TestCase
             'enrollment flip frame drifted from the contracted shape',
         );
         self::assertSame(
-            "{\n    \"error\": \"ENROLLMENT_TOKEN_EXPIRED\",\n    \"code\": \"auth.enrollment_expired\"\n}",
+            '{"error":"ENROLLMENT_TOKEN_EXPIRED","code":"auth.enrollment_expired"}',
             $response->body,
-            'enrollment flip body drifted from JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES serialization',
+            'enrollment flip body drifted from compact JSON_UNESCAPED_SLASHES serialization (M-HUB-09)',
         );
     }
 
@@ -371,9 +370,9 @@ final class ErrorPromotionFramesTest extends TestCase
             'enrollment invalid frame drifted from the contracted shape',
         );
         self::assertSame(
-            "{\n    \"error\": \"ENROLLMENT_TOKEN_INVALID\",\n    \"code\": \"auth.invalid_token\"\n}",
+            '{"error":"ENROLLMENT_TOKEN_INVALID","code":"auth.invalid_token"}',
             $response->body,
-            'enrollment invalid body drifted from JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES serialization',
+            'enrollment invalid body drifted from compact JSON_UNESCAPED_SLASHES serialization (M-HUB-09)',
         );
     }
 
@@ -419,7 +418,7 @@ final class ErrorPromotionFramesTest extends TestCase
             ['error' => 'Unauthorized', 'code' => 'auth.required', 'message' => 'm'],
             $decoded,
         );
-        self::assertSame(json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), $response->body);
+        self::assertSame(json_encode($decoded, JSON_UNESCAPED_SLASHES), $response->body);
     }
 
     // ------------------------------------------------------------------
@@ -662,7 +661,7 @@ final class ErrorPromotionFramesTest extends TestCase
             $site . ': frame drifted from the contracted shape',
         );
         self::assertSame(
-            json_encode($expected, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
+            json_encode($expected, JSON_UNESCAPED_SLASHES),
             $response->body,
             $site . ': serialization drifted',
         );

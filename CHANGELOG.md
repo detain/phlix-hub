@@ -6,6 +6,79 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — minors W-min43 (M-HUB-09, M-HUB-25, M-HUB-31, M-HUB-33, M-HUB-37): the pretty-printed REST wire, the share-cap bypass through reactivation, the :8804 docblock that described a door that does not exist, the two liveness truths the spec conflated, and the un-throttled pre-auth connect flood — 2026-10-30
+
+Review queue `MINORS_QUEUE.md` batch W-min43, five live items, all cured:
+
+- **M-HUB-09** — `Response::json()` stopped pretty-printing. The hub's single
+  shared JSON encode carried `JSON_PRETTY_PRINT`, so every REST payload shipped
+  its indentation to @phlix/ui, the mobile/console/roku clients and the MCP
+  chain (roughly doubling list responses on constrained WAN links, with no
+  consumer that parses whitespace and no gzip anywhere to recover it). The
+  encode is now `JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR` only; `error()`
+  delegates, so error frames follow the same law, and the relay-frame helper
+  `errorBody()` was already compact. Debug indentation is `curl ... | jq` now.
+  Raw-body pins in `McpControllerTest`, `ServerListControllerTest`,
+  `ErrorPromotionFramesTest` and `AlexaRejectionCodeMapLawTest` rotated to the
+  compact spacing WITH their discriminators intact (the `{}`-vs-`[]` and
+  `[`-vs-`{` teeth are spacing-independent — the pins move with the encoder,
+  never the encoder with the pin), and the S173 note in
+  `MyServersFlowTest` records why decoding beats substring-matching either way.
+  MCP's own SSE text channel keeps its pretty encode (it is a human-facing
+  content stream, not the REST envelope) — deliberately untouched.
+- **M-HUB-37** — `:8804` gained a pre-auth connect limiter,
+  `rate_limiter.syncplay_mount` (30/60 s, keyed
+  `syncplay_mount:<real client ip>`, `PHLIX_HUB_RATELIMIT_SYNCPLAY_MOUNT_{MAX,WINDOW}`).
+  Before this leg every anonymous `GET /syncplay/{server_id}` upgrade went
+  straight into the auth path, which costs TWO SQL queries per attempt
+  (relay-token `SELECT` + the ownership probe): a cheap close had been made
+  expensive on purpose, i.e. a pure DB-pressure amplifier in front of an
+  unauthenticated socket. The gate runs in `onWebSocketConnect` before token
+  extraction, mirrors the HB-4.6f `:8803` posture exactly (the worker is
+  `count=1` so the per-worker budget is a true global one; the managed
+  install's loopback HAProxy is resolved through `TrustedProxyResolver` so a
+  household never collapses into one bucket and a forged leftmost hop is never
+  trusted), and refuses with a real WS close frame `1013`
+  (`SyncPlayRelayWorker::CLOSE_TRY_AGAIN_LATER` — same RFC 1011 meaning
+  `:8802`/`:8803` use, one value one meaning across the three surfaces). It
+  fails OPEN like its sibling: a limiter outage degrades to "no throttle",
+  never to a closed surface. Fourteen profiles now. +4 limiter tests (trip-then-
+  reset, per-IP buckets, real-IP keying behind the proxy, fail-open) and the
+  false `docs/websockets.md` claim "there is still no connect-rate-limiter
+  close on this surface" is now truth.
+- **M-HUB-25** — the share quota is enforced on EVERY grant path. The
+  `server.max_users_per_server` read (W5) ran only before a first-ever
+  collaborator INSERT; the reactivate branch returned ahead of it, and because
+  a revoked row is absent from the DISTINCT *active* count,
+  revoke-alice → admit two others → reactivate-alice landed her back outside
+  the quota with no bound on the overshoot. The reactivate path now performs
+  the same `assertWithinShareCap()` projection (revoked returning collaborator
+  counted as +1) before touching the row, and the refusal is the same
+  `SERVER_SHARE_CAP_REACHED` / 409 the insert path throws (no new wire codes).
+  The old exemption test was rewritten into the new law (cap read must be
+  ISSUED on reactivation) and a second case pins the overshoot refusal with the
+  reactivation `UPDATE` proven never-issued.
+- **M-HUB-31** — the `:8804` connect docblock claimed "unauthenticated clients
+  may connect but cannot join rooms or control playback". That described a door
+  that does not exist: the auth gate runs in `onWebSocketConnect` BEFORE the
+  handshake completes, so a missing, empty, expired, foreign-server or
+  unknown-token dial is closed pre-`101` (`4401`, with `1011` for the
+  malformed-path leg). The prose now states that law, names both close codes,
+  and says what matters — an unauthenticated socket never exists, so there is
+  no half-open connection to join anything.
+- **M-HUB-33** — the spec now states the two-liveness law instead of conflating
+  it. `GET /api/v1/me/servers` described only the heartbeat derivation, while
+  the payload carries two signals with different shelf lives: `relayActive` is
+  the LIVE one (join of open `relay_sessions` rows — flips within seconds of the
+  tunnel closing, re-converges at the relay worker's Step B7 reconcile after a
+  crash) and `status` is the ENROLLMENT LIFECYCLE (`offline` is written only by
+  the batched reaper — 180 s threshold on a 60 s tick, so a server that died
+  just after a beat honestly reads `online` for up to ~240 s). A picker that
+  means "reachable right now" reads `relayActive`; rendering `status` as a
+  presence dot lies for minutes. Law stated in `openapi.yaml` (description
+  prose only — zero schema/type/path/enum change, the S66 route bijection and
+  the redocly lint both stay green) and expanded in `docs/websockets.md`.
+
 ### Fixed — minors W-min42 (M-HUB-11, M-HUB-14, M-HUB-15, M-HUB-21, M-HUB-45, M-HUB-46, M-HUB-52): the untimed half-open federation ceremony and its un-negotiated wire version, the burn-without-refund invite redeem and its missing limiter, and four README truth gaps — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min42, seven live items cured

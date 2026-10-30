@@ -17,20 +17,21 @@ namespace Phlix\Hub\Common\RateLimit;
  *
  * Each surface (login / proxy / heartbeat / JWKS / relay-connect / client-mount /
  * mcp / alexa / signup / server-claims / federation-connect / federation-frame /
- * invite-redeem)
+ * invite-redeem / syncplay-mount)
  * gets its OWN limiter instance registered
  * under the matching `rate_limiter.<surface>` container id — a single shared
  * login-grade limiter is wrong for everything but login (HB-4.6).
  * {@see defaults()} maps each container id to the `config/server.php`
  * `rate_limit.<key>` override key plus the per-worker default `{max, window}`.
  *
- * Thresholds are PER-WORKER for ten of the thirteen surfaces. `proxy`, `heartbeat`,
+ * Thresholds are PER-WORKER for eleven of the fourteen surfaces. `proxy`, `heartbeat`,
  * `jwks`, `alexa`, `server_claims` and `invite_redeem` are enforced on the
  * `HUB_WORKERS` HTTP
  * workers, so each keeps an INDEPENDENT per-worker counter and the effective
  * soft-global limit is roughly `max × HUB_WORKERS` (mirrors HB-3.4);
  * `relay_connect` (the :8802 `RelayWorker`), `client_mount` (the :8803
- * `ClientRelayWorker`) and the two federation surfaces (the :8805
+ * `ClientRelayWorker`), `syncplay_mount` (the :8804 `SyncPlayRelayWorker`,
+ * M-HUB-37) and the two federation surfaces (the :8805
  * `FederationWorker`, both roles) run on count=1 surfaces where per-worker ==
  * global.
  *
@@ -76,6 +77,36 @@ final class RateLimitProfiles
 
     /** Container id for the :8803 client-mount limiter. */
     public const string CLIENT_MOUNT = 'rate_limiter.client_mount';
+
+    /**
+     * Container id for the :8804 SyncPlay-connect limiter (minors campaign
+     * M-HUB-37).
+     *
+     * Same posture as {@see CLIENT_MOUNT}: the :8804 `SyncPlayRelayWorker` is
+     * `count=1` (Application::run() constructs it with count 1), so the
+     * per-worker limit is a TRUE global limit, and the key is the REAL client
+     * IP resolved by the trusted-proxy-aware {@see
+     * \Phlix\Hub\Common\Http\TrustedProxyResolver} (on the managed install the
+     * raw TCP peer is the loopback HAProxy — keying on the peer alone would
+     * collapse every household into ONE bucket, the same law HB-4.6f shipped
+     * for :8803).
+     *
+     * Before this profile existed, every unauthenticated `GET
+     * /syncplay/{server_id}` upgrade went straight into the auth path — TWO
+     * SQL queries per attempt (`ClientRelayTokenService::validate()` plus the
+     * ownership probe `ServerInfoHandler::getOwnerAndStatus()`) — so a cheap
+     * close was an expensive close: a pure DB-pressure amplifier in front of
+     * an anonymous socket. 30 / 60s mirrors the :8803 mount budget; the
+     * legitimate population is device apps (a TV, a phone, a tablet behind
+     * one CGNAT exit) reconnecting at single-digit-per-minute rates, while a
+     * flood's per-attempt DB cost is capped at thirty queries a minute per IP
+     * before the refusals become free.
+     *
+     * Keyed `syncplay_mount:<ip>`, hit in the connect hook BEFORE token
+     * extraction, refused with WS close frame `1013` (try again later) — WS ≠
+     * HTTP, no 429 envelope after the upgrade hook.
+     */
+    public const string SYNCPLAY_MOUNT = 'rate_limiter.syncplay_mount';
 
     /**
      * Container id for the MCP personal-access-token auth limiter (S62).
@@ -256,6 +287,7 @@ final class RateLimitProfiles
             self::JWKS                => ['key' => 'jwks',                'max' => 120, 'window' => 60],
             self::RELAY_CONNECT       => ['key' => 'relay_connect',       'max' => 10,  'window' => 60],
             self::CLIENT_MOUNT        => ['key' => 'client_mount',        'max' => 30,  'window' => 60],
+            self::SYNCPLAY_MOUNT      => ['key' => 'syncplay_mount',      'max' => 30,  'window' => 60],
             self::MCP                 => ['key' => 'mcp',                 'max' => 10,  'window' => 900],
             self::ALEXA               => ['key' => 'alexa',               'max' => 60,  'window' => 60],
             self::SIGNUP              => ['key' => 'signup',              'max' => 3,   'window' => 3600],

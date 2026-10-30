@@ -255,7 +255,8 @@ final class AlexaRejectionCodeMapLawTest extends TestCase
 
     /**
      * Exact WHOLE-FRAME assertion: status, exact decoded key set AND order,
-     * and byte-exact serialized body (JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES).
+     * and byte-exact serialized body (compact JSON_UNESCAPED_SLASHES —
+     * minors campaign M-HUB-09 moved Response::json() off JSON_PRETTY_PRINT).
      */
     private static function assertDualPlacementFrame(?Response $response, string $legacy, string $dotted): void
     {
@@ -267,7 +268,7 @@ final class AlexaRejectionCodeMapLawTest extends TestCase
             'the dual-placement frame drifted from {error: legacy, code: dotted}',
         );
         self::assertSame(
-            "{\n    \"error\": \"" . $legacy . "\",\n    \"code\": \"" . $dotted . "\"\n}",
+            '{"error":"' . $legacy . '","code":"' . $dotted . '"}',
             $response->body,
             'the rejection body drifted from contracted serialization',
         );

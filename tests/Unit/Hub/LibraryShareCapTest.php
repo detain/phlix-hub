@@ -19,9 +19,9 @@ use Workerman\MySQL\Connection;
  * email shares and invite redemption converge on).
  *
  * Pins: defaults preservation (no resolver / cap 0 => no counting SELECT at
- * all), returning-collaborator reactivation exemption, DISTINCT projection
- * math, and the exact SERVER_SHARE_CAP_REACHED / 409 throw the controllers
- * map to `quota.exceeded`.
+ * all), the M-HUB-25 law that reactivation shares the cap read with the
+ * insert path, DISTINCT projection math, and the exact
+ * SERVER_SHARE_CAP_REACHED / 409 throw the controllers map to `quota.exceeded`.
  *
  * @package Phlix\Hub\Tests\Unit\Hub
  */
@@ -202,11 +202,14 @@ final class LibraryShareCapTest extends TestCase
         self::assertCount(1, $inserts);
     }
 
-    public function testReactivationOfReturnedCollaboratorIsExempt(): void
+    public function testReactivationIsCapCheckedAndPassesWhenRoomExists(): void
     {
-        // Existing REVOKED tuple -> reactivate branch runs BEFORE the cap:
-        // a returning collaborator never re-consumes quota, and the count
-        // query is never issued.
+        // Minors campaign M-HUB-25 flipped this from the old exemption law:
+        // a REVOKED collaborator is NOT in the active distinct count, so the
+        // reactivation path must project them as +1 and run the same cap
+        // read as the insert path. Here cap 2, one OTHER active collaborator
+        // -> projected 2 <= 2: reactivation proceeds, but only AFTER the
+        // quota read was actually issued.
         $revokedRow = [
             'id'                     => 'old-share',
             'owner_user_id'          => 'owner-1',
@@ -227,6 +230,10 @@ final class LibraryShareCapTest extends TestCase
             if (str_contains($sql, 'SELECT * FROM library_shares')) {
                 return [$revokedRow];
             }
+            if (str_contains($sql, 'COUNT(DISTINCT collaborator_user_id)')) {
+                // One active collaborator; the returning user is NOT present.
+                return [['total' => 1, 'present' => 0]];
+            }
             if (str_contains($sql, 'UPDATE library_shares')) {
                 return 1;
             }
@@ -234,22 +241,87 @@ final class LibraryShareCapTest extends TestCase
             return [];
         };
 
+        $share = $this->handlerWithRevokedRow(static fn (): int => 2);
+
+        self::assertSame('old-share', $share->id);
+        self::assertCount(
+            1,
+            $this->capQueries(),
+            'M-HUB-25: reactivation must run the quota read — the old exemption let '
+            . 'revoke/add-others/reactivate overshoot the cap without bound',
+        );
+    }
+
+    public function testReactivationRefusedWhenServerAlreadyAtCap(): void
+    {
+        // The overshoot this cure exists to close: collaborator revoked, two
+        // OTHER users added since (cap 2 fully consumed) -> the returning
+        // user projects to 3 and MUST be refused, with the reactivation
+        // UPDATE never issued.
+        $revokedRow = [
+            'id'                     => 'old-share',
+            'owner_user_id'          => 'owner-1',
+            'collaborator_user_id'   => 'collab-1',
+            'server_id'              => 'server-1',
+            'library_id'             => 'lib-1',
+            'library_name'           => 'My Movies',
+            'permission_level'       => 'read',
+            'granted_by'             => 'owner-1',
+            'created_at'             => time() - 86400,
+            'expires_at'             => null,
+            'revoked_at'             => time() - 3600,
+        ];
+        $this->responder = static function (string $sql) use ($revokedRow) {
+            if (str_contains($sql, 'SELECT id FROM servers')) {
+                return [['id' => 'server-1']];
+            }
+            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+                return [$revokedRow];
+            }
+            if (str_contains($sql, 'COUNT(DISTINCT collaborator_user_id)')) {
+                return [['total' => 2, 'present' => 0]];
+            }
+            if (str_contains($sql, 'UPDATE library_shares')) {
+                return 1;
+            }
+
+            return [];
+        };
+
+        try {
+            $this->handlerWithRevokedRow(static fn (): int => 2);
+            self::fail('expected the cap to refuse the reactivation');
+        } catch (InvalidArgumentException $e) {
+            self::assertSame(409, $e->getCode());
+            self::assertSame('SERVER_SHARE_CAP_REACHED', $e->getMessage());
+        }
+
+        $reactivationWrites = array_values(array_filter(
+            $this->statements,
+            static fn (string $s): bool => str_contains($s, 'UPDATE library_shares'),
+        ));
+        self::assertSame(
+            [],
+            $reactivationWrites,
+            'a refused reactivation must not touch the revoked row',
+        );
+    }
+
+    private function handlerWithRevokedRow(?callable $maxUsersResolver): LibraryShare
+    {
         $handler = new LibrarySharingHandler(
             $this->db,
             $this->users,
             $this->createMock(StructuredLogger::class),
-            static fn (): int => 1, // tiny cap: irrelevant, exemption must hold
+            $maxUsersResolver,
         );
 
-        $share = $handler->shareLibrary(
+        return $handler->shareLibrary(
             ownerId: 'owner-1',
             collaboratorEmail: 'friend@example.com',
             serverId: 'server-1',
             libraryId: 'lib-1',
             libraryName: 'My Movies',
         );
-
-        self::assertSame('old-share', $share->id);
-        self::assertSame([], $this->capQueries(), 'reactivation must bypass the quota read entirely');
     }
 }

@@ -542,6 +542,12 @@ final class McpControllerTest extends TestCase
      *
      * Do not "simplify" this test to `assertSame([], $body['result'])`. That
      * assertion passes against the broken code.
+     *
+     * The literal spacing below is the COMPACT wire spacing (M-HUB-09 removed
+     * `JSON_PRETTY_PRINT` from the shared `Response::json()` encode, MCP
+     * envelopes included). The `{}`-versus-`[]` discriminator this test exists
+     * for is spacing-independent — rotate these pins with the encoder, never
+     * the encoder with the pin.
      */
     public function testAnEmptyResultEncodesAsAJsonObject(): void
     {
@@ -551,12 +557,12 @@ final class McpControllerTest extends TestCase
         ));
 
         self::assertStringContainsString(
-            '"result": {}',
+            '"result":{}',
             $response->body,
             "ping's EmptyResult was encoded as a JSON array. A conformant MCP client rejects the "
             . 'message and drops the session. Raw body was: ' . $response->body,
         );
-        self::assertStringNotContainsString('"result": []', $response->body);
+        self::assertStringNotContainsString('"result":[]', $response->body);
     }
 
     /**
@@ -566,7 +572,8 @@ final class McpControllerTest extends TestCase
      * A tool whose upstream answered with an empty body produces an empty
      * payload, and `structuredContent` is an OBJECT in the MCP schema. Same
      * blind spot as the result above: decoding cannot see it, so the assertion
-     * is on the raw body.
+     * is on the raw body. (Raw-body spacing = compact, post-M-HUB-09 — see the
+     * note on the test above.)
      */
     public function testAnEmptyToolPayloadEncodesAsAJsonObject(): void
     {
@@ -580,11 +587,11 @@ final class McpControllerTest extends TestCase
 
         self::assertSame(1, $probe->calls, 'the probe never ran, so nothing was rendered.');
         self::assertStringContainsString(
-            '"structuredContent": {}',
+            '"structuredContent":{}',
             $response->body,
             'an empty tool payload was encoded as a JSON array. Raw body was: ' . $response->body,
         );
-        self::assertStringNotContainsString('"structuredContent": []', $response->body);
+        self::assertStringNotContainsString('"structuredContent":[]', $response->body);
     }
 
     /**
@@ -593,6 +600,9 @@ final class McpControllerTest extends TestCase
      *
      * Without this, "wrap everything in an object" would satisfy the test above
      * while turning `tools` into `{"0":…}` and breaking every client.
+     *
+     * (Pins use the compact post-M-HUB-09 wire spacing; the `[`-versus-`{`
+     * discriminator is spacing-independent.)
      */
     public function testAListInsideAResultIsStillAJsonArray(): void
     {
@@ -601,8 +611,8 @@ final class McpControllerTest extends TestCase
             self::GOOD_TOKEN,
         ));
 
-        self::assertStringContainsString('"tools": [', $response->body, 'the tool list stopped being a JSON array.');
-        self::assertStringNotContainsString('"tools": {', $response->body);
+        self::assertStringContainsString('"tools":[', $response->body, 'the tool list stopped being a JSON array.');
+        self::assertStringNotContainsString('"tools":{', $response->body);
     }
 
     /**

@@ -2364,7 +2364,25 @@ paths:
       tags: ["My Servers"]
       summary: "List my servers"
       description: |-
-        Every media server this user has claimed, with online state derived from the last heartbeat.
+        Every media server this user has claimed.
+
+        Liveness law (M-HUB-33): this payload carries TWO liveness truths and
+        they answer different questions — pick the one that matches the claim
+        you are rendering.
+        - `relayActive` is the LIVE signal: derived from open `relay_sessions`
+          rows, so it flips within seconds of the tunnel closing (after a
+          relay-worker crash it re-converges when that worker restarts and
+          reconciles its orphaned session rows). A picker that means "reachable
+          right now" reads THIS.
+        - `status` is the ENROLLMENT LIFECYCLE flag, not a probe: `online` is
+          stamped by the heartbeat handler, `offline` only by the batched reaper
+          (180 s threshold swept every 60 s), so it can honestly still read
+          `online` for up to ~240 s after a crash. Never render `status` as a
+          live-presence dot.
+        `lastSeenAt` is the raw heartbeat stamp both signals are derived from.
+        The authoritative gate for FORWARDING a proxy request is neither field:
+        it is the relay worker's in-memory tunnel registry
+        (`docs/websockets.md`, `:8802`).
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []

@@ -145,8 +145,9 @@ final class HubSettingsController
      * Numeric bounds pass through VERBATIM in the JSON literal type the
      * schema author chose (`json_decode` yields int for `60`, float for
      * `60.0`); meta consumers compare with assertSame, and the wire
-     * encoding is type-independent (`JSON_PRETTY_PRINT` without
-     * `JSON_PRESERVE_ZERO_FRACTION` renders both as `60`).
+     * encoding is type-independent (`json_encode` — compact since minors
+     * campaign M-HUB-09, without `JSON_PRESERVE_ZERO_FRACTION` — renders
+     * both as `60`).
      *
      * Fail-safe: any unreadable, unparseable, or structurally-unexpected
      * schema yields an empty map `[]` rather than an exception.

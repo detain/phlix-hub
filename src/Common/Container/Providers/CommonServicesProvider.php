@@ -43,12 +43,13 @@ use function DI\get;
  * (HB-4.6 Option B) — the per-worker in-memory limiter left the effective
  * login budget at ~`max × HUB_WORKERS`. Signup joined that set with the auth
  * audit fix (3): an anonymous 64 MiB-Argon2id surface must not get
- * `max × HUB_WORKERS` tries either. The remaining nine surfaces (server_claims
+ * `max × HUB_WORKERS` tries either. The remaining eleven surfaces (server_claims
  * joined with the M-HUB-12 pairing cure, the two federation surfaces with
- * M-HUB-14's :8805 limits — both enforced on count=1 workers, where the
- * worker-local counter IS the global one) stay on the
- * worker-local in-memory {@see RateLimiter} (per-worker weakening is
- * acceptable there).
+ * M-HUB-14's :8805 limits, and `syncplay_mount` with M-HUB-37's :8804 pre-auth
+ * connect budget) stay on the in-memory {@see RateLimiter}. For the four
+ * count=1 WebSocket surfaces among them (`:8802`/`:8803`/`:8804`/`:8805`) the
+ * worker-local counter IS the global one, so there is nothing to unify; on the
+ * HTTP-side surfaces the deliberate per-worker weakening remains acceptable.
  *
  * Back-compat: the legacy {@see RateLimiterInterface} binding is aliased to the
  * `login` profile so services that inject the interface directly (notably
@@ -126,7 +127,7 @@ final class CommonServicesProvider implements ServiceProviderInterface
                 // ConnectionPool::getConnection('mysql') in CoreServicesProvider),
                 // NOT the dedicated 'txn' connection: these are single-statement
                 // reads/writes, not a multi-statement transaction. The other
-                // seven surfaces stay worker-local in-memory below — server_claims
+                // eleven surfaces stay worker-local in-memory below — server_claims
                 // among them deliberately (its guesser is an authenticated,
                 // account-metered user against a ~2^40/600s space; see the
                 // SERVER_CLAIMS const docblock for the full alexa-posture law).

@@ -102,6 +102,13 @@ class LibrarySharingHandler
         $now = time();
 
         if ($existingShare !== null) {
+            // Minors campaign M-HUB-25: the quota is enforced on EVERY grant
+            // path, reactivation included. The revoked collaborator is absent
+            // from the distinct ACTIVE count, so the cap check projects them
+            // as +1 — the old exemption let revoke-then-add-others-then-
+            // reactivate overshoot server.max_users_per_server without bound.
+            $this->assertWithinShareCap($serverId, $existingShare->collaboratorUserId, $now);
+
             return $this->reactivateShare(
                 $existingShare,
                 $serverId,
@@ -114,11 +121,10 @@ class LibrarySharingHandler
         }
 
         // Per-server collaborator quota (server.max_users_per_server, W5).
-        // Only NEW collaborators are gated: the reactivate branch above
-        // exempts returning users, and a user already active on another
-        // library of this same server is already inside the distinct count
-        // (see assertWithinShareCap). 0 (default) = unlimited, preserving
-        // the pre-setting behavior byte-for-byte.
+        // A user already active on another library of this same server is
+        // already inside the distinct count, so extending them a new library
+        // is free (see assertWithinShareCap). 0 (default) = unlimited,
+        // preserving the pre-setting behavior byte-for-byte.
         $this->assertWithinShareCap($serverId, $collaboratorId, $now);
 
         /** @var string $shareId */
@@ -167,14 +173,20 @@ class LibrarySharingHandler
     }
 
     /**
-     * Enforce `server.max_users_per_server` before a first-ever collaborator
-     * share INSERTs.
+     * Enforce `server.max_users_per_server` before a share admits a
+     * collaborator — either as a first-ever INSERT or by reactivating a
+     * revoked row (M-HUB-25).
      *
      * Counts DISTINCT active collaborator users on the server (unrevoked,
      * unexpired) — the same denominator the quota names. If the new
      * collaborator already appears in the count (active on another library of
-     * this server) the add doesn't grow it, so it passes. No resolver wired,
-     * or an effective cap of 0 → unlimited (historical behavior).
+     * this server) the add doesn't grow it, so it passes. A revoked share is
+     * NOT in that count, which is why the reactivate path calls this too:
+     * revoke-alice, admit others, reactivate-alice used to land her back
+     * outside the quota.
+     *
+     * No resolver wired, or an effective cap of 0 → unlimited (historical
+     * behavior).
      *
      * Expiry uses PHP's clock bound as a parameter — MySQL NOW() would mix
      * server timezones into the predicate (estate TZ-skew lesson).

@@ -279,12 +279,13 @@ return [
     // Per-surface rate limiting (HB-4.6). Each surface gets its OWN RateLimiter
     // (see Phlix\Hub\Common\RateLimit\RateLimitProfiles); a single login-grade
     // 5/900 limiter is wrong for everything but login. Thresholds are PER-WORKER
-    // for ten surfaces: proxy/heartbeat/jwks/alexa/server_claims/invite_redeem
+    // for eleven surfaces: proxy/heartbeat/jwks/alexa/server_claims/invite_redeem
     // run across the HUB_WORKERS HTTP workers, so each keeps an independent
     // per-worker counter
     // and the soft-global limit is ~max × HUB_WORKERS (mirrors HB-3.4);
-    // relay_connect (:8802), client_mount (:8803) and the two federation
-    // surfaces (:8805, both roles) run on count=1 surfaces (per-worker == global).
+    // relay_connect (:8802), client_mount (:8803), syncplay_mount (:8804) and
+    // the two federation surfaces (:8805, both roles) run on count=1 surfaces
+    // (per-worker == global).
     // ✅ login, mcp and signup are the EXCEPTIONS — genuinely global: their
     // bindings are repointed to the shared DB-backed DbRateLimiter (table
     // login_rate_limit, migration 040_login_rate_limit), so ALL workers share
@@ -413,6 +414,20 @@ return [
             'invite_redeem'      => [
                 'max'    => $envInt('PHLIX_HUB_RATELIMIT_INVITE_REDEEM_MAX', 20),
                 'window' => $envInt('PHLIX_HUB_RATELIMIT_INVITE_REDEEM_WINDOW', 60),
+            ],
+            // :8804 SyncPlay pre-auth connect budget (minors campaign M-HUB-37):
+            // 30 / 60s keyed `syncplay_mount:<real client ip>` in
+            // SyncPlayRelayWorker::onWebSocketConnect — the client_mount
+            // posture on the sibling surface (this worker is count=1, so the
+            // per-worker cap is a true global cap; the managed install fronts
+            // it with HAProxy over loopback, hence the trusted-proxy resolve).
+            // Before this leg the connect path had NO limiter: every
+            // unauthenticated upgrade ran two SQL queries (token validate +
+            // owner probe) before its close. Full reasoning:
+            // RateLimitProfiles::SYNCPLAY_MOUNT.
+            'syncplay_mount'     => [
+                'max'    => $envInt('PHLIX_HUB_RATELIMIT_SYNCPLAY_MOUNT_MAX', 30),
+                'window' => $envInt('PHLIX_HUB_RATELIMIT_SYNCPLAY_MOUNT_WINDOW', 60),
             ],
         ];
     })(),

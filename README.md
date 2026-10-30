@@ -798,14 +798,15 @@ only behind a reverse proxy or port map that breaks same-origin:
 #### Rate limiting ([`config/server.php`](config/server.php) `rate_limit`)
 
 Each abuse-prone surface has its own rate limiter (a single login-grade limiter is wrong for
-everything but login). Thirteen profiles exist in three custody postures: **`login`, `mcp`, and
+everything but login). Fourteen profiles exist in three custody postures: **`login`, `mcp`, and
 `signup` are shared and DB-backed**; six HTTP surfaces (`proxy`, `heartbeat`, `jwks`, `alexa`,
 `server_claims`, `invite_redeem`) use per-worker in-memory limiters (soft-global — see the caveat
-below); the four `count=1`-worker surfaces (`relay_connect`, `client_mount`, `federation_connect`,
-`federation_frame`) are per-worker too, but per-worker *is* global there. Every threshold is
+below); the five `count=1`-worker surfaces (`relay_connect`, `client_mount`,
+`syncplay_mount`, `federation_connect`, `federation_frame`) are per-worker too,
+but per-worker *is* global there. Every threshold is
 env-overridable; absent keys fall back to the defaults below. HTTP surfaces that trip return
 **429** with a `Retry-After` header and `{"error":"Too Many Requests","code":"rate_limited"}`; the
-WebSocket handshakes (:8802/:8803/:8805) reject with WS close code **1013** (Try Again Later) instead.
+WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013** (Try Again Later) instead.
 
 | Variable | Default | Surface / key |
 |----------|---------|---------------|
@@ -821,6 +822,7 @@ WebSocket handshakes (:8802/:8803/:8805) reject with WS close code **1013** (Try
 | `PHLIX_HUB_RATELIMIT_INVITE_REDEEM_MAX` / `_INVITE_REDEEM_WINDOW` | `20` / `60` | Invite-link redemption, keyed `invite_redeem:{userId}` (attributable member; bounds the burn+share write chain) |
 | `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP — `count=1` worker, truly global |
+| `PHLIX_HUB_RATELIMIT_SYNCPLAY_MOUNT_MAX` / `_SYNCPLAY_MOUNT_WINDOW` | `30` / `60` | :8804 SyncPlay pre-auth connect (WS), keyed `syncplay_mount:<real ip>` — `count=1` worker, truly global; runs before the token lookup so a flood can't convert into DB work |
 | `PHLIX_HUB_RATELIMIT_FEDERATION_CONNECT_MAX` / `_FEDERATION_CONNECT_WINDOW` | `10` / `60` | :8805 inbound federation connects (master role), keyed `federation_connect:<trusted ip>` — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_MAX` / `_FEDERATION_FRAME_WINDOW` | `120` / `60` | :8805 federation frames, both roles, keyed `federation_frame:<remote peer hub id>` — `count=1` worker, truly global |
 | `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` | Trusted proxy IPs/CIDRs used to resolve the real client address for the IP-keyed limiters (`src/Common/Http/TrustedProxyResolver.php`) — a forgeable leftmost `X-Forwarded-For` is never trusted |

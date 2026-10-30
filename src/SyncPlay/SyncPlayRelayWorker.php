@@ -13,8 +13,11 @@ namespace Phlix\Hub\SyncPlay;
 
 use Channel\Client as ChannelClient;
 use Psr\Container\ContainerInterface;
+use Phlix\Hub\Common\Http\TrustedProxyResolver;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\ClientRelayWorker;
@@ -124,6 +127,19 @@ final class SyncPlayRelayWorker
      * by waiting.
      */
     public const CLOSE_DO_NOT_RETRY = 1011;
+
+    /**
+     * Throttle close code for the PRE-AUTH connect limiter (minors campaign
+     * M-HUB-37, `rate_limiter.syncplay_mount`): the same 1013 "Try Again
+     * Later" the :8802 `RelayWorker` and :8803 `ClientRelayWorker` answer an
+     * over-budget connect with — one value, one meaning, three surfaces:
+     * a refused connect IS transient here, backing off then reconnecting is
+     * the remedy (contrast {@see self::CLOSE_DO_NOT_RETRY}). It shares its
+     * number with {@see self::CLOSE_LIVENESS_TIMEOUT} for the same reason —
+     * that RFC 1011 meaning — the two legs differ in WHEN they fire (before
+     * the upgrade vs long after it), which is what the log reason carries.
+     */
+    public const CLOSE_TRY_AGAIN_LATER = 1013;
 
     /**
      * Server-originated liveness ping cadence on `:8804`, in seconds
@@ -328,6 +344,30 @@ final class SyncPlayRelayWorker
     }
 
     /**
+     * Per-worker :8804 pre-auth connect limiter (`rate_limiter.syncplay_mount`,
+     * 30/60s, minors campaign M-HUB-37), resolved lazily at the first upgrade
+     * (the same first-resolve boot read every limiter factory performs) and
+     * memoized. Keyed by the connecting client's REAL IP in
+     * {@see self::onWebSocketConnect()}. The worker is `count=1`, so this
+     * per-worker limit is a true global limit — and WITHOUT it, every cheap
+     * unauthenticated upgrade costs two SQL queries in the auth path. Null
+     * keeps the connect hook unlimited (limiter unavailable / not registered).
+     *
+     * @var RateLimiterInterface|null
+     */
+    private ?RateLimiterInterface $mountLimiter = null;
+
+    /**
+     * Trusted-proxy-aware resolver used to derive the REAL client IP for the
+     * per-IP connect rate-limit key. The managed install fronts `:8804`
+     * through HAProxy over loopback (82bd762d era), so `getRemoteIp()` alone
+     * can be the proxy's address — keying on it would collapse every client
+     * behind the front into ONE bucket (the exact HB-4.6f lesson already
+     * learned for `:8803`). Lazily created at the gated leg.
+     */
+    private ?TrustedProxyResolver $trustedProxyResolver = null;
+
+    /**
      * Start the SyncPlay relay WebSocket worker.
      *
      * @return Worker The configured worker instance.
@@ -497,8 +537,17 @@ final class SyncPlayRelayWorker
     /**
      * Handle WebSocket upgrade for SyncPlay client.
      *
-     * SV-4.7: Requires valid relay token + server ownership. Unauthenticated
-     * clients may connect but cannot join rooms or control playback.
+     * SV-4.7 (minors campaign M-HUB-31 truth pass — the old prose claimed
+     * unauthenticated clients "may connect but cannot join rooms": FALSE):
+     * a valid relay token bound to the path's server is REQUIRED BEFORE the
+     * handshake completes. Missing/empty tokens, tokens that fail
+     * {@see validateClientAuth()} (expired, wrong server, unknown), and
+     * unparsable paths are all closed pre-101 — `rejectUnauthorized()` sends
+     * the 4401 application close, the path leg a 1011 do-not-retry close.
+     * An unauthenticated socket never exists, so there is no half-open
+     * connection to join anything. Since M-HUB-37 a cheaper refusal runs even
+     * before that gate: the per-IP pre-auth connect limiter answers an
+     * over-budget upgrade with 1013 ({@see self::CLOSE_TRY_AGAIN_LATER}).
      *
      * @param TcpConnection    $connection Client connection.
      * @param WorkermanRequest $request    WS upgrade request.
@@ -518,6 +567,39 @@ final class SyncPlayRelayWorker
             // M-HUB-17: real close frame, 1011 do-not-retry (see the constant).
             WebSocketCloseFrame::reject($connection, self::CLOSE_DO_NOT_RETRY);
             return;
+        }
+
+        // M-HUB-37 (mirrors HB-4.6f's :8803 mount gate): throttle inbound
+        // upgrades by REAL client IP EARLY — before token extraction and
+        // before {@see self::validateClientAuth()} does its DB work — so an
+        // unauthenticated flood of `GET /syncplay/{server_id}` upgrades can no
+        // longer convert directly into two SQL queries per attempt. Runs
+        // BEFORE the auth leg by construction. WS ≠ HTTP: no 429 envelope
+        // after the upgrade hook — the refusal is a real close frame with
+        // 1013 (try again later), the same answer :8802/:8803 give an
+        // over-budget connect.
+        $limiter = $this->mountLimiter ??= $this->resolveMountLimiter();
+        if ($limiter !== null) {
+            // The managed install fronts :8804 through the same loopback
+            // HAProxy as :8803, so the raw peer may BE the proxy — resolve the
+            // real client from the upgrade headers exactly like the sibling
+            // (a non-trusted peer safely falls back to its own address).
+            $this->trustedProxyResolver ??= new TrustedProxyResolver();
+            $ip = $this->trustedProxyResolver->resolve(
+                $connection->getRemoteIp(),
+                self::upgradeHeader($request, 'x-forwarded-for'),
+                self::upgradeHeader($request, 'x-real-ip'),
+            );
+            $state = $limiter->hit('syncplay_mount:' . $ip);
+            if ($state->limited) {
+                $logger->warning('SyncPlay: connect rate-limited', [
+                    'remote_ip' => $ip,
+                    'server_id' => $serverId,
+                    'reset_at'  => $state->resetAt,
+                ]);
+                WebSocketCloseFrame::reject($connection, self::CLOSE_TRY_AGAIN_LATER);
+                return;
+            }
         }
 
         $connId = spl_object_id($connection);
@@ -660,6 +742,46 @@ final class SyncPlayRelayWorker
         }
 
         return null;
+    }
+
+    /**
+     * Resolve the :8804 pre-auth connect limiter (`rate_limiter.syncplay_mount`,
+     * M-HUB-37) from the container.
+     *
+     * Best-effort, mirroring {@see \Phlix\Hub\Relay\ClientRelayWorker::resolveClientMountLimiter()}
+     * verbatim in posture: an unresolvable limiter yields null (unlimited
+     * connect hook) rather than an exception, because the SyncPlay surface must
+     * keep admitting clients when a container hiccup takes the throttle away —
+     * the limiter is a cost cap, not an authorization gate, and failing it
+     * CLOSED would turn a limiter outage into a product outage.
+     *
+     * @return RateLimiterInterface|null The connect limiter, or null.
+     */
+    private function resolveMountLimiter(): ?RateLimiterInterface
+    {
+        try {
+            /** @var mixed $limiter */
+            $limiter = $this->container->get(RateLimitProfiles::SYNCPLAY_MOUNT);
+        } catch (Throwable) {
+            return null;
+        }
+
+        return $limiter instanceof RateLimiterInterface ? $limiter : null;
+    }
+
+    /**
+     * Read a single header value from the parsed WS upgrade request as a string,
+     * or null when absent/non-scalar. {@see WorkermanRequest::header()} returns
+     * `mixed`, so we coerce defensively for the {@see TrustedProxyResolver}.
+     *
+     * @param WorkermanRequest $request The WS upgrade HTTP request.
+     * @param string           $name    Lower-case header name to read.
+     */
+    private static function upgradeHeader(WorkermanRequest $request, string $name): ?string
+    {
+        /** @var mixed $value */
+        $value = $request->header($name);
+        return is_string($value) ? $value : null;
     }
 
     /**

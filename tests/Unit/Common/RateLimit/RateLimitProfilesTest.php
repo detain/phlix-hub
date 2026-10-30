@@ -64,10 +64,12 @@ final class RateLimitProfilesTest extends TestCase
         self::assertSame('rate_limiter.signup', RateLimitProfiles::SIGNUP);
     }
 
-    public function testDefaultsReturnsAllThirteenProfiles(): void
+    public function testDefaultsReturnsAllFourteenProfiles(): void
     {
         $defaults = RateLimitProfiles::defaults();
 
+        // Fourteen since the minors campaign M-HUB-37 added `syncplay_mount`
+        // (the :8804 pre-auth connect limiter).
         // Thirteen since the minors campaign M-HUB-21 added `invite_redeem`.
         // Twelve since the MAJORS-campaign M-HUB-14 added the two federation
         // surfaces (`federation_connect`, `federation_frame`) — same-numbered
@@ -79,7 +81,23 @@ final class RateLimitProfilesTest extends TestCase
         // "a profile was added but never given a config key or a default"
         // into a red, so bumping the number without adding the matching
         // `testDefaultsContains…Profile` below defeats it.
-        self::assertCount(13, $defaults);
+        self::assertCount(14, $defaults);
+    }
+
+    /**
+     * Minors campaign M-HUB-37: the :8804 SyncPlay connect path gets its own
+     * real-IP-keyed budget — 30 / 60s, config key `syncplay_mount`, the
+     * :8803 `client_mount` posture on the sibling surface.
+     */
+    public function testDefaultsContainsSyncPlayMountProfile(): void
+    {
+        $defaults = RateLimitProfiles::defaults();
+
+        self::assertArrayHasKey(RateLimitProfiles::SYNCPLAY_MOUNT, $defaults);
+        self::assertSame('rate_limiter.syncplay_mount', RateLimitProfiles::SYNCPLAY_MOUNT);
+        self::assertSame('syncplay_mount', $defaults[RateLimitProfiles::SYNCPLAY_MOUNT]['key']);
+        self::assertSame(30, $defaults[RateLimitProfiles::SYNCPLAY_MOUNT]['max']);
+        self::assertSame(60, $defaults[RateLimitProfiles::SYNCPLAY_MOUNT]['window']);
     }
 
     /**

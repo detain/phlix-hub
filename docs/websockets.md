@@ -189,6 +189,30 @@ This is the one client-facing lane with a complete, deliberate liveness loop:
   is never false-reaped, and a half-open one is gone within a couple of
   minutes.
 
+### The two liveness truths the HTTP surface sells (M-HUB-33)
+
+The tunnels this section describes are also what the hub's REST payloads
+report, and the two signals a client can read are NOT interchangeable:
+
+- **`relayActive` / `relay_active`** — the live one. Derived by joining open
+  `relay_sessions` rows (`closed_at IS NULL`) in
+  {@see \Phlix\Hub\Hub\ServerInfoHandler}, so it flips within seconds of the
+  tunnel closing: a clean close settles the row, and after a relay-worker
+  crash the reconciliation at worker start (Step B7) re-converges the rows.
+- **`servers.status`** — the enrollment LIFECYCLE, not a probe. `online` is
+  stamped by `HeartbeatHandler` on each beat; `offline` is written ONLY by
+  {@see \Phlix\Hub\ServerReaper}, whose batched sweep applies a
+  `DEFAULT_OFFLINE_THRESHOLD_SECONDS` (180 s) on a `DEFAULT_INTERVAL_SECONDS`
+  (60 s) tick, so a server that died the instant after a beat can honestly
+  still read `online` for up to ~240 s.
+
+**The law (stated in `openapi.yaml`, `GET /api/v1/me/servers`):** a picker that
+means "reachable right now" reads `relayActive`; `status` answers "is this
+enrollment still alive per the reaper", and rendering it as a presence dot
+lies for minutes after a crash. Neither field authorizes a proxy request —
+the in-memory tunnel registry does (`docs/websockets.md` `:8802` above,
+`RelayProxyManager::onRequest`).
+
 ---
 
 ## `:8803` — client mount
@@ -313,6 +337,17 @@ A token in the **query string is not accepted** and never was safe to send:
 query strings land in access logs, proxy logs and `Referer` headers, and outlive
 the token's own expiry. This is why S2b dropped the form from `:8803`.
 
+Since **M-HUB-37** the connect path also carries a per-IP pre-auth limiter —
+`rate_limiter.syncplay_mount` (30 per 60 s, the :8803 `client_mount` posture and
+threshold), hit in `onWebSocketConnect` **before** token extraction, keyed by the
+REAL client IP from `TrustedProxyResolver` (the managed install fronts `:8804`
+through the same loopback HAProxy as `:8803`, so the raw peer may be the proxy —
+keying on it alone would collapse every household into one bucket). The worker is
+`count=1`, so the per-worker budget is a true global one. Before this leg an
+unauthenticated flood of `GET /syncplay/{server_id}` upgrades converted directly
+into two SQL queries per attempt (the token `SELECT` and the ownership probe),
+i.e. a cheap close was being made expensive on purpose.
+
 > ⚠ Before S237 this surface read `$_GET['token']`. That was broken twice over:
 > the documented client URL put a live credential in a query string, **and**
 > Workerman 5 never populates `$_GET` at all — so the read was always `null` and
@@ -332,12 +367,15 @@ code instead of collapsing into a bare transport-level `1006`.
 | --- | --- | --- |
 | `4401` (`SyncPlayRelayWorker::CLOSE_UNAUTHORIZED`) | `onWebSocketConnect` auth gate + both join-time guards | No token / bad / expired token, token bound to a foreign `server_id`, revoked owner — all bundled into ONE code by design (an enumeration oracle stays closed, same law the claim-code surface obeys). Remedy: re-login / re-mint via `POST /api/v1/me/servers/{id}/relay-token`. |
 | `1011` (`SyncPlayRelayWorker::CLOSE_DO_NOT_RETRY`) | path with no `server_id` segment | Malformed dial URL. Do **not** reconnect-loop: 1013 "Try Again Later" is deliberately not used here, for the reason `ClientMountController` records at its own 1011 site — waiting never cures a typo. |
+| `1013` (`SyncPlayRelayWorker::CLOSE_TRY_AGAIN_LATER`) | pre-auth connect limiter `rate_limiter.syncplay_mount` (30/60 s per real IP, M-HUB-37) | Over the connect budget: the upgrade is refused BEFORE any token lookup or DB read. Transient by nature — back off and reconnect. **Not** an auth failure (that is `4401`), and the deliberate contrast with `1011`: waiting DOES cure this one. |
 | `1013` (`SyncPlayRelayWorker::CLOSE_LIVENESS_TIMEOUT`) | liveness reap: silence ≥ 90 s past the last inbound frame (M-HUB-18) | The hub gave up on a socket that stopped answering. Transient by nature (half-open path, dropped NAT mapping, sleeping device) — reconnecting IS the remedy, which is exactly why this is 1013 and not 1011. |
 
-There is still no connect-rate-limiter close on this surface: the
-per-connection inbound byte budget DROPS over-budget frames rather than closing
-the socket, so the only throttle-shaped signal is the drop itself. `1013` here
-belongs solely to the liveness reap.
+Since **M-HUB-37** `1013` has two named emitters on this surface — the pre-auth
+connect limiter and the liveness reap (same RFC 1011 meaning, "try again later",
+so the shared number is honest; they are told apart by WHEN they fire, before the
+`101` versus long after it). What this surface still does NOT have is a close for
+the per-connection inbound byte budget (audit M-3): over-budget FRAMES are
+dropped, the socket stays open.
 
 **Carrier caveat (true of `:8803`'s table as well).** A client that dials with
 the `bearer` subprotocol and is refused still sees `1006` in the browser's close

@@ -113,6 +113,14 @@ class Response
     /**
      * JSON-encode `$data` as the response body and set Content-Type.
      *
+     * The encode is COMPACT (minors campaign M-HUB-09): the hub's REST wire
+     * is a machine contract consumed by @phlix/ui, the mobile/console/roku
+     * clients and the MCP chain — no consumer parses whitespace, and
+     * pretty-printing ships needless indentation bytes on every payload.
+     * Read a live response with `curl ... | jq` when you want indentation.
+     * `error()` delegates here, so error frames follow the same law; the
+     * relay-frame helper `errorBody()` was already compact and is untouched.
+     *
      * @param array<string, mixed> $data       Data to encode.
      * @param int|null             $statusCode Optional status override.
      *
@@ -126,10 +134,7 @@ class Response
             $this->statusCode = $statusCode;
         }
         $this->headers['Content-Type'] = 'application/json';
-        $this->body = json_encode(
-            $data,
-            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
-        );
+        $this->body = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         return $this;
     }
 

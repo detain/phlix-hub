@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\SyncPlay;
 
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
+use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\WebSocketCloseFrame;
 use Phlix\Hub\SyncPlay\SyncPlayRelayWorker;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
+use Phlix\Hub\Tests\Support\Relay\RecordingMountLimiter;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
@@ -239,6 +243,152 @@ final class SyncPlayRelayWorkerTest extends TestCase
         );
 
         $this->assertRejectedWithCloseFrame($connection, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
+    }
+
+    // ---- M-HUB-37: pre-auth connect limiter (WS close 1013) ---------------
+
+    /**
+     * Minors campaign M-HUB-37: the :8804 connect path must throttle inbound
+     * upgrades by REAL client IP *before* the auth path, because every attempt
+     * there costs two SQL queries (the relay-token `SELECT` plus the ownership
+     * probe). A max=2 limiter therefore lets one no-token connect through to
+     * the 4401 auth refusal and answers the second with 1013 — the throttle
+     * code, never the auth code — proving the gate short-circuits ahead of the
+     * credential path. After the window elapses the same IP is admitted to the
+     * auth gate again (the budget is a window, not a ban).
+     */
+    public function testConnectLimiterTripsAheadOfTheAuthPathThenResets(): void
+    {
+        $this->setServerOwner('server-a', 'user-a');
+
+        $now = 1_000_000;
+        $clock = static function () use (&$now): int {
+            return $now;
+        };
+        $worker = new SyncPlayRelayWorker(
+            SyncPlayRelayWorker::DEFAULT_PORT,
+            1,
+            $this->buildContainer(new RateLimiter(60, 2, 10000, $clock)),
+        );
+        $request = $this->makeUpgradeRequest('/syncplay/server-a');
+
+        // Attempt 1: inside the budget → reaches the auth gate → 4401.
+        $first = $this->makeConnectionFrom('198.51.100.5');
+        $worker->onWebSocketConnect($first, $request);
+        $this->assertRejectedWithCloseFrame($first, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
+
+        // Attempt 2: budget spent → 1013 (throttled). The auth gate is never
+        // reached, so the 4401 signal is absent by construction.
+        $second = $this->makeConnectionFrom('198.51.100.5');
+        $worker->onWebSocketConnect($second, $request);
+        $this->assertRejectedWithCloseFrame($second, SyncPlayRelayWorker::CLOSE_TRY_AGAIN_LATER);
+
+        self::assertSame(0, SyncPlayRelayWorker::getActiveConnectionCount());
+
+        // Past the window the same IP is budgeted afresh → back to the auth
+        // gate (4401, not 1013).
+        $now += 61;
+        $reconnected = $this->makeConnectionFrom('198.51.100.5');
+        $worker->onWebSocketConnect($reconnected, $request);
+        $this->assertRejectedWithCloseFrame($reconnected, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
+    }
+
+    /**
+     * The throttle is a per-IP budget, not a global one: a flood from one
+     * address must not lock the household's other devices out of the surface.
+     * With max=2, the second attempt from `198.51.100.5` trips while the first
+     * from a different IP still reaches the auth gate.
+     */
+    public function testConnectLimiterBucketsPerIp(): void
+    {
+        $this->setServerOwner('server-a', 'user-a');
+
+        $worker = new SyncPlayRelayWorker(
+            SyncPlayRelayWorker::DEFAULT_PORT,
+            1,
+            $this->buildContainer(new RateLimiter(60, 2)),
+        );
+        $request = $this->makeUpgradeRequest('/syncplay/server-a');
+
+        $aggressor = $this->makeConnectionFrom('198.51.100.5');
+        $worker->onWebSocketConnect($aggressor, $request);
+        $this->assertRejectedWithCloseFrame($aggressor, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
+
+        $neighbour = $this->makeConnectionFrom('198.51.100.6');
+        $worker->onWebSocketConnect($neighbour, $request);
+        $this->assertRejectedWithCloseFrame($neighbour, SyncPlayRelayWorker::CLOSE_UNAUTHORIZED);
+
+        $overBudget = $this->makeConnectionFrom('198.51.100.5');
+        $worker->onWebSocketConnect($overBudget, $request);
+        $this->assertRejectedWithCloseFrame($overBudget, SyncPlayRelayWorker::CLOSE_TRY_AGAIN_LATER);
+    }
+
+    /**
+     * Behind the managed install's loopback HAProxy the raw peer IS the proxy,
+     * so a peer-keyed budget would collapse every client into one bucket and
+     * turn the guard into a self-DoS lever. The limiter must key on the REAL
+     * client — the rightmost untrusted `X-Forwarded-For` hop — never on the
+     * loopback peer and never on the client-controlled leftmost entry (the
+     * HB-4.6f law, restated here for :8804).
+     */
+    public function testConnectLimiterKeysOnRealClientIpBehindLoopbackProxy(): void
+    {
+        $this->setServerOwner('server-a', 'user-a');
+
+        $limiter = new RecordingMountLimiter();
+        $worker = new SyncPlayRelayWorker(
+            SyncPlayRelayWorker::DEFAULT_PORT,
+            1,
+            $this->buildContainer($limiter),
+        );
+        $request = $this->makeUpgradeRequest('/syncplay/server-a', null, 'header', null, [
+            'X-Forwarded-For' => '198.51.100.66, 203.0.113.50',
+        ]);
+
+        $connection = $this->makeConnectionFrom('127.0.0.1');
+        $worker->onWebSocketConnect($connection, $request);
+
+        self::assertSame(
+            ['syncplay_mount:203.0.113.50'],
+            $limiter->hits,
+            'the :8804 budget must key on the resolved real client',
+        );
+        self::assertNotContains('syncplay_mount:127.0.0.1', $limiter->hits);
+        self::assertNotContains('syncplay_mount:198.51.100.66', $limiter->hits);
+    }
+
+    /**
+     * An UNRESOLVABLE limiter fails OPEN (unlimited), exactly like the :8803
+     * mount gate: the limiter is a cost cap, not an authorization gate, so a
+     * container outage must degrade to "no throttle" — never to a closed
+     * surface and never to an exception escaping the connect hook (which in a
+     * resident worker would take the whole :8804 process down).
+     */
+    public function testConnectLimiterFailsOpenWhenTheProfileIsUnresolvable(): void
+    {
+        $this->setServerOwner('server-a', 'user-a');
+        $this->grantToken('token-a', 'user-a', 'server-a');
+
+        // No limiter registered at all → get(SYNCPLAY_MOUNT) throws inside
+        // resolveMountLimiter() → null → the hook is unlimited.
+        $worker = new SyncPlayRelayWorker(
+            SyncPlayRelayWorker::DEFAULT_PORT,
+            1,
+            $this->buildContainer(),
+        );
+
+        /** @var list<string> $sink */
+        $sink = [];
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            $connection = $this->makeRecordingConnection($sink);
+            $this->connect($worker, $connection, '/syncplay/server-a', 'token-a');
+        }
+
+        self::assertSame(
+            5,
+            SyncPlayRelayWorker::getActiveConnectionCount(),
+            'an unavailable limiter must not refuse any connect',
+        );
     }
 
     /**
@@ -1191,7 +1341,19 @@ final class SyncPlayRelayWorkerTest extends TestCase
         return $connection;
     }
 
-    private function buildContainer(): ContainerInterface
+    /**
+     * A mock connection whose raw TCP peer is `$ip` — the M-HUB-37 limiter
+     * cases need to control the peer (and only the peer): the real-client
+     * resolution rides the upgrade request's headers, not this address.
+     */
+    private function makeConnectionFrom(string $ip): TcpConnection&MockObject
+    {
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->method('getRemoteIp')->willReturn($ip);
+        return $connection;
+    }
+
+    private function buildContainer(?RateLimiterInterface $mountLimiter = null): ContainerInterface
     {
         // ClientRelayTokenService is final and cannot be mocked; build a real
         // one over a mock Connection whose query() resolves the token lookup
@@ -1226,15 +1388,27 @@ final class SyncPlayRelayWorkerTest extends TestCase
             },
         );
 
-        return new class ($tokenService, $serverInfo) implements ContainerInterface {
+        return new class ($tokenService, $serverInfo, $mountLimiter) implements ContainerInterface {
             public function __construct(
                 private readonly ClientRelayTokenService $tokenService,
                 private readonly ServerInfoHandler $serverInfo,
+                private readonly ?RateLimiterInterface $mountLimiter,
             ) {
             }
 
             public function get(string $id): mixed
             {
+                // The M-HUB-37 limiter is registered ONLY when the case asked
+                // for one: every pre-existing connect case must keep exercising
+                // the fail-OPEN path (unresolvable profile → unlimited), which
+                // is exactly what a container hiccup looks like in production.
+                if ($id === RateLimitProfiles::SYNCPLAY_MOUNT) {
+                    if ($this->mountLimiter === null) {
+                        throw new \RuntimeException('syncplay_mount limiter not registered');
+                    }
+                    return $this->mountLimiter;
+                }
+
                 return match ($id) {
                     ClientRelayTokenService::class => $this->tokenService,
                     ServerInfoHandler::class => $this->serverInfo,
@@ -1265,12 +1439,17 @@ final class SyncPlayRelayWorkerTest extends TestCase
      *                                       present ALONGSIDE the chosen carrier (S355 —
      *                                       the both-carrier edge: auth via header while
      *                                       offering an unrelated subprotocol).
+     * @param array<string,string> $extraHeaders  Additional raw headers (M-HUB-37 —
+     *                                       the proxy-keying cases carry
+     *                                       `X-Forwarded-For`; the request is built
+     *                                       from text so the parse is production's).
      */
     private function makeUpgradeRequest(
         string $path,
         ?string $token = null,
         string $carrier = 'header',
         ?string $extraSubprotocol = null,
+        array $extraHeaders = [],
     ): WorkermanRequest {
         $headers = [
             'Host' => 'hub.example.com',
@@ -1279,6 +1458,9 @@ final class SyncPlayRelayWorkerTest extends TestCase
             'Sec-WebSocket-Version' => '13',
             'Sec-WebSocket-Key' => 'dGhlIHNhbXBsZSBub25jZQ==',
         ];
+        foreach ($extraHeaders as $name => $value) {
+            $headers[$name] = $value;
+        }
 
         if ($token !== null) {
             if ($carrier === 'header') {

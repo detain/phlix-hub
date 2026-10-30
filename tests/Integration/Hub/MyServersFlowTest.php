@@ -190,9 +190,13 @@ final class MyServersFlowTest extends RealDatabaseTestCase
      * Decode the `servers` array out of a JSON response body.
      *
      * ⚠ S173 — this replaces `assertStringContainsString('"servers":[]', …)`.
-     * `Response::json()` encodes with `JSON_PRETTY_PRINT` (src/Http/Response.php:116),
-     * so the body reads `{\n    "servers": []\n}` and the compact-JSON substring has
-     * not matched since pretty-printing was introduced. Asserting on the DECODED
+     * This was written when `Response::json()` encoded with `JSON_PRETTY_PRINT`,
+     * so the body read `{\n    "servers": []\n}` and the compact-JSON substring
+     * had not matched since pretty-printing was introduced. (`Response::json()`
+     * is compact again since minors campaign M-HUB-09 — the substring WOULD
+     * match today, and the decoded-structure law below stays: it is immune to
+     * any future formatting change, which is the actual point.) Asserting on
+     * the DECODED
      * structure is both correct and immune to the next formatting change — a
      * substring assertion on serialised JSON is a formatting test wearing a
      * behaviour test's clothes.

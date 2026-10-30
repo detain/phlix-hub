@@ -73,6 +73,9 @@ final class ServerListControllerTest extends TestCase
 
         $response = $controller->listServers($request);
         self::assertSame(200, $response->statusCode);
-        self::assertStringContainsString('"servers": []', $response->body);
+        // The empty list must stay a JSON ARRAY. Spacing is the compact wire
+        // form: M-HUB-09 removed JSON_PRETTY_PRINT from the shared
+        // Response::json() encode, so this pin tracks the encoder, not the era.
+        self::assertStringContainsString('"servers":[]', $response->body);
     }
 }
