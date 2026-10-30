@@ -64,7 +64,7 @@ final class ClientRelayTokenController
      * @param Request               $request The inbound HTTP request.
      * @param array<string, string> $params  Route params: `id` (server UUID).
      *
-     * @return Response JSON `{token, expires_at}` on success.
+     * @return Response JSON `{token, expires_at, server_id}` on success.
      *
      * @since S2a
      */

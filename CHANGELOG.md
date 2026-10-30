@@ -6,6 +6,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — riders W8 R-HUB-08: the relay-token mint `@return` names the whole 201 payload — 2026-10-30
+
+- **The truth.** M-HUB-08__r2 (Notes) disclosed it: `ClientRelayTokenController::mint()`'s
+  `@return` claimed `{token, expires_at}` while the shipped 201 body carries
+  `{token, expires_at, server_id}` (status(201)->json at the method's tail —
+  r1 MINOR-3 had already re-confirmed the three-key wire shape). Docblock-only
+  cure; no behavior, no wire change, no new codes.
+- **Gates.** Targeted `--filter ClientRelayTokenControllerTest` green
+  unmodified (docblock is prose; no test pinned the stale pair); phpcs BOTH
+  surfaces exit 0 on the changed file (repo config + bare PSR12 — the ScopeIndent
+  law). S439 respected: targeted suites only.
+
 ### Fixed — minors W-min48 (M-HUB-12): the i18n docblock's own pin coordinate, made self-enforcing — 2026-10-30
 
 Review queue `MINORS_QUEUE.md` batch W-min48, closing the hub minors vein
