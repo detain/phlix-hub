@@ -44,12 +44,16 @@ use InvalidArgumentException;
  * - **Mirror, don't invent.** A preflight echoes the requested headers
  *   (`Access-Control-Request-Headers` → `Access-Control-Allow-Headers`) and
  *   reports exactly the verbs the router has registered for that path.
- * - **`Vary: Origin` correctness.** Every response that a request with an
- *   `Origin` header could see carries `Vary: Origin`, merged onto any existing
- *   `Vary`, so an intermediary can never serve a cached allow-response to a
- *   different origin. A request with no `Origin` header (same-origin traffic,
- *   CLI, health probes) leaves every response byte-identical to the
- *   pre-CORS hub.
+ * - **`Vary: Origin` correctness.** Every response that `Router::dispatch`
+ *   produces for a request with an `Origin` header carries `Vary: Origin`,
+ *   merged onto any existing `Vary`, so an intermediary can never serve a
+ *   cached allow-response to a different origin. The hub-level replies
+ *   `src/Application.php` sends from OUTSIDE the router — the pre-router 413
+ *   body-cap and maintenance-503 fast paths and the central 429 and 500
+ *   catches — bypass decoration by construction and carry no CORS headers
+ *   (fail-closed, and origin-independent bytes, so no `Vary` is needed on
+ *   them). A request with no `Origin` header (same-origin traffic, CLI,
+ *   health probes) leaves every response byte-identical to the pre-CORS hub.
  *
  * @package Phlix\Hub\Http
  */
