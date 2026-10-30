@@ -868,9 +868,26 @@ DEFAULT_BACKEND
   } > "$PHLIX_HAPROXY_CFG"
 }
 
+# RFC 1123 hostname test (letters, digits, hyphens, dots; optional trailing
+# dot; labels cannot start/end with a hyphen). Every value interpolated into
+# the managed HAProxy fragment passes this — a newline or space there would
+# write operator-unintended config lines into the fronted front-end.
+phlix_valid_hostname() {
+  local re='^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\.?$'
+  [[ "$1" =~ $re ]]
+}
+
 # Write the phlix-hub fragment. Args: <mode tls|http> <domain or empty>
 phlix_haproxy_write_fragment_hub() {
   local mode="$1" dom="$2"
+  # Choke-point guard (R-HUB-11, review M-HUB-11__r1 m3): ${dom} lands
+  # VERBATIM in the `hdr(host) -i ${dom}` acl lines below. The interactive
+  # path validates at the prompt; the migrate path feeds this from
+  # HUB_PUBLIC_DOMAIN in $ENV_FILE — an operator-editable file — so the
+  # writer itself refuses anything that is not a plain hostname. Blank
+  # (no-domain) stays legal: it selects the unguarded route variant.
+  [ -z "$dom" ] || phlix_valid_hostname "$dom" \
+    || die "Refusing to write the HAProxy fragment: '${dom}' is not a valid hostname (letters, digits, hyphens, dots)."
   mkdir -p "$PHLIX_HAPROXY_MGR_DIR"
   local fragment="$PHLIX_HAPROXY_MGR_DIR/phlix-hub.cfg.fragment"
   {
@@ -1569,6 +1586,12 @@ if [ -z "$DB_PASS" ]; then
   [ -z "$DB_PASS" ] && DB_PASS="$(rand_pass)" && info "Generated a random database password."
 fi
 prompt DOMAIN "Public hostname (blank = no TLS, serve plain HTTP)" "$DOMAIN"
+
+# Validate at input too, not just at the fragment choke: a bad --domain
+# must die before certbot / env-file / systemd work, not at HAProxy-write
+# time after the cert was requested (R-HUB-11; the writer re-checks).
+[ -z "$DOMAIN" ] || phlix_valid_hostname "$DOMAIN" \
+  || die "--domain '$DOMAIN' is not a valid hostname (letters, digits, hyphens, dots)."
 
 if [ -n "$DOMAIN" ] && [ "$WANT_TLS" != "no" ]; then
   prompt ADMIN_EMAIL "Email for Let's Encrypt (blank = skip TLS)" "$ADMIN_EMAIL"

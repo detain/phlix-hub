@@ -6,6 +6,40 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — riders W11 R-HUB-11: the managed-install domain is validated before it reaches the HAProxy fragment — 2026-10-31
+
+- **The ask.** Review M-HUB-11__r1 minor m3 logged the pre-existing gap
+  verbatim: "pre-existing DOMAIN flows unvalidated into the fragment's
+  `hdr(host) -i ${dom}` acl (pre-dates this commit; queue-material, not
+  this lane's debt)". The `--domain` value (CLI flag or prompt answer) was
+  interpolated verbatim into the generated `phlix-hub.cfg.fragment`; a
+  newline or space in it writes operator-unintended config lines into the
+  managed front-end, and the /syncplay/ + /relay/federation/ routes made
+  that fragment worth more than it once was.
+- **The cure (shell-only, zero PHP).** New `phlix_valid_hostname` helper —
+  RFC 1123 grammar (letters, digits, hyphen, dots; hyphen never
+  label-edge; optional trailing dot; single labels stay legal for LAN
+  installs). Guarded at two layers: the input path dies right after the
+  `prompt DOMAIN` step, before certbot / env-file / systemd work begins on
+  a malformed name, and `phlix_haproxy_write_fragment_hub` re-checks at
+  the choke — the `phlix_haproxy_migrate_if_needed_hub` path feeds it
+  `HUB_PUBLIC_DOMAIN` from the operator-editable env file, which no
+  prompt-time check ever covered. Blank domain stays legal (it selects the
+  unguarded route variant); `${mode}` and the backend targets remain
+  script-internal constants, untouched.
+- **Gates.** `bash -n` pass; shellcheck at exact parity (one pre-existing
+  SC2120, zero new findings from this diff). Extracted-function probes:
+  13 grammar cases accept `hub.example.com` / trailing-dot / single-label
+  / uppercase and reject space, newline-injection, underscore, `a..b`,
+  semicolon, backtick, slash, brace, leading-hyphen; the writer choke dies
+  with a named refusal BEFORE creating the fragment dir on a
+  newline-injection dom (tls variant too); http/tls happy paths still write
+  their 1/2 `hdr(host) -i` acl lines. No PHP in the diff → PHPUnit/phpstan/
+  phpcs corpora inert (S439: hub and server suites never run concurrently —
+  nothing here runs either); frozen contract artifacts untouched; no test
+  pins installer bytes (the four `install.sh`-mentioning tests are
+  fixture strings/comments).
+
 ### Fixed — riders W9b R-HUB-09: the deploy surfaces document the CORS allowlist knob — 2026-10-31
 
 - **The ask.** M-HUB-09__fix's own closing line deferred it: "docs/systemd
