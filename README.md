@@ -590,10 +590,33 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # WebSocket upgrade (relay + client mount)
+        # Belt-and-braces upgrade settings: :8800 itself serves no WebSocket
+        # surface (the :8802 server tunnels are direct-connect per the pairing
+        # law, and every proxied mount has its own leg below).
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }
+
+    # Client mount (GET /client/{server_id}, WebSocket) — the leg the reachability
+    # promise above makes, matching the managed HAProxy be_hub_client_relay route
+    # (scripts/install.sh). X-Forwarded-For / X-Real-IP are what the mount reads
+    # to key its per-IP rate limit behind a proxy. Honest posture: this mount is
+    # DECLARED UNAVAILABLE in the deployed topology — after the auth ladder
+    # (limiter -> relay token -> ownership) :8803 answers every upgrade with WS
+    # close 1011 and logs client_mount_bridge_unavailable (docs/websockets.md).
+    # Route it anyway so clients get that loud structured refusal, not a
+    # proxy-level error. Live client-to-server traffic rides the HTTP relay
+    # proxy (/api/v1/servers/{id}/proxy/*), already covered by `location /`.
+    location /client/ {
+        proxy_pass http://127.0.0.1:8803;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 3600s;
     }
 
@@ -967,7 +990,7 @@ Full protocol reference in [`docs/websockets.md`](docs/websockets.md).
 | Endpoint | Port | Notes |
 |----------|------|-------|
 | Server tunnel | `8802` | Server opens its outbound tunnel here |
-| `GET /client/{server_id}` | `8803` | Client connects and is routed to its server |
+| `GET /client/{server_id}` | `8803` | Client mount — ⚠ **declared unavailable**: every authenticated mount is refused with close 1011 (`client_mount_bridge_unavailable`); live traffic rides the `:8800` HTTP relay proxy |
 | `GET /syncplay/{server_id}` | `8804` | SyncPlay client joins a synchronised-playback session |
 | Federation tunnel | `8805` | Peer hub connects for hub-to-hub shares |
 

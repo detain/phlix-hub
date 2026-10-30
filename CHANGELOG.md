@@ -6,6 +6,39 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-23: the README §7 nginx example now serves the client mount it promises — the `/client/` leg lands, with the declared-unavailable posture disclosed in-block — 2026-10-29
+
+Review `hub__writer` M1: §7's prose lists the client mount (`8803`,
+`GET /client/{server_id}`) among the surfaces that "need to be reachable"
+through the reverse proxy, yet the example server block delivered only the
+`8800`/`8804`/`8805` legs — an nginx operator following §7 could not serve the
+mount at all, and the block contradicted the estate's own sanctioned shapes:
+the managed HAProxy fragment routes `/client/` to `:8803`
+(`scripts/install.sh` `be_hub_client_relay`), the firewall table tells the
+`--no-proxy` operator "point your proxy at it", and the custom-proxy paragraph
+says to "replicate the same path prefixes … (`/client/`, `/syncplay/`,
+`/relay/federation/`) and see §7". The block gained the
+`location /client/ { proxy_pass http://127.0.0.1:8803; … }` leg, carrying
+`X-Forwarded-For`/`X-Real-IP` because the mount's per-IP rate limiter resolves
+the real client from exactly those upgrade-request headers
+(`ClientRelayWorker::onWebSocketConnect`). The leg comment states the honest
+posture from the shipped code: the mount is DECLARED UNAVAILABLE in the
+deployed topology — after the auth ladder `:8803` refuses every upgrade with WS
+close 1011 and logs `client_mount_bridge_unavailable`
+(`ClientMountController::onWebSocketConnect`) — routed anyway so clients get
+that loud structured refusal instead of a proxy-level error, while live
+client-to-server traffic rides the `:8800` HTTP relay proxy
+(`/api/v1/servers/{id}/proxy/*`), already covered by `location /`. Two adjacent
+in-block truths were stale on the same claims: the `location /` comment called
+the upgrade settings "relay + client mount" when `:8800` serves no WebSocket
+surface at all (settings kept belt-and-braces, comment corrected), and the
+Relay (WebSocket) endpoint table still promised "Client connects and is routed
+to its server" on `:8803` — now marked declared-unavailable with the 1011
+reason, mirroring the worker table above it. m9's §7 half (the reachability
+list omitting `8804`) was already cured by the prose rewrite that added the
+`/syncplay/` and `/relay/federation/` legs; this lane completes it. Docs-only:
+no `src/`, no wire codes, no `openapi.yaml`, no SPA bundle touched.
+
 ### Fixed — M-HUB-22: the `:8805` federation listener gets the M21 posture law — native `wss://` opt-in, one loud plaintext advisory, a fail-closed mandate, and a docblock that no longer claims WSS — 2026-10-29
 
 Review `hub__secnet` M-3: unlike `:8802`, `:8805` had NO native TLS path at all
