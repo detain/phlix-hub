@@ -1139,7 +1139,7 @@ final class ServerProxyController
 
                 // M-HUB-16: canonical flat envelope at 429 — a concurrent-stream
                 // cap is a quota refusal, not hub unavailability (the server-side
-                // StreamLimitMiddleware precedes with 429 on the same concept).
+                // StreamLimitMiddleware proceeds with 429 on the same concept).
                 // Its recovery instant is NOT derivable (a slot frees whenever a
                 // stream ends), so unlike the bandwidth refusal it carries no
                 // Retry-After/retry_at — recovery time ships only where known.
@@ -1360,7 +1360,7 @@ final class ServerProxyController
      * Build the canonical bandwidth-quota refusal (M-HUB-16).
      *
      * Monthly bandwidth exhaustion is a QUOTA, not hub unavailability, so it
-     * rides 429 (the server-side StreamLimitMiddleware precedes with 429 on the
+     * rides 429 (the server-side StreamLimitMiddleware proceeds with 429 on the
      * concurrent-stream sibling of this concept) inside the hub's flat
      * `{error, code}` envelope — the shared `Response::error()` emit path that
      * every client and the vendored SPA branch on, replacing the hand-rolled

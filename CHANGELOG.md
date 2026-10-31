@@ -6,6 +6,43 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — M-HUB-16 review-carried minors (r1): the "precedes with 429" docblock typo cured at both shipped sites, and the pin-count phrasing forward-recorded — 2026-10-31
+
+- **The ask.** Review `fixlog/M-HUB-16__r1.md` (verdict SHIP) banked four
+  non-blocking P3 findings. Fix-now class: **P3-3** — a docblock typo,
+  "StreamLimitMiddleware *precedes* with 429", at the two shipped sites
+  (`src/Http/Controllers/ServerProxyController.php:1142` and `:1363` at
+  today's tip; the review's `:1130`/`:1351` are the `133b0d84`-era
+  coordinates) where "proceeds" was intended. The r1's own correction to r2
+  stands: exactly 2 sites, both code comments — the CHANGELOG carries zero
+  (grep-measured; the r1 disambiguation is re-verified at this tip).
+- **The cure.** Both comments now read "proceeds with 429". Provable
+  comment-only diff; the server-side `StreamLimitMiddleware.php:139`
+  precedent the sibling note cites stays coordinate-rot-safe (the shipped
+  docblocks name the file, not a line). **P3-1 forward-record (no rewrite
+  of history):** the 2026-10-29 entry's "the four nested-shape pins flipped
+  to the new law (plus the two S247 byte-stream twins)" reads additively but
+  the measured truth is 4 flipped in total, of which 2 ARE the S247
+  byte-stream twins (the parenthetical names a subset, not an addition —
+  r2 and r1 agree). Per the estate's verbatim-history law the historical
+  entry is NOT rewritten; this record is the amendment. **P3-2 listed, not
+  touched:** the `tests/VersionTest.php` trailing-comma carry in
+  `test-durations.json` is inside a blessed generated ledger — the standing
+  law rotates such figures only from a measured re-bless, and the entry's
+  own note says the cache regenerates on the next blessed run; a hand-edit
+  would violate both. **P3-4 listed, no repo surface:** the `:142` vs `:139`
+  plan-cite drift lives only in the lane's `__fix.md` and is already
+  disclosed there; shipped code is coordinate-free.
+- **Gates.** `php -l` clean on the changed file; diff is provably
+  comment-only (both changed lines are `//`/`*` prose). Targeted
+  `--filter 'AdmissionEnvelope|ServerProxyController'` serial (S439 — hub
+  suites only, no server venue fired, no MySQL needed): green, counts in the
+  report below. phpcs `--standard=PSR12` and `--standard=phpcs.xml.dist` on
+  the changed file both rc 0. phpstan prod on the changed file [OK]
+  (comment-only). No wire, contract, openapi or SPA surface touched — md5
+  trio cannot move. Historical CHANGELOG verbatim, forward entry prepended
+  [review M-HUB-16__r1 carried minors].
+
 ### Fixed — rider W16 R-HUB-16: the claim body cap's docblock states its true scope — the byte floor guards the public `newClaim` POST only; the sibling `claim()` is deliberately uncapped (r1's "claim POSTs" plural was phrasing overscope, adjudicated in M-HUB-13__r2 minor-1) — 2026-10-30
 
 - **The ask.** Rider R-HUB-16 (from fixlog/M-HUB-13__r2.md non-blocking
