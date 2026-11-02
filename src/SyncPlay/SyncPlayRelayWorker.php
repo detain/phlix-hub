@@ -2593,7 +2593,9 @@ final class SyncPlayRelayWorker
     /**
      * INCIDENT playjump hub twin — the anchor-ADVANCED group position for
      * the echo chain (mirrors phlix-server `GroupState::getAdvancedPlayback
-     * Position`, commit `86427c6d`, verbatim in semantics):
+     * Position`, commit `86427c6d`, in its advancing semantics — the full
+     * arm-by-arm comparison, with both deliberate omissions disclosed
+     * below, is this docblock):
      *
      *     while playing:  position = raw + max(0, nowMs − anchorAtMs)  (1×)
      *     otherwise:      position = raw anchor (unchanged)
@@ -2610,9 +2612,17 @@ final class SyncPlayRelayWorker
      * Exact milliseconds by law: whole-second quantization would leave two
      * echoes inside one second identical — the frozen-anchor defect in
      * miniature (rejected on record in the server lane, inherited here).
-     * No duration clamp: a JSON relay never inspects media and honestly
-     * answers `current_media_duration: 0` (`canonicalGroupPayload` law), so
-     * there is nothing to clamp against until the wire carries a duration.
+     * TWO clamp arms of the server formula are deliberately NOT mirrored:
+     * (a) the duration clamp — a JSON relay never inspects media and
+     * honestly answers `current_media_duration: 0` (`canonicalGroupPayload`
+     * law), so there is nothing to clamp against until the wire carries a
+     * duration; (b) the server's trailing `max(0, $advanced)` negative
+     * floor — a host-sent negative `position` (canonicalInt passes negatives
+     * through) echoes negative here, exactly as the RAW pre-cure echo always
+     * did; the elapsed term itself clamps at zero, so the advance can only
+     * add to an anchor, never deepen it. Neither omission is a regression
+     * (review `INCIDENT-playjump-hubtwin__r1` MINOR-1); the duration leg was
+     * already disclosed, the negative floor is disclosed here.
      * The reading is pure: neither the anchor nor its stamp moves.
      *
      * @param array{type: string, from_client_id: string, timestamp: int,
