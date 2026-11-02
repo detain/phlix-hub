@@ -6,6 +6,72 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — @phlix/ui v0.99.12 → v0.99.13 re-pin + served /app regen (tag-wave C2-hub) — 2026-11-02
+
+- **The pin.** `web-ui/package.json` moves the tag-form tarball pin
+  `v0.99.12 → v0.99.13` (tag object `ff9c1f91`, peel `e30bae9f` — the ui
+  repo master tip at cut time). The lock regenerates MINIMAL: `npm install
+  @phlix/ui` under the CI-pinned toolchain (node 24.20.0 + bundled npm
+  11.19.0, `NPM_CONFIG_USERCONFIG=/dev/null`) moves exactly 4 lines
+  (root echo URL, ui version, resolved URL, integrity) and the result is
+  idempotent under `npm ci`. The integrity byte-matches the server lane's
+  lock line for the same tag; the nested git-pins HOLD — contracts
+  `v0.5.4` → `c491985317ac9844bcf24caea2f3af6dea556fe1`, syncplay `v0.1.6`
+  → `081687742cdf03e8e362548de231bd0e45413d6b`, each re-verified against
+  the live tag peel the same hour. The installed `dist/` is byte-identical
+  to the freshly-fetched tag tarball (`diff -r` empty).
+- **What v0.99.13 carries.** The Select.vue internal template-ref rename
+  (`open → isOpen`, the ui-side `vue/no-dupe-keys` cure — an internal
+  identifier the minifier never preserves, so no runtime string
+  discriminator exists) plus the toolchain-era dist rebuild from the owner's
+  dependency refresh. No API, no wire, no exports moved.
+- **S181 acceptance.** `php scripts/report-ui-pin-skew.php` measured RED at
+  parent `fb84a368` (exit 1, 3 blocking rows: hub + windows + tizen all
+  STALE once the tag went live); after this re-pin the hub row is OK.
+  DISCLOSED EXTERNAL: `phlix-windows-client` and `phlix-tizen-client` still
+  pin v0.99.12 on their origin masters, so the hub CI `UI Pin Skew` job
+  keeps its two STALE rows (2 blocking) until those lanes land — the same
+  errors reproduce running the reporter at this commit's parent, where the
+  hub's own last push predates the tag and stayed green. This change
+  deliberately touches no sibling repo.
+- **Era currency (M-HUB-12).** `web-ui/tests/ui-pin-currency.test.ts`
+  reddened the two version-coordinate docblocks it gates —
+  `src/i18n/index.ts` ("SHIPS the locale bundles") and
+  `src/components/HubPageHint.vue` (PageHint runtime-barrel posture) — both
+  rotated to v0.99.13 and re-verified against the resolved bytes (locale
+  catalogs present at the main entry; `PageHint` still on
+  `dist/phlix-ui.js`, still unnamed in `dist/index.d.ts`). Three further
+  current-pin statements rotated per the c4c5fb82 precedent with their
+  coordinates re-verified unmooved: `src/utils/shareLiveness.ts`
+  (`safeHref` at `dist/index.d.ts:218`), `src/utils/watchPartyWire.ts` and
+  `src/pages/HubWatchPartyPage.vue` (`buildHubRelayUrl` /
+  `HUB_SYNC_PLAY_PORT` at `dist/index.d.ts:16`). web-ui `node --test`:
+  136/136, baseline-exact.
+- **The served bundle.** `public/assets/app` rebuilt from the new lock
+  under the CI toolchain: 198 files (count stable), aggregate md5
+  `c74bff5e41fbafa762cfcbf495f9cecc → cae2407a4408606149477d2fc43feeb5`
+  (sorted-path md5-list pipeline; the BEFORE figure recomputed from the
+  committed blobs reproduces the recorded bb7a35c9-era number, proving the
+  method matches history). Determinism proven: two consecutive clean builds
+  byte-identical (list diff 0). Churn: 167 content-hash chunk rotations + 2
+  name-stable in-place files (`.vite/manifest.json`, `index.html`) + 29
+  byte-ident. The `index.html` reference table carries the era swap (entry
+  `index-CnrKvAPv.js → index-CHV02oiR.js` plus the full ui component-chunk
+  fleet). No version strings exist inside JS chunks; the era docblock text
+  rides only the entry chunk's sourcemap `sourcesContent` — which is also
+  why the pre-rotation first build differed from the final pair.
+- **Local gates.** Targeted PHP (`--filter
+  'UiPinSkew|SpaBrowser|StaticAssetCache|SpaBundle|RuntimeNpmGuidance|IntegrationDbCiWiring'`):
+  OK 74 tests / 329 assertions. Full parallel `Unit,Integration` against a
+  throwaway host-network MySQL 8.0 (the NAT port-map is broken on this
+  docker host — `--network=host` venue only): merged 5373 tests / 46231
+  assertions / 30 skipped, WALL 111.3s. One bucket reddened on
+  `RelayProxyBridgeTest` with `Class "Swoole\Coroutine" not found` — host
+  venue (the extension exists at `/usr/lib/php/20230831/swoole.so` but is
+  unloaded in the host CLI; CI's setup-php loads it): the same file is
+  OK 17 tests / 56 assertions under `php -d extension=swoole`, and this
+  lane's diff contains zero PHP files.
+
 ### Fixed — INCIDENT playjump hub twin: the relay echo now ADVANCES the group anchor (cures the :8804 watch-party rubber-band) — 2026-11-02
 
 - **The symptom and the cause.** A playing group's stored anchor moves only
