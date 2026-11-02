@@ -132,10 +132,12 @@ export function formatLastSeen(unixSeconds: number | null | undefined, nowMs: nu
 /**
  * Blocklist sanitizer for wire-supplied link destinations — PORT of @phlix/ui's
  * `safeHref` (M-UI-11 law, home `src/utils/safeHref.ts` in the phlix-ui repo),
- * reproduced byte-faithfully because the hub is pinned to @phlix/ui v0.99.10,
- * whose barrel does not yet export the primitive (published from the barrel in
- * the ui r2 rework, post-10.10). Retire this copy on the next ui re-pin by
- * importing from the package instead.
+ * reproduced byte-faithfully. The pin this file last named predates the
+ * primitive's barrel publication; the vendored v0.99.12 package DOES export
+ * `safeHref` (`dist/index.d.ts:218`), so this copy is now RETIRABLE — the
+ * retire (delete the port, import from the package, re-pin the node tests onto
+ * the package export) is registered as a follow-up at [tag-wave C2], kept out
+ * of this lane to keep the re-pin pure.
  *
  * Returns `undefined` for script-y schemes (after control/space stripping) so
  * callers bind it straight into `:href`/guard `window.open` with one check.

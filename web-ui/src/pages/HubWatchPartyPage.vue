@@ -32,9 +32,9 @@
  * All frame parsing/building, link math and refusal sentences live in
  * `utils/watchPartyWire.ts` (pure, node-tested); this file only binds them.
  *
- * Package-boundary posture: the vendored @phlix/ui at the pin (v0.99.10) DOES
+ * Package-boundary posture: the vendored @phlix/ui at the pin (v0.99.12) DOES
  * export the pure dial primitives at its package entry (`buildHubRelayUrl`,
- * `HUB_SYNC_PLAY_PORT` — dist/index.d.ts:15-16), but its socket API
+ * `HUB_SYNC_PLAY_PORT` — dist/index.d.ts:16), but its socket API
  * `openHubRelayConnection` is a store-bound `pending_command`/`play_media`
  * consumer that ignores the `syncplay_group_*` vocabulary — the wrong shape
  * for party ops, which must own the raw socket. So the wire law lives

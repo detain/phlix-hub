@@ -30,7 +30,7 @@
  *     shipping a lie in the UI.
  *  3. VENDORED-ENTRY cross-pins (r2, review M8-r1 MAJOR-1): the pinned
  *     `@phlix/ui` DOES export the dial law at its entry
- *     (`buildHubRelayUrl`/`HUB_SYNC_PLAY_PORT`, `dist/index.d.ts:15-16`) — the
+ *     (`buildHubRelayUrl`/`HUB_SYNC_PLAY_PORT`, `dist/index.d.ts:16`) — the
  *     hub-local re-statement is a CHOSEN posture (the ui socket API is a
  *     store-bound pending-command consumer), so the two 8804 law producers
  *     are pinned against EACH OTHER: port equality, byte-identical URL
@@ -453,7 +453,7 @@ describe('dial law vs the pinned @phlix/ui entry (r2 cross-pins)', () => {
     it('the false seam premise never returns in the shipped docblocks (regression)', () => {
         assert.equal(WIRE_SOURCE.includes('not exported from the pinned package entry'), false);
         assert.equal(PAGE_SOURCE.includes('exports none of it from the'), false);
-        assert.match(WIRE_SOURCE, /dist\/index\.d\.ts:15-16/);
+        assert.match(WIRE_SOURCE, /dist\/index\.d\.ts:16\b/);
     });
 
     it('the copy-link hint tells the truth: every member holds the same link', () => {
