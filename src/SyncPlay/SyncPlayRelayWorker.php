@@ -2179,6 +2179,23 @@ final class SyncPlayRelayWorker
      * non-string stamp to (`senderId ?? ''`, phlix-syncplay `src/client.ts:1435`),
      * so the cure is meaning-preserving for every consumer and contract-
      * conforming on the wire [review riders W15, R-HUB-15].
+     *
+     * INCIDENT playjump (hub twin of phlix-server `86427c6d`): the `position`
+     * answer is no longer the raw frozen anchor but the ADVANCED reading —
+     * while playing, anchor + elapsed on the hub's ms clock
+     * ({@see self::advancedPlaybackPosition()}). Answering the frozen value
+     * every ~5 s was the relay-mode rubber-band (era report §4: the hub's
+     * `cc1e1289` echo path is the new-server-cause). ONE reference tick is
+     * read per ingest and drives BOTH the advanced position and the
+     * `server_time` stamp, so a frame can never carry a position and a clock
+     * that disagree — the server's position/drift/predicate one-tick law
+     * reduced to the hub's two value sites (this relay has no member ingest,
+     * in-sync predicate or nudge; its stated deviations). Scope is the echo
+     * chain: `syncplay_group_state`, bare `room_state.playback` and
+     * `syncplay_group_list` keep answering the raw anchor, mirroring the
+     * server's REST/snapshot discipline. No payload key added, removed or
+     * renamed; no new error codes; the hub's pinned ms `server_time` law
+     * (audit L-2) unchanged.
      */
     private function handleCanonicalPlaybackSync(SyncPlayClient $client): void
     {
@@ -2191,14 +2208,19 @@ final class SyncPlayRelayWorker
 
         self::$roomActivity[$room] = time();
         $anchor = self::$roomPlayback[$room] ?? null;
+        $isPlaying = (self::$roomStates[$room] ?? 'stopped') === 'playing';
+
+        // The one reference tick: `position` and `server_time` below both
+        // read THIS instant (INCIDENT playjump one-tick law).
+        $nowMs = self::nowMs();
 
         $this->broadcastCanonical($room, self::canonicalFrame('syncplay_playback_sync', [
             'member_id' => self::$roomHosts[$room] ?? '',
             'group_id' => self::friendlyFromScoped($client, $room),
             'current_media_id' => $anchor['media_id'] ?? null,
-            'position' => isset($anchor['position']) ? (int) $anchor['position'] : 0,
-            'is_playing' => (self::$roomStates[$room] ?? 'stopped') === 'playing',
-            'server_time' => self::nowMs(),
+            'position' => self::advancedPlaybackPosition($anchor, $isPlaying, $nowMs),
+            'is_playing' => $isPlaying,
+            'server_time' => $nowMs,
         ]));
     }
 
@@ -2566,6 +2588,48 @@ final class SyncPlayRelayWorker
         }
 
         return $anchor;
+    }
+
+    /**
+     * INCIDENT playjump hub twin — the anchor-ADVANCED group position for
+     * the echo chain (mirrors phlix-server `GroupState::getAdvancedPlayback
+     * Position`, commit `86427c6d`, verbatim in semantics):
+     *
+     *     while playing:  position = raw + max(0, nowMs − anchorAtMs)  (1×)
+     *     otherwise:      position = raw anchor (unchanged)
+     *
+     * The stamp needs no new field here: unlike the server's GroupState,
+     * the relay's anchor was born carrying its write-instant — `playback
+     * Anchor()` stores `timestamp` = the same hub ms clock — and the whole
+     * state is process-local (no serialize bridge: the persistence leg of
+     * the server cure is structurally N/A on this side, disclosed rather
+     * than cargo-culted). Anchor writes are the host's explicit play/pause
+     * /seek only (:1604 bare relay, :2143 canonical), so advancing between
+     * them cannot double-count a value another host already advanced.
+     *
+     * Exact milliseconds by law: whole-second quantization would leave two
+     * echoes inside one second identical — the frozen-anchor defect in
+     * miniature (rejected on record in the server lane, inherited here).
+     * No duration clamp: a JSON relay never inspects media and honestly
+     * answers `current_media_duration: 0` (`canonicalGroupPayload` law), so
+     * there is nothing to clamp against until the wire carries a duration.
+     * The reading is pure: neither the anchor nor its stamp moves.
+     *
+     * @param array{type: string, from_client_id: string, timestamp: int,
+     *               position?: float, media_id?: string}|null $anchor
+     * @param bool $isPlaying The room's playing-ness at the SAME tick
+     * @param int  $nowMs     Wall-clock ms of the echo's one reference tick
+     * @return int Position in milliseconds
+     */
+    private static function advancedPlaybackPosition(?array $anchor, bool $isPlaying, int $nowMs): int
+    {
+        $raw = isset($anchor['position']) ? (int) $anchor['position'] : 0;
+
+        if ($anchor === null || !$isPlaying) {
+            return $raw;
+        }
+
+        return $raw + max(0, $nowMs - $anchor['timestamp']);
     }
 
     /**

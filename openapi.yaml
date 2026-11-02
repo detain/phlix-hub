@@ -4410,7 +4410,8 @@ x-phlix-websockets:
         the anchor (position/media/state) updates before the fan-out.
       - >-
         client→hub syncplay_playback_sync — state report relayed to EVERY member including the
-        reporter, carrying the ROOM TRUTH (current anchor) with `member_id` = the host and the hub's
+        reporter, carrying the ROOM TRUTH (anchor advanced by elapsed playing time while playing,
+        from the SAME reference tick that stamps `server_time`) with `member_id` = the host and the hub's
         unix-ms `server_time` (documented deviation: :8097 answers this in unix seconds — SPEC §2's
         ms law governs the relay).
       - "client→hub syncplay_playback_queue — host-only queue replacement, normalized all-or-nothing (entries need a string media_id; media_info keeps string keys only) and capped at 1000 — over-cap is refused with syncplay_error syncplay.queue_limit_exceeded and the stored queue unchanged; accepted queues broadcast to all members."

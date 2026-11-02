@@ -6,6 +6,46 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — INCIDENT playjump hub twin: the relay echo now ADVANCES the group anchor (cures the :8804 watch-party rubber-band) — 2026-11-02
+
+- **The symptom and the cause.** A playing group's stored anchor moves only
+  on host play/pause/seek writes. `handleCanonicalPlaybackSync` echoed that
+  RAW frozen value every ~5s, so drift-correcting clients watching for
+  "play" kept re-seeking backward to the stale position — the rubber-band
+  incident (the `:8804` relay echo is the new-server-cause path in the era
+  report). This mirrors the landed server cure `86427c6d` (phlix-server)
+  verbatim in semantics: one reference tick, exact milliseconds;
+  quantization and the raw drift/predicate split stay REJECTED on record
+  there, inherited here.
+- **The cure.** `advancedPlaybackPosition(?array $anchor, bool $isPlaying,
+  int $nowMs)` — playing: raw anchor + max(0, nowMs − anchor stamp), exact
+  ms; not playing: the raw anchor unchanged. The stamp ALREADY rides the
+  hub's `playbackAnchor()` shape, so there is NO new persisted field and no
+  serialize bridge (the server's `playback_position_at_ms` mirror leg has
+  no hub analogue: hub room state is process-local and swept with the
+  room). `handleCanonicalPlaybackSync` reads ONE tick and both the echoed
+  `position` and `server_time` ride it — a frame can never carry a position
+  and a clock that disagree. No duration clamp: the relay never inspects
+  media and its honest `current_media_duration` is 0 (a 0-clamp IS the
+  rubber-band). The snapshot surfaces (join `group_state`/`room_state`,
+  `group_list`) keep answering the RAW anchor by design — scope is the echo
+  chain only.
+- **Wire law.** Zero payload keys added/removed/renamed, zero new error
+  codes; the documented `:8097`-vs-relay `server_time` scale deviation is
+  untouched.
+- **Tests.** New `tests/Unit/SyncPlay/SyncPlayRelayEchoAdvanceTest` (8
+  cases: five convictions — red at parent `de19413e` with the frozen echo,
+  green at cure — plus paused/never-played/future-stamp guards and the
+  float-anchor truncation law), driven through the real worker `onMessage`
+  with genuine timing; the anchor-stripped mutant reddens EXACTLY the five
+  convictions. Disclosed golden moves (exact-echo pins that survived only
+  on sub-ms play→sync accidents): three `assertSame`s in
+  `SyncPlayRelayCanonicalDialectTest` (90000 room-truth, 4242 refusal law —
+  it measured a real 1 ms drift at cure —, 60000 ms-scale) become bounded
+  pairs that keep each law mutation-toothed (the 555 spoof and the refused
+  99999 bare-write mutants still convict). Doc currency: the echo rows in
+  `docs/websockets.md` and `openapi.yaml` now name the advanced position.
+
 ### Fixed — M-HUB-16 review-carried minors (r1): the "precedes with 429" docblock typo cured at both shipped sites, and the pin-count phrasing forward-recorded — 2026-10-31
 
 - **The ask.** Review `fixlog/M-HUB-16__r1.md` (verdict SHIP) banked four

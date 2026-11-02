@@ -353,7 +353,16 @@ final class SyncPlayRelayCanonicalDialectTest extends TestCase
             $syncs = $this->sinkFramesOfType($sink, 'syncplay_playback_sync');
             self::assertCount(1, $syncs, "{$who}: S291 — the echo reaches EVERYONE including the reporter");
             self::assertSame($aId, $syncs[0]['member_id'], 'the echo is HOST-stamped, never reporter-stamped');
-            self::assertSame(90000, $syncs[0]['position'], 'the ROOM truth echoes, not the reported 555');
+            // INCIDENT playjump hub twin (server 86427c6d): the echo position
+            // is now the ADVANCED anchor — the exact-90000 pin survived only
+            // on a zero-ms play→sync gap (disclosed golden move). The room-
+            // truth law stands: the reported 555 fails the lower bound.
+            self::assertGreaterThanOrEqual(
+                90000,
+                $syncs[0]['position'],
+                'the ROOM truth echoes (advancing), never the reported 555'
+            );
+            self::assertLessThan(90000 + 60_000, $syncs[0]['position'], 'bounded to 60s of clock');
             self::assertTrue($syncs[0]['is_playing']);
             self::assertSame('m1', $syncs[0]['current_media_id']);
             self::assertSame('party', $syncs[0]['group_id']);
@@ -750,7 +759,12 @@ final class SyncPlayRelayCanonicalDialectTest extends TestCase
         $worker->onMessage($connA, $this->canonicalFrame('syncplay_playback_sync', []));
         $syncs = $this->sinkFramesOfType($sinkA, 'syncplay_playback_sync');
         self::assertCount(1, $syncs);
-        self::assertSame(4242, $syncs[0]['position'], 'the refused bare write never touched the shared anchor');
+        // INCIDENT playjump hub twin (server 86427c6d): the echo ADVANCES from
+        // the canonical anchor (this exact-4242 pin measured 1ms drift at the
+        // cure — disclosed golden move). The refusal law stays mutation-toothed:
+        // a landed bare write would answer from 99999, past the upper bound.
+        self::assertGreaterThanOrEqual(4242, $syncs[0]['position'], 'the ROOM anchor echoes, advancing');
+        self::assertLessThan(4242 + 60_000, $syncs[0]['position'], 'refused bare 99999 write never landed');
         self::assertTrue($syncs[0]['is_playing']);
     }
 
@@ -1341,10 +1355,13 @@ final class SyncPlayRelayCanonicalDialectTest extends TestCase
             'the state anchor rides the same ms number the host sent',
         );
 
-        // And the sync echo agrees:
+        // And the sync echo agrees: on the ms scale, answering the playjump-
+        // cured ADVANCED anchor (disclosed golden move: the exact-60000 pin
+        // was timing-coupled — green only while play→sync stayed sub-ms).
         $worker->onMessage($connB, $this->canonicalFrame('syncplay_playback_sync', []));
         $echo = $this->sinkFramesOfType($sinkB, 'syncplay_playback_sync')[0];
-        self::assertSame(60000, $echo['position']);
+        self::assertGreaterThanOrEqual(60000, $echo['position'], 'the ms-scale echo advances from the anchor');
+        self::assertLessThan(60000 + 60_000, $echo['position'], 'bounded to 60s of clock');
     }
 
     public function testLastMemberLeaveClearsEveryCanonicalBook(): void
