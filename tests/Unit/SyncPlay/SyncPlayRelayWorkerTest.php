@@ -31,11 +31,13 @@ use function file_get_contents;
 use function hash;
 use function implode;
 use function is_array;
+use function is_file;
 use function is_string;
 use function json_decode;
 use function json_encode;
 use function microtime;
 use function round;
+use function substr_count;
 use function token_get_all;
 
 use const T_COMMENT;
@@ -950,6 +952,81 @@ final class SyncPlayRelayWorkerTest extends TestCase
         self::assertIsArray($echoA, 'L-1: the sender did not receive its own playback broadcast');
         self::assertIsArray($echoC, 'the other member did not receive the playback broadcast');
         self::assertSame($senderId, $echoC['from_client_id'] ?? null, 'server-authoritative sender id missing');
+    }
+
+    /**
+     * Review Minor 64 — a congested member must be LOUD once, then quiet.
+     *
+     * C joins through a connection whose send buffer is already over the cap:
+     * Workerman's send() answers false (the frame is discarded, not queued).
+     * The worker keeps attempting every later frame (no disconnect, no silent
+     * self-heal assumption) but the relay log must carry exactly ONE warning
+     * for the connection — the inbound throttle's one-warning latch mirrored
+     * on the send leg. (Self-healing stays honest: full-state frames restore
+     * C's picture on the next broadcast; a window that never reopens is reaped
+     * by the M-HUB-18 liveness path, not by this helper.)
+     */
+    public function testACongestedMemberIsLoggedOnceAndKeptReceivingAttempts(): void
+    {
+        $this->grantToken('token-a', 'user-a', 'server-a');
+        $this->grantToken('token-c', 'user-a', 'server-a');
+        $this->setServerOwner('server-a', 'user-a');
+
+        // Point the log at a readable file stream (Monolog StreamHandler is
+        // unbuffered per record) so the warning COUNT — the actual law — is
+        // observable, not just the latch property.
+        $logPath = $this->tmpDir . '/congestion-relay.log';
+        $fileConfig = $this->tmpDir . '/logger-congestion.php';
+        file_put_contents(
+            $fileConfig,
+            "<?php return ['default' => 'congestion', 'handlers' => ['congestion' => "
+            . "['type' => 'stream', 'path' => '" . $logPath . "', 'level' => 'debug']]];",
+        );
+        LoggerFactory::reset();
+        LoggerFactory::init($fileConfig);
+
+        $worker = new SyncPlayRelayWorker(SyncPlayRelayWorker::DEFAULT_PORT, 1, $this->buildContainer());
+
+        $sinkA = [];
+        $connA = $this->makeRecordingConnection($sinkA);
+
+        $congestedAttempts = 0;
+        $connC = $this->createMock(TcpConnection::class);
+        $connC->method('send')->willReturnCallback(
+            function (mixed $data) use (&$congestedAttempts): bool {
+                if (is_string($data)) {
+                    $congestedAttempts++;
+                }
+                return false; // buffer over cap — vendor discards the frame
+            },
+        );
+
+        $this->connect($worker, $connA, '/syncplay/server-a', 'token-a');
+        $worker->onMessage($connA, $this->joinFrame('movie-night', 'Alice'));
+
+        // C's join room_state is the FIRST congested delivery → warning #1.
+        $this->connect($worker, $connC, '/syncplay/server-a', 'token-c');
+        $worker->onMessage($connC, $this->joinFrame('movie-night', 'Carol'));
+
+        // A plays; the broadcast still ATTEMPTS C (delivery #2) but the latch
+        // must keep the log silent about it.
+        $worker->onMessage($connA, $this->playFrame());
+
+        self::assertSame(
+            2,
+            $congestedAttempts,
+            'congestion must never make the relay skip later frames for the member',
+        );
+
+        $logs = is_file($logPath) ? (string) file_get_contents($logPath) : '';
+        self::assertSame(
+            1,
+            substr_count($logs, 'outbound buffer overflow'),
+            'exactly one congestion warning per connection — the latch is the law',
+        );
+
+        // A's healthy fan-out is untouched by C's stall.
+        self::assertIsArray($this->firstSinkFrameOfType($sinkA, 'playback_play'));
     }
 
     /**

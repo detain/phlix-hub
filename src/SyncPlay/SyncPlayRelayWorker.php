@@ -1511,7 +1511,7 @@ final class SyncPlayRelayWorker
             'clients' => $this->getRoomState($scopedRoom),
             'playback' => self::$roomPlayback[$scopedRoom] ?? null,
         ];
-        $client->connection->send(json_encode($stateMessage, JSON_THROW_ON_ERROR));
+        $this->deliver($client, json_encode($stateMessage, JSON_THROW_ON_ERROR));
 
         // Notify the OTHER members about the new joiner. The joiner is EXCLUDED
         // on purpose (audit L-1): both docs promise "Another client joined the
@@ -1641,7 +1641,7 @@ final class SyncPlayRelayWorker
             'client_time' => $message['client_time'] ?? null,
         ];
 
-        $client->connection->send(json_encode($reply, JSON_THROW_ON_ERROR));
+        $this->deliver($client, json_encode($reply, JSON_THROW_ON_ERROR));
     }
 
     // =====================================================================
@@ -1691,6 +1691,38 @@ final class SyncPlayRelayWorker
     }
 
     /**
+     * Single client-facing delivery point (review Minor 64).
+     *
+     * Workerman's `send()` returns false when the payload would push the
+     * per-connection send buffer past its cap — the frame is DISCARDED, not
+     * queued (the Tunnel re-queue law is byte-stream-specific and does not
+     * apply here). Fan-out call sites used to drop that verdict on the floor,
+     * so a stalled member silently degraded. The recovery story is unchanged
+     * and honestly scoped: group-state frames are full-state echoes, so each
+     * drop self-heals on the next broadcast, and the M-HUB-18 liveness ping
+     * reaps a member whose window never reopens. What this helper adds is the
+     * SIGNAL — one warning per connection (the inbound throttle's
+     * one-warning latch mirrored; a stalled window emits a steady discard
+     * stream and logging each would recreate the flood).
+     */
+    private function deliver(SyncPlayClient $client, string $payload): void
+    {
+        if ($client->connection->send($payload)) {
+            return;
+        }
+
+        if ($client->outboundCongestionLogged) {
+            return;
+        }
+        $client->outboundCongestionLogged = true;
+
+        LoggerFactory::get(LogChannels::RELAY)->warning('SyncPlay: outbound buffer overflow, frame discarded', [
+            'client_id' => $client->clientId,
+            'server_id' => $client->serverId,
+        ]);
+    }
+
+    /**
      * Write one canonical frame to a single client.
      *
      * @param array<string, mixed> $frame
@@ -1699,7 +1731,7 @@ final class SyncPlayRelayWorker
      */
     private function sendCanonical(SyncPlayClient $client, array $frame): void
     {
-        $client->connection->send(json_encode($frame, JSON_THROW_ON_ERROR));
+        $this->deliver($client, json_encode($frame, JSON_THROW_ON_ERROR));
     }
 
     /**
@@ -1766,7 +1798,7 @@ final class SyncPlayRelayWorker
             if ($excludeClientId !== null && $client->clientId === $excludeClientId) {
                 continue;
             }
-            $client->connection->send($encoded);
+            $this->deliver($client, $encoded);
         }
     }
 
@@ -2534,7 +2566,7 @@ final class SyncPlayRelayWorker
             if ($excludeClientId !== null && $client->clientId === $excludeClientId) {
                 continue;
             }
-            $client->connection->send($message);
+            $this->deliver($client, $message);
         }
     }
 

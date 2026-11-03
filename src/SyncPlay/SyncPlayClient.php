@@ -42,6 +42,14 @@ final class SyncPlayClient
     public bool $inboundThrottleLogged = false;
 
     /**
+     * One-warning-per-connection latch for OUTBOUND congestion drops (review
+     * Minor 64): a stalled TCP window produces a steady stream of discarded
+     * frames; logging each one recreates the flood the latch exists to mute.
+     * Mirrors {@see self::$inboundThrottleLogged} on the send leg.
+     */
+    public bool $outboundCongestionLogged = false;
+
+    /**
      * Wire-dialect latch (owner decision #14). `false` = the legacy bare room
      * vocabulary (`group_join`/`room_state`/`playback_*`), the dialect this
      * worker shipped with. `true` = the canonical `syncplay_*` catalog

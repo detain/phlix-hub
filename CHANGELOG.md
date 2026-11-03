@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 64 (SyncPlay fan-out congestion is loud once, 2026-11-03)
+- **`send()` verdicts no longer dropped on the floor.** The five fan-out and
+  reply sites (room_state-on-join, time_sync_reply, sendCanonical,
+  broadcastCanonical, broadcastToRoom) discarded Workerman's
+  false-on-buffer-over-cap return — a stalled member degraded with zero
+  operator signal. All five now route through one `deliver()` helper: the
+  frame still rides the self-heal story honestly (full-state echoes restore
+  the next broadcast; a never-reopening window is reaped by M-HUB-18
+  liveness), but congestion logs **exactly one warning per connection** —
+  the inbound throttle's one-warning latch mirrored as
+  `SyncPlayClient::$outboundCongestionLogged`. Ping paths and the
+  delivered-counter site untouched (already verdict-aware). New behavioral
+  test drives two congested deliveries against a readable stream log and
+  asserts attempts-continue plus warning-count-one.
+
 ### Fixed — review Minor 57 (declared WS inbound package cap, 2026-11-03)
 - **The four websocket surfaces stop inheriting their memory bound from
   vendor.** :8802/:8803/:8804/:8805 all ran on whatever Workerman's
