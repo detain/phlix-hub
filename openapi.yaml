@@ -4976,7 +4976,7 @@ x-phlix-websockets:
     direction: "leaf hub ↔ master hub (leaf dials; handshake and DATA payloads flow both directions)"
     auth: >-
       The hub_id in the path must already be a known peer in `federation_peers`; an unknown id is
-      closed with reason "Unknown hub". Path knowledge is only a routing hint — real authentication
+      closed with reason "unknown_hub". Path knowledge is only a routing hint — real authentication
       is the mutual Ed25519 proof-of-key handshake below: the master signs HELLO_ACK with its hub
       keypair, the leaf verifies it against the master's registered public_key, then the leaf proves
       possession of its registered key over the ack's single-use nonce. The channel is VERIFIED only

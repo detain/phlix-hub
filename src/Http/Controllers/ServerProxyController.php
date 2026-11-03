@@ -1146,8 +1146,8 @@ final class ServerProxyController
                 return (new Response())->error(
                     429,
                     'stream.limit',
-                    'You have reached your maximum number of concurrent streams.',
-                    ['message' => 'You have reached your maximum number of concurrent streams.'],
+                    'You have reached your maximum number of concurrent streams',
+                    ['message' => 'You have reached your maximum number of concurrent streams'],
                 );
             }
 

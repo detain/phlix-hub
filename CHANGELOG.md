@@ -6,6 +6,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minors 58, 60, 61 (copy-law batch, 2026-11-03)
+- **Terminal-period law for API copy (Minor 58, resolving Minor 61).**
+  Adopted house law: API `message`/`error`/`reason` fields carry **no**
+  terminal periods; SPA success toasts **do**. Rotated the four stragglers
+  inside the quota/refusal family to match `QuotaFrames` (already law):
+  `ServerProxyController` stream-cap text ×2 and `RelaySessionManager`
+  download/upload bandwidth reasons — trailing '.' stripped. Test
+  propagation fixtures rotated in step (they forward reasons verbatim, so
+  no law changed — the samples now match real-world shape). Minor 61's
+  'Password updated successfully' API-vs-toast split is exactly this law,
+  now documented: the surfaces differ on purpose.
+- **Close-reason register unification (Minor 60).**
+  `FederationWorker::onConnect()` refused-unknown-peer close moved from the
+  capitalized free-prose `'Unknown hub'` to the snake_case stable register
+  (`unknown_hub`), joining `invalid_path`/`internal_error`; the class
+  docblock, `docs/websockets.md` (law paragraph rewritten to a single
+  register — clients key on the close *code*, reasons stay advisory) and
+  `openapi.yaml` `x-phlix-websockets` :8805 block were synced to the new
+  token. Disclosed decision on the `invalid_hello`/`malformed_hello` twin:
+  kept as-is — `Tunnel` distinguishes unparseable JSON (`malformed_hello`)
+  from wrong-type (`invalid_hello`) from missing-fields
+  (`invalid_hello_payload`) as three separate audit causes, and
+  `RelayWorker`'s two refusal sites match the `invalid_hello` spelling the
+  tests pin; collapsing them would erase a distinction the telemetry relies
+  on.
+
 ### Fixed — review hub Minor 53: 503 shell split (user page vs operator log) — 2026-11-03
 
 - `SharedUiController::shell()` served the SAME "Shared UI not built" page —

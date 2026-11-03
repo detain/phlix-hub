@@ -59,7 +59,7 @@ use function trim;
  *      `federation_peers` DB read — and refuse over budget with a WS close
  *      frame 1013 ({@see self::CLOSE_TRY_AGAIN_LATER}).
  *   3. Validate the hub_id is a known peer in federation_peers.
- *      On failure, close with reason "Unknown hub".
+ *      On failure, close with reason `unknown_hub`.
  *   4. On success, delegate to {@see FederationRelayController::onConnect()}.
  *   5. Subsequent text/binary frames are frame-budgeted per REMOTE peer hub
  *      id ({@see RateLimitProfiles::FEDERATION_FRAME}, hit before dispatch)
@@ -493,7 +493,7 @@ final class FederationWorker
                 $logger->warning('Federation: WS rejected, unknown hub', [
                     'hub_id' => $hubId,
                 ]);
-                $connection->close('Unknown hub');
+                $connection->close('unknown_hub');
                 return;
             }
         } catch (Throwable $e) {

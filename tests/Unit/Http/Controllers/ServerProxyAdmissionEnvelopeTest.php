@@ -108,7 +108,7 @@ final class ServerProxyAdmissionEnvelopeTest extends TestCase
         $forwarded = false;
         $controller = $this->controller([
             'allowed' => false,
-            'reason' => 'You have reached your monthly download bandwidth quota.',
+            'reason' => 'You have reached your monthly download bandwidth quota',
             'maxConcurrentStreams' => 0,
             'retryAt' => $roll,
         ], null, $forwarded);
@@ -124,7 +124,7 @@ final class ServerProxyAdmissionEnvelopeTest extends TestCase
         self::assertSame('quota.exceeded', $body['code'] ?? null);
         // …and `error` is the human TEXT, never a nested object.
         self::assertIsString($body['error'] ?? null);
-        self::assertSame('You have reached your monthly download bandwidth quota.', $body['error']);
+        self::assertSame('You have reached your monthly download bandwidth quota', $body['error']);
         // Legacy mirror kept, matching every sibling refusal in this family.
         self::assertSame($body['error'], $body['message'] ?? null);
         // Recovery time, derivable: absolute epoch in the body…
@@ -149,7 +149,7 @@ final class ServerProxyAdmissionEnvelopeTest extends TestCase
         $forwarded = false;
         $controller = $this->controller([
             'allowed' => false,
-            'reason' => 'You have reached your monthly download bandwidth quota.',
+            'reason' => 'You have reached your monthly download bandwidth quota',
             'maxConcurrentStreams' => 0,
             'retryAt' => null,
         ], null, $forwarded);

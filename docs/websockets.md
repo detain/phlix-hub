@@ -695,7 +695,7 @@ other three.
 2. Per-IP connect rate limit (see below) — over-budget upgrades are refused with a
    real WS close frame `1013` BEFORE any `federation_peers` DB read.
 3. The `hub_id` must already be a known peer in `federation_peers`; otherwise the
-   connection is closed with reason `Unknown hub`. There is no self-service
+   connection is closed with reason `unknown_hub`. There is no self-service
    enrollment on this socket — a peer is created through
    `POST /api/v1/me/federation/peers` first.
 4. On success the connection is handed to `FederationRelayController::onConnect()`;
@@ -704,12 +704,11 @@ other three.
 
 **Close-reason conventions.** The close **code** is the machine contract (the
 table below pins the only coded refusal, `1013`); the **reason text** riding
-the frame is a diagnostic, and it follows two registers. Snake_case tokens —
-`invalid_path`, `internal_error` — are stable identifiers: safe to log-match
-and grep, they are never branch-on contracts for peers. Capitalized free prose
-— `Unknown hub` — is a human-facing sentence, not a stable identifier, and may
-be reworded without notice. Clients and tooling must key behavior on the code
-alone and treat every reason string as advisory.
+the frame is a diagnostic in a single register: snake_case tokens —
+`invalid_path`, `internal_error`, `unknown_hub` — are stable identifiers: safe
+to log-match and grep, they are never branch-on contracts for peers. Clients
+and tooling must key behavior on the code alone and treat every reason string
+as advisory.
 
 ### Rate limiting and close codes (M-HUB-14)
 

@@ -683,7 +683,7 @@ class RelaySessionManager
         if ($quotaBytesIn > 0 && $bytesIn >= $quotaBytesIn) {
             return [
                 'allowed' => false,
-                'reason' => 'You have reached your monthly download bandwidth quota.',
+                'reason' => 'You have reached your monthly download bandwidth quota',
                 'maxConcurrentStreams' => $maxConcurrentStreams,
                 'retryAt' => $this->quotaPeriodEnd($periodStart),
             ];
@@ -693,7 +693,7 @@ class RelaySessionManager
         if ($quotaBytesOut > 0 && $bytesOut >= $quotaBytesOut) {
             return [
                 'allowed' => false,
-                'reason' => 'You have reached your monthly upload bandwidth quota.',
+                'reason' => 'You have reached your monthly upload bandwidth quota',
                 'maxConcurrentStreams' => $maxConcurrentStreams,
                 'retryAt' => $this->quotaPeriodEnd($periodStart),
             ];
