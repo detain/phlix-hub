@@ -1086,6 +1086,8 @@ development fallbacks.
 | `HUB_PORT` | `8800` | HTTP listen port |
 | `HUB_WORKERS` | `2` | Number of HTTP worker processes |
 | `HUB_WORKERMAN_LOG` | `.logs/workerman.log` | Workerman's own log file |
+| `HUB_LOG_LEVEL` | `info` | Verbosity of the primary `file` channel (`config/logger.php`); one of the eight Monolog names, invalid → boot fails loud. The old hardcoded `debug` grew one huge file per day (rotation caps by day count, not bytes) |
+| `HUB_LOG_DIR` | `<install>/.logs` | Directory for all five rotating logs. The shipped systemd unit grants `ReadWritePaths` only to the install's `.logs`, so relocate carefully |
 | `HUB_PUBLIC_DOMAIN` | `phlix.media` | Base domain for per-server subdomains |
 | `HUB_BASE_URL` | `https://<HUB_PUBLIC_DOMAIN>`, else `http://localhost:<HUB_PORT>` | Public base URL baked into enrollment JWTs and the JWKS URL — must be reachable **by enrolled servers**, not just in-process |
 | `HUB_RELAY_PORT` | `8802` | Server-tunnel WS listen port (`RelayWorker`) |

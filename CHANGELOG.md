@@ -6,6 +6,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 40: the logging surface gets its operator seam — 2026-11-03
+
+- `config/logger.php` now reads `HUB_LOG_LEVEL` (default **info**; invalid
+  names throw at boot) for the primary `file` channel and `HUB_LOG_DIR`
+  (default `<install>/.logs`, the path the shipped unit grants
+  `ReadWritePaths` to) for all five rotating channels. Previously the whole
+  surface was welded: hardcoded `debug` on the busiest channel with
+  Monolog's day-count (never byte-size) rotation — a busy hub could fill the
+  install disk with 30 enormous daily files. README env table documents both
+  dials; `LoggerConfigTest` pins default/dial/invalid legs (blessed into
+  the parallel runner durations).
+
 ### Fixed — review hub Majors 42 + 43 + 44: member-facing copy speaks to the member; log lines stop pretending to be deliveries — 2026-11-03
 
 - **M42**: the bandwidth-quota 429 refused members in the third person

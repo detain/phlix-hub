@@ -54,6 +54,7 @@
         "tests/Unit/Common/Support/IdsTest.php": 0.09,
         "tests/Unit/Config/AuditRetentionConfigTest.php": 0.002,
         "tests/Unit/Config/DatabaseConfigTest.php": 0.001,
+        "tests/Unit/Config/LoggerConfigTest.php": 0.017,
         "tests/Unit/Config/ServerPortsConfigTest.php": 0.005,
         "tests/Unit/Console/CliCommandRegistrationTest.php": 0.099,
         "tests/Unit/Console/Commands/MigrateCommandTest.php": 0.002,
