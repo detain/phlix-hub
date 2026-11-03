@@ -56,6 +56,11 @@ final class AuthManagerTest extends TestCase
         // the repository the digest arm — no plaintext 'password' key may
         // reach create(), and the digest must verify the chosen password.
         [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        // Declared before the by-ref closure binds: the capture would
+        // auto-vivify at runtime, but the variable must exist in this scope
+        // for the recorder to provably write it (psalm tests-corpus law).
+        /** @var array<string, mixed> $seen */
+        $seen = [];
         $repo->method('usernameExists')->willReturn(false);
         $repo->method('emailExists')->willReturn(false);
         $repo->method('countUsers')->willReturn(2);
