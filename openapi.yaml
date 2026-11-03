@@ -614,6 +614,17 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: false
+        description: Optional refusal reason stored with the request.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Free-text reason shown to the requester.
       responses:
         "200":
           description: "Success."
@@ -686,6 +697,18 @@ paths:
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Envelope carrying one `settings` object; the hub validates keys against the vendored @phlix/shared schema and rejects unknown ones.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings]
+              properties:
+                settings:
+                  type: object
+                  additionalProperties: true
       responses:
         "200":
           description: "Success."
@@ -707,6 +730,18 @@ paths:
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Envelope carrying the single supported toggle.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [checkEnabled]
+              properties:
+                checkEnabled:
+                  type: boolean
+                  description: Run (or stop) the outbound core-version check worker.
       responses:
         "200":
           description: "Success."
@@ -771,6 +806,26 @@ paths:
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Credentials for the new account; `is_admin` promotes it at creation.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+                is_admin:
+                  type: boolean
+                  default: false
       responses:
         "200":
           description: "Success."
@@ -858,6 +913,23 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: false
+        description: Partial update — only the fields present and non-blank are written.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+                  description: Replacement password (stored via the same hashing path as creation).
       responses:
         "200":
           description: "Success."
@@ -949,6 +1021,23 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Partial quota update. Null clears a dimension back to unlimited where the store allows it.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quota_bytes_in:
+                  type: [integer, 'null']
+                  minimum: 0
+                quota_bytes_out:
+                  type: [integer, 'null']
+                  minimum: 0
+                max_concurrent_streams:
+                  type: [integer, 'null']
+                  minimum: 0
       responses:
         "200":
           description: "Success."
@@ -1011,6 +1100,17 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: The final admin state for the user (idempotent set, not a toggle).
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_admin]
+              properties:
+                is_admin:
+                  type: boolean
       responses:
         "200":
           description: "Success."
@@ -1044,6 +1144,18 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Envelope carrying one `throttle_bps` integer; the value lands in the relay TokenBucket for this user.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [throttle_bps]
+              properties:
+                throttle_bps:
+                  type: integer
+                  minimum: 0
       responses:
         "200":
           description: "Success."
@@ -1072,6 +1184,25 @@ paths:
         `{error, code}` plus the legacy top-level `message` key mirroring `error`.
       x-phlix-middleware: []
       security: []
+      requestBody:
+        required: true
+        description: Either `username` or `email` plus the password; `device_id` optionally names the session (falls back to client IP).
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                username:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+                device_id:
+                  type: string
       responses:
         "200":
           description: "Success."
@@ -1156,6 +1287,16 @@ paths:
         error envelope `{error, code}` plus the legacy top-level `message` key mirroring `error`.
       x-phlix-middleware: []
       security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
       responses:
         "200":
           description: "Success."
@@ -1389,6 +1530,21 @@ paths:
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Registers the (peer, user) delegation and audits it.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [peer_id, user_id]
+              properties:
+                peer_id:
+                  type: string
+                  format: uuid
+                user_id:
+                  type: string
+                  format: uuid
       responses:
         "200":
           description: "Success."
@@ -1462,6 +1618,27 @@ paths:
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Partial update of the hub-config row; `role` is the master/leaf switch and requires a reachable `url` when set to master.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum: [master, leaf]
+                url:
+                  type: string
+                  format: uri
+                is_active:
+                  type: boolean
+                name:
+                  type: string
+                public_key:
+                  type: string
+                  description: Ed25519 public material for the federation ceremony.
       responses:
         "200":
           description: "Success."
@@ -1588,6 +1765,25 @@ paths:
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [library_id, peer_id]
+              properties:
+                library_id:
+                  type: string
+                peer_id:
+                  type: string
+                  format: uuid
+                permission:
+                  type: string
+                  enum: [read, readwrite]
+                  default: read
+                library_name:
+                  type: string
       responses:
         "200":
           description: "Success."
@@ -1661,6 +1857,24 @@ paths:
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: The peer\'s reachable URL and its Ed25519 public key; `leaf_hub_id` may be supplied later via the leaf-hub-id route.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, public_key, name]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                public_key:
+                  type: string
+                name:
+                  type: string
+                leaf_hub_id:
+                  type: string
       responses:
         "200":
           description: "Success."
@@ -1725,6 +1939,16 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaf_hub_id]
+              properties:
+                leaf_hub_id:
+                  type: string
       responses:
         "200":
           description: "Success."
@@ -1770,6 +1994,16 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
       responses:
         "200":
           description: "Success."
@@ -1802,6 +2036,16 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
       responses:
         "200":
           description: "Success."
@@ -1849,6 +2093,18 @@ paths:
       x-phlix-middleware: [AuthMiddleware, AdminMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Envelope carrying one `settings` object; keys the vendored schema does not know are rejected.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings]
+              properties:
+                settings:
+                  type: object
+                  additionalProperties: true
       responses:
         "200":
           description: "Success."
@@ -1888,6 +2144,30 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [server_id]
+              properties:
+                server_id:
+                  type: string
+                  format: uuid
+                library_id:
+                  type: string
+                permission:
+                  type: string
+                  enum: [read, readwrite]
+                  default: read
+                max_uses:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                expires_in:
+                  type: integer
+                  description: Seconds until expiry; omitted uses the hub policy default.
       responses:
         "200":
           description: "Success."
@@ -1929,6 +2209,30 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [server_id]
+              properties:
+                server_id:
+                  type: string
+                  format: uuid
+                library_id:
+                  type: string
+                permission:
+                  type: string
+                  enum: [read, readwrite]
+                  default: read
+                max_uses:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                expires_in:
+                  type: integer
+                  description: Seconds until expiry; omitted uses the hub policy default.
       responses:
         "200":
           description: "Success."
@@ -2293,6 +2597,30 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        description: Required fields per type; `tmdb_id` must be positive and `season`/`episode` apply to series requests.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, tmdb_id, title]
+              properties:
+                type:
+                  type: string
+                  enum: [movie, series]
+                tmdb_id:
+                  type: integer
+                  minimum: 1
+                title:
+                  type: string
+                poster_url:
+                  type: string
+                  format: uri
+                season:
+                  type: integer
+                episode:
+                  type: integer
       responses:
         "200":
           description: "Success."
@@ -2558,6 +2886,29 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [collaborator_email, server_id, library_id]
+              properties:
+                collaborator_email:
+                  type: string
+                  format: email
+                server_id:
+                  type: string
+                  format: uuid
+                library_id:
+                  type: string
+                library_name:
+                  type: string
+                  description: Display label stored with the share; falls back to the server-reported name.
+                permission:
+                  type: string
+                  enum: [read, readwrite]
+                  default: read
       responses:
         "200":
           description: "Success."
@@ -2599,6 +2950,29 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [collaborator_email, server_id, library_id]
+              properties:
+                collaborator_email:
+                  type: string
+                  format: email
+                server_id:
+                  type: string
+                  format: uuid
+                library_id:
+                  type: string
+                library_name:
+                  type: string
+                  description: Display label stored with the share; falls back to the server-reported name.
+                permission:
+                  type: string
+                  enum: [read, readwrite]
+                  default: read
       responses:
         "200":
           description: "Success."
@@ -2653,6 +3027,17 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permission]
+              properties:
+                permission:
+                  type: string
+                  enum: [read, readwrite]
       responses:
         "200":
           description: "Success."
@@ -2679,6 +3064,16 @@ paths:
         - $ref: "#/components/parameters/AcceptPhlixProtocol"
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [claim_code]
+              properties:
+                claim_code:
+                  type: string
       responses:
         "200":
           description: "Success."
@@ -2814,6 +3209,41 @@ paths:
         - $ref: "#/components/parameters/AcceptPhlixProtocol"
       security:
         - enrollmentJwt: []
+      requestBody:
+        required: true
+        description: Field names are camelCase (the shared wire DTO). Missing required fields reject the heartbeat.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serverId, version, timestamp, uptimeSeconds, activeSessions, activeTranscodes]
+              properties:
+                serverId:
+                  type: string
+                version:
+                  type: string
+                timestamp:
+                  type: integer
+                uptimeSeconds:
+                  type: integer
+                activeSessions:
+                  type: integer
+                activeTranscodes:
+                  type: integer
+                hostnameCandidates:
+                  type: array
+                  items:
+                    type: string
+                libraries:
+                  type: array
+                  items:
+                    type: object
+                    required: [library_id, library_name]
+                    properties:
+                      library_id:
+                        type: string
+                      library_name:
+                        type: string
       responses:
         "200":
           description: "Success."
@@ -2886,6 +3316,18 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: false
+        description: Forwarded verbatim to the enrolled media server through its tunnel; the schema is defined by the target server endpoint, not by the hub.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
       responses:
         "200":
           description: |-
@@ -3020,6 +3462,18 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: false
+        description: Forwarded verbatim to the enrolled media server through its tunnel; the schema is defined by the target server endpoint, not by the hub.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
       responses:
         "200":
           description: |-
@@ -3065,6 +3519,18 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: false
+        description: Forwarded verbatim to the enrolled media server through its tunnel; the schema is defined by the target server endpoint, not by the hub.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
       responses:
         "200":
           description: |-
@@ -3110,6 +3576,18 @@ paths:
             type: string
       security:
         - bearerAuth: []
+      requestBody:
+        required: false
+        description: Forwarded verbatim to the enrolled media server through its tunnel; the schema is defined by the target server endpoint, not by the hub.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
       responses:
         "200":
           description: |-

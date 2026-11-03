@@ -6,6 +6,34 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 1: openapi.yaml now documents the request bodies the hub actually consumes — 2026-11-02
+
+- **The gap.** 130 operations, 9 `requestBody` blocks: every write endpoint's
+  payload shape lived only in controller code, while the response side was
+  pin-verified against the router (`OpenApiSpecMatchesRouterTest`) — the spec
+  README/AGENTS.md sell as the "HTTP surface description" was one-sided.
+- **The cure.** 30 `requestBody` blocks added, each derived from the handler
+  read FRESH this lane (controllers, route closures, and the shared
+  `HeartbeatDto`): auth login/refresh, admin users/quota/throttle/settings/
+  updates, requests create/deny,
+  shares create/patch (both trailing-slash aliases), invite-links (both
+  aliases), server-claims/claim, heartbeat (camelCase shared-DTO shape
+  incl. optional `hostnameCandidates`/`libraries`), and the full federation
+  write surface (peers, hub-config, leaf-hub-id, relay/admin-delegation
+  toggles, outgoing shares, admin delegations). The four server-proxy verbs
+  carry the honest pass-through body (schema defined by the target server,
+  not the hub).
+- **Truthful absences.** The 22 remaining body-less write operations
+  (path-only DELETEs, restart, redeem, approve/accept/reject, renew,
+  relay-token, subdomain, claims/new) genuinely read no body — verified
+  against their handlers — and stay that way in the spec.
+- **Gates.** `yaml.safe_load` parses; redocly lint VALID with the identical
+  38 pre-existing warning classes (`operation-4xx-response` census unchanged
+  vs the committed file — zero new warnings); `OpenApiSpecMatchesRouterTest`
+  + all three openapi-enum contract tests green (10 tests / 2511 assertions)
+  — the router-bijection extractor reads the extended file with its fixed
+  layout intact.
+
 ### Fixed — review hub C8/C9: watch-party refusal copy tells the truth and names the actor — 2026-11-02
 
 - **C8** `web-ui/src/utils/watchPartyWire.ts` — the
