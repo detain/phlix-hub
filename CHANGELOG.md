@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 5–8: README venue truths — 2026-11-02
+
+- **M5**: "Expect roughly 15 s per test: each one re-applies all 35 migrations"
+  contradicted `RealDatabaseTestCase` (S185): the chain is applied ONCE per
+  PHPUnit process; each `setUp()` re-validates an `information_schema`
+  fingerprint (~2 ms, drift forces rebuild) and pays only a 0.02 s replay plus a
+  data reset. The paragraph and its "every test drops and re-creates" lead-in now
+  describe the real cost model.
+- **M6**: the Docker section never warned that the Ed25519 signing key — state
+  #2 of the README's own three-pieces-of-state doctrine — auto-generates INTO
+  image-internal `/var/www/html/config/` and dies with every container
+  re-creation (all paired servers fail verification; federation peers refuse).
+  Added the warning + single-file bind-mount remedy (`:ro`, readable by the
+  `nobody` daemon). The state-table "path override" claim was also half-true:
+  `config/server.php` ships no `hub_signing_key_path` key — the README now says
+  plainly it is an operator edit read at `HubServicesProvider.php:179`.
+- **M7**: none of the seven `HUB_UPDATES_*` envs was documented anywhere —
+  including `HUB_UPDATES_CHECK_ENABLED` defaulting to **true** (unannounced
+  per-poll egress to `raw.githubusercontent.com`). Full rows added to the
+  Configuration reference with defaults and the measured deadline-vs-timeout
+  rationale.
+- **M8**: the rate-limit table advertised
+  `PHLIX_HUB_RATELIMIT_CLIENT_RELAY_TOKEN_{MAX,WINDOW}` and
+  `PHLIX_HUB_RATELIMIT_CLIENT_REQUEST_CREATE_{MAX,WINDOW}` — env vars read by
+  NOTHING (grep-proven; every other row's env exists in `config/server.php`).
+  The two rows now state the honest surface: `RateLimitProfiles::defaults()`
+  literals, overridable only via a `rate_limit.<profile>` subsection in
+  `config/server.php` (consumed generically by `CommonServicesProvider`).
+
 ### Fixed — review hub Major 4: checksum-divergence re-apply can no longer wedge the chain — 2026-11-02
 
 - `migrations/041` records a comment-normalised md5 per applied file, and the

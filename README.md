@@ -277,7 +277,7 @@ starts cleanly and then fails closed in ways that look like data loss.
 |-------|-------|------------------------|
 | **Database** | MySQL schema `phlix_hub` (credentials in `/etc/phlix-hub.env`) | Every server registration, user, claim code, invite, share, quota row, federation peer/key registration, rate-limit history, audit trail and the migration ledger. Restore **only onto a schema migrated to the same or a newer code version** (the `migrations` table checksums files; see *Database migrations* above). |
 | **JWT session secret** | `HUB_JWT_SECRET` inside `/etc/phlix-hub.env` (chmod 600) | Signs every access/refresh token (`config/auth.php`; ≥32 bytes). If it is lost, changed, or the env file is restored from a different era, **every issued session becomes unverifiable**: all users are logged out at once and refresh tokens cannot save them. When the var is missing entirely, `AuthServicesProvider` falls back to a process-local random secret — tokens die on every restart, so never run production without it. |
-| **Hub signing key** | `config/hub-signing-key.pem`, mode **0600**, auto-generated on first boot by `HubServicesProvider` → `Ed25519KeyManager` (path override: `hub_signing_key_path` in `config/server.php`) | The hub's Ed25519 identity. It signs enrollment artifacts servers present on pairing and is the master-side key in the federation mutual proof-of-key ceremony. If it is lost and a fresh one is generated, **already-registered servers fail verification** (re-pair them) and **federation peers whose leaf keys were registered under the old identity refuse the hub** until trust is re-established with each peer. |
+| **Hub signing key** | `config/hub-signing-key.pem`, mode **0600**, auto-generated on first boot by `HubServicesProvider` → `Ed25519KeyManager` (path override: add `'hub_signing_key_path' => '<absolute path>'` to the array in `config/server.php` — the shipped file does not define the key, and `HubServicesProvider.php:179` reads it from there, so the override is an operator edit, not an env var) | The hub's Ed25519 identity. It signs enrollment artifacts servers present on pairing and is the master-side key in the federation mutual proof-of-key ceremony. If it is lost and a fresh one is generated, **already-registered servers fail verification** (re-pair them) and **federation peers whose leaf keys were registered under the old identity refuse the hub** until trust is re-established with each peer. |
 
 Everything else is derived and safe to lose: `.logs/`, `var/` (Smarty
 compile/cache, DI container cache, Swoole HOME lock, Workerman pid/status), and
@@ -876,6 +876,28 @@ left unset: the entrypoint then generates one key **once** and persists it to
 container re-creation. An ephemeral generated key without the volume invalidates all tokens on
 every restart.
 
+⚠ **The JWT volume is not the whole story — the Ed25519 identity key is state #2 and it lives
+nowhere persistent in the default layout.** The hub auto-generates its hub signing key at
+`/var/www/html/config/hub-signing-key.pem` on first boot, and `/var/www/html` is image-internal:
+every container re-creation (every upgrade, every `docker rm`+`run`) silently generates a fresh
+identity, so **all paired servers fail verification and all federation peers refuse the hub** —
+the exact incident path the "three pieces of state" table above warns about, arriving in Docker
+with no warning line. Preserve it with a single-file bind-mount, readable by the daemon user
+(`nobody`, uid 65534 — the image runs `USER nobody`):
+
+```bash
+# once, from your persisted secret store; the key must exist before first boot to avoid a throwaway generation
+docker run -d --name phlix-hub \
+  … \
+  -v /var/phlix/secrets/hub-signing-key.pem:/var/www/html/config/hub-signing-key.pem:ro \
+  phlix-hub
+# host side: chown 65534:65534 /var/phlix/secrets/hub-signing-key.pem && chmod 600 …
+```
+
+(Or point `hub_signing_key_path` — the `config/server.php` array key described above — at a path
+under your mounted volume; that file is baked into the image, so the bind-mount form above is the
+no-source-edit route.)
+
 Migrations run automatically from the entrypoint on every boot (look for the
 `PHLIX-HUB-MIGRATIONS-OK` banner); set `HUB_MIGRATIONS_STRICT=1` to refuse booting on a
 half-migrated schema instead of the start-anyway default. A manual idempotent re-run stays
@@ -1009,15 +1031,22 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 | `PHLIX_HUB_RATELIMIT_ALEXA_MAX` / `_ALEXA_WINDOW` | `60` / `60` | Alexa skill endpoint, keyed `alexa:<trusted ip>` (flood-cost cap only — Amazon's RSA signature is the credential) |
 | `PHLIX_HUB_RATELIMIT_SERVER_CLAIMS_MAX` / `_SERVER_CLAIMS_WINDOW` | `60` / `60` | Server-claim pairing trio, keyed `server_claims:{new,status,claim}:<trusted ip>` |
 | `PHLIX_HUB_RATELIMIT_INVITE_REDEEM_MAX` / `_INVITE_REDEEM_WINDOW` | `20` / `60` | Invite-link redemption, keyed `invite_redeem:{userId}` (attributable member; bounds the burn+share write chain) |
-| `PHLIX_HUB_RATELIMIT_CLIENT_RELAY_TOKEN_MAX` / `_CLIENT_RELAY_TOKEN_WINDOW` | `10` / `60` | Client relay-token mint (`POST /me/servers/{id}/relay-token`), keyed `client_relay_token:{userId}` — attributable member; with the service-side cap of 20 active tokens per (user, server) scope this bounds both mint rate and standing credentials (M-HUB-22) |
-| `PHLIX_HUB_RATELIMIT_CLIENT_REQUEST_CREATE_MAX` / `_CLIENT_REQUEST_CREATE_WINDOW` | `20` / `60` | Media-request creation (`POST /me/requests`), keyed `client_request_create:{userId}` — attributable member; paired with the pending dedup echo and the 50-pending standing cap on the member's queue (M-HUB-23) |
+| `client_relay_token` (no env seam) | `10` / `60` | Client relay-token mint (`POST /me/servers/{id}/relay-token`), keyed `client_relay_token:{userId}` — attributable member; with the service-side cap of 20 active tokens per (user, server) scope this bounds both mint rate and standing credentials (M-HUB-22). Default is a `RateLimitProfiles::defaults()` literal; override ONLY by adding a `rate_limit.client_relay_token` `{max, window}` subsection to `config/server.php` (read generically by `CommonServicesProvider`) |
+| `client_request_create` (no env seam) | `20` / `60` | Media-request creation (`POST /me/requests`), keyed `client_request_create:{userId}` — attributable member; paired with the pending dedup echo and the 50-pending standing cap on the member's queue (M-HUB-23). Same override route as above: a `rate_limit.client_request_create` subsection in `config/server.php` — there is no `PHLIX_HUB_RATELIMIT_*` env for these two profiles |
 | `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_SYNCPLAY_MOUNT_MAX` / `_SYNCPLAY_MOUNT_WINDOW` | `30` / `60` | :8804 SyncPlay pre-auth connect (WS), keyed `syncplay_mount:<real ip>` — `count=1` worker, truly global; runs before the token lookup so a flood can't convert into DB work |
 | `PHLIX_HUB_RATELIMIT_FEDERATION_CONNECT_MAX` / `_FEDERATION_CONNECT_WINDOW` | `10` / `60` | :8805 inbound federation connects (master role), keyed `federation_connect:<trusted ip>` — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_FEDERATION_FRAME_MAX` / `_FEDERATION_FRAME_WINDOW` | `120` / `60` | :8805 federation frames, both roles, keyed `federation_frame:<remote peer hub id>` — `count=1` worker, truly global |
 | `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` | Trusted proxy IPs/CIDRs used to resolve the real client address for the IP-keyed limiters (`src/Common/Http/TrustedProxyResolver.php`) — a forgeable leftmost `X-Forwarded-For` is never trusted |
-| `PHLIX_FEDERATION_CA_BUNDLE` | unset | TLS trust-anchor selection for federation **dials** (this hub as leaf connecting to an `https://`/`wss://` master): absolute path to a PEM bundle that replaces the system store as verification anchor. Set it when the master serves a private-CA certificate; an unreadable path fails LOUD at dial (never a silent system-store fallback). `src/Federation/FederationPeerManager.php` (`buildMasterDialPlan`) — see also `docs/websockets.md`
+| `PHLIX_FEDERATION_CA_BUNDLE` | unset | TLS trust-anchor selection for federation **dials** (this hub as leaf connecting to an `https://`/`wss://` master): absolute path to a PEM bundle that replaces the system store as verification anchor. Set it when the master serves a private-CA certificate; an unreadable path fails LOUD at dial (never a silent system-store fallback). `src/Federation/FederationPeerManager.php` (`buildMasterDialPlan`) — see also `docs/websockets.md` |
+| `HUB_UPDATES_CHECK_ENABLED` | `true` | Update-check master switch. **On by default**: the hub fetches a version marker from `raw.githubusercontent.com` (below) once per poll interval. Disable with `false` on egress-restricted or air-gapped installs — a blocked fetch is recorded as a failed check and retried on the next interval; it never blocks boot or serves. An admin can also flip it at runtime via `PUT /api/v1/admin/updates/settings` (a `hub_settings` override, which wins over this default) |
+| `HUB_UPDATES_MARKER_URL` | `https://raw.githubusercontent.com/detain/phlix-hub/master/VERSION` | The remote version marker fetched per poll; kept in lockstep with `Phlix\Hub\Version::VERSION` (pinned by `tests/VersionTest.php`) |
+| `HUB_UPDATES_COMMAND` | the installer's `--update` one-liner | Copy-to-clipboard update command surfaced by `GET /api/v1/admin/updates/status` — verbatim from *Updating an existing install* above; an operator pastes it into a root shell |
+| `HUB_UPDATES_POLL_SECONDS` | `86400` | Steady-state interval between marker fetches (nothing fetches on the boot path; the worker only touches the network when this interval elapsed since the last completed check) |
+| `HUB_UPDATES_SWEEP_SECONDS` | `60` | How often the maintenance worker asks whether a poll is due — one `hub_settings` read, not a network call |
+| `HUB_UPDATES_TIMEOUT_SECONDS` | `10` | Socket timeout for the marker fetch |
+| `HUB_UPDATES_DEADLINE_SECONDS` | `20` | Backstop deadline for an in-flight fetch (NOT a duplicate of the timeout: with no route out, hooked DNS resolution can stall `stream_socket_client()` past the vendor client's own timer — measured 2026-08-10; without the deadline, an egress-filtered hub's first fetch stays in flight forever). At expiry the check is recorded as timed out and the single-flight guard released |
 
 > **Per-worker vs global caveat.** Most thresholds are enforced **per worker process**. The
 > :8802/:8803/:8805 relay and federation workers are `count=1`, so per-worker == global for
@@ -1402,8 +1431,8 @@ composer psalm    # Psalm (errorLevel 1)
 
 `tests/Integration/**` talks to a real database and **self-skips** when the
 `HUB_TEST_DB_*` variables are absent, so `composer test` on a box without MySQL
-runs the unit suite only. Point them at a throwaway database — every test drops
-and re-creates all tables and re-applies the whole `migrations/` chain, so never
+runs the unit suite only. Point them at a throwaway database — the suite builds
+its tables there and empties data between tests, so never
 aim them at a database you care about:
 
 ```bash
@@ -1413,7 +1442,12 @@ HUB_TEST_DB_USER=root HUB_TEST_DB_PASSWORD=root HUB_TEST_DB_NAME=phlix_hub_test 
 ```
 
 The named database must already exist (the tests create tables, not schemas).
-Expect roughly 15 s per test: each one re-applies all 35 migrations.
+The migration chain is applied **once per PHPUnit process** (a few seconds),
+not per test: `RealDatabaseTestCase` caches the resulting schema fingerprint,
+re-validates it against `information_schema` on every `setUp()` (~2 ms; any
+drift — including a sibling suite legitimately emptying the database — forces
+a drop-and-re-apply), and each test only gets a cheap 0.02 s chain replay plus
+a data reset on top. Budget seconds for the suite, not minutes per test.
 
 CI runs on every push and pull request via [GitHub Actions](.github/workflows/ci.yml) —
 **twelve jobs** — and the image pair ships in a second workflow
