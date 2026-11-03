@@ -50,6 +50,39 @@ final class AuthManagerTest extends TestCase
         return [$repo, $jwt, $audit, $logger, $rateLimiter];
     }
 
+    public function testRegisterPassesPrecomputedDigestArmToCreate(): void
+    {
+        // Minor 45: register() hashes BEFORE the transaction opens and hands
+        // the repository the digest arm — no plaintext 'password' key may
+        // reach create(), and the digest must verify the chosen password.
+        [$repo, $jwt, $audit, $logger, $rl] = $this->deps();
+        $repo->method('usernameExists')->willReturn(false);
+        $repo->method('emailExists')->willReturn(false);
+        $repo->method('countUsers')->willReturn(2);
+        $repo->method('create')->willReturnCallback(
+            /** @param array<string, mixed> $data */
+            static function (array $data) use (&$seen): string {
+                $seen = $data;
+                return 'u-new';
+            }
+        );
+        $repo->method('findById')->willReturn([
+            'id' => 'u-new',
+            'username' => 'alice',
+            'email' => 'a@example.com',
+            'password_hash' => 'secret',
+        ]);
+
+        $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl);
+        $mgr->register('alice', 'a@example.com', 'longenough');
+
+        self::assertIsArray($seen);
+        self::assertArrayNotHasKey('password', $seen, 'the plaintext arm must not reach create() from register()');
+        self::assertArrayHasKey('password_hash', $seen);
+        self::assertStringStartsWith('$argon2id$', (string) $seen['password_hash']);
+        self::assertTrue(password_verify('longenough', (string) $seen['password_hash']));
+    }
+
     public function testRegisterValidatesUsernameLength(): void
     {
         [$repo, $jwt, $audit, $logger, $rl] = $this->deps();

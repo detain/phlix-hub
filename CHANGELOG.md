@@ -6,6 +6,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minor 45: signup hashing moved outside the transaction — 2026-11-03
+
+- `AuthManager::register()` computes the Argon2id digest **before**
+  `beginTrans()` and hands `UserRepository::create()` a new precomputed
+  `password_hash` arm; the ~50-100 ms CPU-bound hash no longer stretches the
+  signup-election transaction (and its `auth_signup_guard` gap locks,
+  migration 047) across pure computation — visible under signup bursts on
+  resident workers. `create()` now enforces exactly-one credential arm
+  (plaintext `password` XOR precomputed `password_hash`; both, neither, a
+  non-string, or a foreign-shaped digest all throw `InvalidArgumentException`
+  before any SQL). The two existing plaintext callers are untouched;
+  `register()` ships the digest, pinned by tests on both layers.
+
+
 ### Fixed — review hub Minors 38+40: limiter dilution boot notice + batched library upserts — 2026-11-03
 
 - **Minor 38 — multi-worker rate-limit dilution is now announced at boot.**

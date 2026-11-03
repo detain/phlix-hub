@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Auth;
 
+use InvalidArgumentException;
 use Phlix\Hub\Auth\UserRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
@@ -185,6 +186,67 @@ final class UserRepositoryTest extends TestCase
             'username' => 'dup',
             'email'    => 'dup@example.com',
             'password' => 'correct-horse-battery',
+        ]);
+    }
+
+    public function testCreateStoresPrecomputedDigestArmVerbatim(): void
+    {
+        $digest = password_hash('longenough-pw', PASSWORD_ARGON2ID);
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::once())
+            ->method('query')
+            ->with(
+                self::stringContains('INSERT INTO users'),
+                self::callback(static fn (array $b): bool => ($b['pwd'] ?? null) === $digest),
+            );
+
+        $repo = new UserRepository($db);
+        $repo->create([
+            'username'      => 'alice',
+            'email'         => 'a@example.com',
+            'password_hash' => $digest,
+        ]);
+    }
+
+    public function testCreateRejectsBothCredentialArms(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::never())->method('query');
+
+        $repo = new UserRepository($db);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('exactly one credential arm');
+        $repo->create([
+            'username'      => 'alice',
+            'email'         => 'a@example.com',
+            'password'      => 'longenough-pw',
+            'password_hash' => '$argon2id$v=19$m=65536,t=4,p=1$x$y',
+        ]);
+    }
+
+    public function testCreateRejectsMissingCredentialArms(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::never())->method('query');
+
+        $repo = new UserRepository($db);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('exactly one credential arm');
+        $repo->create(['username' => 'alice', 'email' => 'a@example.com']);
+    }
+
+    public function testCreateRejectsForeignShapedDigestArm(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects(self::never())->method('query');
+
+        $repo = new UserRepository($db);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Argon2id digest');
+        $repo->create([
+            'username'      => 'alice',
+            'email'         => 'a@example.com',
+            'password_hash' => 'hunter2!!',
         ]);
     }
 

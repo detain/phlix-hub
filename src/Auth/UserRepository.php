@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Auth;
 
+use InvalidArgumentException;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
@@ -155,14 +156,51 @@ class UserRepository
      * Callers should catch the thrown exception and translate it to a
      * domain-level "email already registered" error if needed.
      *
-     * @param array{username: string, email: string, password: string, display_name?: ?string} $data
+     * Credential arms — EXACTLY one is required (Minor 45):
+     *  - `password` — plaintext; hashed here with Argon2id (the classic path).
+     *  - `password_hash` — a PRECOMPUTED Argon2id digest, so a caller that
+     *    already opened a transaction can keep the ~50-100 ms CPU-bound hash
+     *    OUT of it (register() elects an admin inside the same txn; holding
+     *    the `auth_signup_guard` gap locks across pure hashing stretches
+     *    lock-hold time under signup bursts on resident workers).
+     * Both arms, or neither, is a caller bug and throws immediately.
+     *
+     * @param array{
+     *     username: string, email: string, password?: string,
+     *     password_hash?: string, display_name?: ?string
+     * } $data
      *
      * @return string Generated UUID for the new row.
      */
     public function create(array $data): string
     {
         $id = self::generateUuid();
-        $passwordHash = password_hash($data['password'], PASSWORD_ARGON2ID);
+
+        if (isset($data['password_hash']) && isset($data['password'])) {
+            throw new InvalidArgumentException(
+                'create() needs exactly one credential arm: password (plaintext) or password_hash (precomputed digest)'
+            );
+        }
+
+        if (isset($data['password_hash'])) {
+            /** @var mixed $digest */
+            $digest = $data['password_hash'];
+            if (!is_string($digest) || !str_starts_with($digest, '$argon2id$')) {
+                throw new InvalidArgumentException('password_hash must be a precomputed Argon2id digest string');
+            }
+            $passwordHash = $digest;
+        } elseif (isset($data['password'])) {
+            /** @var mixed $plaintext */
+            $plaintext = $data['password'];
+            if (!is_string($plaintext)) {
+                throw new InvalidArgumentException('password must be a string');
+            }
+            $passwordHash = password_hash($plaintext, PASSWORD_ARGON2ID);
+        } else {
+            throw new InvalidArgumentException(
+                'create() needs exactly one credential arm: password (plaintext) or password_hash (precomputed digest)'
+            );
+        }
 
         $this->db->query(
             'INSERT INTO users (id, username, email, password_hash, display_name) '

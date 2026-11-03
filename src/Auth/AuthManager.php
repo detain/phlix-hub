@@ -290,6 +290,12 @@ class AuthManager
             throw new InvalidArgumentException('Email already registered');
         }
 
+        // Minor 45: the CPU-bound Argon2id digest is computed BEFORE the
+        // transaction opens — hashing inside BEGIN..COMMIT stretched the
+        // signup-election gap locks across pure CPU work. Pure function of
+        // $password; the insert below now rides the precomputed arm.
+        $passwordHash = password_hash($password, PASSWORD_ARGON2ID);
+
         $db = $this->db;
         if ($db !== null) {
             $db->beginTrans();
@@ -297,10 +303,10 @@ class AuthManager
 
         try {
             $userId = $this->userRepository->create([
-                'username'     => $username,
-                'email'        => $email,
-                'password'     => $password,
-                'display_name' => $username,
+                'username'      => $username,
+                'email'         => $email,
+                'password_hash' => $passwordHash,
+                'display_name'  => $username,
             ]);
 
             $isFirstUser = $db !== null
