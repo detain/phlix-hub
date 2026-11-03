@@ -2,7 +2,7 @@
 /**
  * Hub-local contextual page hint (W5 / plan §9 PageHint pass).
  *
- * Upstream `PageHint` is on the RUNTIME barrel at the vendored v0.99.13 pin
+ * Upstream `PageHint` is on the RUNTIME barrel at the vendored v0.99.14 pin
  * (a `PageHint` export of `dist/phlix-ui.js`) but NOT the TYPE barrel —
  * `dist/index.d.ts` never names it (the component's declaration exists only
  * at `dist/components/ui/PageHint.vue.d.ts`), so a typed `import { PageHint

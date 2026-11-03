@@ -6,6 +6,44 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — web-ui re-pin @phlix/ui v0.99.13 -> v0.99.14 (tag-wave cascade C2-hub, 2026-11-04)
+- **Pin + bundle ride one commit.** The tarball idiom (`web-ui/package.json`
+  pins a GitHub archive URL) moves to `refs/tags/v0.99.14.tar.gz`; the
+  `package-lock.json` delta is a surgical 7+/7− under the CI toolchain
+  (node 24 + npm 11): root echo, the `@phlix/ui` node (version, resolved,
+  integrity — the sha512 method was validated by reproducing the committed
+  v0.99.13 integrity byte-for-byte from the live tarball, then applied to
+  v0.99.14), its `@phlix/contracts` dependency echo `#v0.5.4` -> `#v0.5.5`,
+  and the nested `@phlix/contracts` node (version + git resolved = the live
+  tag peel `e2159816…`). `@phlix/syncplay` holds `#v0.1.6` (ui's own pin).
+  `npm ci` under `NPM_CONFIG_USERCONFIG=/dev/null` is idempotent against the
+  hand-edited lock (zero rewrite; the installed tree carries ui 0.99.14 +
+  contracts 0.5.5 whose `dist/error-codes.json` md5 equals the vendored
+  fixture).
+- **Era currency (M-HUB-12, measured red).** `npm test` reddened exactly the
+  two tripwire-gated coordinate sites (i18n/index.ts, HubPageHint.vue: 152
+  tests, 150 pass, 2 fail); both plus the two ungated precedent coordinates
+  (shareLiveness.ts, watchPartyWire.ts) rotated to v0.99.14 only after
+  re-verifying each claim against the RESOLVED bytes: `safeHref` still at
+  `dist/index.d.ts:218`, the hubRelay dial pair still at `:16`, the locale
+  catalog exports still present, `PageHint` still runtime-barrel-only (the
+  typed wrapper and its [tag-wave C2] follow-up stay). Suite then 152/152 —
+  the era baseline moved 136 -> 152 tests since the v0.99.13 wave (phase-2
+  additions, measured not assumed).
+- **Served bundle regenerated deterministically.** `npm run build` (vue-tsc
+  floor first) twice: aggregate md5 `8e8b4f5c294267def79c3038e7f5f35a`
+  identical across builds (sorted-file md5 method); the committed tree moves
+  101 renames + 34/34 add/delete pairs + 2 content-modifies (index.html,
+  vite manifest), corpus count UNCHANGED at 198 tracked files / 96 JS chunks /
+  99 manifest entries — no era count rotated because nothing measured moved.
+  The regenerated bundle carries the v0.99.14 cohort end-to-end: the served
+  chunks contain the new `not_found` locale row this release's PHP leg emits.
+  The S253 gate compares this against a fresh CI build of the same lock.
+- **S181 posture:** hub's own pin row goes CURRENT with this commit. The skew
+  job grades every estate consumer's live pins — sibling re-pins land on
+  their own lanes' clocks, so the job may still enumerate sibling STALE rows
+  until the cascade wave closes.
+
 ### Changed — contracts v0.5.5 cascade: the R-HUB-W2-C1 completion (2026-11-04)
 - **The two prose-only 404s speak the minted word.** `common.not_found` was
   registered RESERVED in `@phlix/contracts` v0.5.5 precisely for these sites;
