@@ -5179,9 +5179,9 @@ components:
           examples:
             quota_exceeded:
               value:
-                error: User has reached their monthly download bandwidth quota.
+                error: You have reached your monthly download bandwidth quota.
                 code: quota.exceeded
-                message: User has reached their monthly download bandwidth quota.
+                message: You have reached your monthly download bandwidth quota.
                 retry_at: 1761955200
             stream_limit:
               value:

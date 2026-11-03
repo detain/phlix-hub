@@ -3273,7 +3273,7 @@ final class ServerProxyControllerTest extends TestCase
         $sessionManager = $this->createMock(RelaySessionManager::class);
         $sessionManager->method('checkUserQuota')->willReturn([
             'allowed' => false,
-            'reason' => 'User has reached their monthly download bandwidth quota.',
+            'reason' => 'You have reached your monthly download bandwidth quota.',
             'maxConcurrentStreams' => 0,
             'retryAt' => strtotime(date('Y-m-01') . ' +1 month'),
         ]);
@@ -6516,7 +6516,7 @@ final class ServerProxyControllerTest extends TestCase
         $overQuota = $this->createMock(RelaySessionManager::class);
         $overQuota->method('checkUserQuota')->willReturn([
             'allowed' => false,
-            'reason' => 'User has reached their monthly download bandwidth quota.',
+            'reason' => 'You have reached your monthly download bandwidth quota.',
             'maxConcurrentStreams' => 0,
             'retryAt' => strtotime(date('Y-m-01') . ' +1 month'),
         ]);
