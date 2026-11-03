@@ -166,7 +166,9 @@ actually dials.
 
 ### Keepalive and idle reap
 
-This is the one client-facing lane with a complete, deliberate liveness loop:
+This is the **server-facing** lane with a complete, deliberate liveness loop —
+the client-facing `:8804` mount has run the same 30 s / 90 s math since
+M-HUB-18 (see the glance table above), so neither claim of exclusivity holds:
 
 - **Hub → server:** every 30 seconds
   `HubServicesProvider::startInMemoryReapers()` sends a `HEARTBEAT` (`0x06`,
@@ -381,7 +383,7 @@ code instead of collapsing into a bare transport-level `1006`.
 | `1013` (`SyncPlayRelayWorker::CLOSE_LIVENESS_TIMEOUT`) | liveness reap: silence ≥ 90 s past the last inbound frame (M-HUB-18) | The hub gave up on a socket that stopped answering. Transient by nature (half-open path, dropped NAT mapping, sleeping device) — reconnecting IS the remedy, which is exactly why this is 1013 and not 1011. |
 
 Since **M-HUB-37** `1013` has two named emitters on this surface — the pre-auth
-connect limiter and the liveness reap (same RFC 1011 meaning, "try again later",
+connect limiter and the liveness reap (same RFC 6455 meaning, "try again later",
 so the shared number is honest; they are told apart by WHEN they fire, before the
 `101` versus long after it). What this surface still does NOT have is a close for
 the per-connection inbound byte budget (audit M-3): over-budget FRAMES are
@@ -403,7 +405,8 @@ This surface speaks **two message vocabularies** and never translates between th
   handlers stay for wire compatibility.
 - the **CANONICAL `syncplay_*` catalog** — the vocabulary of the media server's
   `:8097` socket and every syncplay client, defined by
-  [`phlix-syncplay/SPEC.md`](../../phlix-syncplay/SPEC.md) §3 (19 closed-set types).
+  `phlix-syncplay/SPEC.md` §3 in the sibling `detain/phlix-syncplay` repository
+  (19 closed-set types).
   This is the **live room lane**: relay-mode syncplay clients (mobile is the first)
   create, join, and steer rooms entirely in this catalog.
 
@@ -807,7 +810,7 @@ frame types — there are no federation-specific binary types in use:
 | `DATA` (`0x05`) ch 0 | both → both | `{"shares":[{"id","peer_id","library_id","library_name","permission","status"}]}` | Federated library offers created/changed. **Emitted and accepted in BOTH directions**: the master pushes its offers down (`FederationMasterPusher::pushOffer`, plus the post-hello replay) and the leaf pushes its own up (`FederationPeerManager::pushLibraryShare`); each receiver surfaces them at `GET /api/v1/me/federation/library-shares/incoming`. |
 | `DATA` (`0x05`) ch 0 | both → both | `{"share_id":...}` | An offer was withdrawn — emitted by either side (`pushRevocation` on the master side, `pushLibraryShareRevoked` on the leaf side), accepted by both handlers. |
 | `DATA` (`0x05`) ch 0 | reserved: master → leaf | `{"user_id":...,"peer_id":...,"action":"grant"|"revoke"}` | An admin delegation grant/revoke. **Receive-only forward-compat path**: the leaf consumer is implemented and verified-gated (`FederationPeerManager::handleAdminDelegation`), and since R17-07 validates before writing — the frame `peer_id` must equal the channel's ceremony-bound hub uuid (cross-check only; writes stamp the LOCAL peer row id) and `user_id` must resolve in this hub's `users` table, else the payload is refused with a snake_case audit reason and zero persistence. The master-side producer is NOT implemented — `createAdminDelegation` writes only the DB row and audit — so this envelope is never emitted today. |
-| `HEARTBEAT` (`0x06`) ch 0 | both → both | empty | keep-alive every 15 s once verified |
+| `HEARTBEAT` (`0x06`) ch 0 | leaf → master | empty | keep-alive every 15 s once verified — sent ONLY by the dialing leaf role (`FederationPeerManager` heartbeat timer); the master's frame handler consumes them and answers nothing. No master-side emitter exists. |
 | `DISCONNECTED` (`0x07`) ch 0 | either → either | `{"reason":...}` | clean close (e.g. `peer_deleted`) |
 
 The dedicated `0x09`–`0x0F` codes are **retired wire types**: reserved in the
@@ -830,8 +833,13 @@ SyncPlay vocabulary is mirrored on `:8804`, so the two catalogs are read
 together. Source of truth: `phlix-server/src/Server/WebSocket/WebSocketEvents.php`
 and `WebSocketServer.php`.
 
-Behind HAProxy over loopback in production, so the real client IP is resolved from
-`X-Forwarded-For`.
+:8097 is a **direct-dial listener** — clients reach it on the LAN or through a
+port-forward/TLS terminator you run yourself; there is no managed proxy hop in
+front of it (phlix-server's installer treats it as a port it *publishes*). Do
+NOT trust `X-Forwarded-For` arriving on this socket: on a direct listener that
+header is client-supplied, and peer identity must come from the socket's own
+address. (Contrast `:8803`, which IS fronted by HAProxy with
+`option forwardfor` — see its section above.)
 
 ### Envelope
 

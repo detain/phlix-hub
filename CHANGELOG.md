@@ -6,6 +6,33 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 21–25: the wire reference's five paper cuts — 2026-11-02
+
+- **M21**: close-code RFC citation corrected to **6455** (1013 Try Again Later
+  is §7.4.1 of the WebSocket protocol spec; RFC 1011 is an unrelated 1987
+  obsolete hostname RFC — a number-echo typo with a normative citation in a
+  wire-contract document).
+- **M22**: the `../../phlix-syncplay/SPEC.md` markdown link resolved only in
+  this estate's sibling checkout — 404 on GitHub. Now a plain-text sibling-repo
+  pointer, matching the document's own convention elsewhere.
+- **M23**: federation `HEARTBEAT (0x06)` envelope row said "both → both" —
+  code truth re-verified: the leaf timer sends (`FederationPeerManager`
+  heartbeat timer), the master only consumes (`FederationFrameHandler::
+  handleHeartbeat`), and grep finds zero master-side emitters. Row now reads
+  `leaf → master` and contradicts the old claim explicitly, aligned with the
+  document's own glance table.
+- **M24**: ":8097 … Behind HAProxy over loopback" was wrong topology for a
+  direct-dial listener and actively dangerous — it taught operators to trust a
+  forgeable `X-Forwarded-For` on a socket no proxy ever fronts. Replaced with
+  the direct-listener truth (installer *publishes* the port; identity from the
+  socket peer; XFF is client-supplied noise) plus the accurate contrast with
+  `:8803`, which genuinely IS HAProxy-fronted with `option forwardfor`.
+- **M25**: ":8802 is *the one client-facing lane* with a complete liveness
+  loop" was doubly false — the lane is server-facing, and since M-HUB-18 the
+  client-facing :8804 runs the same 30 s/90 s math (its glance-table row and
+  `CLOSE_LIVENESS_TIMEOUT` prove it in this same document). Rewritten to name
+  both lanes honestly.
+
 ### Fixed — review hub Majors 17 + 19 + 20: the hub decision, framed; entity + dangling-ref fixes — 2026-11-02
 
 - **M17**: new *Do I actually need a hub?* subsection — the honest skip-list
