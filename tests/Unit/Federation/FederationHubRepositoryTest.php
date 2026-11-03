@@ -300,8 +300,10 @@ final class FederationHubRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('FROM federation_peers WHERE public_key'),
-                ['public_key' => 'abc123']
+                self::stringContains('FROM federation_peers WHERE public_key_hash'),
+                // Migration 050 law: the predicate is the byte-exact SHA-256
+                // of the key, matching the generated column's stored value.
+                ['public_key_hash' => hash('sha256', 'abc123')]
             )
             ->willReturn([$expectedPeer]);
 

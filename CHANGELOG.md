@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 35: peer public-key lookup rides a generated-column UNIQUE hash index (was a TEXT full scan on the handshake gate) — 2026-11-03
+
+- Migration `050_federation_peer_public_key_hash.sql`: `public_key_hash
+  CHAR(64) GENERATED ALWAYS AS (LOWER(SHA2(public_key, 256))) STORED` +
+  `UNIQUE KEY uq_federation_peers_public_key_hash` — the claim-code norm
+  pattern (048), guard included: a legacy table already holding duplicate
+  (or collation-variant) keys aborts at the PREPARE guard carrying its own
+  remedy instead of an opaque 1062, with nothing altered.
+- `FederationHubRepository::getPeerByPublicKey()` now matches
+  `WHERE public_key_hash = :public_key_hash` with the digest computed by PHP
+  (`hash('sha256', …)`, byte-ident to the column — MySQL-proven); EXPLAIN
+  flipped from full scan to `type: const`, one unique-index hit per inbound
+  handshake (FederationFrameHandler hub_hello + registration probe).
+  Semantics tighten honestly: the old compare ran through the table's
+  case-insensitive PAD-SPACE collation, so case-variant keys could pair with
+  the wrong row (signature check refused them anyway); exact-byte hash
+  matching refuses earlier. No wire change: same method, same rows, same 409.
+- Docker MySQL 8.4 lifecycle proven: fresh chain (36 applied) → re-run no-op
+  → dirty-duplicate guard red with remedy text → post-remediation apply green.
+
 ### Fixed — review hub Minors 1-6 + 34: bearer/cookie prose truth pass, live-tag example, TOC anchor, stale schema-cost notes, dead `.env.example` → documented Xdebug envs — 2026-11-03
 
 - Minor 1: every remaining cookie-auth prose site now matches the shipped

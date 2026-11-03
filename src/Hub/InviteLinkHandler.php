@@ -161,7 +161,8 @@ class InviteLinkHandler
 
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, owner_user_id, server_id, library_id, permission, token_hash, max_uses, use_count, expires_at, created_at FROM invite_links WHERE token_hash = :token_hash LIMIT 1',
+            'SELECT id, owner_user_id, server_id, library_id, permission, token_hash, max_uses, '
+            . 'use_count, expires_at, created_at FROM invite_links WHERE token_hash = :token_hash LIMIT 1',
             ['token_hash' => $tokenHash],
         );
 
@@ -321,7 +322,9 @@ class InviteLinkHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, owner_user_id, server_id, library_id, permission, token_hash, max_uses, use_count, expires_at, created_at FROM invite_links WHERE owner_user_id = :owner_id ORDER BY created_at DESC',
+            'SELECT id, owner_user_id, server_id, library_id, permission, token_hash, max_uses, '
+            . 'use_count, expires_at, created_at FROM invite_links WHERE owner_user_id = :owner_id ORDER BY '
+            . 'created_at DESC',
             ['owner_id' => $ownerId],
         );
 
@@ -371,7 +374,8 @@ class InviteLinkHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, owner_user_id, server_id, library_id, permission, token_hash, max_uses, use_count, expires_at, created_at FROM invite_links WHERE id = :id',
+            'SELECT id, owner_user_id, server_id, library_id, permission, token_hash, max_uses, '
+            . 'use_count, expires_at, created_at FROM invite_links WHERE id = :id',
             ['id' => $linkId],
         );
 

@@ -337,7 +337,10 @@ class ClaimRequestHandler
             // this method's uppercased normaliser.
             /** @var list<array<string, mixed>> $rows */
             $rows = $this->db->query(
-                'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, claimed_by, claimed_at, paired_at, paired_server_id FROM server_claims WHERE claim_code_norm = :code FOR UPDATE',
+                'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, '
+                . 'hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, claimed_by, '
+                . 'claimed_at, paired_at, paired_server_id FROM server_claims WHERE claim_code_norm = :code FOR '
+                . 'UPDATE',
                 ['code' => $normalizedCode],
             );
 
@@ -500,7 +503,9 @@ class ClaimRequestHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, claimed_by, claimed_at, paired_at, paired_server_id FROM server_claims WHERE id = :id',
+            'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, '
+            . 'hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, claimed_by, '
+            . 'claimed_at, paired_at, paired_server_id FROM server_claims WHERE id = :id',
             ['id' => $claimId],
         );
         if (empty($rows)) {
@@ -734,9 +739,11 @@ class ClaimRequestHandler
         $fingerprint = $this->jwkFingerprint($publicKeyJwk);
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, claimed_by, claimed_at, paired_at, paired_server_id FROM server_claims
-             WHERE claimed_by IS NULL AND expires_at > :now
-             ORDER BY created_at DESC LIMIT ' . self::CLAIM_LOOKUP_WINDOW,
+            'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, '
+             . 'hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, '
+             . 'claimed_by, claimed_at, paired_at, paired_server_id FROM server_claims'
+             . "\n             WHERE claimed_by IS NULL AND expires_at > :now"
+             . "\n             ORDER BY created_at DESC LIMIT " . self::CLAIM_LOOKUP_WINDOW,
             ['now' => time()],
         );
 

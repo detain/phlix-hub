@@ -117,7 +117,8 @@ class FederationAdminDelegationRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, peer_id, user_id, granted_at, revoked_at FROM federation_admin_delegations WHERE id = :id LIMIT 1',
+            'SELECT id, peer_id, user_id, granted_at, revoked_at FROM federation_admin_delegations WHERE '
+            . 'id = :id LIMIT 1',
             ['id' => $id],
         );
 

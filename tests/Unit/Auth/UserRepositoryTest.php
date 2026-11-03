@@ -20,7 +20,11 @@ final class UserRepositoryTest extends TestCase
         $db = $this->createMock(Connection::class);
         $db->expects(self::once())
             ->method('query')
-            ->with('SELECT id, username, email, password_hash, display_name, is_admin, created_at, updated_at FROM users WHERE id = :id', ['id' => 'u-1'])
+            ->with(
+                'SELECT id, username, email, password_hash, display_name, is_admin, created_at, updated_at '
+                 . 'FROM users WHERE id = :id',
+                ['id' => 'u-1'],
+            )
             ->willReturn([['id' => 'u-1', 'username' => 'alice', 'email' => 'a@example.com']]);
 
         $repo = new UserRepository($db);

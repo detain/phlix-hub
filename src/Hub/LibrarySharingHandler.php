@@ -574,7 +574,8 @@ class LibrarySharingHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, owner_user_id, collaborator_user_id, server_id, library_id, library_name, permission_level, granted_by, created_at, expires_at, revoked_at FROM library_shares WHERE id = :id',
+            'SELECT id, owner_user_id, collaborator_user_id, server_id, library_id, library_name, '
+             . 'permission_level, granted_by, created_at, expires_at, revoked_at FROM library_shares WHERE id = :id',
             ['id' => $shareId],
         );
 
@@ -592,11 +593,12 @@ class LibrarySharingHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, owner_user_id, collaborator_user_id, server_id, library_id, library_name, permission_level, granted_by, created_at, expires_at, revoked_at FROM library_shares
-             WHERE owner_user_id = :owner_id
-               AND collaborator_user_id = :collaborator_id
-               AND library_id = :library_id
-             LIMIT 1',
+            'SELECT id, owner_user_id, collaborator_user_id, server_id, library_id, library_name, '
+             . 'permission_level, granted_by, created_at, expires_at, revoked_at FROM library_shares'
+             . "\n             WHERE owner_user_id = :owner_id"
+             . "\n               AND collaborator_user_id = :collaborator_id"
+             . "\n               AND library_id = :library_id"
+             . "\n             LIMIT 1",
             [
                 'owner_id' => $ownerId,
                 'collaborator_id' => $collaboratorId,

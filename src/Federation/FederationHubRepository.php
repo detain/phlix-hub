@@ -38,7 +38,8 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, name, url, public_key, role, is_master, is_active, created_at, updated_at FROM federation_hubs LIMIT 1',
+            'SELECT id, name, url, public_key, role, is_master, is_active, created_at, updated_at FROM '
+            . 'federation_hubs LIMIT 1',
         );
 
         return $rows[0] ?? null;
@@ -154,10 +155,11 @@ class FederationHubRepository
         // the pool-disabled fallback constructs it), so the semantics hold.
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers
-             WHERE id = :id OR leaf_hub_id = :id
-             ORDER BY id = :id DESC
-             LIMIT 1',
+            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, '
+             . 'last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers'
+             . "\n             WHERE id = :id OR leaf_hub_id = :id"
+             . "\n             ORDER BY id = :id DESC"
+             . "\n             LIMIT 1",
             ['id' => $id],
         );
 
@@ -175,7 +177,9 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE url = :url LIMIT 1',
+            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, '
+            . 'status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE '
+            . 'url = :url LIMIT 1',
             ['url' => $url],
         );
 
@@ -185,6 +189,15 @@ class FederationHubRepository
     /**
      * Get a peer by its public key.
      *
+     * The lookup rides the generated-column UNIQUE index of migration 050:
+     * the column holds `LOWER(SHA2(public_key, 256))` and PHP computes the
+     * same lowercase hex digest here, so one handshake is one single-row
+     * unique-index hit instead of a full scan of the TEXT column (the
+     * claim-code norm fix, 048, ported). Byte-exact by design: the old
+     * collation-lenient TEXT compare could pair a case-variant key with the
+     * wrong row — such a peer failed signature verification anyway, the hash
+     * predicate simply refuses earlier and never scans.
+     *
      * @param string $publicKey Base64-encoded Ed25519 public key.
      *
      * @return array<string, mixed>|null Peer row or null.
@@ -193,8 +206,10 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE public_key = :public_key LIMIT 1',
-            ['public_key' => $publicKey],
+            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, '
+            . 'status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE '
+            . 'public_key_hash = :public_key_hash LIMIT 1',
+            ['public_key_hash' => hash('sha256', $publicKey)],
         );
 
         return $rows[0] ?? null;
@@ -228,7 +243,9 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE status = :status ORDER BY name',
+            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, '
+            . 'status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE '
+            . 'status = :status ORDER BY name',
             ['status' => 'connected'],
         );
 
@@ -251,7 +268,9 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            "SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE status <> :suspended ORDER BY name",
+            "SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, "
+            . "status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE "
+            . "status <> :suspended ORDER BY name",
             ['suspended' => 'suspended'],
         );
 
