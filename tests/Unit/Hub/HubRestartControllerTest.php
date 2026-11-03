@@ -206,7 +206,8 @@ final class HubRestartControllerTest extends TestCase
 
         self::assertSame(500, $response->statusCode);
         $body = json_decode((string) $response->body, true);
-        self::assertSame('pid_identity_mismatch', $body['error']);
+        self::assertIsArray($body);
+        self::assertSame('pid_identity_mismatch', $body['error'] ?? null);
         self::assertSame([], $controller->scheduled, 'a foreign process must never receive the reload signal');
     }
 
@@ -220,7 +221,8 @@ final class HubRestartControllerTest extends TestCase
 
         self::assertSame(500, $response->statusCode);
         $body = json_decode((string) $response->body, true);
-        self::assertSame('pid_identity_mismatch', $body['error']);
+        self::assertIsArray($body);
+        self::assertSame('pid_identity_mismatch', $body['error'] ?? null);
         self::assertSame([], $controller->scheduled);
     }
 
