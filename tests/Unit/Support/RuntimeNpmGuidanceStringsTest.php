@@ -65,12 +65,18 @@ use function unlink;
  *
  * | mutation                                             | this test |
  * | ---------------------------------------------------- | --------- |
- * | any of the five strings reverted to a bare `install` | RED       |
- * | one 503 site edited, a sibling left behind           | RED       |
+ * | any guidance string reverted to a bare `install`     | RED       |
+ * | the constant edited while a log call left behind     | RED       |
  * | the `cd web-ui` / `npm run build` frame dropped      | RED       |
- * | the emitted runtime frame altered                    | RED       |
- * | any one of the four 503 branches' frame altered      | RED       |
+ * | the browser body regaining any shell guidance        | RED       |
+ * | any 503 branch's log line altered                    | RED       |
+ * | the SECURITY refusal re-adding rebuild guidance      | RED       |
  * | the survival token moved out of PHP code             | RED       |
+ *
+ * Minor 53 re-rotated this S467 law: the CI-true frame moved OUT of the browser
+ * response (end users were being served shell commands, and a denied traversal
+ * was mislabelled as a broken build) INTO the per-cause operator error_log line.
+ * The incantation itself is still exactly one CI-true constant per runtime file.
  *
  * Scope: the bare `npm install` in {@see SpaBundleCiWiringTest} and
  * {@see McpE2ECiWiringTest} is deliberate workflow-YAML counter-example prose and is
@@ -99,14 +105,14 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
     /** The pre-S467 wrong signal: a bare install that floats resolution off the lockfile. */
     private const LEGACY_INSTALL = 'npm install';
 
-    /** Whole frame the four 503 bodies emit (HTML-entity `&&`, matching the source). */
-    private const HTML_FRAME = self::CD_STEP . ' &amp;&amp; ' . self::CI_INSTALL . ' &amp;&amp; ' . self::BUILD_STEP;
+    /** Minor 53: the user-honest browser frame every bundle failure now shows. */
+    private const USER_FRAME = '503 — UI unavailable';
 
     /** Whole frame the Vite exception emits (literal `&&`, matching the source). */
     private const PLAIN_FRAME = self::CD_STEP . ' && ' . self::CI_INSTALL . ' && ' . self::BUILD_STEP;
 
     /** Number of guidance sites per runtime file. */
-    private const CONTROLLER_SITES = 4;
+    private const CONTROLLER_SITES = 1;
 
     private const VITE_SITES = 1;
 
@@ -254,29 +260,61 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
     public function testTheRealControllerResponseCarriesTheCiTrueFrame(): void
     {
         // A never-existent root: the manifest guard throws and branch 1 answers 503.
-        $this->assertShell503CarriesTheCiTrueFrame(self::MISSING_ROOT, 'missing Vite manifest');
+        $this->assertShell503IsUserHonestAndLogsGuidance(self::MISSING_ROOT, 'vite manifest unreadable', true);
     }
 
     /**
-     * Drive {@see SharedUiController::shell()} at a given public root and assert the artefact
-     * it actually returns is a 503 carrying the CI-true frame — reused for every `not built`
-     * branch so each of the four identical literals is proven on a real response, not read off
-     * the source.
+     * Minor 53 posture: drive {@see SharedUiController::shell()} at a given public root and
+     * assert BOTH artefacts that actually leave the process — the browser body (user-honest,
+     * zero shell commands) and the error_log line (per-cause operator diagnostic carrying the
+     * whole CI-true frame for build-state branches; the SECURITY refusal logs its cause and
+     * deliberately NOT the frame). $expectGuidance selects which law the branch obeys.
      */
-    private function assertShell503CarriesTheCiTrueFrame(string $publicRoot, string $branch): void
-    {
-        $response = (new SharedUiController($publicRoot))->shell(new Request(), []);
+    private function assertShell503IsUserHonestAndLogsGuidance(
+        string $publicRoot,
+        string $branch,
+        bool $expectGuidance
+    ): void {
+        $logFile = sys_get_temp_dir() . '/phlix-s467-rot-' . bin2hex(random_bytes(5)) . '.log';
+        $previous = ini_set('error_log', $logFile);
+        try {
+            $response = (new SharedUiController($publicRoot))->shell(new Request(), []);
+        } finally {
+            ini_restore('error_log');
+        }
 
         self::assertSame(503, $response->statusCode, $branch . ': a broken bundle must answer 503');
         self::assertStringContainsString(
-            self::HTML_FRAME,
+            self::USER_FRAME,
             $response->body,
-            $branch . ': the emitted 503 body must contain the whole CI-true frame'
+            $branch . ': the emitted 503 body must be the user-honest UI-unavailable frame'
         );
         self::assertStringNotContainsString(
-            self::LEGACY_INSTALL,
+            'npm',
             $response->body,
-            $branch . ': the emitted 503 body must not direct a bare `npm install`'
+            $branch . ': the browser body must leak ZERO shell guidance (Minor 53)'
+        );
+
+        $logged = is_file($logFile) ? (string) file_get_contents($logFile) : '';
+        @unlink($logFile);
+        self::assertStringContainsString($branch, $logged, $branch . ': the operator log names the CAUSE');
+        if ($expectGuidance) {
+            self::assertStringContainsString(
+                self::PLAIN_FRAME,
+                $logged,
+                $branch . ': build-state branches log the whole CI-true frame'
+            );
+        } else {
+            self::assertStringNotContainsString(
+                'npm ci',
+                $logged,
+                $branch . ': the SECURITY refusal must not suggest a rebuild fixes a denied path'
+            );
+        }
+        self::assertStringNotContainsString(
+            self::LEGACY_INSTALL,
+            $logged,
+            $branch . ': the log must not direct a bare `npm install`'
         );
     }
 
@@ -285,7 +323,11 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
         // Manifest present so branch 1 is cleared; index.html absent so realpath() is false.
         [$publicRoot] = $this->makeBuiltRoot();
 
-        $this->assertShell503CarriesTheCiTrueFrame($publicRoot, 'missing index.html');
+        $this->assertShell503IsUserHonestAndLogsGuidance(
+            $publicRoot,
+            'shell index.html missing under the public root',
+            true
+        );
     }
 
     public function testTheEscapedShellResponseCarriesTheCiTrueFrame(): void
@@ -297,7 +339,11 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
             'the escape symlink must be creatable for this branch'
         );
 
-        $this->assertShell503CarriesTheCiTrueFrame($publicRoot, 'shell resolves outside the public root');
+        $this->assertShell503IsUserHonestAndLogsGuidance(
+            $publicRoot,
+            'SECURITY: shell path escapes the public root',
+            false
+        );
     }
 
     public function testTheNonFileShellResponseCarriesTheCiTrueFrame(): void
@@ -309,7 +355,11 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
             'the index.html directory must be creatable for this branch'
         );
 
-        $this->assertShell503CarriesTheCiTrueFrame($publicRoot, 'shell path is a directory, not a file');
+        $this->assertShell503IsUserHonestAndLogsGuidance(
+            $publicRoot,
+            'shell path is not a regular file',
+            true
+        );
     }
 
     public function testTheRealViteExceptionCarriesTheCiTrueFrame(): void

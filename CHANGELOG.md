@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minor 53: 503 shell split (user page vs operator log) — 2026-11-03
+
+- `SharedUiController::shell()` served the SAME "Shared UI not built" page —
+  including raw `cd web-ui && … npm ci && npm run build` shell commands — for
+  five different outcomes, and mislabelled a DENIED PATH TRAVERSAL as a broken
+  build. Now: one user-honest `503 — UI unavailable` frame reaches the browser
+  (zero shell guidance), while each cause logs its own operator diagnostic
+  (`vite manifest unreadable`, `shell index.html missing`, `shell path is not a
+  regular file`, read-failure) carrying the S467 CI-true rebuild frame as ONE
+  constant, and the traversal refusal logs a SECURITY line with NO rebuild
+  suggestion (a rebuild does not fix a denied path). `RuntimeNpmGuidanceStringsTest`
+  re-rotated with the move (disclosed): source-layer site count 4→1, and every
+  branch is now proven on BOTH artefacts that leave the process — body must be
+  guidance-free, log must carry the frame per law. `npm` never vanishes from
+  the runtime sources, so the S467 survival law holds unchanged.
+
+
 ### Fixed — review hub Minors 55+56: restart identity gate + fail-loud runtime dirs — 2026-11-03
 
 - **Minor 55 — `POST /api/v1/admin/restart` now verifies the pid before

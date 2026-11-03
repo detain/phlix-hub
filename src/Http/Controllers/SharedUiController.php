@@ -30,6 +30,39 @@ final class SharedUiController
      *                           directory. The built SPA shell is read from
      *                           `$publicRoot . self::SHELL_RELATIVE_PATH`.
      */
+    /**
+     * CI-true rebuild incantation (S467 law, Minor 53 posture): now emitted to
+     * the OPERATOR log only — never into the browser response, where it was
+     * shell-command text shown to end users and, worse, the single label
+     * shared by four very different failure causes including a denied path
+     * traversal. The four build-state branches log it; the security refusal
+     * does not (rebuilding fixes nothing about a denied path).
+     */
+    private const REBUILD_GUIDANCE =
+        'cd web-ui && NPM_CONFIG_USERCONFIG=/dev/null npm ci && npm run build';
+
+    /**
+     * The one user-honest 503 frame for every bundle-serving failure, plus
+     * the per-cause operator diagnostic that used to be the (mis)labelled page.
+     */
+    private function unavailable(string $cause, bool $withGuidance): Response
+    {
+        error_log(sprintf(
+            '[phlix-hub] SharedUiController 503 (%s): %s%s',
+            $cause,
+            'the portal shell could not be served under ' . $this->publicRoot,
+            $withGuidance ? ' — rebuild with: ' . self::REBUILD_GUIDANCE : ''
+        ));
+
+        return (new Response())
+            ->status(503)
+            ->html(
+                '<h1>503 — UI unavailable</h1>'
+                . '<p>The hub web interface cannot be served right now. '
+                . 'If this persists, contact your hub administrator.</p>'
+            );
+    }
+
     public function __construct(private readonly string $publicRoot)
     {
     }
@@ -58,60 +91,31 @@ final class SharedUiController
             $viteAssets = new ViteAssets($this->publicRoot);
             $viteAssets->getEntryJsPath();
         } catch (\RuntimeException) {
-            return (new Response())
-                ->status(503)
-                ->html(
-                    '<h1>503 — Shared UI not built</h1>'
-                    . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; NPM_CONFIG_USERCONFIG=/dev/null npm ci '
-                    . '&amp;&amp; npm run build</code>.</p>'
-                );
+            return $this->unavailable('vite manifest unreadable — the bundle was never built', true);
         }
 
         $shellPath = $this->publicRoot . self::SHELL_RELATIVE_PATH;
         $real = realpath($shellPath);
 
         if ($real === false) {
-            return (new Response())
-                ->status(503)
-                ->html(
-                    '<h1>503 — Shared UI not built</h1>'
-                    . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; NPM_CONFIG_USERCONFIG=/dev/null npm ci '
-                    . '&amp;&amp; npm run build</code>.</p>'
-                );
+            return $this->unavailable('shell index.html missing under the public root', true);
         }
 
         /** @var non-empty-string $realPath */
         $realPath = $real;
 
         if (! str_starts_with($realPath, $this->publicRoot . DIRECTORY_SEPARATOR)) {
-            return (new Response())
-                ->status(503)
-                ->html(
-                    '<h1>503 — Shared UI not built</h1>'
-                    . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; NPM_CONFIG_USERCONFIG=/dev/null npm ci '
-                    . '&amp;&amp; npm run build</code>.</p>'
-                );
+            // Minor 53 honesty: this is a SECURITY refusal, not a broken build.
+            return $this->unavailable('SECURITY: shell path escapes the public root — request denied', false);
         }
 
         if (! is_file($realPath)) {
-            return (new Response())
-                ->status(503)
-                ->html(
-                    '<h1>503 — Shared UI not built</h1>'
-                    . '<p>The Vue SPA bundle is missing. '
-                    . 'Run <code>cd web-ui &amp;&amp; NPM_CONFIG_USERCONFIG=/dev/null npm ci '
-                    . '&amp;&amp; npm run build</code>.</p>'
-                );
+            return $this->unavailable('shell path is not a regular file', true);
         }
 
         $html = file_get_contents($realPath);
         if ($html === false) {
-            return (new Response())
-                ->status(503)
-                ->html('<h1>503 — Shared UI could not be read</h1>');
+            return $this->unavailable('shell index.html exists but could not be read (permissions?)', true);
         }
 
         // Inject window.__PHLIX__ config
