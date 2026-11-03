@@ -81,11 +81,18 @@ final class AuthManagerTest extends TestCase
         $mgr = new AuthManager($repo, $jwt, $audit, $logger, $rl);
         $mgr->register('alice', 'a@example.com', 'longenough');
 
-        self::assertIsArray($seen);
+        // No assertIsArray here: after the typed declaration the check is
+        // provably true (phpstan flags impossible asserts). The callback-
+        // fired law is carried by assertArrayHasKey below — an unfired
+        // recorder leaves $seen empty and that assertion fails.
         self::assertArrayNotHasKey('password', $seen, 'the plaintext arm must not reach create() from register()');
         self::assertArrayHasKey('password_hash', $seen);
-        self::assertStringStartsWith('$argon2id$', (string) $seen['password_hash']);
-        self::assertTrue(password_verify('longenough', (string) $seen['password_hash']));
+        $digest = $seen['password_hash'];
+        if (!is_string($digest)) {
+            self::fail('password_hash arm must reach create() as a string digest');
+        }
+        self::assertStringStartsWith('$argon2id$', $digest);
+        self::assertTrue(password_verify('longenough', $digest));
     }
 
     public function testRegisterValidatesUsernameLength(): void
