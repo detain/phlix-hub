@@ -482,37 +482,46 @@ final class Application
         // Protected pages + API.
         $authMiddleware = $this->resolveAuthMiddleware();
 
-        // Legacy SSR dashboard pages now redirect to the Vue SPA. They stay
-        // auth-gated so an unauthenticated browser is bounced to /app/login by
-        // the AuthMiddleware challenge before the redirect ever runs.
+        // Legacy SSR dashboard pages now redirect to the Vue SPA. Review hub
+        // Minor 54: these handlers read no identity — they are pure pointers —
+        // and the auth gate on them only LOST information: an unauthenticated
+        // hit received a bare 302 to /app/login while the real destination
+        // (/app/admin/settings, /app/servers/{id}, …) evaporated. They are
+        // PUBLIC by design now, matching the `/invite/{token}` pointer which
+        // always was: the browser lands on the SPA route it actually asked
+        // for, and the SPA's own router guard (pinned @phlix/ui) bounces to
+        // /app/login?redirect=<fullPath>, preserving the destination
+        // end-to-end. Nothing is exposed by this: every JSON API behind these
+        // pages stays auth-gated (the RouteManifest/RegistrarAuthGateTest law
+        // mirrors the registrations below and reddens on drift either way).
         $this->router->group('/my-servers', static function (Router $r): void {
             $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/servers'));
-        }, [$authMiddleware]);
+        });
 
         $this->router->group('/claim-server', static function (Router $r): void {
             // No dedicated claim page — the claim modal lives in the SPA's
             // MyServersPage (/app/servers).
             $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/servers'));
-        }, [$authMiddleware]);
+        });
 
         // Redirect to Vue SPA.
         $this->router->group('/invite-links', static function (Router $r): void {
             $r->get('', static function (Request $request): Response {
                 return (new Response())->redirect('/app/invite-links');
             });
-        }, [$authMiddleware]);
+        });
 
         $this->router->group('/hub-settings', static function (Router $r): void {
             $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/admin/settings'));
-        }, [$authMiddleware]);
+        });
 
         $this->router->group('/audit-logs', static function (Router $r): void {
             $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/admin/audit-logs'));
-        }, [$authMiddleware]);
+        });
 
         $this->router->group('/logs', static function (Router $r): void {
             $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/admin/logs'));
-        }, [$authMiddleware]);
+        });
 
         $this->router->group('/federation', static function (Router $r): void {
             $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/federation'));
@@ -520,7 +529,7 @@ final class Application
             $r->get('/shares', static function (Request $request): Response {
                 return (new Response())->redirect('/app/federation/shares');
             });
-        }, [$authMiddleware]);
+        });
 
         // Redirect to Vue SPA.
         $this->router->group('/servers/{id}', static function (Router $r): void {
@@ -529,7 +538,7 @@ final class Application
                 $id = $params['id'];
                 return (new Response())->redirect('/app/servers/' . $id);
             });
-        }, [$authMiddleware]);
+        });
 
         $me = $this->resolveMeController();
         $serverList = $this->resolveServerListController();
@@ -951,12 +960,13 @@ final class Application
         $adminMiddleware = $this->resolveAdminMiddleware();
         $requestController = $this->resolveRequestController();
 
-        // Redirect to Vue SPA.
+        // Redirect to Vue SPA — public pointer (Minor 54 law: identity-free;
+        // the SPA guard owns the auth bounce with ?redirect=<fullPath>).
         $this->router->group('/requests', static function (Router $r): void {
             $r->get('', static function (Request $request): Response {
                 return (new Response())->redirect('/app/requests');
             });
-        }, [$authMiddleware]);
+        });
 
         // Redirect to Vue SPA. Admin-gated like every other `/admin/*` surface:
         // the page it points at is the admin queue, so a non-admin is refused
@@ -1496,16 +1506,17 @@ final class Application
     {
         $shareController = $this->resolveLibraryShareController();
 
-        // Redirect to Vue SPA.
+        // Redirect to Vue SPA — public pointer (Minor 54 law: identity-free;
+        // the SPA guard owns the auth bounce with ?redirect=<fullPath>).
         $this->router->group('/shared-with-me', static function (Router $r): void {
             $r->get('', static function (Request $request): Response {
                 return (new Response())->redirect('/app/shared-with-me');
             });
-        }, [$authMiddleware]);
+        });
 
         $this->router->group('/manage-shares', static function (Router $r): void {
             $r->get('', static fn (Request $req): Response => (new Response())->redirect('/app/shares'));
-        }, [$authMiddleware]);
+        });
 
         // JSON API for shares.
         $this->router->group('/api/v1/me/shares', static function (Router $r) use ($shareController): void {

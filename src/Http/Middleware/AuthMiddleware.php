@@ -150,6 +150,16 @@ final class AuthMiddleware
 
     /**
      * Decide whether to send a JSON 401 or an HTML 302 redirect to /app/login.
+     *
+     * The bare `/app/login` target (no `?redirect=`) is honest for what is
+     * left of the HTML family after review hub Minor 54: the twelve
+     * identity-free SSR pointers were de-gated, so they never reach this
+     * challenge — an unauthenticated visitor gets the pointer's own SPA
+     * 302 and the SPA router guard re-bounces with `?redirect=<full path>`.
+     * What still 302s from HERE is a route whose RESULT would differ with a
+     * session (e.g. `/admin/requests`' auth+admin chain); there the bare
+     * login page is the correct destination because the target page is not
+     * a constant — it depends on who logs in.
      */
     private function challenge(Request $request, string $code): Response
     {

@@ -279,36 +279,36 @@ final class RouteManifest
             // Legacy SSR page paths — auth-gated redirects into the SPA.
             [
                 'method' => 'GET', 'path' => '/my-servers', 'url' => '/my-servers',
-                'gate' => self::GATE_AUTH_HTML,
+                'gate' => self::GATE_PUBLIC,
             ],
             [
                 'method' => 'GET', 'path' => '/claim-server', 'url' => '/claim-server',
-                'gate' => self::GATE_AUTH_HTML,
+                'gate' => self::GATE_PUBLIC,
             ],
             [
                 'method' => 'GET', 'path' => '/invite-links', 'url' => '/invite-links',
-                'gate' => self::GATE_AUTH_HTML,
+                'gate' => self::GATE_PUBLIC,
             ],
             [
                 'method' => 'GET', 'path' => '/hub-settings', 'url' => '/hub-settings',
-                'gate' => self::GATE_AUTH_HTML,
+                'gate' => self::GATE_PUBLIC,
             ],
             [
                 'method' => 'GET', 'path' => '/audit-logs', 'url' => '/audit-logs',
-                'gate' => self::GATE_AUTH_HTML,
+                'gate' => self::GATE_PUBLIC,
             ],
-            ['method' => 'GET', 'path' => '/logs', 'url' => '/logs', 'gate' => self::GATE_AUTH_HTML],
+            ['method' => 'GET', 'path' => '/logs', 'url' => '/logs', 'gate' => self::GATE_PUBLIC],
             [
                 'method' => 'GET', 'path' => '/federation', 'url' => '/federation',
-                'gate' => self::GATE_AUTH_HTML,
+                'gate' => self::GATE_PUBLIC,
             ],
             [
                 'method' => 'GET', 'path' => '/federation/shares', 'url' => '/federation/shares',
-                'gate' => self::GATE_AUTH_HTML,
+                'gate' => self::GATE_PUBLIC,
             ],
             [
                 'method' => 'GET', 'path' => '/servers/{id}', 'url' => '/servers/srv-1',
-                'gate' => self::GATE_AUTH_HTML,
+                'gate' => self::GATE_PUBLIC,
             ],
 
             // `/api/v1` JSON surface.
@@ -409,7 +409,7 @@ final class RouteManifest
             'registerRequestRoutes' => [
                 [
                     'method' => 'GET', 'path' => '/requests', 'url' => '/requests',
-                    'gate' => self::GATE_AUTH_HTML,
+                    'gate' => self::GATE_PUBLIC,
                 ],
                 [
                     'method' => 'GET', 'path' => '/admin/requests', 'url' => '/admin/requests',
@@ -536,11 +536,11 @@ final class RouteManifest
             'registerSharingRoutes' => [
                 [
                     'method' => 'GET', 'path' => '/shared-with-me', 'url' => '/shared-with-me',
-                    'gate' => self::GATE_AUTH_HTML,
+                    'gate' => self::GATE_PUBLIC,
                 ],
                 [
                     'method' => 'GET', 'path' => '/manage-shares', 'url' => '/manage-shares',
-                    'gate' => self::GATE_AUTH_HTML,
+                    'gate' => self::GATE_PUBLIC,
                 ],
                 [
                     'method' => 'POST', 'path' => '/api/v1/me/shares', 'url' => '/api/v1/me/shares',

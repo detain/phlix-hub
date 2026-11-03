@@ -3793,18 +3793,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/admin/audit-logs`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/admin/audit-logs`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/admin/audit-logs when signed in, /app/login when not"
+              description: "/app/admin/audit-logs for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/claim-server":
@@ -3816,18 +3816,18 @@ paths:
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`. There is no dedicated claim page; the claim modal lives in the SPA
         MyServersPage.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/servers`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/servers`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/servers when signed in, /app/login when not"
+              description: "/app/servers for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/client/{server_id}":
@@ -3883,18 +3883,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/federation`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/federation`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/federation when signed in, /app/login when not"
+              description: "/app/federation for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/federation/shares":
@@ -3905,18 +3905,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/federation/shares`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/federation/shares`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/federation/shares when signed in, /app/login when not"
+              description: "/app/federation/shares for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/health":
@@ -3963,18 +3963,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/admin/settings`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/admin/settings`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/admin/settings when signed in, /app/login when not"
+              description: "/app/admin/settings for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/invite-links":
@@ -3985,18 +3985,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/invite-links`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/invite-links`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/invite-links when signed in, /app/login when not"
+              description: "/app/invite-links for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/invite/{token}":
@@ -4051,18 +4051,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/admin/logs`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/admin/logs`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/admin/logs when signed in, /app/login when not"
+              description: "/app/admin/logs for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/manage-shares":
@@ -4073,18 +4073,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/shares`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/shares`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/shares when signed in, /app/login when not"
+              description: "/app/shares for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/mcp":
@@ -4310,18 +4310,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/servers`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/servers`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/servers when signed in, /app/login when not"
+              description: "/app/servers for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/oauth/authorize":
@@ -4630,18 +4630,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/requests`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/requests`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/requests when signed in, /app/login when not"
+              description: "/app/requests for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/servers/{id}":
@@ -4652,7 +4652,7 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
+      x-phlix-middleware: []
       parameters:
         - name: "id"
           in: path
@@ -4660,17 +4660,17 @@ paths:
           description: "Resource id (8-4-4-4-12 hex UUID)."
           schema:
             type: string
-      security:
-        - bearerAuth: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/servers/{id}`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/servers/{id}`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/servers/{id} when signed in, /app/login when not"
+              description: "/app/servers/{id} for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/shared-with-me":
@@ -4681,18 +4681,18 @@ paths:
       description: |-
         Legacy server-rendered page path. The Smarty UI was retired; this path 302-redirects into the
         Vue SPA under `/app`.
-      x-phlix-middleware: [AuthMiddleware]
-      security:
-        - bearerAuth: []
+      x-phlix-middleware: []
+      security: []
       responses:
         "302":
           description: |-
-            Always a redirect, but to one of two places. Signed in: `/app/shares`. Not signed in:
-            `AuthMiddleware` short-circuits first and answers a non-`/api/` path with `/app/login` rather
-            than a JSON 401, so a browser is bounced to the login page.
+            Always a 302 to `/app/shares`. The pointer is PUBLIC (review hub Minor 54): the handler
+            reads no identity. An unauthenticated browser lands on the SPA route it asked
+            for and the SPA's own router guard continues the bounce to
+            `/app/login?redirect=<full path>`, so the destination survives login.
           headers:
             Location:
-              description: "/app/shares when signed in, /app/login when not"
+              description: "/app/shares for every caller (auth state is irrelevant to this public pointer)"
               schema:
                 type: string
   "/signup":

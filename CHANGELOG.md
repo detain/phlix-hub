@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 54 (identity-free SSR pointers stop losing the destination behind the auth gate, 2026-11-03)
+- **The gate enforced nothing and cost the destination.** Twelve bookmark-grade
+  pointer routes (`/my-servers`, `/claim-server`, `/invite-links`,
+  `/hub-settings`, `/audit-logs`, `/logs`, `/federation`, `/federation/shares`,
+  `/servers/{id}`, `/requests`, `/shared-with-me`, `/manage-shares`) carried
+  `[AuthMiddleware]`: a guest bounced 302 to the bare `/app/login` with the
+  destination dropped, because `challenge()` only knows the route it rejected.
+  But every one of these handlers READS NO IDENTITY — the response is a static
+  302 to an `/app/…` SPA route — so the middleware contributed only the lossy
+  bounce. All twelve are de-gated; the SPA's own auth guard then re-bounces an
+  unauthenticated visitor to login with `?redirect=<fullPath>` (the pinned
+  `@phlix/ui` law, consumed by LoginForm/SignupForm), so the destination now
+  survives the round trip. `/admin/requests` KEEPS its gate: its outcome
+  genuinely depends on who the caller is (403 for non-admins), which a static
+  redirect cannot express. All JSON data APIs are untouched. `openapi.yaml`
+  (12 blocks: middleware, security, descriptions), the route-registration
+  `RouteManifest` gate columns and `ApplicationRouteCompositionTest` follow in
+  lockstep, with a new unauthenticated dispatch pin asserting every pointer's
+  exact SPA `Location`.
+
 ### Fixed — review Minor 43 (subdomain allocation reverts its DB stamp when the DNS call fails, 2026-11-03)
 - **Claim-then-write ordering, closed loop.** `DnsAliasManager::allocateSubdomain()`
   stamped `servers.subdomain` first, then called the provider

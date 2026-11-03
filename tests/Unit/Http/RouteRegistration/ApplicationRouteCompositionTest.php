@@ -62,6 +62,17 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
      *    either of them ever appears here, the consent screen has become
      *    reachable — and the code mintable — without a session.
      *
+     *  - the twelve legacy SSR page pointers (`/my-servers`, `/claim-server`,
+     *    `/invite-links`, `/hub-settings`, `/audit-logs`, `/logs`, `/federation`,
+     *    `/federation/shares`, `/servers/{id}`, `/requests`, `/shared-with-me`,
+     *    `/manage-shares`) — review hub Minor 54 de-gated them: each handler is a
+     *    bare 302 into `/app/...` that reads no identity, and keeping the gate on
+     *    a pointer only discarded the destination (the challenge answered a bare
+     *    `/app/login`). Unauthenticated hits now land on the SPA route, whose own
+     *    guard re-bounces to `/app/login?redirect=<full path>`. The data APIs
+     *    behind these pages stay gated — this is a pointer-truth change, not an
+     *    authorization change.
+     *
      * @var list<string>
      */
     private const UNGATED_ROUTES = [
@@ -70,11 +81,23 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
         'GET /.well-known/jwks.json',
         'GET /app',
         'GET /app/{path:.*}',
+        'GET /audit-logs',
+        'GET /claim-server',
         'GET /client/{server_id}',
+        'GET /federation',
+        'GET /federation/shares',
+        'GET /hub-settings',
         'GET /health',
         'GET /invite/{token}',
+        'GET /invite-links',
         'GET /login',
+        'GET /logs',
+        'GET /manage-shares',
+        'GET /my-servers',
         'GET /mcp',
+        'GET /requests',
+        'GET /servers/{id}',
+        'GET /shared-with-me',
         'GET /signup',
         'POST /api/v1/auth/login',
         'POST /api/v1/auth/logout',
@@ -256,6 +279,46 @@ final class ApplicationRouteCompositionTest extends RouteRegistrationTestCase
             . implode(', ', array_diff($expected, $ungated))
             . ']',
         );
+    }
+
+    /**
+     * Review hub Minor 54 (cure behavior): the twelve de-gated legacy SSR
+     * pointers must answer an UNAUTHENTICATED GET with a 302 to their SPA
+     * destination — the destination the gate used to discard. This is the
+     * end-to-end half of the law; the UNGATED_ROUTES const above pins that
+     * the middleware was removed, this pins what the caller now actually
+     * receives (the SPA route, not `/app/login`). A regression that silently
+     * re-gates the family, or repoints a pointer, reddens here.
+     */
+    public function testPublicPointersLandOnTheirSpaDestinationsWithoutASession(): void
+    {
+        $router = $this->runRegistrar('registerRoutes');
+
+        $destinations = [
+            '/my-servers' => '/app/servers',
+            '/claim-server' => '/app/servers',
+            '/invite-links' => '/app/invite-links',
+            '/hub-settings' => '/app/admin/settings',
+            '/audit-logs' => '/app/admin/audit-logs',
+            '/logs' => '/app/admin/logs',
+            '/federation' => '/app/federation',
+            '/federation/shares' => '/app/federation/shares',
+            '/servers/srv-42' => '/app/servers/srv-42',
+            '/requests' => '/app/requests',
+            '/shared-with-me' => '/app/shared-with-me',
+            '/manage-shares' => '/app/shares',
+        ];
+
+        foreach ($destinations as $path => $destination) {
+            $response = $router->dispatch($this->request('GET', $path));
+
+            self::assertSame(302, $response->statusCode, $path . ' must 302 without a session');
+            self::assertSame(
+                $destination,
+                $response->headers['Location'] ?? null,
+                $path . ' must point at its SPA destination, not /app/login'
+            );
+        }
     }
 
     /**
