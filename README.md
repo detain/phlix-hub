@@ -169,6 +169,12 @@ wherever it first appears.
     `/invite/{token}` URLs; redeeming it is one-time.)
 - **claim code** — the human-typed `ABCD-1234` pairing handoff (see
   *Connecting a media server*).
+- **campaign markers** — codes like `S261`, `R-HUB-13`, `M-HUB-10`,
+  `HB-4.6`, `R14-08`, bare commit SHAs, or "review hub__asphp M2" are
+  provenance tags from this project's tracked review/audit campaign (each
+  names a finding, requirement, or decision, not a public issue link). They
+  say *why* a rule exists; the code and behavior they reference is what
+  ships.
 - **watch party / group / room** — one concept, three names, by layer (the
   naming-layers map phlix-server's README publishes, carried here): the
   **canonical wire** says *group* (`syncplay_group_*` frames, `group_id`);
@@ -1083,7 +1089,7 @@ an external host).
 `app.log`, `error.log`, `hub.log`, `relay.log`, `audit.log` (5 channels, 30 rotations each;
 see [`config/logger.php`](config/logger.php)) — **not** stdout. `docker logs phlix-hub`
 therefore shows only the entrypoint banners and Workerman's own console output
-(Workerman's internal log file is the sixth neighbor there, `HUB_WORKERMAN_LOG`,
+(Workerman's internal log file is the sixth log path in that family, `HUB_WORKERMAN_LOG`,
 default `.logs/workerman.log`). To follow the application:
 
 ```bash
@@ -1205,7 +1211,7 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 | `PHLIX_HUB_RATELIMIT_ALEXA_MAX` / `_ALEXA_WINDOW` | `60` / `60` | Alexa skill endpoint, keyed `alexa:<trusted ip>` (flood-cost cap only — Amazon's RSA signature is the credential) |
 | `PHLIX_HUB_RATELIMIT_SERVER_CLAIMS_MAX` / `_SERVER_CLAIMS_WINDOW` | `60` / `60` | Server-claim pairing trio, keyed `server_claims:{new,status,claim}:<trusted ip>` |
 | `PHLIX_HUB_RATELIMIT_INVITE_REDEEM_MAX` / `_INVITE_REDEEM_WINDOW` | `20` / `60` | Invite-link redemption, keyed `invite_redeem:{userId}` (attributable member; bounds the burn+share write chain) |
-| `client_relay_token` (no env seam) | `10` / `60` | Client relay-token mint (`POST /me/servers/{id}/relay-token`), keyed `client_relay_token:{userId}` — attributable member; with the service-side cap of 20 active tokens per (user, server) scope this bounds both mint rate and standing credentials (M-HUB-22). Default is a `RateLimitProfiles::defaults()` literal; override ONLY by adding a `rate_limit.client_relay_token` `{max, window}` subsection to `config/server.php` (read generically by `CommonServicesProvider`) |
+| `client_relay_token` (no env seam) | `10` / `60` | Client relay-token mint (`POST /me/servers/{id}/relay-token`), keyed `client_relay_token:{userId}` — attributable member; with the service-side cap of 20 active tokens per (user, server) scope this bounds both mint rate and standing credentials (M-HUB-22, relay-token limiter). Default is a `RateLimitProfiles::defaults()` literal; override ONLY by adding a `rate_limit.client_relay_token` `{max, window}` subsection to `config/server.php` (read generically by `CommonServicesProvider`) |
 | `client_request_create` (no env seam) | `20` / `60` | Media-request creation (`POST /me/requests`), keyed `client_request_create:{userId}` — attributable member; paired with the pending dedup echo and the 50-pending standing cap on the member's queue (M-HUB-23). Same override route as above: a `rate_limit.client_request_create` subsection in `config/server.php` — there is no `PHLIX_HUB_RATELIMIT_*` env for these two profiles |
 | `PHLIX_HUB_RATELIMIT_RELAY_CONNECT_MAX` / `_RELAY_CONNECT_WINDOW` | `10` / `60` | :8802 server relay-connect (WS), keyed by IP — `count=1` worker, truly global |
 | `PHLIX_HUB_RATELIMIT_CLIENT_MOUNT_MAX` / `_CLIENT_MOUNT_WINDOW` | `30` / `60` | :8803 client-mount (WS), keyed by IP — `count=1` worker, truly global |
@@ -1822,8 +1828,8 @@ and the nightly trigger):
   Codecov). The suite output then faces the **S173 zero-skip gate** —
   `scripts/assert-integration-tests-ran.php` reads PHPUnit's JUnit report and fails the
   build if any test skipped without an explicit, justified `ALLOWED_SKIPS` entry (to date
-  exactly one: the no-swoole noop case in `CoroutineHooksTest`, whose branch is unreachable
-  on the swoole-loading CI venue), or if fewer than 31 real-database tests executed — 31 is
+  exactly one: the no-swoole no-op case in `CoroutineHooksTest`, whose branch is unreachable
+  on the swoole-loading CI environment), or if fewer than 31 real-database tests executed — 31 is
   the enforced MIN floor, not the suite size (the current real-DB count is printed by the
   gate itself). ⚠ A skipped test is not a neutral absence: PHPUnit exits `0` with *"OK, but
   some tests were skipped!"*, so before this gate a missing MySQL service made every
@@ -1844,12 +1850,15 @@ and the nightly trigger):
 - **SPA Bundle Build + Compare Gate** (`spa-bundle`, S253) — a fresh build of `web-ui/` on
   the pinned Node must byte-match the committed `public/assets/app/` tree. This is the gate
   that makes "what you serve is what's in git" true.
-- **Browser floor (M-HUB-10)** — the portal bundle targets
-  `build.target: 'baseline-widely-available'` (≈Chrome/Edge 107+, Safari 16+, Firefox
-  104+), DECLARED in `web-ui/vite.config.ts` rather than inherited from a Vite default.
-  The served shell carries a boot placeholder + `<noscript>` notice, so a below-floor
-  browser reads an explanation instead of a white screen. TV surfaces are separate
-  packaged clients and never load this bundle.
+
+The enumeration above is the twelve. One further build posture sits under the
+same heading by habit but is not a CI job — the **browser floor** (M-HUB-10):
+the portal bundle targets `build.target: 'baseline-widely-available'`
+(≈Chrome/Edge 107+, Safari 16+, Firefox 104+), DECLARED in
+`web-ui/vite.config.ts` rather than inherited from a Vite default. The served
+shell carries a boot placeholder + `<noscript>` notice, so a below-floor
+browser reads an explanation instead of a white screen. TV surfaces are
+separate packaged clients and never load this bundle.
 
 The Docker workflow (S300) builds this repo's own image on this repo's PRs: **boot first,
 publish second** — `docker-boot-gate` boots the freshly built image against a throwaway

@@ -26,7 +26,7 @@ each surface's `portSource`.
 > `:8097` belongs to `phlix-server` and this repository's CI clones one checkout,
 > so nothing here asserts against it. It is documentation, not a contract test.
 
-### Keepalive at a glance
+## Keepalive at a glance
 
 What each socket does about idleness is part of its contract — the consumers
 differ in what their APIs can even send (browser-class JS cannot emit WS-level
@@ -80,13 +80,13 @@ single reliable WS/TCP stream, so the field is used for multiplexing instead:
 | `0x06` | `HEARTBEAT` | either → either | 0 | keep-alive probe / ack |
 | `0x07` | `DISCONNECTED` | hub → client | 0 | server tunnel closed; client should reconnect |
 | `0x08` | `ERROR` | hub ↔ any | 0 | error condition |
-| `0x09` | `HUB_HELLO` | — | 0 | **RETIRED** — reserved in the vendored `RelayFrameType` enum, never emitted; the federation handshake rides JSON **text** frames (`hub_hello`) instead |
-| `0x0A` | `HUB_HELLO_ACK` | — | 0 | **RETIRED** — never emitted; signed ack rides a JSON text frame (`hub_hello_ack`) |
-| `0x0B` | `HUB_HEARTBEAT` | — | 0 | **RETIRED** — never emitted; federation liveness rides the generic `HEARTBEAT` (`0x06`) |
-| `0x0C` | `LIBRARY_SHARE_UPDATE` | — | 0 | **RETIRED** — never emitted; share payloads ride `DATA` (`0x05`) envelopes with a JSON discriminator |
-| `0x0D` | `LIBRARY_SHARE_REVOKED` | — | 0 | **RETIRED** — never emitted; revocation payloads ride `DATA` (`0x05`) envelopes |
-| `0x0E` | `ADMIN_DELEGATION` | — | 0 | **RETIRED** — never emitted; delegation payloads ride `DATA` (`0x05`) envelopes |
-| `0x0F` | `HUB_DISCONNECTED` | — | 0 | **RETIRED** — never emitted; federation goodbye rides the generic `DISCONNECTED` (`0x07`) |
+| `0x09` | `HUB_HELLO` | n/a | 0 | **RETIRED** — reserved in the vendored `RelayFrameType` enum, never emitted; the federation handshake rides JSON **text** frames (`hub_hello`) instead |
+| `0x0A` | `HUB_HELLO_ACK` | n/a | 0 | **RETIRED** — never emitted; signed ack rides a JSON text frame (`hub_hello_ack`) |
+| `0x0B` | `HUB_HEARTBEAT` | n/a | 0 | **RETIRED** — never emitted; federation liveness rides the generic `HEARTBEAT` (`0x06`) |
+| `0x0C` | `LIBRARY_SHARE_UPDATE` | n/a | 0 | **RETIRED** — never emitted; share payloads ride `DATA` (`0x05`) envelopes with a JSON discriminator |
+| `0x0D` | `LIBRARY_SHARE_REVOKED` | n/a | 0 | **RETIRED** — never emitted; revocation payloads ride `DATA` (`0x05`) envelopes |
+| `0x0E` | `ADMIN_DELEGATION` | n/a | 0 | **RETIRED** — never emitted; delegation payloads ride `DATA` (`0x05`) envelopes |
+| `0x0F` | `HUB_DISCONNECTED` | n/a | 0 | **RETIRED** — never emitted; federation goodbye rides the generic `DISCONNECTED` (`0x07`) |
 | `0x10` | `HTTP_REQUEST` | hub → server | request id | `RelayHttpRequest` JSON |
 | `0x11` | `HTTP_RESPONSE` | server → hub | request id | tagged `HEAD` / `BODY` / `END` chunk (`RelayHttpResponseCodec`) |
 | `0x12` | `HTTP_CANCEL` | hub → server | request id | empty — the client abandoned the request |
@@ -142,7 +142,7 @@ deliberate estate posture — flip both sides in one wave, never one alone.
 
 ### Rate limiting and close codes
 
-A per-IP connect limiter (`rate_limiter.relay_connect`, 10 per 60s) runs at the
+A per-IP connect limiter (`rate_limiter.relay_connect`, 10 per 60 s) runs at the
 WS-connect hook, *before* `HELLO` is read, closing the H-H1 tunnel-displacement
 DoS surface. The worker is `count=1`, so the per-worker limit is a true global
 limit.
@@ -475,9 +475,9 @@ name gets `syncplay_error` `UNKNOWN_MESSAGE`, matching `:8097`'s strictness):
 | `type` | Meaning |
 | --- | --- |
 | `syncplay_group_create` | Open (or re-enter) the owner-scoped shadow room named by `group_name` (default `New Group`). First member is host. Answered with `syncplay_group_state` (`{group, your_id}`); other members get `syncplay_info`. A re-enter into a full room (M-HUB-28) → `syncplay.group_full`; `member_name` capped as on join (M-HUB-38), non-string → `Host`. |
-| `syncplay_group_join` | Same as create but keyed by `group_id` (must be a non-empty string, else `syncplay.group_not_found`). Join implies leave — moving rooms is one operation. A full room (M-HUB-28, 50 members) → `syncplay.group_full` / "Group is full" (the server's own refusal). `member_name` is control-char stripped and truncated to 128 codepoints (M-HUB-38); non-string → `User`. `password_hash` is accepted and **ignored** (see the auth note above). |
+| `syncplay_group_join` | Same as create but keyed by `group_id` (must be a non-empty string, else `syncplay.group_not_found`). Join implies leave — moving rooms is one operation. A full room (M-HUB-28, 50 members) → `syncplay.group_full` / "Group is full" (the server's own refusal). `member_name` is control-char stripped and truncated to 128 codepoints (M-HUB-38); non-string → `User`. `password_hash` is accepted and **ignored** — authentication on this surface is the bearer subprotocol only (see the `:8804` *Authentication* section); the field is a pre-SPEC client artifact kept for shape compatibility, never consulted. |
 | `syncplay_group_leave` | Leave the current group. The leaver gets an `syncplay_info` ack; remaining members get a fresh `syncplay_group_state` (and `syncplay_host_elect` first, if the host left). Roomless → `syncplay_error` `syncplay.leave_failed`. |
-| `syncplay_playback_play` / `_pause` / `_seek` | **Host-only** control (non-host → `syncplay_error` `NOT_HOST`). The host's `play` is acked to it and relayed to the others; `pause`/`seek` go to the others only — the `:8097` law, deliberately opposite the bare sender-included echo above. Outbound frames carry no `group_id` (server shape). |
+| `syncplay_playback_play` / `_pause` / `_seek` | **Host-only** control (non-host → `syncplay_error` `NOT_HOST`). The host's `play` is acked to it and relayed to the others; `pause`/`seek` go to the others only — the `:8097` law, deliberately opposite the bare sender-included echo below. Outbound frames carry no `group_id` (server shape). |
 | `syncplay_playback_sync` | State report relayed to **every** member including the reporter, carrying the room truth: the ADVANCED `position` (anchor + elapsed playing time while `is_playing`; the raw anchor otherwise — the playjump echo cure, mirroring `:8097`'s law), `current_media_id`, `is_playing`, `member_id` = the host, and the hub's `server_time` in **unix ms** — both values read from the SAME reference tick of the ingest (documented deviation: `:8097` answers this in seconds — SPEC §2's ms law governs here). |
 | `syncplay_playback_queue` | **Host-only** queue replacement, normalized all-or-nothing (string `media_id` required; `media_info` keeps only string keys) and capped at 1000. Over-cap → `syncplay_error` `syncplay.queue_limit_exceeded` with the stored queue **unchanged**; accepted → `syncplay_group_state`-independent `syncplay_playback_queue` broadcast to all. |
 | `syncplay_chat` | Relayed to every member including the sender, stamped with authoritative `member_id`/`member_name`; the message is control-char stripped and truncated to 2000 codepoints (M-HUB-38) before a blank message is silently dropped; roomless → `NOT_IN_GROUP`. |
@@ -652,7 +652,7 @@ the master advertises an `https://` / `wss://` URL, termination happens at its
 upstream proxy — a shape nothing in the repo can verify from the listen side,
 which is why the plaintext bind now announces itself.
 
-**Listener-side TLS posture (master accept end, M-HUB-22).** The `:8805`
+**Listener-side TLS posture (master accept end, M-HUB-22, federation listener TLS).** The `:8805`
 worker mirrors the `:8802` law (c32bb524): `federation_tls`
 (`HUB_FEDERATION_TLS`, with `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY`)
 serves the listener as native `wss://` with the same ECDHE+AEAD server context
@@ -661,7 +661,7 @@ for the managed install, where HAProxy fronts this listener and terminates TLS
 upstream — but every boot then logs one loud `SECURITY` advisory on the relay
 channel: the hub-to-hub link carries the H-4 ceremony and all federation
 payloads (share offers' library metadata), the ceremony is signature-based yet
-nothing in its canonical strings binds the TLS channel, so an active on-path
+nothing in its canonical strings binds the TLS channel. So an active on-path
 adversary on a raw-exposed `:8805` (a `--no-proxy` install is exactly that)
 relays both ceremony legs untouched, gets both hubs to mark VERIFIED, and
 reads/mutates everything after. `HUB_FEDERATION_REQUIRE_TLS=true`
@@ -788,7 +788,7 @@ binary `0x09`/`0x0A`, which are retired wire types):
    the replacement link. A pending ceremony is additionally time-bounded
    (minors campaign M-HUB-11): after 30 s an unconsumed handshake is dead on
    arrival (`consumeHandshake()` reports it absent, so a very late proof is
-   refused like a replay), and the master's heartbeat arm closes the half-open
+   refused like a replay), and the master's heartbeat timer closes the half-open
    link with `DISCONNECTED` `{reason: hello_auth_timeout}` so the leaf
    re-hellos instead of squatting unverified forever.
 
@@ -868,7 +868,7 @@ The socket accepts an unauthenticated connection and immediately sends
 `connected`. Only four types may be sent before authenticating —
 `ping`, `pong`, `auth_request`, `connected`. Everything in the privileged list
 below, plus **every** type beginning `syncplay_`, requires an authenticated
-connection. A per-surface connect limiter (30 per 60s, in-memory; the worker is
+connection. A per-surface connect limiter (30 per 60 s, in-memory; the worker is
 `count=1` so that is global) guards the upgrade.
 
 ### Event catalog
@@ -889,7 +889,8 @@ Privileged events: the whole Session, Playback and Dashboard groups, plus every
 
 > The SyncPlay names above are the **canonical** wire strings of
 > `phlix-syncplay/SPEC.md` §3 — that spec is the single source of truth for
-> this vocabulary (see §1: underscore-prefixed `syncplay_group_create`, never
+> this vocabulary (SPEC §1). The canonical spelling is the `syncplay_`
+> prefix followed by verb-then-object — `syncplay_group_create` — never
 > the pre-SPEC spellings `syncplay_create_group` / `syncplay_join_group` /
 > `syncplay_leave_group` / `syncplay_sync_state` / `syncplay_sync_request`,
 > which this document listed until audit L-8 corrected it).

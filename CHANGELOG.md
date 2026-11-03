@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minors 22-31: browser-floor demoted from the CI-jobs enumeration, jargon register pass, campaign-marker legend + M-HUB-22 disambiguation, heading hierarchy, dead/inverted pointers, comma splice, SPEC-vocabulary clarity, unit spacing + n/a direction cells — 2026-11-03
+
+- README's "twelve jobs, honestly enumerated" list carried a thirteenth bullet
+  that is a build-target declaration, not a CI job — the browser-floor note now
+  follows the list as an explicitly non-job posture.
+- Register pass: "no-swoole noop case" → "no-op", "the sixth neighbor there" →
+  "the sixth log path in that family", "CI venue" → "CI environment", the
+  master's "heartbeat arm" → its timer.
+- The README glossary now explains the estate's internal provenance tags
+  (S###/R-HUB-##/M-HUB-##/HB-#.#/bare SHAs), and the two meanings of
+  `M-HUB-22` (relay-token limiter / federation-listener TLS) are qualified at
+  each site so the label collision reads resolved.
+- websockets.md: "Keepalive at a glance" promoted to an H2 (was an H3 under
+  the bare H1); the stale "see the auth note above" pointer on `password_hash`
+  states the rule inline (bearer subprotocol only; the field is a pre-SPEC
+  shape artifact, never consulted); the `playback_*` echo-law pointer now
+  says *below* (where the law actually sits); the comma-spliced SECURITY
+  advisory chain breaks at "So"; the canonical-names note names SPEC §1
+  explicitly and spells the law as "`syncplay_` prefix, verb-then-object"
+  (was the ambiguous "underscore-prefixed"); limiter cadence unified to
+  "per 60 s"; the seven RETIRED frame rows carry `n/a` direction cells
+  instead of bare em-dashes (screen-reader clarity).
+
 ### Fixed — review hub Minors 15, 17-21, 25: relay-dial block restructured with the landed portal seam, naming-layers glossary entry, prose grammar passes, example hosts normalized — 2026-11-03
 
 - README `:8804`/`:8805` firewall prose (one 33-line sentence carrying four
