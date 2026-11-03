@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 57 (declared WS inbound package cap, 2026-11-03)
+- **The four websocket surfaces stop inheriting their memory bound from
+  vendor.** :8802/:8803/:8804/:8805 all ran on whatever Workerman's
+  `$defaultMaxPackageSize` happened to be while the hub's queue derivations
+  (Tunnel's 256-frame caps, SyncPlay budgets) silently assumed that number —
+  a vendor default change would move every bound at once, unnoticed. Each
+  worker's TCP-accept `onConnect` (a slot all four left unused — the
+  websocket protocol speaks through `onWebSocketConnect`) now lands
+  `InboundPackageCap::MAX_INBOUND_PACKAGE_BYTES` (10 MiB — exactly the value
+  inherited today, so behavior-preserving by construction) onto the
+  connection, mirroring the HTTP surface's M-HUB-30 pin. The cap becomes a
+  declared hub number and Tunnel's frame-count queues become computable
+  residency. Tests: value-equals-vendor-default (drift is a disclosed
+  decision), real-connection landing, per-worker wiring source-scan, and a
+  src/ inventory pin making a fifth un-pinned websocket worker impossible to
+  land silently. **Also forward-fixed:** batch 15's Minor 35 deleted three DTO
+  test files without rotating `scripts/parallel/test-durations.json` — the
+  bless classifier was red at tip (measured); rows removed alongside this
+  lane's new-file bless (DurationCacheTracksSuiteTest 9T green).
+
 ### Fixed — review Minor 52 (media-route entry-point comments truthed, 2026-11-03)
 - **Comments recited a redirect that never existed.** All fifteen media-route
   comments in `web-ui/src/main.ts` claimed the routes were "reached by

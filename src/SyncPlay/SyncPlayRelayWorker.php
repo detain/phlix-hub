@@ -446,6 +446,10 @@ final class SyncPlayRelayWorker
         $worker->count = $this->count;
 
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
+        // Minor 57: declared inbound package cap pinned at TCP-accept (law in
+        // \Phlix\Hub\Relay\InboundPackageCap) — this surface no longer
+        // inherits it from vendor.
+        $worker->onConnect = \Phlix\Hub\Relay\InboundPackageCap::onConnect();
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
         $worker->onWorkerStart = [$this, 'onWorkerStart'];

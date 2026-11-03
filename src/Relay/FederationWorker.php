@@ -315,6 +315,9 @@ final class FederationWorker
 
         $worker->onWorkerStart = [$this, 'onWorkerStart'];
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
+        // Minor 57: declared inbound package cap pinned at TCP-accept (law in
+        // InboundPackageCap) — this surface no longer inherits it from vendor.
+        $worker->onConnect = InboundPackageCap::onConnect();
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
 

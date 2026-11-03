@@ -260,6 +260,9 @@ final class RelayWorker
 
         // Fired during the WS upgrade handshake (before any frames arrive).
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
+        // Minor 57: declared inbound package cap pinned at TCP-accept (law in
+        // InboundPackageCap) — this surface no longer inherits it from vendor.
+        $worker->onConnect = InboundPackageCap::onConnect();
         // Fired with each deframed WS message payload (HELLO text, then frames).
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
