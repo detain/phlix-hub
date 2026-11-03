@@ -71,7 +71,9 @@ function formatDate(unixSeconds: number | null): string {
 }
 
 function formatPermission(permission: string): string {
-    return permission === 'readwrite' ? 'Read / Write' : 'Read only';
+    // Same register as the grant side's option labels (ShareLibraryCard):
+    // one concept, one phrase, wherever a member reads their permission.
+    return permission === 'readwrite' ? 'View and manage' : 'View only';
 }
 
 /**

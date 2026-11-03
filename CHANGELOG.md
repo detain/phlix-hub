@@ -6,6 +6,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 62 (share permission labels unified, 2026-11-03)
+- **One register for one concept.** The shared-with-me page rendered the
+  incoming grant's permission as `Read / Write` / `Read only` while the grant
+  side's own select options (ShareLibraryCard) say `View and manage` /
+  `View only` — a member read one vocabulary when giving and another when
+  receiving. The badge function now mirrors the canonical pair verbatim.
+  Comments-only elsewhere; SPA rebuilt deterministic ×3 (aggregate stable at
+  the second and third clean builds) with the bundle re-vendored in the same
+  commit (S253).
+
 ### Fixed — review Minor 65 (bounded per-tunnel client registry, 2026-11-03)
 - **`TunnelManager::MAX_TUNNEL_CLIENTS = 50`.** `acceptClient()` attached
   clients without bound — the upstream IP-keyed limiters slow mount arrivals
