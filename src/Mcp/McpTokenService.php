@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Mcp;
 
+use Phlix\Hub\Common\Database\KeySweeper;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
@@ -79,6 +80,13 @@ final class McpTokenService
      * presented a bad token". The entropy is entirely in the suffix.
      */
     public const string TOKEN_PREFIX = 'phlix-mcp-';
+
+    /**
+     * PK rows deleted per arm per tick by {@see pruneExpiredTokens()} — same
+     * scale as {@see \Phlix\Hub\ServerReaper::HEARTBEAT_SWEEP_BATCH_SIZE};
+     * backlogs drain over ticks instead of one unbounded DELETE.
+     */
+    private const int PRUNE_BATCH_SIZE = 1000;
 
     /** @var Connection Async MySQL connection used for all queries. */
     private Connection $db;
@@ -328,22 +336,22 @@ final class McpTokenService
      * operator investigating "why did my agent stop working" wants the expired
      * row to still be listable for a while.
      *
-     * Note the operator is OR, not AND: with AND only rows that were BOTH
-     * expired-by->30-days AND revoked would go, leaving the common
-     * expired-never-revoked rows to accumulate forever.
+     * H-D2's OR is STRUCTURAL here (review hub Minor 42): two independent
+     * {@see KeySweeper} arms — expired-by-grace and revoked — whose deletions
+     * sum, each bounded per tick and keyed by PRIMARY KEY through the
+     * `idx_mcp_tokens_expires_at` (044) and `idx_mcp_tokens_revoked_at` (051)
+     * indexes. An AND-style single statement is no longer expressible, which
+     * is the point: the old text needed precedence commentary precisely because
+     * the one-character regression was live.
      *
-     * @return int Number of rows deleted.
+     * @return int Number of rows deleted across both arms.
      */
     public function pruneExpiredTokens(): int
     {
-        /** @var mixed $result */
-        $result = $this->db->query(
-            'DELETE FROM mcp_tokens'
-                . ' WHERE expires_at < NOW() - INTERVAL 30 DAY'
-                . ' OR revoked_at IS NOT NULL',
-        );
+        $sweeper = new KeySweeper($this->db, 'mcp_tokens', self::PRUNE_BATCH_SIZE);
 
-        return is_int($result) ? $result : 0;
+        return $sweeper->sweep('expires_at < NOW() - INTERVAL 30 DAY')
+            + $sweeper->sweep('revoked_at IS NOT NULL');
     }
 
     /**

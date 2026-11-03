@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;
 
+use Phlix\Hub\Common\Database\KeySweeper;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
@@ -70,6 +71,13 @@ final class ClientRelayTokenService
      * IN-list (see the method docblock).
      */
     private const CAP_SWEEP_BATCH_SIZE = 1000;
+
+    /**
+     * PK rows deleted per arm per tick by {@see pruneExpiredTokens()} — same
+     * scale as {@see \Phlix\Hub\ServerReaper::HEARTBEAT_SWEEP_BATCH_SIZE};
+     * backlogs drain over ticks instead of one unbounded DELETE.
+     */
+    private const int PRUNE_BATCH_SIZE = 1000;
 
     /**
      * Default token lifetime in seconds (1 hour) when no override is given.
@@ -313,28 +321,31 @@ final class ClientRelayTokenService
      *    growth (the 1-day grace keeps a just-expired token queryable briefly); or
      *  - it has been explicitly revoked (removed regardless of expiry).
      *
-     * Note the operator is OR, not AND: with AND only tokens that are BOTH
-     * expired-by->1-day AND revoked would be pruned, leaving the common
-     * expired-never-revoked rows to accumulate forever.
+     * H-D2's OR is now STRUCTURAL rather than a precedence hazard: the arms are
+     * two independent keyed sweeps whose deletions sum. The old single
+     * `DELETE … OR …` needed WHERE-precedence commentary to stay correct, and
+     * an AND regression (only expired-AND-revoked rows prune → unbounded growth
+     * of the expired-never-revoked majority) was one character away. With
+     * separate arms that regression is impossible: dropping either arm deletes
+     * strictly FEWER rows and the unit law-pins (each arm's SQL must not
+     * mention the other's column) catch both directions.
      *
-     * Precedence: the comparison / `IS NOT NULL` predicates bind tighter than
-     * `OR`, so the WHERE clause parses as
-     * `(expires_at < NOW() - INTERVAL 1 DAY) OR (revoked_at IS NOT NULL)`.
+     * Review hub Minor 42: each arm runs through {@see KeySweeper} — a
+     * non-locking indexed PK read (`idx_client_relay_tokens_expires_at` from
+     * 032; `idx_client_relay_tokens_revoked_at` from 051) then a delete by
+     * PRIMARY KEY, bounded to {@see PRUNE_BATCH_SIZE} rows per tick per arm.
+     * Leftovers drain on subsequent ticks (60 s cadence).
      *
-     * @return int Number of rows deleted.
+     * @return int Number of rows deleted across both arms.
      *
      * @since HB-4.2
      */
     public function pruneExpiredTokens(): int
     {
-        /** @var int|bool $result */
-        $result = $this->db->query(
-            'DELETE FROM client_relay_tokens'
-                . ' WHERE expires_at < NOW() - INTERVAL 1 DAY'
-                . ' OR revoked_at IS NOT NULL',
-        );
+        $sweeper = new KeySweeper($this->db, 'client_relay_tokens', self::PRUNE_BATCH_SIZE);
 
-        return is_int($result) ? $result : 0;
+        return $sweeper->sweep('expires_at < NOW() - INTERVAL 1 DAY')
+            + $sweeper->sweep('revoked_at IS NOT NULL');
     }
 
     /**

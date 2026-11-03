@@ -267,20 +267,72 @@ final class McpTokenServiceTest extends TestCase
      * The sweep must be an OR, not an AND: with AND the common
      * expired-never-revoked row would accumulate forever.
      */
+    /**
+     * Review hub Minor 42 (mirror of the client-relay-token law): the MCP
+     * prune is two independent indexed batch arms — expired-by-30-days and
+     * revoked — each a non-locking PK SELECT (capped at 1000) followed by a
+     * keyed DELETE. The old joined single DELETE is the shape this pin kills.
+     */
     public function testPruneRemovesLongExpiredOrRevokedRows(): void
     {
+        $now = time();
+        $day = 86400;
+        $rows = [
+            'expired' => ['id' => 'expired', 'expires_at' => $now - 31 * $day, 'revoked_at' => null],
+            'revoked' => ['id' => 'revoked', 'expires_at' => $now + 86400,     'revoked_at' => $now - $day],
+            'active'  => ['id' => 'active',  'expires_at' => $now + 86400,     'revoked_at' => null],
+        ];
+
+        $survivors = $rows;
+        /** @var list<string> $seen */
+        $seen = [];
+
         $db = $this->createMock(Connection::class);
-        $db->expects(self::once())
-            ->method('query')
-            ->willReturnCallback(function (string $sql): int {
-                self::assertStringContainsString('DELETE FROM mcp_tokens', $sql);
-                self::assertStringContainsString(' OR revoked_at IS NOT NULL', $sql);
-                self::assertStringNotContainsString(' AND revoked_at IS NOT NULL', $sql);
+        $db->method('query')->willReturnCallback(
+            /** @param mixed $params */
+            function (string $sql, $params = null) use (&$seen, &$survivors, $now, $day): mixed {
+                $seen[] = $sql;
 
-                return 3;
-            });
+                if (preg_match('/^SELECT id FROM mcp_tokens WHERE (.+) ORDER BY id LIMIT 1000$/', $sql, $arm) === 1) {
+                    $ids = [];
+                    foreach ($survivors as $row) {
+                        $hit = match ($arm[1]) {
+                            'expires_at < NOW() - INTERVAL 30 DAY' => $row['expires_at'] < $now - 30 * $day,
+                            'revoked_at IS NOT NULL' => $row['revoked_at'] !== null,
+                            default => self::fail('unexpected prune arm: ' . $arm[1]),
+                        };
+                        if ($hit) {
+                            $ids[] = ['id' => $row['id']];
+                        }
+                    }
+                    return $ids;
+                }
 
-        self::assertSame(3, (new McpTokenService($db))->pruneExpiredTokens());
+                if (preg_match('/^DELETE FROM mcp_tokens WHERE id IN \(([^)]+)\)$/', $sql) === 1) {
+                    /** @var array<string, string> $params */
+                    $count = 0;
+                    foreach ($params as $id) {
+                        unset($survivors[$id]);
+                        $count++;
+                    }
+                    return $count;
+                }
+
+                self::fail(
+                    'prune must speak the two-phase keyed-sweep protocol; got: ' . $sql
+                    . ' (joined single-DELETE shape = Minor 42 regression)'
+                );
+            },
+        );
+
+        self::assertSame(2, (new McpTokenService($db))->pruneExpiredTokens());
+        self::assertSame([
+            'SELECT id FROM mcp_tokens WHERE expires_at < NOW() - INTERVAL 30 DAY ORDER BY id LIMIT 1000',
+            'DELETE FROM mcp_tokens WHERE id IN (:id_0)',
+            'SELECT id FROM mcp_tokens WHERE revoked_at IS NOT NULL ORDER BY id LIMIT 1000',
+            'DELETE FROM mcp_tokens WHERE id IN (:id_0)',
+        ], $seen);
+        self::assertSame(['active'], array_keys($survivors));
     }
 
     public function testTouchUpdatesLastUsedAndIgnoresAnEmptyId(): void

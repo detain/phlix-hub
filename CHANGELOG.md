@@ -6,6 +6,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 42 (token prunes become two indexed, batch-bounded arms, 2026-11-03)
+- **One wide OR-DELETE per 60 s tick → two narrow keyed sweeps.** The
+  client-relay and MCP token pruners each issued a single
+  `DELETE … WHERE expires_at < NOW() - INTERVAL n DAY OR revoked_at IS NOT NULL`:
+  the disjunction forced the expires-indexed arm to be abandoned in favor of a
+  full scan (no index can serve an OR across different columns), `revoked_at`
+  had NO index at all, and the bare DELETE next-key-locks every row it walks —
+  fighting concurrent token INSERTs on every maintenance tick. Each prune now
+  runs TWO pure arms, each through the ServerReaper's proven two-phase idiom
+  promoted to `src/Common/Database/KeySweeper.php`: a non-locking
+  `SELECT id … LIMIT 1000` (index range scan), then `DELETE … WHERE id IN (…)`
+  locking exactly those named PK rows in primary-key order, three bounded
+  retries on deadlock. Migration 051 adds `idx_client_relay_tokens_revoked_at`
+  and `idx_mcp_tokens_revoked_at` (guarded re-run-safe shape). The H-D2 law —
+  expired rows MUST prune whatever their revoked state — becomes STRUCTURAL:
+  two arms cannot be quietly AND-joined, and the arm-purity pins kill any
+  regression toward the joined shape. Unit law pins rotate to the new
+  statement sequences; `tests/Integration/Hub/TokenPruneRealDbTest.php` proves
+  the arms against real MySQL (inside-grace survivor kept, double-match row
+  deleted once, clean zero tick, both 051 indexes present).
+
 ### Fixed — review Minor 54 (identity-free SSR pointers stop losing the destination behind the auth gate, 2026-11-03)
 - **The gate enforced nothing and cost the destination.** Twelve bookmark-grade
   pointer routes (`/my-servers`, `/claim-server`, `/invite-links`,

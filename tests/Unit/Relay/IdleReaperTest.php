@@ -324,12 +324,17 @@ class IdleReaperTest extends TestCase
 
         // ClientRelayTokenService is final, so we use a real instance with a
         // mock DB to verify pruneExpiredTokens() is called with correct SQL.
+        // [review hub Minor 42] the prune is TWO indexed arms, each a two-phase
+        // KeySweeper pass (SELECT ids → DELETE by PK): the fake answers phase-1
+        // SELECTs with one row so every arm reaches its DELETE, proving the
+        // reaper drives the full sweep — not just reaches the pruner.
         $db = $this->createMock(Connection::class);
-        $capturedSql = '';
+        /** @var list<string> $statements */
+        $statements = [];
         $db->method('query')->willReturnCallback(
-            function (string $sql, $params = null) use (&$capturedSql): int {
-                $capturedSql = $sql;
-                return 5; // 5 rows pruned
+            function (string $sql, $params = null) use (&$statements): mixed {
+                $statements[] = $sql;
+                return str_starts_with($sql, 'SELECT id FROM') ? [['id' => 'crt-fake-1']] : 1;
             },
         );
 
@@ -347,9 +352,18 @@ class IdleReaperTest extends TestCase
 
         $reaper->reapDbMaintenance();
 
-        $this->assertStringContainsString('DELETE FROM client_relay_tokens', $capturedSql);
-        $this->assertStringContainsString('expires_at < NOW() - INTERVAL 1 DAY', $capturedSql);
-        $this->assertStringContainsString('revoked_at IS NOT NULL', $capturedSql);
+        $this->assertCount(
+            4,
+            $statements,
+            'reapDbMaintenance() with only the client-relay token service wired must issue both '
+            . 'prune arms, each a SELECT/DELETE pair. Fewer means an arm is not reached at all.',
+        );
+        $this->assertStringContainsString('expires_at < NOW() - INTERVAL 1 DAY', $statements[0]);
+        $this->assertStringNotContainsString('revoked_at', $statements[0], 'arm purity: expiry arm stands alone');
+        $this->assertStringStartsWith('DELETE FROM client_relay_tokens WHERE id IN', $statements[1]);
+        $this->assertStringContainsString('revoked_at IS NOT NULL', $statements[2]);
+        $this->assertStringNotContainsString('expires_at', $statements[2], 'arm purity: revoked arm stands alone');
+        $this->assertStringStartsWith('DELETE FROM client_relay_tokens WHERE id IN', $statements[3]);
     }
 
     public function testReapDbMaintenanceIsNoopForClientRelayTokensWhenServiceNull(): void
@@ -559,9 +573,9 @@ class IdleReaperTest extends TestCase
         /** @var list<string> $statements */
         $statements = [];
         $db->method('query')->willReturnCallback(
-            function (string $sql, $params = null) use (&$statements): int {
+            function (string $sql, $params = null) use (&$statements): mixed {
                 $statements[] = $sql;
-                return 7;
+                return str_starts_with($sql, 'SELECT id FROM') ? [['id' => 'mcp-fake-1']] : 1;
             },
         );
 
@@ -580,14 +594,17 @@ class IdleReaperTest extends TestCase
         $reaper->reapDbMaintenance();
 
         $this->assertCount(
-            1,
+            4,
             $statements,
-            'reapDbMaintenance() with only the MCP token service wired must issue exactly one statement. '
-            . 'Zero means the pruner is not reached at all.',
+            'reapDbMaintenance() with only the MCP token service wired must issue both prune arms, '
+            . 'each a SELECT/DELETE pair. Fewer means an arm is not reached at all.',
         );
-        $this->assertStringContainsString('DELETE FROM mcp_tokens', $statements[0]);
         $this->assertStringContainsString('expires_at < NOW() - INTERVAL 30 DAY', $statements[0]);
-        $this->assertStringContainsString('revoked_at IS NOT NULL', $statements[0]);
+        $this->assertStringNotContainsString('revoked_at', $statements[0], 'arm purity: expiry arm stands alone');
+        $this->assertStringStartsWith('DELETE FROM mcp_tokens WHERE id IN', $statements[1]);
+        $this->assertStringContainsString('revoked_at IS NOT NULL', $statements[2]);
+        $this->assertStringNotContainsString('expires_at', $statements[2], 'arm purity: revoked arm stands alone');
+        $this->assertStringStartsWith('DELETE FROM mcp_tokens WHERE id IN', $statements[3]);
     }
 
     /**

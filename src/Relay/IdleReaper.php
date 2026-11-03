@@ -461,6 +461,9 @@ final class IdleReaper
         // HB-4.2: Prune client relay tokens that expired more than 1 day ago OR
         // were revoked (H-D2). Expired-never-revoked tokens are the common case
         // (~1 h TTL, rarely revoked), so the OR is what actually bounds growth.
+        // Review hub Minor 42: the OR is now two indexed batch arms behind
+        // KeySweeper (PK-keyed deletes, ≤1000 rows per arm per tick), not one
+        // unbounded full-scan DELETE statement.
         $this->clientRelayTokenService?->pruneExpiredTokens();
 
         // HB-4.7 (H-A1): Purge the rotated-out Ed25519 previous-key sidecar once

@@ -12,7 +12,6 @@ use function hash;
 use function preg_match;
 use function str_contains;
 use function strlen;
-use function strtoupper;
 use function time;
 
 /**
@@ -190,56 +189,100 @@ final class ClientRelayTokenServiceTest extends TestCase
         );
     }
 
-    public function testPruneExpiredTokensOrJoinsExpiryAndRevokedPredicates(): void
+    /**
+     * Review hub Minor 42 law: the prune is TWO independent keyed-sweep arms,
+     * never one joined statement. Exact statement sequence for a fixture with
+     * one expired row and one revoked row: arm-A SELECT, arm-A keyed DELETE,
+     * arm-B SELECT, arm-B keyed DELETE — each SELECT capped at the batch size
+     * and PK-ordered.
+     */
+    public function testPruneSweepsExpiryAndRevokedAsIndependentKeyedArms(): void
     {
+        $now = time();
+        $day = 86400;
+        $rows = [
+            't-old'   => ['id' => 't-old',   'expires_at' => $now - 2 * $day, 'revoked_at' => null],
+            't-rev'   => ['id' => 't-rev',   'expires_at' => $now + 3600,     'revoked_at' => $now - 60],
+            't-fresh' => ['id' => 't-fresh', 'expires_at' => $now + 3600,     'revoked_at' => null],
+        ];
+
+        $survivors = $rows;
+        /** @var list<array{0: string, 1: mixed}> $statements */
+        $statements = [];
+
         $db = $this->createMock(Connection::class);
-        $capturedSql = '';
-        $capturedParams = null;
         $db->method('query')->willReturnCallback(
-            function (string $sql, $params = null) use (&$capturedSql, &$capturedParams): int {
-                $capturedSql = $sql;
-                $capturedParams = $params;
-                return 7;
+            /** @param mixed $params */
+            function (string $sql, $params = null) use (&$statements, &$survivors, $now, $day): mixed {
+                $statements[] = [$sql, $params];
+
+                $selectArm = '/^SELECT id FROM client_relay_tokens WHERE (.+) ORDER BY id LIMIT 1000$/';
+                if (preg_match($selectArm, $sql, $arm) === 1) {
+                    $ids = [];
+                    foreach ($survivors as $row) {
+                        $expired = $row['expires_at'] < $now - $day;
+                        $revoked = $row['revoked_at'] !== null;
+                        $hit = match ($arm[1]) {
+                            'expires_at < NOW() - INTERVAL 1 DAY' => $expired,
+                            'revoked_at IS NOT NULL' => $revoked,
+                            default => self::fail('unexpected prune arm: ' . $arm[1]),
+                        };
+                        if ($hit) {
+                            $ids[] = ['id' => $row['id']];
+                        }
+                    }
+                    return $ids;
+                }
+
+                if (preg_match('/^DELETE FROM client_relay_tokens WHERE id IN \(([^)]+)\)$/', $sql, $del) === 1) {
+                    /** @var array<string, string> $params */
+                    $count = 0;
+                    foreach ($params as $key => $id) {
+                        unset($survivors[$id]);
+                        $count++;
+                    }
+                    return $count;
+                }
+
+                self::fail(
+                    'prune must speak the two-phase keyed-sweep protocol; got: ' . $sql
+                    . ' (a joined single-DELETE or an AND arm is the Minor 42 / H-D2 regression this pin kills)'
+                );
             },
         );
 
         $service = new ClientRelayTokenService($db);
         $deleted = $service->pruneExpiredTokens();
 
-        $this->assertSame(7, $deleted);
-        $this->assertStringContainsString('DELETE FROM client_relay_tokens', $capturedSql);
-        $this->assertStringContainsString('expires_at < NOW() - INTERVAL 1 DAY', $capturedSql);
-        $this->assertStringContainsString('revoked_at IS NOT NULL', $capturedSql);
+        $this->assertSame(2, $deleted);
+        $this->assertSame([
+            'SELECT id FROM client_relay_tokens WHERE expires_at < NOW() - INTERVAL 1 DAY ORDER BY id LIMIT 1000',
+            'DELETE FROM client_relay_tokens WHERE id IN (:id_0)',
+            'SELECT id FROM client_relay_tokens WHERE revoked_at IS NOT NULL ORDER BY id LIMIT 1000',
+            'DELETE FROM client_relay_tokens WHERE id IN (:id_0)',
+        ], array_column($statements, 0));
+        $this->assertSame([['id_0' => 't-old'], ['id_0' => 't-rev']], [
+            $statements[1][1],
+            $statements[3][1],
+        ]);
 
-        // H-D2: the expiry and revoked predicates MUST be OR-joined, NOT AND.
-        // With AND, only tokens that are BOTH expired-by->1-day AND revoked are
-        // pruned, so the common expired-never-revoked row (tokens have a ~1 h TTL
-        // and are rarely revoked) is never removed and the table grows forever.
-        $matched = preg_match(
-            '/INTERVAL\s+1\s+DAY\s+(AND|OR)\s+revoked_at\s+IS\s+NOT\s+NULL/i',
-            $capturedSql,
-            $operator,
-        );
-        $this->assertSame(
-            1,
-            $matched,
-            'prune SQL must join the expiry and revoked predicates with a single AND/OR operator',
-        );
-        $this->assertSame(
-            'OR',
-            strtoupper($operator[1]),
-            'expiry/revoked predicates must be OR-joined, not AND (H-D2)',
-        );
+        // Arm purity: no statement may mention both predicate columns — that
+        // is the joined-DELETE (precedence-hazard) shape, structurally gone.
+        foreach ($statements as [$sql, $unusedParams]) {
+            if (str_contains($sql, 'expires_at') && str_contains($sql, 'revoked_at')) {
+                self::fail('expiry and revoked predicates must live in separate arms: ' . $sql);
+            }
+        }
 
-        // No params needed for this query.
-        $this->assertNull($capturedParams);
+        $this->assertSame(['t-fresh'], array_keys($survivors));
     }
 
     /**
-     * Behavioral guard for H-D2: drive pruneExpiredTokens() against a fake DB
-     * that interprets the emitted DELETE's WHERE clause over fixture rows, and
-     * prove an expired-never-revoked row (revoked_at IS NULL) is removed. Under
-     * the old AND bug that row survives — so a regression back to AND fails here.
+     * Behavioral guard for H-D2 under the two-arm shape: a fake DB
+     * interprets each arm over fixture rows (like the live table would), and
+     * the expired-never-revoked row — the growth case — must be removed while
+     * the fresh active row survives. An AND regression collapses the arms and
+     * dies on the fake's protocol fail-loud.
      */
     public function testPruneDeletesExpiredNeverRevokedRowBehaviorally(): void
     {
@@ -249,58 +292,63 @@ final class ClientRelayTokenServiceTest extends TestCase
         // expires_at / revoked_at are unix timestamps; revoked_at null = never revoked.
         $rows = [
             // The H-D2 growth case: simply expired long ago, never revoked.
-            'expired_never_revoked' => ['expires_at' => $now - (2 * $day), 'revoked_at' => null],
-            // Revoked but not yet expired — OR removes it; AND would keep it.
-            'revoked_not_expired'   => ['expires_at' => $now + 3600,        'revoked_at' => $now - 60],
-            // Fresh, active, un-revoked — must be kept under either operator.
-            'fresh_active'          => ['expires_at' => $now + 3600,        'revoked_at' => null],
-            // Both expired and revoked — removed under either operator.
-            'expired_and_revoked'   => ['expires_at' => $now - (2 * $day),  'revoked_at' => $now - 120],
+            'expired_never_revoked' => ['id' => 'a', 'expires_at' => $now - (2 * $day), 'revoked_at' => null],
+            // Revoked but not yet expired — the second arm removes it.
+            'revoked_not_expired'   => ['id' => 'b', 'expires_at' => $now + 3600,        'revoked_at' => $now - 60],
+            // Fresh, active, un-revoked — the only survivor.
+            'fresh_active'          => ['id' => 'c', 'expires_at' => $now + 3600,        'revoked_at' => null],
+            // Both expired AND revoked — arm A catches it first; still gone.
+            'expired_and_revoked'   => ['id' => 'd', 'expires_at' => $now - (2 * $day),  'revoked_at' => $now - 120],
         ];
 
-        $db = $this->createMock(Connection::class);
         $survivors = $rows;
+
+        $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$survivors, $now, $day): int {
-                // Extract the operator that joins the two predicates so a
-                // regression back to AND is evaluated as AND (and thus caught).
-                if (
-                    preg_match(
-                        '/INTERVAL\s+1\s+DAY\s+(AND|OR)\s+revoked_at\s+IS\s+NOT\s+NULL/i',
-                        $sql,
-                        $operator,
-                    ) !== 1
-                ) {
-                    self::fail('prune SQL must join the expiry and revoked predicates with a single AND/OR');
-                }
-                $usesOr    = strtoupper($operator[1]) === 'OR';
-                $threshold = $now - $day; // NOW() - INTERVAL 1 DAY
-
-                $deleted = 0;
-                $kept    = [];
-                foreach ($survivors as $name => $row) {
-                    $expiredBeyondGrace = $row['expires_at'] < $threshold;
-                    $revoked            = $row['revoked_at'] !== null;
-                    $matches            = $usesOr
-                        ? ($expiredBeyondGrace || $revoked)
-                        : ($expiredBeyondGrace && $revoked);
-                    if ($matches) {
-                        $deleted++;
-                    } else {
-                        $kept[$name] = $row;
+            /** @param mixed $params */
+            function (string $sql, $params = null) use (&$survivors, $now, $day): mixed {
+                $selectArm = '/^SELECT id FROM client_relay_tokens WHERE (.+) ORDER BY id LIMIT 1000$/';
+                if (preg_match($selectArm, $sql, $arm) === 1) {
+                    $ids = [];
+                    $threshold = $now - $day;
+                    foreach ($survivors as $row) {
+                        $expiredBeyondGrace = $row['expires_at'] < $threshold;
+                        $revoked = $row['revoked_at'] !== null;
+                        $hit = match ($arm[1]) {
+                            'expires_at < NOW() - INTERVAL 1 DAY' => $expiredBeyondGrace,
+                            'revoked_at IS NOT NULL' => $revoked,
+                            default => self::fail('unexpected prune arm: ' . $arm[1]),
+                        };
+                        if ($hit) {
+                            $ids[] = ['id' => $row['id']];
+                        }
                     }
+                    return $ids;
                 }
-                $survivors = $kept;
 
-                return $deleted;
+                if (preg_match('/^DELETE FROM client_relay_tokens WHERE id IN \(([^)]+)\)$/', $sql) === 1) {
+                    /** @var array<string, string> $params */
+                    $count = 0;
+                    foreach ($params as $id) {
+                        // Fixture keys are semantic names; match by the row's id field.
+                        $survivors = array_filter(
+                            $survivors,
+                            static fn (array $row): bool => $row['id'] !== $id
+                        );
+                        $count++;
+                    }
+                    return $count;
+                }
+
+                self::fail('prune must speak the two-phase keyed-sweep protocol: ' . $sql);
             },
         );
 
         $service = new ClientRelayTokenService($db);
         $deleted = $service->pruneExpiredTokens();
 
-        // OR semantics: 3 of 4 rows pruned. The fresh active token is the only survivor.
-        $this->assertSame(3, $deleted, 'expected 3 of 4 rows pruned under OR semantics');
+        // Both arms fire: 3 of 4 rows pruned. The fresh active token is the only survivor.
+        $this->assertSame(3, $deleted, 'expected 3 of 4 rows pruned across the two arms');
         $this->assertArrayNotHasKey(
             'expired_never_revoked',
             $survivors,
@@ -314,6 +362,7 @@ final class ClientRelayTokenServiceTest extends TestCase
             'a fresh, un-revoked token must NOT be pruned',
         );
     }
+
 
     public function testPruneExpiredTokensReturnsZeroWhenResultNotInt(): void
     {
