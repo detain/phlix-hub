@@ -6,6 +6,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Removed — review hub Minor 35: three dead Federation DTOs (and their shadow tests) deleted — 2026-11-03
+
+- `src/Federation/FederationPeerDto.php`, `FederationIncomingOfferDto.php` and
+  `FederationLibraryShareDto.php` had zero references anywhere in `src/` or
+  `bin/` — the repositories speak arrays/PDO rows directly. Their green test
+  files made dead code look load-bearing; test-covered dead code masks exactly
+  the drift it claims to protect. All three classes and their three per-file
+  tests deleted. S299 corpus floors hold (603 files inspected, 0E/0W); PHPStan
+  still `[OK]`; Federation filter 432T green.
+
 ### Fixed — review hub Minors 32, 33: plaintext-credential caveats for ALL --no-proxy ufw openings (8800/8802 included), and pin-before-you-pipe guidance for the one-line installer — 2026-11-03
 
 - `scripts/install.sh` `--no-proxy` firewall notice said "plaintext" only of
