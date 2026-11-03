@@ -75,7 +75,7 @@ final class LibraryShareCapTest extends TestCase
             if (str_contains($sql, 'SELECT id FROM servers')) {
                 return [['id' => 'server-1']];
             }
-            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+            if (str_contains($sql, 'SELECT id, owner_user_id')) {
                 return [];
             }
             if (str_contains($sql, 'COUNT(DISTINCT collaborator_user_id)')) {
@@ -227,7 +227,7 @@ final class LibraryShareCapTest extends TestCase
             if (str_contains($sql, 'SELECT id FROM servers')) {
                 return [['id' => 'server-1']];
             }
-            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+            if (str_contains($sql, 'SELECT id, owner_user_id')) {
                 return [$revokedRow];
             }
             if (str_contains($sql, 'COUNT(DISTINCT collaborator_user_id)')) {
@@ -275,7 +275,7 @@ final class LibraryShareCapTest extends TestCase
             if (str_contains($sql, 'SELECT id FROM servers')) {
                 return [['id' => 'server-1']];
             }
-            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+            if (str_contains($sql, 'SELECT id, owner_user_id')) {
                 return [$revokedRow];
             }
             if (str_contains($sql, 'COUNT(DISTINCT collaborator_user_id)')) {

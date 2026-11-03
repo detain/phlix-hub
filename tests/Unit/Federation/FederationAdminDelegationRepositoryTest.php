@@ -62,7 +62,7 @@ final class FederationAdminDelegationRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('SELECT * FROM federation_admin_delegations'),
+                self::stringContains('FROM federation_admin_delegations'),
                 ['user_id' => 'user-123']
             )
             ->willReturn($delegations);
@@ -97,7 +97,7 @@ final class FederationAdminDelegationRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('SELECT * FROM federation_admin_delegations'),
+                self::stringContains('FROM federation_admin_delegations'),
                 ['peer_id' => 'peer-x']
             )
             ->willReturn($delegations);
@@ -120,7 +120,7 @@ final class FederationAdminDelegationRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('SELECT * FROM federation_admin_delegations WHERE id'),
+                self::stringContains('FROM federation_admin_delegations WHERE id'),
                 ['id' => 'del-find']
             )
             ->willReturn([$delegation]);

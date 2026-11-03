@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 31: every `SELECT *` read in src/ now projects an explicit column list — 2026-11-03
+
+- All 35 `SELECT *` query sites (UserRepository, the four Federation repositories
+  + session manager, LibrarySharingHandler, InviteLinkHandler, ClaimRequestHandler,
+  RequestManager) now name each table's complete current column set — the same
+  rows consumers saw before (verified from migrations 001/007/030/046/048/049,
+  incl. the generated `claim_code_norm` and `leaf_hub_id`), so behavior is
+  byte-identical — but a column a future migration adds can no longer silently
+  ride into every row map (the `password_hash`-toward-`/oauth/userinfo` spread
+  the review called out is now bounded by an explicit edit, not a deny-list).
+- Three docblocks that described the old `SELECT *` shape were corrected to
+  match (OAuthUserInfoController, AuthMiddleware ×2); the `UserListCommand`
+  prose comparing to phlix-server's list command is untouched (server repo).
+- 33 test-mock SQL matchers rotated to the new shapes (string-contains only;
+  three ladders reordered/re-anchored where the naive rotation shadowed
+  findAll/COUNT/DELETE branches — all laws preserved, none deleted).
+  894-test direct neighborhood OK; PHPStan + PSR-12 + repo ruleset clean.
+
 ### Fixed — review hub Major 34 (tail): the remaining five clock/resolver/pending-completion seams get native `\Closure` property types — 2026-11-03
 
 - `CoreUpdateCheckService::$pendingCompletion`, `AuthManager::$signupsDisabledResolver`,

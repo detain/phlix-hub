@@ -48,7 +48,7 @@ final class LibrarySharingHandlerTest extends TestCase
             if (str_contains($sql, 'SELECT id FROM servers')) {
                 return [['id' => 'server-1']];
             }
-            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+            if (str_contains($sql, 'FROM library_shares')) {
                 return [];
             }
             if (str_contains($sql, 'INSERT INTO library_shares')) {
@@ -132,7 +132,7 @@ final class LibrarySharingHandlerTest extends TestCase
             if (str_contains($sql, 'SELECT id FROM servers')) {
                 return [['id' => 'server-1']];
             }
-            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+            if (str_contains($sql, 'FROM library_shares')) {
                 return [$existingShare->toPayload()];
             }
             return [];
@@ -181,7 +181,7 @@ final class LibrarySharingHandlerTest extends TestCase
                 if (str_contains($sql, 'SELECT id FROM servers')) {
                     return [['id' => 'server-1']];
                 }
-                if (str_contains($sql, 'SELECT * FROM library_shares')) {
+                if (str_contains($sql, 'FROM library_shares')) {
                     return [$revokedRow];
                 }
                 if (str_contains($sql, 'UPDATE library_shares') && str_contains($sql, 'revoked_at = NULL')) {
@@ -246,7 +246,7 @@ final class LibrarySharingHandlerTest extends TestCase
         );
 
         $this->db->method('query')->willReturnCallback(function (string $sql) use ($share) {
-            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+            if (str_contains($sql, 'FROM library_shares')) {
                 return [$share->toPayload()];
             }
             return [];
@@ -280,7 +280,7 @@ final class LibrarySharingHandlerTest extends TestCase
         );
 
         $this->db->method('query')->willReturnCallback(function (string $sql) use ($share) {
-            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+            if (str_contains($sql, 'FROM library_shares')) {
                 return [$share->toPayload()];
             }
             return [];
@@ -566,7 +566,7 @@ final class LibrarySharingHandlerTest extends TestCase
         );
 
         $this->db->method('query')->willReturnCallback(function (string $sql) use ($share) {
-            if (str_contains($sql, 'SELECT * FROM library_shares')) {
+            if (str_contains($sql, 'FROM library_shares')) {
                 return [$share->toPayload()];
             }
             if (str_contains($sql, 'UPDATE library_shares')) {

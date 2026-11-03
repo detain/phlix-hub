@@ -38,7 +38,7 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_hubs LIMIT 1',
+            'SELECT id, name, url, public_key, role, is_master, is_active, created_at, updated_at FROM federation_hubs LIMIT 1',
         );
 
         return $rows[0] ?? null;
@@ -154,7 +154,7 @@ class FederationHubRepository
         // the pool-disabled fallback constructs it), so the semantics hold.
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_peers
+            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers
              WHERE id = :id OR leaf_hub_id = :id
              ORDER BY id = :id DESC
              LIMIT 1',
@@ -175,7 +175,7 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_peers WHERE url = :url LIMIT 1',
+            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE url = :url LIMIT 1',
             ['url' => $url],
         );
 
@@ -193,7 +193,7 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_peers WHERE public_key = :public_key LIMIT 1',
+            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE public_key = :public_key LIMIT 1',
             ['public_key' => $publicKey],
         );
 
@@ -228,7 +228,7 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_peers WHERE status = :status ORDER BY name',
+            'SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE status = :status ORDER BY name',
             ['status' => 'connected'],
         );
 
@@ -251,7 +251,7 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            "SELECT * FROM federation_peers WHERE status <> :suspended ORDER BY name",
+            "SELECT id, name, url, public_key, leaf_hub_id, relay_enabled, admin_delegation_enabled, status, last_seen_at, last_connected_at, created_at, updated_at FROM federation_peers WHERE status <> :suspended ORDER BY name",
             ['suspended' => 'suspended'],
         );
 

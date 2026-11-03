@@ -146,7 +146,7 @@ class RequestManager
     {
         /** @var mixed $rows */
         $rows = $this->db->query(
-            'SELECT * FROM requests
+            'SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests
              WHERE user_id = :user_id
                AND type = :type
                AND tmdb_id = :tmdb_id
@@ -230,7 +230,7 @@ class RequestManager
             ]
         );
 
-        $rows = $this->db->query('SELECT * FROM requests WHERE id = :id', ['id' => $id]);
+        $rows = $this->db->query('SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests WHERE id = :id', ['id' => $id]);
         if (!is_array($rows) || count($rows) === 0) {
             throw new \RuntimeException('Failed to create request: row not retrievable after insert');
         }
@@ -256,7 +256,7 @@ class RequestManager
                     // post-approval row (status 'approved'), not the stale
                     // 'pending' snapshot taken before the auto-approve ran.
                     /** @var list<array<array-key, mixed>> $reread */
-                    $reread = $this->db->query('SELECT * FROM requests WHERE id = :id', ['id' => $request['id']]);
+                    $reread = $this->db->query('SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests WHERE id = :id', ['id' => $request['id']]);
                     $rereadRow = $reread[0] ?? null;
                     if (is_array($rereadRow)) {
                         $request = $this->hydrateRequest($rereadRow);
@@ -385,14 +385,14 @@ class RequestManager
         if ($userId !== null) {
             /** @var mixed $rows */
             $rows = $this->db->query(
-                'SELECT * FROM requests WHERE user_id = :user_id AND status = \'pending\'
+                'SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests WHERE user_id = :user_id AND status = \'pending\'
                  ORDER BY created_at DESC',
                 ['user_id' => $userId]
             );
         } else {
             /** @var mixed $rows */
             $rows = $this->db->query(
-                'SELECT * FROM requests WHERE status = \'pending\' ORDER BY created_at DESC'
+                'SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests WHERE status = \'pending\' ORDER BY created_at DESC'
             );
         }
         return $this->hydrateRequests($rows);
@@ -407,7 +407,7 @@ class RequestManager
     {
         /** @var mixed $rows */
         $rows = $this->db->query(
-            'SELECT * FROM requests WHERE status = \'available\' ORDER BY updated_at DESC'
+            'SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests WHERE status = \'available\' ORDER BY updated_at DESC'
         );
         return $this->hydrateRequests($rows);
     }
@@ -436,7 +436,7 @@ class RequestManager
 
         /** @var mixed $rows */
         $rows = $this->db->query(
-            'SELECT * FROM requests' . $where . ' ORDER BY created_at DESC'
+            'SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests' . $where . ' ORDER BY created_at DESC'
         );
         return $this->hydrateRequests($rows);
     }
@@ -452,7 +452,7 @@ class RequestManager
     {
         /** @var mixed $rows */
         $rows = $this->db->query(
-            'SELECT * FROM requests WHERE user_id = :user_id ORDER BY created_at DESC',
+            'SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests WHERE user_id = :user_id ORDER BY created_at DESC',
             ['user_id' => $userId]
         );
         return $this->hydrateRequests($rows);
@@ -467,7 +467,7 @@ class RequestManager
      */
     public function getRequestById(string $requestId): ?array
     {
-        $rows = $this->db->query('SELECT * FROM requests WHERE id = :id', ['id' => $requestId]);
+        $rows = $this->db->query('SELECT id, user_id, type, tmdb_id, title, poster_url, season, episode, status, rejection_reason, created_at, updated_at FROM requests WHERE id = :id', ['id' => $requestId]);
         if (!is_array($rows) || count($rows) === 0) {
             return null;
         }

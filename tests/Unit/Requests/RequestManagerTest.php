@@ -340,7 +340,7 @@ final class RequestManagerTest extends TestCase
         $this->db->method('query')
             ->willReturnCallback(static function (string $sql) use (&$executed) {
                 $executed[] = $sql;
-                if (str_contains($sql, 'SELECT * FROM requests WHERE id')) {
+                if (str_contains($sql, 'FROM requests WHERE id')) {
                     return [self::row(['id' => 'test-id', 'type' => 'movie', 'status' => 'pending'])];
                 }
                 if (str_contains($sql, 'UPDATE requests SET status = :to')) {
@@ -354,7 +354,7 @@ final class RequestManagerTest extends TestCase
         self::assertFalse($this->manager->approveRequest('test-id'));
 
         self::assertCount(3, $executed);
-        self::assertStringContainsString('SELECT * FROM requests WHERE id', $executed[0]);
+        self::assertStringContainsString('FROM requests WHERE id', $executed[0]);
         self::assertStringContainsString("WHERE id = :id AND status = :from", $executed[1]);
         self::assertStringContainsString('UPDATE requests SET status = :to', $executed[1]);
         self::assertStringContainsString('UPDATE requests SET status = :to', $executed[2]);
@@ -365,7 +365,7 @@ final class RequestManagerTest extends TestCase
         $claimRan = false;
         $this->db->method('query')
             ->willReturnCallback(static function (string $sql) use (&$claimRan) {
-                if (str_contains($sql, 'SELECT * FROM requests WHERE id')) {
+                if (str_contains($sql, 'FROM requests WHERE id')) {
                     return [self::row(['id' => 'test-id', 'type' => 'movie', 'status' => 'pending'])];
                 }
                 if (str_contains($sql, 'UPDATE requests SET status = :to')) {

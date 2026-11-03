@@ -61,7 +61,7 @@ final class FederationLibraryShareRepositoryTest extends TestCase
 
         $db->expects(self::once())
             ->method('query')
-            ->with(self::stringContains('SELECT * FROM federation_library_shares'))
+            ->with(self::stringContains('FROM federation_library_shares'))
             ->willReturn($shares);
 
         $repo = new FederationLibraryShareRepository($db);
@@ -78,7 +78,7 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('SELECT * FROM federation_library_shares WHERE id'),
+                self::stringContains('FROM federation_library_shares WHERE id'),
                 ['id' => 'share-find']
             )
             ->willReturn([$share]);
@@ -166,7 +166,7 @@ final class FederationLibraryShareRepositoryTest extends TestCase
 
         $db->expects(self::once())
             ->method('query')
-            ->with(self::stringContains('SELECT * FROM federation_incoming_share_offers'))
+            ->with(self::stringContains('FROM federation_incoming_share_offers'))
             ->willReturn($offers);
 
         $repo = new FederationLibraryShareRepository($db);
@@ -183,7 +183,7 @@ final class FederationLibraryShareRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('SELECT * FROM federation_incoming_share_offers WHERE id'),
+                self::stringContains('FROM federation_incoming_share_offers WHERE id'),
                 ['id' => 'offer-find']
             )
             ->willReturn([$offer]);

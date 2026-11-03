@@ -116,7 +116,7 @@ final class SingleUseInviteConnection extends Connection
             return 0;
         }
 
-        if (str_contains($sql, 'SELECT * FROM invite_links')) {
+        if (str_contains($sql, 'FROM invite_links')) {
             if (!$this->exists) {
                 return [];
             }

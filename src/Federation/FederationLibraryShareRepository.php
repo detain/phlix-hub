@@ -91,7 +91,7 @@ class FederationLibraryShareRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_library_shares ORDER BY shared_at DESC',
+            'SELECT id, library_id, library_name, peer_id, permission, status, shared_at, revoked_at FROM federation_library_shares ORDER BY shared_at DESC',
         );
 
         return $rows;
@@ -108,7 +108,7 @@ class FederationLibraryShareRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_library_shares WHERE id = :id LIMIT 1',
+            'SELECT id, library_id, library_name, peer_id, permission, status, shared_at, revoked_at FROM federation_library_shares WHERE id = :id LIMIT 1',
             ['id' => $id],
         );
 
@@ -136,7 +136,7 @@ class FederationLibraryShareRepository
 
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_library_shares
+            'SELECT id, library_id, library_name, peer_id, permission, status, shared_at, revoked_at FROM federation_library_shares
              WHERE status = :status AND peer_id = :peer_id
              ORDER BY shared_at DESC',
             [
@@ -177,7 +177,7 @@ class FederationLibraryShareRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_incoming_share_offers ORDER BY offered_at DESC',
+            'SELECT id, peer_id, library_id, library_name, permission, status, offered_at, responded_at, accepted_by FROM federation_incoming_share_offers ORDER BY offered_at DESC',
         );
 
         return $rows;
@@ -194,7 +194,7 @@ class FederationLibraryShareRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_incoming_share_offers WHERE id = :id LIMIT 1',
+            'SELECT id, peer_id, library_id, library_name, permission, status, offered_at, responded_at, accepted_by FROM federation_incoming_share_offers WHERE id = :id LIMIT 1',
             ['id' => $id],
         );
 

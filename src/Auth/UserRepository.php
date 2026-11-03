@@ -46,7 +46,7 @@ class UserRepository
     public function findById(string $id): ?array
     {
         $result = $this->db->query(
-            'SELECT * FROM users WHERE id = :id',
+            'SELECT id, username, email, password_hash, display_name, is_admin, created_at, updated_at FROM users WHERE id = :id',
             ['id' => $id],
         );
         if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
@@ -63,7 +63,7 @@ class UserRepository
     public function findByUsername(string $username): ?array
     {
         $result = $this->db->query(
-            'SELECT * FROM users WHERE username = :username',
+            'SELECT id, username, email, password_hash, display_name, is_admin, created_at, updated_at FROM users WHERE username = :username',
             ['username' => $username],
         );
         if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
@@ -80,7 +80,7 @@ class UserRepository
     public function findByEmail(string $email): ?array
     {
         $result = $this->db->query(
-            'SELECT * FROM users WHERE email = :email',
+            'SELECT id, username, email, password_hash, display_name, is_admin, created_at, updated_at FROM users WHERE email = :email',
             ['email' => $email],
         );
         if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
@@ -99,7 +99,7 @@ class UserRepository
     public function findAdminById(string $id): ?array
     {
         $result = $this->db->query(
-            'SELECT * FROM users WHERE id = :id AND is_admin = 1',
+            'SELECT id, username, email, password_hash, display_name, is_admin, created_at, updated_at FROM users WHERE id = :id AND is_admin = 1',
             ['id' => $id],
         );
         if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {

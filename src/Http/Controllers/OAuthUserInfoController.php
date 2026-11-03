@@ -54,8 +54,9 @@ use function is_string;
  *
  * ## The response is enumerated, not spread
  *
- * `UserRepository::findById()` does `SELECT *`, so returning the row (or the row
- * minus a deny-list) would publish every column a future migration adds to
+ * `UserRepository::findById()` projects the full current column set of the
+ * row, so returning it as-is (or the row minus a deny-list) would publish
+ * every column a future migration adds to
  * `users` — to a third party — with nothing to notice. The three fields below
  * are written out one at a time for that reason; a new column reaches this
  * response only when somebody adds a line here.

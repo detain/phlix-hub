@@ -190,7 +190,7 @@ final class InviteLinkHandlerTest extends TestCase
         ];
 
         $this->db->method('query')->willReturnCallback(function (string $sql) use ($row) {
-            if (str_contains($sql, 'SELECT * FROM invite_links')) {
+            if (str_contains($sql, 'FROM invite_links')) {
                 return [$row];
             }
             return [];
@@ -226,7 +226,7 @@ final class InviteLinkHandlerTest extends TestCase
         ];
 
         $this->db->method('query')->willReturnCallback(function (string $sql) use ($row) {
-            if (str_contains($sql, 'SELECT * FROM invite_links')) {
+            if (str_contains($sql, 'FROM invite_links')) {
                 return [$row];
             }
             return [];
@@ -387,7 +387,7 @@ final class InviteLinkHandlerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
             static function (string $sql, $params = null) {
-                if (str_contains($sql, 'SELECT * FROM invite_links')) {
+                if (str_contains($sql, 'FROM invite_links')) {
                     return [[
                         'owner_user_id' => 'owner-1',
                         'server_id' => 'server-1',

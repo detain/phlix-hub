@@ -52,7 +52,7 @@ final class AuthMiddleware
     /**
      * Short-TTL in-worker cache for user-existence probes.
      *
-     * Avoids a full `SELECT * FROM users WHERE id = ?` on every authenticated
+     * Avoids a full user-row read (`UserRepository::findById`) on every authenticated
      * request — the hot-path controllers only need $request->userId from the
      * already-validated JWT. Each entry stores the BOOLEAN probe RESULT
      * (`exists`) alongside the unix timestamp it was taken (`at`); entries
@@ -120,7 +120,7 @@ final class AuthMiddleware
         $userId = $claims->sub;
 
         // Lightweight existence check with short TTL — avoids the full
-        // `SELECT * FROM users WHERE id = ?` on every authenticated request.
+        // user-row read (`UserRepository::findById`) on every authenticated request.
         // The hot-path controllers only need $request->userId (from the
         // already-validated JWT claims); controllers that need the full user
         // row call AuthManager::getCurrentUser() directly.

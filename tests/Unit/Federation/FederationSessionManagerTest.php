@@ -238,7 +238,7 @@ final class FederationSessionManagerTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::callback(fn (string $sql) => str_contains($sql, 'SELECT * FROM federation_sessions')),
+                self::callback(fn (string $sql) => str_contains($sql, 'FROM federation_sessions')),
                 ['peer_id' => 'peer-active']
             )
             ->willReturn([$expectedSession]);

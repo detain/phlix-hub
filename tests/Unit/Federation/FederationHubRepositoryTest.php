@@ -27,7 +27,7 @@ final class FederationHubRepositoryTest extends TestCase
 
         $db->expects(self::once())
             ->method('query')
-            ->with(self::stringContains('SELECT * FROM federation_hubs'))
+            ->with(self::stringContains('FROM federation_hubs'))
             ->willReturn([$expectedConfig]);
 
         $repo = new FederationHubRepository($db);
@@ -151,7 +151,7 @@ final class FederationHubRepositoryTest extends TestCase
             ->method('query')
             ->with(
                 self::callback(function (string $sql) {
-                    return str_contains($sql, 'SELECT * FROM federation_peers')
+                    return str_contains($sql, 'FROM federation_peers')
                         && str_contains($sql, 'WHERE id = :id OR leaf_hub_id = :id')
                         && str_contains($sql, 'ORDER BY id = :id DESC');
                 }),
@@ -281,7 +281,7 @@ final class FederationHubRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('SELECT * FROM federation_peers WHERE url'),
+                self::stringContains('FROM federation_peers WHERE url'),
                 ['url' => 'https://peer.example.com']
             )
             ->willReturn([$expectedPeer]);
@@ -300,7 +300,7 @@ final class FederationHubRepositoryTest extends TestCase
         $db->expects(self::once())
             ->method('query')
             ->with(
-                self::stringContains('SELECT * FROM federation_peers WHERE public_key'),
+                self::stringContains('FROM federation_peers WHERE public_key'),
                 ['public_key' => 'abc123']
             )
             ->willReturn([$expectedPeer]);

@@ -79,7 +79,7 @@ class FederationAdminDelegationRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_admin_delegations
+            'SELECT id, peer_id, user_id, granted_at, revoked_at FROM federation_admin_delegations
              WHERE user_id = :user_id AND revoked_at IS NULL',
             ['user_id' => $userId],
         );
@@ -98,7 +98,7 @@ class FederationAdminDelegationRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_admin_delegations
+            'SELECT id, peer_id, user_id, granted_at, revoked_at FROM federation_admin_delegations
              WHERE peer_id = :peer_id AND revoked_at IS NULL',
             ['peer_id' => $peerId],
         );
@@ -117,7 +117,7 @@ class FederationAdminDelegationRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_admin_delegations WHERE id = :id LIMIT 1',
+            'SELECT id, peer_id, user_id, granted_at, revoked_at FROM federation_admin_delegations WHERE id = :id LIMIT 1',
             ['id' => $id],
         );
 

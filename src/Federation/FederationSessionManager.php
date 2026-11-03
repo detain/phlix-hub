@@ -361,7 +361,7 @@ class FederationSessionManager
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT * FROM federation_sessions
+            'SELECT id, peer_id, established_at, last_heartbeat_at, bytes_sent, bytes_received, alive FROM federation_sessions
              WHERE peer_id = :peer_id AND alive = 1
              ORDER BY established_at DESC
              LIMIT 1',

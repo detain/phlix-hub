@@ -60,7 +60,7 @@ final class RequestManagerAutoApproveTest extends TestCase
                 if (str_contains($sql, 'INSERT INTO requests')) {
                     return [];
                 }
-                if (str_contains($sql, 'SELECT * FROM requests WHERE id')) {
+                if (str_contains($sql, 'FROM requests WHERE id')) {
                     $selects++;
                     // Status flips to approved once the claim UPDATE has run.
                     $claimed = $this->saw('UPDATE requests SET status = :to', 'approved');

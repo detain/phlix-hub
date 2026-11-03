@@ -159,20 +159,21 @@ final class AdminUserRoutesTest extends TestCase
                 if (str_contains($sql, 'SELECT 1 FROM users WHERE username')) {
                     return ($opts['usernameExists'] ?? false) ? [['1' => 1]] : [];
                 }
-                if (str_contains($sql, 'SELECT id, username, email')) {
-                    return $opts['findAll'] ?? [];
-                }
-                if (str_contains($sql, 'SELECT * FROM users WHERE id')) {
+                if (str_contains($sql, 'SELECT id, username, email, password_hash')) {
+                    // Full-row UserRepository finder projection (M31).
+                    if (str_contains($sql, 'WHERE username')) {
+                        $row = $opts['findByUsername'] ?? null;
+                        return $row === null ? [] : [$row];
+                    }
+                    if (str_contains($sql, 'WHERE email')) {
+                        $row = $opts['findByEmail'] ?? null;
+                        return $row === null ? [] : [$row];
+                    }
                     $row = $opts['findById'] ?? null;
                     return $row === null ? [] : [$row];
                 }
-                if (str_contains($sql, 'SELECT * FROM users WHERE username')) {
-                    $row = $opts['findByUsername'] ?? null;
-                    return $row === null ? [] : [$row];
-                }
-                if (str_contains($sql, 'SELECT * FROM users WHERE email')) {
-                    $row = $opts['findByEmail'] ?? null;
-                    return $row === null ? [] : [$row];
+                if (str_contains($sql, 'SELECT id, username, email')) {
+                    return $opts['findAll'] ?? [];
                 }
                 // INSERT / UPDATE / DELETE.
                 return true;
