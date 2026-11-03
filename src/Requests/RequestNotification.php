@@ -35,7 +35,8 @@ class RequestNotification
     /**
      * Honest delivery status stamped on every record (Major 43).
      */
-    private const NO_CHANNEL_NOTE = 'log-only — the hub has no email/push/WebSocket fan-out yet; no user was notified. '
+    private const string NO_CHANNEL_NOTE =
+        'log-only — the hub has no email/push/WebSocket fan-out yet; no user was notified. '
         . 'The message field is the text a future delivery channel WOULD send.';
 
     private StructuredLogger $logger;

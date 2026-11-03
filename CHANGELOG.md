@@ -6,6 +6,47 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — CI attestation (psalm corpus inherited reds cured, 2026-11-03)
+- **All nine errors predate this lane.** The Psalm job has been red on hub
+  master since `551b0df5` was pushed unattested (its CI run 41714152750 lists
+  the same nine errors; the corpus was green at `96245a6d`). Docker
+  `phlix-psalm-csf:8.4` reproduction confirms every site exists at the base
+  tree, and the deferred-lane tip carries the identical set — so the cure
+  lands here, fix-forward, exactly as the server estate did at `8e72825d`:
+  - `Application.php`: the stream-producer is captured ONCE into
+    `$streamProducer` so the null-check and the invocation inside its arm
+    provably speak of the same value (`PossiblyNullFunctionCall` gone; no
+    behavior change — the getter is a pure property read).
+  - `Auth/UserRepository.php`: the compound `is_string || str_starts_with`
+    guard split into two sequential single-condition throws — same exception,
+    same message bytes for both arms; psalm narrows cleanly.
+  - `Federation/FederationHubRepository.php`: `HUB_ROW_ID` gains its
+    `const string` type (`MissingClassConstType`).
+  - `Http/Controllers/FederationController.php`: the `!is_string($parts['scheme'])`
+    arm dropped — by `parse_url`'s own contract the scheme is a string when
+    set, so the arm was unrepresentable to both psalm and reality
+    (`TypeDoesNotContainType`); the parse-failure and missing-scheme defensive
+    arms stand.
+  - `Http/Response.php`: `stream()` normalizes with a single
+    `Closure::fromCallable($producer)` — it passes an existing `Closure`
+    through by identity, so the `instanceof` fork was dead weight and its
+    `callable` docblock claim was the contradiction psalm flagged
+    (`DocblockTypeContradiction`).
+  - `Hub/HeartbeatHandler.php`: `array_values()` on an already-list-typed
+    collection dropped (`RedundantFunctionCall`).
+  - `Requests/RequestNotification.php`: `NO_CHANNEL_NOTE` gains
+    `const string` (value bytes unchanged; wrapped for the 120-col corpus).
+  - `Stats/Metrics/MetricsFlushService.php`: the retention-resolver property
+    docblock's `Closure(): int` signature deleted — plain `\Closure` is the
+    honest stored shape (what `Closure::fromCallable` yields), the int law is
+    enforced at the call site's cast, which now legitimately stays
+    (`MixedPropertyTypeCoercion` + `RedundantCastGivenDocblockType`).
+  Measured: `psalm --no-progress --show-info=false` in the CI-faithful 8.4
+  container reports ZERO errors beyond the local-only swoole-absence family
+  (those vanish in CI, which installs the extension); the 621-test targeted
+  neighborhood stays green (3 known host swoole errors, 1 sanctioned skip);
+  phpstan CI-faithful `[OK]`; S299 corpus 0E/0W.
+
 ### Fixed — review Minor 50 (hub chrome labels speak the locale catalog, 2026-11-03)
 - **The one i18n gap the ui seam could not close.** The eleven top-bar menu
   labels in `main.ts` and five page quick-link labels were hardcoded English in

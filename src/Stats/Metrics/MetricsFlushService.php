@@ -44,10 +44,11 @@ final class MetricsFlushService
     private int $retentionDays;
 
     /**
-     * LIVE `server.metrics.retention_days` reader — answers already clamped
-     * 1..3650 upstream by HubSettingsResolvers::int; null keeps the boot value.
-     *
-     * @var \Closure(): int|null
+     * LIVE `server.metrics.retention_days` reader — answers an int already
+     * clamped 1..3650 upstream by HubSettingsResolvers::int; null keeps the
+     * boot value. Plain `\Closure` is the honest stored shape (what
+     * `Closure::fromCallable` yields); the int-return law is enforced at the
+     * call site's cast, not by a docblock signature the factory cannot speak.
      */
     private ?\Closure $retentionResolver = null;
 

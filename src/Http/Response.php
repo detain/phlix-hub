@@ -80,10 +80,12 @@ class Response
         // Review hub Major 33: the property is no longer a public untyped
         // slot on the object that doubles as the wire response envelope —
         // only this setter moves it, and the stored shape is a real Closure
-        // regardless of what callable was handed in.
-        $this->streamProducer = $producer instanceof \Closure
-            ? $producer
-            : \Closure::fromCallable($producer);
+        // regardless of what callable was handed in. Closure::fromCallable
+        // passes an existing Closure through by identity, so this single call
+        // IS the whole normalization — no instanceof fork needed (and psalm
+        // rightly rejects claiming a `callable` docblock type "contains"
+        // Closure before the check narrows it).
+        $this->streamProducer = \Closure::fromCallable($producer);
         return $this;
     }
 

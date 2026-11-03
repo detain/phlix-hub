@@ -36,7 +36,7 @@ class FederationHubRepository
      * because the value crosses the wire (federation_peers.leaf_hub_id stores
      * a peer hub's own row id; callers pattern-check it).
      */
-    public const HUB_ROW_ID = '00000000-0000-4000-8000-000000000044';
+    public const string HUB_ROW_ID = '00000000-0000-4000-8000-000000000044';
 
     public function __construct(
         private readonly Connection $db,

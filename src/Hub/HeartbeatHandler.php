@@ -302,7 +302,7 @@ class HeartbeatHandler
         $upsertParams = [];
         /** @var list<string> $tuples */
         $tuples = [];
-        foreach (array_values($libraries) as $i => $ref) {
+        foreach ($libraries as $i => $ref) {
             $tuples[] = sprintf(
                 '(:id_%d, :server_id_%d, :library_id_%d, :library_name_%d, NOW(), NOW())',
                 $i,

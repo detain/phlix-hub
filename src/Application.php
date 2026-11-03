@@ -2354,7 +2354,10 @@ final class Application
                 $hubRequest = Request::fromWorkerman($request, $connection);
                 $response = $router->dispatch($hubRequest);
                 $status = $response->statusCode;
-                if ($response->getStreamProducer() !== null) {
+                // Captured ONCE: the null-check below and the invocation inside
+                // its arm must provably speak of the same producer value.
+                $streamProducer = $response->getStreamProducer();
+                if ($streamProducer !== null) {
                     // The response is streamed straight to the socket in
                     // fragments (relay pass-through of a large media body) rather
                     // than sent as one buffered blob. The producer owns the whole
@@ -2394,7 +2397,7 @@ final class Application
                     // `RelayProxyBridge::stream()`'s matching comment and
                     // `quality_worklog.md` D3s round-3 (Finding D).
                     try {
-                        ($response->getStreamProducer())($connection);
+                        $streamProducer($connection);
                     } catch (Throwable $e) {
                         $status = 500;
                         $logger?->error('Unhandled exception in streaming response producer', [

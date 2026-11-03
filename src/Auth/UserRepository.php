@@ -185,7 +185,10 @@ class UserRepository
         if (isset($data['password_hash'])) {
             /** @var mixed $digest */
             $digest = $data['password_hash'];
-            if (!is_string($digest) || !str_starts_with($digest, '$argon2id$')) {
+            if (!is_string($digest)) {
+                throw new InvalidArgumentException('password_hash must be a precomputed Argon2id digest string');
+            }
+            if (!str_starts_with($digest, '$argon2id$')) {
                 throw new InvalidArgumentException('password_hash must be a precomputed Argon2id digest string');
             }
             $passwordHash = $digest;

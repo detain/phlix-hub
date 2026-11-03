@@ -82,7 +82,10 @@ final class FederationController
     private static function hasAllowedUrlScheme(string $url): bool
     {
         $parts = parse_url($url);
-        if (!is_array($parts) || !isset($parts['scheme']) || !is_string($parts['scheme'])) {
+        // Two defensive arms: parse failure and missing scheme. The scheme,
+        // when present, is a string by parse_url's own contract, so no
+        // per-type arm is needed (nor expressible) here.
+        if (!is_array($parts) || !isset($parts['scheme'])) {
             return false;
         }
 
