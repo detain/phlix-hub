@@ -46,7 +46,7 @@ use const JSON_THROW_ON_ERROR;
 use const JSON_UNESCAPED_SLASHES;
 
 /**
- * Pins the hub's error-code vocabulary to `@phlix/contracts` v0.5.3 and
+ * Pins the hub's error-code vocabulary to `@phlix/contracts` v0.5.5 and
  * enforces the hub-side wire law: every literal the hub places on a
  * `code`/`error_code` wire field is a REGISTERED stable code.
  *
@@ -54,8 +54,8 @@ use const JSON_UNESCAPED_SLASHES;
  *
  * The W3 emit-wave doctrine is error-code-first: stable registered codes on
  * the wire, English text as debug fallback. The SSOT vocabulary is
- * `@phlix/contracts` `dist/error-codes.json` (204 codes / 37 domains at
- * v0.5.3). This test is the hub half of the vendored-fixture law modelled on
+ * `@phlix/contracts` `dist/error-codes.json` (205 codes / 37 domains at
+ * v0.5.5). This test is the hub half of the vendored-fixture law modelled on
  * {@see \Phlix\Hub\Tests\Unit\Mcp\McpScopesContractTest}: same byte-copied
  * artifact, same one-line PIN, same anti-vacuity floor asserted BEFORE any
  * comparison, same fixture-honesty marker check, same hardcoded tag literal
@@ -136,8 +136,8 @@ final class ErrorCodesContractTest extends TestCase
 {
     /**
      * Anti-vacuity floor: the registry carried 147 codes at its first hub
-     * audit, 202 at v0.5.1 and 204 at v0.5.3. Asserted on the fixture BEFORE
-     * any comparison.
+     * audit, 202 at v0.5.1, 204 at v0.5.3 and 205 at v0.5.5. Asserted on the
+     * fixture BEFORE any comparison.
      * If the registry ever legitimately drops below this, this constant is
      * edited deliberately, in the same commit, with the reason stated —
      * that edit is what makes the shrink visible.
@@ -157,7 +157,7 @@ final class ErrorCodesContractTest extends TestCase
      * `tests/fixtures/contracts/error-codes.PIN` and the re-vendored fixture
      * in one commit.
      */
-    private const string CONTRACT_TAG = 'v0.5.3';
+    private const string CONTRACT_TAG = 'v0.5.5';
 
     private const string FIXTURE = __DIR__ . '/../../fixtures/contracts/error-codes.json';
 
@@ -382,7 +382,7 @@ final class ErrorCodesContractTest extends TestCase
             self::CODE_FLOOR,
             count($codes),
             'FLOOR: the fixture must carry at least ' . self::CODE_FLOOR
-            . ' codes (204 as of ' . self::CONTRACT_TAG . ')',
+            . ' codes (205 as of ' . self::CONTRACT_TAG . ')',
         );
         self::assertSame(count($codes), count(array_unique($codes)), 'FLOOR: the fixture carries duplicate codes');
     }

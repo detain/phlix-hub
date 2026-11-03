@@ -78,8 +78,8 @@ final class ErrorCodesOpenApiEnumContractTest extends TestCase
             self::CODE_FLOOR,
             count($enum),
             sprintf(
-                'FLOOR: openapi.yaml\'s Error.code enum must carry at least %d members (204 as of '
-                . '@phlix/contracts v0.5.3); read %d. Either the enum shrank or the extractor '
+                'FLOOR: openapi.yaml\'s Error.code enum must carry at least %d members (205 as of '
+                . '@phlix/contracts v0.5.5); read %d. Either the enum shrank or the extractor '
                 . 'stopped finding it.',
                 self::CODE_FLOOR,
                 count($enum),

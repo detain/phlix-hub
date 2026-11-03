@@ -204,6 +204,39 @@ final class RouterTest extends TestCase
         self::assertSame(404, $res->statusCode);
     }
 
+    /**
+     * R-HUB-W2-C1 law-pin: the router's unmatched-route fallback speaks the
+     * unified member-facing 404 envelope minted in @phlix/contracts v0.5.5 —
+     * the registered machine word `not_found` in `code`, and ONE human
+     * sentence co-mirrored in `error` and `message` (the pinned `extractError`
+     * read order is error-then-message, so both keys must carry the same
+     * sentence). The bare HTTP phrase `Not Found` is on the member-channel ban
+     * list (\Phlix\Hub\Tests\Unit\Http\Controllers\MemberErrorProseTest); the
+     * sentence here is Router's own shipped wording, kept verbatim.
+     * `assertSame` on the decoded body pins the key ORDER (error, code,
+     * message) as well as the values — the canonical envelope shape.
+     */
+    public function testUnmatchedRouteEmitsTheUnifiedNotFoundEnvelope(): void
+    {
+        $router = new Router();
+        $router->get('/path', static fn (Request $r, array $p): Response => (new Response())->status(200));
+
+        $miss = $router->dispatch($this->request('GET', '/never/registered'));
+        self::assertSame(404, $miss->statusCode);
+
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode((string) $miss->body, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(
+            [
+                'error' => 'The requested resource was not found',
+                'code' => 'not_found',
+                'message' => 'The requested resource was not found',
+            ],
+            $decoded,
+            'router 404 must carry the unified error/code/message envelope (R-HUB-W2-C1)',
+        );
+    }
+
     // --- Middleware returning response early ---
 
     public function testGroupMiddlewareCanReturnEarlyResponse(): void

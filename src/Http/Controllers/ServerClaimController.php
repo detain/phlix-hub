@@ -242,7 +242,8 @@ final class ServerClaimController
      * `claim.*` trio answers 404 / 410 / 409 with three DISTINCT registered
      * codes. That is contract-law bound: @phlix/contracts errors.ts registers
      * claim.code_not_found / claim.code_expired / claim.code_already_claimed
-     * (registry md5 40c1da48 frozen — no new or collapsed codes from a client
+     * (registry re-baselined at v0.5.5, md5 5d1783a7 — the trio stays distinct
+     * by registry law; mints are contracts waves only, never a client
      * repo), and the pinned consumer @phlix/ui src/api/claimServer.ts maps all
      * three to distinct user-facing kinds ("That claim code has expired.
      * Generate a new one on your server." is real pairing UX). Collapsing them

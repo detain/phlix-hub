@@ -5273,7 +5273,7 @@ components:
           type: string
           description: >-
             Stable machine code from the closed @phlix/contracts error-code vocabulary
-            (v0.5.3: 204 codes / 37 domains). Pinned byte-for-byte to
+            (v0.5.5: 205 codes / 37 domains). Pinned byte-for-byte to
             tests/fixtures/contracts/error-codes.json by ErrorCodesContractTest, and this
             enum is pinned to the same fixture by ErrorCodesOpenApiEnumContractTest. The
             order below is the registry emission order; appending is safe, reordering is not.
@@ -5396,6 +5396,7 @@ components:
             - "missing_user_id"
             - "missing_server_id"
             - "not_server_owner"
+            - "not_found"
             - "peer_url_exists"
             - "peer_key_exists"
             - "peer_not_found"

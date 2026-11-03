@@ -580,6 +580,15 @@ final class AuthControllerTest extends TestCase
         self::assertSame('Invalid or expired refresh token', $decoded['message']);
     }
 
+    /**
+     * R-HUB-W2-C1 law-pin (companion of RouterTest's envelope pin): the auth
+     * dispatcher's `default =>` arm is the hub's second prose-only 404 — the
+     * second producer the contracts v0.5.5 mint registered `not_found` for.
+     * It must speak the same unified envelope: registered machine word in
+     * `code`, one human sentence co-mirrored in `error` and `message`, never
+     * the banned HTTP phrase `Not Found`. `assertSame` on the decoded body
+     * pins key ORDER (error, code, message) as well as values.
+     */
     public function testInvokeUnknownPathReturns404(): void
     {
         $controller = $this->controller($this->authMgr());
@@ -589,5 +598,17 @@ final class AuthControllerTest extends TestCase
 
         $response = $controller($request);
         self::assertSame(404, $response->statusCode);
+
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(
+            [
+                'error' => 'The requested resource was not found',
+                'code' => 'not_found',
+                'message' => 'The requested resource was not found',
+            ],
+            $decoded,
+            'auth dispatcher 404 must carry the unified error/code/message envelope (R-HUB-W2-C1)',
+        );
     }
 }

@@ -64,7 +64,11 @@ final class AuthController
             ['POST', '/api/v1/auth/login']  => $this->loginJson($request),
             ['POST', '/api/v1/auth/logout'] => $this->logoutJson($request),
             ['POST', '/api/v1/auth/refresh']=> $this->refreshJson($request),
-            default => (new Response())->status(404)->json(['error' => 'Not Found']),
+            // R-HUB-W2-C1: the second prose-only 404 the contracts v0.5.5
+            // mint registered `not_found` for — now speaks the unified
+            // member-facing envelope (machine word in `code`, one sentence
+            // co-mirrored in error/message), companion of Router::notFound().
+            default => self::errorFrame(404, 'not_found', 'The requested resource was not found'),
         };
     }
 

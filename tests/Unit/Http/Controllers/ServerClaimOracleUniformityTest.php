@@ -23,7 +23,8 @@ use PHPUnit\Framework\TestCase;
  * The three refusal frames are DISTINCT on purpose (404 `claim.code_not_found`
  * / 410 `claim.code_expired` / 409 `claim.code_already_claimed`). Collapsing
  * them is NOT available to this repo: @phlix/contracts registers all three
- * (errors.ts claim.* trio, registry md5 40c1da48 frozen), and the pinned
+ * (errors.ts claim.* trio, registered through the v0.5.5 re-baseline —
+ * md5 5d1783a7), and the pinned
  * consumer @phlix/ui (src/api/claimServer.ts) renders distinct pairing UX
  * from each ("code has expired — generate a new one" is the legitimate
  * user's recovery path). What IS law here is SHAPE uniformity: every denial

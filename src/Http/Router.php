@@ -438,14 +438,23 @@ class Router
     }
 
     /**
-     * 404 response builder.
+     * 404 response builder — the unified member-facing envelope minted in
+     * @phlix/contracts v0.5.5 (R-HUB-W2-C1): the registered machine word
+     * `not_found` on `code`, and Router's own human sentence co-mirrored in
+     * `error` and `message` (the pinned `extractError` read order is
+     * error-then-message, so both keys carry the same sentence). The bare
+     * HTTP phrase is off the member channel per the ban list enforced by
+     * {@see \Phlix\Hub\Tests\Unit\Http\Controllers\MemberErrorProseTest}.
+     * Key order (error, code, message) is the canonical envelope shape,
+     * byte-pinned by RouterTest::testUnmatchedRouteEmitsTheUnifiedNotFoundEnvelope.
      */
     private function notFound(): Response
     {
         return (new Response())
             ->status(404)
             ->json([
-                'error' => 'Not Found',
+                'error' => 'The requested resource was not found',
+                'code' => 'not_found',
                 'message' => 'The requested resource was not found',
             ]);
     }

@@ -6,6 +6,42 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — contracts v0.5.5 cascade: the R-HUB-W2-C1 completion (2026-11-04)
+- **The two prose-only 404s speak the minted word.** `common.not_found` was
+  registered RESERVED in `@phlix/contracts` v0.5.5 precisely for these sites;
+  this leg lands the producers per the recorded mirror ruling — one human
+  sentence co-mirrored in `error` and `message`, the machine word `not_found`
+  in `code`, canonical key order (error, code, message). `Router::notFound()`
+  keeps its shipped sentence verbatim and loses the banned HTTP phrase
+  `Not Found`; the auth dispatcher's `default =>` arm (previously
+  `['error' => 'Not Found']`, no `code`) now rides `AuthController::errorFrame`
+  with the same sentence. No new wire vocabulary: every emitted literal is a
+  registered code. Red-first proved: both law-pins
+  (`RouterTest::testUnmatchedRouteEmitsTheUnifiedNotFoundEnvelope`,
+  `AuthControllerTest::testInvokeUnknownPathReturns404` body leg) were run
+  against the pre-flip producers and failed with exactly the envelope diffs
+  above before flipping green.
+- **Vendored registry re-vendored to v0.5.5.**
+  `tests/fixtures/contracts/error-codes.json` is a byte copy of the tag's
+  `dist/error-codes.json` (md5 `40c1da48…` → `5d1783a71a3c4e128b2021327cad3717`,
+  204 → 205 codes, domains stay 37); disk-proven ordered insertion — removing
+  `not_found` at index 118 reconstructs the old fixture exactly, every other
+  position untouched. `error-codes.PIN` + the `CONTRACT_TAG` lockstep rotate to
+  `v0.5.5` (measured red at `ErrorCodesContractTest:407`), the era staircase and
+  floor prose re-pin to the measured figures, and
+  `ErrorCodesOpenApiEnumContractTest` (measured red at :101 on the ordered
+  whole-list) drives the single `not_found` insertion into `openapi.yaml`'s
+  `Error.code` enum after `not_server_owner`, registry position preserved.
+  `mcp-scopes.json` (`8c92c070…`) and the route-manifest figure
+  (`91579683…` @ S280 survival token) are byte-untouched — the wave held both.
+- **Stale-era prose truth pass (RESULT-named duties).** The two "registry md5
+  40c1da48 frozen" claims (`ServerClaimController.php` state-oracle docblock,
+  `ServerClaimOracleUniformityTest.php` header) re-word to the v0.5.5
+  re-baseline (`5d1783a7…`) — the trio-distinctness law they carry is unchanged
+  and now cites a live md5; the `openapi.yaml` enum description (v0.5.3: 204)
+  and the Alexa law-test + enum-test tag literals rotate to v0.5.5/205.
+  Historical "minted at v0.5.3" records stay verbatim — they are true provenance.
+
 ### Fixed — review Minor 3 (008 and 046 guard each object their ALTER creates, 2026-11-03)
 - **Paired replay probes.** `008_subdomain_allocation.sql` and
   `046_federation_peer_leaf_hub_id.sql` each wrapped an ALTER adding a COLUMN *and*
