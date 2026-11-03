@@ -105,6 +105,49 @@ final class Ed25519KeyManagerTest extends TestCase
     }
 
     /**
+     * Minor 36 — a RESTORED/rotated-in key may land world-readable from outside
+     * this class. Adoption stays permissive (the documented recovery path must
+     * not brick), but it must announce itself: the private half readable by
+     * any local user forges every enrollment JWT and federation proof.
+     */
+    public function testLooseModeKeyFileLoudlyWarnsOnAdoption(): void
+    {
+        (new Ed25519KeyManager($this->keyPath))->getOrCreateKeyPair();
+        chmod($this->keyPath, 0644);
+
+        $logFile = $this->tmpDir . '/error_log.capture';
+        $previous = ini_set('error_log', $logFile);
+        try {
+            (new Ed25519KeyManager($this->keyPath))->getOrCreateKeyPair();
+        } finally {
+            ini_set('error_log', (string) $previous);
+        }
+
+        $logged = (string) file_get_contents($logFile);
+        self::assertStringContainsString('SECURITY: Ed25519 signing key', $logged);
+        self::assertStringContainsString('mode 644', $logged);
+        self::assertStringContainsString($this->keyPath, $logged);
+    }
+
+    public function testStrictModeKeyFileLogsNoSecurityWarning(): void
+    {
+        (new Ed25519KeyManager($this->keyPath))->getOrCreateKeyPair();
+
+        $logFile = $this->tmpDir . '/error_log.capture';
+        $previous = ini_set('error_log', $logFile);
+        try {
+            (new Ed25519KeyManager($this->keyPath))->getOrCreateKeyPair();
+        } finally {
+            ini_set('error_log', (string) $previous);
+        }
+
+        // A clean 0600 adoption writes nothing at all — the capture file is
+        // then never created; absence IS the assertion.
+        $logged = is_file($logFile) ? (string) file_get_contents($logFile) : '';
+        self::assertStringNotContainsString('SECURITY: Ed25519 signing key', $logged);
+    }
+
+    /**
      * S7: a never-rotated manager exposes exactly one active key (and one JWK)
      * and no previous-key sidecar — the single-key path is unchanged.
      */

@@ -63,6 +63,21 @@ class ConnectionPool
     public static function getConnection(string $name = 'mysql'): Connection
     {
         if (!isset(self::$connections[$name])) {
+            // Fail fast, fail loud — but only where the miss would actually
+            // dial: without init() the include below reads from '' (`include
+            // ''` dies as ValueError: Path cannot be empty), a warning-level
+            // mess in whoever called us. One clear exception names the
+            // missing bootstrap step instead. An already-memoised name
+            // short-circuits above — the seam ConnectionPoolTestControl and
+            // the priming unit suites legitimately rely on.
+            if (self::$configPath === '') {
+                throw new \RuntimeException(
+                    'ConnectionPool::getConnection() must not open a new connection before'
+                    . ' ConnectionPool::init() — no config path is set. Bootstrap must call'
+                    . ' ConnectionPool::init($absolutePathToConfigDatabase) first.'
+                );
+            }
+
             /**
              * @psalm-suppress UnresolvableInclude
              * @var array<string, array<string, scalar>> $config

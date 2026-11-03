@@ -179,9 +179,10 @@ final class HubSettingsResolvers
         try {
             if (!$repository instanceof HubSettingsRepository) {
                 // Not booted (unit tests, CLI smoke commands): there is no
-                // store to consult. Checked explicitly rather than caught,
-                // because ConnectionPool::getConnection() on an uninitialised
-                // pool emits warnings instead of throwing.
+                // store to consult. Checked explicitly rather than caught:
+                // an uninitialised pool now throws the guard's
+                // RuntimeException (Minor 37), and a catch here would
+                // conflate a missing bootstrap with a real store failure.
                 if (ConnectionPool::getInstance() === null) {
                     return null;
                 }

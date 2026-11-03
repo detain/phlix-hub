@@ -33,8 +33,9 @@ use function var_export;
  * purpose (a reaper on the shared `mysql` socket trips 2014 mid-transaction —
  * see `config/database.php`). A container definition cannot intercept that, so a
  * test resolving anything that reaches `HeartbeatHandler` — {@see
- * \Phlix\Hub\Relay\IdleReaper} does — dies with `ValueError: Path cannot be
- * empty` from an uninitialised pool.
+ * \Phlix\Hub\Relay\IdleReaper} does — dies with the pool's guard
+ * RuntimeException (Minor 37; previously the bare `ValueError: Path cannot
+ * be empty`) from an uninitialised pool.
  *
  * ## Why the state is snapshotted rather than merely set
  *

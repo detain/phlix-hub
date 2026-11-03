@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minors 36+37: signing-key mode audit + pool fail-fast — 2026-11-03
+
+- **Minor 36 — `Ed25519KeyManager` audits the mode of an ADOPTED key file.**
+  `loadStoredKeyPair()` now checks the on-disk permissions of a key that existed
+  before this process started (freshly generated keys are 0600-from-birth via the
+  locked write path): any group/other bits produce one loud `SECURITY:` log line
+  naming the path and effective mode before adoption. Restore and rotation paths
+  keep working — the posture is warn-never-refuse, because refusing would brick
+  the disaster-recovery flow the operator just performed — but a world-readable
+  restored signing key can no longer pass silently (anyone holding the PEM bytes
+  could forge every credential the hub signs).
+- **Minor 37 — `ConnectionPool::getConnection()` fails fast before `init()`.**
+  Opening a NEW connection while the static `$configPath` is still empty now
+  throws one descriptive `RuntimeException` instead of `include ''` degrading
+  into a warning-level mess with a half-initialized pool. The guard sits inside
+  the memo-MISS branch by design: the documented test seam
+  (`tests/Support/ConnectionPoolTestControl.php`) primes the memo without booting
+  config and keeps resolving; `HubSettingsResolvers`' unbooted check stays the
+  first responder for its own callers, with the new exception phrasing documented
+  at both seams. `tests/Unit/Common/Database/ConnectionPoolGuardTest.php` pins
+  both laws (throw on an uninitialised miss; memo short-circuit without a path)
+  and is blessed into the S458 durations file.
+
+
 ### Removed — review hub Minor 35: three dead Federation DTOs (and their shadow tests) deleted — 2026-11-03
 
 - `src/Federation/FederationPeerDto.php`, `FederationIncomingOfferDto.php` and

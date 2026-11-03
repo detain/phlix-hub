@@ -153,6 +153,28 @@ final class Ed25519KeyManager
             return false;
         }
 
+        // Adoption of a restored/rotated-in PEM is deliberately permissive —
+        // refusing a world-readable key would brick the documented recovery
+        // path — but never SILENT: the write path creates 0600-from-birth
+        // (see generateKeyPairLocked), so any looser mode on disk arrived via
+        // a restore/copy outside this class, and the private half sitting
+        // group/world-readable means any local reader can forge enrollment
+        // JWTs and federation proofs. Loud warning (error_log, the
+        // MigrationRunner boot-warning idiom), boot continues.
+        if ($existed) {
+            $mode = @fileperms($this->keyPath);
+            if (is_int($mode) && ($mode & 0o077) !== 0) {
+                error_log(sprintf(
+                    '[phlix-hub] SECURITY: Ed25519 signing key %s is mode %03o — group/world-'
+                    . 'accessible. Continuing, but restore 0600 (chmod 600 %s) immediately: '
+                    . 'any local reader of this file can forge every credential this key signs.',
+                    $this->keyPath,
+                    $mode & 0o777,
+                    $this->keyPath
+                ));
+            }
+        }
+
         $keyPair = $this->extractKeyPair($pem);
         $this->privateKey = $keyPair['private'];
         $this->publicKey = $keyPair['public'];
