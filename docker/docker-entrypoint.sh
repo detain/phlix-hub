@@ -212,7 +212,7 @@ exit(0);
 		echo "==========================================================" >&2
 		echo "PHLIX-HUB-MIGRATION-FAILURE: scripts/run-migrations.php exited ${migration_status}." >&2
 		echo "The database schema may be HALF-MIGRATED. Failing migrations are" >&2
-		echo "not recorded in schema_migrations and are retried on next boot." >&2
+		echo "not recorded in the migrations ledger and are retried on next boot." >&2
 		echo "Run 'php scripts/run-migrations.php' (or 'bin/phlix migrate')" >&2
 		echo "for the full error list." >&2
 

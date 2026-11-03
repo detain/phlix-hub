@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minors 7-14: pool terminology, migration-gap + sql-mode posture, config-only keys named, entrypoint ledger name, tail path, config/ inventory, quick-start /app/* paths — 2026-11-03
+
+- README: "async connection pool" → the repo's own coroutine-pool language with
+  the `DB_POOL_ENABLED` pointer; one sentence on the historical 013–026
+  numbering gap (filename-keyed ledger → harmless); new SQL-mode posture
+  paragraph (default not pinned; `MetricsRepository::history()` alias-grouping
+  law; share-offer boundary parsers make non-strict silent truncation
+  mode-agnostic); the "configured entirely through environment variables"
+  claim now names the five config-file-only keys (`hub_signing_key_path`,
+  `dns_zone_dir`, `tls_certs_dir`, `acme_email`, `dns_provider`); project tree
+  config/ list completed (11 files); quick start steers to `/app/signup`,
+  `/app/servers` and the in-page claim flow (legacy shims still 302, now
+  honestly footnoted).
+- `docker/docker-entrypoint.sh` failure banner: `schema_migrations` → the hub's
+  real `migrations` ledger name (docker-boot-smoke.sh's own comment law).
+- `docs/ui-asset-rebuild.md`: `tail … error-$(date).log` tailed Monolog's
+  rotated copy — now the active `.logs/error.log`.
+
 ### Fixed — review hub Major 39: hub routes for un-scoped media surfaces redirect to the server directory (were guaranteed 404 blobs) — 2026-11-03
 
 - New pure law module `web-ui/src/utils/mediaGuard.ts`: five guarded feature

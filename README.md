@@ -218,7 +218,9 @@ Supporting pieces:
 
 - **PSR-11 container** (PHP-DI 7) wires services; routes are registered in
   [`src/Application.php`](src/Application.php).
-- **MySQL** is accessed through an async connection pool (`workerman/mysql`). The pool is
+- **MySQL** is accessed through a coroutine connection pool (`workerman/mysql`, a
+  mysqli wrapper; each coroutine leases its own connection — see `DB_POOL_ENABLED`
+  in the configuration reference). The pool is
   initialised lazily so `/health` stays up even if the database is briefly unreachable.
 - **JWT** auth is symmetric (HS256); Ed25519 keys are used for signing enrollment/relay material,
   and the public key set is served at `/.well-known/jwks.json`.
@@ -559,12 +561,12 @@ php start.php start                # start the Hub (Ctrl-C to stop)
 curl http://localhost:8800/health  # => {"status":"ok",...}
 ```
 
-Then open <http://localhost:8800/signup> to create the first account — it is auto-promoted to
+Then open <http://localhost:8800/app/signup> to create the first account — it is auto-promoted to
 **admin**. On a public deployment make sure that first signup is *yours* before opening `:8800`
 to the network, then lock registration down: `HUB_SIGNUPS_ENABLED=false` at boot, or flip the
 live `auth.signups_disabled` hub setting under `/app/admin/settings` (no restart needed).
-After signing in, `/my-servers` lists your servers and `/claim-server` walks through pairing a
-new one.
+After signing in, `/app/servers` lists your servers and the claim flow there (legacy
+`/claim-server` 302s to it) walks through pairing a new one.
 
 > Run `php start.php start -d` to daemonize; `stop`, `restart`, `reload`, and `status`
 > are also available.
@@ -689,8 +691,12 @@ sudo chown -R phlix-hub:phlix-hub /opt/phlix-hub
 
 ### 4. Environment configuration
 
-The Hub is configured entirely through environment variables (see the
-[reference](#configuration-reference)). Create an env file the service will load:
+The Hub is configured almost entirely through environment variables (see the
+[reference](#configuration-reference)) — with five exceptions that live in the
+merged config files only and have no env seam: `hub_signing_key_path`,
+`dns_zone_dir`, `tls_certs_dir`, `acme_email` and `dns_provider`, read with
+built-in defaults by `HubServicesProvider` and gating the DNS-alias/TLS
+surfaces. Create an env file the service will load:
 
 ```bash
 sudo tee /etc/phlix-hub.env >/dev/null <<EOF
@@ -1277,9 +1283,20 @@ at boot per worker).
 ## Database schema
 
 Migrations live in [`migrations/`](migrations) and are applied in filename order.
+The numbering is historical, not contiguous — 013–026 were never used — and the
+ledger is keyed by filename, so the gap is harmless.
 The schema below is the complete inventory: the 35 tables the migrations create,
 grouped by subsystem, plus the `migrations` tracking table the runner creates
 for itself.
+
+**SQL-mode posture.** Nothing pins or asserts sql_mode; the code is written for
+MySQL 8's default. Two sites engage it: `MetricsRepository::history()` groups on
+a SELECT alias so the default `ONLY_FULL_GROUP_BY` accepts it (a raw-expression
+GROUP BY there 500s with error 1055), and `FederationLibraryShareRepository`'s
+offer ingestion parses every field before store — because a non-strict venue
+would silently truncate oversized bytes into bounded columns as trusted rows,
+which is exactly the failure the boundary parsers exist to make mode-agnostic.
+A deployment running a non-default sql_mode must re-verify both paths.
 
 | Table | Purpose |
 |-------|---------|
@@ -1831,7 +1848,7 @@ and only then does `docker-build` publish it.
 ```
 phlix-hub/
 ├── bin/              # bin/phlix CLI entry script (webman/console)
-├── config/          # Environment-driven config (server, database, auth, logger, updates)
+├── config/          # Environment-driven config (auth, database, federation, hub, invite, logger, metrics, process, requests, server, updates)
 ├── docker/           # docker-entrypoint.sh + php.ini (image bits; the image boots start.php directly)
 ├── docs/            # websockets.md — the :8802/:8803/:8804/:8805 surfaces
 ├── migrations/      # Idempotent SQL migrations

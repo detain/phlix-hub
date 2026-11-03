@@ -220,7 +220,7 @@ sudo systemctl restart phlix-hub
 ```bash
 curl -s http://localhost:8800/health
 journalctl -u phlix-hub -n 50 --no-pager
-tail -20 /opt/phlix-hub/.logs/error-$(date +%Y-%m-%d).log
+tail -20 /opt/phlix-hub/.logs/error.log
 ```
 
 ### Port already in use on restart
