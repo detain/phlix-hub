@@ -319,7 +319,9 @@ bundle still need the operator to `ufw allow 8804/tcp` as well, which serves the
 HTTPS-served page cannot complete a direct dial at all, and its only viable path (the
 same-origin `wss://<hub-domain>/syncplay/…` route) is live for seam-aware clients while
 the portal bundle waits on the disclosed bundle-wiring rider (a web-ui rebuild, out of
-the installer's scope). Installs the installer never seeds — no-domain managed and
+the installer's scope). On a TLS-served hub the direct form never becomes viable, so
+there `ufw allow 8804/tcp` is pure downside — do NOT open it.
+Installs the installer never seeds — no-domain managed and
 `--no-proxy` boxes, where it cannot name an origin clients will actually reach — keep the
 hand-set door: the same two vars in `/etc/phlix-hub.env` and a restart (a non-empty
 operator value is never overwritten).

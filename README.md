@@ -518,7 +518,10 @@ therefore still require the operator to **also** `ufw allow 8804/tcp`; that
 completes the plain `ws://<host>:8804` form for HTTP-served pages (`8804` is
 a plaintext listener, so an HTTPS-served page's `wss://` direct dial cannot
 complete — the managed route is the only viable door there, and the portal
-bundle reaches it only once the disclosed bundle-wiring rider lands).
+bundle reaches it only once the disclosed bundle-wiring rider lands). On a
+TLS-served hub there is therefore no reason to open `8804`: it buys the portal
+nothing while publishing a pre-auth token-carrying socket to the world — leave
+it closed and re-open only for plain-HTTP frontends.
 No-domain managed installs and `--no-proxy` boxes are never seeded — there
 the installer cannot name an origin clients will actually reach — and the
 manual escape hatch stays theirs: hand-set `HUB_WS_URL=wss://<hub-domain>`
@@ -1026,6 +1029,22 @@ docker run -d --name phlix-hub \
 (Or point `hub_signing_key_path` — the `config/server.php` array key described above — at a path
 under your mounted volume; that file is baked into the image, so the bind-mount form above is the
 no-source-edit route.)
+
+⚠ **The quick run above publishes all five surfaces in the clear.** With the TLS envs at their
+documented defaults, `-p 8802:8802` exposes a plaintext listener that carries the **enrollment
+JWT** in its `HELLO` frame, `:8804`/`:8805` are pre-auth token-bearing sockets, and `:8800` is
+plain HTTP — and Docker publishes them on every host interface. Two honest postures:
+
+- **Proxy-fronted (recommended):** bind publishes to loopback — `-p 127.0.0.1:8800:8800`, `-p
+  127.0.0.1:8803:8803`, … — and let the host's reverse proxy be the only thing that reaches the
+  hub, TLS included (see *[8. Reverse proxy & TLS](#8-reverse-proxy--tls)*). Do not publish
+  `:8804` at all on a TLS-served hub: browsers cannot dial it from an HTTPS page anyway.
+- **Direct-dialed:** if media servers must reach the container without a TLS-terminating proxy,
+  set `HUB_RELAY_TLS=1` with `HUB_RELAY_TLS_CERT`/`HUB_RELAY_TLS_KEY` before pairing anything,
+  and `HUB_RELAY_REQUIRE_TLS=1` so a misconfigured plaintext `:8802` refuses to boot instead of
+  leaking enrollment credentials. Federation peers want the same treatment on `:8805`
+  (`HUB_FEDERATION_TLS*` / `HUB_FEDERATION_REQUIRE_TLS`). The family is tabulated in the
+  [configuration reference](#configuration-reference).
 
 Migrations run automatically from the entrypoint on every boot (look for the
 `PHLIX-HUB-MIGRATIONS-OK` banner); set `HUB_MIGRATIONS_STRICT=1` to refuse booting on a

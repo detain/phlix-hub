@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 26 + 27: stop telling operators to open ports that can never help them — 2026-11-02
+
+- **M26**: Major 9 had already made the 8804 guidance *conditional*, but both
+  passages still left the TLS-hub conclusion unstated. The README seam now
+  says the quiet law out loud: on a TLS-served hub `ufw allow 8804/tcp` buys
+  the portal nothing while publishing a pre-auth token-carrying socket — leave
+  it closed. The websockets.md twin got the same do-NOT-open clause.
+- **M27**: the Docker quick run publishes all five surfaces in the clear with
+  zero exposure guidance. Added a caveat block with the two honest postures —
+  loopback-bound publishing behind the host proxy (with the never-publish-8804
+  note for TLS hubs) or listener-side TLS (`HUB_RELAY_TLS*`,
+  `HUB_RELAY_REQUIRE_TLS`, `HUB_FEDERATION_TLS*`/`REQUIRE_TLS`, all names
+  re-verified against the env table) — and the enrollment-JWT-in-`HELLO`
+  hazard named, per websockets.md's own credential-bearing framing.
+
 ### Fixed — review hub Majors 21–25: the wire reference's five paper cuts — 2026-11-02
 
 - **M21**: close-code RFC citation corrected to **6455** (1013 Try Again Later
