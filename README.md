@@ -66,6 +66,27 @@ The Hub is **self-hosted software**: you run it on a machine you control, for yo
 servers. This repository documents that deployment only — there is no vendor-run public
 instance pointed at from here.
 
+### Do I actually need a hub?
+
+Not always. The hub exists to defeat **NAT without port-forwarding** and to host the
+social layer. Skip it when either of those is already solved another way:
+
+- **Everyone watches on your home LAN** → the Phlix apps can reach the server's own
+  address directly; a hub adds nothing.
+- **You're willing to port-forward and run TLS yourself** → remote clients can dial
+  the server's own :8097 WebSocket listener directly (that socket needs no hub
+  role in the middle) — no relay needed.
+
+Run a hub when you want remote access **without opening inbound ports** (servers dial
+*out* to it), a **directory** of your servers with liveness, **library sharing** and
+**invite links** for people who don't have accounts on the server itself, **media
+requests** (Sonarr/Radarr fulfilment), or **hub-to-hub federation**.
+
+The step-by-step user journeys — what-the-hub-is, remote-access, self-hosting,
+claiming a server, library sharing, sharing with friends, invite links, requests —
+live in the docs site: [phlix-docs → Hub](https://detain.github.io/phlix-docs/hub/what-is-the-hub).
+This README is the operator/API reference; those pages are the illustrated path.
+
 ## Features
 
 - **Accounts & auth** — signup/login, Argon2id password hashing, HMAC-SHA256 JWT access &
@@ -80,7 +101,7 @@ instance pointed at from here.
   liveness is tracked with heartbeats. The tunnel data-plane applies real backpressure:
   when the send buffer is full, the upstream reader is paused and resumed only when the buffer
   drains, preventing silent frame drops on slow streams.
-- **Subdomain allocation** — each enrolled server can be assigned `&lt;subdomain&gt;.&lt;public-domain&gt;`
+- **Subdomain allocation** — each enrolled server can be assigned `<subdomain>.<public-domain>`
   for clean, per-server URLs.
 - **Library sharing** — share a specific library on one of your servers with another Hub user,
   with read-only or read/write permission levels. The **Shares** page carries the direct door
@@ -339,7 +360,7 @@ starts cleanly and then fails closed in ways that look like data loss.
 
 | Piece | Where | What breaking it costs |
 |-------|-------|------------------------|
-| **Database** | MySQL schema `phlix_hub` (credentials in `/etc/phlix-hub.env`) | Every server registration, user, claim code, invite, share, quota row, federation peer/key registration, rate-limit history, audit trail and the migration ledger. Restore **only onto a schema migrated to the same or a newer code version** (the `migrations` table checksums files; see *Database migrations* above). |
+| **Database** | MySQL schema `phlix_hub` (credentials in `/etc/phlix-hub.env`) | Every server registration, user, claim code, invite, share, quota row, federation peer/key registration, rate-limit history, audit trail and the migration ledger. Restore **only onto a schema migrated to the same or a newer code version** (the `migrations` table checksums files; see *[6. Run migrations](#6-run-migrations)* in the production install below). |
 | **JWT session secret** | `HUB_JWT_SECRET` inside `/etc/phlix-hub.env` (chmod 600) | Signs every access/refresh token (`config/auth.php`; ≥32 bytes). If it is lost, changed, or the env file is restored from a different era, **every issued session becomes unverifiable**: all users are logged out at once and refresh tokens cannot save them. When the var is missing entirely, `AuthServicesProvider` falls back to a process-local random secret — tokens die on every restart, so never run production without it. |
 | **Hub signing key** | `config/hub-signing-key.pem`, mode **0600**, auto-generated on first boot by `HubServicesProvider` → `Ed25519KeyManager` (path override: add `'hub_signing_key_path' => '<absolute path>'` to the array in `config/server.php` — the shipped file does not define the key, and `HubServicesProvider.php:179` reads it from there, so the override is an operator edit, not an env var) | The hub's Ed25519 identity. It signs enrollment artifacts servers present on pairing and is the master-side key in the federation mutual proof-of-key ceremony. If it is lost and a fresh one is generated, **already-registered servers fail verification** (re-pair them) and **federation peers whose leaf keys were registered under the old identity refuse the hub** until trust is re-established with each peer. |
 
@@ -1283,7 +1304,10 @@ for itself.
 
 ## HTTP API
 
-Selected endpoints (full surface in [`src/Application.php`](src/Application.php)). Protected
+Selected endpoints below. The maintained, machine-readable surface is
+[`openapi.yaml`](openapi.yaml) at the repo root (Redocly-validated, kept in lockstep
+with the router by `OpenApiSpecMatchesRouterTest`); [`src/Application.php`](src/Application.php)
+is where routes are registered, not where they should be read from. Protected
 routes require a `Bearer` access token (or the session cookie, which also gates the legacy
 page paths before they redirect to `/app`).
 
@@ -1816,7 +1840,11 @@ phlix-hub/
 ## Related repositories
 
 - [`detain/phlix`](https://github.com/detain/phlix) (a.k.a. `phlix-server`) — the local media server.
+- [`detain/phlix-docs`](https://github.com/detain/phlix-docs) — the user-facing docs site, incl. the Hub journey pages linked from *Do I actually need a hub?*
 - [`detain/phlix-shared`](https://github.com/detain/phlix-shared) — shared interfaces, DTOs, and protocol types.
+- [`detain/phlix-ui`](https://github.com/detain/phlix-ui) — the Vue design system whose bundle this hub serves at `/app`.
+- [`detain/phlix-contracts`](https://github.com/detain/phlix-contracts) — the frozen error-code and route-manifest contracts shared by every Phlix client and server.
+- [`detain/phlix-syncplay`](https://github.com/detain/phlix-syncplay) — the watch-party wire spec and reference libraries.
 
 ## License
 

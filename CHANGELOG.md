@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 17 + 19 + 20: the hub decision, framed; entity + dangling-ref fixes — 2026-11-02
+
+- **M17**: new *Do I actually need a hub?* subsection — the honest skip-list
+  (LAN-only viewers; port-forwarders dialing the server's own :8097 listener
+  directly) vs the buy-in list (no-inbound-port remote access, directory,
+  sharing/invites, requests, federation). The phlix-docs hub journey is now
+  linked where the decision is made, *Related repositories* grew the four
+  estates actually referenced by this README (docs/ui/contracts/syncplay),
+  and the HTTP API section stopped shipping readers into `src/Application.php`
+  as the surface of record — `openapi.yaml` is (with the router-lockstep test
+  named as why it can be trusted).
+- **M19**: `&lt;subdomain&gt;` HTML entities inside a code span rendered
+  literally — code spans don't decode; plain angle brackets now.
+- **M20**: "see *Database migrations* above" pointed at a section that has
+  never existed; the restore-table row now links the real *6. Run migrations*
+  install step, with direction fixed (it is below, not above).
+
 ### Fixed — review hub Majors 14 + 15: the jargon wall gets a door; the naming trap gets renamed — 2026-11-02
 
 - **M14**: new *Terms used in this document* section after the intro — every
