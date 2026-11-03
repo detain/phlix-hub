@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 11: the media-server pairing journey, written for humans — 2026-11-02
+
+- **M11**: "Connecting a media server" read as an API-client script — step 1
+  offered `POST /api/v1/server-claims/new` to a reader who cannot curl, step 2
+  said "enter the code on the server" without naming any screen, and the code
+  lifetime, failure paths, and success signal were absent. Rewritten as the
+  two-sided handoff it is: the server-side pairing screen requests the code
+  (format truth from `ClaimRequestHandler::generateClaimCode()` — 4+4
+  uppercase, no 0/O/1/I ambiguity), the human types it into the hub's signed-in
+  claim flow (legacy path `/claim-server`), redeemer-owns-pairing + the
+  per-user cap refusal at redeem (`quota.exceeded`, reset `on_release`), the
+  server's polling leg receiving the one-time enrollment material on
+  `GET /server-claims/{claimId}`, the 600 s expiry with a fresh-code remedy,
+  and the three distinct refusals the hub answers. The `PHLIX_RELAY_*`
+  tunnel-config seam is named and pointed at the phlix-server README — the
+  pm finding that hub-side docs never said *which side* configures the dial.
+
 ### Fixed — review hub Majors 9–10: exposure reality + the lockout-recovery CLI — 2026-11-02
 
 - **M9**: the manual install had no firewall/exposure step while all four relay

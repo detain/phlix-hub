@@ -1366,13 +1366,33 @@ whether opening it helps or only exposes.
 
 ## Connecting a media server
 
-1. On the Hub, sign in and open **My Servers** (`/app/servers`) to start a claim, or the server
-   requests a code via `POST /api/v1/server-claims/new`.
-2. Enter the claim code on the server; the server is issued an **enrollment JWT** and registers
-   its public key.
-3. The server opens its **outbound relay tunnel** to the Hub and begins sending heartbeats.
-4. The server now appears under **My Servers** (`/app/servers`), and remote clients can reach it
-   through the Hub — no inbound ports required.
+Pairing is a two-sided handoff: the **server** requests a code from the hub, and
+a **human types that code into the hub** while signed in. The hub's own pages
+under *My Servers* (the SPA's claim flow, legacy path `/claim-server`) do the
+typing; the server-side counterpart lives in the media server's admin UI.
+
+1. **On the media server**, open its hub-pairing screen and enter this hub's
+   URL. The server calls the hub's public `POST /api/v1/server-claims/new` and
+   the screen shows a claim code like `ABCD-1234` — uppercase, four plus four,
+   written so no `0`/`O`/`1`/`I` can be misread — together with an expiry
+   countdown.
+2. **On the hub**, sign in and open **My Servers → claim a server**, and type
+   the code. The claim belongs to **your** account — whoever redeems the code
+   owns the pairing (and is subject to the per-user server cap; a full quota
+   fails the redeem with a clear message).
+3. **Wait, both screens do the rest.** The server polls the hub until the claim
+   completes, then receives its **enrollment JWT** and registers its public
+   key. If the code's **10-minute window** lapses first, nothing is lost: ask
+   the server for a fresh code and repeat step 2. The hub distinguishes
+   "no such code", "expired", and "already redeemed" for the polling server.
+4. **The server opens its own outbound relay tunnel** (:8802) to the hub and
+   starts heartbeating — no inbound ports on the server's network. It then
+   appears under **My Servers**, online, and remote clients can reach it
+   through the hub.
+
+The tunnel's address and credentials are configured on the **server** side
+(`PHLIX_RELAY_*` — see the phlix-server repository's README); the hub needs no
+per-server setup beyond the claim.
 
 ## Federation: pairing two hubs (operator walkthrough)
 
