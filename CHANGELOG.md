@@ -6,6 +6,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 32: the dashboard's bare SQL moves behind a repository — 2026-11-03
+
+- `AdminDashboardController` was the one controller issuing SQL itself
+  (three scalar `COUNT`s + a CASE-aggregate straight through an injected
+  `Connection`). New `Hub\StatsRepository::dashboardCounts()` owns the
+  queries and the mixed→int coercion; the controller projects its DTO into
+  the unchanged `{success, data}` envelope (zero wire change), PHP-DI gains
+  a `StatsRepository` factory beside `AuditLogRepository`'s, and the
+  route-mirror test builds the real pair. 19 dashboard tests green.
+
 ### Fixed — review hub Major 41: the entrypoint waits for MySQL before spending its one migration attempt — 2026-11-03
 
 - `docker/docker-entrypoint.sh` ran `scripts/run-migrations.php` exactly

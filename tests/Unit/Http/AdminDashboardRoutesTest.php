@@ -8,6 +8,7 @@ use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Http\Controllers\AdminDashboardController;
 use Phlix\Hub\Hub\AuditLogRepository;
+use Phlix\Hub\Hub\StatsRepository;
 use Phlix\Hub\Http\Middleware\AdminMiddleware;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -78,7 +79,7 @@ final class AdminDashboardRoutesTest extends TestCase
      */
     private function buildRouter(Connection $db): Router
     {
-        $controller = new AdminDashboardController($db, new AuditLogRepository($db));
+        $controller = new AdminDashboardController(new StatsRepository($db), new AuditLogRepository($db));
 
         $auth = $this->auth;
         $admin = $this->admin;

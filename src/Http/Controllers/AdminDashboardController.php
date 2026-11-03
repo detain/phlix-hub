@@ -12,9 +12,9 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Hub\AuditLogRepository;
+use Phlix\Hub\Hub\StatsRepository;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
-use Workerman\MySQL\Connection;
 
 /**
  * Admin JSON API for the hub dashboard (hubby.md H1.4).
@@ -31,11 +31,11 @@ use Workerman\MySQL\Connection;
  *    activity feed, reusing {@see AuditLogRepository::find()} (which already
  *    LEFT JOINs `users` to resolve a friendly actor name).
  *
- * The {@see Connection} is injected directly because the summary counters are
- * trivial aggregate `COUNT`s that do not warrant a dedicated repository; all
- * queries use named `:params` (never positional `?`, which breaks the hub's
- * `bindMore()`), and the only dynamic input — the activity `limit` — is parsed
- * to a clamped integer before it reaches a query.
+ * Counters come from {@see StatsRepository::dashboardCounts()} — this used
+ * to be the one controller issuing bare SQL itself; review hub Major 32
+ * moved it behind the repository the rest of the API already uses. The only
+ * dynamic input, the activity `limit`, is parsed to a clamped integer before
+ * it reaches a query.
  *
  * Both routes are gated by {@see \Phlix\Hub\Http\Middleware\AuthMiddleware} +
  * {@see \Phlix\Hub\Http\Middleware\AdminMiddleware} (wired in
@@ -58,11 +58,11 @@ final class AdminDashboardController
     private const MAX_ACTIVITY_LIMIT = 100;
 
     /**
-     * @param Connection         $db        Async MySQL connection for the summary counters.
+     * @param StatsRepository    $stats     Dashboard counters (the only SQL path for the summary).
      * @param AuditLogRepository $auditLogs Source of the recent-activity feed.
      */
     public function __construct(
-        private readonly Connection $db,
+        private readonly StatsRepository $stats,
         private readonly AuditLogRepository $auditLogs,
     ) {
     }
@@ -79,17 +79,7 @@ final class AdminDashboardController
     {
         return (new Response())->json([
             'success' => true,
-            'data' => [
-                'servers' => $this->serverCounts(),
-                'active_relay_sessions' => $this->scalarCount(
-                    'SELECT COUNT(*) AS cnt FROM relay_sessions WHERE closed_at IS NULL',
-                ),
-                'pending_requests' => $this->scalarCount(
-                    'SELECT COUNT(*) AS cnt FROM requests WHERE status = :status',
-                    ['status' => 'pending'],
-                ),
-                'user_count' => $this->scalarCount('SELECT COUNT(*) AS cnt FROM users'),
-            ],
+            'data' => $this->stats->dashboardCounts(),
         ]);
     }
 
@@ -116,54 +106,6 @@ final class AdminDashboardController
             'success' => true,
             'data' => $activity,
         ]);
-    }
-
-    /**
-     * Count claimed servers split by heartbeat-derived status in one query.
-     *
-     * @return array{total: int, online: int, offline: int}
-     */
-    private function serverCounts(): array
-    {
-        /** @var mixed $rows */
-        $rows = $this->db->query(
-            'SELECT'
-            . ' COUNT(*) AS total,'
-            . " SUM(CASE WHEN status = 'online' THEN 1 ELSE 0 END) AS online,"
-            . " SUM(CASE WHEN status = 'offline' THEN 1 ELSE 0 END) AS offline"
-            . ' FROM servers',
-        );
-
-        $total = 0;
-        $online = 0;
-        $offline = 0;
-        if (is_array($rows) && isset($rows[0]) && is_array($rows[0])) {
-            /** @var array<string, mixed> $row */
-            $row = $rows[0];
-            $total = self::intOf($row['total'] ?? null);
-            $online = self::intOf($row['online'] ?? null);
-            $offline = self::intOf($row['offline'] ?? null);
-        }
-
-        return ['total' => $total, 'online' => $online, 'offline' => $offline];
-    }
-
-    /**
-     * Run a single-row `COUNT(*) AS cnt` query and return the count.
-     *
-     * @param string                      $sql    SQL selecting a `cnt` column.
-     * @param array<string, scalar|null>  $params Named bind parameters.
-     */
-    private function scalarCount(string $sql, array $params = []): int
-    {
-        /** @var mixed $rows */
-        $rows = $this->db->query($sql, $params);
-        if (is_array($rows) && isset($rows[0]) && is_array($rows[0])) {
-            /** @var array<string, mixed> $row */
-            $row = $rows[0];
-            return self::intOf($row['cnt'] ?? null);
-        }
-        return 0;
     }
 
     /**
@@ -212,12 +154,6 @@ final class AdminDashboardController
             return self::DEFAULT_ACTIVITY_LIMIT;
         }
         return max(1, min(self::MAX_ACTIVITY_LIMIT, (int) $raw));
-    }
-
-    /** Coerce a `mixed` query value to int (non-numeric → 0). */
-    private static function intOf(mixed $value): int
-    {
-        return is_numeric($value) ? (int) $value : 0;
     }
 
     /** Coerce a `mixed` value to string (non-string → empty string). */

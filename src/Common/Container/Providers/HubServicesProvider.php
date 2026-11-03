@@ -69,6 +69,7 @@ use Phlix\Hub\SyncPlay\PendingCommandPusherInterface;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Hub\TlsCertificateManager;
 use Phlix\Hub\Hub\Updates\AsyncVersionMarkerFetcher;
+use Phlix\Hub\Hub\StatsRepository;
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckService;
 use Phlix\Hub\Hub\Updates\CoreUpdateCheckWorker;
 use Phlix\Hub\Hub\Updates\VersionMarkerFetcherInterface;
@@ -228,6 +229,15 @@ final class HubServicesProvider implements ServiceProviderInterface
                 Connection $db,
             ): AuditLogRepository {
                 return new AuditLogRepository($db);
+            })->parameter('db', get(Connection::class)),
+
+            // Dashboard counters behind a repository (review hub Major 32):
+            // AdminDashboardController was the last controller holding a raw
+            // Connection to run its own COUNTs.
+            StatsRepository::class => factory(static function (
+                Connection $db,
+            ): StatsRepository {
+                return new StatsRepository($db);
             })->parameter('db', get(Connection::class)),
         ]);
 
@@ -1307,15 +1317,15 @@ final class HubServicesProvider implements ServiceProviderInterface
             })->parameter('repo', get(AuditLogRepository::class)),
 
             // Shared admin console dashboard API (hubby.md H1.4). Injects the
-            // Connection for the summary counters and reuses AuditLogRepository
-            // for the activity feed; gated [auth, admin] at the route group in
-            // Application::registerAdminDashboardRoutes().
+            // StatsRepository for the summary counters and reuses
+            // AuditLogRepository for the activity feed; gated [auth, admin] at
+            // the route group in Application::registerAdminDashboardRoutes().
             AdminDashboardController::class => factory(static function (
-                Connection $db,
+                StatsRepository $stats,
                 AuditLogRepository $auditLogs,
             ): AdminDashboardController {
-                return new AdminDashboardController($db, $auditLogs);
-            })->parameter('db', get(Connection::class))
+                return new AdminDashboardController($stats, $auditLogs);
+            })->parameter('stats', get(StatsRepository::class))
                 ->parameter('auditLogs', get(AuditLogRepository::class)),
 
             // Admin log viewer (mirrors phlix-server). Resolves to the hub's
