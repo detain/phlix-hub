@@ -280,6 +280,16 @@ with an auto-renewing Let's Encrypt certificate:
 curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh | sudo bash
 ```
 
+> **On a production host, pin what you pipe into root.** `master` floats — the
+> bytes you execute today need not be the ones you reviewed. The published
+> release tags are the audited states; fetch one with
+> `--branch <vX.Y.Z>` (see *Install flags* — the update path uses the same
+> form), or download, inspect, then run locally:
+> `curl -fsSL <the same URL> -o /tmp/phlix-install.sh && less /tmp/phlix-install.sh && sudo bash /tmp/phlix-install.sh`.
+> Day-one convenience is fine for throwaway boxes; on a box holding user
+> credentials, a pinned script is the difference between an install and an
+> open root-shell for whoever owns `master` that day.
+
 To set up HTTPS at the same time, pass your domain and an email for Let's Encrypt:
 
 ```bash
@@ -505,8 +515,8 @@ directly. Open it on the firewall but don't put it behind the HAProxy 80/443 fro
 
 | Port | Surface | Managed HAProxy path | `--no-proxy` path |
 | --- | --- | --- | --- |
-| `8800` | HTTP API + SPA + `/health` | routed at `/` via 80/443 | ufw-opened |
-| `8802` | server tunnels | direct — ufw-opened (pairing law: never proxied) | ufw-opened |
+| `8800` | HTTP API + SPA + `/health` | routed at `/` via 80/443 | ufw-opened (plaintext REST + portal — bearer credentials ride it in the clear; front it with your own TLS or keep it loopback) |
+| `8802` | server tunnels | direct — ufw-opened (pairing law: never proxied; note it is **plaintext**, and `HELLO` carries each server's durable enrollment JWT — per surface, the most secret to lose) | ufw-opened (same credential note) |
 | `8803` | client mount (declared unavailable) | routed at `/client/` | loopback only — point your proxy at it |
 | `8804` | SyncPlay watch-party clients | routed at `/syncplay/` | ufw-opened (plaintext WS — close it once your proxy routes it) |
 | `8805` | federation MASTER ingress (peer dials) | routed at `/relay/federation/` | ufw-opened (same plaintext caveat) |

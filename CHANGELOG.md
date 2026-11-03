@@ -6,6 +6,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minors 32, 33: plaintext-credential caveats for ALL --no-proxy ufw openings (8800/8802 included), and pin-before-you-pipe guidance for the one-line installer — 2026-11-03
+
+- `scripts/install.sh` `--no-proxy` firewall notice said "plaintext" only of
+  `8804`/`8805` while opening four ports — the two it stayed silent about are
+  the credential-bearing ones: `8800` (bearer REST + portal in the clear) and
+  `8802` (every server's `HELLO` carries its durable enrollment JWT). The
+  warning now names what each opened port leaks and how to close what a
+  self-fronted proxy already covers. The README ports table carries the twin
+  notes per surface.
+- README's `curl … master | sudo bash` day-one path now states the pinning
+  law for production hosts: `master` floats, published tags are the audited
+  states — pass `--branch <vX.Y.Z>` or download-inspect-then-run before
+  handing root to a moving ref.
+
 ### Fixed — review hub Minors 22-31: browser-floor demoted from the CI-jobs enumeration, jargon register pass, campaign-marker legend + M-HUB-22 disambiguation, heading hierarchy, dead/inverted pointers, comma splice, SPEC-vocabulary clarity, unit spacing + n/a direction cells — 2026-11-03
 
 - README's "twelve jobs, honestly enumerated" list carried a thirteenth bullet

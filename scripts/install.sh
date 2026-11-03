@@ -2028,8 +2028,14 @@ if [ "$SKIP_HAPROXY" = "yes" ]; then
     ufw allow "$SYNCPLAY_PORT"/tcp comment 'Phlix Hub SyncPlay WS' >/dev/null 2>&1 || true
     ufw allow "$FEDERATION_PORT"/tcp comment 'Phlix Hub federation ingress' >/dev/null 2>&1 || true
     info "Opened ports ${HUB_PORT}/tcp, ${RELAY_PORT}/tcp, ${SYNCPLAY_PORT}/tcp and ${FEDERATION_PORT}/tcp in ufw."
-    info "(${SYNCPLAY_PORT}/${FEDERATION_PORT} are plaintext WebSocket — if you fronted them"
-    info " with your own TLS proxy, close them again: ufw deny ${SYNCPLAY_PORT}/tcp && ufw deny ${FEDERATION_PORT}/tcp)"
+    info "(All four are PLAINTEXT listeners and each carries a secret on the wire:"
+    info " ${HUB_PORT} serves REST + portal with bearer tokens; ${RELAY_PORT} tunnels"
+    info " servers whose HELLO carries their durable enrollment JWT — the credential-"
+    info " bearing surface; ${SYNCPLAY_PORT}/${FEDERATION_PORT} are pre-auth token-"
+    info " bearing WebSocket listeners.)"
+    info " Front anything you can with your own TLS proxy and close it again — the"
+    info " browser-facing WebSocket pair first:"
+    info " ufw deny ${SYNCPLAY_PORT}/tcp && ufw deny ${FEDERATION_PORT}/tcp)"
   fi
 else
 # Reach a TLS-or-HTTP fragment + rebuild the merged haproxy.cfg.
