@@ -56,7 +56,10 @@ interface TunnelManagerInterface
      *                              enforces it. Null (or unresolvable) mounts the
      *                              connection Unlimited.
      *
-     * @return ClientConnection|null The created ClientConnection, or null if tunnel not found.
+     * @return ClientConnection|null The created ClientConnection, or null when
+     *                              the tunnel is absent, not active, or its
+     *                              client registry is at
+     *                              {@see TunnelManager::MAX_TUNNEL_CLIENTS} (Minor 65).
      */
     public function acceptClient(
         string $serverId,

@@ -6,6 +6,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 65 (bounded per-tunnel client registry, 2026-11-03)
+- **`TunnelManager::MAX_TUNNEL_CLIENTS = 50`.** `acceptClient()` attached
+  clients without bound — the upstream IP-keyed limiters slow mount arrivals
+  but never cap the SET, so each new `ClientConnection` + channel entries grew
+  the resident worker's registry under sustained authenticated demand. The
+  cap (mirroring SyncPlay's MAX_ROOM_MEMBERS sizing idiom the review itself
+  contrasted) refuses the overflow mount loudly and returns null — before the
+  throttle-resolution DB read, and never by displacing an established member.
+  Honest scope: `acceptClient()` has no production caller today (M2
+  process-local finding stands; :8803 refuses against the empty registry) —
+  this is the tested data-plane building block ensuring the documented
+  rebuild cannot reintroduce unbounded growth. Both `@return` docblocks
+  (manager + interface) state the third null cause.
+
 ### Fixed — review Minor 64 (SyncPlay fan-out congestion is loud once, 2026-11-03)
 - **`send()` verdicts no longer dropped on the floor.** The five fan-out and
   reply sites (room_state-on-join, time_sync_reply, sendCanonical,

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Relay;
 
 use Phlix\Hub\Hub\RelaySessionManager;
+use Phlix\Hub\Relay\ClientConnection;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\Tunnel;
 use Phlix\Hub\Relay\TunnelManager;
@@ -334,6 +335,58 @@ class TunnelManagerTest extends TestCase
         $result = $manager->acceptClient('server-abc', $clientWs, 'client-1');
 
         $this->assertNull($result);
+    }
+
+    /**
+     * Review Minor 65 — one tunnel's client registry is BOUNDED. The mount
+     * past MAX_TUNNEL_CLIENTS is refused (null) and the refusal short-circuits
+     * BEFORE the throttle-resolved DB read: an over-cap mount must not cost a
+     * single read. Established members are never displaced to make room —
+     * the cap answers the arrival, not the incumbents.
+     */
+    public function testTunnelClientCapRefusesTheNextMountBeforeAnyThrottleRead(): void
+    {
+        $manager = new TunnelManager(
+            $this->sessionManager,
+            $this->codec,
+            $this->logger,
+        );
+
+        $serverWs = $this->createMock(TcpConnection::class);
+        $this->sessionManager->method('registerServer')->willReturn('session-123');
+
+        $tunnel = $manager->acceptServer('server-abc', $serverWs);
+        $tunnel->status = Tunnel::STATUS_ACTIVE;
+        $tunnel->relaySessionId = 'session-123';
+
+        for ($i = 0; $i < TunnelManager::MAX_TUNNEL_CLIENTS; $i++) {
+            $client = $manager->acceptClient(
+                'server-abc',
+                $this->createMock(TcpConnection::class),
+                'client-' . $i,
+            );
+            self::assertInstanceOf(ClientConnection::class, $client, 'mount ' . $i . ' must be admitted');
+        }
+        self::assertCount(TunnelManager::MAX_TUNNEL_CLIENTS, $tunnel->clientConnections);
+
+        // The overflow mount carries a userId: if the cap is checked after
+        // throttle resolution, this expectation reddens on the DB read.
+        $this->sessionManager->expects(self::never())->method('getUserThrottleBps');
+
+        $refused = $manager->acceptClient(
+            'server-abc',
+            $this->createMock(TcpConnection::class),
+            'client-overflow',
+            '',
+            'user-42',
+        );
+
+        self::assertNull($refused, 'the mount past the cap must be refused');
+        self::assertCount(
+            TunnelManager::MAX_TUNNEL_CLIENTS,
+            $tunnel->clientConnections,
+            'refuse, never displace',
+        );
     }
 
     public function testAcceptClientCreatesClientConnectionWhenTunnelActive(): void

@@ -19,6 +19,7 @@ use Generator;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 
+use function count;
 use function gethostname;
 use function is_string;
 
@@ -44,6 +45,20 @@ use function is_string;
  */
 final class TunnelManager implements TunnelManagerInterface
 {
+    /**
+     * Bound for one tunnel's client registry (review Minor 65). Each mount
+     * pins a ClientConnection plus its channel entries inside the resident
+     * worker; the upstream IP-keyed limiters (client_mount 30/60s,
+     * relay_connect 10/60s) slow arrivals but never bound the SET, so
+     * sustained authenticated demand grew it without ceiling. 50 mirrors the
+     * SyncPlay relay's MAX_ROOM_MEMBERS sizing idiom the review itself
+     * contrasted. On overflow a NEW mount is refused loudly (null) — never is
+     * an established member evicted. This is the data-plane building block's
+     * own hygiene: today {@see self::acceptClient()} has no production caller
+     * (see the class-header M2 note), the cap simply ensures the rebuild
+     * cannot reintroduce the unbounded growth.
+     */
+    public const MAX_TUNNEL_CLIENTS = 50;
     /**
      * @param RelaySessionManager       $sessionManager Session manager for byte accounting.
      * @param RelayWireCodecInterface   $codec         Wire codec for frame encoding/decoding.
@@ -246,7 +261,10 @@ final class TunnelManager implements TunnelManagerInterface
      *                              When provided, the user's per-user relay throttle
      *                              is resolved and attached to the connection.
      *
-     * @return ClientConnection|null The created ClientConnection, or null if tunnel not found.
+     * @return ClientConnection|null The created ClientConnection, or null when
+     *                              the tunnel is absent, not active, or its
+     *                              client registry is at
+     *                              {@see self::MAX_TUNNEL_CLIENTS} (Minor 65).
      */
     public function acceptClient(
         string $serverId,
@@ -271,6 +289,19 @@ final class TunnelManager implements TunnelManagerInterface
                 'tunnel_id' => $tunnel->tunnelId,
                 'client_id' => $clientId,
                 'tunnel_status' => $tunnel->status,
+            ]);
+            return null;
+        }
+
+        // Minor 65: bounded registry — refuse the NEW mount past the cap,
+        // BEFORE spending a DB read on throttle resolution, and never at the
+        // cost of an established member.
+        if (count($tunnel->clientConnections) >= self::MAX_TUNNEL_CLIENTS) {
+            $this->logger->warning('Relay: client connection rejected, tunnel client cap reached', [
+                'server_id' => $serverId,
+                'tunnel_id' => $tunnel->tunnelId,
+                'client_id' => $clientId,
+                'max_clients' => self::MAX_TUNNEL_CLIENTS,
             ]);
             return null;
         }
