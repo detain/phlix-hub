@@ -36,6 +36,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 - [Configuration reference](#configuration-reference)
 - [Database schema](#database-schema)
 - [HTTP API](#http-api)
+- [Watching with family and friends](#watching-with-family-and-friends)
 - [Connecting a media server](#connecting-a-media-server)
 - [Testing & quality](#testing--quality)
 - [Project structure](#project-structure)
@@ -56,7 +57,9 @@ self-hostable cloud service that makes those servers reachable from anywhere:
 - The Hub is also a **directory**: it tracks which servers you own, their liveness (heartbeats),
   shared libraries, invite links, and media requests.
 
-You can use the public Hub or run your own — the same codebase powers both.
+The Hub is **self-hosted software**: you run it on a machine you control, for your
+servers. This repository documents that deployment only — there is no vendor-run public
+instance pointed at from here.
 
 ## Features
 
@@ -84,6 +87,11 @@ You can use the public Hub or run your own — the same codebase powers both.
   bookkeeping only — `createAdminDelegation` writes the DB row plus an audit entry, but the
   master-side wire push is not implemented, so no `admin_delegation` frame ever reaches the
   peer today (the reserved envelope is documented as such on `:8805` in the OpenAPI spec).
+- **SyncPlay relay** — watches in lockstep across devices: the hub carries the
+  synchronised-playback messages (play/pause/seek) for viewers outside your home
+  network. Account-scoped today — see [Watching with family and
+  friends](#watching-with-family-and-friends) for what that means before you invite
+  anyone.
 - **Media requests** — a Jellyseerr-class request queue. Users request movies/series; admins
   approve, and the Hub talks to Sonarr/Radarr to fulfil them.
 - **Web UI & admin console** — the hub's front door is a Vue SPA (the shared `@phlix/ui` design
@@ -284,7 +292,13 @@ find /var/backups/phlix-hub -maxdepth 1 -type d -mtime +14 -exec rm -rf {} +
 Restore, in the order that keeps every boot gate happy:
 
 1. Stop the service (`systemctl stop phlix-hub`).
-2. Create the schema and reload: `mysql phlix_hub < hub-db.sql.gz`.
+2. Create the schema and reload — the dump is gzipped, so decompress into the
+   client; feeding the `.gz` bytes directly into `mysql` fails with a syntax
+   error and leaves an empty schema:
+
+   ```bash
+   gunzip -c hub-db.sql.gz | mysql phlix_hub
+   ```
 3. Put `phlix-hub.env` at `/etc/phlix-hub.env` **before** first boot (mode 600,
    owned by root — the service reads it via `EnvironmentFile`), and the key at
    `config/hub-signing-key.pem` **before** first boot (mode 600, owned by the
@@ -551,8 +565,16 @@ mysql -h 127.0.0.1 -u phlix_hub -p phlix_hub -e 'SELECT 1;'
 sudo git clone https://github.com/detain/phlix-hub.git /opt/phlix-hub
 cd /opt/phlix-hub
 sudo composer install --no-dev --optimize-autoloader
+# Create the dedicated service account first (same shape install.sh uses),
+# then hand the whole tree to it. The unit below runs as phlix-hub, so the
+# tree — including .logs/, var/ and config/ (the Ed25519 signing key lands in
+# config/ on first boot) — must be writable by phlix-hub, NOT by www-data:
+# a world-shared web user would defeat the isolation law above.
+sudo getent group phlix-hub >/dev/null || sudo groupadd --system phlix-hub
+sudo getent passwd phlix-hub >/dev/null \
+  || sudo useradd --system --no-create-home --shell /usr/sbin/nologin --gid phlix-hub phlix-hub
 sudo mkdir -p .logs
-sudo chown -R www-data:www-data /opt/phlix-hub
+sudo chown -R phlix-hub:phlix-hub /opt/phlix-hub
 ```
 
 ### 4. Environment configuration
@@ -594,10 +616,15 @@ production with `openssl rand -hex 32` and keep it stable.
 
 ### 5. Run migrations
 
+Run the migrator as **root** — the env file is mode 600 root-owned, so an
+unprivileged re-execution of the `grep | xargs` form would silently expand to an
+empty environment and the runner would fall back to `config/database.php`
+defaults instead of your step-2 password (the installer itself runs as root end
+to end, so its own migrator call at `scripts/install.sh:1836` inherits the real
+environment):
+
 ```bash
-sudo -u www-data --preserve-env \
-  env $(grep -v '^#' /etc/phlix-hub.env | xargs) \
-  php /opt/phlix-hub/scripts/run-migrations.php
+sudo bash -c 'set -a; . /etc/phlix-hub.env; set +a; php /opt/phlix-hub/scripts/run-migrations.php'
 ```
 
 The runner records applied migrations in a `migrations` table and is **idempotent** — re-running
@@ -1223,6 +1250,36 @@ Full protocol reference in [`docs/websockets.md`](docs/websockets.md).
 | `GET /client/{server_id}` | `8803` | Client mount — ⚠ **declared unavailable**: every authenticated mount is refused with close 1011 (`client_mount_bridge_unavailable`); live traffic rides the `:8800` HTTP relay proxy |
 | `GET /syncplay/{server_id}` | `8804` | SyncPlay client joins a synchronised-playback session |
 | Federation tunnel | `8805` | Peer hub connects for hub-to-hub shares |
+
+## Watching with family and friends
+
+A **watch party** is what Phlix calls a synchronised-playback group (the protocol
+messages say `group`, the internals say `room`, members see **Watch Party**):
+press play on one device and every participant's player follows — start, pause,
+seek, in step. The human journey lives in the user guide:
+[phlix-docs — SyncPlay](https://detain.github.io/phlix-docs/advanced/syncplay)
+and [Sharing with friends](https://detain.github.io/phlix-docs/hub/share-with-friends).
+
+What the Hub adds is **cross-network reach**: viewers who are not on your home
+LAN cannot see your media server's sync port directly, so their browsers dial the
+hub's SyncPlay relay (port `8804`, WebSocket path `/syncplay/{server_id}`) and the
+hub forwards the party's play/pause/seek messages down the tunnels it already
+holds. Opening the portal's **Watch Party** page and typing a party name is the
+whole member flow — the name *is* the join code.
+
+**The limitation to know before you invite anyone:** a hub-relayed party is
+**account-scoped**. The room is keyed to the media server and its owning account,
+so it spans that account's own devices (TVs, phones, laptops signed into the same
+hub). A friend who has *their own* hub account cannot join your party through the
+hub — the relay refuses them. Friends with accounts on the media server itself can
+still join through the server's own LAN/direct SyncPlay path, which does not go
+through the hub at all. Cross-account watch parties are a hub capability still to
+come; nothing in this repo ships them today.
+
+Operators: for remote browsers to dial `:8804` directly it must be reachable —
+see the port table under *Running alongside phlix-server* and
+`docs/websockets.md` (§`:8804`) for the TLS/mixed-content caveat that decides
+whether opening it helps or only exposes.
 
 ## Connecting a media server
 
