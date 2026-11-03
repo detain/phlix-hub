@@ -18,6 +18,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
+use Phlix\Hub\Common\Support\ProcessLocalTopology;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\ClientRelayWorker;
@@ -406,6 +407,7 @@ final class SyncPlayRelayWorker
         private readonly float $inboundRateBytesPerSecond = self::INBOUND_RATE_BYTES_PER_SECOND,
         private readonly float $inboundBurstBytes = self::INBOUND_BURST_BYTES,
     ) {
+        ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-syncplay-relay-ws (:8804)');
     }
 
     /**

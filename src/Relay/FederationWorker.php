@@ -17,6 +17,7 @@ use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
+use Phlix\Hub\Common\Support\ProcessLocalTopology;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationPushDispatcher;
@@ -147,6 +148,7 @@ final class FederationWorker
         private readonly ?string $tlsKey = null,
         private readonly bool $requireTls = false,
     ) {
+        ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-federation-ws (:8805)');
     }
 
     /**

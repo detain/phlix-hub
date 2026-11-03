@@ -18,6 +18,7 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
+use Phlix\Hub\Common\Support\ProcessLocalTopology;
 use Phlix\Hub\Hub\RelaySessionManager;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
 use Phlix\Hub\Stats\Metrics\MetricsFlushService;
@@ -109,6 +110,7 @@ final class RelayWorker
         private readonly ?string $tlsKey = null,
         private readonly bool $requireTls = false,
     ) {
+        ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-relay-ws (:8802)');
     }
 
     /**

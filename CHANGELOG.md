@@ -6,6 +6,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub C6: worker `count` is not a knob — process-local topology now fails loud — 2026-11-02
+
+- **The law.** All four WS workers (`RelayWorker` :8802, `ClientRelayWorker`
+  :8803, `SyncPlayRelayWorker` :8804, `FederationWorker` :8805) keep their
+  authoritative connection topology in PHP statics — `$connTunnels`,
+  `$connServerIds`/`$liveConnections`, `$clients`/`$rooms`/`$roomHosts`/
+  `$roomPlayback`, `$connHubIds` plus the `FederationRelayController` and
+  `ClientMountController` registries. Workerman forks `count` children that
+  each inherit a COPY: at `count > 1` the processes irreconcilably disagree
+  about which tunnels/mounts/watch groups exist and every "global" rate
+  limiter silently becomes a per-N-th share (the `RateLimitProfiles` law:
+  one worker process == the global budget). The knob was unsound while
+  silently accepted; every real call site passes 1.
+- **The cure.** New `src/Common/Support/ProcessLocalTopology.php` —
+  `assertSingleProcess(int $count, string $workerName)` throws
+  `RuntimeException` naming the worker and the offending count unless it is
+  exactly 1. Wired into all four constructors (earliest possible boot
+  failure, before any socket or fork). No config surface changed; no wire
+  shape touched.
+- **Pins.** `tests/Unit/Relay/ProcessLocalTopologyTest.php` (9 tests):
+  the pure guard law (accepts 1; rejects 0/2/-1 naming worker + count), the
+  per-worker wiring for all four constructors (count 2 refuses to build —
+  wiring, not theater), and that count 1 still builds each worker. Blessed
+  into `scripts/parallel/test-durations.json` at its measured serial time.
+
 ### Changed — @phlix/ui v0.99.12 → v0.99.13 re-pin + served /app regen (tag-wave C2-hub) — 2026-11-02
 
 - **The pin.** `web-ui/package.json` moves the tag-form tarball pin

@@ -17,6 +17,7 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
 use Phlix\Hub\Common\Support\Ids;
+use Phlix\Hub\Common\Support\ProcessLocalTopology;
 use Phlix\Hub\Http\Controllers\ClientMountController;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
@@ -178,6 +179,7 @@ final class ClientRelayWorker
         private readonly int $port = self::DEFAULT_PORT,
         private readonly int $count = 1,
     ) {
+        ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-client-relay-ws (:8803)');
     }
 
     /**
