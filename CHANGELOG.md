@@ -6,6 +6,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 3: the extension-gate claim now says where the gate actually bites — 2026-11-02
+
+- README *Requirements* promised "hard boot gates — the hub refuses to start
+  without them". Measured truth: `scripts/assert-required-extensions.php` is wired
+  into every CI PHP job (ci.yml:128/171/199/288/541) — never into `start.php`,
+  `docker-entrypoint.sh`, the Dockerfile, or the installer; the boot path proceeds
+  without the extensions and fails at first symbol use.
+- The prose now states the enforcement points honestly (CI step; installer apt
+  package list; container base image) and names the hand-host hazard explicitly,
+  including the Alexa fail-into-400 symptom the script header describes.
+- **Considered and rejected** (recorded so the next lane does not re-litigate):
+  wiring the script into `start.php`/entrypoint. The script parses `$argv` for
+  `--also=` additions (requiring it from boot would feed it `start.php start`), and
+  the shipped container's completeness cannot be verified from this repo (its base
+  is external `ghcr.io/detain/phlix-base`) — a fatal boot gate validated against
+  neither is a bricked-container risk beyond a review-fix lane's remit. The composer
+  `ext-*` declaration is likewise untouched: platform requirements change what
+  downstream `composer install` resolves, which is not this entry's remit.
+
 ### Fixed — review hub Major 2: the two-hub federation pairing walkthrough is now written down — 2026-11-02
 
 - **README.** New H2 **"Federation: pairing two hubs (operator walkthrough)"**

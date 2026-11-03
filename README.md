@@ -143,9 +143,17 @@ Supporting pieces:
 
 ## Requirements
 
-- **PHP 8.3+**. Nine extensions are hard boot gates — the hub refuses to start without them
-  (`scripts/assert-required-extensions.php`, each entry citing the exact symbol the code calls):
-  `openssl`, `curl`, `sodium`, `mbstring`, `json`, `hash`, `filter`, `ctype`, `posix`.
+- **PHP 8.3+**. Nine extensions are hard gates — `openssl`, `curl`, `sodium`,
+  `mbstring`, `json`, `hash`, `filter`, `ctype`, `posix` — asserted by
+  `scripts/assert-required-extensions.php` (each entry citing the exact symbol the
+  code calls). Be precise about WHERE the gate bites: it runs as a CI step in every
+  PHP job (a build with a missing extension never ships), and the managed installer
+  provisions them via the apt package list (`php-cli php-mysql php-mbstring
+  php-curl …`) and the container base image carries them. **The hub process does not
+  re-check them at boot**: a hand-assembled host missing e.g. `curl` starts and then
+  fails at first symbol use (`Call to undefined function openssl_verify()` inside the
+  Alexa signature gate presents as rejected signatures, not as a clear config error).
+  On any install path other than the managed installer, install them yourself.
   `openssl` is additionally what makes any TLS dial (federation `wss://`/`https://` masters,
   relay TLS) possible at runtime — without it those paths fail loud, not silent.
 - **`pcntl`** — not boot-gated (Workerman requires it for process management rather than hub
