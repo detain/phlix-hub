@@ -148,6 +148,19 @@ class Response
             $this->statusCode = $statusCode;
         }
         $this->headers['Content-Type'] = 'application/json';
+        // Review hub Minor 48: hub JSON is session-scoped or
+        // per-user data, but before this the responses carried NO freshness
+        // directive at all — browsers then cache them HEURISTICALLY (a 401 or
+        // a member list surviving a logout/re-login is the observable harm).
+        // `no-store` is the honest default for data responses (unlike the SPA
+        // shell's `no-cache`, revalidation itself needs an identity here).
+        // Like html() above this only SEEDS a default: a caller that set its
+        // own Cache-Control beforehand keeps it (e.g. HubJwksController's
+        // `public, max-age=3600`), and one setting it afterwards overwrites
+        // via header(). Mirrors the phlix-server twin landed the same day.
+        if (! isset($this->headers['Cache-Control'])) {
+            $this->headers['Cache-Control'] = 'no-store';
+        }
         $this->body = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         return $this;
     }

@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 48 (Response::json() seeds a non-cache directive, 2026-11-03)
+- **Silence is not a cache policy.** `Response::json()` set only `Content-Type`,
+  while `html()` already seeded `Cache-Control: no-cache` when the handler had
+  not chosen one — so every JSON envelope shipped without any freshness
+  directive and left intermediaries free to serve stale 200 bodies under
+  heuristic freshness. `json()` now seeds `Cache-Control: no-store` with the
+  same seed-if-absent law: a handler that sets its own header first (JWKS keeps
+  its deliberate `no-cache` revalidation posture) wins, and a later explicit
+  `header()` still overwrites. `error()` delegates to `json()`, so 401/404/500
+  envelopes inherit the protection; no wire shape, code or key order moved.
+  Five pins in `tests/Unit/Http/ResponseJsonCacheControlTest.php` (default
+  seed, error() inheritance, pre-set survival, post-overwrite, html() unchanged).
+
 ### Fixed — review Minor 59 (quota-family voice standardization lands its register law, 2026-11-03)
 - **One code, one rule for its sentences.** The `quota.exceeded` family had
   answered members in four grammatical persons. With the third-person
