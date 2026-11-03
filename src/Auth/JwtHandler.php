@@ -80,9 +80,9 @@ final class JwtHandler
      * Holds shared configuration lookup logic, never per-request state, so it
      * is safe on a resident-memory singleton.
      *
-     * @var (callable(string, int): int)|null
+     * @var \Closure(string, int): int|null
      */
-    private $ttlResolver;
+    private ?\Closure $ttlResolver;
 
     /**
      * Build a JwtHandler.
@@ -116,7 +116,9 @@ final class JwtHandler
         $this->audience = $audience;
         $this->accessTtl = $accessTtl;
         $this->refreshTtl = $refreshTtl;
-        $this->ttlResolver = $ttlResolver;
+        // Coerced at the boundary to a native \Closure (review hub Major 34
+        // tail); the constructor still accepts any callable.
+        $this->ttlResolver = $ttlResolver === null ? null : \Closure::fromCallable($ttlResolver);
     }
 
     /**

@@ -6,6 +6,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 34 (tail): the remaining five clock/resolver/pending-completion seams get native `\Closure` property types — 2026-11-03
+
+- `CoreUpdateCheckService::$pendingCompletion`, `AuthManager::$signupsDisabledResolver`,
+  `JwtHandler::$ttlResolver`, `MetricsFlushService::$retentionResolver`,
+  `PendingCommandDispatcher::$publisher` were untyped `@var`-docblock'd callable
+  properties; all five are now natively typed `\Closure` (nullable where the seam
+  is optional) with `Closure::fromCallable()` coercion at the callable-typed
+  entry boundary, matching the Major 34 partial sweep. Constructors and call
+  sites keep accepting any callable; behavior is byte-identical. PHPStan clean
+  on all five files; 128-test direct neighborhood green.
+
 ### Fixed — review hub Major 34 (partial): the untyped-`@var` properties where a native type exists get one — 2026-11-03
 
 - `private $publisher` cohort (FederationPushDispatcher, FederationPushBridge,

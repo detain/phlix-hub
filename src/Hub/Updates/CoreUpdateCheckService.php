@@ -128,9 +128,9 @@ final class CoreUpdateCheckService
      * is the count=1 maintenance worker's timer, which never has two checks in
      * flight, so this cannot grow without bound.
      *
-     * @var (callable(CoreUpdateStatus):void)|null
+     * @var \Closure(CoreUpdateStatus): void|null
      */
-    private $pendingCompletion = null;
+    private ?\Closure $pendingCompletion = null;
 
     /**
      * True between issuing a fetch and recording its outcome (S308 single
@@ -255,7 +255,7 @@ final class CoreUpdateCheckService
         // double does, and a cached/failed-fast transport may too), in which
         // case record() -> complete() runs inside the call below — arming the
         // slot afterwards would silently drop the callback.
-        $this->pendingCompletion = $onComplete;
+        $this->pendingCompletion = $onComplete === null ? null : \Closure::fromCallable($onComplete);
         $this->inFlight          = true;
         $generation              = ++$this->generation;
         $this->armDeadline();

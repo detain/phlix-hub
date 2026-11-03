@@ -47,9 +47,9 @@ final class MetricsFlushService
      * LIVE `server.metrics.retention_days` reader — answers already clamped
      * 1..3650 upstream by HubSettingsResolvers::int; null keeps the boot value.
      *
-     * @var callable|null
+     * @var \Closure(): int|null
      */
-    private $retentionResolver = null;
+    private ?\Closure $retentionResolver = null;
 
     /** @var int Seconds of connection inactivity before a row is pruned. */
     private int $connectionTtlSeconds;
@@ -81,7 +81,9 @@ final class MetricsFlushService
         // server.metrics.retention_days (W5): LIVE reader of the effective
         // override (HubSettingsResolvers::int, clamped 1..3650, fail-safe to
         // the boot config value). Null (tests) keeps the boot value forever.
-        $this->retentionResolver    = is_callable($retentionResolver) ? $retentionResolver : null;
+        $this->retentionResolver = is_callable($retentionResolver)
+            ? \Closure::fromCallable($retentionResolver)
+            : null;
     }
 
     /**
@@ -177,7 +179,7 @@ final class MetricsFlushService
         // LIVE retention: re-read every prune tick (count=1 relay worker,
         // flush-interval cadence — never a hot path). An admin shrinking the
         // window sees the first DELETE wave within one tick.
-        $retentionDays = is_callable($this->retentionResolver)
+        $retentionDays = $this->retentionResolver !== null
             ? (int) ($this->retentionResolver)()
             : $this->retentionDays;
         $rollupCutoff  = $this->datetime($nowTs - ($retentionDays * 86400));

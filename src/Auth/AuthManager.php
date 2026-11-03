@@ -113,20 +113,24 @@ class AuthManager
         private readonly ?RefreshTokenRevocationService $revocations = null,
         ?callable $signupsDisabledResolver = null,
     ) {
-        // `callable` is not a legal property type in PHP — held untyped with
-        // a docblock, exactly like JwtHandler::$ttlResolver (the sibling
-        // live-settings seam).
-        $this->signupsDisabledResolver = $signupsDisabledResolver;
+        // `callable` is not a legal property type in PHP — the seam is stored
+        // as a native \Closure, coerced at this boundary (review hub Major 34
+        // tail), mirroring JwtHandler::$ttlResolver.
+        $this->signupsDisabledResolver = $signupsDisabledResolver === null
+            ? null
+            : \Closure::fromCallable($signupsDisabledResolver);
     }
 
     /**
-     * Live signup-gate resolver (`callable(): ?bool`) — see the constructor
-     * documentation. Null means "no live store wired"; the boot-time
-     * `$signupsEnabled` flag decides.
+     * Live signup-gate resolver — see the constructor documentation. Null
+     * means "no live store wired"; the boot-time `$signupsEnabled` flag decides.
      *
-     * @var (callable(): ?bool)|null
+     * Stored as a native \Closure (review hub Major 34 tail): the constructor
+     * accepts any callable and coerces at the boundary.
+     *
+     * @var \Closure(): ?bool|null
      */
-    private $signupsDisabledResolver;
+    private ?\Closure $signupsDisabledResolver;
 
     /**
      * Lazy dummy hash used to equalise the unknown-user login path with the

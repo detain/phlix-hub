@@ -46,9 +46,9 @@ use const JSON_THROW_ON_ERROR;
 final class PendingCommandDispatcher
 {
     /**
-     * @var callable(string, array<string, mixed>): void
+     * @var \Closure(string, array<string, mixed>): void
      */
-    private $publisher;
+    private \Closure $publisher;
 
     /**
      * @param StructuredLogger                                    $logger    Relay logger.
@@ -59,9 +59,9 @@ final class PendingCommandDispatcher
         private readonly StructuredLogger $logger,
         ?callable $publisher = null,
     ) {
-        $this->publisher = $publisher ?? static function (string $event, array $data): void {
+        $this->publisher = \Closure::fromCallable($publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
-        };
+        });
     }
 
     /**
