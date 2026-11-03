@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 39: hub routes for un-scoped media surfaces redirect to the server directory (were guaranteed 404 blobs) — 2026-11-03
+
+- New pure law module `web-ui/src/utils/mediaGuard.ts`: five guarded feature
+  roots (`/app/search`, `/app/music`, `/app/books`, `/app/audiobooks`,
+  `/app/photo`, boundary-exact child matching) + `SERVER_DIRECTORY_PATH`.
+- `web-ui/src/main.ts` registers ONE `router.beforeEach` answering any guarded
+  navigation without `useServerStore().hasCurrent` with a redirect to
+  `/app/servers` — the vendored pages fall back to the hub's own base for
+  media APIs, which serves zero media endpoints, so landing there cold (or
+  after the selected server was unlinked) rendered raw `{error:'Not found'}`
+  JSON. The redirect is the prompt; nav entries stay clickable by design.
+  Missing `$router` (shell contract break) fails loud instead of silently
+  restoring the dead-ends.
+- `tests/media-guard.test.ts`: path truth table (roots, deep children, glued
+  siblings never guarded) + main.ts wiring-truth pass. SPA rebuilt
+  deterministic x2 and committed under `public/assets/app`.
+
 ### Fixed — review hub Major 38: portal Watch Party dial honors the operator `__PHLIX__.wsUrl`/`wsPath` seam — 2026-11-03
 
 - `web-ui/src/utils/watchPartyWire.ts::buildRelayUrl()` now applies the same

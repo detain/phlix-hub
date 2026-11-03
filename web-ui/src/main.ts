@@ -1,4 +1,4 @@
-import { createPhlixApp, ServerDetailPage, FederationSharesPage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem } from '@phlix/ui';
+import { createPhlixApp, ServerDetailPage, FederationSharesPage, RequestsPage, InviteLinksPage, AcceptInvitePage, SearchPage, MusicAlbumPage, MusicArtistsPage, MusicArtistPage, MusicTracksPage, MusicPlayerPage, BooksPage, BookDetailPage, BookReaderPage, AudiobooksPage, AudiobookDetailPage, AudiobookPlayerPage, PhotoAlbumsPage, PhotoAlbumPage, PhotoViewPage, PhotoSlideshowPage, buildHubAdminRoutes, mcpTokensMenuItem, useServerStore } from '@phlix/ui';
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
 import { messagesForLocale, resolveLocale } from './i18n';
@@ -8,6 +8,11 @@ import HubManageSharesPage from './pages/HubManageSharesPage.vue';
 import HubSharedWithMePage from './pages/HubSharedWithMePage.vue';
 import HubSecuritySettingsPage from './pages/HubSecuritySettingsPage.vue';
 import HubWatchPartyPage from './pages/HubWatchPartyPage.vue';
+import { needsServerSelection, SERVER_DIRECTORY_PATH } from './utils/mediaGuard';
+
+interface MinimalRouter {
+    beforeEach(guard: (to: { path: string }) => true | { path: string }): void;
+}
 
 const app = createPhlixApp({
     // i18n seam (config-time, @phlix/ui R6.5c): resolve the boot locale ONCE at
@@ -282,4 +287,22 @@ const app = createPhlixApp({
         ...buildHubAdminRoutes(),
     ],
 });
+
+// [review hub Major 39] media-surface server-selection guard: every guarded
+// path (law + truth in src/utils/mediaGuard.ts) with no selected server lands
+// on the server directory instead of a guaranteed `{error:'Not found'}` blob —
+// the redirect IS the prompt; nav entries stay clickable by design.
+// vue-router still installs the router object on globalProperties.$router at
+// app.use() time (vue-router 5.2 verified); a missing one means the vendored
+// shell's install broke — fail loudly rather than silently ship dead-ends.
+const router = (app.config.globalProperties as { $router?: MinimalRouter }).$router;
+if (router === undefined) {
+    throw new Error('hub media guard: vue-router did not install $router — shell contract broken');
+}
+router.beforeEach((to) => (
+    needsServerSelection(to.path) && !useServerStore().hasCurrent
+        ? { path: SERVER_DIRECTORY_PATH }
+        : true
+));
+
 app.mount('#phlix-app');
