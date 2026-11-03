@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minors 1-6 + 34: bearer/cookie prose truth pass, live-tag example, TOC anchor, stale schema-cost notes, dead `.env.example` → documented Xdebug envs — 2026-11-03
+
+- Minor 1: every remaining cookie-auth prose site now matches the shipped
+  bearer-only reality (`AuthMiddleware.php:24-45` deleted the cookie read; no
+  controller sets a session cookie): README API-surface intro, the OAuth
+  consent-gate docblock in `Application.php`, the no-middleware docblock in
+  `McpController.php`, and the `HUB_COOKIE_INSECURE` table row (it gates
+  `Response::cookie()` — reserved seam, nothing on the hub uses it today).
+- Minor 3: update example pins `--branch v1.0.0` (the only published tag;
+  `v0.2.0` never existed and fails `git fetch --depth 1 origin v0.2.0`).
+- Minor 4: TOC gained the missing "Backing up and restoring" entry (heading
+  exists at README:355).
+- Minor 5: migration 040 header no longer claims "nothing reads this table
+  yet" — `DbRateLimiter` reads/writes/prunes it (its :126/:160/:188/:221) and
+  three profiles are wired via `CommonServicesProvider`.
+- Minor 6: `RealDatabaseTestCase` cost table marks the 29-table figure as
+  era-bound (the chain is longer now).
+- Minor 2 + 34: `.env.example` deleted — it was a dead convention (no dotenv
+  in the lock, nothing loads `.env`; copying it did nothing). Its only
+  content, the Xdebug dials, is now documented where operators actually
+  read: two Security & posture rows in the README Configuration reference,
+  including the never-in-production caution for `debug`/`trace` under
+  `start_with_request = trigger` (traces land in `/tmp/xdebug`).
+
 ### Fixed — review hub Major 31: every `SELECT *` read in src/ now projects an explicit column list — 2026-11-03
 
 - All 35 `SELECT *` query sites (UserRepository, the four Federation repositories

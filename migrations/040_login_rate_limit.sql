@@ -20,7 +20,9 @@
 -- exactly once); CREATE TABLE IF NOT EXISTS keeps re-runs safe. InnoDB + utf8mb4
 -- to match the rest of the schema. NOTE: this migration only creates the table.
 -- The DbRateLimiter implementation and the RateLimitProfiles::LOGIN rebinding are
--- separate follow-up sub-steps; nothing reads this table yet.
+-- separate follow-up sub-steps; the table is live: DbRateLimiter reads, writes and
+-- prunes it and three rate-limit profiles are wired against it (see
+-- CommonServicesProvider and the README rate-limit section).
 
 CREATE TABLE IF NOT EXISTS login_rate_limit (
     rate_key    VARCHAR(191) NOT NULL COMMENT 'Opaque RateLimiterInterface bucket key, e.g. auth:login:<ip>',

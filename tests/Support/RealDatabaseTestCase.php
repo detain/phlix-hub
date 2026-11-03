@@ -22,7 +22,7 @@ use Workerman\MySQL\Connection;
  *
  * | step                                     | cost      |
  * |------------------------------------------|-----------|
- * | `dropAllTables()` (29 tables)             | 3.31 s    |
+ * | `dropAllTables()` (29 tables — era of this measurement; the chain is longer now) | 3.31 s    |
  * | `MigrationRunner::run()`, empty database  | 13.3 s    |
  * | `MigrationRunner::run()`, replay          | **0.02 s**|
  * | `TRUNCATE` every table                    | 8.7 s     |

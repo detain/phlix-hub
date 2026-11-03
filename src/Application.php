@@ -790,9 +790,10 @@ final class Application
      *  - **`AuthMiddleware`, not `AuthMiddleware` + something.** The path is not
      *    under `/api/`, so an unauthenticated visitor is bounced to
      *    `/app/login` (a 302) rather than handed a JSON 401 — which is what a
-     *    human arriving from a third-party app should get. The POST is also
-     *    cookie-authenticable for the same reason: `AuthMiddleware` only forces
-     *    bearer-only on mutating `/api/` paths. The consent form's CSRF defence
+     *    human arriving from a third-party app should get. The middleware is
+     *    bearer-only on every path (the legacy cookie surface was deleted as
+     *    dead code), so this POST carries the SPA's bearer token exactly like
+     *    `/api/` calls do. The consent form's CSRF defence
      *    is the single-use, user-bound consent ticket, which a cross-origin page
      *    cannot read (see {@see \Phlix\Hub\OAuth\ConsentTicketService}).
      *  - **`/oauth/token` carries NO route middleware, on purpose.** Its caller

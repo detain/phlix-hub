@@ -22,6 +22,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 - [Requirements](#requirements)
 - [One-line install](#one-line-install)
 - [Updating an existing install](#updating-an-existing-install)
+- [Backing up and restoring](#backing-up-and-restoring)
 - [Uninstalling](#uninstalling)
 - [Running alongside phlix-server](#running-alongside-phlix-server)
 - [Quick start (development)](#quick-start-development)
@@ -328,7 +329,7 @@ curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/ins
 Pin to a specific tag or branch with `--branch`:
 
 ```bash
-sudo bash /opt/phlix-hub/scripts/install.sh --update --branch v0.2.0 -y
+sudo bash /opt/phlix-hub/scripts/install.sh --update --branch v1.0.0 -y
 ```
 
 What `--update` does, in order:
@@ -1130,7 +1131,9 @@ the `PHLIX_HUB_RATELIMIT_*` envs below, so when it is set the env defaults are N
 | `HUB_FEDERATION_TLS` | `false` | Terminates TLS natively on the `:8805` hub-to-hub federation listener (`wss://`) — for masters reached WITHOUT a TLS-terminating upstream proxy. Needs `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` (both default `null`). A plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot (M22) |
 | `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` | `null` | PEM paths for the `:8805` TLS context above |
 | `HUB_FEDERATION_REQUIRE_TLS` | `false` | Fail-closed `:8805` bind mandate, the federation sibling of `HUB_RELAY_REQUIRE_TLS` above: `true` makes `FederationWorker::start()` throw before constructing the listener when TLS is off — no cleartext federation socket is ever bound (federation inbound stays down, the hub serves the rest). `false` = warn-only. Keep unset on managed installs, where HAProxy fronts `:8805` and terminates TLS upstream |
-| `HUB_COOKIE_INSECURE` | unset | Drops `Secure` from session cookies — **local plain-HTTP development only** |
+| `HUB_COOKIE_INSECURE` | unset | Drops `Secure` from cookies set through `Response::cookie()`. The bearer-only hub never sets session cookies (that surface was deleted as dead code); this escape exists only for local plain-HTTP experiments with a future cookie |
+| `XDEBUG_MODE` | `off` | Xdebug mode inside the container (`docker/php.ini:30`, installer-generated ini on bare-metal provision — `scripts/install.sh:410`). **Never set `debug` or `trace` in production**: `start_with_request = trigger` means any request carrying the trigger value arms step-debugging/tracing, and traces land world-writable in `/tmp/xdebug` (`docker-entrypoint.sh:48`) |
+| `XDEBUG_TRIGGER` | `devdebug` | Trigger value for the mode above (`docker/php.ini:32`). Treat it as a secret if you ever enable a debug/trace mode on a reachable host; the former `.env.example` carried it as plain text and was deleted because nothing in this repo loads `.env` files (no dotenv in the lock) |
 | `PHLIX_CORS_ALLOW_ORIGINS` | unset — **deny-all** | Cross-origin allowlist for the hub's REST HTTP surface (`src/Http/CorsPolicy.php`, read once at router construction — boot-scoped, changes need a hub restart): comma-separated **exact lowercase origins** (`PHLIX_CORS_ALLOW_ORIGINS=https://hub.example.com,app://-`); a malformed entry — wildcard, uppercase, path, whitespace — fails LOUD at boot instead of silently denying at runtime. Allowlisted origins earn the `OPTIONS` 204 preflight and an `Access-Control-Allow-Origin` echo on actual replies; `Access-Control-Allow-Credentials` is never emitted (hub REST is bearer-auth, and a cross-origin cookie ride is exactly what this posture refuses). A disallowed-origin preflight is byte-identical to an unknown-path 404 — a probe cannot map the route table. `app://-` is the origin the desktop (Electron Windows client) hub-mode renderer presents — add it when the hub serves packaged desktop clients. Honest scope limit (the position law, M-HUB-09 r2/r3): `OPTIONS` on AUTHED routes runs the auth chain before any CORS grant, so this knob opens cross-origin reach for the **public** control endpoints (health, auth, server-claims trio); authed desktop hub-mode REST deliberately stays beyond browser-CORS reach there — its live cross-origin work rides the CORS-exempt relay WebSockets (`:8802`–`:8804`). The same-origin `/app` portal needs nothing: same-origin fetches never preflight. Full policy text in `openapi.yaml` §"Cross-origin (CORS)" |
 | `HUB_WS_HOST` | falls back to `HUB_PUBLIC_DOMAIN`, then `your-hub-host` | Host advertised in the `X-WS-Endpoint` steer when a plain HTTP GET hits the `:8802`/`:8803` WebSocket mounts — host only: the steer's `ws://` scheme and default port are fixed, not proxy/port-aware |
 | `HUB_REQUESTS_AUTO_APPROVE` | `false` | Auto-approves freshly filed media requests (best-effort, after the `pending` row lands). Live twin: `requests.auto_approve` |
@@ -1330,8 +1333,9 @@ Selected endpoints below. The maintained, machine-readable surface is
 [`openapi.yaml`](openapi.yaml) at the repo root (Redocly-validated, kept in lockstep
 with the router by `OpenApiSpecMatchesRouterTest`); [`src/Application.php`](src/Application.php)
 is where routes are registered, not where they should be read from. Protected
-routes require a `Bearer` access token (or the session cookie, which also gates the legacy
-page paths before they redirect to `/app`).
+routes require a `Bearer` access token — the hub is bearer-only (the legacy
+cookie surface was deleted as dead code, and the old page paths 302-redirect
+to `/app` unconditionally).
 
 ### Health & discovery
 
