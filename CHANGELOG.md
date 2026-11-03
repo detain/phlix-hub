@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 63 (mint/dial jargon leaves the member copy, 2026-11-03)
+- **You join a party; the hub issues a token.** The watch-party page told members
+  the hub had "minted" a token and that a party "cannot be dialed" — developer/
+  crypto slang and a phone metaphor fighting the join/leave/host vocabulary the
+  page itself uses everywhere else. All six member-visible sentences adopt the
+  plain register: empty-token refusal → "The hub issued an empty relay token —
+  the party cannot be joined."; server-list failure → "no party can be joined";
+  mint-failure fallback → "refused to issue a relay token"; socket-close copy →
+  "expire about an hour after being issued" (×2); display hint → "hub-issued
+  ids"; page note → "this hub issues no secret ticket". Internals keep their
+  law untouched, as the review itself ruled: the `dial()` function, the
+  `minting` phase, `mintFailureSentence`, identifiers and comments. SPA rebuilt
+  deterministic ×2 (aggregate `3075bed4…` stable across both clean builds),
+  bundle re-vendored in the same commit (S253, 103 re-hashed chunks).
+
 ### Fixed — corpus-gate cure (two overlong test lines at local tip, 2026-11-03)
 - **Pre-existing, never CI-attested.** cont#13's shipped tests left two
   `Generic.Files.LineLength` warnings (135 and 130 chars) in

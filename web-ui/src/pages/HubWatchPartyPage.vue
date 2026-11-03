@@ -228,8 +228,8 @@ function handleFrame(raw: unknown): void {
 
 function socketCloseReason(): string {
     return yourId.value !== null
-        ? 'The relay closed the connection. The party still exists on the hub — rejoin with its name (relay tokens expire about an hour after minting).'
-        : 'The relay closed the connection before the party act completed. Relay tokens expire about an hour after minting — try again.';
+        ? 'The relay closed the connection. The party still exists on the hub — rejoin with its name (relay tokens expire about an hour after being issued).'
+        : 'The relay closed the connection before the party act completed. Relay tokens expire about an hour after being issued — try again.';
 }
 
 function dial(intent: { join?: string; create?: string } = {}): void {
@@ -252,7 +252,7 @@ function dial(intent: { join?: string; create?: string } = {}): void {
         try {
             const minted = await http.post<{ token?: unknown }>('/api/v1/me/servers/' + serverId + '/relay-token');
             if (typeof minted.token !== 'string' || minted.token === '') {
-                refusal.value = 'The hub minted an empty relay token — the party cannot be dialed.';
+                refusal.value = 'The hub issued an empty relay token — the party cannot be joined.';
                 phase.value = 'setup';
                 return;
             }
@@ -261,7 +261,7 @@ function dial(intent: { join?: string; create?: string } = {}): void {
             const code = e instanceof ApiError ? (e.body as { code?: unknown } | null)?.code : null;
             refusal.value = mintFailureSentence(
                 typeof code === 'string' ? code : null,
-                errMessage(e, 'The hub refused to mint a relay token for that server.'),
+                errMessage(e, 'The hub refused to issue a relay token for that server.'),
             );
             phase.value = 'setup';
             return;
@@ -391,7 +391,7 @@ function selectLinkField(event: Event): void {
             A party is hosted on ONE of your servers and spans the signed-in devices of
             YOUR account — the relay scopes every room to the account that owns the server,
             so a friend signed in elsewhere cannot join it yet (guest access is a hub
-            capability still to come). The party name IS the join code: this hub mints no
+            capability still to come). The party name IS the join code: this hub issues no
             secret ticket, and the link below simply carries both.
         </p>
 
@@ -401,7 +401,7 @@ function selectLinkField(event: Event): void {
         <!-- Loading / failure / empty-server states with reasons -->
         <p v-if="phase === 'loading-servers'" class="wp__state">Loading your servers…</p>
         <template v-else-if="phase === 'servers-failed'">
-            <p class="wp__state">Your servers could not be listed, so no party can be dialed.</p>
+            <p class="wp__state">Your servers could not be listed, so no party can be joined.</p>
             <button type="button" class="wp__button" @click="loadServers">Retry</button>
         </template>
         <template v-else-if="phase === 'no-servers'">
@@ -432,7 +432,7 @@ function selectLinkField(event: Event): void {
                 <span class="wp__label">Your name in the party</span>
                 <input v-model="displayName" type="text" maxlength="80" placeholder="Host" :disabled="inParty" />
                 <span class="wp__hint">
-                    Display label only — the relay identifies members by hub-minted ids, not by
+                    Display label only — the relay identifies members by hub-issued ids, not by
                     this name.
                 </span>
             </label>
