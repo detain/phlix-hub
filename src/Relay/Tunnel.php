@@ -698,9 +698,22 @@ final class Tunnel implements TunnelInterface
             $this->proxyManager?->failServer($this->serverId);
         }
 
-        // Close the session in the database
+        // Close the session in the database. M45: best-effort bookkeeping —
+        // this runs inside Workerman's onClose callback, and an escaping
+        // MySQL error would fatal the count=1 relay worker, flapping every
+        // server tunnel during exactly the DB blip that matters most.
+        // reapStaleSessions() closes the orphan row durably; the close stamp
+        // lag is the acceptable loss, the dead worker is not.
         if ($this->relaySessionId !== null) {
-            $this->sessionManager->closeSession($this->relaySessionId, 'server_disconnected');
+            try {
+                $this->sessionManager->closeSession($this->relaySessionId, 'server_disconnected');
+            } catch (\Throwable $e) {
+                $this->logger->error('Relay: session close failed on server disconnect', [
+                    'session_id' => $this->relaySessionId,
+                    'error' => $e->getMessage(),
+                    'exception' => $e::class,
+                ]);
+            }
         }
 
         $this->status = self::STATUS_CLOSED;
@@ -1908,9 +1921,22 @@ final class Tunnel implements TunnelInterface
         // Close server connection
         $this->serverWs->close();
 
-        // Close session in DB
+        // Close session in DB. M45: guarded for the same reason as the
+        // server-disconnect twin above — every close vector (backpressure
+        // overflow, decode failure, safety timer, displacement drain) runs
+        // inside a Workerman callback, and the teardown must survive MySQL
+        // being down. The stale-session reaper finishes the row.
         if ($this->relaySessionId !== null) {
-            $this->sessionManager->closeSession($this->relaySessionId, $reason);
+            try {
+                $this->sessionManager->closeSession($this->relaySessionId, $reason);
+            } catch (\Throwable $e) {
+                $this->logger->error('Relay: session close failed during tunnel teardown', [
+                    'session_id' => $this->relaySessionId,
+                    'reason' => $reason,
+                    'error' => $e->getMessage(),
+                    'exception' => $e::class,
+                ]);
+            }
         }
 
         $this->status = self::STATUS_CLOSED;

@@ -140,7 +140,18 @@ final class RelayServerHandler
      */
     public function onClose(string $sessionId, string $reason = 'server_disconnect'): void
     {
-        $this->sessionManager->closeSession($sessionId, $reason);
+        // M45: same teardown doctrine as Tunnel::close() — this runs on a
+        // Workerman onClose path; a MySQL blip must not fatal the worker.
+        // reapStaleSessions() closes the orphan row durably.
+        try {
+            $this->sessionManager->closeSession($sessionId, $reason);
+        } catch (\Throwable $e) {
+            $this->logger->error('Relay: session close failed on server handler disconnect', [
+                'session_id' => $sessionId,
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
 
         $this->logger->info('Relay server disconnected', [
             'session_id' => $sessionId,

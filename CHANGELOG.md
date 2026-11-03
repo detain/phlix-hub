@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 45: relay teardown survives a MySQL blip — 2026-11-03
+
+- `Tunnel::close()`, `Tunnel::onServerClose()` and
+  `RelayServerHandler::onClose()` called `RelaySessionManager::closeSession()`
+  — a synchronous UPDATE — UNGUARDED, directly inside Workerman callbacks
+  (onClose, backpressure overflow, decode failure, safety timer,
+  displacement drain). Under a DB outage every tunnel close raised, fataling
+  the count=1 relay worker and flapping all server tunnels network-wide —
+  exactly when the relay matters most. All three vectors now log-and-continue
+  (the repo's own S312/C07 IdleReaper precedent worded the doctrine); the
+  close is best-effort byte bookkeeping and `reapStaleSessions()` closes the
+  orphan row durably. `TunnelTeardownDbGuardTest` pins it — measured red:
+  strip the guards and exactly the 3 throwing legs error; happy-path leg
+  still closes once.
+
 ### Fixed — review hub Major 33: the streaming producer is no longer a public untyped slot — 2026-11-03
 
 - `Http\Response::$streamProducer` — the live socket-facing producer the
