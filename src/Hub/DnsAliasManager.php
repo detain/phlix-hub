@@ -80,8 +80,54 @@ class DnsAliasManager
             ],
         );
 
-        $this->dnsProvider->addRecord(self::DOMAIN, $subdomain, 'A', '0.0.0.0');
-        $this->dnsProvider->updateSoa(self::DOMAIN);
+        // Review hub Minor 43: the UPDATE above and the DNS writes below were
+        // an unguarded DB-then-DNS sequence — any provider failure left the
+        // `servers.subdomain` row claiming an alias that does not resolve,
+        // and the existing-subdomain short-circuit at the top of this method
+        // then made the state PERMANENT (retries return the phantom label;
+        // the record is never written). Cure: on any provider throw, revert
+        // the row to its previous NULL state, log at error, and rethrow so
+        // the caller still sees the failure. Retryability is total: the label
+        // is deterministic in server_id and StaticZoneManager::addRecord() is
+        // idempotent (skips a byte-ident existing line), so a clean revert
+        // lets the next allocation redo the whole step.
+        //
+        // Disclosed residual window: if addRecord() SUCCEEDS but updateSoa()
+        // throws, the revert removes the DB row while the zone file keeps the
+        // orphan A-record line. The next attempt re-adds the identical line
+        // (addRecord no-ops) and completes updateSoa — the orphan is inert
+        // ('0.0.0.0' placeholder value, deleted with the zone) and converges,
+        // so this is drift-repair, not drift-proofing.
+        try {
+            $this->dnsProvider->addRecord(self::DOMAIN, $subdomain, 'A', '0.0.0.0');
+            $this->dnsProvider->updateSoa(self::DOMAIN);
+        } catch (\Throwable $dnsFailure) {
+            try {
+                $this->db->query(
+                    'UPDATE servers SET subdomain = NULL WHERE id = :id',
+                    ['id' => $serverId],
+                );
+            } catch (\Throwable $revertFailure) {
+                // The drift is now BOTH sides' fault — scream with both
+                // contexts, but never mask the DNS failure that got us here.
+                $this->logger->error('Subdomain revert FAILED after DNS error — row left claiming an alias', [
+                    'server_id' => $serverId,
+                    'subdomain' => $subdomain,
+                    'dns_error' => $dnsFailure->getMessage(),
+                    'revert_error' => $revertFailure->getMessage(),
+                    'dns_provider' => $this->providerType,
+                ]);
+            }
+
+            $this->logger->error('Subdomain allocation rolled back after DNS provider failure', [
+                'server_id' => $serverId,
+                'subdomain' => $subdomain,
+                'error' => $dnsFailure->getMessage(),
+                'dns_provider' => $this->providerType,
+            ]);
+
+            throw $dnsFailure;
+        }
 
         // NOTE: TLS provisioning is intentionally NOT triggered here.
         // In this build TlsCertificateManager::provisionCertificate()

@@ -6,6 +6,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 43 (subdomain allocation reverts its DB stamp when the DNS call fails, 2026-11-03)
+- **Claim-then-write ordering, closed loop.** `DnsAliasManager::allocateSubdomain()`
+  stamped `servers.subdomain` first, then called the provider
+  (`addRecord` + `updateSoa`) unguarded — a provider failure (network, quota,
+  bad auth) left the database asserting an allocation DNS never learned about,
+  and every later lookup of that server's alias pointed at a name that does not
+  resolve. The DNS calls now sit inside a try: on any throw the row is reverted
+  (`SET subdomain = NULL` for that server id), an error line records the
+  rollback, and the original failure rethrows unmasked; if the revert itself
+  fails, the compound event is logged rather than swallowed. Retry converges by
+  construction: the label is a deterministic `sha256(server_id)` and
+  `StaticZoneManager::addRecord()` is idempotent (existing-record skip). The
+  disclosed residual window — `addRecord` succeeding before `updateSoa` throws —
+  leaves an inert 0.0.0.0 A-record, documented in the method docblock. Zero
+  caller or wire changes (`SubdomainController` only maps
+  `InvalidArgumentException` to 404; the rethrow keeps the honest generic 500).
+  Three fake-provider tests pin the exact SQL sequence incl. the revert, the
+  updateSoa-throw variant, and happy-path never-reverting.
+
 ### Fixed — review Minor 48 (Response::json() seeds a non-cache directive, 2026-11-03)
 - **Silence is not a cache policy.** `Response::json()` set only `Content-Type`,
   while `html()` already seeded `Cache-Control: no-cache` when the handler had

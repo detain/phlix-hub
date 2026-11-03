@@ -163,6 +163,105 @@ class DnsAliasManagerTest extends TestCase
         $this->manager->refreshCertificate($serverId);
     }
 
+    // --- review hub Minor 43: DB-then-DNS drift on provider failure -----------
+
+    public function testDnsRecordFailureRevertsTheSubdomainRowAndRethrows(): void
+    {
+        $serverId = 'server-dns-fail';
+
+        /** @var list<string> $sqlSequence */
+        $sqlSequence = [];
+        $this->db->method('query')
+            ->willReturnCallback(function (string $sql) use (&$sqlSequence): array {
+                $sqlSequence[] = $sql;
+                return [];
+            });
+
+        $dns = $this->createMock(StaticZoneManager::class);
+        $dns->method('addRecord')->willThrowException(new \RuntimeException('provider down'));
+        $dns->expects($this->never())->method('updateSoa');
+
+        $manager = new DnsAliasManager($this->db, $dns, $this->certManager, $this->logger);
+
+        try {
+            $manager->allocateSubdomain($serverId);
+            $this->fail('the provider failure must surface to the caller unchanged');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('provider down', $e->getMessage());
+        }
+
+        // Exact statement sequence: existence probe, allocation UPDATE, then
+        // the REVERT. Without the cure the third statement never happens and
+        // the row permanently claims an alias DNS never got (the short-circuit
+        // on the next call would return this phantom label forever).
+        $this->assertSame([
+            'SELECT subdomain FROM servers WHERE id = :id AND subdomain IS NOT NULL LIMIT 1',
+            'SELECT id FROM servers WHERE subdomain = :subdomain LIMIT 1',
+            'UPDATE servers SET subdomain = :subdomain WHERE id = :id',
+            'UPDATE servers SET subdomain = NULL WHERE id = :id',
+        ], $sqlSequence);
+    }
+
+    public function testUpdateSoaFailureAlsoRevertsTheSubdomainRow(): void
+    {
+        // The disclosed partial window: the A-record write can succeed while
+        // the SOA refresh throws. The revert still runs — the orphan zone line
+        // is inert and the deterministic label re-adds idempotently on retry.
+        $serverId = 'server-soa-fail';
+
+        /** @var list<string> $sqlSequence */
+        $sqlSequence = [];
+        $this->db->method('query')
+            ->willReturnCallback(function (string $sql) use (&$sqlSequence): array {
+                $sqlSequence[] = $sql;
+                return [];
+            });
+
+        $dns = $this->createMock(StaticZoneManager::class);
+        $dns->expects($this->once())->method('addRecord');
+        $dns->method('updateSoa')->willThrowException(new \RuntimeException('soa write failed'));
+
+        $manager = new DnsAliasManager($this->db, $dns, $this->certManager, $this->logger);
+
+        try {
+            $manager->allocateSubdomain($serverId);
+            $this->fail('the provider failure must surface to the caller unchanged');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('soa write failed', $e->getMessage());
+        }
+
+        $this->assertSame([
+            'SELECT subdomain FROM servers WHERE id = :id AND subdomain IS NOT NULL LIMIT 1',
+            'SELECT id FROM servers WHERE subdomain = :subdomain LIMIT 1',
+            'UPDATE servers SET subdomain = :subdomain WHERE id = :id',
+            'UPDATE servers SET subdomain = NULL WHERE id = :id',
+        ], $sqlSequence);
+    }
+
+    public function testSuccessfulAllocationNeverIssuesTheRevert(): void
+    {
+        // Anti-mutation for the cure itself: the happy path (real file-backed
+        // zone manager from setUp) must NOT touch the NULL revert statement.
+        $serverId = 'server-happy';
+
+        /** @var list<string> $sqlSequence */
+        $sqlSequence = [];
+        $this->db->method('query')
+            ->willReturnCallback(function (string $sql) use (&$sqlSequence): array {
+                $sqlSequence[] = $sql;
+                return [];
+            });
+
+        $subdomain = $this->manager->allocateSubdomain($serverId);
+
+        $this->assertSame(8, strlen($subdomain));
+        $this->assertSame([
+            'SELECT subdomain FROM servers WHERE id = :id AND subdomain IS NOT NULL LIMIT 1',
+            'SELECT id FROM servers WHERE subdomain = :subdomain LIMIT 1',
+            'UPDATE servers SET subdomain = :subdomain WHERE id = :id',
+        ], $sqlSequence);
+    }
+
     private function recursiveDelete(string $dir): void
     {
         if (!is_dir($dir)) {
