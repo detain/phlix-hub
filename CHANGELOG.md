@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 34 (partial): the untyped-`@var` properties where a native type exists get one — 2026-11-03
+
+- `private $publisher` cohort (FederationPushDispatcher, FederationPushBridge,
+  RelayProxyBridge, RelayProxyManager, ChannelPendingCommandPusher): now
+  `private \Closure`, the duplicate `@var` dropped; constructor params stay
+  `?callable` (widest accepted input, call-shape documented there) and the
+  assignment coerces via `Closure::fromCallable`.
+- `$*Factory`/`$clock`/`$sleeper` cohort (UserCreate/Delete/List/Promote,
+  MigrateCommand, PooledMySQLConnection::$rawFactory,
+  ConnectionResponseSink::$sleeper/$clock, MetricsCollector::$clock): same
+  native-`\Closure` + fromCallable treatment. PHPStan level 9 and PSR-12
+  clean across the corpus.
+- REMAINING (queue-stays-open): the five clock/resolver/runner fields at
+  CoreUpdateCheckService:133, AuthManager:129, JwtHandler:85,
+  MetricsFlushService:52, PendingCommandDispatcher:51.
+
 ### Fixed — review hub Major 32: the dashboard's bare SQL moves behind a repository — 2026-11-03
 
 - `AdminDashboardController` was the one controller issuing SQL itself

@@ -67,9 +67,8 @@ final class FederationPushDispatcher
     private readonly FrameEncoder $encoder;
 
     /**
-     * @var callable(string, array<string, mixed>): void
      */
-    private $publisher;
+    private \Closure $publisher;
 
     /**
      * @param StructuredLogger                                    $logger   Relay logger.
@@ -84,9 +83,9 @@ final class FederationPushDispatcher
         ?callable $publisher = null,
     ) {
         $this->encoder = new FrameEncoder();
-        $this->publisher = $publisher ?? static function (string $event, array $data): void {
+        $this->publisher = \Closure::fromCallable($publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
-        };
+        });
     }
 
     /**

@@ -156,9 +156,8 @@ final class RelayProxyManager
     private array $pending = [];
 
     /**
-     * @var callable(string, array<string, mixed>): void
      */
-    private $publisher;
+    private \Closure $publisher;
 
     /**
      * @var MetricsCollector|null
@@ -189,9 +188,9 @@ final class RelayProxyManager
         ?MetricsCollector $metrics = null,
         private readonly int $maxBufferedResponseBytes = self::DEFAULT_MAX_BUFFERED_RESPONSE_BYTES,
     ) {
-        $this->publisher = $publisher ?? static function (string $event, array $data): void {
+        $this->publisher = \Closure::fromCallable($publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
-        };
+        });
         $this->metrics = $metrics;
 
         // Single sweep timer that periodically checks all pending entries for

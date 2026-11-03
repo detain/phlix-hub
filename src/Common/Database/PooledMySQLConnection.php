@@ -57,8 +57,8 @@ use Workerman\MySQL\Connection;
  */
 final class PooledMySQLConnection extends Connection
 {
-    /** @var callable():Connection Factory that opens one raw connection. */
-    private $rawFactory;
+    /** @var \Closure(): Connection Factory that opens one raw connection. */
+    private \Closure $rawFactory;
 
     /** @var int Maximum number of raw connections the pool may open. */
     private int $maxSize;
@@ -110,7 +110,7 @@ final class PooledMySQLConnection extends Connection
     ) {
         // Deliberately NOT calling parent::__construct() — see class docblock.
         $this->maxSize = max(1, $maxSize);
-        $this->rawFactory = $rawFactory ?? static function () use (
+        $this->rawFactory = \Closure::fromCallable($rawFactory ?? static function () use (
             $host,
             $port,
             $user,
@@ -119,7 +119,7 @@ final class PooledMySQLConnection extends Connection
             $charset
         ): Connection {
             return new PhlixMySQLConnection($host, $port, $user, $password, $database, $charset);
-        };
+        });
     }
 
     /**

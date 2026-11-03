@@ -37,8 +37,8 @@ use Throwable;
 #[AsCommand(name: 'migrate', description: 'Apply database migrations (migrations/*.sql)')]
 final class MigrateCommand extends Command
 {
-    /** @var callable(): MigrationRunner */
-    private $runnerFactory;
+    /** @var \Closure(): MigrationRunner */
+    private \Closure $runnerFactory;
 
     /**
      * @param callable(): MigrationRunner $runnerFactory Lazy factory producing a configured
@@ -50,7 +50,7 @@ final class MigrateCommand extends Command
     public function __construct(callable $runnerFactory)
     {
         parent::__construct();
-        $this->runnerFactory = $runnerFactory;
+        $this->runnerFactory = \Closure::fromCallable($runnerFactory);
     }
 
     /**

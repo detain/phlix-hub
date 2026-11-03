@@ -114,9 +114,8 @@ final class RelayProxyBridge
     private array $pending = [];
 
     /**
-     * @var callable(string, array<string, mixed>): void
      */
-    private $publisher;
+    private \Closure $publisher;
 
     /**
      * @param StructuredLogger                                  $logger    Relay logger.
@@ -132,9 +131,9 @@ final class RelayProxyBridge
         ?string $replyEvent = null,
         private readonly ?MetricsCollector $metrics = null,
     ) {
-        $this->publisher = $publisher ?? static function (string $event, array $data): void {
+        $this->publisher = \Closure::fromCallable($publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
-        };
+        });
         $pid = getmypid();
         $this->replyEvent = $replyEvent
             ?? ('phlix.relay.proxy.reply.' . ($pid === false ? 0 : $pid) . '.' . bin2hex(random_bytes(4)));

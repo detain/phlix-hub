@@ -73,9 +73,8 @@ final class FederationPushBridge
     private array $pending = [];
 
     /**
-     * @var callable(string, array<string, mixed>): void
      */
-    private $publisher;
+    private \Closure $publisher;
 
     /**
      * @param StructuredLogger                                    $logger     Relay logger.
@@ -88,9 +87,9 @@ final class FederationPushBridge
         ?callable $publisher = null,
         ?string $replyEvent = null,
     ) {
-        $this->publisher = $publisher ?? static function (string $event, array $data): void {
+        $this->publisher = \Closure::fromCallable($publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
-        };
+        });
         $pid = getmypid();
         $this->replyEvent = $replyEvent
             ?? ('phlix.federation.push.reply.' . ($pid === false ? 0 : $pid)

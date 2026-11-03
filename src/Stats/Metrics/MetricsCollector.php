@@ -35,8 +35,8 @@ final class MetricsCollector
     /** @var bool Whether recording is active. */
     private bool $enabled;
 
-    /** @var callable(): int Returns the current Unix timestamp. */
-    private $clock;
+    /** @var \Closure(): int Returns the current Unix timestamp. */
+    private \Closure $clock;
 
     /**
      * @param MetricsRegistry      $registry In-memory accumulator for this worker.
@@ -47,7 +47,7 @@ final class MetricsCollector
     {
         $this->registry = $registry;
         $this->enabled  = $enabled;
-        $this->clock    = $clock ?? static fn (): int => time();
+        $this->clock    = \Closure::fromCallable($clock ?? static fn (): int => time());
     }
 
     /**

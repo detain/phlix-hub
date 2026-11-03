@@ -175,19 +175,19 @@ final class ConnectionResponseSink implements RelayResponseSink
     private readonly ?TokenBucket $throttleBucket;
 
     /**
-     * @var callable(float): void Coroutine-yielding sleeper used to pace a
+     * @var \Closure(float): void Coroutine-yielding sleeper used to pace a
      *          throttled stream. Defaults to {@see Timer::sleep()} (suspends only
      *          the current coroutine, never the event loop); tests inject a fake
      *          that advances their virtual clock for deterministic pacing.
      */
-    private $sleeper;
+    private \Closure $sleeper;
 
     /**
-     * @var callable(): float Monotonic clock (seconds). Defaults to
+     * @var \Closure(): float Monotonic clock (seconds). Defaults to
      *          {@see microtime()}; tests inject a virtual clock so the token-bucket
      *          refill/pace behaviour is deterministic without a running event loop.
      */
-    private $clock;
+    private \Closure $clock;
 
     /**
      * @var bool True for a HEAD request. A HEAD response legitimately carries
@@ -220,10 +220,10 @@ final class ConnectionResponseSink implements RelayResponseSink
         $this->resume = new Channel(1);
         $this->isHead = strtoupper($method) === 'HEAD';
         $this->throttleBucket = $throttleBucket;
-        $this->sleeper = $sleeper ?? static function (float $seconds): void {
+        $this->sleeper = \Closure::fromCallable($sleeper ?? static function (float $seconds): void {
             Timer::sleep($seconds);
-        };
-        $this->clock = $clock ?? static fn (): float => microtime(true);
+        });
+        $this->clock = \Closure::fromCallable($clock ?? static fn (): float => microtime(true));
     }
 
     /**

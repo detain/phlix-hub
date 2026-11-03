@@ -48,8 +48,8 @@ final class UserListCommand extends Command
 {
     use JsonOutput;
 
-    /** @var callable(): UserRepository Lazy factory for the backing repository. */
-    private $userRepositoryFactory;
+    /** @var \Closure(): UserRepository Lazy factory for the backing repository. */
+    private \Closure $userRepositoryFactory;
 
     /**
      * @param callable(): UserRepository $userRepositoryFactory Lazy factory
@@ -58,7 +58,7 @@ final class UserListCommand extends Command
      */
     public function __construct(callable $userRepositoryFactory)
     {
-        $this->userRepositoryFactory = $userRepositoryFactory;
+        $this->userRepositoryFactory = \Closure::fromCallable($userRepositoryFactory);
         parent::__construct();
     }
 

@@ -74,9 +74,8 @@ final class ChannelPendingCommandPusher implements PendingCommandPusherInterface
     private array $pending = [];
 
     /**
-     * @var callable(string, array<string, mixed>): void
      */
-    private $publisher;
+    private \Closure $publisher;
 
     /**
      * @param StructuredLogger                                    $logger     Relay logger.
@@ -89,9 +88,9 @@ final class ChannelPendingCommandPusher implements PendingCommandPusherInterface
         ?callable $publisher = null,
         ?string $replyEvent = null,
     ) {
-        $this->publisher = $publisher ?? static function (string $event, array $data): void {
+        $this->publisher = \Closure::fromCallable($publisher ?? static function (string $event, array $data): void {
             ChannelClient::publish($event, $data);
-        };
+        });
         $pid = getmypid();
         $this->replyEvent = $replyEvent
             ?? ('phlix.syncplay.pending_command.reply.' . ($pid === false ? 0 : $pid)
