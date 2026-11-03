@@ -115,6 +115,30 @@ describe('dial law (docs/websockets.md :8804, S237)', () => {
         assert.throws(() => buildRelayUrl(undefined, 'srv-1'), /no hub origin/);
     });
 
+    it('honors the operator __PHLIX__ seam exactly like the pinned @phlix/ui lane', () => {
+        const g = globalThis as { __PHLIX__?: unknown };
+        try {
+            g.__PHLIX__ = { wsUrl: 'wss://relay.example.com:9443', wsPath: null };
+            assert.equal(
+                buildRelayUrl('https://hub.example.com', 'srv/2'),
+                'wss://relay.example.com:9443/syncplay/srv%2F2',
+                'pinned wsUrl wins over origin derivation; wsPath null defaults to /syncplay',
+            );
+            g.__PHLIX__ = { wsUrl: 'ws://10.0.0.5', wsPath: '/relay-ws' };
+            assert.equal(
+                buildRelayUrl(undefined, 'srv-1'),
+                'ws://10.0.0.5/relay-ws/srv-1',
+            );
+        } finally {
+            delete g.__PHLIX__;
+        }
+        // Seam absent = legacy law (the parity twin below dials exactly this).
+        assert.equal(
+            buildRelayUrl('https://hub.example.com', 'srv-1'),
+            'wss://hub.example.com:8804/syncplay/srv-1',
+        );
+    });
+
     it('carries the token ONLY as the bearer subprotocol pair', () => {
         assert.deepEqual(relaySubprotocols('tok'), ['bearer', 'tok']);
         // S237: a query-string credential is refused by design — the builder

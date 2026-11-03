@@ -6,6 +6,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 38: portal Watch Party dial honors the operator `__PHLIX__.wsUrl`/`wsPath` seam — 2026-11-03
+
+- `web-ui/src/utils/watchPartyWire.ts::buildRelayUrl()` now applies the same
+  rule as the pinned @phlix/ui SyncPlay lane: a pinned `wsUrl` wins verbatim
+  with `wsPath ?? '/syncplay'`; with no seam, the legacy same-origin
+  `hostname:8804` derivation is untouched (parity twin test still green).
+  Previously the hub-local page dead-dialed :8804 on TLS/443-only reverse
+  proxy deployments — half-honoring a knob it was supposed to follow.
+- Truth test added in `tests/watch-party.test.ts` (seam present/absent);
+  SPA rebuilt deterministic x2 and committed under `public/assets/app`.
+
 ### Fixed — review hub Major 35: peer public-key lookup rides a generated-column UNIQUE hash index (was a TEXT full scan on the handshake gate) — 2026-11-03
 
 - Migration `050_federation_peer_public_key_hash.sql`: `public_key_hash

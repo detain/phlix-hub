@@ -71,6 +71,20 @@ export const BEARER_SUBPROTOCOL = 'bearer';
 /* ------------------------------------------------------------------ dial --- */
 
 /**
+ * Minimal shape of the deployment-injected `window.__PHLIX__` config object
+ * emitted by SharedUiController::shell(). Only the two socket hints are read
+ * here; null/absent means "operator did not pin a relay endpoint".
+ */
+interface PhlixShellSocketConfig {
+    readonly wsUrl?: string | null;
+    readonly wsPath?: string | null;
+}
+
+function shellSocketConfig(): PhlixShellSocketConfig | undefined {
+    return (globalThis as { __PHLIX__?: PhlixShellSocketConfig }).__PHLIX__;
+}
+
+/**
  * Build the relay URL: `ws(s)://<host>:8804/syncplay/<server_id>`.
  *
  * The scheme follows the hub origin (`https:` → `wss:`), the host is the
@@ -78,10 +92,24 @@ export const BEARER_SUBPROTOCOL = 'bearer';
  * the origin's port. `hubBaseUrl` defaults to the app's own origin (the common
  * self-hosted layout where the hub serves the SPA and the relay from one host).
  *
- * @throws Error when `hubBaseUrl` (or the ambient location) is unparsable — a
- *         silent fallback URL would dial somewhere nobody chose.
+ * The operator seam wins: when `__PHLIX__.wsUrl` is pinned (HUB_WS_URL,
+ * SharedUiController::configuredSocketBaseUrl), it is dialed verbatim with
+ * `__PHLIX__.wsPath ?? '/syncplay'` — the exact rule the pinned @phlix/ui
+ * SyncPlay lane applies (phlix-ui.js buildHubRelayUrl), mirrored here so the
+ * vendored store and this portal's own Watch Party dial can never diverge on
+ * a TLS/443-only reverse-proxy deployment (where same-origin :8804 is dead).
+ *
+ * @throws Error when no seam is pinned AND `hubBaseUrl` (or the ambient
+ *         location) is unparsable — a silent fallback URL would dial
+ *         somewhere nobody chose.
  */
 export function buildRelayUrl(hubBaseUrl: string | undefined, serverId: string): string {
+    const injected = shellSocketConfig();
+    const seam = typeof injected?.wsUrl === 'string' && injected.wsUrl !== '' ? injected : null;
+    if (seam !== null) {
+        const wsPath = seam.wsPath ?? '/syncplay';
+        return `${seam.wsUrl}${wsPath}/${encodeURIComponent(serverId)}`;
+    }
     const ambient = globalThis.location?.origin;
     const base = hubBaseUrl ?? ambient;
     if (typeof base !== 'string' || base === '') {
