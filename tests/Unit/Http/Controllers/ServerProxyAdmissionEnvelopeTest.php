@@ -179,7 +179,7 @@ final class ServerProxyAdmissionEnvelopeTest extends TestCase
         );
 
         self::assertFalse($forwarded, 'a capped stream must never reach the relay bridge');
-        self::assertNull($response->streamProducer, 'a capped stream must not return a streaming producer');
+        self::assertNull($response->getStreamProducer(), 'a capped stream must not return a streaming producer');
         self::assertSame(429, $response->statusCode);
 
         $body = $this->bodyOf($response);

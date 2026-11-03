@@ -64,10 +64,8 @@ class Response
      * stream) straight through without buffering the whole body on the hub. The
      * producer owns the entire on-the-wire response once invoked (status line,
      * headers, body, terminator).
-     *
-     * @var (callable(TcpConnection): void)|null
      */
-    public $streamProducer = null;
+    private ?\Closure $streamProducer = null;
 
     /**
      * Mark this response as an incrementally-streamed response.
@@ -79,8 +77,24 @@ class Response
      */
     public function stream(callable $producer): self
     {
-        $this->streamProducer = $producer;
+        // Review hub Major 33: the property is no longer a public untyped
+        // slot on the object that doubles as the wire response envelope —
+        // only this setter moves it, and the stored shape is a real Closure
+        // regardless of what callable was handed in.
+        $this->streamProducer = $producer instanceof \Closure
+            ? $producer
+            : \Closure::fromCallable($producer);
         return $this;
+    }
+
+    /**
+     * The live streaming producer, or null when this response takes the
+     * buffered path. Read-only view for the HTTP worker and admission gates;
+     * the only writer is {@see self::stream()}.
+     */
+    public function getStreamProducer(): ?\Closure
+    {
+        return $this->streamProducer;
     }
 
     /**

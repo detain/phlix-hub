@@ -225,7 +225,7 @@ final class McpToolContext
         // $body is empty and decoding it would report an EMPTY SUCCESS. Say so
         // instead: no shipped tool targets those prefixes, and the day one does,
         // this must be a deliberate decision rather than a silent blank.
-        if ($response->streamProducer !== null) {
+        if ($response->getStreamProducer() !== null) {
             return [
                 'status' => 501,
                 'payload' => [

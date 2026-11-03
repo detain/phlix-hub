@@ -195,7 +195,7 @@ final class AlexaMediaGateway
         // decoding it would report an EMPTY SUCCESS. Neither path this class can
         // reach streams, so this is unreachable today and says so rather than
         // returning a silent blank if that ever changes.
-        if ($response->streamProducer !== null) {
+        if ($response->getStreamProducer() !== null) {
             return [
                 'status' => 501,
                 'payload' => [

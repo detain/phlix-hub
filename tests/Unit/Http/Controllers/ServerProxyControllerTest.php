@@ -182,8 +182,8 @@ final class ServerProxyControllerTest extends TestCase
     private function drive(Response $response): RecordingBrowserConnection
     {
         $connection = $this->fakeConnection();
-        if ($response->streamProducer !== null) {
-            ($response->streamProducer)($connection);
+        if ($response->getStreamProducer() !== null) {
+            ($response->getStreamProducer())($connection);
         }
         return $connection;
     }
@@ -1116,7 +1116,7 @@ final class ServerProxyControllerTest extends TestCase
             'a HEAD reply must keep the paired server\'s real Content-Length, not a recomputed 0',
         );
         $this->assertTrue($headStream->headOnly, 'the HEAD reply must select the BodylessResponse encoder');
-        $this->assertNull($headStream->streamProducer, 'HEAD must take the buffered path, not the producer');
+        $this->assertNull($headStream->getStreamProducer(), 'HEAD must take the buffered path, not the producer');
 
         // ---- every other HEAD: 403 from the SCOPE gate, with a GET control --
         $denied = [
@@ -1453,7 +1453,8 @@ final class ServerProxyControllerTest extends TestCase
         );
 
         // HEAD is buffered, never streamed — no producer closure.
-        $this->assertNull($response->streamProducer, 'HEAD must take the buffered path, not the streaming producer');
+        $this->assertNull($response->getStreamProducer(), 'HEAD must take the buffered '
+            . 'path, not the streaming producer');
         // Prompt completion on END — a 200, never a 504 gateway timeout.
         $this->assertSame(200, $response->statusCode);
         // Range support survives the hub's response framing.
@@ -1493,7 +1494,7 @@ final class ServerProxyControllerTest extends TestCase
         );
 
         // A streaming path defers to a producer instead of a buffered body.
-        $this->assertNotNull($response->streamProducer);
+        $this->assertNotNull($response->getStreamProducer());
         $this->assertSame('', $response->body);
 
         $connection = $this->drive($response);
@@ -1643,8 +1644,8 @@ final class ServerProxyControllerTest extends TestCase
             }
         };
 
-        $this->assertNotNull($response->streamProducer);
-        ($response->streamProducer)($connection);
+        $this->assertNotNull($response->getStreamProducer());
+        ($response->getStreamProducer())($connection);
 
         // head + two body fragments, all bytes delivered.
         $this->assertCount(3, $connection->sizes);
@@ -3343,7 +3344,7 @@ final class ServerProxyControllerTest extends TestCase
             ['id' => 'srv-1', 'path' => 'hls/job-abc/seg-00007.ts'],
         );
         // A refused stream returns a buffered 429 JSON error, not a producer.
-        $this->assertNull($response->streamProducer, 'A capped stream must not return a streaming producer.');
+        $this->assertNull($response->getStreamProducer(), 'A capped stream must not return a streaming producer.');
         $this->assertSame(429, $response->statusCode);
         $this->assertFalse($forwarded, 'A capped stream must never reach the relay bridge.');
         /** @var array<string, mixed> $body */
@@ -3409,7 +3410,7 @@ final class ServerProxyControllerTest extends TestCase
             ['id' => 'srv-1', 'path' => 'hls/job-abc/seg-00007.ts'],
         );
 
-        $this->assertNotNull($response->streamProducer);
+        $this->assertNotNull($response->getStreamProducer());
         $connection = $this->drive($response);
         $this->assertStringContainsString('HTTP/1.1 200 OK', $connection->written[0]);
     }
@@ -6266,7 +6267,7 @@ final class ServerProxyControllerTest extends TestCase
             ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
         );
 
-        $this->assertNotNull($response->streamProducer, 'the byte stream must take the STREAMING path');
+        $this->assertNotNull($response->getStreamProducer(), 'the byte stream must take the STREAMING path');
         $connection = $this->drive($response);
 
         $written = $connection->written;
@@ -6450,7 +6451,7 @@ final class ServerProxyControllerTest extends TestCase
             'the gate that refuses a relayed direct-play stream is the HUB-side concurrent-stream cap '
             . '(RelaySessionManager::activeUserStreams vs max_concurrent_streams), NOT anything in phlix-server',
         );
-        $this->assertNull($denied->streamProducer, 'a refused stream must not return a producer');
+        $this->assertNull($denied->getStreamProducer(), 'a refused stream must not return a producer');
         // (2) a DECISION, not a timeout: the bridge is never touched, and the
         // refusal is orders of magnitude faster than the 30 s reply timeout.
         $this->assertSame(0, $denyForwarded, 'the refusal must happen BEFORE anything is forwarded');
@@ -6493,7 +6494,7 @@ final class ServerProxyControllerTest extends TestCase
         );
         $connection = $this->drive($allowed);
 
-        $this->assertNotNull($allowed->streamProducer, 'the control must be admitted as a stream');
+        $this->assertNotNull($allowed->getStreamProducer(), 'the control must be admitted as a stream');
         $this->assertSame(1, $allowForwarded, 'the control must reach the relay bridge');
         $this->assertStringStartsWith('HTTP/1.1 206 ', $connection->written[0]);
     }

@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 33: the streaming producer is no longer a public untyped slot — 2026-11-03
+
+- `Http\Response::$streamProducer` — the live socket-facing producer the
+  HTTP worker invokes per connection — was `public $streamProducer = null`
+  with only a `@var` docblock: any code could overwrite it mid-flight on the
+  object that doubles as the response envelope. It is now `private
+  ?\Closure`, written only by the fluent `stream()` setter (which coerces
+  arbitrary callables through `Closure::fromCallable`), and read through the
+  new `getStreamProducer()` accessor — the 24 former direct reads in
+  `Application`, the MCP/Alexa admission gates and the law-pinning tests all
+  go through it now; no test lost an assertion, every pin just speaks the
+  accessor.
+
 ### Fixed — review hub Major 40: the logging surface gets its operator seam — 2026-11-03
 
 - `config/logger.php` now reads `HUB_LOG_LEVEL` (default **info**; invalid

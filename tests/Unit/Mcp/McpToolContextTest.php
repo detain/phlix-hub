@@ -33,7 +33,7 @@ use function sprintf;
  *
  * That is precisely the shape this program has been burned by — a green test
  * pinning code that no longer runs. A mutation that deletes the
- * `$response->streamProducer !== null` branch entirely survives the whole suite
+ * `$response->getStreamProducer() !== null` branch entirely survives the whole suite
  * unless something drives it. This file drives it, so the backstop is proven
  * REACHABLE and correct rather than assumed to be.
  *

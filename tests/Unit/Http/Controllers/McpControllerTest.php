@@ -665,7 +665,7 @@ final class McpControllerTest extends TestCase
         );
 
         self::assertSame(401, $response->statusCode);
-        self::assertNull($response->streamProducer, 'an unauthenticated GET must not open a stream.');
+        self::assertNull($response->getStreamProducer(), 'an unauthenticated GET must not open a stream.');
         self::assertSame('auth.required', self::body($response)['code'] ?? null);
     }
 
@@ -706,7 +706,7 @@ final class McpControllerTest extends TestCase
         $response = $this->controller()->stream($this->getRequest(self::GOOD_TOKEN, $headers));
 
         self::assertSame(406, $response->statusCode);
-        self::assertNull($response->streamProducer, 'a refused GET must not open a stream.');
+        self::assertNull($response->getStreamProducer(), 'a refused GET must not open a stream.');
         self::assertSame('mcp.sse_not_acceptable', self::body($response)['code'] ?? null);
     }
 
@@ -737,7 +737,7 @@ final class McpControllerTest extends TestCase
         );
 
         self::assertSame(200, $response->statusCode);
-        self::assertNotNull($response->streamProducer, "Accept: {$accept} must open a stream.");
+        self::assertNotNull($response->getStreamProducer(), "Accept: {$accept} must open a stream.");
     }
 
     /**
@@ -777,8 +777,8 @@ final class McpControllerTest extends TestCase
             },
         );
 
-        self::assertNotNull($response->streamProducer);
-        ($response->streamProducer)($connection);
+        self::assertNotNull($response->getStreamProducer());
+        ($response->getStreamProducer())($connection);
 
         self::assertStringContainsString('HTTP/1.1 200 OK', $written);
         self::assertStringContainsString('Content-Type: text/event-stream', $written);
@@ -799,7 +799,7 @@ final class McpControllerTest extends TestCase
         ]));
 
         self::assertSame(400, $response->statusCode);
-        self::assertNull($response->streamProducer);
+        self::assertNull($response->getStreamProducer());
         self::assertSame('mcp.unsupported_protocol_version', self::body($response)['code'] ?? null);
     }
 

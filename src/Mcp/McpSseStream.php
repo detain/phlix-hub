@@ -53,7 +53,7 @@ use const JSON_UNESCAPED_SLASHES;
  * ## Framing: chunked, not connection-close
  *
  * The producer owns the whole on-the-wire response (see
- * {@see \Phlix\Hub\Http\Response::$streamProducer}). A `text/event-stream` has
+ * {@see \Phlix\Hub\Http\Response::getStreamProducer()}). A `text/event-stream` has
  * no length known in advance, so the head declares `Transfer-Encoding: chunked`
  * and every frame goes out as one HTTP chunk — the identical idiom
  * {@see \Phlix\Hub\Http\ConnectionResponseSink::head()} uses for a relay body
