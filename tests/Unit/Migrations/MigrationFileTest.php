@@ -191,6 +191,60 @@ final class MigrationFileTest extends TestCase
     }
 
     /**
+     * A guarded replay probe must name EVERY object the guarded statement creates.
+     *
+     * Review minor (2026-11-03): migrations 008 and 046 wrapped an ALTER that adds a
+     * COLUMN *and* an INDEX/UNIQUE KEY, but the `IF(...)` guard probed only
+     * `information_schema.COLUMNS`. Whatever the probe saw decided the whole
+     * statement, so a replay facing a schema whose index half had gone missing (or a
+     * column half kept without its key) skipped the DDL that actually still applied —
+     * the guard's coverage was narrower than the statement's effect. 034 already
+     * demonstrates the STATISTICS-side probe, and the 048/050 nested-CASE arms carry
+     * both; this writes the pairing down as a rule so it cannot regress in a new
+     * migration.
+     *
+     * Scope is the pairing the review named: a file whose guarded DDL adds a column
+     * AND an index must probe `COLUMNS` *and* `STATISTICS`. Column-only guards
+     * (007, 036) and index-only guards (034, 049, 051) each cover exactly what their
+     * statement creates and are exempt.
+     *
+     * @dataProvider migrationFileProvider
+     */
+    public function testGuardedDdlProbesEveryObjectKindItCreates(string $file): void
+    {
+        $contents = file_get_contents($file);
+        self::assertNotFalse($contents);
+
+        $addsColumn = preg_match('/\bADD COLUMN\b/i', $contents) === 1;
+        $addsIndex = preg_match(
+            '/\bADD (?:UNIQUE |FULLTEXT )?(?:INDEX|KEY)\b|^\s*CREATE (?:UNIQUE )?INDEX\b/im',
+            $contents,
+        ) === 1;
+        $guarded = stripos($contents, 'SET @phlix_guard') !== false;
+
+        if (!$guarded || !$addsColumn || !$addsIndex) {
+            // Nothing paired to cover: either unguarded table DDL, or a statement
+            // whose effect is one object kind.
+            $this->addToAssertionCount(1);
+
+            return;
+        }
+
+        $name = basename($file);
+        self::assertMatchesRegularExpression(
+            '/information_schema\.COLUMNS/i',
+            $contents,
+            $name . ' adds a COLUMN under a guard but never probes information_schema.COLUMNS',
+        );
+        self::assertMatchesRegularExpression(
+            '/information_schema\.STATISTICS/i',
+            $contents,
+            $name . ' adds an INDEX/KEY under a guard but never probes information_schema.STATISTICS '
+                . '(the review-minor asymmetry: the column probe decided a statement that also created a key)',
+        );
+    }
+
+    /**
      * Whether this migration file creates one or more new tables (as
      * opposed to ALTER-only edits against tables defined by earlier
      * migrations). Table-shape checks like InnoDB/utf8mb4 declaration

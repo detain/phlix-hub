@@ -6,6 +6,34 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 3 (008 and 046 guard each object their ALTER creates, 2026-11-03)
+- **Paired replay probes.** `008_subdomain_allocation.sql` and
+  `046_federation_peer_leaf_hub_id.sql` each wrapped an ALTER adding a COLUMN *and*
+  an INDEX / UNIQUE KEY behind a single `information_schema.COLUMNS` probe, so a
+  replay facing a schema whose other half had gone missing was skipped by a guard that
+  never looked at it — the probe's coverage was narrower than the statement's effect.
+  Each half now carries its own block (`…_sql_column` on `COLUMNS`, `…_sql_index` on
+  `STATISTICS`, the 034 idiom), column first, so the key probe can never add a key
+  over a column that is not there. Fresh applies are untouched: both probes read 0 and
+  both ALTERs run verbatim.
+- **Two gates, no database touched.**
+  `MigrationFileTest::testGuardedDdlProbesEveryObjectKindItCreates` is the corpus-wide
+  rule: a guarded statement that adds both object kinds must probe both. It reads the
+  whole migrations directory — 008/046 satisfy it now, 048/050 already did through
+  their nested-CASE arms, and the column-only guards (007, 036) plus the index-only
+  ones (034, 049, 051) are exempt by shape.
+  `MigrationRunnerTest::testPairedGuardsExecuteAsTwoIndependentProbeBlocks` drives the
+  real files through the runner's splitter with a recording connection and asserts the
+  emitted shape: two independent guard blocks each carrying only its own DDL, column
+  before index, and PREPARE/DEALLOCATE ×2 so nothing dangles on the shared connection.
+  Splitter-only bugs (a `;` inside a string literal, a forgotten DEALLOCATE) surface
+  nowhere else. Measured from red: the pre-cure single-guard file yields zero paired
+  blocks, and a renamed probe reddens exactly its own dataset.
+- **The live-DB replay leg stays CI-attested.**
+  `tests/Integration/Migrations/MigrationRunnerIntegrationTest` (fresh apply, then a
+  silent replay) runs it; this lane deliberately did not spin a scratch MySQL, because
+  the estate's server lane is PHP-active on the shared database venue.
+
 ### Fixed — review Minor 2 (the SharedUi 503 diagnostic rides the estate logger, 2026-11-03)
 - **Sink swap, same words.** `SharedUiController::unavailable()` wrote its per-cause
   503 diagnostic through bare `error_log()`, bypassing the per-handler level routing

@@ -15,16 +15,35 @@
 -- 1060/1061, the checksum would never refresh, and the chain would wedge. The probe
 -- below skips the statement when its object already exists; fresh applies are
 -- unaffected (probe returns 0 → the ALTER runs verbatim).
-SET @phlix_guard_sql = IF(
+--
+-- PAIRED probe (review minor, 2026-11-03): this ALTER creates TWO objects — the
+-- `subdomain` column and the `ix_servers_subdomain` index — so a probe that names
+-- only one of them can skip work the other object still needs. The column half and
+-- the index half each carry their own information_schema probe (the 034 STATISTICS
+-- idiom), so a replay heals whichever one is missing instead of trusting the other
+-- to have travelled with it. Order matters: the index probe runs after the column
+-- is guaranteed present.
+SET @phlix_guard_sql_column = IF(
     (SELECT COUNT(*) FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = DATABASE()
          AND TABLE_NAME = 'servers'
          AND COLUMN_NAME = 'subdomain') = 0,
-    'ALTER TABLE servers ADD COLUMN subdomain VARCHAR(63) NULL AFTER capabilities, ADD INDEX ix_servers_subdomain (subdomain)',
+    'ALTER TABLE servers ADD COLUMN subdomain VARCHAR(63) NULL AFTER capabilities',
     'SELECT 1');
-PREPARE phlix_guard FROM @phlix_guard_sql;
-EXECUTE phlix_guard;
-DEALLOCATE PREPARE phlix_guard;
+PREPARE phlix_guard_column FROM @phlix_guard_sql_column;
+EXECUTE phlix_guard_column;
+DEALLOCATE PREPARE phlix_guard_column;
+
+SET @phlix_guard_sql_index = IF(
+    (SELECT COUNT(*) FROM information_schema.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'servers'
+         AND INDEX_NAME = 'ix_servers_subdomain') = 0,
+    'ALTER TABLE servers ADD INDEX ix_servers_subdomain (subdomain)',
+    'SELECT 1');
+PREPARE phlix_guard_index FROM @phlix_guard_sql_index;
+EXECUTE phlix_guard_index;
+DEALLOCATE PREPARE phlix_guard_index;
 
 CREATE TABLE IF NOT EXISTS dns_challenges (
     id                       CHAR(36) NOT NULL,

@@ -584,6 +584,131 @@ final class MigrationRunnerTest extends TestCase
         $runner->run();
     }
 
+    /**
+     * The two paired-guard migrations shipped by the 2026-11-03 review cure.
+     *
+     * @return list<array{0: string, 1: string, 2: string}>
+     */
+    public static function pairedGuardMigrationProvider(): array
+    {
+        return [
+            ['008_subdomain_allocation.sql', 'subdomain', 'ix_servers_subdomain'],
+            ['046_federation_peer_leaf_hub_id.sql', 'leaf_hub_id', 'uq_federation_peers_leaf_hub_id'],
+        ];
+    }
+
+    /**
+     * Executed-shape proof for the paired replay guards (review minor 2026-11-03).
+     *
+     * Both files used to wrap "add a column AND add an index" in ONE statement
+     * behind a column-only `information_schema.COLUMNS` probe: whichever half the
+     * probe looked at decided the whole statement, so a replay facing a schema that
+     * kept the column but lost the key skipped the DDL that still applied. The cure
+     * splits each ALTER into a column block and an index block, each with its own
+     * probe (the 034 STATISTICS idiom).
+     *
+     * `MigrationFileTest` pins that text pattern statically; this pins what the
+     * runner ACTUALLY sends to MySQL — the shape the replay obeys. Driving the real
+     * file through the splitter with a recording connection is deliberate: the
+     * guard is a multi-statement SQL script, and a `;` inside a string literal or a
+     * forgotten `DEALLOCATE` would only ever show up here, not in a regex over the
+     * file. No database is touched.
+     *
+     * @dataProvider pairedGuardMigrationProvider
+     */
+    public function testPairedGuardsExecuteAsTwoIndependentProbeBlocks(
+        string $migrationFile,
+        string $columnName,
+        string $indexName
+    ): void {
+        $real = __DIR__ . '/../../../migrations/' . $migrationFile;
+        self::assertFileExists($real);
+        copy($real, $this->migrationsDir . '/' . $migrationFile);
+
+        $db = $this->createMock(Connection::class);
+        $statements = [];
+        $callIndex = 0;
+        $db->method('query')
+            ->willReturnCallback(function ($sql, $params = null) use (&$statements, &$callIndex) {
+                $callIndex++;
+                if ($callIndex === 2) {
+                    // listApplied
+                    return [];
+                }
+                $statements[] = $sql;
+                return null;
+            });
+
+        $runner = new MigrationRunner($db, $this->migrationsDir);
+        self::assertSame([$migrationFile], $runner->run());
+
+        /** @var list<string> $guards */
+        $guards = array_values(array_filter(
+            $statements,
+            static fn ($s): bool => is_string($s) && str_contains($s, 'SET @phlix_guard_sql_'),
+        ));
+        self::assertCount(
+            2,
+            $guards,
+            $migrationFile . ' must send exactly two guarded blocks (column half, index half)',
+        );
+
+        [$columnGuard, $indexGuard] = $guards;
+
+        self::assertStringContainsString('information_schema.COLUMNS', $columnGuard);
+        self::assertStringContainsString("COLUMN_NAME = '" . $columnName . "'", $columnGuard);
+        self::assertStringContainsString('ADD COLUMN', $columnGuard);
+        self::assertStringNotContainsString(
+            'information_schema.STATISTICS',
+            $columnGuard,
+            'the column block must probe only the column it adds',
+        );
+        self::assertStringNotContainsString(
+            'ADD INDEX',
+            $columnGuard,
+            'the column block must not carry index DDL — that is the pairing the review named',
+        );
+        self::assertStringNotContainsString(
+            'ADD UNIQUE KEY',
+            $columnGuard,
+            'the column block must not carry key DDL — that is the pairing the review named',
+        );
+
+        self::assertStringContainsString('information_schema.STATISTICS', $indexGuard);
+        self::assertStringContainsString("INDEX_NAME = '" . $indexName . "'", $indexGuard);
+        self::assertStringContainsString(
+            $indexName,
+            $indexGuard,
+            $migrationFile . ': the index block must add ' . $indexName,
+        );
+        self::assertStringNotContainsString(
+            'ADD COLUMN',
+            $indexGuard,
+            'the index block must not re-add the column: it runs only once the column half exists',
+        );
+
+        // The index half has to run AFTER the column half, or a fresh apply would
+        // try to key a column that is not there yet.
+        $columnPosition = array_search($columnGuard, $statements, true);
+        $indexPosition = array_search($indexGuard, $statements, true);
+        self::assertIsInt($columnPosition);
+        self::assertIsInt($indexPosition);
+        self::assertLessThan($indexPosition, $columnPosition);
+
+        // Every guard prepares and deallocates on the shared connection: a dangling
+        // prepared statement name would collide with the next block.
+        $prepared = array_values(array_filter(
+            $statements,
+            static fn ($s): bool => is_string($s) && preg_match('/^\s*PREPARE phlix_guard_/', $s) === 1,
+        ));
+        $released = array_values(array_filter(
+            $statements,
+            static fn ($s): bool => is_string($s) && str_contains($s, 'DEALLOCATE PREPARE phlix_guard_'),
+        ));
+        self::assertCount(2, $prepared, $migrationFile . ': both blocks must prepare their statement');
+        self::assertCount(2, $released, $migrationFile . ': both blocks must deallocate, leaving nothing dangling');
+    }
+
     public function testTrackingTableConstantIsStable(): void
     {
         self::assertSame('migrations', MigrationRunner::TRACKING_TABLE);

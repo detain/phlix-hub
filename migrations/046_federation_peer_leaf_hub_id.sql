@@ -22,13 +22,32 @@
 -- 1060/1061, the checksum would never refresh, and the chain would wedge. The probe
 -- below skips the statement when its object already exists; fresh applies are
 -- unaffected (probe returns 0 → the ALTER runs verbatim).
-SET @phlix_guard_sql = IF(
+--
+-- PAIRED probe (review minor, 2026-11-03): this ALTER creates TWO objects — the
+-- `leaf_hub_id` column and the `uq_federation_peers_leaf_hub_id` UNIQUE key that
+-- makes the two-id reconciliation safe — so a column-only probe could skip a replay
+-- that still owed the key (or vice versa). Each half carries its own
+-- information_schema probe (the 034 STATISTICS idiom). Order matters: the key probe
+-- runs after the column is guaranteed present, so it can never add a key over a
+-- column that is not there.
+SET @phlix_guard_sql_column = IF(
     (SELECT COUNT(*) FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = DATABASE()
          AND TABLE_NAME = 'federation_peers'
          AND COLUMN_NAME = 'leaf_hub_id') = 0,
-    'ALTER TABLE federation_peers ADD COLUMN leaf_hub_id CHAR(36) NULL AFTER public_key, ADD UNIQUE KEY uq_federation_peers_leaf_hub_id (leaf_hub_id)',
+    'ALTER TABLE federation_peers ADD COLUMN leaf_hub_id CHAR(36) NULL AFTER public_key',
     'SELECT 1');
-PREPARE phlix_guard FROM @phlix_guard_sql;
-EXECUTE phlix_guard;
-DEALLOCATE PREPARE phlix_guard;
+PREPARE phlix_guard_column FROM @phlix_guard_sql_column;
+EXECUTE phlix_guard_column;
+DEALLOCATE PREPARE phlix_guard_column;
+
+SET @phlix_guard_sql_index = IF(
+    (SELECT COUNT(*) FROM information_schema.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'federation_peers'
+         AND INDEX_NAME = 'uq_federation_peers_leaf_hub_id') = 0,
+    'ALTER TABLE federation_peers ADD UNIQUE KEY uq_federation_peers_leaf_hub_id (leaf_hub_id)',
+    'SELECT 1');
+PREPARE phlix_guard_index FROM @phlix_guard_sql_index;
+EXECUTE phlix_guard_index;
+DEALLOCATE PREPARE phlix_guard_index;
