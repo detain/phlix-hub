@@ -26,5 +26,18 @@
 -- degrades gracefully (records name-only) for the earlier files applied in the
 -- same run and backfills their checksums on the next run.
 
-ALTER TABLE migrations
-    ADD COLUMN checksum CHAR(32) NULL COMMENT 'Comment-normalised md5 of the migration file when applied; NULL for pre-HB-4.11 rows awaiting backfill';
+-- idempotency guard (review hub M4, 2026-11-02): the runner re-applies a file
+-- whose checksum diverged (README *Database migrations*). A bare ADD would then raise
+-- 1060/1061, the checksum would never refresh, and the chain would wedge. The probe
+-- below skips the statement when its object already exists; fresh applies are
+-- unaffected (probe returns 0 → the ALTER runs verbatim).
+SET @phlix_guard_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'migrations'
+         AND COLUMN_NAME = 'checksum') = 0,
+    'ALTER TABLE migrations ADD COLUMN checksum CHAR(32) NULL COMMENT ''Comment-normalised md5 of the migration file when applied; NULL for pre-HB-4.11 rows awaiting backfill''',
+    'SELECT 1');
+PREPARE phlix_guard FROM @phlix_guard_sql;
+EXECUTE phlix_guard;
+DEALLOCATE PREPARE phlix_guard;

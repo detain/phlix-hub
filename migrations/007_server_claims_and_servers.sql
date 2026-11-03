@@ -16,13 +16,34 @@
 -- Column ordering is cosmetic; we deliberately do NOT use `AFTER enrolled_at`
 -- here because that column is created later (see migration 012).
 
-ALTER TABLE server_claims
-    ADD COLUMN claimed_by CHAR(36) NULL AFTER expires_at,
-    ADD COLUMN claimed_at INT UNSIGNED NULL AFTER claimed_by,
-    ADD COLUMN protocol_version VARCHAR(10) NOT NULL DEFAULT 'v1' AFTER hostname_candidates_json,
-    ADD COLUMN public_key_jwk JSON NOT NULL AFTER protocol_version;
+-- idempotency guard (review hub M4, 2026-11-02): the runner re-applies a file
+-- whose checksum diverged (README *Database migrations*). A bare ADD would then raise
+-- 1060/1061, the checksum would never refresh, and the chain would wedge. The probe
+-- below skips the statement when its object already exists; fresh applies are
+-- unaffected (probe returns 0 → the ALTER runs verbatim).
+SET @phlix_guard_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'server_claims'
+         AND COLUMN_NAME = 'claimed_by') = 0,
+    'ALTER TABLE server_claims ADD COLUMN claimed_by CHAR(36) NULL AFTER expires_at, ADD COLUMN claimed_at INT UNSIGNED NULL AFTER claimed_by, ADD COLUMN protocol_version VARCHAR(10) NOT NULL DEFAULT ''v1'' AFTER hostname_candidates_json, ADD COLUMN public_key_jwk JSON NOT NULL AFTER protocol_version',
+    'SELECT 1');
+PREPARE phlix_guard FROM @phlix_guard_sql;
+EXECUTE phlix_guard;
+DEALLOCATE PREPARE phlix_guard;
 
-ALTER TABLE servers
-    ADD COLUMN public_key_jwk JSON NOT NULL AFTER version,
-    ADD COLUMN heartbeat_interval INT UNSIGNED NOT NULL DEFAULT 60 AFTER public_key_jwk,
-    ADD COLUMN capabilities JSON NULL AFTER heartbeat_interval;
+-- idempotency guard (review hub M4, 2026-11-02): the runner re-applies a file
+-- whose checksum diverged (README *Database migrations*). A bare ADD would then raise
+-- 1060/1061, the checksum would never refresh, and the chain would wedge. The probe
+-- below skips the statement when its object already exists; fresh applies are
+-- unaffected (probe returns 0 → the ALTER runs verbatim).
+SET @phlix_guard_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'servers'
+         AND COLUMN_NAME = 'public_key_jwk') = 0,
+    'ALTER TABLE servers ADD COLUMN public_key_jwk JSON NOT NULL AFTER version, ADD COLUMN heartbeat_interval INT UNSIGNED NOT NULL DEFAULT 60 AFTER public_key_jwk, ADD COLUMN capabilities JSON NULL AFTER heartbeat_interval',
+    'SELECT 1');
+PREPARE phlix_guard FROM @phlix_guard_sql;
+EXECUTE phlix_guard;
+DEALLOCATE PREPARE phlix_guard;

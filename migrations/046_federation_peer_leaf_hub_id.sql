@@ -17,6 +17,18 @@
 -- tracking table and never re-runs them, so a plain ALTER suffices.
 -- (MySQL 8 does not support `ADD COLUMN IF NOT EXISTS` — MariaDB-only.)
 
-ALTER TABLE federation_peers
-    ADD COLUMN leaf_hub_id CHAR(36) NULL AFTER public_key,
-    ADD UNIQUE KEY uq_federation_peers_leaf_hub_id (leaf_hub_id);
+-- idempotency guard (review hub M4, 2026-11-02): the runner re-applies a file
+-- whose checksum diverged (README *Database migrations*). A bare ADD would then raise
+-- 1060/1061, the checksum would never refresh, and the chain would wedge. The probe
+-- below skips the statement when its object already exists; fresh applies are
+-- unaffected (probe returns 0 → the ALTER runs verbatim).
+SET @phlix_guard_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'federation_peers'
+         AND COLUMN_NAME = 'leaf_hub_id') = 0,
+    'ALTER TABLE federation_peers ADD COLUMN leaf_hub_id CHAR(36) NULL AFTER public_key, ADD UNIQUE KEY uq_federation_peers_leaf_hub_id (leaf_hub_id)',
+    'SELECT 1');
+PREPARE phlix_guard FROM @phlix_guard_sql;
+EXECUTE phlix_guard;
+DEALLOCATE PREPARE phlix_guard;

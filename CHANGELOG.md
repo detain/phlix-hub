@@ -6,6 +6,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 4: checksum-divergence re-apply can no longer wedge the chain — 2026-11-02
+
+- `migrations/041` records a comment-normalised md5 per applied file, and the
+  runner RE-APPLIES any file whose on-disk checksum diverged (the documented
+  self-heal path). Eleven legacy migrations contained bare `ADD COLUMN` /
+  `ADD KEY` DDL that, once the schema already carried those objects, re-ran as
+  error 1060/1061 — `MigrationRunner::applyFile()` rethrows, so a single edited
+  legacy file would have bricked every subsequent boot migrate.
+- Each unsafe statement in migrations 006, 007, 008, 012, 034, 036, 038, 039,
+  041, 042, 046 is now wrapped in the 048-style `information_schema`
+  PREPARE/EXECUTE guard (column probe via `COLUMNS`, index probe via
+  `STATISTICS`; no-op arm is `SELECT 1`). One guard per original atomic ALTER:
+  DDL is all-or-nothing, so the first named column's presence proves the whole
+  statement already landed.
+- Migration 034's header claim "the runner never re-runs them" was corrected to
+  the 041-era divergence truth (it was the file most likely to hit it).
+- 030's `MODIFY` statements were measured re-run-safe on MySQL (MODIFY is
+  idempotent when the definition already matches) and deliberately untouched.
+- Proven dynamically on a scratch MySQL 8: fresh full-chain apply via
+  `scripts/run-migrations.php` = 35 applied, exit 0; each guarded file re-piped
+  into the applied schema = rc 0 (guards no-op);
+  `MigrationRunnerIntegrationTest` (incl. `testRerunningIsIdempotent` and the
+  checksum-divergence tests) = 10 tests / 240 assertions OK; ledger-pin tests
+  (`MigrationRunnerTest`, `MigrateCommandTest`, `RelayUserSettingsMigrationTest`)
+  = 27 tests OK.
+
 ### Fixed — review hub Major 3: the extension-gate claim now says where the gate actually bites — 2026-11-02
 
 - README *Requirements* promised "hard boot gates — the hub refuses to start
