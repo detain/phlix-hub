@@ -40,6 +40,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 - [Watching with family and friends](#watching-with-family-and-friends)
 - [Connecting a media server](#connecting-a-media-server)
 - [Federation: pairing two hubs](#federation-pairing-two-hubs-operator-walkthrough)
+- [Portal admin basics](#portal-admin-basics)
 - [Testing & quality](#testing--quality)
 - [Project structure](#project-structure)
 - [Related repositories](#related-repositories)
@@ -89,19 +90,25 @@ instance pointed at from here.
   bookkeeping only — `createAdminDelegation` writes the DB row plus an audit entry, but the
   master-side wire push is not implemented, so no `admin_delegation` frame ever reaches the
   peer today (the reserved envelope is documented as such on `:8805` in the OpenAPI spec).
-- **SyncPlay relay** — watches in lockstep across devices: the hub carries the
+- **Watch Party (SyncPlay relay)** — watches in lockstep across devices: the hub carries the
   synchronised-playback messages (play/pause/seek) for viewers outside your home
-  network. Account-scoped today — see [Watching with family and
+  network, with a **Watch Party** page at `/app/watch-party` for hosting and joining rooms.
+  Account-scoped today — see [Watching with family and
   friends](#watching-with-family-and-friends) for what that means before you invite
   anyone.
 - **Media requests** — a Jellyseerr-class request queue. Users request movies/series; admins
   approve, and the Hub talks to Sonarr/Radarr to fulfil them.
 - **Web UI & admin console** — the hub's front door is a Vue SPA (the shared `@phlix/ui` design
   system) served at `/app` (`/` redirects to `/app/servers`). Every signed-in user gets **My Servers**,
-  **Server Detail**, **Search**, **Federation**, **Federation Shares**, **Shares**, **Shared With Me**,
-  **Invite Links**, and **Requests**; there is a public **invite-acceptance** page at `/app/invite/:token`
-  (the target of the public `GET /invite/{token}` link). On top of that a `requiresAdmin` **admin console**
-  at `/app/admin/*` (Hub Dashboard, Users, Logs, Settings, Audit Logs, request approval). The Vue SPA is
+  **Server Detail**, **Search**, **Shares**, **Shared With Me**, **Watch Party**, **Invite Links**,
+  **Requests**, **Security** (own password/sessions), **MCP tokens** (own API credentials), and the
+  media-browsing surfaces (music, books, audiobooks, photos) for the selected server; there is a
+  public **invite-acceptance** page at `/app/invite/:token` (the target of the public
+  `GET /invite/{token}` link). **Federation**, **Federation Shares**, and the `requiresAdmin`
+  **admin console** at `/app/admin/*` (Hub Dashboard, Users, Logs, Settings, Audit Logs, request
+  approval) are admin-only — the nav hides them for members and every `/api/v1/admin/*` endpoint
+  gates server-side regardless. See [Portal admin basics](#portal-admin-basics) for a page-by-page
+  guide. The Vue SPA is
   now the **only** web UI: the legacy server-rendered (Smarty) pages have been **deleted** and their old
   paths 302-redirect to `/app` (e.g. `/my-servers` → `/app/servers`, `/login` → `/app/login`, the public
   `/invite/{token}` → `/app/invite/{token}`). The `smarty/smarty` dependency was removed — the hub renders
@@ -1480,6 +1487,67 @@ status; `connected` only ever appears after a successful `hub_hello_ack` ceremon
 a row stuck at `pending`/`disconnected` with a healthy process means the dial was
 refused or dropped, and `docs/websockets.md` §:8805 documents the refusal reasons the
 audit log carries.
+
+## Portal admin basics
+
+The admin-facing tour of what the portal actually shows. Everything here lives
+in the SPA at `/app` — no shell, no env vars required. Two roles exist:
+**members** see their own servers, shares, and parties; **admins** additionally
+see **Federation**, **Federation Shares**, and the whole **Admin console**. The
+console is enforced server-side on every `/api/v1/admin/*` call — the menu
+entry merely reflects that.
+
+### Pages every member can use
+
+| Page | What you do there |
+|---|---|
+| **My Servers** (`/app/servers`) | Pair a media server (type its claim code — see [Connecting a media server](#connecting-a-media-server)), inspect, rename, or unlink. This is also where you pick the **current** server; every media page browses that one. |
+| **Server Detail** (`/app/servers/:id`) | One server's health, versions, and relay state. |
+| **Search** (`/app/search`) | Cross-library search against the selected server. |
+| **Shares** (`/app/shares`) | Grant other members access to your paired server's libraries. |
+| **Shared With Me** (`/app/shared-with-me`) | Libraries other members have granted you. |
+| **Invite Links** (`/app/invite-links`) | Create single-use signed invites — one step creates the account AND the library share; the recipient lands on the public `/app/invite/:token` page. |
+| **Watch Party** (`/app/watch-party`) | Host or join a synchronized viewing room on your selected server. |
+| **Requests** (`/app/requests`) | Jellyseerr-style request queue: ask for movies/series; admins approve. |
+| **Security** (`/app/settings/security`) | Your own password change and session hygiene. |
+| **MCP tokens** (`/app/mcp-tokens`) | Personal access tokens for MCP/API access — every user manages their own. |
+
+The media-browsing surfaces (music `/app/music/*`, books `/app/books/*`,
+audiobooks `/app/audiobooks/*`, photos `/app/photo/*`) all operate against the
+**selected server**. With no server selected — or if the selected one was
+unlinked — they have no data to show; pair or re-select under My Servers first.
+
+### Admin console (`/app/admin/*`)
+
+| Page | What it's for |
+|---|---|
+| **Dashboard** | Hub-wide counts: users, servers, parties, traffic. |
+| **Users** | Create users (the on-ramp when signups are closed), edit, promote/demote admin, reset a member's password, delete. |
+| **Logs** | Recent hub log lines in the browser — no SSH needed. |
+| **Settings** | The hub settings store — the toggles are the next table. |
+| **Audit Logs** | Append-only record of claims, pairings, federation, and admin actions (`GET /api/v1/me/audit-logs`). |
+| **Requests (approval)** | Approve or reject the request queue; approvals dispatch to Sonarr/Radarr when configured. |
+
+### What the Settings toggles actually do
+
+Admin → Settings edits the hub settings store: live rows that override
+config-file defaults, served by `GET/PUT /api/v1/admin/settings`. Most take
+effect on the next request; the two marked **restart** only re-read at worker
+boot. The store can never touch secrets, TLS paths, or listener ports — those
+are denied by design and belong in the [env reference](#configuration-reference).
+
+| Toggle (store key) | Effect | Live? |
+|---|---|---|
+| **Signups disabled** `auth.signups_disabled` | `POST` registration answers 403 `auth.signups_disabled`. Invite links remain the on-ramp. Before enabling, make sure at least one admin password you know works — recovery without one is `bin/phlix user:list` / `user:promote`. | live |
+| **Maintenance mode** `hub.maintenance_mode` | Every API request answers 503 `provider_unavailable` EXCEPT health checks, auth endpoints (nobody gets locked out mid-maintenance), the hub/admin settings routes (so you can switch it back off), and the admin restart. Takes effect within ~1 s. | live |
+| **Federation enabled** `federation.enabled` | The hub↔hub master switch. Off: outbound dials stop and their reconnect ticks park into ≤60 s probes, all 11 federation admin mutations answer 409 `provider.not_configured`, inbound peer frames are dropped. On: parked probes resume dialing within a minute. | live |
+| **Auto-approve requests** `requests.auto_approve` | New requests are approved without admin review (best-effort Sonarr/Radarr dispatch). | live |
+| **Invite default expiry** `invite.default_expiry_seconds` | How long a new invite link stays valid when the creator doesn't pick a lifetime. | live |
+| **Per-user server cap** `server.max_servers_per_user` · **per-server user cap** `server.max_users_per_server` | Quotas enforced AT REDEEM — claiming a code or sharing past the cap fails `quota.exceeded` (resets on release, never a timer). | live |
+| **Metrics** `server.metrics.enabled` / `server.metrics.retention_days` | Opt-in usage metrics kept on the hub; retention prunes per day. | enabled: **restart** · retention: live |
+| **Relay rate limits** `server.rate_limit` (JSON) | The real dial for the 429 throttles — env overrides for these knobs do NOT exist. | **restart** |
+| **Sonarr / Radarr** `server.arr.{sonarr,radarr}.{enabled,url}` | Request fulfilment backends. The API keys stay env-only by design (never settable through the store). | live |
+| **Token lifetimes** `auth.access_ttl` · `auth.refresh_ttl` · `server.enrollment_ttl` | JWT lifetimes for sessions and server enrollment. | live |
 
 ## Testing & quality
 

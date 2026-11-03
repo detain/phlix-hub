@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 12 + 18: portal admin basics + the shipped-pages list, walked against the live nav — 2026-11-02
+
+- **M12**: a portal admin who never touches env vars had no guide — everything
+  they saw was one 10-line bullet. New *Portal admin basics* section: per-page
+  table for member surfaces (routes read from `web-ui/src/main.ts`) and the
+  admin console (backed by the actual `/api/v1/admin/*` registrations:
+  dashboard/users/logs/settings/audit-logs/requests), plus a toggles table
+  with the enforcement truth and the honest live/restart split — maintenance
+  exemptions lifted from `MaintenanceGate::EXEMPT_PREFIXES`, the federation
+  park-probe ≤60 s admission law, caps firing at redeem, the metrics +
+  rate-limit restart pair, and the live-TTL mint-time resolver wiring.
+- **M18**: the bullet claimed every signed-in user gets Federation +
+  Federation Shares — both are `requiresAdmin` in the nav; and it omitted
+  Watch Party, Security, and MCP tokens, which ship for everyone. List
+  rewritten against `main.ts`; the Features list now names the watch party
+  surface the SyncPlay bullet never mentioned.
+
 ### Fixed — review hub Major 11: the media-server pairing journey, written for humans — 2026-11-02
 
 - **M11**: "Connecting a media server" read as an API-client script — step 1
