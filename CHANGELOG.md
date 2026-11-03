@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 47 (federation URL scheme allowlist at store, 2026-11-03)
+- **Transport-scheme admission for stored dial-addresses.** `createPeer`
+  validated URLs by shape only (`FILTER_VALIDATE_URL`), so `ftp://`,
+  `gopher://`, `file:///`… values passed the store gate and reached the dial
+  side (whose unknown-scheme TLS arm was a backstop, never admission). The
+  controller now enforces the dialer's own mapping table — `http|https|ws|
+  wss` — at the boundary, refusing foreign schemes with the registered
+  `invalid_url` code plus a free-form reason (no new wire codes). The
+  hub-config PUT arm is closed in the same stroke: it previously required
+  only a non-empty string, so even malformed values landed in
+  `federation_hubs` and went out to followers — it now shares the shape +
+  scheme gate before any write. Tests: foreign-scheme refusals ×3, plaintext
+  `ws://` acceptance law (completing the four-scheme table beside the
+  existing https/wss pins), putHubConfig reject-before-write ×2 + acceptance.
+
 ### Fixed — review Minor 44 (federation_hubs single-row determinism, 2026-11-03)
 - **ensureHubExists() TOCTOU closed.** The old form probed with an un-ordered
   `SELECT id … LIMIT 1` and answered emptiness with `INSERT IGNORE` under a

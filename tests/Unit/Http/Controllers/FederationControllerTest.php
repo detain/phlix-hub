@@ -280,6 +280,135 @@ final class FederationControllerTest extends TestCase
         self::assertSame(409, $response->statusCode);
     }
 
+    /**
+     * Store-time scheme allowlist (review Minor 47): shape-valid URLs whose
+     * scheme the federation dialer cannot act on (everything outside
+     * http|https|ws|wss) are refused with the registered `invalid_url` code
+     * instead of landing in the row a later dial reaches for. The
+     * `FederationPeerManager` dial side forcing TLS on unknown schemes is
+     * backstop, not admission.
+     */
+    public function testCreatePeerRejectsForeignTransportSchemes(): void
+    {
+        foreach (['ftp://peer.example.com', 'gopher://169.254.169.254/x', 'file:///etc/passwd'] as $url) {
+            $this->hubRepo->method('getPeerByUrl')->willReturn(null);
+            $this->hubRepo->method('getPeerByPublicKey')->willReturn(null);
+
+            $request = new Request();
+            $request->path = '/api/v1/me/federation/peers';
+            $request->method = 'POST';
+            $request->userId = 'admin-1';
+            $request->body = [
+                'url' => $url,
+                'public_key' => 'scheme-key',
+                'name' => 'Scheme Peer',
+            ];
+
+            $response = $this->controller->createPeer($request);
+
+            self::assertSame(400, $response->statusCode, 'scheme of ' . $url . ' must be refused at the store gate');
+            $body = self::arrayNode(json_decode($response->body, true));
+            self::assertSame('invalid_url', $body['code'] ?? null);
+            self::assertIsString($body['reason'] ?? null);
+            self::assertStringContainsString('scheme must be one of', $body['reason']);
+        }
+    }
+
+    /**
+     * The allowlist is exactly the dialer's mapping table — plaintext ws://
+     * (same-host masters) must stay storable, mirroring the existing
+     * https/wss acceptance laws.
+     */
+    public function testCreatePeerAcceptsPlaintextWsUrl(): void
+    {
+        $this->hubRepo->method('getPeerByUrl')->willReturn(null);
+        $this->hubRepo->method('getPeerByPublicKey')->willReturn(null);
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/peers';
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+        $request->body = [
+            'url' => 'ws://master.example.com:8805',
+            'public_key' => 'ws-peer-key',
+            'name' => 'Ws Master',
+        ];
+
+        $response = $this->controller->createPeer($request);
+
+        self::assertSame(201, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('ws://master.example.com:8805', $body['url']);
+    }
+
+    /**
+     * The hub's OWN advertised URL (putHubConfig) earns the same store-time
+     * law (Minor 47). The arm previously accepted any non-empty string, so
+     * malformed and foreign-scheme values reached federation_hubs and went
+     * out to followers. Rejection must happen before any write.
+     */
+    public function testPutHubConfigRejectsForeignTransportScheme(): void
+    {
+        $this->hubRepo->expects(self::never())->method('ensureHubExists');
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/hub-config';
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['url' => 'ftp://hub.example.com'];
+
+        $response = $this->controller->putHubConfig($request);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_url', $body['code'] ?? null);
+        self::assertIsString($body['reason'] ?? null);
+        self::assertStringContainsString('scheme must be one of', $body['reason']);
+    }
+
+    public function testPutHubConfigRejectsMalformedUrl(): void
+    {
+        $this->hubRepo->expects(self::never())->method('ensureHubExists');
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/hub-config';
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['url' => 'not a url at all'];
+
+        $response = $this->controller->putHubConfig($request);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_url', $body['code'] ?? null);
+    }
+
+    public function testPutHubConfigAcceptsTransportSchemeUrl(): void
+    {
+        $this->hubRepo->method('getHubConfig')->willReturn([
+            'id' => 'hub-1',
+            'name' => 'Hub',
+            'url' => 'https://old.example.com',
+            'public_key' => 'key',
+            'role' => 'master',
+            'is_master' => 1,
+            'is_active' => 1,
+        ]);
+        $this->hubRepo->expects(self::once())
+            ->method('ensureHubExists')
+            ->with('Hub', 'https://advertised.example.com', 'key');
+
+        $request = new Request();
+        $request->path = '/api/v1/me/federation/hub-config';
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['url' => 'https://advertised.example.com'];
+
+        $response = $this->controller->putHubConfig($request);
+
+        self::assertSame(200, $response->statusCode);
+    }
+
     public function testDeletePeerReturns204OnSuccess(): void
     {
         $this->hubRepo->method('getPeerById')->willReturn([

@@ -60,6 +60,36 @@ final class FederationController
         '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
 
     /**
+     * Transport-scheme allowlist for stored dial-addresses (review Minor 47).
+     * `FILTER_VALIDATE_URL` alone accepts ftp/gopher/file/mailto URLs; those
+     * values pass the store gate today and reach the dial side, where the
+     * unknown-scheme arm would try a TLS socket at them from the fleet
+     * network. The four schemes below are exactly the ones
+     * FederationPeerManager's dial mapping understands (http|ws plaintext,
+     * https|wss TLS) — storing anything else is a misconfiguration or a
+     * probe, so it is refused at the boundary instead of dialed.
+     *
+     * @var list<string>
+     */
+    private const ALLOWED_URL_SCHEMES = ['http', 'https', 'ws', 'wss'];
+
+    /**
+     * True when the (already shape-valid) URL's scheme is a transport the
+     * federation dialer can act on. Parse failure or missing scheme — both
+     * unreachable past `FILTER_VALIDATE_URL`, kept as defensive arms —
+     * deny.
+     */
+    private static function hasAllowedUrlScheme(string $url): bool
+    {
+        $parts = parse_url($url);
+        if (!is_array($parts) || !isset($parts['scheme']) || !is_string($parts['scheme'])) {
+            return false;
+        }
+
+        return in_array(strtolower($parts['scheme']), self::ALLOWED_URL_SCHEMES, true);
+    }
+
+    /**
      * @param (callable(): bool)|null $enabledResolver LIVE reader of
      *        `federation.enabled` (HubSettingsResolvers::bool, fail-safe to the
      *        boot flag); null keeps the pre-W5 always-on mutation surface.
@@ -166,10 +196,17 @@ final class FederationController
             }
         }
 
-        // Validate and update URL
+        // Validate and update URL — the hub's advertised dial-address earns the
+        // same store-time law as peer URLs (Minor 47): this arm previously
+        // checked only "non-empty string", so any scheme-less/foreign-scheme
+        // value landed in federation_hubs and went out to followers.
         if ($urlRaw !== null) {
-            if (!is_string($urlRaw) || $urlRaw === '') {
+            if (!is_string($urlRaw) || $urlRaw === '' || !filter_var($urlRaw, FILTER_VALIDATE_URL)) {
                 return $this->badRequest('invalid_url');
+            }
+
+            if (!self::hasAllowedUrlScheme($urlRaw)) {
+                return $this->badRequest('invalid_url', 'hub URL scheme must be one of: http, https, ws, wss');
             }
 
             // Update hub URL
@@ -323,9 +360,13 @@ final class FederationController
             return $this->badRequest('missing_name');
         }
 
-        // Validate URL format
+        // Validate URL format — shape first, then transport scheme (Minor 47).
         if (!filter_var($urlRaw, FILTER_VALIDATE_URL)) {
             return $this->badRequest('invalid_url');
+        }
+
+        if (!self::hasAllowedUrlScheme($urlRaw)) {
+            return $this->badRequest('invalid_url', 'peer URL scheme must be one of: http, https, ws, wss');
         }
 
         // Check for duplicate URL or public key
