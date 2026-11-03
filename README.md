@@ -41,6 +41,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 - [Connecting a media server](#connecting-a-media-server)
 - [Federation: pairing two hubs](#federation-pairing-two-hubs-operator-walkthrough)
 - [Portal admin basics](#portal-admin-basics)
+- [Troubleshooting](#troubleshooting)
 - [Testing & quality](#testing--quality)
 - [Project structure](#project-structure)
 - [Related repositories](#related-repositories)
@@ -1548,6 +1549,87 @@ are denied by design and belong in the [env reference](#configuration-reference)
 | **Relay rate limits** `server.rate_limit` (JSON) | The real dial for the 429 throttles — env overrides for these knobs do NOT exist. | **restart** |
 | **Sonarr / Radarr** `server.arr.{sonarr,radarr}.{enabled,url}` | Request fulfilment backends. The API keys stay env-only by design (never settable through the store). | live |
 | **Token lifetimes** `auth.access_ttl` · `auth.refresh_ttl` · `server.enrollment_ttl` | JWT lifetimes for sessions and server enrollment. | live |
+
+## Troubleshooting
+
+Symptom-first answers for the five things that actually go wrong. If none of
+this fits, the log is the oracle: `.logs/app.log` (or Admin → Logs).
+
+### My server shows offline under My Servers
+
+Pairing is **outbound**: the server keeps a WebSocket tunnel to the hub's relay
+listener on **:8802**; the hub never dials into your network. So "offline"
+means that tunnel is down — check the server side first:
+
+1. Is the media server process running its relay client? (phlix-server config:
+   `PHLIX_RELAY_*` — the tunnel's address and credentials are configured
+   THERE, not on the hub.)
+2. Can the server reach `hub-domain:8802`? The hub's firewall must allow it —
+   and note the relay listeners bind `0.0.0.0` regardless of `HUB_HOST`
+   (see *Firewall the exposure* in the manual install).
+3. If the hub runs with `HUB_RELAY_TLS`/`HUB_RELAY_REQUIRE_TLS`, the server
+   must present TLS-compatible dialing — a `wss://` hub refuses plaintext
+   tunnels when `REQUIRE_TLS` is on.
+4. Watch the hub log for `HELLO`/enrollment-key rejections: an unregistered
+   or re-keyed server is refused, and **audit-logged** — check Admin →
+   Audit Logs for the reason.
+
+### The claim code isn't going through
+
+The code lives **10 minutes** (600 s) and is single-use. The hub answers three
+distinct refusals, and each means something different:
+
+| You see | Meaning | Fix |
+|---|---|---|
+| "no such code" (`claim.code_not_found`, 404) | Typo, or the code was regenerated on the server | Retype carefully (`ABCD-1234`, no `0`/`O`/`1`/`I`), or get a fresh code |
+| "expired" (`claim.code_expired`, 410) | The 10-minute window lapsed | Ask the server for a fresh code |
+| "already used" (`claim.code_already_claimed`, 409) | Someone redeemed it | Pair the *other* screen — the code now belongs to that pairing |
+| 409 `quota.exceeded` | Redeeming would exceed your per-user server cap | Unlink a server or raise `server.max_servers_per_user` |
+
+Guessing repeatedly rate-limits you: 429 after 60 bad attempts per minute —
+the bucket is per-worker, so the true ceiling is 60 × workers per IP.
+
+### Watch Party won't join — "relay on port 8804 is unreachable"
+
+**:8804 is a plaintext listener.** If the portal page itself was served over
+HTTPS, the browser refuses the direct `wss://…:8804` dial (mixed content) —
+opening 8804 in the firewall changes nothing on a TLS hub. Two working shapes:
+
+- **HTTP-served hub:** open `8804/tcp` and the direct dial works.
+- **TLS-served hub:** front `:8804` with your reverse proxy (a `wss://`
+  upgrade location), and set `HUB_WS_URL` (+ `HUB_WS_PATH=/syncplay`) so the
+  portal surfaces dial the proxy instead — see [Configuration
+  reference](#configuration-reference). Note: the hub-local Watch Party page
+  currently always dials `hostname:8804` regardless of that seam (open
+  review finding, Major 38) — until it is cured, parties on TLS hubs join
+  through the vendored Browse surfaces, not the hub's own page.
+
+Also check the party code itself: rooms are per-server, and joining requires
+the caller's own access to that server (the relay gates on ownership, not
+just the code).
+
+### Too Many Requests (429) — what is and isn't configurable
+
+HTTP endpoints answer **429** with `Retry-After` and
+`{"error":"Too Many Requests","code":"rate_limited"}`; the WebSocket
+listeners (:8802/:8803/:8804/:8805) reject the handshake with close code
+**1013 (Try Again Later)** instead. The live dial is the `server.rate_limit`
+hub-setting JSON blob (Admin → Settings) — **restart required** after edits,
+because limiter profiles are per-worker singletons. There are no
+`PHLIX_HUB_RATELIMIT_*` env knobs (a doc fiction retired in Major 8). A
+single NAT behind many clients shares one IP bucket — raise the bucket or
+front-load, don't fight the throttle.
+
+### Passwords: members and admin lockout
+
+There is **no self-service reset** — no mail transport exists to send a
+reset link. A member who forgets their password asks an admin: **Admin →
+Users → reset-password** (`POST /api/v1/admin/users/{id}/reset-password`).
+The admin who locked everyone else out (or was demoted) is recovered from the
+shell: `bin/phlix user:list` to find the account, `bin/phlix user:promote
+'username-or-email'` to restore admin (it toggles — `--revoke` demotes,
+refusing to remove the last admin). If the LAST admin disables themselves behind
+`auth.signups_disabled`, the CLI path remains open — it needs no web session.
 
 ## Testing & quality
 

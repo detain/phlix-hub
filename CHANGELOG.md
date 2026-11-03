@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 13: the README finally gets a Troubleshooting section — 2026-11-02
+
+- **M13**: the only "Troubleshooting" in the repo was four deploy-engineer
+  items in `hub_deploy.md`. Added five symptom-first answers to the README —
+  offline server (outbound-tunnel reality: check :8802 reachability, the
+  `PHLIX_RELAY_*` side, TLS dial posture, audit-logged key refusals), the
+  claim-code refusal table (404/410/409 + the `quota.exceeded` neighbor,
+  600 s window, per-worker guess bucket — all lifted from the live
+  `mapError()` arms), Watch Party unreachability (the plaintext-:8804
+  mixed-content law with the honest note that the hub-local page ignores the
+  `HUB_WS_URL` seam — Major 38, still open), 429/1013 semantics with the
+  restart-required `server.rate_limit` dial, and the no-self-service-reset
+  password story (admin console `reset-password`; last-admin recovery via
+  `bin/phlix user:promote`).
+
 ### Fixed — review hub Majors 12 + 18: portal admin basics + the shipped-pages list, walked against the live nav — 2026-11-02
 
 - **M12**: a portal admin who never touches env vars had no guide — everything
