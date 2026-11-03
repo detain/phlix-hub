@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 2: the two-hub federation pairing walkthrough is now written down — 2026-11-02
+
+- **README.** New H2 **"Federation: pairing two hubs (operator walkthrough)"**
+  (TOC entry included): the five ordered steps an operator actually performs —
+  prerequisites (the `federation.enabled` gate and the `:8805` listener), reading
+  one's own identity (`/.well-known/jwks.json` + `GET hub-config`, including the
+  discovered truth that `public_key` in the config row is operator-maintained and
+  is what `hub_hello` carries verbatim — the portal page does not fill it), the
+  out-of-band URL+key exchange stated as the load-bearing first-trust law it is
+  (registered-key substitution is the one collapse point; accepted encodings
+  documented from `FederationHandshake::normalizePublicKey`: base64url/base64/hex
+  → raw 32 bytes), master-registers-leaf-FIRST (the path lookup refuses unknown
+  `hub_id`s — no self-service enrollment on :8805), the leaf's role flip
+  (`role: "leaf"` + `is_active` is precisely what the dial loop gates on,
+  `FederationPeerManager.php:412`), and the per-peer relay/admin-delegation
+  toggles + the outgoing/incoming share-offer flow, plus how to read link state
+  (`connected` only post-`hub_hello_ack`).
+- **docs/websockets.md.** The :8805 ceremony section now points operators at the
+  walkthrough and labels itself the wire reference (the pairing procedure was
+  previously scattered across ceremony mechanics no admin would read top-down).
+- Facts re-verified from source this lane (createPeer validation order and
+  UUID-law `leaf_hub_id`, the path-segment refusal, hello's config-row key
+  source, dial-role gating); nothing in this entry changes code or wire shapes.
+
 ### Fixed — review hub Major 1: openapi.yaml now documents the request bodies the hub actually consumes — 2026-11-02
 
 - **The gap.** 130 operations, 9 `requestBody` blocks: every write endpoint's

@@ -38,6 +38,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 - [HTTP API](#http-api)
 - [Watching with family and friends](#watching-with-family-and-friends)
 - [Connecting a media server](#connecting-a-media-server)
+- [Federation: pairing two hubs](#federation-pairing-two-hubs-operator-walkthrough)
 - [Testing & quality](#testing--quality)
 - [Project structure](#project-structure)
 - [Related repositories](#related-repositories)
@@ -1290,6 +1291,93 @@ whether opening it helps or only exposes.
 3. The server opens its **outbound relay tunnel** to the Hub and begins sending heartbeats.
 4. The server now appears under **My Servers** (`/app/servers`), and remote clients can reach it
    through the Hub — no inbound ports required.
+
+## Federation: pairing two hubs (operator walkthrough)
+
+Federation links **two hub installations** so their users can share libraries across
+hubs and (optionally) delegate admin actions. Each hub signs its handshake with the
+Ed25519 key created on first boot (`config/hub-signing-key.pem`, README
+*Backing up and restoring*); the paired remote hub must store the matching **public**
+key before the link can ever verify. Everything below is also exposed in the portal —
+**Federation** and **Federation Shares** pages (admin-only nav entries) — so the
+`curl` calls are the equivalent low-level path, not the only one.
+
+**Prerequisites on both sides.** The `federation.enabled` hub setting must be on —
+while it is off, every federation control-plane route answers `409` and no dial is
+attempted (Configuration reference). Each hub needs a publicly reachable `:8805`
+listener; on TLS-managed installs that listener speaks `wss://` (see
+`docs/websockets.md`, *The :8805 federation lane*).
+
+**Step 1 — each admin reads their own identity.** Two endpoints, both trivial:
+
+```bash
+curl -s https://YOUR-HUB/.well-known/jwks.json
+# → the hub's Ed25519 signing key as JWK `x` (base64url of the raw 32 bytes)
+curl -s -H "Authorization: Bearer $HUB_JWT" \
+  https://YOUR-HUB/api/v1/me/federation/hub-config
+# → {id, name, url, public_key, role, is_master, is_active}
+```
+
+`id` is this hub's hub_id (a UUID minted when the config row was first written).
+The `public_key` column is operator-maintained: the handshake's `hub_hello` carries
+exactly this stored value as the caller's claim of identity, so it must be set before
+the peer pair can ever verify — if GET shows `null`, save the JWKS `x` value:
+`PUT /api/v1/me/federation/hub-config {"public_key": "<x>"}` (the portal Federation
+page does not fill this field; the API call is how).
+
+**Step 2 — exchange identity out of band, and verify it.** The two admins swap
+(hub_id, relay URL, public key) over a channel they already trust — a phone call, a
+typed key fingerprint, anything but the hub link itself. This is the load-bearing
+security law: the handshake verifies that the dialer *possesses* the registered key
+(the proof is an Ed25519 signature checked against it), so a substituted key in
+`federation_peers` collapses the whole ceremony to "paste the token." The URL and key
+you register are only as strong as the channel you got them over. The stored key
+accepts the usual encodings — base64url (the JWKS `x` form), standard base64, or hex;
+anything that is not 32 bytes after decoding never verifies.
+
+**Step 3 — the master registers the leaf first.** The dial direction is fixed: the
+**leaf dials the master**, and the master only accepts a dialer it already knows —
+the hub_id in the dial path (`/relay/federation/{hub_id}`) must match a peer row
+before any connection is honored. So on the master:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $MASTER_JWT" -H "Content-Type: application/json" \
+  -d '{"url": "https://LEAF-HUB:8805", "public_key": "<LEAF_PUBLIC_KEY>", "name": "Annabell hub", "leaf_hub_id": "<LEAF_HUB_ID>"}' \
+  https://MASTER-HUB/api/v1/me/federation/peers
+```
+
+`leaf_hub_id` is what the path lookup matches; it may be omitted here and bound later
+with `PUT /api/v1/me/federation/peers/{id}/leaf-hub-id` — until it is set, the leaf's
+dials are refused, which is the safe failure.
+
+**Step 4 — the leaf registers the master and declares its role.** On the leaf,
+`POST …/federation/peers` with the master's URL and public key (that row is the dial
+target; the handshake answers with the master's own proof-of-key before any data is
+accepted), then flip this hub's role:
+
+```bash
+curl -s -X PUT -H "Authorization: Bearer $LEAF_JWT" -H "Content-Type: application/json" \
+  -d '{"role": "leaf", "is_active": true}' \
+  https://LEAF-HUB/api/v1/me/federation/hub-config
+```
+
+Only a config with `role: "leaf"` and `is_active: true` dials (and only rows in that
+state are retried on schedule after a drop); a master hub's own config stays at
+`role: "master"` or unset, which is what keeps it from dialing back.
+
+**Step 5 — enable what the link is allowed to carry.** Peer registration alone moves
+no data. Per peer: `PUT /api/v1/me/federation/peers/{id}/relay {"enabled": true}`
+switches on library relay; `PUT …/peers/{id}/admin-delegation {"enabled": true}`
+switches on the admin-delegation channel (further gated by named delegations,
+`POST /api/v1/me/federation/admin-delegations`). Library sharing itself is an offer
+flow: `POST …/library-shares/outgoing` on the offering side, then the receiving user
+sees it under *incoming offers* and answers `accept` or `reject`.
+
+**Reading the link state.** `GET /api/v1/me/federation/peers` shows each peer's
+status; `connected` only ever appears after a successful `hub_hello_ack` ceremony —
+a row stuck at `pending`/`disconnected` with a healthy process means the dial was
+refused or dropped, and `docs/websockets.md` §:8805 documents the refusal reasons the
+audit log carries.
 
 ## Testing & quality
 

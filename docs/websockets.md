@@ -614,6 +614,10 @@ imported so one law governs both sockets:
 ws://master-hub.example:8805/relay/federation/{hub_id}
 ```
 
+> Looking for the end-to-end operator procedure (key exchange, registration order,
+> what to click)? It lives in the README: **"Federation: pairing two hubs (operator
+> walkthrough)"**. This section is the wire-level reference.
+
 Parsed by `FederationWorker::parseHubId()` with
 `~^/relay/federation/([^/?#]+)/?(?:[?#].*)?$~`. Leaf hubs dial the master hub;
 this worker is the master-side listener.
