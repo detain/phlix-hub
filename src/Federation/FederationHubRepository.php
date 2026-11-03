@@ -11,7 +11,6 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Federation;
 
-use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
 /**
@@ -24,6 +23,21 @@ use Workerman\MySQL\Connection;
  */
 class FederationHubRepository
 {
+    /**
+     * Fixed primary key of the hub's own single config row (review Minor 44).
+     *
+     * The row identity used to be a random UUID minted at first bootstrap,
+     * which made the old SELECT-then-INSERT_IGNORE dance a TOCTOU: two
+     * concurrent bootstraps carrying DRIFTED urls both inserted (uq_url only
+     * collapses same-URL races), silently breaking the one-row invariant this
+     * class documents. With a fixed id, concurrent INSERTs collide on PRIMARY
+     * itself — the ON DUPLICATE KEY UPDATE arm turns the race into a
+     * last-writer-wins refresh of the ONE row. Format-matched to a UUID v4
+     * because the value crosses the wire (federation_peers.leaf_hub_id stores
+     * a peer hub's own row id; callers pattern-check it).
+     */
+    public const HUB_ROW_ID = '00000000-0000-4000-8000-000000000044';
+
     public function __construct(
         private readonly Connection $db,
     ) {
@@ -39,15 +53,26 @@ class FederationHubRepository
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
             'SELECT id, name, url, public_key, role, is_master, is_active, created_at, updated_at FROM '
-            . 'federation_hubs LIMIT 1',
+            . 'federation_hubs ORDER BY id LIMIT 1',
         );
 
         return $rows[0] ?? null;
     }
 
     /**
-     * Ensure the hub row exists. Creates it with INSERT IGNORE if absent,
-     * or updates url/name/public_key if already present.
+     * Ensure the hub row exists. Creates it (fixed {@see self::HUB_ROW_ID})
+     * or updates name/url/public_key if already present.
+     *
+     * Minor 44 determinism: the old form probed with an UN-ordered `LIMIT 1`
+     * and answered emptiness with `INSERT IGNORE` — a drifted-URL concurrent
+     * bootstrap slipped past uq_url and produced a second row, after which
+     * every un-ordered read of "the" hub row became non-deterministic. The
+     * create arm now rides the fixed sentinel id, so any race collapses on
+     * PRIMARY via ON DUPLICATE KEY UPDATE, and every read ORDERs BY id so the
+     * chosen row is stable even against a table already broken by the old
+     * code. The update arm is keyed to the row that was actually found
+     * (legacy rows keep their id — federation_peers.leaf_hub_id cross-
+     * references it) instead of rewriting the whole table.
      *
      * @param string $name      Human-readable hub name.
      * @param string $url       Public-facing hub URL.
@@ -59,31 +84,61 @@ class FederationHubRepository
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id FROM federation_hubs LIMIT 1',
+            'SELECT id FROM federation_hubs ORDER BY id LIMIT 1',
         );
 
         if ($rows === []) {
-            $id = $this->generateUuid();
-            $this->db->query(
-                'INSERT IGNORE INTO federation_hubs (id, name, url, public_key)
-                 VALUES (:id, :name, :url, :public_key)',
-                [
-                    'id' => $id,
-                    'name' => $name,
-                    'url' => $url,
-                    'public_key' => $publicKey,
-                ],
-            );
-        } else {
-            $this->db->query(
-                'UPDATE federation_hubs SET name = :name, url = :url, public_key = :public_key',
-                [
-                    'name' => $name,
-                    'url' => $url,
-                    'public_key' => $publicKey,
-                ],
-            );
+            $this->upsertSentinelRow($name, $url, $publicKey);
+
+            return;
         }
+
+        /** @var array<string, mixed> $row */
+        $row = $rows[0];
+        /** @var mixed $rowId */
+        $rowId = $row['id'] ?? null;
+        if (!is_string($rowId) || $rowId === '') {
+            // Defensive: a row whose id does not read back as a non-empty
+            // string cannot be targeted by key — stamp the sentinel slot
+            // instead of leaving the config un-written (and never a silent
+            // no-op: the values land on the very next read).
+            $this->upsertSentinelRow($name, $url, $publicKey);
+
+            return;
+        }
+
+        $this->db->query(
+            'UPDATE federation_hubs SET name = :name, url = :url, public_key = :public_key WHERE id = :id',
+            [
+                'name' => $name,
+                'url' => $url,
+                'public_key' => $publicKey,
+                'id' => $rowId,
+            ],
+        );
+    }
+
+    /**
+     * One idempotent statement that lands the config on the sentinel row:
+     * fresh insert when absent, in-place refresh when a concurrent bootstrap
+     * (or a legacy same-URL row via uq_url) already occupies a unique key.
+     *
+     * @return void
+     */
+    private function upsertSentinelRow(string $name, string $url, string $publicKey): void
+    {
+        $this->db->query(
+            'INSERT INTO federation_hubs (id, name, url, public_key)
+             VALUES (:id, :name, :url, :public_key)
+             ON DUPLICATE KEY UPDATE
+                 name = VALUES(name), url = VALUES(url), public_key = VALUES(public_key)',
+            [
+                'id' => self::HUB_ROW_ID,
+                'name' => $name,
+                'url' => $url,
+                'public_key' => $publicKey,
+            ],
+        );
     }
 
     /**
@@ -393,15 +448,5 @@ class FederationHubRepository
             'DELETE FROM federation_peers WHERE id = :id',
             ['id' => $id],
         );
-    }
-
-    /**
-     * Generate a random UUID v4.
-     *
-     * @return string Formatted UUID string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

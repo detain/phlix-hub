@@ -54,40 +54,89 @@ final class FederationHubRepositoryTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
 
+        $captured = [];
         $db->expects(self::exactly(2))
             ->method('query')
-            ->willReturnCallback(function (string $sql) {
-                if (str_contains($sql, 'SELECT id FROM federation_hubs')) {
-                    return []; // No existing hub
-                }
-                if (str_contains($sql, 'INSERT IGNORE INTO federation_hubs')) {
-                    return [];
-                }
+            ->willReturnCallback(function (string $sql, ?array $params = null) use (&$captured): array {
+                $captured[] = [$sql, $params];
                 return [];
             });
 
         $repo = new FederationHubRepository($db);
         $repo->ensureHubExists('New Hub', 'https://new.example.com', 'public-key-xyz');
+
+        // Law (review Minor 44): the probe read is ORDERED (`ORDER BY id`) so
+        // even an already-broken table yields a stable row choice, and the
+        // create arm rides the FIXED sentinel id through ON DUPLICATE KEY
+        // UPDATE — never a random UUID, never INSERT IGNORE. A drifted-URL
+        // concurrent bootstrap collides on PRIMARY, not into a second row.
+        self::assertStringContainsString('SELECT id FROM federation_hubs ORDER BY id LIMIT 1', $captured[0][0]);
+        self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $captured[1][0]);
+        self::assertStringNotContainsString('INSERT IGNORE', $captured[1][0]);
+        self::assertStringContainsString('INSERT INTO federation_hubs', $captured[1][0]);
+        self::assertSame(FederationHubRepository::HUB_ROW_ID, $captured[1][1]['id'] ?? null);
     }
 
     public function testEnsureHubExistsUpdatesWhenPresent(): void
     {
         $db = $this->createMock(Connection::class);
 
+        $captured = [];
         $db->expects(self::exactly(2))
             ->method('query')
-            ->willReturnCallback(function (string $sql) {
+            ->willReturnCallback(function (string $sql, ?array $params = null) use (&$captured): array {
+                $captured[] = [$sql, $params];
                 if (str_contains($sql, 'SELECT id FROM federation_hubs')) {
-                    return [['id' => 'existing-hub']]; // Hub exists
-                }
-                if (str_contains($sql, 'UPDATE federation_hubs SET')) {
-                    return [];
+                    return [['id' => 'existing-hub']];
                 }
                 return [];
             });
 
         $repo = new FederationHubRepository($db);
         $repo->ensureHubExists('Updated Hub', 'https://updated.example.com', 'new-public-key');
+
+        // Law (review Minor 44): the update arm is KEYED to the row that was
+        // actually found (`WHERE id = :id`) — the legacy statement rewrote
+        // the WHOLE table, silently relabeling any drifted second row. The
+        // found id (legacy rows carry random UUIDs referenced from
+        // federation_peers.leaf_hub_id) is never re-minted.
+        self::assertStringContainsString('UPDATE federation_hubs SET', $captured[1][0]);
+        self::assertStringContainsString('WHERE id = :id', $captured[1][0]);
+        self::assertSame('existing-hub', $captured[1][1]['id'] ?? null);
+    }
+
+    public function testEnsureHubExistsFallsBackToSentinelOnUnreadableRowId(): void
+    {
+        $db = $this->createMock(Connection::class);
+
+        $captured = [];
+        $db->expects(self::exactly(2))
+            ->method('query')
+            ->willReturnCallback(function (string $sql, ?array $params = null) use (&$captured): array {
+                $captured[] = [$sql, $params];
+                if (str_contains($sql, 'SELECT id FROM federation_hubs')) {
+                    return [['id' => '']]; // unreadable key — defensive arm
+                }
+                return [];
+            });
+
+        $repo = new FederationHubRepository($db);
+        $repo->ensureHubExists('Edge Hub', 'https://edge.example.com', 'edge-key');
+
+        self::assertStringContainsString('ON DUPLICATE KEY UPDATE', $captured[1][0]);
+        self::assertSame(FederationHubRepository::HUB_ROW_ID, $captured[1][1]['id'] ?? null);
+    }
+
+    public function testTheSentinelIdIsWellFormedForTheWire(): void
+    {
+        // The row id crosses the wire (federation_peers.leaf_hub_id binds a
+        // PEER's own row id, and the controller UUID-pattern-checks incoming
+        // bindings), so the sentinel must keep the canonical UUID shape.
+        self::assertSame(
+            1,
+            preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', FederationHubRepository::HUB_ROW_ID),
+            'HUB_ROW_ID must be a well-formed UUID v4 shape',
+        );
     }
 
     public function testUpdateRoleUpdatesHubRole(): void

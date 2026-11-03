@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 44 (federation_hubs single-row determinism, 2026-11-03)
+- **ensureHubExists() TOCTOU closed.** The old form probed with an un-ordered
+  `SELECT id … LIMIT 1` and answered emptiness with `INSERT IGNORE` under a
+  freshly-minted random UUID: two concurrent bootstraps carrying **drifted**
+  URLs both inserted (`uq_url` only collapses same-URL races), silently
+  breaking the one-row invariant and making every later un-ordered read
+  non-deterministic. The create arm now rides a fixed sentinel primary key
+  (`HUB_ROW_ID`, well-formed v4 shape — the id crosses the wire through
+  `federation_peers.leaf_hub_id`) via one idempotent
+  `INSERT … ON DUPLICATE KEY UPDATE`, so races collapse on PRIMARY instead of
+  into a second row; the update arm is keyed to the row actually found
+  (`WHERE id = :id`) instead of rewriting the whole table; both probe reads
+  gained `ORDER BY id` for a stable choice even against an already-broken
+  table. A row whose id reads back malformed falls to the sentinel upsert
+  rather than a silent no-op. Tests: the two law mocks re-rotated with the
+  determinism assertions + new unreadable-id and wire-shape pins (25T green).
+
 ### Fixed — review Minors 58, 60, 61 (copy-law batch, 2026-11-03)
 - **Terminal-period law for API copy (Minor 58, resolving Minor 61).**
   Adopted house law: API `message`/`error`/`reason` fields carry **no**
