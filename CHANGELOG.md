@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 52 (media-route entry-point comments truthed, 2026-11-03)
+- **Comments recited a redirect that never existed.** All fifteen media-route
+  comments in `web-ui/src/main.ts` claimed the routes were "reached by
+  redirecting the server-rendered /music|/books|/photo|/audiobooks URL to the
+  SPA" — the hub registers zero such server-rendered paths (route-table
+  verified). Replaced by one honest group note: the routes are entered only
+  via in-app navigation (the vendored @phlix/ui library surfaces and Search
+  push these paths under a scoped server), and an un-scoped direct visit is
+  answered by the Major-39 `mediaGuard` redirect to `/app/servers`.
+  Comments-only source change — the shipped code chunk is byte-identical; the
+  source map's embedded source text re-verified deterministic ×2 and committed
+  with the change (S253 freshness law).
+
 ### Fixed — review Minor 47 (federation URL scheme allowlist at store, 2026-11-03)
 - **Transport-scheme admission for stored dial-addresses.** `createPeer`
   validated URLs by shape only (`FILTER_VALIDATE_URL`), so `ftp://`,

@@ -167,114 +167,110 @@ const app = createPhlixApp({
             name: 'requests',
             component: RequestsPage,
         },
-        // Music album detail — reached by redirecting the server-rendered
-        // /music/albums/{name} to the SPA, or from the music library drill-down.
+        // --- Media routes (music / books / audiobooks / photo) -------------
+        // Entered only through in-app navigation: the vendored @phlix/ui
+        // library surfaces and Search results push these /app/* paths while a
+        // server is scoped. The hub serves no server-rendered /music, /books,
+        // /audiobooks or /photo URLs to redirect from — verified against the
+        // server route table (zero matches) — so any direct (un-scoped) visit
+        // relies on utils/mediaGuard.ts and lands on /app/servers instead of
+        // a dead API call. (review Minor 52: the per-route comments here
+        // formerly recited a server-rendered redirect flow that was never
+        // wired; the group note above is now the single source of entry truth.)
+
+        // Music album detail.
         {
             path: '/app/music/album/:name',
             name: 'music-album',
             component: MusicAlbumPage,
             props: true,
         },
-        // Music artists listing — reached by redirecting the server-rendered
-        // /music/artists to the SPA.
+        // Music artists listing.
         {
             path: '/app/music/artists',
             name: 'music-artists',
             component: MusicArtistsPage,
         },
-        // Music artist detail — reached by redirecting the server-rendered
-        // /music/artists/{name} to the SPA, or from the artists listing.
+        // Music artist detail.
         {
             path: '/app/music/artist/:name',
             name: 'music-artist',
             component: MusicArtistPage,
             props: true,
         },
-        // Music tracks listing — reached by redirecting the server-rendered
-        // /music/tracks to the SPA.
+        // Music tracks listing.
         {
             path: '/app/music/tracks',
             name: 'music-tracks',
             component: MusicTracksPage,
         },
-        // Music player — reached by redirecting the server-rendered
-        // /music/player to the SPA.
+        // Music player.
         {
             path: '/app/music/player',
             name: 'music-player',
             component: MusicPlayerPage,
         },
-        // Books listing — reached by redirecting the server-rendered
-        // /books to the SPA.
+        // Books listing.
         {
             path: '/app/books',
             name: 'books',
             component: BooksPage,
         },
-        // Book detail — reached by redirecting the server-rendered
-        // /books/{id} to the SPA, or from the books listing.
+        // Book detail.
         {
             path: '/app/books/:id',
             name: 'book-detail',
             component: BookDetailPage,
             props: true,
         },
-        // Book reader — reached by redirecting the server-rendered
-        // /books/{id}/read to the SPA.
+        // Book reader.
         {
             path: '/app/books/:id/read',
             name: 'book-reader',
             component: BookReaderPage,
             props: true,
         },
-        // Audiobooks listing — reached by redirecting the server-rendered
-        // /audiobooks to the SPA.
+        // Audiobooks listing.
         {
             path: '/app/audiobooks',
             name: 'audiobooks',
             component: AudiobooksPage,
         },
-        // Audiobook detail — reached by redirecting the server-rendered
-        // /audiobooks/{id} to the SPA, or from the audiobooks listing.
+        // Audiobook detail.
         {
             path: '/app/audiobooks/:id',
             name: 'audiobook-detail',
             component: AudiobookDetailPage,
             props: true,
         },
-        // Audiobook player — reached by redirecting the server-rendered
-        // /audiobooks/{id}/read to the SPA.
+        // Audiobook player.
         {
             path: '/app/audiobooks/:id/read',
             name: 'audiobook-player',
             component: AudiobookPlayerPage,
             props: true,
         },
-        // Photo albums listing — reached by redirecting the server-rendered
-        // /photo/albums to the SPA.
+        // Photo albums listing.
         {
             path: '/app/photo/albums',
             name: 'photo-albums',
             component: PhotoAlbumsPage,
         },
-        // Photo album detail — reached by redirecting the server-rendered
-        // /photo/album/{id} to the SPA.
+        // Photo album detail.
         {
             path: '/app/photo/album/:id',
             name: 'photo-album',
             component: PhotoAlbumPage,
             props: true,
         },
-        // Single photo view — reached by redirecting the server-rendered
-        // /photo/photo/{id} to the SPA.
+        // Single photo view.
         {
             path: '/app/photo/photo/:id',
             name: 'photo-view',
             component: PhotoViewPage,
             props: true,
         },
-        // Photo slideshow — reached by redirecting the server-rendered
-        // /photo/slideshow to the SPA.
+        // Photo slideshow.
         {
             path: '/app/photo/slideshow',
             name: 'photo-slideshow',
