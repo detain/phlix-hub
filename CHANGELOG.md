@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 9–10: exposure reality + the lockout-recovery CLI — 2026-11-02
+
+- **M9**: the manual install had no firewall/exposure step while all four relay
+  listeners hard-bind `0.0.0.0` (`RelayWorker.php:253`,
+  `ClientRelayWorker.php:195`, `SyncPlayRelayWorker.php:444`,
+  `FederationWorker.php:308`) regardless of `HUB_HOST`, and `ufw` rules only get
+  opened when ufw is active (inactive ⇒ zero host filtering even on managed
+  installs). New manual-install step 5 (*Firewall the exposure you just
+  accepted*) states the per-port reality, the `HUB_HOST` blind spot, the
+  8804/8805 conditional guidance, and an example policy; steps renumbered
+  6–8 with TOC and cross-refs (§7→§8, step 6→7) carried forward.
+- **M10**: `bin/phlix user:create|user:list|user:promote|user:delete` — the only
+  recovery path when the last admin locks itself out behind
+  `auth.signups_disabled` — were undocumented (CLI block listed only
+  migrate/smoke/oauth). Added with option truth read from the command sources
+  (`--email` required; `--password` prompt-or-stdin; `--revoke` demotes;
+  `--force` does NOT bypass the last-admin guard; `--json` everywhere).
+
 ### Fixed — review hub Majors 5–8: README venue truths — 2026-11-02
 
 - **M5**: "Expect roughly 15 s per test: each one re-applies all 35 migrations"

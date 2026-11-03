@@ -29,9 +29,10 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
   - [2. MySQL: database, user, and grants](#2-mysql-database-user-and-grants)
   - [3. Application code](#3-application-code)
   - [4. Environment configuration](#4-environment-configuration)
-  - [5. Run migrations](#5-run-migrations)
-  - [6. Run as a systemd service](#6-run-as-a-systemd-service)
-  - [7. Reverse proxy & TLS](#7-reverse-proxy--tls)
+  - [5. Firewall the exposure you just accepted](#5-firewall-the-exposure-you-just-accepted)
+  - [6. Run migrations](#6-run-migrations)
+  - [7. Run as a systemd service](#7-run-as-a-systemd-service)
+  - [8. Reverse proxy & TLS](#8-reverse-proxy--tls)
 - [Docker](#docker)
 - [Configuration reference](#configuration-reference)
 - [Database schema](#database-schema)
@@ -171,7 +172,7 @@ Supporting pieces:
 
 On a fresh Ubuntu/Debian host, [`scripts/install.sh`](scripts/install.sh) does everything in
 [Production install](#production-install-on-ubuntu) for you — system packages, MySQL database +
-user, code, env file, JWT secret, migrations, a systemd service, and an HAProxy reverse proxy
+user, code, env file, firewall decisions, JWT secret, migrations, a systemd service, and an HAProxy reverse proxy
 with an auto-renewing Let's Encrypt certificate:
 
 > The installer also compiles the **Swoole + php-uv** extensions from source (the coroutine
@@ -448,7 +449,7 @@ If you'd rather use your own reverse proxy (nginx, Caddy, Traefik, etc.) instead
 managed HAProxy, pass `--no-proxy` to either install script. Each service then listens on its
 own port (8800 / 8802 / 8803 / 8804 / 8805 for phlix-hub, 8096 for phlix-server) and you point
 your proxy at those — replicate the same path prefixes the managed config uses (`/client/`,
-`/syncplay/`, `/relay/federation/`) and see §7 for the WebSocket pass-through requirements.
+`/syncplay/`, `/relay/federation/`) and see §8 for the WebSocket pass-through requirements.
 
 Everything else is already namespaced (env files, systemd units, install dirs, service users,
 MySQL DBs, backend ports, certbot artefacts) so there are no other co-install conflicts.
@@ -493,7 +494,19 @@ php bin/phlix smoke:jwt    # smoke-test the JWT create/validate round-trip
 php bin/phlix oauth:client:register   # register an OAuth client (prints the one-time secret)
 php bin/phlix oauth:client:list       # list registered clients and their status
 php bin/phlix oauth:client:disable    # disable a client (add --revoke-tokens to cut live tokens)
+
+php bin/phlix user:list                        # list hub accounts
+php bin/phlix user:create <username> --email <addr> [--password …] [--admin] [--display-name …]
+php bin/phlix user:promote <user-or-email>     # grant admin; --revoke demotes
+php bin/phlix user:delete <user-or-email> [--force]   # last-admin is protected even with --force
 ```
+
+`user:*` is the **only recovery path when the last admin locks itself out** —
+signup can be closed (`auth.signups_disabled`) and the portal's admin controls
+require an admin, so an account that forgets its way out of the building can
+only be let back in from a root shell on the hub host. `--password` may be
+omitted (interactive prompt) or piped as a single stdin line for scripting;
+every command accepts `--json` for machine-readable output.
 
 `migrate` is the CLI equivalent of `php scripts/run-migrations.php`.
 
@@ -623,7 +636,39 @@ only in development (`APP_ENV`/`HUB_ENV` = `dev|local`, or `HUB_JWT_ALLOW_DEV_SE
 fallback invalidates every token on restart and differs per worker, so set a real secret in
 production with `openssl rand -hex 32` and keep it stable.
 
-### 5. Run migrations
+### 5. Firewall the exposure you just accepted
+
+A fresh manual install is **internet-reachable on five ports**. Set this reality
+straight before step 7 starts the daemon:
+
+- `:8800` serves the admin console and the REST API. Behind nginx + TLS you may
+  keep it loopback-only; exposed directly it is the whole control plane.
+- `:8802`, `:8803`, `:8804`, `:8805` (relay, client-relay, SyncPlay, federation)
+  **always bind all interfaces** — the worker code hard-codes the bind address
+  (`websocket://0.0.0.0:<port>` in `RelayWorker.php:253`,
+  `ClientRelayWorker.php:195`, `SyncPlayRelayWorker.php:444`,
+  `FederationWorker.php:308`). `HUB_HOST` restricts **only** `:8800`. Setting
+  `HUB_HOST=127.0.0.1` behind nginx still leaves every relay listener on the
+  public interface unless you firewall it.
+- The installer-managed path opens `ufw` rules per-port only **when ufw is
+  active** (see the ports table under *Install modes*); the manual path runs no
+  firewall at all. If `sudo ufw status` says `inactive`, you have no host
+  filtering whatsoever — either enable it with an explicit policy, or open the
+  ports on your cloud security group. Decide per port: `8804` only needs to be
+  open while plaintext watch-party clients dial it directly (once your TLS
+  proxy routes `/syncplay/`, close it); `8805` only needs inbound dials if this
+  hub acts as a federation **master**.
+
+Example for an nginx-fronted hub that only serves its own media servers over
+the direct tunnels:
+
+```bash
+sudo ufw default deny incoming && sudo ufw allow 22/tcp \
+  && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp \
+  && sudo ufw allow 8802/tcp && sudo ufw enable
+```
+
+### 6. Run migrations
 
 Run the migrator as **root** — the env file is mode 600 root-owned, so an
 unprivileged re-execution of the `grep | xargs` form would silently expand to an
@@ -651,12 +696,12 @@ it after a successful apply is a no-op.
 > schema. Because a re-applied file executes again, keep migrations re-run-safe (`CREATE TABLE IF NOT
 > EXISTS`, additive/idempotent DDL) — the same contract that already governs writing migrations.
 
-### 6. Run as a systemd service
+### 7. Run as a systemd service
 
 `scripts/install.sh` is the **canonical generator** of the unit file — it writes the
 full hardened definition below (service user, port gate, graceful reload, resource
 limits, sandbox). If you install by hand, mirror it; the inline copy here is kept
-current with the template in `scripts/install.sh` (step 6, "systemd service").
+current with the template in `scripts/install.sh` (step 7, "systemd service").
 
 ```bash
 sudo tee /etc/systemd/system/phlix-hub.service >/dev/null <<'EOF'
@@ -757,7 +802,7 @@ sudo systemctl status phlix-hub
 curl http://localhost:8800/health
 ```
 
-### 7. Reverse proxy & TLS
+### 8. Reverse proxy & TLS
 
 Terminate TLS at a reverse proxy in front of the Hub. The HTTP API (`8800`) plus the three
 path-namespaced WebSocket surfaces need to be reachable through it: the client mount
