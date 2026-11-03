@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minor 41: audit-log admin query projected `al.*` — the one wildcard M31's sweep left behind (alias form) — 2026-11-03
+
+- `AuditLogRepository::find()` now names all 13 `audit_logs` columns (029) in
+  stored order plus the two joined actor fields; a future schema column can no
+  longer leak into every admin audit response by accident. No matcher pinned
+  the old string (tests assert INSERT-side); law comment marks the alias-form
+  gap for future sweeps.
+
 ### Fixed — review hub Minors 7-14: pool terminology, migration-gap + sql-mode posture, config-only keys named, entrypoint ledger name, tail path, config/ inventory, quick-start /app/* paths — 2026-11-03
 
 - README: "async connection pool" → the repo's own coroutine-pool language with

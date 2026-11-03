@@ -174,7 +174,14 @@ class AuditLogRepository
 
         /** @var mixed $rows */
         $rows = $this->db->query(
-            "SELECT al.*, u.display_name AS actor_name, u.username AS actor_username"
+            // M31 law, alias form: `al.*` was the one wildcard projection the
+            // SELECT-* sweep left behind (aliased join) — a schema column now
+            // leaks into every admin audit response by accident. Explicit set
+            // = the 13 audit_logs columns (029) in stored order + the two
+            // joined actor fields.
+            "SELECT al.id, al.event, al.user_id, al.session_id, al.device_id, al.resource, al.action,"
+                . " al.success, al.reason, al.ip_address, al.user_agent, al.context_json, al.created_at,"
+                . " u.display_name AS actor_name, u.username AS actor_username"
                 . " FROM audit_logs al"
                 . " LEFT JOIN users u ON u.id = al.user_id"
                 . " WHERE {$where}"
