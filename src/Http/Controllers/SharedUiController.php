@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\ViteAssets;
@@ -44,14 +46,25 @@ final class SharedUiController
     /**
      * The one user-honest 503 frame for every bundle-serving failure, plus
      * the per-cause operator diagnostic that used to be the (mis)labelled page.
+     *
+     * The diagnostic rides the estate logger (review minor, 2026-11-03), not
+     * `error_log()`: the bare call bypassed the per-handler level routing and the
+     * `HUB_LOG_DIR` / `HUB_LOG_LEVEL` seams the whole rest of the corpus respects,
+     * so these lines landed on stderr outside the rotating channel files an
+     * operator actually reads. `warning` is the level the failure deserves: a hub
+     * that cannot serve its own shell is broken but not an emergency, and it
+     * clears the `file` handler's default `info` threshold while staying out of
+     * `error.log`. Message text is unchanged from the `error_log()` frame; only
+     * the ad-hoc `[phlix-hub]` tag is gone, because the channel name now carries
+     * that identity.
      */
     private function unavailable(string $cause, bool $withGuidance): Response
     {
-        error_log(sprintf(
-            '[phlix-hub] SharedUiController 503 (%s): %s%s',
+        LoggerFactory::get(LogChannels::HTTP)->warning(sprintf(
+            'SharedUiController 503 (%s): %s%s',
             $cause,
             'the portal shell could not be served under ' . $this->publicRoot,
-            $withGuidance ? ' — rebuild with: ' . self::REBUILD_GUIDANCE : ''
+            $withGuidance ? ' — rebuild with: ' . self::REBUILD_GUIDANCE : '',
         ));
 
         return (new Response())

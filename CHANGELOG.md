@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 2 (the SharedUi 503 diagnostic rides the estate logger, 2026-11-03)
+- **Sink swap, same words.** `SharedUiController::unavailable()` wrote its per-cause
+  503 diagnostic through bare `error_log()`, bypassing the per-handler level routing
+  and the `HUB_LOG_DIR` / `HUB_LOG_LEVEL` seams the rest of the corpus respects (M40
+  era). It is now `LoggerFactory::get(LogChannels::HTTP)->warning(...)`; the message
+  text carries over unchanged apart from the ad-hoc `[phlix-hub]` tag, which the
+  channel name replaces. `warning` is the level the failure deserves — it clears the
+  `file` handler's default `info` threshold and stays out of `error.log`: a hub that
+  cannot serve its own shell is broken, not an emergency.
+- **The S467 capture venue moved with it.** `RuntimeNpmGuidanceStringsTest` had read
+  the old sink with `ini_set('error_log', …)`; a Monolog handler resolves its path
+  from the config the factory was initialised with, so the behavioural layer now
+  drives a temp single-stream logger config through the new
+  `tests/Support/TempLoggerCapture` trait — explicit capture/restore of the factory's
+  process-global statics (level `debug`, so the capture sees every level), scratch
+  removed on teardown. `SharedUiControllerCspTest` picks up the same capture because
+  one of its cases drives the 503 branch; without it the un-initialised factory would
+  `include ''` straight into a ValueError.
+- **Teeth measured, not assumed.** Restoring the bare `error_log()` call reddens the
+  four log-line laws (10 tests: 4 failures); the swap back to the logger returns
+  10/10 green — the assertions read the artefact the process really writes.
+
 ### Fixed — review Minor 1 (restart's free-form 500 arms are now contract-documented, 2026-11-03)
 - **`POST /api/v1/admin/restart` documented no 500 at all.** The operation answers
   failure with six free-form arms in a flat `{success:false,error,message}` envelope

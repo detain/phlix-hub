@@ -13,6 +13,7 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 
 use Phlix\Hub\Http\Controllers\SharedUiController;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Tests\Support\TempLoggerCapture;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -31,11 +32,26 @@ use PHPUnit\Framework\TestCase;
  */
 final class SharedUiControllerCspTest extends TestCase
 {
+    use TempLoggerCapture;
+
     /** @var list<string> temp dirs to prune in tearDown */
     private array $tmpDirs = [];
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // One case below drives the 503 branch, and that branch now logs through
+        // LoggerFactory (2026-11-03 review cure). The factory has to be pointed at
+        // scratch space, or the diagnostic would resolve the real config/logger.php
+        // and write into the install's .logs during a unit run.
+        $this->startLoggerCapture();
+    }
+
     protected function tearDown(): void
     {
+        $this->stopLoggerCapture();
+
         foreach ($this->tmpDirs as $dir) {
             $this->rrmdir($dir);
         }

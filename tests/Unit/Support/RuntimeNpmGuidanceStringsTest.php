@@ -14,6 +14,7 @@ namespace Phlix\Hub\Tests\Unit\Support;
 use Phlix\Hub\Http\Controllers\SharedUiController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\ViteAssets;
+use Phlix\Hub\Tests\Support\TempLoggerCapture;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -75,7 +76,9 @@ use function unlink;
  *
  * Minor 53 re-rotated this S467 law: the CI-true frame moved OUT of the browser
  * response (end users were being served shell commands, and a denied traversal
- * was mislabelled as a broken build) INTO the per-cause operator error_log line.
+ * was mislabelled as a broken build) INTO the per-cause operator log line — the
+ * estate `LoggerFactory` channel since the 2026-11-03 review cure, a bare
+ * `error_log()` before it.
  * The incantation itself is still exactly one CI-true constant per runtime file.
  *
  * Scope: the bare `npm install` in {@see SpaBundleCiWiringTest} and
@@ -86,6 +89,8 @@ use function unlink;
  */
 final class RuntimeNpmGuidanceStringsTest extends TestCase
 {
+    use TempLoggerCapture;
+
     private const CONTROLLER = __DIR__ . '/../../../src/Http/Controllers/SharedUiController.php';
 
     private const VITE_ASSETS = __DIR__ . '/../../../src/Http/ViteAssets.php';
@@ -126,8 +131,22 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
     /** @var list<string> ephemeral public-root trees built by a test, removed in tearDown(). */
     private array $baseDirs = [];
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Minor 53's diagnostic left the bare `error_log()` sink on 2026-11-03
+        // (review cure: it bypassed the per-handler level routing and the
+        // HUB_LOG_DIR/HUB_LOG_LEVEL seams). The behavioural layer below still
+        // asserts the real artefact — it just reads the estate logger's own
+        // output now, captured into a temp stream.
+        $this->startLoggerCapture();
+    }
+
     protected function tearDown(): void
     {
+        $this->stopLoggerCapture();
+
         foreach ($this->baseDirs as $baseDir) {
             $this->removeTree($baseDir);
         }
@@ -266,22 +285,20 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
     /**
      * Minor 53 posture: drive {@see SharedUiController::shell()} at a given public root and
      * assert BOTH artefacts that actually leave the process — the browser body (user-honest,
-     * zero shell commands) and the error_log line (per-cause operator diagnostic carrying the
+     * zero shell commands) and the operator log line (per-cause diagnostic carrying the
      * whole CI-true frame for build-state branches; the SECURITY refusal logs its cause and
      * deliberately NOT the frame). $expectGuidance selects which law the branch obeys.
+     *
+     * The log side is read from the estate logger ({@see TempLoggerCapture}), since the
+     * 2026-11-03 review cure moved this diagnostic off `error_log()`.
      */
     private function assertShell503IsUserHonestAndLogsGuidance(
         string $publicRoot,
         string $branch,
         bool $expectGuidance
     ): void {
-        $logFile = sys_get_temp_dir() . '/phlix-s467-rot-' . bin2hex(random_bytes(5)) . '.log';
-        $previous = ini_set('error_log', $logFile);
-        try {
-            $response = (new SharedUiController($publicRoot))->shell(new Request(), []);
-        } finally {
-            ini_restore('error_log');
-        }
+        $this->clearLoggerCapture();
+        $response = (new SharedUiController($publicRoot))->shell(new Request(), []);
 
         self::assertSame(503, $response->statusCode, $branch . ': a broken bundle must answer 503');
         self::assertStringContainsString(
@@ -295,8 +312,7 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
             $branch . ': the browser body must leak ZERO shell guidance (Minor 53)'
         );
 
-        $logged = is_file($logFile) ? (string) file_get_contents($logFile) : '';
-        @unlink($logFile);
+        $logged = $this->capturedLoggerOutput();
         self::assertStringContainsString($branch, $logged, $branch . ': the operator log names the CAUSE');
         if ($expectGuidance) {
             self::assertStringContainsString(
