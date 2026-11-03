@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 42 + 43 + 44: member-facing copy speaks to the member; log lines stop pretending to be deliveries — 2026-11-03
+
+- **M42**: the bandwidth-quota 429 refused members in the third person
+  ("User has reached their monthly…"), while the sibling refusal in the same
+  wire family is second person. Both quota sentences (src + tests' copy pins
+  + the openapi example block) are now "You have reached your monthly …
+  bandwidth quota." — text only; the wire codes, payload shape and
+  reason-KEY pins are untouched.
+- **M43**: `RequestNotification` promised users actions through a channel
+  that does not exist — its only sink is the hub log, yet entries were named
+  "…notification", which the class' own docblock let an operator read as
+  delivery. Event names now say "logged, not delivered", every record
+  carries a `delivery` field stating no user was told, and the docblock
+  spells out the future-channel law with a pin.
+- **M44**: a rejection reason written as normal prose ("Not available in
+  your region.") composed "…rejected: …region.." — the trailing period is
+  now trimmed before the sentence terminator is appended, and titles are
+  wrapped in typographic quotes so names containing apostrophes no longer
+  break the quoting.
+
 ### Fixed — review hub Majors 36 + 37: the hub identity key can no longer leak into git or image layers; DB credentials fail loud — 2026-11-03
 
 - **M36**: the Ed25519 hub signing key auto-generates into `config/` when
