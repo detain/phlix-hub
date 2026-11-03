@@ -218,9 +218,11 @@ describe('wire-of-component — hub security page', () => {
     });
 
     it('the Security menu entry exists and targets the route', () => {
+        // [review hub Minor 50] the label is catalog-driven; the byte-pin that
+        // EN still renders 'Security' lives in hub-menu-catalog.test.ts.
         assert.match(
             MAIN_SOURCE,
-            /\{ id: 'security', label: 'Security', to: '\/app\/settings\/security' \}/,
+            /\{ id: 'security', label: t\('menu\.security'\), to: '\/app\/settings\/security' \}/,
         );
     });
 

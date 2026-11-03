@@ -159,9 +159,20 @@ describe('registry parity with the @phlix/ui pin (drift guard)', () => {
 describe('wiring source pins (mechanical proofs the seam is reachable)', () => {
     it('main.ts boots createPhlixApp with the resolved locale messages', () => {
         const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+        // [review hub Minor 50] the boot locale is resolved ONCE into
+        // bootLocale and feeds BOTH the ui seam (messages) and the hub-local
+        // chrome catalog (setHubLocale). One-resolve + both-sinks is the law.
         assert.ok(
-            /messages:\s*messagesForLocale\(resolveLocale\(\)\)/.test(main),
-            'main.ts must pass messagesForLocale(resolveLocale()) into createPhlixApp',
+            /const bootLocale = resolveLocale\(\);/.test(main),
+            'main.ts must resolve the boot locale once',
+        );
+        assert.ok(
+            /messages:\s*messagesForLocale\(bootLocale\)/.test(main),
+            'main.ts must pass messagesForLocale(bootLocale) into createPhlixApp',
+        );
+        assert.ok(
+            /setHubLocale\(bootLocale\);/.test(main),
+            'main.ts must bind the same locale into the hub-local catalog',
         );
     });
 

@@ -329,7 +329,12 @@ describe('display math', () => {
 
 describe('portal wiring (menu + routes + page)', () => {
     it('the nav menu carries a Watch Party entry (a route nobody navigates to is the same defect in a different coat)', () => {
-        assert.match(MAIN_SOURCE, /id:\s*'watch-party',\s*label:\s*'Watch Party',\s*to:\s*'\/app\/watch-party'/);
+        // [review hub Minor 50] the label is catalog-driven; the byte-pin that
+        // EN still renders 'Watch Party' lives in hub-menu-catalog.test.ts.
+        assert.match(
+            MAIN_SOURCE,
+            /id:\s*'watch-party',\s*label:\s*t\('menu\.watchParty'\),\s*to:\s*'\/app\/watch-party'/,
+        );
     });
 
     it('both routes mount the hub-local page', () => {

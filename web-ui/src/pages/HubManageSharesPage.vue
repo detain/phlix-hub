@@ -14,6 +14,11 @@
 import { ManageSharesPage } from '@phlix/ui';
 import HubPageHint from '../components/HubPageHint.vue';
 import ShareLibraryCard from '../components/ShareLibraryCard.vue';
+// [review hub Minor 50] quick-link labels ride the hub-local catalog; the
+// hint PROSE below stays English by the documented partial-adoption law.
+import { useHubMessages } from '../i18n/hub-messages';
+
+const { t } = useHubMessages();
 </script>
 
 <template>
@@ -21,9 +26,9 @@ import ShareLibraryCard from '../components/ShareLibraryCard.vue';
         <HubPageHint
             hint-id="manage-shares"
             :links="[
-                { to: '/app/invite-links', label: 'Invite links' },
-                { to: '/app/servers', label: 'My servers' },
-                { to: '/app/admin/settings', label: 'Hub settings' },
+                { to: '/app/invite-links', label: t('links.inviteLinks') },
+                { to: '/app/servers', label: t('links.myServers') },
+                { to: '/app/admin/settings', label: t('links.hubSettings') },
             ]"
         >
             Shares grant other Phlix accounts access to libraries on your servers; invite links

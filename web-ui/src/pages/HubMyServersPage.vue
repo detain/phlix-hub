@@ -15,6 +15,11 @@
  */
 import { MyServersPage } from '@phlix/ui';
 import HubPageHint from '../components/HubPageHint.vue';
+// [review hub Minor 50] quick-link labels ride the hub-local catalog; the
+// hint PROSE below stays English by the documented partial-adoption law.
+import { useHubMessages } from '../i18n/hub-messages';
+
+const { t } = useHubMessages();
 </script>
 
 <template>
@@ -22,9 +27,9 @@ import HubPageHint from '../components/HubPageHint.vue';
         <HubPageHint
             hint-id="my-servers"
             :links="[
-                { to: '/app/invite-links', label: 'Invite links' },
-                { to: '/app/shared-with-me', label: 'Shared with me' },
-                { to: '/app/admin/settings', label: 'Hub settings' },
+                { to: '/app/invite-links', label: t('links.inviteLinks') },
+                { to: '/app/shared-with-me', label: t('links.sharedWithMe') },
+                { to: '/app/admin/settings', label: t('links.hubSettings') },
             ]"
         >
             Servers appear here after their owner redeems a claim code. An admin can cap how many

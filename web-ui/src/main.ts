@@ -2,6 +2,7 @@ import { createPhlixApp, ServerDetailPage, FederationSharesPage, RequestsPage, I
 import '@phlix/ui/style.css';
 import '@phlix/ui/fonts.css';
 import { messagesForLocale, resolveLocale } from './i18n';
+import { setHubLocale, useHubMessages } from './i18n/hub-messages';
 import HubMyServersPage from './pages/HubMyServersPage.vue';
 import HubFederationPage from './pages/HubFederationPage.vue';
 import HubManageSharesPage from './pages/HubManageSharesPage.vue';
@@ -14,14 +15,21 @@ interface MinimalRouter {
     beforeEach(guard: (to: { path: string }) => true | { path: string }): void;
 }
 
+// i18n seam (config-time, @phlix/ui R6.5c): resolve the boot locale ONCE at
+// startup (VITE_PHLIX_LOCALE → navigator.language → 'en' — no runtime switcher
+// per estate doctrine). The locale drives BOTH catalogs: the ui-catalog override
+// map passed into createPhlixApp (mergeMessages lays it OVER ui's English
+// defaults; 'en' resolves to an EMPTY override, so English rendering is
+// byte-identical to omitting the field — see src/i18n/index.ts for the full
+// law), and the hub-local chrome catalog (src/i18n/hub-messages.ts — the menu
+// labels below, which ui renders VERBATIM and no messages override can reach;
+// review hub Minor 50).
+const bootLocale = resolveLocale();
+setHubLocale(bootLocale);
+const { t } = useHubMessages();
+
 const app = createPhlixApp({
-    // i18n seam (config-time, @phlix/ui R6.5c): resolve the boot locale ONCE at
-    // startup (VITE_PHLIX_LOCALE → navigator.language → 'en' — no runtime switcher
-    // per estate doctrine) and pass that locale's ui-catalog override map, which
-    // ui's mergeMessages lays OVER its English defaults. 'en' resolves to an
-    // EMPTY override, so English rendering is byte-identical to omitting the
-    // field entirely (see src/i18n/index.ts for the full law).
-    messages: messagesForLocale(resolveLocale()),
+    messages: messagesForLocale(bootLocale),
     app: 'hub',
     // The hub's home is its servers directory — never the media-server Browse page
     // (which calls server-only endpoints like /api/v1/libraries that 404 on the
@@ -35,24 +43,26 @@ const app = createPhlixApp({
     // the directory/relay hub), so only the hub surfaces are listed. "Admin" is
     // `requiresAdmin`, so the shell shows it only for an authenticated admin
     // (`useAuthStore().isAdmin`); the hub admin API is gated server-side regardless.
+    // The labels ride the hub-local catalog (hub-messages.ts / Minor 50); ids,
+    // routes, and the admin gating below are unchanged.
     menu: [
-        { id: 'my-servers', label: 'My Servers', to: '/app/servers' },
-        { id: 'search', label: 'Search', to: '/app/search' },
-        { id: 'federation', label: 'Federation', to: '/app/federation', requiresAdmin: true },
-        { id: 'federation-shares', label: 'Federation Shares', to: '/app/federation/shares', requiresAdmin: true },
-        { id: 'manage-shares', label: 'Shares', to: '/app/shares' },
-        { id: 'shared-with-me', label: 'Shared With Me', to: '/app/shared-with-me' },
+        { id: 'my-servers', label: t('menu.myServers'), to: '/app/servers' },
+        { id: 'search', label: t('menu.search'), to: '/app/search' },
+        { id: 'federation', label: t('menu.federation'), to: '/app/federation', requiresAdmin: true },
+        { id: 'federation-shares', label: t('menu.federationShares'), to: '/app/federation/shares', requiresAdmin: true },
+        { id: 'manage-shares', label: t('menu.shares'), to: '/app/shares' },
+        { id: 'shared-with-me', label: t('menu.sharedWithMe'), to: '/app/shared-with-me' },
         // Watch parties (M-HUB-08, [review hub__casualgamer M5]): the :8804
         // relay's rooms had ZERO portal surface — the review's "invisible
         // marquee feature". Sits with the personal media surfaces, NOT behind
         // the admin gate: the wire gates on the caller's own server ownership.
-        { id: 'watch-party', label: 'Watch Party', to: '/app/watch-party' },
-        { id: 'invite-links', label: 'Invite Links', to: '/app/invite-links' },
-        { id: 'requests', label: 'Requests', to: '/app/requests' },
+        { id: 'watch-party', label: t('menu.watchParty'), to: '/app/watch-party' },
+        { id: 'invite-links', label: t('menu.inviteLinks'), to: '/app/invite-links' },
+        { id: 'requests', label: t('menu.requests'), to: '/app/requests' },
         // Self account security (M-HUB-07). Sits with the other personal
         // surfaces (MCP tokens below), NOT behind the admin gate: the endpoint
         // gates on the caller's own session + current-password proof.
-        { id: 'security', label: 'Security', to: '/app/settings/security' },
+        { id: 'security', label: t('menu.security'), to: '/app/settings/security' },
         // MCP personal-access tokens (S62 API / S243 UI). `createPhlixApp` mounts
         // the ROUTE for every `app: 'hub'` consumer, but menus are consumer-owned —
         // supplying `menu` above replaces the shell default — so without this line
@@ -62,7 +72,7 @@ const app = createPhlixApp({
         // and every hub user manages their own credentials, so it sits with the
         // ordinary entries, before the admin-only "Admin" link.
         mcpTokensMenuItem(),
-        { id: 'admin', label: 'Admin', to: '/app/admin/dashboard', requiresAdmin: true },
+        { id: 'admin', label: t('menu.admin'), to: '/app/admin/dashboard', requiresAdmin: true },
     ],
     // Routes carry the full /app prefix: the router's history base is '/', so the
     // prefix lives in the path itself (not the history base).

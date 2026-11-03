@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 50 (hub chrome labels speak the locale catalog, 2026-11-03)
+- **The one i18n gap the ui seam could not close.** The eleven top-bar menu
+  labels in `main.ts` and five page quick-link labels were hardcoded English in
+  the consumer — and no `PhlixAppConfig.messages` override can reach them: the
+  pinned `@phlix/ui` renders menu labels VERBATIM (`NavLink` emits
+  `" " + e.label`, never through its own `t()`), and an override for an unknown
+  ui group is dropped by `mergeMessages`. New `web-ui/src/i18n/hub-messages.ts`:
+  a hub-local `menu`/`links` catalog for all seven hub locales, bound ONCE at
+  boot from the SAME `resolveLocale()` result that selects the ui catalogs
+  (typed `group.key` lookups — a renamed key is a vue-tsc BUILD error; unknown
+  keys fail loud at render, ui's own law). `HUB_MESSAGES.en` is byte-identical
+  to the historical strings (pinned): English boot renders exactly what it
+  always rendered, so the localization is purely additive. Deliberate disclosed
+  residual: sentence/paragraph hint PROSE stays English — fragment-by-fragment
+  prose localization without estate translation review is the worse-text path,
+  and the catalog is the seam that follow-up copy threads through. New
+  `node --test` suite (locale key-space parity, EN byte pins, late-bound
+  switch, wiring proofs that zero raw `label: '` literals survive in
+  `main.ts`/pages); two pre-existing literal pins (watch-party, security)
+  rotate to speak the catalog law. SPA rebuilt deterministic ×2 from a CLEAN
+  `npm ci` (S253-era rotation, 104 files), committed with its sources.
+
 ### Fixed — review Minor 42 (token prunes become two indexed, batch-bounded arms, 2026-11-03)
 - **One wide OR-DELETE per 60 s tick → two narrow keyed sweeps.** The
   client-relay and MCP token pruners each issued a single

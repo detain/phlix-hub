@@ -11,6 +11,11 @@
  */
 import { FederationPage } from '@phlix/ui';
 import HubPageHint from '../components/HubPageHint.vue';
+// [review hub Minor 50] quick-link labels ride the hub-local catalog; the
+// hint PROSE below stays English by the documented partial-adoption law.
+import { useHubMessages } from '../i18n/hub-messages';
+
+const { t } = useHubMessages();
 </script>
 
 <template>
@@ -18,8 +23,8 @@ import HubPageHint from '../components/HubPageHint.vue';
         <HubPageHint
             hint-id="federation"
             :links="[
-                { to: '/app/federation/shares', label: 'Incoming shares' },
-                { to: '/app/admin/settings', label: 'Hub settings' },
+                { to: '/app/federation/shares', label: t('links.incomingShares') },
+                { to: '/app/admin/settings', label: t('links.hubSettings') },
             ]"
         >
             Federation links this hub to other Phlix hubs (peers, shared libraries, admin
