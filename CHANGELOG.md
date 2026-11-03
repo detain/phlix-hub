@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Major 41: the entrypoint waits for MySQL before spending its one migration attempt — 2026-11-03
+
+- `docker/docker-entrypoint.sh` ran `scripts/run-migrations.php` exactly
+  once with no readiness probe; with the documented default "start anyway"
+  posture, a container beating its database to the wire burned the attempt
+  and shipped an UN-MIGRATED schema while `/health` (DB-free by design)
+  reported `healthy`. Added a bounded TCP-probe wait — `HUB_DB_WAIT_SECONDS`
+  (default 60, `0` = old behavior) against `HUB_DB_HOST:HUB_DB_PORT` — that
+  bails instantly for a non-resolving host (a typo is not a slow boot; the
+  strict-mode control container still fails fast inside its 120 s gate) and
+  hands over to the existing banner machinery when the timeout expires.
+  Probe legs exec-verified (refused→1, listening→0).
+
 ### Fixed — review hub Major 45: relay teardown survives a MySQL blip — 2026-11-03
 
 - `Tunnel::close()`, `Tunnel::onServerClose()` and

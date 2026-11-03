@@ -1086,6 +1086,7 @@ development fallbacks.
 | `HUB_PORT` | `8800` | HTTP listen port |
 | `HUB_WORKERS` | `2` | Number of HTTP worker processes |
 | `HUB_WORKERMAN_LOG` | `.logs/workerman.log` | Workerman's own log file |
+| `HUB_DB_WAIT_SECONDS` | `60` | Docker entrypoint: seconds to wait for the MySQL listener (TCP probe of `HUB_DB_HOST:HUB_DB_PORT`) before running migrations, so a container that wins the boot race against its database no longer burns its one migration attempt and ships an un-migrated schema behind a green DB-free `/health`. A non-resolving host aborts the wait immediately (typo ≠ slow boot); `0` = old single-attempt behavior |
 | `HUB_LOG_LEVEL` | `info` | Verbosity of the primary `file` channel (`config/logger.php`); one of the eight Monolog names, invalid → boot fails loud. The old hardcoded `debug` grew one huge file per day (rotation caps by day count, not bytes) |
 | `HUB_LOG_DIR` | `<install>/.logs` | Directory for all five rotating logs. The shipped systemd unit grants `ReadWritePaths` only to the install's `.logs`, so relocate carefully |
 | `HUB_PUBLIC_DOMAIN` | `phlix.media` | Base domain for per-server subdomains |

@@ -69,40 +69,40 @@ mkdir -p /tmp/xdebug 2>/dev/null || true
 # than `php -r`, so it cannot depend on the application it is about to start.
 # ---------------------------------------------------------------------------
 hub_generate_secret() {
-    if od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | grep -qE '^[0-9a-f]{64}$'; then
-        od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
-        return 0
-    fi
-    if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 32
-        return 0
-    fi
-    return 1
+	if od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | grep -qE '^[0-9a-f]{64}$'; then
+		od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+		return 0
+	fi
+	if command -v openssl >/dev/null 2>&1; then
+		openssl rand -hex 32
+		return 0
+	fi
+	return 1
 }
 
 if [ -z "${HUB_JWT_SECRET:-}" ] && [ -r "$JWT_SECRET_FILE" ]; then
-    HUB_JWT_SECRET="$(cat "$JWT_SECRET_FILE" 2>/dev/null || true)"
-    [ -n "$HUB_JWT_SECRET" ] && echo "Using the JWT signing key persisted at ${JWT_SECRET_FILE}."
+	HUB_JWT_SECRET="$(cat "$JWT_SECRET_FILE" 2>/dev/null || true)"
+	[ -n "$HUB_JWT_SECRET" ] && echo "Using the JWT signing key persisted at ${JWT_SECRET_FILE}."
 fi
 
 if [ -z "${HUB_JWT_SECRET:-}" ]; then
-    HUB_JWT_SECRET="$(hub_generate_secret 2>/dev/null || true)"
-    if [ -z "$HUB_JWT_SECRET" ]; then
-        echo "==========================================================" >&2
-        echo "PHLIX-HUB-JWT-SECRET-UNAVAILABLE: could not generate a signing" >&2
-        echo "key (no usable od(1)/openssl). Set HUB_JWT_SECRET explicitly —" >&2
-        echo "the hub refuses to serve authenticated traffic without one." >&2
-        echo "==========================================================" >&2
-    elif ( umask 077 && printf '%s' "$HUB_JWT_SECRET" > "$JWT_SECRET_FILE" ) 2>/dev/null; then
-        echo "Generated a JWT signing key and persisted it to ${JWT_SECRET_FILE}."
-    else
-        echo "==========================================================" >&2
-        echo "PHLIX-HUB-JWT-SECRET-EPHEMERAL: generated a JWT signing key but" >&2
-        echo "could not write ${JWT_SECRET_FILE}. It will CHANGE on every" >&2
-        echo "restart, invalidating all sessions. Mount /var/phlix/config, or" >&2
-        echo "set HUB_JWT_SECRET." >&2
-        echo "==========================================================" >&2
-    fi
+	HUB_JWT_SECRET="$(hub_generate_secret 2>/dev/null || true)"
+	if [ -z "$HUB_JWT_SECRET" ]; then
+		echo "==========================================================" >&2
+		echo "PHLIX-HUB-JWT-SECRET-UNAVAILABLE: could not generate a signing" >&2
+		echo "key (no usable od(1)/openssl). Set HUB_JWT_SECRET explicitly —" >&2
+		echo "the hub refuses to serve authenticated traffic without one." >&2
+		echo "==========================================================" >&2
+	elif (umask 077 && printf '%s' "$HUB_JWT_SECRET" >"$JWT_SECRET_FILE") 2>/dev/null; then
+		echo "Generated a JWT signing key and persisted it to ${JWT_SECRET_FILE}."
+	else
+		echo "==========================================================" >&2
+		echo "PHLIX-HUB-JWT-SECRET-EPHEMERAL: generated a JWT signing key but" >&2
+		echo "could not write ${JWT_SECRET_FILE}. It will CHANGE on every" >&2
+		echo "restart, invalidating all sessions. Mount /var/phlix/config, or" >&2
+		echo "set HUB_JWT_SECRET." >&2
+		echo "==========================================================" >&2
+	fi
 fi
 
 export HUB_JWT_SECRET
@@ -112,10 +112,10 @@ export HUB_JWT_SECRET
 # `HUB_MIGRATIONS_STRICT="1 "` silently falling through to boot-anyway is
 # exactly the kind of opt-in that looks applied and is not.
 migrations_strict() {
-    case "$(printf '%s' "${HUB_MIGRATIONS_STRICT:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
-        1 | true | yes | on) return 0 ;;
-        *) return 1 ;;
-    esac
+	case "$(printf '%s' "${HUB_MIGRATIONS_STRICT:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+	1 | true | yes | on) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 
 # ---------------------------------------------------------------------------
@@ -132,53 +132,105 @@ migrations_strict() {
 # ---------------------------------------------------------------------------
 migrations_skipped_reason=''
 if [ -z "${HUB_DB_HOST:-}" ]; then
-    migrations_skipped_reason="no database host configured (set HUB_DB_HOST)"
+	migrations_skipped_reason="no database host configured (set HUB_DB_HOST)"
 elif [ ! -f "${APP_ROOT}/scripts/run-migrations.php" ]; then
-    migrations_skipped_reason="${APP_ROOT}/scripts/run-migrations.php not found"
+	migrations_skipped_reason="${APP_ROOT}/scripts/run-migrations.php not found"
 fi
 
 if [ -n "$migrations_skipped_reason" ]; then
-    echo "Skipping database migrations: ${migrations_skipped_reason}."
-    if migrations_strict; then
-        echo "==========================================================" >&2
-        echo "PHLIX-HUB-MIGRATIONS-NOT-RUN: ${migrations_skipped_reason}." >&2
-        echo "HUB_MIGRATIONS_STRICT is set and the schema could not be" >&2
-        echo "verified: refusing to start." >&2
-        echo "==========================================================" >&2
-        exit 1
-    fi
+	echo "Skipping database migrations: ${migrations_skipped_reason}."
+	if migrations_strict; then
+		echo "==========================================================" >&2
+		echo "PHLIX-HUB-MIGRATIONS-NOT-RUN: ${migrations_skipped_reason}." >&2
+		echo "HUB_MIGRATIONS_STRICT is set and the schema could not be" >&2
+		echo "verified: refusing to start." >&2
+		echo "==========================================================" >&2
+		exit 1
+	fi
 else
-    echo "Running database migrations..."
-    # `set -e` must not abort here: the exit code is inspected below.
-    # `cmd || var=$?` is the POSIX-portable way to suppress `set -e` while
-    # KEEPING the status. (`if ! cmd; then …; fi` also suppresses `set -e`, but
-    # discards `$?`, which both the banner and strict mode need.)
-    migration_status=0
-    php "${APP_ROOT}/scripts/run-migrations.php" || migration_status=$?
+	# -----------------------------------------------------------------------
+	# Wait-for-db (review hub Major 41): the migration attempt used to race
+	# MySQL with ZERO retry. A container started before the database accepts
+	# connections burned its one attempt and — in the default non-strict
+	# posture — shipped on an UN-MIGRATED schema while /health stayed green,
+	# because /health is DB-free by design. wait-for-free-ports.sh gates port
+	# release, not DB readiness, so nothing else ever noticed. Probe TCP
+	# readiness for HUB_DB_WAIT_SECONDS (default 60; 0 restores the old
+	# single-attempt boot). A host that does not even RESOLVE is a config
+	# typo, not a slow DB: bail out of the wait immediately so strict-mode
+	# control containers still fail fast instead of idling the timeout.
+	# -----------------------------------------------------------------------
+	db_wait="${HUB_DB_WAIT_SECONDS:-60}"
+	case "$db_wait" in
+	'' | *[!0-9]*) db_wait=60 ;;
+	esac
+	if [ "$db_wait" -gt 0 ]; then
+		db_probe_elapsed=0
+		while :; do
+			db_probe_status=0
+			# shellcheck disable=SC2016
+			php -r '
+$host = $argv[1];
+$port = (int) $argv[2];
+if (!filter_var($host, FILTER_VALIDATE_IP) && !gethostbynamel($host) && !checkdnsrr($host, "ANY")) {
+    exit(2);
+}
+$errno = 0;
+$errstr = "";
+$sock = @stream_socket_client("tcp://{$host}:{$port}", $errno, $errstr, 2.0);
+if ($sock === false) {
+    exit(1);
+}
+fclose($sock);
+exit(0);
+' "$HUB_DB_HOST" "${HUB_DB_PORT:-3306}" >/dev/null 2>&1 || db_probe_status=$?
 
-    if [ "$migration_status" -ne 0 ]; then
-        echo "==========================================================" >&2
-        echo "PHLIX-HUB-MIGRATION-FAILURE: scripts/run-migrations.php exited ${migration_status}." >&2
-        echo "The database schema may be HALF-MIGRATED. Failing migrations are" >&2
-        echo "not recorded in schema_migrations and are retried on next boot." >&2
-        echo "Run 'php scripts/run-migrations.php' (or 'bin/phlix migrate')" >&2
-        echo "for the full error list." >&2
+			if [ "$db_probe_status" -eq 0 ]; then
+				break
+			fi
+			if [ "$db_probe_status" -eq 2 ]; then
+				echo "HUB_DB_HOST '${HUB_DB_HOST}' does not resolve — not waiting for a mistyped database host." >&2
+				break
+			fi
+			if [ "$db_probe_elapsed" -ge "$db_wait" ]; then
+				echo "Database ${HUB_DB_HOST}:${HUB_DB_PORT:-3306} still unreachable after ${db_wait}s — proceeding; the migration step below reports the outcome." >&2
+				break
+			fi
+			sleep 2
+			db_probe_elapsed=$((db_probe_elapsed + 2))
+		done
+	fi
+	echo "Running database migrations..."
+	# `set -e` must not abort here: the exit code is inspected below.
+	# `cmd || var=$?` is the POSIX-portable way to suppress `set -e` while
+	# KEEPING the status. (`if ! cmd; then …; fi` also suppresses `set -e`, but
+	# discards `$?`, which both the banner and strict mode need.)
+	migration_status=0
+	php "${APP_ROOT}/scripts/run-migrations.php" || migration_status=$?
 
-        if migrations_strict; then
-            echo "HUB_MIGRATIONS_STRICT is set: refusing to start." >&2
-            echo "==========================================================" >&2
-            exit "$migration_status"
-        fi
+	if [ "$migration_status" -ne 0 ]; then
+		echo "==========================================================" >&2
+		echo "PHLIX-HUB-MIGRATION-FAILURE: scripts/run-migrations.php exited ${migration_status}." >&2
+		echo "The database schema may be HALF-MIGRATED. Failing migrations are" >&2
+		echo "not recorded in schema_migrations and are retried on next boot." >&2
+		echo "Run 'php scripts/run-migrations.php' (or 'bin/phlix migrate')" >&2
+		echo "for the full error list." >&2
 
-        echo "Starting anyway (default). Set HUB_MIGRATIONS_STRICT=1 to refuse" >&2
-        echo "to start on a migration failure instead." >&2
-        echo "==========================================================" >&2
-    else
-        # A POSITIVE marker, printed by this script and nothing else. The boot
-        # gate greps for it: an absent failure banner is not evidence that the
-        # migration step ran — the step could have been removed entirely.
-        echo "PHLIX-HUB-MIGRATIONS-OK: scripts/run-migrations.php exited 0."
-    fi
+		if migrations_strict; then
+			echo "HUB_MIGRATIONS_STRICT is set: refusing to start." >&2
+			echo "==========================================================" >&2
+			exit "$migration_status"
+		fi
+
+		echo "Starting anyway (default). Set HUB_MIGRATIONS_STRICT=1 to refuse" >&2
+		echo "to start on a migration failure instead." >&2
+		echo "==========================================================" >&2
+	else
+		# A POSITIVE marker, printed by this script and nothing else. The boot
+		# gate greps for it: an absent failure banner is not evidence that the
+		# migration step ran — the step could have been removed entirely.
+		echo "PHLIX-HUB-MIGRATIONS-OK: scripts/run-migrations.php exited 0."
+	fi
 fi
 
 # The daemon becomes PID 1: its exit code is the container's exit code, and
