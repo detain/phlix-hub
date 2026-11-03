@@ -6,6 +6,33 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 36 + 37: the hub identity key can no longer leak into git or image layers; DB credentials fail loud — 2026-11-03
+
+- **M36**: the Ed25519 hub signing key auto-generates into `config/` when
+  `hub_signing_key_path` is unset, and nothing excluded it — one `git add -A`
+  after a local boot could commit the identity every registered server and
+  federation peer trusts, and `COPY .` in the Dockerfile baked any local key
+  into image layers. `.gitignore` + `.dockerignore` now carry `config/*.pem`
+  (with the `tests/fixtures/**/*.pem` Alexa-cert fixtures exempt in the
+  docker context), and a CI step asserts no private-key material is tracked.
+  The path default itself stays at `config/` deliberately: relocating it to
+  `var/keys/` would silently orphan keys already generated in place on live
+  installs (identity replacement = mass re-pairing), a worse hazard than the
+  now-closed leak; the backup/mount remedy for that surface is the README's
+  existing state table.
+- **M37**: `config/database.php` applied the publicly-published
+  `phlix_hub`/`phlix_hub` credential pair SILENTLY whenever `HUB_DB_*` envs
+  were unset — on a shared host that can attach to the wrong database and
+  happily read/write it. The file now mirrors the estate's own JWT-secret
+  doctrine: the literal fallback is admitted only in declared dev contexts
+  (`APP_ENV`/`HUB_ENV` dev|development|local), with an explicit
+  `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD=1` opt-in, or under the PHPUnit
+  harness; everywhere else an unset `HUB_DB_PASSWORD` throws at boot. Managed
+  installs are unaffected (install.sh generates a random password into
+  `/etc/phlix-hub.env`; the docker boot-smoke already passes every `HUB_DB_*`).
+  Six subprocess-evidence legs added to `DatabaseConfigTest` (clean-child
+  `env -i` loads — the in-process require can never exercise the refusal).
+
 ### Fixed — review hub Majors 26 + 27: stop telling operators to open ports that can never help them — 2026-11-02
 
 - **M26**: Major 9 had already made the 8804 guidance *conditional*, but both

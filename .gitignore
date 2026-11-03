@@ -38,3 +38,7 @@ public/workerman.log
 /tests/E2E/Mcp/node_modules/
 # S329: the mcp-e2e job's JUnit report, read by scripts/assert-mcp-e2e-ran.php
 /junit-mcp.xml
+
+# Review hub Major 36: the Ed25519 hub identity key auto-generates into
+# config/ when hub_signing_key_path is unset — it must never be committed.
+config/*.pem

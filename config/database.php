@@ -2,11 +2,59 @@
 
 declare(strict_types=1);
 
+// DB credential admission policy (review hub Major 37).
+//
+// The old shape was `getenv(...) ?: 'phlix_hub'` for user AND password — a
+// credential pair published in this repo, applied SILENTLY whenever the env
+// vars were missing. On a shared host that is not a dev convenience but a
+// wrong-database hazard: the hub happily authenticates against whatever
+// `phlix_hub`/`phlix_hub` MySQL account exists and reads/writes it.
+//
+// The policy now mirrors the estate's own JWT-secret doctrine
+// (AuthServicesProvider::resolveSecret()): the literal fallbacks are admitted
+// ONLY in dev/local (`APP_ENV`/`HUB_ENV`), under an explicit opt-in env flag,
+// or inside the PHPUnit harness (which manages its own DB venue). Everywhere
+// else, an unset `HUB_DB_PASSWORD` is a boot failure, not a silent default.
+// Managed installs are unaffected: scripts/install.sh generates a random
+// password and writes it into /etc/phlix-hub.env.
+$dbPasswordEnv = getenv('HUB_DB_PASSWORD');
+$dbUserEnv = getenv('HUB_DB_USER');
+
+$devFallbackAllowed = static function (): bool {
+    foreach (['APP_ENV', 'HUB_ENV'] as $key) {
+        $value = getenv($key);
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+            if ($normalized === 'dev' || $normalized === 'development' || $normalized === 'local') {
+                return true;
+            }
+        }
+    }
+    $flag = getenv('PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD');
+    if (is_string($flag) && in_array(strtolower(trim($flag)), ['1', 'true', 'yes', 'on'], true)) {
+        return true;
+    }
+    // The test harness builds its own DB venue and never relies on these
+    // literals being production-safe (same early-return discipline as
+    // AuthServicesProvider::isTestEnvironment()).
+    return defined('PHPUNIT_COMPOSER_INSTALL') || defined('__PHPUNIT_PHAR__');
+};
+
+if ($dbPasswordEnv === false && !$devFallbackAllowed()) {
+    throw new RuntimeException(
+        'No database password configured: set the HUB_DB_PASSWORD environment '
+        . 'variable. The published "phlix_hub" literal fallback is only admitted '
+        . 'in development (APP_ENV/HUB_ENV dev|local), with '
+        . 'PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD=1, or under PHPUnit — refusing to '
+        . 'boot rather than silently authenticating with a publicly-known pair.',
+    );
+}
+
 $mysql = [
     'host'     => getenv('HUB_DB_HOST') ?: '127.0.0.1',
     'port'     => (int) (getenv('HUB_DB_PORT') ?: 3306),
-    'user'     => getenv('HUB_DB_USER') ?: 'phlix_hub',
-    'password' => getenv('HUB_DB_PASSWORD') ?: 'phlix_hub',
+    'user'     => $dbUserEnv !== false ? $dbUserEnv : 'phlix_hub',
+    'password' => $dbPasswordEnv !== false ? $dbPasswordEnv : 'phlix_hub',
     'database' => getenv('HUB_DB_NAME') ?: 'phlix_hub',
 
     // Coroutine connection POOL (default ON). Each coroutine leases its own

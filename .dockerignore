@@ -43,3 +43,9 @@ junit.xml
 # Local environment.
 .env
 var
+
+# Review hub Major 36: never bake a locally-generated hub signing key (or any
+# private key) into image layers via `COPY .`.
+config/*.pem
+*.pem
+!tests/fixtures/**/*.pem

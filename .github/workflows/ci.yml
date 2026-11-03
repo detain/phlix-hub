@@ -33,6 +33,14 @@ jobs:
       - name: Validate composer.json
         run: composer validate --strict --no-check-publish
 
+      - name: Assert no private keys are tracked (review hub Major 36)
+        run: |
+          LEAKED=$(git ls-files | grep '\.pem$' | grep -v '^tests/fixtures/' || true)
+          if [ -n "$LEAKED" ]; then
+            echo "::error::Private-key material is tracked in git (hub identity keys must never be): $LEAKED"
+            exit 1
+          fi
+
   openapi:
     name: OpenAPI Description
     runs-on: ubuntu-26.04
