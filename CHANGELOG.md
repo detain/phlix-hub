@@ -6,6 +6,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub C7: the installer and certbot hook no longer make TLS private keys world-readable — 2026-11-02
+
+- **The hole.** `scripts/install.sh` chmod 644-ed the relay TLS **key** (and
+  its resolved `archive/` symlink target) so the unprivileged relay worker
+  could read it, and the certbot deploy-hook template re-applied
+  `chmod 644 live/privkey.pem` + `chmod 644 archive/<domain>/*.pem` on EVERY
+  renewal — any later operator hardening was silently reverted at the next
+  renew. Any local account (a co-installed phlix-server web user, a cron
+  foothold) could then copy the hub TLS private key: decryption and endpoint
+  impersonation of relay/federation traffic. The same file already proved
+  the better shape is easy: the HAProxy combined PEM sits at 600.
+  (Probe bonus: the hook's `$ARCHIVE_DIR` lines were expanded to empty by
+  the installer's own unquoted heredoc, so the archive leg never even ran.)
+- **The cure (report-prescribed).** New dedicated system group `phlix-tls`
+  owns key material at mode 640; the service user joins it.
+  `phlix_ensure_tls_group()` (idempotent) runs from the cert-perm fixer, and
+  the rewritten deploy hook converges on the same shape at every renewal:
+  key files chgrp+640, public cert/chain/fullchain stay 644 (they are
+  public), dirs keep +x traversal, and the combined HAProxy PEM law is
+  untouched at 600. Runtime paths are written literally into the hook so
+  the empty-variable trap class is gone; the generated hook's bytes were
+  reproduced in a probe and pass `bash -n`.
+- **Operational note.** Existing hub daemons pick the supplementary group up
+  at their next restart (systemd resolves groups at spawn); fresh installs
+  and `--update` wire it in directly.
+
 ### Fixed — review hub C6: worker `count` is not a knob — process-local topology now fails loud — 2026-11-02
 
 - **The law.** All four WS workers (`RelayWorker` :8802, `ClientRelayWorker`

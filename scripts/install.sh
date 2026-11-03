@@ -650,6 +650,25 @@ phlix_user_is_dedicated() {
 }
 
 # ---------------------------------------------------------------------------
+# TLS private-key group (C7)
+#
+# The relay worker (SERVICE_USER) must be able to read the relay TLS private
+# key, and nobody else may. A dedicated system group owns the key material at
+# mode 640; both the installer path and the certbot deploy hook converge on
+# this shape, so a renewal can never restore a world-readable key again.
+# Existing daemons pick the supplementary group up at their next restart
+# (systemd resolves groups when spawning the unit).
+# ---------------------------------------------------------------------------
+phlix_ensure_tls_group() {
+  getent group phlix-tls >/dev/null 2>&1 || groupadd --system phlix-tls
+
+  if id "$SERVICE_USER" >/dev/null 2>&1 \
+    && ! id -nG "$SERVICE_USER" 2>/dev/null | grep -qx phlix-tls; then
+    usermod -aG phlix-tls "$SERVICE_USER"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Let's Encrypt cert permission fix
 #
 # Let's Encrypt's live/ directory is owned by root with mode 700, making
@@ -706,14 +725,22 @@ phlix_fix_letsencrypt_cert_perms() {
   chmod 755 "$cert_dir"           2>/dev/null || true   # /etc/letsencrypt/live/<domain>
   chmod 755 "$(dirname "$domain_archive")" 2>/dev/null || true  # /etc/letsencrypt/archive/<domain>
 
-  # Fix PEM files: 644 so the service user can read them.
+  # C7 (review hub__devops2): public cert material may be world-readable —
+  # it is public. Private keys never are: the old 644 let any local account
+  # (a co-installed phlix-server web user, a cron foothold) copy the hub TLS
+  # key. The worker reads the key through group phlix-tls at mode 640.
   if [ -f "$relay_cert" ]; then
     chmod 644 "$relay_cert"
     chmod 644 "$(readlink -f "$relay_cert")" 2>/dev/null || true
   fi
   if [ -n "$relay_key" ] && [ -f "$relay_key" ]; then
-    chmod 644 "$relay_key"
-    chmod 644 "$(readlink -f "$relay_key")" 2>/dev/null || true
+    phlix_ensure_tls_group
+    # chmod/chgrp dereference the live/ symlink onto the archive target;
+    # the readlink leg covers non-symlink key paths.
+    chmod 640 "$relay_key" 2>/dev/null || true
+    chgrp phlix-tls "$relay_key" 2>/dev/null || true
+    chmod 640 "$(readlink -f "$relay_key")" 2>/dev/null || true
+    chgrp phlix-tls "$(readlink -f "$relay_key")" 2>/dev/null || true
   fi
 
   info "Fixed Let's Encrypt cert permissions for relay TLS (cert dir: $cert_dir)"
@@ -2021,22 +2048,32 @@ if [ "$TLS_ENABLED" = "yes" ]; then
     mkdir -p /etc/letsencrypt/renewal-hooks/deploy
     cat > /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh <<HOOK
 #!/bin/sh
+# Managed by the Phlix Hub installer; rewritten on every install/update.
 cat "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" \
     "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" > "/etc/haproxy/certs/${DOMAIN}.pem"
 chmod 600 "/etc/haproxy/certs/${DOMAIN}.pem"
 systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
-# Fix perms on Let's Encrypt dirs so the relay worker (runs as phlix-hub) can
-# read the PEM files via the live/ -> archive/ symlinks.
-# live/ and archive/ are drwx------ root by default; we need +x for traversal.
-chmod 755 /etc/letsencrypt/live/
-chmod 755 /etc/letsencrypt/archive/
-chmod 755 /etc/letsencrypt/live/${DOMAIN}
-chmod 644 /etc/letsencrypt/live/${DOMAIN}/fullchain.pem
-chmod 644 /etc/letsencrypt/live/${DOMAIN}/privkey.pem
-# The archive dir and its cert files also need fixing.
-ARCHIVE_DIR="/etc/letsencrypt/archive/${DOMAIN}"
-chmod 755 "$ARCHIVE_DIR"
-chmod 644 "$ARCHIVE_DIR"/*.pem
+# C7 (review hub__devops2): renewal must NEVER re-expose the TLS private key.
+# The old body chmod 644-ed live/privkey.pem (dereferenced onto the archive
+# target) on every renewal, undoing any hardening — and its "$ARCHIVE_DIR"
+# lines were expanded to empty by this very heredoc at install time, so the
+# archive leg never ran. Public cert files stay 644 (they are public); the
+# key becomes group phlix-tls at 640 and the service user joins that group
+# (same shape as phlix_ensure_tls_group above). Dirs get +x for traversal.
+chmod 755 /etc/letsencrypt/live/ /etc/letsencrypt/archive/ "/etc/letsencrypt/live/${DOMAIN}" "/etc/letsencrypt/archive/${DOMAIN}" 2>/dev/null || true
+getent group phlix-tls >/dev/null 2>&1 || groupadd --system phlix-tls
+if id -u ${SERVICE_USER} >/dev/null 2>&1 && ! id -nG ${SERVICE_USER} 2>/dev/null | grep -qx phlix-tls; then
+  usermod -aG phlix-tls ${SERVICE_USER}
+fi
+for pem in /etc/letsencrypt/archive/${DOMAIN}/privkey*.pem; do
+  [ -e "\$pem" ] || continue
+  chgrp phlix-tls "\$pem" 2>/dev/null || true
+  chmod 640 "\$pem"
+done
+for pem in /etc/letsencrypt/archive/${DOMAIN}/cert*.pem /etc/letsencrypt/archive/${DOMAIN}/chain*.pem /etc/letsencrypt/archive/${DOMAIN}/fullchain*.pem; do
+  [ -e "\$pem" ] || continue
+  chmod 644 "\$pem"
+done
 HOOK
     chmod +x /etc/letsencrypt/renewal-hooks/deploy/phlix-haproxy.sh
 
