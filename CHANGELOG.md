@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub C8/C9: watch-party refusal copy tells the truth and names the actor — 2026-11-02
+
+- **C8** `web-ui/src/utils/watchPartyWire.ts` — the
+  `syncplay.group_not_found` sentence claimed the user's party name was
+  EMPTY, a diagnosis that cannot be reached: both empty-name cases
+  (join and create) are intercepted client-side before any frame goes on
+  the wire, so the relay only ever answers `group_not_found` for a NON-empty
+  name whose party does not exist. New copy states the actual fact and the
+  still-actionable instruction: "No party is open with that name — type the
+  exact party name to join."
+- **C9** `web-ui/src/pages/HubWatchPartyPage.vue` — the WS-error refusal
+  pointed members at `docs/websockets.md`, a source-repo file they cannot
+  open, and told them to "open" a listener only the operator can touch.
+  The sentence now splits the audience: hub operators get the actionable
+  check (listener running / port open), everyone else gets the only
+  available move — ask the hub admin.
+- **Bundle.** Served `public/assets/app/` regenerated with the change
+  (`npm run build` from the committed lock — S253 equality holds; web-ui
+  suite 136/0 and `vue-tsc` green beforehand; no test pinned the old
+  sentences — the wire-code KEY pins in `tests/watch-party.test.ts`
+  still pass untouched).
+
 ### Fixed — review hub C7: the installer and certbot hook no longer make TLS private keys world-readable — 2026-11-02
 
 - **The hole.** `scripts/install.sh` chmod 644-ed the relay TLS **key** (and

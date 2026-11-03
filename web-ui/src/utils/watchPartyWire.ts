@@ -380,7 +380,7 @@ export const MINT_FAILURE_SENTENCES: Readonly<Record<string, string>> = Object.f
  * displayed verbatim with its code, never dressed up.
  */
 export const WIRE_ERROR_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
-    'syncplay.group_not_found': 'That party name is empty — type the exact party name to join.',
+    'syncplay.group_not_found': 'No party is open with that name — type the exact party name to join.',
     'syncplay.leave_failed': 'You were not in a party — the leave had nothing to do.',
     'syncplay.queue_limit_exceeded': 'That queue exceeded the relay cap of 1000 items.',
     UNKNOWN_MESSAGE: 'The relay refused that frame as not part of its documented catalog.',

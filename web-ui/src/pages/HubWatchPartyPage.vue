@@ -287,7 +287,9 @@ function dial(intent: { join?: string; create?: string } = {}): void {
         ws.onerror = () => {
             refusal.value =
                 'The hub SyncPlay relay on port 8804 is unreachable from this browser. '
-                + 'The relay is a separate listener from the hub website — see docs/websockets.md (§:8804) for opening it.';
+                + 'If you run this hub, check that the relay listener is running and its port is '
+                + 'open; otherwise ask your hub admin — opening a port is an operator action, '
+                + 'not something the page can do for you.';
         };
         ws.onclose = () => {
             socket = null;
