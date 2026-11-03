@@ -138,6 +138,25 @@ class HubRestartController
                 ]);
             }
 
+            // Minor 55 — identity BEFORE authority: signal 0 only proves SOME
+            // process holds this pid. After a master crash + PID recycle the
+            // SIGUSR2 would land on an unrelated tenant while the hub answered
+            // 200 and never reloaded. /proc's argv is the cheap, unspoofable
+            // (by the hub's own standards) witness: the Workerman master
+            // always carries start.php within its first two argv slots.
+            $cmdline = $this->readProcessCmdline((int) $pid);
+            if ($cmdline === null || !self::cmdlineIdentifiesHub($cmdline)) {
+                return (new Response())->status(500)->json([
+                    'success' => false,
+                    'error'   => 'pid_identity_mismatch',
+                    'message' => sprintf(
+                        'Process %d exists but is not this hub\'s Workerman master '
+                        . '(stale pid file with a recycled PID?). Refusing to signal it.',
+                        (int) $pid
+                    ),
+                ]);
+            }
+
             $this->scheduleSignal((int) $pid);
 
             return (new Response())->json([
@@ -196,5 +215,43 @@ class HubRestartController
     protected function sendSignal(int $pid, int $signal): bool
     {
         return posix_kill($pid, $signal);
+    }
+
+    /**
+     * Read /proc/<pid>/cmdline for the identity gate (Minor 55).
+     *
+     * Extracted as a seam so tests control the witness without a real
+     * process. Null means "no readable argv" — the gate treats that as
+     * refusal (fail closed: an unverifiable pid must never receive the
+     * reload signal on the hub's behalf).
+     */
+    protected function readProcessCmdline(int $pid): ?string
+    {
+        $path = '/proc/' . $pid . '/cmdline';
+        if (!is_file($path)) {
+            return null;
+        }
+        $raw = @file_get_contents($path);
+
+        return $raw === false ? null : $raw;
+    }
+
+    /**
+     * Pure identity law (Minor 55): a /proc cmdline (NUL-separated argv)
+     * belongs to this hub's master when the interpreter or its script
+     * argument — the first two argv slots — is named start.php. An
+     * unrelated process merely holding the string deeper in its arguments
+     * (`tail start.php`, `grep start.php …`) does NOT pass.
+     */
+    public static function cmdlineIdentifiesHub(string $cmdline): bool
+    {
+        $argv = array_values(array_filter(explode("\0", $cmdline), static fn (string $a): bool => $a !== ''));
+        foreach (array_slice($argv, 0, 2) as $slot) {
+            if (basename($slot) === 'start.php') {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

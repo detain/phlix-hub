@@ -64,6 +64,29 @@ $dbConfigPath     = $configDir . '/database.php';
 $loggerConfigPath = $configDir . '/logger.php';
 $authConfigPath   = $configDir . '/auth.php';
 
+/**
+ * Minor 56 — prepare a runtime directory and FAIL LOUD when that is not
+ * possible. The old `@mkdir` posture let EROFS/EACCES pass silently at
+ * bootstrap: the pid write later died with a Workerman-level message, but
+ * the log/status channels degraded invisibly (phlix-server's hardened-unit
+ * EROFS incident was exactly this shape). Same fail-fast law as the JWT
+ * pre-flight below: one clear sentence to STDERR, exit 1.
+ */
+$ensureWritableDir = static function (string $dir, string $purpose): void {
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    if (!is_dir($dir) || !is_writable($dir)) {
+        fwrite(STDERR, sprintf(
+            '[phlix-hub] FATAL: cannot prepare the %s directory %s — '
+            . 'check ownership and read-only mounts (EROFS/EACCES) before the unit restart loop begins.\n',
+            $purpose,
+            $dir
+        ));
+        exit(1);
+    }
+};
+
 // -----------------------------------------------------------------------------
 // 2. Initialise static pools / factories
 // -----------------------------------------------------------------------------
@@ -81,7 +104,7 @@ ConnectionPool::class; // ensure autoload pulls the class.
 // + ReadWritePaths) without needing a code change. phlix-server hit
 // this exact EROFS path when its hardened unit shipped first.
 $workerLogFile = __DIR__ . '/.logs/workerman.log';
-@mkdir(dirname($workerLogFile), 0775, true);
+$ensureWritableDir(dirname($workerLogFile), 'workerman log (.logs/)');
 Worker::$logFile = $workerLogFile;
 
 // -----------------------------------------------------------------------------
@@ -151,8 +174,8 @@ $hubStatusFile = is_string($serverConfig['status_file'] ?? null) && $serverConfi
     ? (string) $serverConfig['status_file']
     : __DIR__ . '/var/hub.status';
 
-@mkdir(dirname($hubPidFile), 0775, true);
-@mkdir(dirname($hubStatusFile), 0775, true);
+$ensureWritableDir(dirname($hubPidFile), 'pid (var/)');
+$ensureWritableDir(dirname($hubStatusFile), 'status file (var/)');
 Worker::$pidFile = $hubPidFile;
 Worker::$statusFile = $hubStatusFile;
 

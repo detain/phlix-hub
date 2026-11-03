@@ -193,6 +193,49 @@ final class HubRestartControllerTest extends TestCase
         self::assertFalse($controller->fireScheduledSignal());
     }
 
+    public function testRecycledPidIdentityMismatchRefusesToSignal(): void
+    {
+        // Minor 55: a live, signallable pid that is NOT the hub master
+        // (crashed master, PID recycled by another tenant) must be refused
+        // — no SIGUSR2 scheduled, no cheerful ack.
+        file_put_contents($this->pidFile, '99999');
+
+        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
+        $controller->cmdline = "/usr/sbin/nginx\0-g\0daemon\0off\0";
+        $response = $controller->restart($this->makeRequest(), []);
+
+        self::assertSame(500, $response->statusCode);
+        $body = json_decode((string) $response->body, true);
+        self::assertSame('pid_identity_mismatch', $body['error']);
+        self::assertSame([], $controller->scheduled, 'a foreign process must never receive the reload signal');
+    }
+
+    public function testUnreadableCmdlineRefusesFailClosed(): void
+    {
+        file_put_contents($this->pidFile, '99999');
+
+        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
+        $controller->cmdline = null;
+        $response = $controller->restart($this->makeRequest(), []);
+
+        self::assertSame(500, $response->statusCode);
+        $body = json_decode((string) $response->body, true);
+        self::assertSame('pid_identity_mismatch', $body['error']);
+        self::assertSame([], $controller->scheduled);
+    }
+
+    public function testCmdlineIdentityLawReadsOnlyTheFirstTwoArgvSlots(): void
+    {
+        self::assertTrue(HubRestartController::cmdlineIdentifiesHub("php\0/opt/phlix-hub/start.php\0start\0"));
+        self::assertTrue(HubRestartController::cmdlineIdentifiesHub("/usr/bin/php8.3\0start.php\0start\0"));
+        self::assertFalse(
+            HubRestartController::cmdlineIdentifiesHub("tail\0-f\0/opt/phlix-hub/start.php\0"),
+            'a deep argv token must not certify identity (grep/tail shapes)'
+        );
+        self::assertFalse(HubRestartController::cmdlineIdentifiesHub(''));
+        self::assertFalse(HubRestartController::cmdlineIdentifiesHub("php\0artisan\0serve\0"));
+    }
+
     /**
      * The pid path the controller reads must be the one `start.php` writes.
      * `config/server.php` is the single source of truth for both, so its

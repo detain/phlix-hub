@@ -31,10 +31,22 @@ final class TestableRestartController extends \Phlix\Hub\Http\Controllers\HubRes
     /** @var (callable(): void)|null The deferred reload, pending manual firing. */
     private $pendingSignal = null;
 
+    /**
+     * Witness handed to the Minor 55 identity gate; null = unreadable
+     * /proc entry. Defaults to the honest hub master's argv so the
+     * pre-existing success-path laws keep testing what they tested.
+     */
+    public ?string $cmdline = "php\0/opt/phlix-hub/start.php\0start\0";
+
     public function __construct(string $pidFile, ?bool $signalResult, StructuredLogger $logger)
     {
         parent::__construct($pidFile, $logger);
         $this->signalResult = $signalResult;
+    }
+
+    protected function readProcessCmdline(int $pid): ?string
+    {
+        return $this->cmdline;
     }
 
     protected function sendSignal(int $pid, int $signal): bool

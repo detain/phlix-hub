@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minors 55+56: restart identity gate + fail-loud runtime dirs — 2026-11-03
+
+- **Minor 55 — `POST /api/v1/admin/restart` now verifies the pid before
+  signalling it.** A signal-0 probe proves only that *some* process holds the
+  number; after a master crash with PID recycle the SIGUSR2 used to land on an
+  unrelated tenant while the hub cheerfully acked a restart that never
+  happened. The controller now reads `/proc/<pid>/cmdline` and requires
+  `start.php` within the first two argv slots (pure
+  `HubRestartController::cmdlineIdentifiesHub()`; a deep-token `tail -f
+  start.php` does not certify), refusing with a new operator-facing
+  `pid_identity_mismatch` 500 and scheduling nothing when the witness is
+  absent or foreign. Fail-closed on unreadable `/proc` entries. Three new
+  pins + the test double's identity witness.
+- **Minor 56 — `start.php` prepares `.logs/` and `var/` fail-loud.** The
+  silent `@mkdir` posture let EROFS/EACCES degrade the workerman-log and
+  status-file channels invisibly (the pid write died later with a Workerman
+  message, not this one). A shared `$ensureWritableDir` helper now checks
+  `is_dir && is_writable` after each prepare and exits 1 with one clear
+  sentence naming the purpose and path — the same posture as the JWT
+  pre-flight beside it. Both `var/` consumers (pid, status) are guarded
+  independently so config-moved paths stay covered.
+
+
 ### Fixed — review hub Minor 45: signup hashing moved outside the transaction — 2026-11-03
 
 - `AuthManager::register()` computes the Argon2id digest **before**
