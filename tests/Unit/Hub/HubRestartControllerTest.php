@@ -266,6 +266,206 @@ final class HubRestartControllerTest extends TestCase
     }
 
     /**
+     * Whole `openapi.yaml` text — the artefact whose restart section is pinned below.
+     */
+    private function specSource(): string
+    {
+        $path = dirname(__DIR__, 3) . '/openapi.yaml';
+        self::assertFileExists($path, 'the hub specification must exist to be pinned');
+
+        return (string) file_get_contents($path);
+    }
+
+    /**
+     * Whole `HubRestartController.php` text — the subject of that section.
+     */
+    private function controllerSource(): string
+    {
+        $path = dirname(__DIR__, 3) . '/src/Http/Controllers/HubRestartController.php';
+        self::assertFileExists($path, 'the restart controller must exist to be pinned');
+
+        return (string) file_get_contents($path);
+    }
+
+    /**
+     * The arms the controller actually answers with, read from ITS OWN source.
+     *
+     * @return list<string> sorted, de-duplicated
+     */
+    private function emittedFailureArms(): array
+    {
+        $source = $this->controllerSource();
+        self::assertMatchesRegularExpression(
+            "/'error'\\s+=> 'pid_file_not_found'/",
+            $source,
+            'the restart controller must still own its 500 arms — the extractor below is anchored on them',
+        );
+
+        $count = preg_match_all("/'error'\\s+=> '([a-z_]+)'/", $source, $matches);
+        self::assertIsInt($count, 'the arm extraction must run');
+        self::assertGreaterThanOrEqual(
+            6,
+            $count,
+            'the restart endpoint answers with six failure arms; fewer extracted means the reader broke',
+        );
+
+        /** @var list<string> $arms */
+        $arms = array_values(array_unique($matches[1]));
+        sort($arms);
+
+        return $arms;
+    }
+
+    /**
+     * The lines of `paths."/api/v1/admin/restart".post.responses."500"`.
+     *
+     * Read the same deliberately narrow line-wise way as
+     * {@see \Phlix\Hub\Tests\Unit\Contracts\ErrorCodesOpenApiEnumContractTest}:
+     * this repo has no YAML library and CI installs no `yaml` extension, so
+     * `yaml_parse()` would pass locally and fatal in CI. Every anchor fails LOUD
+     * rather than returning fewer lines — a reader that quietly found nothing
+     * would turn the arm bijection below into a vacuous pass, which is the exact
+     * failure mode this gate exists to prevent.
+     *
+     * @return list<string> the 500 node's lines, its own key and terminator excluded
+     */
+    private function restartFiveHundredBlock(): array
+    {
+        $lines = preg_split('/\r\n|\n/', $this->specSource());
+        self::assertIsArray($lines, 'openapi.yaml must be readable');
+
+        $pathIndex = array_search('  "/api/v1/admin/restart":', $lines, true);
+        self::assertIsInt($pathIndex, 'the spec must carry the /api/v1/admin/restart path');
+
+        $start = null;
+        $indent = null;
+        $last = count($lines);
+        for ($i = $pathIndex + 1; $i < $last; $i++) {
+            if (str_starts_with($lines[$i], '  "')) {
+                break; // the next path key: this operation has no 500 node at all
+            }
+            if (trim($lines[$i]) === '"500":') {
+                $start = $i;
+                $indent = strspn($lines[$i], ' ');
+                break;
+            }
+        }
+        self::assertNotNull(
+            $start,
+            'the restart operation documents no "500" response: the review-minor cure '
+            . '(enumerate the free-form arms) was reverted or lost',
+        );
+        self::assertNotNull($indent);
+
+        $block = [];
+        for ($i = $start + 1; $i < $last; $i++) {
+            if (trim($lines[$i]) === '') {
+                $block[] = $lines[$i];
+                continue;
+            }
+            if (strspn($lines[$i], ' ') <= $indent) {
+                break; // dedented back to the response-code level: the 500 node is over
+            }
+            $block[] = $lines[$i];
+        }
+        self::assertNotEmpty($block, 'the restart "500" response has no body');
+
+        return $block;
+    }
+
+    /**
+     * Review minor (2026-11-03, cured): `POST /api/v1/admin/restart` now
+     * documents its 500 surface, and this is the pin that keeps it true.
+     *
+     * The endpoint answers failure with six free-form arms in a flat
+     * `{ success: false, error, message }` envelope. They are deliberately NOT
+     * registry codes (the `@phlix/contracts` vocabulary is frozen and carries no
+     * code for this operation), so no machine-checked gate existed for them at
+     * all — the exact asymmetry the review named: callers could branch on 500
+     * while no published contract listed why. The cure documented the arms; this
+     * test makes the documentation undeletable, both directions:
+     *
+     *  - every arm the controller emits must be one of the spec's bullets;
+     *  - every bullet the spec carries must be an arm the controller emits.
+     *
+     * Adding an arm without documenting it, or documenting a fossil, redden
+     * here with the offender named.
+     */
+    public function testTheSpecDocumentsExactlyTheArmsTheRestartControllerEmits(): void
+    {
+        $emitted = $this->emittedFailureArms();
+
+        /** @var list<string> $documented */
+        $documented = [];
+        foreach ($this->restartFiveHundredBlock() as $line) {
+            $entry = trim($line);
+            if ($entry === '' || !str_starts_with($entry, '- ')) {
+                continue; // prose, not an arm bullet
+            }
+            if (preg_match('/^- `([a-z_]+)`/', $entry, $match) !== 1) {
+                self::fail('Unparsable bullet in the restart "500" description: ' . $entry);
+            }
+            $documented[] = $match[1];
+        }
+
+        $documented = array_values(array_unique($documented));
+        sort($documented);
+        self::assertNotEmpty(
+            $documented,
+            'the restart "500" response enumerates no arms at all, so nothing was compared — '
+            . 'the cure this test guards is the enumeration itself',
+        );
+
+        self::assertSame(
+            [],
+            array_values(array_diff($emitted, $documented)),
+            'every 500 arm the controller answers with must be enumerated in openapi.yaml '
+            . '(the review-minor asymmetry: callers branch on 500 with no published list of why)',
+        );
+
+        self::assertSame(
+            [],
+            array_values(array_diff($documented, $emitted)),
+            'openapi.yaml must not enumerate an arm the restart controller never emits',
+        );
+    }
+
+    /**
+     * The 500 envelope itself: the three keys the controller writes, closed
+     * against extras, and the deliberate ABSENCE of a `code` key — the
+     * registry-frozen posture stated as a schema rather than left to prose.
+     */
+    public function testTheSpecPinsTheRestartFiveHundredEnvelopeWithoutAWireCode(): void
+    {
+        $block = implode("\n", $this->restartFiveHundredBlock());
+
+        self::assertMatchesRegularExpression(
+            '/^\s+required: \[success, error, message\]$/m',
+            $block,
+            'the 500 schema must require exactly the three keys restart() writes',
+        );
+        self::assertMatchesRegularExpression(
+            '/^\s+additionalProperties: false$/m',
+            $block,
+            'the 500 envelope is closed: restart() writes no fourth key',
+        );
+        foreach (['success', 'error', 'message'] as $key) {
+            self::assertMatchesRegularExpression(
+                '/^ {18}' . $key . ':$/m',
+                $block,
+                $key . ' must be declared as a property of the 500 schema',
+            );
+        }
+
+        self::assertDoesNotMatchRegularExpression(
+            '/^ {18}code:$/m',
+            $block,
+            'the restart 500 envelope carries no machine code: the @phlix/contracts registry is '
+            . 'frozen and no code was added for this operation (no-new-wire-codes law)',
+        );
+    }
+
+    /**
      * @param mixed $body
      *
      * @return array<string, mixed>

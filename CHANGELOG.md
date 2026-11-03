@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 1 (restart's free-form 500 arms are now contract-documented, 2026-11-03)
+- **`POST /api/v1/admin/restart` documented no 500 at all.** The operation answers
+  failure with six free-form arms in a flat `{success:false,error,message}` envelope
+  — `pid_file_not_found`, `pid_file_read_failed`, `invalid_pid`, `signal_send_failed`,
+  `pid_identity_mismatch` (5391e44e), `restart_failed` — and none of them appeared in
+  `openapi.yaml`. They stay outside the `@phlix/contracts` vocabulary deliberately: the
+  registry is frozen, carries no code for this operation, so the envelope has no
+  `code` key. The review's asymmetry was that callers could branch on HTTP 500 with no
+  published list of why. The spec now carries a `500` response — a description
+  enumerating every arm, and a closed schema requiring exactly
+  `success`/`error`/`message`, with `code` stated absent rather than merely omitted.
+- **The documentation is pinned both ways.** `HubRestartControllerTest` grew
+  `testTheSpecDocumentsExactlyTheArmsTheRestartControllerEmits` (the arms read out of
+  the controller's own source against the spec's bullets: an undocumented new arm, or
+  a fossil arm left behind in the spec, reddens with the offender named) and
+  `testTheSpecPinsTheRestartFiveHundredEnvelopeWithoutAWireCode`.
+  `OpenApiSpecMatchesRouterTest` needed no rotation — it pins paths, methods and
+  middleware, not response tables (measured: it stayed green over the new node).
+  Redocly `2.30.5` lint stays exit 0 and no warning names the restart operation.
+
 ### Fixed — CI attestation (psalm corpus inherited reds cured, 2026-11-03)
 - **All nine errors predate this lane.** The Psalm job has been red on hub
   master since `551b0df5` was pushed unattested (its CI run 41714152750 lists

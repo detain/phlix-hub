@@ -659,6 +659,46 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+        "500":
+          description: |-
+            The reload was refused or could not be scheduled. `error` carries one of
+            six free-form operational arms, each named for the check that failed:
+
+            - `pid_file_not_found` — no pid file at the configured `pid_file` path.
+            - `pid_file_read_failed` — the pid file exists but could not be read.
+            - `invalid_pid` — the pid file's content is empty or not numeric.
+            - `signal_send_failed` — that pid is not running or not signallable
+              (the signal-0 liveness probe before the deferred reload).
+            - `pid_identity_mismatch` — a process holds the pid but it is not this
+              hub's Workerman master (stale pid file over a recycled PID); the hub
+              refuses to signal an unrelated tenant.
+            - `restart_failed` — unexpected failure while scheduling. The wire
+              message is deliberately constant; the exception detail is operator-log
+              only, since it can carry pid-file paths and environment detail.
+
+            These strings are deliberately NOT members of the closed
+            `@phlix/contracts` error-code vocabulary: the registry is the sole truth
+            for machine-readable codes, carries no code for this operation, and this
+            envelope therefore has no `code` key at all. Callers branch on HTTP 500
+            and may surface `message`; treat `error` as diagnostic text, not a
+            contract-stable discriminator.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, error, message]
+                additionalProperties: false
+                properties:
+                  success:
+                    type: boolean
+                    description: "Always `false` on this response."
+                    enum: [false]
+                  error:
+                    type: string
+                    description: "One of the free-form arms enumerated in the response description."
+                  message:
+                    type: string
+                    description: "Human-readable cause; operator-safe, carries no path or environment detail."
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
