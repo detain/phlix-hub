@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minors 38+40: limiter dilution boot notice + batched library upserts — 2026-11-03
+
+- **Minor 38 — multi-worker rate-limit dilution is now announced at boot.**
+  The per-worker in-memory profiles stay documented-as-spec, but the
+  README-silent arithmetic (effective budget = max x HUB_WORKERS) can no
+  longer ambush an operator: Application's HTTP worker setup emits one
+  STDERR notice when it arms the pool with `workers > 1` (name `login`/
+  `signup` as the DB-backed exceptions, point at the scope docs), and
+  nothing when the local counter genuinely IS the global one. The law is
+  the pure `RateLimiter::multiWorkerNotice()`; `RateLimiterMultiWorkerNoticeTest`
+  pins both arms.
+- **Minor 40 — heartbeat library upserts batch into ONE statement.**
+  `HeartbeatHandler::updateServerLibraries()` wrote one INSERT per reported
+  library inside the change window; it now builds a single multi-row
+  `INSERT ... ON DUPLICATE KEY UPDATE library_name = VALUES(library_name)`
+  with index-suffixed named params (the same generator idiom as the prune
+  DELETE right below it). Same-row semantics are byte-equivalent (each
+  conflicting tuple updates from its own `VALUES()`), and a test now pins
+  the arity law: two reported libraries ride exactly one statement. The
+  count=1 hash-shortcut and the boundary caps are untouched; batching makes
+  the loop's per-row cost unconditionally flat, as the review asked.
+
+
 ### Fixed — review hub Minors 36+37: signing-key mode audit + pool fail-fast — 2026-11-03
 
 - **Minor 36 — `Ed25519KeyManager` audits the mode of an ADOPTED key file.**

@@ -291,21 +291,37 @@ class HeartbeatHandler
             return;
         }
 
-        foreach ($libraries as $ref) {
-            // Upsert each library
-            $this->db->query(
-                'INSERT INTO server_libraries (id, server_id, library_id, library_name, created_at, updated_at)
-                 VALUES (:id, :server_id, :library_id, :library_name, NOW(), NOW())
-                 ON DUPLICATE KEY UPDATE library_name = :library_name_update, updated_at = NOW()',
-                [
-                    'id' => $this->generateUuid(),
-                    'server_id' => $serverId,
-                    'library_id' => $ref->libraryId,
-                    'library_name' => $ref->libraryName,
-                    'library_name_update' => $ref->libraryName,
-                ],
+        // Minor 40 — ONE multi-row upsert instead of one statement per
+        // library. The generated named placeholders follow the same
+        // RelaySessionManager ladder as the prune DELETE below; the list is
+        // hard-bounded by MAX_LIBRARY_COUNT at the HTTP boundary, so the
+        // single statement can never grow unbounded. VALUES() in the update
+        // clause keeps each conflicting row updating from its own tuple
+        // (byte-identical effect to the old per-row :library_name_update).
+        /** @var array<string, mixed> $upsertParams */
+        $upsertParams = [];
+        /** @var list<string> $tuples */
+        $tuples = [];
+        foreach (array_values($libraries) as $i => $ref) {
+            $tuples[] = sprintf(
+                '(:id_%d, :server_id_%d, :library_id_%d, :library_name_%d, NOW(), NOW())',
+                $i,
+                $i,
+                $i,
+                $i
             );
+            $upsertParams['id_' . $i] = $this->generateUuid();
+            $upsertParams['server_id_' . $i] = $serverId;
+            $upsertParams['library_id_' . $i] = $ref->libraryId;
+            $upsertParams['library_name_' . $i] = $ref->libraryName;
         }
+
+        $this->db->query(
+            'INSERT INTO server_libraries (id, server_id, library_id, library_name, created_at, updated_at)
+             VALUES ' . implode(', ', $tuples) .
+            ' ON DUPLICATE KEY UPDATE library_name = VALUES(library_name), updated_at = NOW()',
+            $upsertParams,
+        );
 
         // M-HUB-15: prune stale rows — every cached library this server did NOT
         // report is removed, in the same transaction as the upserts above.

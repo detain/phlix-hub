@@ -18,6 +18,7 @@ use Channel\Server as ChannelServer;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Federation\FederationPushBridge;
 use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
@@ -2035,6 +2036,15 @@ final class Application
         $worker = new Worker(sprintf('http://%s:%d', $host, $port));
         $worker->count = $workers;
         $worker->name = 'phlix-hub-http';
+
+        // Minor 38: an in-memory rate-limit profile armed on a multi-worker
+        // HTTP pool dilutes its budget (max x workers). Documented-as-spec,
+        // but said out loud once at boot rather than left as a docblock
+        // ambush. The law itself is the pure RateLimiter::multiWorkerNotice().
+        $limiterNotice = RateLimiter::multiWorkerNotice($workers);
+        if ($limiterNotice !== null) {
+            fwrite(STDERR, $limiterNotice . PHP_EOL);
+        }
 
         // M-HUB-30: the hub's global HTTP body cap, pinned ONTO every inbound
         // connection rather than inherited from the vendor default (which this

@@ -51,6 +51,7 @@
     "tests/Unit/Common/RateLimit/DbRateLimiterTest.php": 0.003,
     "tests/Unit/Common/RateLimit/RateLimitProfilesTest.php": 0.006,
     "tests/Unit/Common/RateLimit/RateLimitStateTest.php": 0.001,
+    "tests/Unit/Common/RateLimit/RateLimiterMultiWorkerNoticeTest.php": 0.001,
     "tests/Unit/Common/RateLimit/RateLimiterTest.php": 0.002,
     "tests/Unit/Common/Support/IdsTest.php": 0.09,
     "tests/Unit/Config/AuditRetentionConfigTest.php": 0.002,

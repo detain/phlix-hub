@@ -46,6 +46,29 @@ use Closure;
 final class RateLimiter implements RateLimiterInterface
 {
     /**
+     * Minor 38 — the per-worker dilution of the HTTP-side in-memory profiles
+     * is DOCUMENTED-AS-SPEC (class SCOPE note; {@see DbRateLimiter} exists
+     * only for login/signup), but it must never be news to an operator at the
+     * moment the pool fans out. Returns the boot notice when an HTTP pool of
+     * $httpWorkers > 1 arms these profiles (effective budget = max × workers),
+     * and null for a single-worker pool where the local counter IS the global
+     * one. Pure function: the emission point lives in Application's HTTP
+     * worker setup; tests pin the law here.
+     */
+    public static function multiWorkerNotice(int $httpWorkers): ?string
+    {
+        if ($httpWorkers <= 1) {
+            return null;
+        }
+
+        return '[phlix-hub] NOTE: ' . $httpWorkers . ' HTTP workers — the in-memory rate-limit '
+            . 'profiles (every surface except the DB-backed login/signup) count PER WORKER, so '
+            . 'their effective budget is max x ' . $httpWorkers . '. Deliberate as-spec; the four '
+            . 'count=1 WebSocket surfaces (:8802-:8805) are unaffected. See README rate-limit '
+            . 'section and CommonServicesProvider scope notes.';
+    }
+
+    /**
      * Bucket map keyed by the caller's opaque key.
      *
      * @var array<string, array{count: int, reset_at: int}>

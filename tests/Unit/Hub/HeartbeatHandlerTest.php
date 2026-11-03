@@ -217,18 +217,28 @@ final class HeartbeatHandlerTest extends TestCase
         $serverId = 'server-libs-test';
 
         $insertedLibraries = [];
+        $libraryStatements = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql, array $params = []) use ($serverId, &$insertedLibraries) {
+            function (string $sql, array $params = []) use ($serverId, &$insertedLibraries, &$libraryStatements) {
                 if (str_contains($sql, 'FOR UPDATE')) {
                     return [['id' => $serverId]];
                 }
                 if (str_contains($sql, 'INSERT INTO server_libraries')) {
-                    $insertedLibraries[] = [
-                        'server_id' => $params['server_id'] ?? null,
-                        'library_id' => $params['library_id'] ?? null,
-                        'library_name' => $params['library_name'] ?? null,
-                    ];
+                    $libraryStatements++;
+                    // Minor 40: the upsert is ONE batched statement whose rows
+                    // ride index-suffixed named params. Un-suffix so the per-row
+                    // law this matcher has always pinned keeps asserting the set.
+                    foreach (array_keys($params) as $paramKey) {
+                        if (preg_match('/^library_id_(\\d+)$/', (string) $paramKey, $m) === 1) {
+                            $tupleIndex = (int) $m[1];
+                            $insertedLibraries[$tupleIndex] = [
+                                'server_id' => $params['server_id_' . $tupleIndex] ?? null,
+                                'library_id' => $params[$paramKey] ?? null,
+                                'library_name' => $params['library_name_' . $tupleIndex] ?? null,
+                            ];
+                        }
+                    }
                 }
                 return [];
             }
@@ -256,6 +266,7 @@ final class HeartbeatHandlerTest extends TestCase
 
         $handler->handle($serverId, $token, $heartbeat);
 
+        self::assertSame(1, $libraryStatements, 'Minor 40: both rows must ride ONE batched upsert statement');
         self::assertSame(
             [
                 ['server_id' => $serverId, 'library_id' => 'lib-1', 'library_name' => 'Movies'],
@@ -363,11 +374,19 @@ final class HeartbeatHandlerTest extends TestCase
                     return [['hash' => '198d10dca935fcae916a75f62b275ac247c3a8a582fa62422b43ab2629d764e6']];
                 }
                 if (str_contains($sql, 'INSERT INTO server_libraries')) {
-                    $insertedLibraries[] = [
-                        'server_id' => $params['server_id'] ?? null,
-                        'library_id' => $params['library_id'] ?? null,
-                        'library_name' => $params['library_name'] ?? null,
-                    ];
+                    // Minor 40: the upsert is ONE batched statement whose rows
+                    // ride index-suffixed named params. Un-suffix so the per-row
+                    // law this matcher has always pinned keeps asserting the set.
+                    foreach (array_keys($params) as $paramKey) {
+                        if (preg_match('/^library_id_(\\d+)$/', (string) $paramKey, $m) === 1) {
+                            $tupleIndex = (int) $m[1];
+                            $insertedLibraries[$tupleIndex] = [
+                                'server_id' => $params['server_id_' . $tupleIndex] ?? null,
+                                'library_id' => $params[$paramKey] ?? null,
+                                'library_name' => $params['library_name_' . $tupleIndex] ?? null,
+                            ];
+                        }
+                    }
                 }
                 return [];
             },
@@ -416,11 +435,19 @@ final class HeartbeatHandlerTest extends TestCase
                     return [['hash' => '0000000000000000000000000000000000000000000000000000000000000000']];
                 }
                 if (str_contains($sql, 'INSERT INTO server_libraries')) {
-                    $insertedLibraries[] = [
-                        'server_id' => $params['server_id'] ?? null,
-                        'library_id' => $params['library_id'] ?? null,
-                        'library_name' => $params['library_name'] ?? null,
-                    ];
+                    // Minor 40: the upsert is ONE batched statement whose rows
+                    // ride index-suffixed named params. Un-suffix so the per-row
+                    // law this matcher has always pinned keeps asserting the set.
+                    foreach (array_keys($params) as $paramKey) {
+                        if (preg_match('/^library_id_(\\d+)$/', (string) $paramKey, $m) === 1) {
+                            $tupleIndex = (int) $m[1];
+                            $insertedLibraries[$tupleIndex] = [
+                                'server_id' => $params['server_id_' . $tupleIndex] ?? null,
+                                'library_id' => $params[$paramKey] ?? null,
+                                'library_name' => $params['library_name_' . $tupleIndex] ?? null,
+                            ];
+                        }
+                    }
                 }
                 return [];
             },
@@ -475,11 +502,19 @@ final class HeartbeatHandlerTest extends TestCase
                     return [];
                 }
                 if (str_contains($sql, 'INSERT INTO server_libraries')) {
-                    $insertedLibraries[] = [
-                        'server_id' => $params['server_id'] ?? null,
-                        'library_id' => $params['library_id'] ?? null,
-                        'library_name' => $params['library_name'] ?? null,
-                    ];
+                    // Minor 40: the upsert is ONE batched statement whose rows
+                    // ride index-suffixed named params. Un-suffix so the per-row
+                    // law this matcher has always pinned keeps asserting the set.
+                    foreach (array_keys($params) as $paramKey) {
+                        if (preg_match('/^library_id_(\\d+)$/', (string) $paramKey, $m) === 1) {
+                            $tupleIndex = (int) $m[1];
+                            $insertedLibraries[$tupleIndex] = [
+                                'server_id' => $params['server_id_' . $tupleIndex] ?? null,
+                                'library_id' => $params[$paramKey] ?? null,
+                                'library_name' => $params['library_name_' . $tupleIndex] ?? null,
+                            ];
+                        }
+                    }
                 }
                 return [];
             },
