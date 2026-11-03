@@ -103,7 +103,7 @@ info:
     url: "https://github.com/detain/phlix-hub"
 
 servers:
-  - url: "https://hub.phlix.tv"
+  - url: "https://hub.example.com"
     description: "Production hub."
   - url: "http://localhost:8800"
     description: "Local development (Workerman HTTP worker, unproxied)."
@@ -3638,7 +3638,7 @@ paths:
             header name the `:8802` WebSocket to connect to instead.
           headers:
             X-WS-Endpoint:
-              description: "WebSocket URL of the relay tunnel, e.g. `ws://hub.phlix.tv:8802`."
+              description: "WebSocket URL of the relay tunnel, e.g. `ws://hub.example.com:8802`."
               schema:
                 type: string
           content:
@@ -3717,7 +3717,7 @@ paths:
       tags: ["Server Enrollment"]
       summary: "Allocate a subdomain"
       description: |-
-        Allocates `<name>.phlix.tv` for the calling server and provisions the DNS alias. Authenticates
+        Allocates a `<name>.<HUB_PUBLIC_DOMAIN>` subdomain (config default base `phlix.media`) for the calling server and provisions the DNS alias. Authenticates
         INSIDE the controller against the Ed25519 enrollment JWT, so it carries no route middleware.
         phlix-server calls this from `src/Hub/SubdomainClient.php`.
       x-phlix-middleware: []
@@ -4737,7 +4737,7 @@ x-phlix-websockets:
     repo: phlix-hub
     port: 8802
     portSource: "config/server.php `relay_port` (default 8802); Application::run()"
-    url: "ws://hub.phlix.tv:8802"
+    url: "ws://hub.example.com:8802"
     path: "/"
     worker: "Phlix\\Hub\\Relay\\RelayWorker"
     direction: "media server → hub (outbound, so it traverses NAT)"
@@ -4767,7 +4767,7 @@ x-phlix-websockets:
     repo: phlix-hub
     port: 8803
     portSource: "config/server.php `client_relay_port` (default 8803, env HUB_CLIENT_RELAY_PORT); Application::run() falls back to ClientRelayWorker::DEFAULT_PORT"
-    url: "ws://hub.phlix.tv:8803/client/{server_id}"
+    url: "ws://hub.example.com:8803/client/{server_id}"
     path: "/client/{server_id}"
     pathPattern: "~^/client/([^/?#]+)/?(?:[?#].*)?$~"
     worker: "Phlix\\Hub\\Relay\\ClientRelayWorker"
@@ -4810,7 +4810,7 @@ x-phlix-websockets:
     repo: phlix-hub
     port: 8804
     portSource: "config/server.php `syncplay_port` (default 8804, env HUB_SYNCPLAY_PORT); Application::run() falls back to SyncPlayRelayWorker::DEFAULT_PORT"
-    url: "ws://hub.phlix.tv:8804/syncplay/{server_id}"
+    url: "ws://hub.example.com:8804/syncplay/{server_id}"
     path: "/syncplay/{server_id}"
     pathPattern: "~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~"
     worker: "Phlix\\Hub\\SyncPlay\\SyncPlayRelayWorker"
@@ -4969,7 +4969,7 @@ x-phlix-websockets:
     repo: phlix-hub
     port: 8805
     portSource: "config/server.php `federation_port` (default 8805, env HUB_FEDERATION_PORT); HubServicesProvider falls back to FederationWorker::DEFAULT_PORT"
-    url: "ws://master-hub.example:8805/relay/federation/{hub_id}"
+    url: "ws://master-hub.example.com:8805/relay/federation/{hub_id}"
     path: "/relay/federation/{hub_id}"
     pathPattern: "~^/relay/federation/([^/?#]+)/?(?:[?#].*)?$~"
     worker: "Phlix\\Hub\\Relay\\FederationWorker"
@@ -5599,7 +5599,7 @@ components:
           type: string
         subdomain:
           type: string
-          description: "Allocated <name>.phlix.tv, if any."
+          description: "Allocated <name>.<HUB_PUBLIC_DOMAIN> subdomain, if any."
         version:
           type: string
       additionalProperties: true

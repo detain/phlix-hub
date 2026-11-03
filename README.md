@@ -169,6 +169,13 @@ wherever it first appears.
     `/invite/{token}` URLs; redeeming it is one-time.)
 - **claim code** — the human-typed `ABCD-1234` pairing handoff (see
   *Connecting a media server*).
+- **watch party / group / room** — one concept, three names, by layer (the
+  naming-layers map phlix-server's README publishes, carried here): the
+  **canonical wire** says *group* (`syncplay_group_*` frames, `group_id`);
+  the hub **internals** say *room* (`SyncPlayRelayWorker`'s `room_state`,
+  `MAX_ROOM_MEMBERS`, `broadcastToRoom`, and the legacy bare-room dialect);
+  member-facing **copy** says *watch party*. `docs/websockets.md` keeps the
+  wire/internal spellings; the portal shows members only the party copy.
 - **federation** — hub-to-hub linking: two independent hubs share libraries
   with each other. Not a global network; strictly pairwise and consented.
 - **peer** — the other hub in a federation link.
@@ -240,8 +247,8 @@ Supporting pieces:
   On any install path other than the managed installer, install them yourself.
   `openssl` is additionally what makes any TLS dial (federation `wss://`/`https://` masters,
   relay TLS) possible at runtime — without it those paths fail loud, not silent.
-- **`pcntl`** — not boot-gated (Workerman requires it for process management rather than hub
-  source calling it directly; it ships with Ubuntu's `php-cli` package).
+- **`pcntl`** — not boot-gated (Workerman requires it for process management rather than the
+  hub source calling it directly; it ships with Ubuntu's `php-cli` package).
 - **Swoole + php-uv are recommended, not required.** They enable Workerman's coroutine runtime;
   the hub runs without them but logs an explicit `Swoole extension not detected — coroutine
   runtime will not be active` warning at boot. `scripts/install.sh` compiles both from source;
@@ -367,9 +374,10 @@ starts cleanly and then fails closed in ways that look like data loss.
 | **JWT session secret** | `HUB_JWT_SECRET` inside `/etc/phlix-hub.env` (chmod 600) | Signs every access/refresh token (`config/auth.php`; ≥32 bytes). If it is lost, changed, or the env file is restored from a different era, **every issued session becomes unverifiable**: all users are logged out at once and refresh tokens cannot save them. When the var is missing entirely, `AuthServicesProvider` falls back to a process-local random secret — tokens die on every restart, so never run production without it. |
 | **Hub signing key** | `config/hub-signing-key.pem`, mode **0600**, auto-generated on first boot by `HubServicesProvider` → `Ed25519KeyManager` (path override: add `'hub_signing_key_path' => '<absolute path>'` to the array in `config/server.php` — the shipped file does not define the key, and `HubServicesProvider.php:179` reads it from there, so the override is an operator edit, not an env var) | The hub's Ed25519 identity. It signs enrollment artifacts servers present on pairing and is the master-side key in the federation mutual proof-of-key ceremony. If it is lost and a fresh one is generated, **already-registered servers fail verification** (re-pair them) and **federation peers whose leaf keys were registered under the old identity refuse the hub** until trust is re-established with each peer. |
 
-Everything else is derived and safe to lose: `.logs/`, `var/` (Smarty
-compile/cache, DI container cache, Swoole HOME lock, Workerman pid/status), and
-`public/assets/app/` is a committed build.
+Everything else is derived and safe to lose: `.logs/` and `var/` (Smarty
+compile/cache, DI container cache, Swoole HOME lock, Workerman pid/status).
+`public/assets/app/` is a committed build — recover it from the repository,
+not from a backup.
 
 Backup (cron-friendly, keeps the trio in one archive):
 
@@ -498,39 +506,45 @@ directly. Open it on the firewall but don't put it behind the HAProxy 80/443 fro
 | `8805` | federation MASTER ingress (peer dials) | routed at `/relay/federation/` | ufw-opened (same plaintext caveat) |
 | `2206` | cross-process channel broker | loopback only | loopback only |
 
-Under the managed HAProxy the two relay WebSocket surfaces are **not** opened on the
-firewall — and from there their stories differ. Federation leaves ride the existing 443
-frontend end to end: a leaf's dial target is operator-configured, and the managed
-`/relay/federation/` route carries `wss://<master-domain>/relay/federation/{hub_id}` with
-no extra port, TLS included. Browser SyncPlay clients now split. The route
-exists, and on a domain-bound managed install the installer itself steers a
-seam-aware browser onto it
-(R-HUB-13): the generated env block gains `HUB_WS_URL` — `wss://<domain>`
-under TLS, `ws://<domain>` on the plain-HTTP managed frontend, always
-matching the frontend the fragments actually built (certbot-failure fallback
-included) — and `HUB_WS_PATH=/syncplay` (the ui seam — `HUB_WS_URL` is the
-master switch; a lone `HUB_WS_PATH` refines nothing), and
-`SharedUiController` grammar-validates both (invalid values fail soft to
-unset) into the shell's `window.__PHLIX__.wsUrl/wsPath` bootstrap —
-seam-aware `@phlix/ui` clients served by the hub then dial the managed route
-with no operator step at all. The hub portal bundle never consults the seam:
-its dial law stays the legacy direct form
+Under the managed HAProxy the two relay WebSocket surfaces are **not** opened on
+the firewall. Who dials what, from where:
+
+- **Federation (`:8805`)** — peer-side ingress rides the shared 443 frontend;
+  a leaf's dial target is operator-configured, and the managed
+  `/relay/federation/` route carries `wss://<master-domain>/relay/federation/{hub_id}`
+  with no extra port, TLS included.
+- **SyncPlay watch parties (`:8804`)** — every browser path consults the
+  operator seam before dialing: both the pinned `@phlix/ui` bundle and the
+  hub's own portal bundle (`web-ui/`'s `buildRelayUrl` — the bundle-wiring
+  rider, shipped at this repo's pin) read the shell's
+  `window.__PHLIX__.wsUrl/wsPath` bootstrap. On a domain-bound managed
+  install the installer itself seeds that seam
+  (R-HUB-13): the generated env block gains `HUB_WS_URL` — `wss://<domain>`
+  under TLS, `ws://<domain>` on the plain-HTTP managed frontend, always
+  matching the frontend the fragments actually built (certbot-failure fallback
+  included) — and `HUB_WS_PATH=/syncplay` (the ui seam — `HUB_WS_URL` is the
+  master switch; a lone `HUB_WS_PATH` refines nothing), and
+  `SharedUiController` grammar-validates both (invalid values fail soft to
+  unset). Browsers — portal bundle included — then dial the managed
+  `/syncplay/` route with no operator step, so `8804` never needs opening.
+  It is a plaintext listener: an HTTPS-served page's `wss://` direct dial
+  cannot complete against it (the managed route is the only viable door
+  there), and on a TLS-served hub leaving it closed is pure upside — an open
+  `8804` buys nothing while publishing a pre-auth token-carrying socket to
+  the world.
+
+The direct form survives exactly where the installer cannot name an origin
+clients will actually reach — no-domain managed installs and `--no-proxy`
+boxes. There the seam stays unset and clients fall back to the legacy
 `ws(s)://<page-host>:8804/syncplay/{server_id}` with the port fixed by
-`SyncPlayRelayWorker::DEFAULT_PORT`. Watch parties dialed by that bundle
-therefore still require the operator to **also** `ufw allow 8804/tcp`; that
-completes the plain `ws://<host>:8804` form for HTTP-served pages (`8804` is
-a plaintext listener, so an HTTPS-served page's `wss://` direct dial cannot
-complete — the managed route is the only viable door there, and the portal
-bundle reaches it only once the disclosed bundle-wiring rider lands). On a
-TLS-served hub there is therefore no reason to open `8804`: it buys the portal
-nothing while publishing a pre-auth token-carrying socket to the world — leave
-it closed and re-open only for plain-HTTP frontends.
-No-domain managed installs and `--no-proxy` boxes are never seeded — there
-the installer cannot name an origin clients will actually reach — and the
-manual escape hatch stays theirs: hand-set `HUB_WS_URL=wss://<hub-domain>`
-with `HUB_WS_PATH=/syncplay` in `/etc/phlix-hub.env` (both grammar-validated
-per the env table below; the installer never overwrites a non-empty value)
-and restart `phlix-hub`.
+`SyncPlayRelayWorker::DEFAULT_PORT`, so `--no-proxy` installs open
+`8804`/`8805` in ufw (when it is active) and the plain
+`ws://<host>:8804` / `ws://<host>:8805` forms documented in
+[`docs/websockets.md`](docs/websockets.md) are reachable there directly.
+The manual escape hatch stays open for everyone else too: hand-set
+`HUB_WS_URL=wss://<hub-domain>` with `HUB_WS_PATH=/syncplay` in
+`/etc/phlix-hub.env` (both grammar-validated per the env table below; the
+installer never overwrites a non-empty value) and restart `phlix-hub`.
 `--no-proxy` installs open `8804`/`8805` in ufw (when it is active), so the plain
 `ws://<host>:8804` / `ws://<host>:8805` forms documented in
 [`docs/websockets.md`](docs/websockets.md) are reachable there directly.
@@ -555,7 +569,7 @@ composer install
 export HUB_DB_HOST=127.0.0.1 HUB_DB_USER=phlix_hub HUB_DB_PASSWORD=phlix_hub HUB_DB_NAME=phlix_hub
 export HUB_JWT_SECRET="$(openssl rand -hex 32)"
 
-php scripts/run-migrations.php     # create the schema (idempotent)
+php scripts/run-migrations.php     # create the tables (idempotent)
 php start.php start                # start the Hub (Ctrl-C to stop)
 
 curl http://localhost:8800/health  # => {"status":"ok",...}

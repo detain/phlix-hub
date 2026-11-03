@@ -111,7 +111,7 @@ generic `HEARTBEAT` (`0x06`) and `DISCONNECTED` (`0x07`) frames. See
 ## `:8802` — server relay tunnel
 
 ```
-ws://hub.phlix.tv:8802
+ws://hub.example.com:8802
 ```
 
 Mounted at the bare root; there is no path to parse. The media server dials
@@ -239,7 +239,7 @@ the in-memory tunnel registry does (`docs/websockets.md` `:8802` above,
 > either lands.
 
 ```
-ws://hub.phlix.tv:8803/client/{server_id}
+ws://hub.example.com:8803/client/{server_id}
 ```
 
 Parsed by `ClientRelayWorker::parseServerId()` with the anchored pattern
@@ -296,7 +296,7 @@ paid for, and it should cross to the client mount with it.
 ## `:8804` — SyncPlay relay
 
 ```
-ws://hub.phlix.tv:8804/syncplay/{server_id}
+ws://hub.example.com:8804/syncplay/{server_id}
 ```
 
 Parsed by `SyncPlayRelayWorker::parseServerId()` with
@@ -309,17 +309,19 @@ managed install also seeds the ui seam that dials it: `HUB_WS_URL`
 always the scheme of the frontend actually built) plus `HUB_WS_PATH=/syncplay` land in
 `/etc/phlix-hub.env`, `SharedUiController` grammar-validates both (invalid values fail
 soft to unset; the `README.md` env tables state the grammar) into the shell's
-`window.__PHLIX__.wsUrl/wsPath` bootstrap, and seam-aware `@phlix/ui` clients ride the
-managed route with no operator step. The hub portal bundle does **not** consult the seam:
-its `buildRelayUrl`, like `@phlix/ui`'s legacy hub-relay law wherever the bootstrap is
-absent, builds the direct form `ws(s)://<page-host>:8804/…` with the port fixed by
-`SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port — so dials made by that
-bundle still need the operator to `ufw allow 8804/tcp` as well, which serves the plain
-`ws://<host>:8804/…` form from HTTP-served pages; `8804` is a plaintext listener, so an
-HTTPS-served page cannot complete a direct dial at all, and its only viable path (the
-same-origin `wss://<hub-domain>/syncplay/…` route) is live for seam-aware clients while
-the portal bundle waits on the disclosed bundle-wiring rider (a web-ui rebuild, out of
-the installer's scope). On a TLS-served hub the direct form never becomes viable, so
+`window.__PHLIX__.wsUrl/wsPath` bootstrap, and every browser path rides the
+managed route with no operator step: the hub portal bundle consults the seam
+exactly like the pinned `@phlix/ui` — its `buildRelayUrl` reads
+`window.__PHLIX__.wsUrl/wsPath` (the bundle-wiring rider shipped with the
+portal's seam adoption) and, wherever the bootstrap is absent, falls back to
+`@phlix/ui`'s legacy hub-relay law: the direct form
+`ws(s)://<page-host>:8804/…` with the port fixed by
+`SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port. A seeded
+install therefore needs no `8804` opening for ANY browser path; `8804` is a
+plaintext listener, so an HTTPS-served page cannot complete a direct dial at
+all, and its only viable path — the same-origin
+`wss://<hub-domain>/syncplay/…` route — is live for portal and ui clients
+alike. On a TLS-served hub the direct form never becomes viable, so
 there `ufw allow 8804/tcp` is pure downside — do NOT open it.
 Installs the installer never seeds — no-domain managed and
 `--no-proxy` boxes, where it cannot name an origin clients will actually reach — keep the
@@ -616,7 +618,7 @@ imported so one law governs both sockets:
 ## `:8805` — hub federation
 
 ```
-ws://master-hub.example:8805/relay/federation/{hub_id}
+ws://master-hub.example.com:8805/relay/federation/{hub_id}
 ```
 
 > Looking for the end-to-end operator procedure (key exchange, registration order,

@@ -6,6 +6,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Minors 15, 17-21, 25: relay-dial block restructured with the landed portal seam, naming-layers glossary entry, prose grammar passes, example hosts normalized — 2026-11-03
+
+- README `:8804`/`:8805` firewall prose (one 33-line sentence carrying four
+  behaviors) is now a who-dials-what table; the prose that still described the
+  hub portal bundle as seam-blind is retired — since the `buildRelayUrl` seam
+  adoption the bundle consults `window.__PHLIX__.wsUrl/wsPath` exactly like the
+  pinned `@phlix/ui`, so a seeded install needs no `8804` opening for any
+  browser path and the "waits on the disclosed bundle-wiring rider" future
+  tense (README + websockets.md twins) is present tense with location.
+- Glossary gains the naming-layers entry (wire *group* / internals *room* /
+  copy *watch party*), carrying the map phlix-server publishes.
+- Prose: missing article ("the hub source"), the backup "safe to lose" list
+  sentence split (the committed-build fact was bolted on with "and"),
+  "create the schema (idempotent)" → "create the tables" (one word, two
+  meanings vs the tests' usage).
+- Example hosts normalized to the RFC-reserved `example.com` family in
+  websockets.md + openapi.yaml (`hub.phlix.tv` → `hub.example.com`,
+  `master-hub.example` → `master-hub.example.com`); the two openapi DNS-alias
+  strings that claimed allocations land on `.phlix.tv` now state the truth:
+  `<name>.<HUB_PUBLIC_DOMAIN>` (config default base `phlix.media`).
+
 ### Fixed — review hub Minor 41: audit-log admin query projected `al.*` — the one wildcard M31's sweep left behind (alias form) — 2026-11-03
 
 - `AuditLogRepository::find()` now names all 13 `audit_logs` columns (029) in
