@@ -119,6 +119,10 @@ final class InboundPackageCapTest extends TestCase
         $expected = self::WORKER_FILES;
         sort($expected);
 
-        self::assertSame($expected, $found, 'websocket worker inventory moved — every WS surface owes the InboundPackageCap pin');
+        self::assertSame(
+            $expected,
+            $found,
+            'websocket worker inventory moved — every WS surface owes the InboundPackageCap pin',
+        );
     }
 }

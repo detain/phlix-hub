@@ -134,7 +134,10 @@ final class FederationHubRepositoryTest extends TestCase
         // bindings), so the sentinel must keep the canonical UUID shape.
         self::assertSame(
             1,
-            preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', FederationHubRepository::HUB_ROW_ID),
+            preg_match(
+                '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+                FederationHubRepository::HUB_ROW_ID,
+            ),
             'HUB_ROW_ID must be a well-formed UUID v4 shape',
         );
     }

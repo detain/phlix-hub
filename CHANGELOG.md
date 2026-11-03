@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — corpus-gate cure (two overlong test lines at local tip, 2026-11-03)
+- **Pre-existing, never CI-attested.** cont#13's shipped tests left two
+  `Generic.Files.LineLength` warnings (135 and 130 chars) in
+  `FederationHubRepositoryTest` (UUID-shape regex line) and `InboundPackageCapTest`
+  (worker-inventory message) — under the S299 corpus law (0 errors, 0 warnings)
+  `PhpcsCorpusGateTest` reddens the local tip. Both lines wrapped; assertions and
+  messages are unchanged token-for-token.
+
 ### Fixed — review Minor 62 (share permission labels unified, 2026-11-03)
 - **One register for one concept.** The shared-with-me page rendered the
   incoming grant's permission as `Read / Write` / `Read only` while the grant
