@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review Minor 59 (quota-family voice standardization lands its register law, 2026-11-03)
+- **One code, one rule for its sentences.** The `quota.exceeded` family had
+  answered members in four grammatical persons. With the third-person
+  bandwidth legs already rotated to second person (M42) and no leg carrying
+  a terminal period (M58), the residual drift lived in `QuotaFrames`: the
+  account server-cap refusal (claim ceremony) moved from the telegraphic
+  'Server quota reached for this account' to the family's second person,
+  'You have reached your maximum number of servers'. The per-server
+  collaborator cap deliberately KEEPS its explicit subject — 'This server
+  has reached its collaborator limit' — by the review's own ruling
+  (object-caused caps take an explicit subject): the same frame answers
+  invite redeem, whose reader is an invited member who never filled the
+  roster, and the vendored SPA mirror (shareCreate.ts) plus the hub's
+  invite-link troubleshooting docs quote it for exactly that audience. The
+  register law now stands stated in the class docblock; four test copy-pins
+  rotated with their emitter — codes, envelope shape and key order
+  untouched.
+
 ### Fixed — review Minor 63 (mint/dial jargon leaves the member copy, 2026-11-03)
 - **You join a party; the hub issues a token.** The watch-party page told members
   the hub had "minted" a token and that a party "cannot be dialed" — developer/

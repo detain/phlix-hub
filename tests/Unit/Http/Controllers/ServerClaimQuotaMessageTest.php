@@ -23,7 +23,9 @@ use PHPUnit\Framework\TestCase;
  * `error()` merges `$extra` over nothing (left-hand `error`/`code` keys
  * win, the human sentence rides `message` untouched), and `mapError()`
  * emits the quota arm as the registered `quota.exceeded` code with
- * 'Server quota reached for this account' verbatim. The residual
+ * 'You have reached your maximum number of servers' verbatim (Minor 59
+ * rotated that copy to the family's second-person register; the pin
+ * rotates with its emitter by law). The residual
  * mislabel is CLIENT-side: the pinned @phlix/ui `claimServer.ts`
  * resolves a failure `kind` from a code table that lacks `quota.exceeded`,
  * so a 409 falls through to its status-keyed 'already_claimed' copy.
@@ -48,9 +50,9 @@ final class ServerClaimQuotaMessageTest extends TestCase
      * (assertSame on the decoded array).
      */
     private const QUOTA_FRAME = [
-        'error' => 'Server quota reached for this account',
+        'error' => 'You have reached your maximum number of servers',
         'code' => 'quota.exceeded',
-        'message' => 'Server quota reached for this account',
+        'message' => 'You have reached your maximum number of servers',
         'quota_kind' => 'server_count',
         'quota_reset' => 'on_release',
     ];

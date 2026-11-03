@@ -30,6 +30,15 @@ namespace Phlix\Hub\Http;
  *    calendar window rolls; the frame already carries the instant in
  *    `Retry-After`/`retry_at` where derivable).
  *
+ * The copy register of the human leg is law (review Minor 59): a cap the
+ * READER owns — their account, their month, their pending requests — speaks
+ * second person ('You have reached your…'); a cap of the SERVER object
+ * keeps an explicit subject ('This server has…'), because the collaborators
+ * leg also answers the redeem path (InviteLinkController::redeem), whose
+ * reader is an invited member who never filled the roster — a 'your' there
+ * would mis-assign the remedy (freeing capacity is the owner's act). No leg
+ * carries a terminal period (M58 API-message law).
+ *
  * @package Phlix\Hub\Http
  */
 final class QuotaFrames
@@ -70,10 +79,18 @@ final class QuotaFrames
         return ['quota_kind' => $kind, 'quota_reset' => $reset];
     }
 
-    /** Human copy of the account-server-cap refusal (claim ceremony). */
-    public const SERVER_COUNT_TEXT = 'Server quota reached for this account';
+    /**
+     * Human copy of the account-server-cap refusal (claim ceremony) — a
+     * member-caused cap (their account, their slots): second person, the
+     * same register as the concurrent-streams and bandwidth refusals.
+     */
+    public const SERVER_COUNT_TEXT = 'You have reached your maximum number of servers';
 
-    /** Human copy of the per-server collaborator cap refusal. */
+    /**
+     * Human copy of the per-server collaborator cap refusal — an
+     * object-caused cap: the explicit subject stands by the Minor 59
+     * ruling, as the redeem path hands this frame to blameless invitees.
+     */
     public const COLLABORATORS_TEXT = 'This server has reached its collaborator limit';
 
     /** Human copy of the per-user pending-request cap refusal (M-HUB-23). */

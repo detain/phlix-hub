@@ -49,8 +49,8 @@ final class QuotaExceededWireTest extends TestCase
         // sentence (renderers read it — the SCREAMING machine literal was
         // the worst of both worlds), and the frame says WHICH cap answered
         // and WHEN the answer changes.
-        self::assertSame('Server quota reached for this account', $body['error']);
-        self::assertSame('Server quota reached for this account', $body['message']);
+        self::assertSame('You have reached your maximum number of servers', $body['error']);
+        self::assertSame('You have reached your maximum number of servers', $body['message']);
         self::assertSame('server_count', $body['quota_kind']);
         self::assertSame('on_release', $body['quota_reset']);
     }
