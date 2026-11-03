@@ -17,6 +17,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
 
 - [What is the Hub?](#what-is-the-hub)
 - [Features](#features)
+- [Terms used in this document](#terms-used-in-this-document)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
 - [One-line install](#one-line-install)
@@ -124,6 +125,56 @@ instance pointed at from here.
   signature + certificate-chain verification, that drives playback on your servers by voice.
 - **Operations-ready** — structured JSON logging (Monolog) across dedicated channels
   (app, error, hub, relay, audit), a `/health` endpoint, and idempotent SQL migrations.
+
+## Terms used in this document
+
+Plain definitions for the vocabulary this README leans on — the jargon wall a
+reader hit otherwise. Also see the model case: "claim code" is glossed inline
+wherever it first appears.
+
+- **SPA** — single-page application: the Vue app under `/app` that loads once
+  and redraws itself client-side; the hub's entire web UI.
+- **JWT** — JSON Web Token: a signed, self-describing credential string. Three
+  kinds live here, and calling all of them "token" is the estate's worst habit:
+  - **session JWT** — your login credential; the portal holds it and calls
+    `/api/v1` with it.
+  - **enrollment JWT** — issued to a media server ONCE, at claim redemption;
+    the server presents it in `HELLO` on its :8802 tunnel to prove who it is.
+  - **relay token** — a short-lived, per-session bearer a client uses to join
+    :8803/:8804; carried in the WebSocket subprotocol (`["bearer", <tok>]`),
+    never in a URL.
+  - (A fourth "token" — the **invite token** — is the secret in
+    `/invite/{token}` URLs; redeeming it is one-time.)
+- **claim code** — the human-typed `ABCD-1234` pairing handoff (see
+  *Connecting a media server*).
+- **federation** — hub-to-hub linking: two independent hubs share libraries
+  with each other. Not a global network; strictly pairwise and consented.
+- **peer** — the other hub in a federation link.
+- **master / leaf** — the two roles of one federation link: the **leaf** dials
+  (initiates the outbound connection), the **master** accepts. A hub may be
+  master on some links and leaf on others.
+- **dial** — to open an outbound WebSocket connection to another service
+  (the hub never dials into your media server; your server dials the hub).
+- **JWKS** — JSON Web Key Set: the hub's public-key list at
+  `/.well-known/jwks.json`, how peers verify each other's signatures without
+  shipping private material.
+- **NAT** — Network Address Translation: why home servers have no public
+  inbound address, and therefore why every persistent connection here is
+  dialed OUTBOUND.
+- **SNI** — Server Name Indication: the hostname a TLS client states
+  mid-handshake so one endpoint can serve many certificates.
+- **HLS** — HTTP Live Streaming: the segmented `.m3u8`+`.ts` playback format
+  the relay fronts for remote viewing.
+- **PKCE** — Proof Key for Code Exchange: the OAuth 2.0 extension that stops
+  an intercepted authorization code from being redeemed; this hub accepts
+  `S256` only.
+- **backpressure** — pausing a fast sender when the receiver's buffer fills,
+  instead of buffering forever or dropping bytes.
+- **reaped** — force-closed by the liveness loop after missing keepalives
+  (30 s ping / 90 s window on the relay lanes).
+- **seam** — a deliberate configuration junction where behavior swaps without
+  a code change (e.g. `HUB_WS_URL` is the seam between direct-:8804 dialing
+  and proxy-fronted `wss://`).
 
 ## Architecture
 
@@ -237,6 +288,10 @@ The same `scripts/install.sh` updates an in-place install **without rotating any
 reads the existing `/etc/phlix-hub.env` (so the JWT secret and DB password are preserved),
 pulls the latest code, refreshes Composer dependencies, runs pending migrations, and restarts
 the service:
+
+Updating the hub's **web-UI assets** (`@phlix/ui` re-pin + Vite bundle rebuild under
+`public/assets/app/`) is a separate procedure — the runbook for it lives in
+[docs/ui-asset-rebuild.md](docs/ui-asset-rebuild.md).
 
 ```bash
 sudo bash /opt/phlix-hub/scripts/install.sh --update -y

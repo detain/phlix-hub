@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — review hub Majors 14 + 15: the jargon wall gets a door; the naming trap gets renamed — 2026-11-02
+
+- **M14**: new *Terms used in this document* section after the intro — every
+  flagged term defined in plain words where the README first needs it: the
+  four distinct credential classes that all got called "token" (session /
+  enrollment / relay-bearer / invite), federation/peer/master/leaf/dial,
+  SPA/JWKS (path pinned to the real `/.well-known/jwks.json`)/NAT/SNI/HLS/
+  PKCE/backpressure/reaped/seam. "claim code" named as the glossing model.
+- **M15**: `hub_deploy.md` promised a deploy guide and delivered the
+  `@phlix/ui` asset-rebuild runbook. Moved (git mv) to
+  `docs/ui-asset-rebuild.md` — its honest name — the self-apologizing preamble
+  rewritten, a redirect stub left at the old path for stale bookmarks, and the
+  README's *Updating an existing install* section (which never referenced the
+  runbook at all) now links it. The "give the repo a real deploy guide" half
+  of the finding is covered by the README's install/Docker/firewall/trouble-
+  shooting chapters that the runbook used to be mistaken for.
+
 ### Fixed — review hub Major 13: the README finally gets a Troubleshooting section — 2026-11-02
 
 - **M13**: the only "Troubleshooting" in the repo was four deploy-engineer
