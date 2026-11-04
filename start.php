@@ -43,7 +43,6 @@ require_once __DIR__ . '/vendor/autoload.php';
 use Phlix\Hub\Application;
 use Phlix\Hub\Common\Container\ContainerFactory;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
-use Phlix\Hub\Common\Database\ConnectionPool;
 use Phlix\Hub\Common\Logger\LoggerFactory;
 use Workerman\Worker;
 
@@ -96,7 +95,6 @@ LoggerFactory::init($loggerConfigPath);
 // /health endpoint stays reachable even when MySQL is unreachable. The
 // pool is initialised lazily by the container the first time a service
 // asks for a Connection.
-ConnectionPool::class; // ensure autoload pulls the class.
 
 // Workerman's default log file is `workerman.log` in the current
 // directory. Pin it to the install's .logs/ dir so the location is

@@ -96,7 +96,7 @@ Options:
   --jwt-secret SECRET     JWT signing secret              (default: random 32-byte)
   --service-user USER     System user to run as           (default: www-data)
   --workers N             HTTP worker processes           (default: 4)
-  --branch NAME           Git branch or tag name to install (default: master)
+  --branch NAME           Git branch or tag to install    (default: master)
   --repo URL              Git repository URL              (default: detain/phlix-hub)
   --tls                   Force TLS / HAProxy + certbot setup
   --no-tls                Skip TLS; HAProxy serves plain HTTP on :80
@@ -1425,9 +1425,9 @@ do_update() {
   log "Ensuring Xdebug is installed and configured"
   phlix_install_xdebug
 
-  # 3. Clear Smarty compile cache so templates pick up changes immediately.
-  # (compile_check is on by default, but stale entries from earlier renders
-  #  occasionally linger after .tpl edits.)
+  # 3. Clear any leftover Smarty compile cache from pre-SPA installs.
+  # (The Smarty SSR UI was retired — nothing writes these dirs anymore; the
+  #  [ -d ] guard below keeps this a no-op on fresh installs. Vestige only.)
   if [ -d "$INSTALL_PATH/var/smarty" ]; then
     log "Clearing Smarty compile + cache directories"
     rm -rf "$INSTALL_PATH/var/smarty/compile"/* "$INSTALL_PATH/var/smarty/cache"/* 2>/dev/null || true
@@ -1969,9 +1969,8 @@ SyslogIdentifier=phlix-hub
 # pinned under one of the ReadWritePaths below —
 #   .logs/  : app/error/hub/relay/audit + workerman logs (config/logger.php,
 #             start.php Worker::\$logFile)
-#   var/    : Swoole RemoteObject lock (HOME), Smarty compile/cache
-#             (HttpServicesProvider var/smarty/{compile,cache}), the DI
-#             container compile dir (ContainerFactory var/cache/container), and
+#   var/    : Swoole RemoteObject lock (HOME), the DI container compile
+#             dir (ContainerFactory var/cache/container), and
 #             Workerman's pid/status files (start.php pins them into var/ — the
 #             defaults land in the read-only root and saveMasterPid() would
 #             throw "can not save pid to …").

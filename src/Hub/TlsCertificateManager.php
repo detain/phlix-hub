@@ -42,7 +42,8 @@ class TlsCertificateManager
      */
     public const string NOT_IMPLEMENTED_MESSAGE =
         'ACME certificate provisioning is not implemented in this build. '
-        . 'Provision certs out-of-band — see docs/hub-admin/tls.md.';
+        . 'Provision certs out-of-band — see '
+        . 'https://detain.github.io/phlix-docs/hub-admin/tls.';
 
     /**
      * @param string                                   $certsDir   Directory to store certificates.

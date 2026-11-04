@@ -74,7 +74,7 @@ class DnsAliasManagerTest extends TestCase
             });
 
         // allocateSubdomain() no longer triggers TLS provisioning;
-        // operators install certs out-of-band (docs/hub-admin/tls.md).
+        // operators install certs out-of-band (phlix-docs docs/hub-admin/tls.md).
         // The mock therefore expects no call at all.
         $this->certManager->expects($this->never())->method('provisionCertificate');
 

@@ -180,7 +180,7 @@ final class SubdomainController
         } catch (\RuntimeException $e) {
             return (new Response())
                 ->status(501)
-                ->header('Link', '</docs/hub-admin/tls.md>; rel="help"')
+                ->header('Link', '<https://detain.github.io/phlix-docs/hub-admin/tls>; rel="help"')
                 ->json([
                     'error' => 'NOT_IMPLEMENTED',
                     'code' => 'tls.acme_not_implemented',

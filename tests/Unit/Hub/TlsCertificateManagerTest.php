@@ -99,7 +99,8 @@ class TlsCertificateManagerTest extends TestCase
     {
         $this->assertSame(
             'ACME certificate provisioning is not implemented in this build. '
-            . 'Provision certs out-of-band — see docs/hub-admin/tls.md.',
+            . 'Provision certs out-of-band — see '
+            . 'https://detain.github.io/phlix-docs/hub-admin/tls.',
             TlsCertificateManager::NOT_IMPLEMENTED_MESSAGE,
         );
 
@@ -112,7 +113,7 @@ class TlsCertificateManagerTest extends TestCase
                 $e->getMessage(),
             );
             $this->assertStringContainsString(
-                'docs/hub-admin/tls.md',
+                'phlix-docs/hub-admin/tls',
                 $e->getMessage(),
             );
         }

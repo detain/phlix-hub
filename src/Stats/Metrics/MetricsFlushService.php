@@ -17,10 +17,14 @@ use Phlix\Hub\Common\Database\ConnectionPool;
  * Persists the hub's {@see MetricsRegistry} state to MySQL.
  *
  * Uses named `:param` placeholders (hub convention). The UPSERTs
- * (`INSERT ... ON DUPLICATE KEY UPDATE col = col + VALUES(col)`) use a fixed
- * `worker_id` of `'hub-relay'` since the hub runs a single relay process.
- * Rates for the live-connection panel are derived from the delta between
- * successive flushes divided by the flush interval.
+ * (`INSERT ... ON DUPLICATE KEY UPDATE col = col + VALUES(col)`) all target a
+ * shared `worker_id` of `'hub-relay'` — and every hub process that arms a
+ * flush timer (the HTTP worker in `Application`, `RelayWorker`, and
+ * `ClientRelayWorker` each do) writes into that one row. The ODKU additivity
+ * is by design, but capacity reasoning must count one writer PER PROCESS on
+ * the ~5 s cadence — the row name is a label, not a claim of a single
+ * relay process. Rates for the live-connection panel are derived from the
+ * delta between successive flushes divided by the flush interval.
  *
  * @package Phlix\Hub\Stats\Metrics
  * @since S4

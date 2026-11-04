@@ -110,7 +110,8 @@ class SubdomainControllerTest extends TestCase
         $dnsManager = $this->createMock(DnsAliasManager::class);
         $dnsManager->method('refreshCertificate')->willThrowException(new \RuntimeException(
             'ACME certificate provisioning is not implemented in this build. '
-            . 'Provision certs out-of-band — see docs/hub-admin/tls.md.',
+            . 'Provision certs out-of-band — see '
+            . 'https://detain.github.io/phlix-docs/hub-admin/tls.',
         ));
 
         $certManager = $this->createMock(TlsCertificateManager::class);
@@ -123,13 +124,13 @@ class SubdomainControllerTest extends TestCase
 
         $this->assertSame(501, $response->statusCode);
         $this->assertSame(
-            '</docs/hub-admin/tls.md>; rel="help"',
+            '<https://detain.github.io/phlix-docs/hub-admin/tls>; rel="help"',
             $response->headers['Link'] ?? '',
         );
         $responseBody = (string) $response->body;
         $this->assertStringContainsString('NOT_IMPLEMENTED', $responseBody);
         $this->assertStringContainsString('tls.acme_not_implemented', $responseBody);
-        $this->assertStringContainsString('docs/hub-admin/tls.md', $responseBody);
+        $this->assertStringContainsString('phlix-docs/hub-admin/tls', $responseBody);
     }
 
     public function testRefreshCertificateReturns400WithoutServerId(): void

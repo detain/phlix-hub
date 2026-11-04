@@ -435,8 +435,8 @@ starts cleanly and then fails closed in ways that look like data loss.
 | **JWT session secret** | `HUB_JWT_SECRET` inside `/etc/phlix-hub.env` (chmod 600) | Signs every access/refresh token (`config/auth.php`; ≥32 bytes). If it is lost, changed, or the env file is restored from a different era, **every issued session becomes unverifiable**: all users are logged out at once and refresh tokens cannot save them. When the var is missing entirely, `AuthServicesProvider` falls back to a process-local random secret — tokens die on every restart, so never run production without it. |
 | **Hub signing key** | `config/hub-signing-key.pem`, mode **0600**, auto-generated on first boot by `HubServicesProvider` → `Ed25519KeyManager` (path override: add `'hub_signing_key_path' => '<absolute path>'` to the array in `config/server.php` — the shipped file does not define the key, and `HubServicesProvider.php:179` reads it from there, so the override is an operator edit, not an env var) | The hub's Ed25519 identity. It signs enrollment artifacts servers present on pairing and is the master-side key in the federation mutual proof-of-key ceremony. If it is lost and a fresh one is generated, **already-registered servers fail verification** (re-pair them) and **federation peers whose leaf keys were registered under the old identity refuse the hub** until trust is re-established with each peer. |
 
-Everything else is derived and safe to lose: `.logs/` and `var/` (Smarty
-compile/cache, DI container cache, Swoole HOME lock, Workerman pid/status).
+Everything else is derived and safe to lose: `.logs/` and `var/` (DI container
+cache, Swoole HOME lock, Workerman pid/status).
 `public/assets/app/` is a committed build — recover it from the repository,
 not from a backup.
 
@@ -916,7 +916,9 @@ Environment="HOME=/opt/phlix-hub/var"
 ExecStartPre=/usr/bin/env bash /opt/phlix-hub/scripts/wait-for-free-ports.sh -t 90 8800 8802 8803 8804 8805 2206
 ExecStart=/usr/bin/php /opt/phlix-hub/start.php start
 # GRACEFUL reload: Workerman arms its SIGKILL timer only for SIGUSR1, so
-# SIGUSR2 (Worker.php:1390/$gracefulStop) is the reload that does NOT cut live
+# SIGUSR2 (Workerman Worker::$gracefulStop — symbol cite; the vendored
+# line number drifts per workerman release, so do not pin one) is the reload
+# that does NOT cut live
 # relay tunnels and in-flight HLS. POST /api/v1/admin/restart sends the same
 # signal, so 'systemctl reload' and the in-app Restart button behave alike.
 # (The pid file lives at /opt/phlix-hub/var/hub.pid — do NOT point
@@ -941,8 +943,8 @@ StandardError=journal
 SyslogIdentifier=phlix-hub
 # Sandbox hardening. The install root stays READ-ONLY; every runtime write is
 # pinned under ReadWritePaths: .logs/ (app/error/hub/relay/audit + workerman
-# logs), var/ (Swoole HOME lock, Smarty compile/cache, the DI container compile
-# dir, config/ needs write for the Ed25519 hub signing key — HubServicesProvider
+# logs), var/ (Swoole HOME lock, the DI container compile dir,
+# config/ needs write for the Ed25519 hub signing key — HubServicesProvider
 # writes config/hub-signing-key.pem, mode 0600 — Workerman pid/status files).
 # NOTE: MemoryDenyWriteExecute (breaks PHP JIT/opcache), PrivateDevices and
 # SystemCallFilter (io_uring is syscall-sensitive) are deliberately NOT set.
@@ -1948,7 +1950,7 @@ phlix-hub/
 ├── bin/              # bin/phlix CLI entry script (webman/console)
 ├── config/          # Environment-driven config (auth, database, federation, hub, invite, logger, metrics, process, requests, server, updates)
 ├── docker/           # docker-entrypoint.sh + php.ini (image bits; the image boots start.php directly)
-├── docs/            # websockets.md — the :8802/:8803/:8804/:8805 surfaces
+├── docs/            # websockets.md (:8802-:8805 surfaces) + ui-asset-rebuild.md (@phlix/ui re-pin runbook)
 ├── migrations/      # Idempotent SQL migrations
 ├── openapi.yaml     # HTTP surface description (linted with redocly.yaml)
 ├── public/
@@ -1965,10 +1967,10 @@ phlix-hub/
 │   ├── Console/         # bin/phlix commands (migrate, smoke:jwt, oauth:client:*)
 │   ├── Http/            # Router, request/response, controllers, middleware, response sink
 │   ├── Hub/             # Claims, heartbeats, sharing, DNS, TLS, relay sessions, update checks
-│   ├── Federation/      # Hub-to-hub federation peers, shares, sessions
+│   ├── Federation/      # Hub-to-hub federation peer/share/session services (the :8805 worker itself lives under Relay/)
 │   ├── Mcp/             # MCP protocol, tool registry + tools, PAT service, scopes
 │   ├── OAuth/           # Authorization server: clients, codes, PKCE, tokens, consent, scopes
-│   ├── Relay/           # Reverse-tunnel relay workers, frame codec, tunnels, throttle token bucket
+│   ├── Relay/           # Reverse-tunnel relay workers (incl. the :8805 FederationWorker listener), frame codec, tunnels, throttle token bucket
 │   ├── Requests/        # Media request manager
 │   ├── Stats/           # Relay metrics registry, collector, flush service
 │   └── SyncPlay/        # SyncPlay relay worker + pending-command dispatch
