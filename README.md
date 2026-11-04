@@ -1764,10 +1764,12 @@ opening 8804 in the firewall changes nothing on a TLS hub. Two working shapes:
 - **TLS-served hub:** front `:8804` with your reverse proxy (a `wss://`
   upgrade location), and set `HUB_WS_URL` (+ `HUB_WS_PATH=/syncplay`) so the
   portal surfaces dial the proxy instead — see [Configuration
-  reference](#configuration-reference). Note: the hub-local Watch Party page
-  currently always dials `hostname:8804` regardless of that seam (open
-  review finding, Major 38) — until it is cured, parties on TLS hubs join
-  through the vendored Browse surfaces, not the hub's own page.
+  reference](#configuration-reference). The hub-local Watch Party page
+  honors that same seam: `web-ui/`'s `buildRelayUrl` consults
+  `window.__PHLIX__.wsUrl`/`wsPath` first and only then falls back to
+  same-origin `:8804` — the identical law the vendored `@phlix/ui` dial
+  applies, so on a correctly proxied TLS hub the hub's own page joins
+  parties (the Major 38 carve-out is cured at the current pin).
 
 Also check the party code itself: rooms are per-server, and joining requires
 the caller's own access to that server (the relay gates on ownership, not
