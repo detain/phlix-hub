@@ -6,6 +6,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Docs — forward-correction: the hub DOES track a public/ directory (the SPA bundle); what was deleted is public/index.php — and the DERIV-HUB-3 "11" counts files, not cites — 2026-11-04
+
+- **Serving-layout prose (corrects the DERIV-HUB-2 bullet below, 229a58d8):** that entry claimed
+  "the hub has no `public/` directory and never served through one". Over-reach. `public/` IS
+  tracked — `public/assets/app/**` (198 files) is the committed SPA bundle, read at runtime by
+  `SharedUiController` (its :86 docblock names `public/assets/app/index.html`). The accurate
+  claim is the source queue row's own (`.reviews/2026-11-03/FIX-QUEUE-DERIVED.md:49`): the hub
+  has no `public/index.php` — public/assets only. The old `public/index.php` shim was DELETED
+  by 829e3855 ("refactor(workerman): drop public/index.php shim"), which `start.php`:19's
+  entry-point law states outright. What died was the PHP entry shim, not the directory. The
+  DERIV-HUB-2 cure itself (CoreServicesProvider cite → `start.php`) is untouched and true.
+- **Bare-cite count phrasing (clarifies the DERIV-HUB-3 bullet below, 229a58d8):** "the 11
+  remaining bare `updates.md #50` docblock cites" — 11 is the FILE count (8 src + 3 test
+  headers); the qualified cite INSTANCES are 21 (18 src + 3 tests, per the bullet's own
+  enumeration). Completeness stands: zero bare cites remain at tip. Noted here so the landed
+  number never reads as an instance census.
+- Found by the read-only content review `.reviews/2026-11-03/REVIEW-DERIVED-CON-HUB.md`
+  (F1 Minor / F2 Info, subject 229a58d8). Prose truth only: zero code, spec, or wire movement.
+  Per the append-only law the 229a58d8 bullets stand VERBATIM above — this entry is their
+  forward correction.
+
 ### Changed — derived-cures wave: entry-point cite truth, qualified legacy changelog cites, InviteLink permission spec truth — 2026-11-04
 
 - **DERIV-HUB-2 (zombie docblock, cured):** `CoreServicesProvider` class-header prose claimed its
