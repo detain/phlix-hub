@@ -16,7 +16,7 @@ The hub's `web-ui/` imports it and runs `vite build` to produce **Vite code-spli
 `public/assets/app/assets/`. The hub's Workerman HTTP worker serves these committed assets
 directly.
 
-```
+```text
 @phlix/ui npm package (dist/phlix-ui.js, dist/player.js, ...)
         ↓  npm ci (tarball pinned by tag in package.json, sha512 integrity in package-lock.json)
 phlix-hub/web-ui/node_modules/@phlix/ui/

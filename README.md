@@ -1914,7 +1914,7 @@ and only then does `docker-build` publish it.
 
 ## Project structure
 
-```
+```text
 phlix-hub/
 ├── bin/              # bin/phlix CLI entry script (webman/console)
 ├── config/          # Environment-driven config (auth, database, federation, hub, invite, logger, metrics, process, requests, server, updates)

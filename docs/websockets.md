@@ -51,7 +51,7 @@ All three tunnel surfaces share one wire codec, `Phlix\Shared\Relay\RelayFrame`
 (encoded by `src/Relay/FrameEncoder.php`, decoded by `FrameDecoder.php`). All
 integers are big-endian:
 
-```
+```text
 [4-byte channel / request id (uint32)][1-byte frame type][2-byte payload length (uint16)][N payload bytes]
 ```
 
@@ -110,7 +110,7 @@ generic `HEARTBEAT` (`0x06`) and `DISCONNECTED` (`0x07`) frames. See
 
 ## `:8802` — server relay tunnel
 
-```
+```text
 ws://hub.example.com:8802
 ```
 
@@ -238,7 +238,7 @@ the in-memory tunnel registry does (`docs/websockets.md` `:8802` above,
 > architecture decisions; the catalog below describes the intended wire if
 > either lands.
 
-```
+```text
 ws://hub.example.com:8803/client/{server_id}
 ```
 
@@ -295,7 +295,7 @@ paid for, and it should cross to the client mount with it.
 
 ## `:8804` — SyncPlay relay
 
-```
+```text
 ws://hub.example.com:8804/syncplay/{server_id}
 ```
 
@@ -617,7 +617,7 @@ imported so one law governs both sockets:
 
 ## `:8805` — hub federation
 
-```
+```text
 ws://master-hub.example.com:8805/relay/federation/{hub_id}
 ```
 
@@ -824,7 +824,7 @@ receipt.
 
 ## `:8097` — media server events and SyncPlay (`phlix-server`)
 
-```
+```text
 ws://media-server:8097/
 ```
 
