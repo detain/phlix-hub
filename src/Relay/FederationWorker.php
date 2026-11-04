@@ -487,6 +487,11 @@ final class FederationWorker
         $limiter = $this->connectLimiter();
         if ($limiter !== null) {
             $state = null;
+            // A non-null $state below implies the resolve+hit pair ran to
+            // completion, so $clientIp is always assigned when it is read in
+            // the limited branch; this initialisation exists for psalm's flow
+            // analysis (PossiblyUndefinedVariable across the catch boundary).
+            $clientIp = '';
             try {
                 $this->trustedProxyResolver ??= new TrustedProxyResolver();
                 $clientIp = $this->trustedProxyResolver->resolve(
