@@ -35,20 +35,22 @@
  * digest. That same corpus is what phlix-server commits as two wire-guard
  * constants:
  *
- *   - ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST   (375 entries)
- *   - WebPortalRouterWirePathGuardTest::ROUTE_MANIFEST     ( 48 entries)
+ *   - ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST   (376 entries)
+ *   - WebPortalRouterWirePathGuardTest::ROUTE_MANIFEST     ( 50 entries)
  *
- * whose union minus the 11 shared rails is the 412-tuple snapshot (375+48−11,
- * mirroring the S280 parity pin — server `1fc8188`-era counts; the prologue
- * originally cited the pre-refresh 373/410 breakdown). Both server CI jobs
+ * whose union minus the 11 shared rails is the 415-tuple snapshot (376+50−11,
+ * mirroring the S280 parity pin — server `58530ec2`-era counts; the prologue
+ * originally cited the pre-refresh 373/410, then 375/412, breakdown). Both server CI jobs
  * compare their const against the FULL rendered production router table
  * VERBATIM, so an unregistered-in-const route reddens phlix-server itself. The
  * faithfulness of this gate is therefore INHERITED from phlix-server's guards,
  * not re-proven here — exactly what makes a content compare IFF-clean where the
  * sha compare was over-strict. The parse below is the concatenation-aware one
  * already proven by phlix-contracts/scripts/generate-server-route-manifest.mjs,
- * and it reproduces the pinned digest `a8d05147…` byte-for-byte at the fixture's
- * source_sha (see the S492 §5A fidelity transcript in the PR body).
+ * and it reproduces the fixture's recorded `sha256` byte-for-byte at that
+ * snapshot's own source_sha (the S492 §5A fidelity transcript proved the
+ * equivalence at the original pin; the regen #36 currency wave re-proved it at
+ * `58530ec2`: this parse's digest equals the boot-derived fixture digest).
  *
  * ## Why a script and not a test
  *

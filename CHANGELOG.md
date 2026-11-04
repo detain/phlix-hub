@@ -6,6 +6,39 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — route snapshot currency-sync to server `58530ec2` + contracts export re-vendor (412 → 415 tuples) — 2026-11-04
+
+- **The standing `Server Route Snapshot Currency` red, cured.** Live phlix-server master carries
+  three tuples the vendored S332 snapshot did not: the watch-history alias pair
+  (`GET /api/v1/me/history` + `GET /api/v1/users/me/history`, server `a86e0999`) and
+  `GET /api/v1/servers/{id}` (server `8bb435cf`) — 412 → 415. Content drift is exactly what the
+  gate reddens on; this commit executes the sanctioned fix in one lockstep (S492/1fc81886 precedent):
+  `dump-phlix-server-route-manifest.php` re-run against server `58530ec2` — whose route content is
+  byte-identical to live master (the last content-changing server commit is `8bb435cf`; the two
+  wire-guard tables show zero motion from there to the tip, and an independent dumper re-run at
+  `58530ec2` reproduced the fixture byte-for-byte), `S332_EXPECTED_SERVER_SOURCE_SHA` bumped to the
+  same sha, and the vendored contracts export (`Fixtures/contracts-server-route-manifest.json`)
+  re-vendored byte-identical from `@phlix/contracts` `1de13a0` `dist/server-route-manifest.json`
+  (regen #36 — md5 `90b79e35…`).
+- **Why the snapshot pins `58530ec2` rather than the moving tip:** S280's both-copies-same-sha
+  parity law binds the hub fixture's `source_sha` to the sha stamped by the upstream contracts
+  export it vendors, and regen #36 carries `58530ec2`. The tip has since advanced by
+  provenance-only motion, so the S492 job prints its designed NON-BLOCKING lag `::warning::`
+  (content digest equal = CURRENT) instead of a zero-warning landing — the trade the owner's
+  batch39-F2 ruling explicitly accepts while server master moves under an active campaign.
+- **Cross-mechanism identity re-proven at the new tip:** the boot-derived fixture digest
+  (`69441e34…`) equals the constant-parsed digest the currency script derives from the two
+  server wire-guard tables at the same commit — the S492 gate's faithfulness claim survives the
+  regen, and its prologue era counts (`376+50−11=415`) rotate with it.
+- **S107 deny enumeration re-derives UNCHANGED from the grown snapshot:** all three new tuples are
+  GET read rails — no write verb under an allowlisted read prefix — so the deny list and the
+  residual-disposition table hold; the pin test confirms, not the prose.
+- **Gate constants moved honestly:** `S280_EXPECTED_ROUTE_COUNT` 412 → 415 (breakdown prose now
+  376 Application + 50 WebPortal − 11 shared), the non-vacuity test method re-named to
+  `…FourHundredFifteenTuples`, the survival token re-suffixed `@415-90b79e35`, and the
+  vendored-bytes md5 pin refreshed to `90b79e355055307d5ba2cc0ef98e2300`. The cs#47 lane ritual
+  token deliberately holds (wave marker, not a per-regen counter).
+
 ### Fixed — HUB-09: password-success toast renders one sentence, one way — 2026-11-04
 
 - `HubSecuritySettingsPage` rendered the same sentence with and without a
