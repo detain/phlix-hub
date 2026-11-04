@@ -48,10 +48,12 @@ use Workerman\Timer;
  *      {@see FederationHandshake}).
  *   4. Sends HEARTBEAT (generic binary) every 15 seconds once verified
  *   5. Handles incoming DATA envelopes (library-share offers/revocations,
- *      admin-delegation payloads) — every inbound frame first passes the
- *      shared :8805 frame budget ({@see self::guardIncomingFrame()}, review
- *      hub__exploiter M3) BEFORE parse/dispatch, and payloads are refused
- *      before the channel is
+ *      admin-delegation payloads) — every inbound frame runs through the
+ *      guarded seam in R2 order: shape gate first, then the shared :8805
+ *      frame budget ({@see self::guardIncomingFrame()}, review
+ *      hub__exploiter M3; validate-then-charge — a malformed frame drops
+ *      FREE and can never spend a peer's budget) before dispatch, and
+ *      payloads are refused before the channel is
  *      verified (H-4 leaf-side gate); admin delegations additionally run
  *      validation-before-write against the authenticated channel identity
  *      and the local users table (R17-07)

@@ -141,9 +141,12 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
         );
 
         $body = (string) ($block[0] ?? '');
-        // The r1 law (guard gates dispatch, drop-before-parse) now rides the
-        // GUARDED SEAM (review hub__asphp R1: every inbound leg runs through
+        // The r1 law (guard gates dispatch) now rides the GUARDED SEAM
+        // (review hub__asphp R1: every inbound leg runs through
         // handleInboundLeafFrame); the closure must stay a bare route to it.
+        // R2 refined the guard's ORDER: shape first, budget second — a
+        // malformed frame drops FREE, so junk can never spend a peer's
+        // charge budget (validate-then-charge, review hub__asphp R2 Major).
         self::assertStringContainsString(
             '$this->handleInboundLeafFrame($data)',
             $body,
