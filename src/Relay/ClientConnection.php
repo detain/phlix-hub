@@ -54,7 +54,7 @@ final class ClientConnection
      * @param StructuredLogger     $logger     Structured logger for relay events.
      * @param string               $sessionId  Optional relay session ID for this client.
      * @param int                  $throttleBps Per-user sustained relay rate cap in BITS/sec
-     *                                          (S41/S42, updates.md #50). `0` = Unlimited: no
+     *                                          (S41/S42, phlix-docs docs/old/updates.md #50). `0` = Unlimited: no
      *                                          bucket is built and {@see Tunnel::sendToClient()}
      *                                          takes the unthrottled fast path. Resolved from the
      *                                          owning user's `throttle_bps` at mount time
@@ -109,7 +109,7 @@ final class ClientConnection
 
     /**
      * @var TokenBucket|null Per-connection byte-rate token bucket enforcing this
-     *          user's relay throttle (S42, updates.md #50). Null when the user is
+     *          user's relay throttle (S42, phlix-docs docs/old/updates.md #50). Null when the user is
      *          Unlimited ({@see $throttleBps} `=== 0`). Public so the owning
      *          {@see Tunnel} can consult/debit it on the server→client data path
      *          (and so tests can inject a bucket seeded at a known clock base for

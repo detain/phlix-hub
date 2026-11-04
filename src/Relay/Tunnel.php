@@ -236,7 +236,7 @@ final class Tunnel implements TunnelInterface
 
     /**
      * Drain-timer interval (seconds) for a throttled client's rate-limit backlog
-     * (S42, updates.md #50). When the token bucket runs dry, queued server→client
+     * (S42, phlix-docs docs/old/updates.md #50). When the token bucket runs dry, queued server→client
      * frames are released on this cadence as the bucket refills. 50 ms (20 ticks/s)
      * paces delivery smoothly without busy-spinning the event loop; the timer is
      * armed only while a backlog exists and cancelled the moment it drains, so a
@@ -1043,7 +1043,7 @@ final class Tunnel implements TunnelInterface
 
         $encoded = $this->codec->encode($frame->type, $frame->seq, $frame->payload);
 
-        // Per-user bandwidth throttle (S42, updates.md #50). A client mounted with
+        // Per-user bandwidth throttle (S42, phlix-docs docs/old/updates.md #50). A client mounted with
         // a finite cap (throttle_bps > 0) is paced by its own per-connection token
         // bucket; 0 = Unlimited bypasses this entirely and takes the unchanged
         // fast path below (no bucket, no queue, no timer overhead). The throttle

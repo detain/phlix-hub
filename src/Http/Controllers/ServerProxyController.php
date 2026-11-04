@@ -1246,7 +1246,7 @@ final class ServerProxyController
      * server — so a multi-MB segment (or a whole direct-play file) never has to
      * be buffered on the hub before the first byte reaches the client.
      *
-     * ### Per-user bandwidth throttle (S43, updates.md #50)
+     * ### Per-user bandwidth throttle (S43, phlix-docs docs/old/updates.md #50)
      * The owning user's durable throttle (`throttle_bps`; `0` = Unlimited) is read
      * ONCE here and turned into a {@see TokenBucket} the {@see ConnectionResponseSink}
      * paces the response body against, mirroring the WS relay path (S42). Unlimited
@@ -1292,7 +1292,7 @@ final class ServerProxyController
     ): Response {
         $sessionManager = $this->sessionManager;
 
-        // Per-user bandwidth throttle (S43, updates.md #50): resolve the owning
+        // Per-user bandwidth throttle (S43, phlix-docs docs/old/updates.md #50): resolve the owning
         // user's DURABLE cap (bits/sec; `0` = Unlimited) ONCE at stream admission
         // — never per fragment — and build the token bucket the response-body sink
         // paces against. Unlimited yields a null bucket so the sink takes its

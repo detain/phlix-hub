@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see TokenBucket} — the reusable byte-rate limiter behind the
- * per-user relay throttle (S42, updates.md #50).
+ * per-user relay throttle (S42, phlix-docs docs/old/updates.md #50).
  *
  * All timing is driven through the injectable clock so the rate/refill behaviour
  * is deterministic without a running event loop.

@@ -36,7 +36,7 @@ use Phlix\Hub\Http\Response;
  *    period.
  *  - `PUT /api/v1/admin/users/{id}/throttle` {@see self::setUserThrottle()} — set
  *    a user's sustained relay bandwidth THROTTLE (rate cap in bits/sec), chosen
- *    from a fixed set of levels (S41, updates.md #50). Distinct from the monthly
+ *    from a fixed set of levels (S41, phlix-docs docs/old/updates.md #50). Distinct from the monthly
  *    byte-cap quota above; NOT enforced yet (enforcement is S42/S43). The current
  *    value is surfaced as `throttle_bps` on the bandwidth GET payloads.
  *
@@ -189,7 +189,7 @@ final class UserQuotaController
     /**
      * `PUT /api/v1/admin/users/{id}/throttle` — set a user's sustained relay
      * bandwidth THROTTLE (rate cap in bits/sec) for the current period. Admin-only
-     * (S41, updates.md #50).
+     * (S41, phlix-docs docs/old/updates.md #50).
      *
      * Body: `{ "throttle_bps": int }`. The value MUST be one of the fixed allowed
      * levels ({@see self::ALLOWED_THROTTLE_BPS}: 1/3/5/10/20/50 Mbps in bps, or 0

@@ -42,7 +42,7 @@ final class CoreServicesProvider implements ServiceProviderInterface
      * @param ContainerBuilder<\DI\Container> $builder   Builder being assembled.
      * @param array<string, mixed>            $appConfig Must contain `db_config_path` and
      *                                                   `logger_config_path` keys (the bootstrap
-     *                                                   in `public/index.php` injects these).
+     *                                                   in `start.php` injects these).
      *
      * @return void
      *

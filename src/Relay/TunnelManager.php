@@ -257,7 +257,7 @@ final class TunnelManager implements TunnelManagerInterface
      * @param TcpConnection $clientWs Workerman connection to the client.
      * @param string      $clientId Client UUID assigned by the hub.
      * @param string      $sessionId Optional relay session ID for this client.
-     * @param string|null $userId   Authenticated owning-user UUID (S42, updates.md #50).
+     * @param string|null $userId   Authenticated owning-user UUID (S42, phlix-docs docs/old/updates.md #50).
      *                              When provided, the user's per-user relay throttle
      *                              is resolved and attached to the connection.
      *
@@ -306,7 +306,7 @@ final class TunnelManager implements TunnelManagerInterface
             return null;
         }
 
-        // Resolve the owning user's per-user relay throttle (S42, updates.md #50)
+        // Resolve the owning user's per-user relay throttle (S42, phlix-docs docs/old/updates.md #50)
         // so the created connection enforces it. Best-effort + fail-OPEN: a DB
         // hiccup must never break a mount, so on error the connection is Unlimited
         // (0) rather than refused. An unconfigured user reads back the migration
@@ -335,7 +335,7 @@ final class TunnelManager implements TunnelManagerInterface
 
     /**
      * Resolve a mounting user's per-user relay throttle in bits/sec (S42,
-     * updates.md #50), reading the `throttle_bps` value persisted by S41 via
+     * phlix-docs docs/old/updates.md #50), reading the `throttle_bps` value persisted by S41 via
      * {@see RelaySessionManager::getUserThrottleBps()}.
      *
      * Fail-OPEN and non-blocking-friendly: no `$userId` (or an empty one) mounts

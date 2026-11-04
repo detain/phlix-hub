@@ -21,7 +21,7 @@ use ReflectionMethod;
 
 /**
  * Reachability + auth-gating contract for the S41 admin throttle endpoint
- * `PUT /api/v1/admin/users/{id}/throttle` (updates.md #50).
+ * `PUT /api/v1/admin/users/{id}/throttle` (phlix-docs docs/old/updates.md #50).
  *
  * WHY THIS EXISTS — a green test can pin dead code. Every other throttle test
  * ({@see \Phlix\Hub\Tests\Unit\Http\Controllers\UserQuotaControllerTest}) calls

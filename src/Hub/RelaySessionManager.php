@@ -755,7 +755,7 @@ class RelaySessionManager
 
     /**
      * Set or update a user's per-user relay THROTTLE (sustained rate cap in
-     * bits/sec) — a DURABLE per-user admin setting (S41, updates.md #50).
+     * bits/sec) — a DURABLE per-user admin setting (S41, phlix-docs docs/old/updates.md #50).
      *
      * Persisted in the dedicated {@see relay_user_settings} store (migration 043)
      * as an INSERT ... ON DUPLICATE KEY UPDATE upsert keyed on `user_id` ALONE —
@@ -789,7 +789,7 @@ class RelaySessionManager
 
     /**
      * Read a user's operator-configured relay throttle (bits/sec) — a DURABLE
-     * per-user admin setting (S41, updates.md #50).
+     * per-user admin setting (S41, phlix-docs docs/old/updates.md #50).
      *
      * Read from the dedicated {@see relay_user_settings} store (migration 043),
      * keyed by `user_id` ALONE with NO period scoping, so the value is stable

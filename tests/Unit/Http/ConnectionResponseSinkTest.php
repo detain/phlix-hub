@@ -509,7 +509,7 @@ final class ConnectionResponseSinkTest extends TestCase
     }
 
     // ---------------------------------------------------------------------
-    // Per-user bandwidth throttle (S43, updates.md #50)
+    // Per-user bandwidth throttle (S43, phlix-docs docs/old/updates.md #50)
     // ---------------------------------------------------------------------
 
     public function testUnlimitedStreamIsNeverPaced(): void

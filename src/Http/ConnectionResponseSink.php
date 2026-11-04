@@ -63,7 +63,7 @@ use function strtoupper;
  * coroutine until `onBufferDrain`, so the upstream relay→hub channel fills and
  * exerts real back-pressure rather than letting the hub queue an unbounded body.
  *
- * ### Per-user bandwidth throttle (S43, updates.md #50)
+ * ### Per-user bandwidth throttle (S43, phlix-docs docs/old/updates.md #50)
  * When constructed with a {@see TokenBucket} (built from the owning user's durable
  * `throttle_bps` by {@see \Phlix\Hub\Http\Controllers\ServerProxyController}), each
  * body fragment is paced against that bucket in {@see self::body()} before it is
@@ -166,7 +166,7 @@ final class ConnectionResponseSink implements RelayResponseSink
     private readonly Channel $resume;
 
     /**
-     * @var TokenBucket|null Per-user byte-rate throttle bucket (S43, updates.md
+     * @var TokenBucket|null Per-user byte-rate throttle bucket (S43, phlix-docs docs/old/updates.md
      *          #50). Null when the owning user is Unlimited (`throttle_bps === 0`),
      *          in which case {@see self::body()} bypasses pacing entirely. Built
      *          once at stream admission by {@see \Phlix\Hub\Http\Controllers\ServerProxyController}
@@ -203,7 +203,7 @@ final class ConnectionResponseSink implements RelayResponseSink
      * @param string                $method        The inbound request method (used only to
      *                                             exempt HEAD from the short-body safeguard).
      * @param TokenBucket|null      $throttleBucket Per-user throttle bucket, or null for
-     *                                             Unlimited (S43, updates.md #50) — null
+     *                                             Unlimited (S43, phlix-docs docs/old/updates.md #50) — null
      *                                             bypasses pacing entirely.
      * @param (callable(float): void)|null $sleeper Coroutine-yielding sleeper; null uses
      *                                             {@see Timer::sleep()}. Overridable for tests.
@@ -298,7 +298,7 @@ final class ConnectionResponseSink implements RelayResponseSink
             return true;
         }
 
-        // Per-user bandwidth throttle (S43, updates.md #50). Pace this fragment
+        // Per-user bandwidth throttle (S43, phlix-docs docs/old/updates.md #50). Pace this fragment
         // against the connection's token bucket BEFORE releasing it; Unlimited
         // (null bucket) skips entirely so the fast path is byte-for-byte
         // unchanged. The wait yields the coroutine — never a blocking sleep — and

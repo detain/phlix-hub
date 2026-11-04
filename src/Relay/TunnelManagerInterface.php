@@ -49,7 +49,7 @@ interface TunnelManagerInterface
      * @param TcpConnection $clientWs Workerman connection to the client.
      * @param string      $clientId Client UUID assigned by the hub.
      * @param string      $sessionId Optional relay session ID for this client.
-     * @param string|null $userId   Authenticated owning-user UUID (S42, updates.md #50).
+     * @param string|null $userId   Authenticated owning-user UUID (S42, phlix-docs docs/old/updates.md #50).
      *                              When provided, the user's per-user relay throttle
      *                              (`throttle_bps`) is resolved and attached to the
      *                              created connection so {@see Tunnel::sendToClient()}
