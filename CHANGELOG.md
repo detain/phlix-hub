@@ -6,6 +6,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — immediate rejection arm contained: symmetric close() throw-safety inside WebSocketCloseFrame::reject (review hub__asphp R3, minor F-R3-4)
+
+- 36cd1f1a wrapped the DEFERRED rejection arm ("a close() that throws
+  there would escape the arm and take the whole worker down") but left the
+  POST-handshake arm's identical `$connection->close($frame, true)` bare —
+  and that is the arm the frame-budget rejection actually reaches
+  (FederationWorker::onMessage calls `reject()` OUTSIDE its dispatch try).
+  The lane's own test corpus mirrored the asymmetry: the deferred arm had
+  a throwing-close pin; the immediate arm never threw in any test.
+- Cure: the immediate arm gets the same try/log/swallow containment —
+  one attributed error line (`rejection close failed — contained`, code +
+  reason), worker survives. The method docblock now states the law for
+  both arms.
+- Pin: `WebSocketCloseFrameTest::testImmediateRejectionArmContainsAThrowingClose`
+  — red-first, measured at the parent (the planted `RuntimeException`
+  escaped `reject()` verbatim; PHPUnit error, stack printed); suite OK
+  8 tests/22 assertions (+1 test) post-cure. psalm both corpora, phpcs
+  both standards, phpstan green on the changed files.
+
 ### Fixed — leaf-side frame-budget charge leg folded into the :8805 barrier (review hub__asphp R3, major F-R3-1)
 
 - `FederationPeerManager::guardIncomingFrame()` ran `$limiter->hit()` BARE,

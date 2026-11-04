@@ -182,4 +182,27 @@ final class WebSocketCloseFrameTest extends TestCase
         self::assertStringContainsString('socket died mid-write', $lines);
         self::assertStringContainsString('1013', $lines);
     }
+
+    public function testImmediateRejectionArmContainsAThrowingClose(): void
+    {
+        // R3 survivor sweep (review hub__asphp F-R3-4): the post-handshake arm
+        // runs the SAME close() on the SAME object as the wrapped deferred arm
+        // — and it is the arm the frame-budget rejection actually reaches
+        // (FederationWorker::onMessage calls reject() OUTSIDE that method's
+        // dispatch try). A dead-socket throw must be contained here too:
+        // one attributed error line, swallow, worker stays alive.
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->context = new \stdClass();
+        $connection->context->websocketHandshake = true;
+
+        $connection->method('close')
+            ->willThrowException(new \RuntimeException('socket died mid-write'));
+
+        WebSocketCloseFrame::reject($connection, 1013);
+
+        $lines = (string) file_get_contents($this->logFile);
+        self::assertStringContainsString('rejection close failed', $lines);
+        self::assertStringContainsString('socket died mid-write', $lines);
+        self::assertStringContainsString('1013', $lines);
+    }
 }

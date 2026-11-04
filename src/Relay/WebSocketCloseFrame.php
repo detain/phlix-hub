@@ -91,6 +91,11 @@ final class WebSocketCloseFrame
      * follows the `101` byte-for-byte; closing with a raw frame any earlier
      * would corrupt the HTTP response the client is still parsing.
      *
+     * Both arms contain a throwing `close()` into one attributed error
+     * line (R3 survivor sweep, review hub__asphp F-R3-4): the call runs on
+     * a resident worker's event loop, and an escaping dead-socket throw
+     * would take the worker — and every connection it serves — down.
+     *
      * @param TcpConnection $connection The connection to reject.
      * @param int           $code       Close code to deliver (see {@see bytes()}).
      *
@@ -101,7 +106,24 @@ final class WebSocketCloseFrame
         $frame = self::bytes($code);
 
         if (!empty($connection->context->websocketHandshake)) {
-            $connection->close($frame, true);
+            // R3 survivor sweep (review hub__asphp F-R3-4): the SAME
+            // close()-may-throw vector as the deferred arm below, on the
+            // SAME object — and this is the arm the frame-budget rejection
+            // actually reaches, from FederationWorker::onMessage OUTSIDE
+            // that method's dispatch try. Contain it identically: attribute
+            // one error line, swallow, keep the resident worker alive.
+            try {
+                $connection->close($frame, true);
+            } catch (Throwable $e) {
+                LoggerFactory::get(LogChannels::RELAY)->error(
+                    'WebSocketCloseFrame: rejection close failed — contained',
+                    [
+                        'code'  => $code,
+                        'error' => $e->getMessage(),
+                    ],
+                );
+            }
+
             return;
         }
 
