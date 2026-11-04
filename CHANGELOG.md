@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — federation hint prose stops advertising controls the SPA does not have (review xrepo__hub-ui, Major 1, 2026-11-04)
+
+- The hub federation page hint closed with "A hub-config save / peer
+  relay toggle still dials immediately" — but the SPA exposes no
+  hub-config form and no per-peer relay toggle anywhere (verified at ui
+  tip 2b0a8ea9: zero callers of either PUT). The endpoints are real and
+  the immediate-dial law is true, so the sentence was reworded to say
+  what is actually shippable: the re-dial triggers exist today only as
+  admin-gated API endpoints (`PUT /api/v1/me/federation/hub-config`,
+  `PUT /api/v1/me/federation/peers/:id/relay`) and the page wires no
+  control to them. Copy + bundle only; zero behavior change — the
+  park-at-cap sentences above are current post 229d3d1 and untouched.
+- Bundle: `public/assets/app/` regenerated (clean build ×2, aggregate
+  md5 `ac2c315dac77be6d04fc699a48333ff4`; the rotated hash set carries
+  the string into the main chunk). vue-tsc runs inside `npm run build`;
+  web-ui node suite 152/152.
+
 ### Fixed — deadlock retries decide on wire codes, not English text (review hub__srphp, HUB-m56, 2026-11-05)
 
 - `ServerReaper`'s three sweeps each carried a verbatim copy of the same

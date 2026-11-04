@@ -34,7 +34,11 @@ const { t } = useHubMessages();
             traffic on links that survived the off-window and re-establishes links that dropped
             while off within ≤60s automatically — the reconnect chain parks at the ≤60s backoff cap
             during the off-window and re-checks on that cadence, so no restart or explicit trigger
-            is needed. A hub-config save / peer relay toggle still dials immediately.
+            is needed. The explicit re-dial triggers (a hub-config save, a peer relay toggle) dial
+            out immediately, but today they exist only as admin-gated API endpoints —
+            <code>PUT /api/v1/me/federation/hub-config</code> and
+            <code>PUT /api/v1/me/federation/peers/:id/relay</code>; this page exposes no control
+            that invokes them.
         </HubPageHint>
         <FederationPage />
     </div>
