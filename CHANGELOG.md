@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — hub minors wave-1: three README docs-hygiene cures (review hub__docmaint, hub__newcomer, Minor, 2026-11-04)
+- `server.relay.reconnect_drain_grace_seconds` was the one store key of the
+  18-key `HubSettingsRepository::ALLOWED_KEYS` census invisible in the README:
+  the `HUB_RELAY_RECONNECT_DRAIN_GRACE` env row gained its "Live twin:"
+  sentence and the Settings toggles table gained its row (live, clamped
+  0–300, read per displacement by `TunnelManager`). [337d7bfe]
+- The production-install migration step cited the installer's migrator call
+  at `scripts/install.sh:1836` — a line inside the generated env-file heredoc.
+  Re-anchored to the two real calls at the current tip: `:1449` (first
+  install) and `:1865` (update). [30353726]
+- The development quick start ran `scripts/run-migrations.php` against a
+  database it never created (the migrator builds tables, not the schema), so
+  the first copy-pasted command on a clean machine died on
+  `Unknown database 'phlix_hub'`. One `sudo mysql` line now creates the
+  database and the `phlix_hub@127.0.0.1` user with the same least-privilege
+  grants as the production path. [37f6a9c0]
+
 ### Fixed — psalm-clean leaf-push payload types (review hub__asphp C5 round-1, Major, 2026-11-04)
 - `FederationPushDispatcher::pushLeafOffer()`/`pushLeafRevocation()` declared
   their decoded request body `array<array-key, mixed>` while passing it to
