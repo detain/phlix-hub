@@ -76,7 +76,12 @@ async function submit(): Promise<void> {
         currentPassword.value = '';
         newPassword.value = '';
         confirmPassword.value = '';
-        message.value = typeof data.message === 'string' ? data.message : 'Password updated successfully.';
+        // House copy law (API `message` carries no terminal period; SPA
+        // success toasts do): render the toast sentence normalized so the
+        // one sentence cannot read two ways depending on which branch fired.
+        const apiMessage =
+            typeof data.message === 'string' ? data.message : 'Password updated successfully';
+        message.value = apiMessage.endsWith('.') ? apiMessage : `${apiMessage}.`;
     } catch (e) {
         failed.value = true;
         const { code, text } = frameOf(e);

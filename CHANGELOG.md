@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — HUB-09: password-success toast renders one sentence, one way — 2026-11-04
+
+- `HubSecuritySettingsPage` rendered the same sentence with and without a
+  terminal period depending on which branch fired: the API arm ships
+  `Password updated successfully` (no period — the terminal-period house law
+  for wire copy) while the fallback literal carried one. The toast slot now
+  normalizes — API text gains its sentence-final period, the fallback reads
+  through the same rule — so one sentence cannot appear two ways. Page-code
+  pins (POST path, no-webauthn law) untouched; the node-test suite is green
+  unmodified (152/152); the committed SPA bundle is regenerated in the same
+  commit — deterministic ×3 builds byte-identical from clean `npm@11 ci`, the
+  entry-chunk change cascading content-hash renames across all 103 chunks
+  (208 assets + `index.html` + `.vite/manifest.json`); a clean-source control
+  rebuild reproduced the previous commit byte-exactly (the venue is
+  deterministic), and the 93 bundle-gate tests needed zero pin rotation.
+
 ### Docs — info batch 3: exception-barrier boundary law, relay-strip mirror pointer, tls.md cite tail ×3, m46 site-count truth + config residue, wave-1 failure-mode precision (HUB-68/69, HUB-17 tail) — 2026-11-04
 
 - **HUB-68 — `FederationWorker`'s header speaks the barrier's boundary.** The
