@@ -281,14 +281,24 @@ curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/ins
 ```
 
 > **On a production host, pin what you pipe into root.** `master` floats — the
-> bytes you execute today need not be the ones you reviewed. The published
-> release tags are the audited states; fetch one with
-> `--branch <vX.Y.Z>` (see *Install flags* — the update path uses the same
-> form), or download, inspect, then run locally:
+> bytes you execute today need not be the ones you reviewed. Pin by commit
+> SHA: raw.githubusercontent.com serves any revision, so replace `master` in
+> the URL above with the full 40-character SHA you audited, and record which
+> SHA you ran. Or download, inspect, then run locally:
 > `curl -fsSL <the same URL> -o /tmp/phlix-install.sh && less /tmp/phlix-install.sh && sudo bash /tmp/phlix-install.sh`.
 > Day-one convenience is fine for throwaway boxes; on a box holding user
 > credentials, a pinned script is the difference between an install and an
 > open root-shell for whoever owns `master` that day.
+>
+> **There is no usable release tag yet — and `v1.0.0` is not one.** The only
+> `v*` tag published on origin is `v1.0.0` (2026-05-19), a relic that
+> pre-dates this repo's versioning scheme: the product is on the 0.x line
+> (`VERSION` and `Version::VERSION` are 0.5.0, and `CHANGELOG.md` records
+> releases up to 0.5.0 — none of which have ever been tagged). That
+> tag sits 834 commits behind `master`; an install or `--update` that reaches
+> it silently rolls you back five months of fixes. Until a real release tag
+> exists, the SHA pin above is the audited-state path, and `--branch` should
+> name `master`. Once valid tags are cut (`v0.5.0` or later), pin those.
 
 To set up HTTPS at the same time, pass your domain and an email for Let's Encrypt:
 
@@ -314,7 +324,7 @@ terminal (with sensible defaults), and runs **fully unattended** when piped or g
 | `--jwt-secret SECRET` | HMAC secret used to sign JWTs (random 32-byte hex if omitted) |
 | `--service-user USER` | System user to run as (default `phlix-hub` — dedicated system account, created if missing) |
 | `--workers N` | HTTP worker processes (default 4) |
-| `--branch NAME` | Git branch or tag to install (default `master`) |
+| `--branch NAME` | Git branch or **tag name** to install (default `master`) — named refs only; a raw commit SHA is not resolved (the update resets to `origin/<name>`). See [One-line install](#one-line-install) on the stale `v1.0.0` tag |
 | `--repo URL` | Git repository URL (default `detain/phlix-hub`) |
 | `--tls` / `--no-tls` | Force or skip Let's Encrypt + HAProxy TLS |
 | `--no-proxy` | Skip the managed HAProxy entirely (use your own reverse proxy) |
@@ -351,10 +361,13 @@ curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/ins
   | sudo bash -s -- --update -y
 ```
 
-Pin to a specific tag or branch with `--branch`:
+Pin to a specific branch or tag with `--branch` (named ref only — not a commit
+SHA, and until a valid release tag is cut, `master` is the only sound value;
+never `v1.0.0`, the stale pre-versioning-scheme tag — see
+[One-line install](#one-line-install)):
 
 ```bash
-sudo bash /opt/phlix-hub/scripts/install.sh --update --branch v1.0.0 -y
+sudo bash /opt/phlix-hub/scripts/install.sh --update --branch master -y
 ```
 
 What `--update` does, in order:

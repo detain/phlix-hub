@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — README install pin advice: stale v1.0.0 tag trap (review hub__newcomer critical, 2026-11-04)
+- **Defect:** the Quick Start told operators to pin "the published release tags
+  ... with `--branch <vX.Y.Z>`" and the update example was `--branch v1.0.0`.
+  `git ls-remote --tags origin` carries exactly one `v*` tag — `v1.0.0`
+  (c3450faa, 2026-05-19) — a pre-versioning-scheme relic 834 commits behind
+  master. The repo's real line is 0.x (`VERSION` / `Version::VERSION` 0.5.0;
+  CHANGELOG releases 0.1.0–0.5.0, none ever tagged). Following the advice
+  installed — or `--update` hard-reset an existing install back to — a state
+  five and a half months stale, silently.
+- **Cure (docs-only, no tag cut):** the README now states plainly that no
+  usable release tag exists and `v1.0.0` must never be pinned; the audited-
+  state path until real tags are cut is pinning the bootstrap script by
+  full commit SHA (raw.githubusercontent.com serves any revision) and naming
+  `master` for `--branch`; the update example uses `--branch master`. The
+  Install-flags row documents that `--branch` resolves named refs only
+  (install.sh runs `git reset --hard origin/<name>` — a raw SHA cannot work).
+- **Out of scope here:** cutting the missing `v0.5.0`-or-later release tag is
+  an owner decision; the README tells operators to switch to tag pins once it
+  lands.
+
 ### Changed — web-ui re-pin @phlix/ui v0.99.13 -> v0.99.14 (tag-wave cascade C2-hub, 2026-11-04)
 - **Pin + bundle ride one commit.** The tarball idiom (`web-ui/package.json`
   pins a GitHub archive URL) moves to `refs/tags/v0.99.14.tar.gz`; the
