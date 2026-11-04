@@ -31,9 +31,11 @@ use Workerman\Timer;
 
 /**
  * M-HUB-14 (review hub__exploiter M3, leaf role): the outbound master link's
- * inbound frames must pass the shared :8805 frame budget BEFORE any parse or
- * dispatch, and the over-budget reaction must be the self-healing one — drop
+ * inbound frames must pass the shared :8805 frame budget before any dispatch,
+ * and the over-budget reaction must be the self-healing one — drop
  * the link, let the capped reconnect ladder re-dial after the window.
+ * R2 cure (review hub__asphp): the budget now sits BEHIND a free shape gate
+ * — malformed frames never charge it (validate-then-charge).
  *
  * ## Why the two-part proof shape
  *
@@ -106,10 +108,12 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
     // --------------------------------------------------- wiring (r1 defect)
 
     /**
-     * The live leaf onMessage closure must run the frame guard BEFORE
-     * handleMessage — drop-before-parse. r1's REWORK-1 verdict existed
-     * because a lane shipped the limiter plumbing with no call site; this pin
-     * is the red-on-that-regression guard.
+     * The live leaf onMessage closure must route through the guarded seam,
+     * and INSIDE the seam the frame guard must gate dispatch: shape first
+     * (free drops), then budget, then parse — the validate-then-charge law
+     * of the R2 cure. r1's REWORK-1 verdict existed because a lane shipped
+     * the limiter plumbing with no call site; this pin is the
+     * red-on-that-regression guard.
      */
     public function testEstablishConnectionMessageClosureGuardsBeforeHandle(): void
     {
@@ -163,7 +167,7 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
         self::assertLessThan(
             $handleAt,
             $guardAt,
-            'guard runs BEFORE parse/dispatch (drop-before-parse law)',
+            'guard runs BEFORE parse/dispatch (validate-then-charge law: only shaped frames are charged)',
         );
         self::assertStringContainsString(
             'if (!$this->guardIncomingFrame($data)) {',
@@ -356,7 +360,110 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
         self::assertSame([], $limiter->hits);
     }
 
+    // --------------------------------------------- validate-then-charge (R2)
+
+    /**
+     * Review hub__asphp R2-Major: a BURST of malformed frames must leave the
+     * budget untouched. Pre-cure, the seam charged the limiter before any
+     * shape validation, so hostile junk on a healthy link drove the shared
+     * per-peer budget to a drop — the victim's own counter was the DoS lever.
+     * Post-cure the seam validates first: unprotocolable frames are dropped
+     * FREE (no hit, no ladder, link survives), and the well-formed frame
+     * that follows the burst is charged exactly once — proving the gate,
+     * not the wiring, is what held the budget intact.
+     */
+    public function testMalformedBurstLeavesTheBudgetUntouched(): void
+    {
+        $this->forceWorkermanRuntime();
+
+        $limiter = $this->recordingLimiter();
+        $manager = $this->peerManager();
+        $manager->setReceiveFrameLimiter($limiter);
+        $this->setMasterPeerId($manager, 'peer-burst');
+        $connection = new AsyncTcpConnection('ws://127.0.0.1:1');
+        $this->setMasterConnection($manager, $connection);
+
+        $junk = [
+            '{not json',              // fails the text decode AND the 0x00 envelope head
+            'null',                   // valid JSON, not an array
+            '{"foo":true}',           // array without a string type — undispatchable
+            str_repeat('x', 77),      // oversized-style junk: no envelope head either
+        ];
+        foreach ($junk as $frame) {
+            $manager->handleInboundLeafFrame($frame);
+        }
+
+        self::assertSame([], $limiter->hits, 'a malformed burst may not spend one unit of the budget');
+        self::assertSame([], $this->armedTimers(), 'the free drops must not arm a reconnect ladder');
+        self::assertSame(
+            $connection,
+            $this->readProp($manager, 'masterConnection'),
+            'the live link must survive the whole burst',
+        );
+        self::assertSame('', (string) file_get_contents($this->logFile), 'free drops log nothing (anti-amp)');
+
+        $manager->handleInboundLeafFrame('{"type":"hub_hello_ack"}');
+        self::assertSame(
+            ['federation_frame:peer-burst'],
+            $limiter->hits,
+            'the well-formed frame after the burst pays exactly one hit',
+        );
+    }
+
+    /**
+     * The charge side of the same law: WELL-FORMED means protocol-shape
+     * (text array with a string type), not "reaches a match arm" — an
+     * unknown type is a forward-compatible, dispatch-attempting frame and
+     * rides the budget like any other.
+     */
+    public function testTypedUnknownFrameIsWellFormedAndCharged(): void
+    {
+        $limiter = $this->recordingLimiter();
+        $manager = $this->peerManager();
+        $manager->setReceiveFrameLimiter($limiter);
+        $this->setMasterPeerId($manager, 'peer-typed');
+        $this->setMasterConnection($manager, new AsyncTcpConnection('ws://127.0.0.1:1'));
+
+        $manager->handleInboundLeafFrame('{"type":"not_a_real_frame_type"}');
+
+        self::assertSame(
+            ['federation_frame:peer-typed'],
+            $limiter->hits,
+            'a protocol-shape text frame is charged even when its type has no handler',
+        );
+    }
+
     // ------------------------------------------------------------- helpers
+
+    /**
+     * Anonymous always-unlimited limiter recording every key it was asked
+     * to charge (the R2 pins observe the CHARGE set, not the verdict).
+     *
+     * @return \Phlix\Hub\Common\RateLimit\RateLimiterInterface&object{hits: list<string>}
+     */
+    private function recordingLimiter(): object
+    {
+        return new class () implements \Phlix\Hub\Common\RateLimit\RateLimiterInterface {
+            /** @var list<string> */
+            public array $hits = [];
+
+            public function hit(string $key): \Phlix\Hub\Common\RateLimit\RateLimitState
+            {
+                $this->hits[] = $key;
+
+                return new \Phlix\Hub\Common\RateLimit\RateLimitState(1, 120, time() + 60, false, 121);
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): \Phlix\Hub\Common\RateLimit\RateLimitState
+            {
+                return new \Phlix\Hub\Common\RateLimit\RateLimitState(0, 120, 0, false, 120);
+            }
+        };
+    }
 
     /**
      * The setter stores the SAME limiter object (identity, not copy) — the

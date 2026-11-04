@@ -1182,7 +1182,9 @@ class FederationPeerManager
 
     /**
      * M-HUB-14 (review hub__exploiter M3, leaf role): budget ONE inbound
-     * frame from the master link before anything parses it.
+     * frame from the master link, charged by the guarded seam only for a
+     * PROTOCOL-SHAPED frame (R2 cure: the seam's shape gate runs first, so
+     * malformed junk is dropped free and never reaches this budget).
      *
      * Returns true when the frame may proceed. When the shared per-peer
      * budget is exhausted: one warning (carrying the frame's byte size for
@@ -1345,9 +1347,10 @@ class FederationPeerManager
             }
         };
 
-        // On message — route through the guarded seam: budget first
-        // (drop-before-parse), parse/dispatch under the S312 barrier. The
-        // seam is the law's seat; the closure must stay a bare call.
+        // On message — route through the guarded seam: shape gate first
+        // (malformed drops are FREE — R2 cure), then the per-peer budget,
+        // then parse/dispatch under the S312 barrier. The seam is the law's
+        // seat; the closure must stay a bare call to it.
         $this->masterConnection->onMessage = function (
             /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn,
             string $data
@@ -1519,9 +1522,16 @@ class FederationPeerManager
 
     /**
      * The guarded inbound-frame seam of the leaf link (review hub__asphp,
-     * R1 Major — fourth arm of the M-A finding): budget first
-     * (drop-before-parse), then parse/dispatch under the S312/M-HUB-03
-     * barrier.
+     * R1 Major — fourth arm of the M-A finding; R2 Major — charge order):
+     * VALIDATE-THEN-CHARGE, then dispatch under the S312/M-HUB-03 barrier.
+     *
+     * R1 shaped the barrier; R2 shaped the budget. A frame the protocol can
+     * never dispatch is dropped FREE before the limiter is consulted:
+     * charging malformed junk handed a hostile peer the victim's own
+     * per-peer budget as the lever to sever a healthy verified link
+     * (DoS amplification). Shape is settled without touching the stateful
+     * FrameDecoder buffer, so the validate-first reorder moves no expensive
+     * work ahead of a gate.
      *
      * Everything the fan-out reaches is live DB work on the count=1 :8805
      * loop — `handleHelloAck` reads and writes the peer/session stores, the
@@ -1539,6 +1549,10 @@ class FederationPeerManager
      */
     public function handleInboundLeafFrame(string $data): void
     {
+        if (!$this->isProtocolShapedFrame($data)) {
+            return;
+        }
+
         if (!$this->guardIncomingFrame($data)) {
             return;
         }
@@ -1548,6 +1562,43 @@ class FederationPeerManager
         } catch (Throwable $e) {
             $this->containLeafCallback($e, 'inbound frame handler');
         }
+    }
+
+    /**
+     * Cheap, non-consuming shape gate of the validate-then-charge law
+     * (review hub__asphp R2 Major).
+     *
+     * Text leg: exactly what {@see self::handleTextFrame()} requires to
+     * attempt dispatch — JSON (depth parity) decoding to an array carrying
+     * a string `type`. An array with an UNKNOWN type is well-formed:
+     * forward-compatibility means dispatchability is not shape, and the
+     * budget treats it like every other real frame.
+     *
+     * Binary leg: the envelope head law the classifier itself states —
+     * big-endian sequence head byte `0x00`, minimum 7-byte header. The
+     * decoder is deliberately NOT consulted: its buffer accumulates partial
+     * frames, so a probe would CONSUME the bytes it screens. Frames past
+     * the head gate keep the historical charge-before-decode posture,
+     * honestly bounded: their failure leg (InvalidFrameType) is
+     * self-limiting — the first undecodable frame recycles the link.
+     *
+     * Vacuous inputs (empty string, non-UTF-8 junk, short bodies, wrong
+     * head) are all refused here, before any parse or charge.
+     */
+    private function isProtocolShapedFrame(string $data): bool
+    {
+        if ($this->isTextFrame($data)) {
+            try {
+                /** @var mixed $decoded */
+                $decoded = json_decode($data, true, 4, JSON_THROW_ON_ERROR);
+            } catch (Throwable) {
+                return false;
+            }
+
+            return is_array($decoded) && is_string($decoded['type'] ?? null);
+        }
+
+        return strlen($data) >= 7 && $data[0] === "\x00";
     }
 
     /**

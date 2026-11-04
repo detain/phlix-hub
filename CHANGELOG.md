@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — the leaf link's frame budget charges only protocol-shaped frames (review hub__asphp, R2 Major, 2026-11-04)
+
+- The finding: `handleInboundLeafFrame()` armed the shared per-peer limiter
+  BEFORE any shape validation, so a burst of malformed junk from a hostile
+  master-side peer spent the victim's own budget down to the drop — the
+  link-teardown penalty for flood was applied by the flood itself
+  (DoS amplification against a healthy verified link).
+- Cure: validate-then-charge. A new non-consuming shape gate
+  (`isProtocolShapedFrame()`) sits first in the seam — text frames must
+  decode (depth parity with the dispatcher) to an array carrying a string
+  `type`, binary frames must satisfy the envelope head law (`0x00` big-endian
+  sequence head, minimum 7 bytes) — and malformed frames are dropped FREE:
+  no hit, no log amp, link survives. The stateful `FrameDecoder` is
+  deliberately never probed (a probe consumes the bytes it screens), so
+  post-gate binary frames keep charge-before-decode, honestly bounded: their
+  malformed leg recycles the link on the first offense.
+- Pins (red-measured at `8feedd50`: the 4-frame junk burst charged 4 hits):
+  burst-leaves-budget-untouched incl. the well-formed-after-burst pays-one
+  conviction, and the boundary pin that an unknown-TYPE frame is
+  shape-well-formed and charged (dispatchability is not shape). Wiring-pin
+  law labels rotated in the same commit.
+
 ### Fixed — federation hint prose stops advertising controls the SPA does not have (review xrepo__hub-ui, Major 1, 2026-11-04)
 
 - The hub federation page hint closed with "A hub-config save / peer
