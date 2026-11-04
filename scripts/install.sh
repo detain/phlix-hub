@@ -1871,7 +1871,7 @@ log "Installing systemd service"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Phlix Hub
-Documentation=https://docs.phlix.media
+Documentation=https://detain.github.io/phlix-docs
 After=network.target mysql.service
 Wants=mysql.service
 StartLimitIntervalSec=500

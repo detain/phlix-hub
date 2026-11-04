@@ -851,7 +851,7 @@ current with the template in `scripts/install.sh` (step 7, "systemd service").
 sudo tee /etc/systemd/system/phlix-hub.service >/dev/null <<'EOF'
 [Unit]
 Description=Phlix Hub
-Documentation=https://docs.phlix.media
+Documentation=https://detain.github.io/phlix-docs
 After=network.target mysql.service
 Wants=mysql.service
 StartLimitIntervalSec=500
