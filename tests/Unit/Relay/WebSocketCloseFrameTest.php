@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Tests\Unit\Relay;
 
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Relay\WebSocketCloseFrame;
+use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
 use Workerman\Connection\TcpConnection;
 
@@ -27,6 +29,44 @@ use function pack;
  */
 final class WebSocketCloseFrameTest extends TestCase
 {
+    use LoggerFactoryIsolation;
+
+    private string $logFile = '';
+
+    private string $logConfigDir = '';
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->logFile = (string) tempnam(sys_get_temp_dir(), 'phlix-hub-wcf-test-log-');
+        $configDir = sys_get_temp_dir() . '/phlix-hub-wcf-test-' . bin2hex(random_bytes(6));
+        mkdir($configDir, 0700, true);
+        file_put_contents(
+            $configDir . '/logger.php',
+            "<?php return ['default' => 'mem', 'handlers' => ['mem' => "
+            . "['type' => 'stream', 'path' => '" . $this->logFile . "', 'level' => 'debug']]];",
+        );
+        LoggerFactory::reset();
+        LoggerFactory::init($configDir . '/logger.php');
+        $this->logConfigDir = $configDir;
+    }
+
+    protected function tearDown(): void
+    {
+        LoggerFactory::reset();
+        if ($this->logFile !== '' && is_file($this->logFile)) {
+            unlink($this->logFile);
+        }
+        if ($this->logConfigDir !== '' && is_file($this->logConfigDir . '/logger.php')) {
+            unlink($this->logConfigDir . '/logger.php');
+            @rmdir($this->logConfigDir);
+        }
+        $this->logFile = '';
+        $this->logConfigDir = '';
+        parent::tearDown();
+    }
+
     public function testBytesEncodeTheDocumentedCodesAsRealCloseFrames(): void
     {
         // 4401 = 0x1131, 1013 = 0x03f5, 1011 = 0x03f3 — FIN+close opcode,
@@ -114,5 +154,32 @@ final class WebSocketCloseFrameTest extends TestCase
         WebSocketCloseFrame::reject($connection, 1013);
 
         self::assertInstanceOf(\Closure::class, $connection->onWebSocketConnected);
+    }
+
+    public function testDeferredRejectionArmContainsAThrowingClose(): void
+    {
+        // R2 survivor sweep: the armed rejection runs on the event loop of a
+        // RESIDENT worker — a close() that throws there (dead socket, teardown
+        // race) escapes into Workerman's callback funnel and takes the worker
+        // down (the stopAll class the federation arms were contained against).
+        // The arm must contain it: swallow after attributing one error line.
+        $connection = $this->createMock(TcpConnection::class);
+        $connection->context = null;
+
+        $connection->method('close')
+            ->willThrowException(new \RuntimeException('socket died mid-write'));
+
+        WebSocketCloseFrame::reject($connection, 1013);
+        self::assertInstanceOf(\Closure::class, $connection->onWebSocketConnected);
+
+        ($connection->onWebSocketConnected)(
+            $connection,
+            $this->createMock(\Workerman\Protocols\Http\Request::class),
+        );
+
+        $lines = (string) file_get_contents($this->logFile);
+        self::assertStringContainsString('rejection arm close failed', $lines);
+        self::assertStringContainsString('socket died mid-write', $lines);
+        self::assertStringContainsString('1013', $lines);
     }
 }

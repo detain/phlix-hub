@@ -16,7 +16,9 @@ use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Common\Logger\LogChannels;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Common\RateLimit\RateLimiter;
+use Phlix\Hub\Common\RateLimit\RateLimiterInterface;
 use Phlix\Hub\Common\RateLimit\RateLimitProfiles;
+use Phlix\Hub\Common\RateLimit\RateLimitState;
 use Phlix\Hub\Federation\FederationConnectionManager;
 use Phlix\Hub\Federation\FederationFrameHandler;
 use Phlix\Hub\Federation\FederationHubRepository;
@@ -250,6 +252,62 @@ final class FederationWorkerRateLimitTest extends TestCase
 
         self::assertSame(1, $dbReads, 'fail-open must let the connect reach validation');
         self::assertNull($connection->onWebSocketConnected ?? null);
+    }
+
+    /**
+     * Fail-open law, R2: the docblock's claim held for RESOLUTION only — a
+     * supplied limiter whose hit() THROWS (external cache backend exploding
+     * mid-probe) escaped through the connect path into Workerman's callback
+     * funnel and killed the resident count=1 worker. The gate must contain
+     * it with a named error line, fall through to normal DB validation, and
+     * arm nothing — the connect proceeds unlimited, degraded but alive.
+     */
+    public function testConnectLimiterThrowingOnHitFailsOpenToValidation(): void
+    {
+        $dbReads = 0;
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->method('getPeerById')->willReturnCallback(
+            function (string $id) use (&$dbReads): array {
+                $dbReads++;
+
+                return ['id' => $id];
+            }
+        );
+
+        $throwing = new class implements RateLimiterInterface {
+            public function hit(string $key): RateLimitState
+            {
+                throw new RuntimeException('limiter backend exploded mid-probe');
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                throw new RuntimeException('unreachable in this fixture');
+            }
+        };
+
+        $worker = $this->worker([
+            FederationHubRepository::class => $hubRepo,
+            RateLimitProfiles::FEDERATION_CONNECT => $throwing,
+        ]);
+
+        $logger = $this->injectRelayLogger();
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(
+                self::stringContains('connect limiter threw'),
+                self::anything(),
+            );
+
+        $connection = $this->connection('198.51.100.7');
+        $worker->onWebSocketConnect($connection, $this->upgradeRequest());
+
+        self::assertSame(1, $dbReads, 'a throwing hit() must not starve the connect of DB validation');
+        self::assertNull($connection->onWebSocketConnected ?? null, 'no rejection may be armed on the fail-open path');
     }
 
     // ------------------------------------------------------- frame limiter

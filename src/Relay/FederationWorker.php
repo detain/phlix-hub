@@ -479,18 +479,32 @@ final class FederationWorker
         // 10/60s: a legitimate leaf's capped backoff ladder re-dials at most
         // once per minute, so CGNAT neighbours pair freely while the loop is
         // starved. Over budget: one warning + close 1013, NO dispatch, NO DB
-        // read. Limiter failure fails OPEN (unlimited) by sibling law.
+        // read. Limiter failure fails OPEN (unlimited) by sibling law — R2
+        // makes that claim TRUE for both failure arms: resolution is caught in
+        // resolveConnectLimiter(), and a SUPPLIED limiter whose hit() (or the
+        // trusted-proxy resolve feeding it) throws is contained right here,
+        // named on the log, and the connect falls through to validation.
         $limiter = $this->connectLimiter();
         if ($limiter !== null) {
-            $this->trustedProxyResolver ??= new TrustedProxyResolver();
-            $clientIp = $this->trustedProxyResolver->resolve(
-                $connection->getRemoteIp(),
-                self::upgradeHeader($request, 'x-forwarded-for'),
-                self::upgradeHeader($request, 'x-real-ip'),
-            );
+            $state = null;
+            try {
+                $this->trustedProxyResolver ??= new TrustedProxyResolver();
+                $clientIp = $this->trustedProxyResolver->resolve(
+                    $connection->getRemoteIp(),
+                    self::upgradeHeader($request, 'x-forwarded-for'),
+                    self::upgradeHeader($request, 'x-real-ip'),
+                );
 
-            $state = $limiter->hit('federation_connect:' . $clientIp);
-            if ($state->limited) {
+                $state = $limiter->hit('federation_connect:' . $clientIp);
+            } catch (Throwable $e) {
+                $logger->error('Federation: connect limiter threw — failing open (unlimited)', [
+                    'hub_id' => $hubId,
+                    'error'  => $e->getMessage(),
+                ]);
+                $state = null;
+            }
+
+            if ($state !== null && $state->limited) {
                 $logger->warning('Federation: inbound connect rate-limited', [
                     'remote_ip' => $clientIp,
                     'reset_at'  => $state->resetAt,

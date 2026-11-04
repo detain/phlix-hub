@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — survivor-sweep residue: rejection arm and connect throttle made throw-safe (review hub__asphp R2, minor)
+
+- `WebSocketCloseFrame::reject()`'s pre-handshake deferred arm closed bare:
+  a throwing `close()` inside that event-loop arm (socket already dead
+  mid-teardown) escaped Workerman's callback funnel and took the resident
+  federation worker down. The arm now contains it — one attributed error
+  line (`rejection arm close failed — contained`, code + reason), then
+  swallows.
+- `FederationWorker::onWebSocketConnect()`'s connect throttle ran its
+  proxy-resolve + `hit()` UNGUARDED while its comment claimed fail-open;
+  only limiter RESOLUTION was caught. A throwing limiter backend (an
+  exploding cache probe) killed the connect path instead of degrading it.
+  The gate now wraps both calls: a throw becomes one named error line
+  (`connect limiter threw — failing open (unlimited)`) and the connect
+  falls through to DB validation — unlimited but alive. The claim is now
+  literally true for both failure arms.
+- Pins: `WebSocketCloseFrameTest::testDeferredRejectionArmContainsAThrowingClose`
+  and `FederationWorkerRateLimitTest::testConnectLimiterThrowingOnHitFailsOpenToValidation`
+  (red-first: both measured the escaping throwable pre-cure).
+
 ### Fixed — the invite-link 201 echoes the effective fields (review hub__webux, HUB-m29, 2026-11-05)
 
 - `createInviteLink()` coerced silently: `max_uses` fell to 1 unless

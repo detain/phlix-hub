@@ -12,6 +12,9 @@ declare(strict_types=1);
 namespace Phlix\Hub\Relay;
 
 use InvalidArgumentException;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
+use Throwable;
 use Workerman\Connection\TcpConnection;
 
 /**
@@ -106,8 +109,24 @@ final class WebSocketCloseFrame
         // Finish the handshake, then close with the documented code — one extra
         // event-loop tick at most, and the peer's close event carries the real
         // code instead of a transport failure.
-        $connection->onWebSocketConnected = static function (TcpConnection $connection) use ($frame): void {
-            $connection->close($frame, true);
+        //
+        // R2 survivor sweep: this arm fires from Workerman's callback funnel
+        // on a RESIDENT worker — a close() that throws there (socket already
+        // dead mid-teardown) would escape the arm and take the whole worker
+        // down, converting a refused peer into collateral for every other
+        // connection it serves. Contain it: attribute one error line, swallow.
+        $connection->onWebSocketConnected = static function (TcpConnection $connection) use ($frame, $code): void {
+            try {
+                $connection->close($frame, true);
+            } catch (Throwable $e) {
+                LoggerFactory::get(LogChannels::RELAY)->error(
+                    'WebSocketCloseFrame: rejection arm close failed — contained',
+                    [
+                        'code'  => $code,
+                        'error' => $e->getMessage(),
+                    ],
+                );
+            }
         };
     }
 }
