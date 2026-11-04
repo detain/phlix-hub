@@ -286,6 +286,7 @@ final class FederationPushDispatcher
                 return;
             }
 
+            /** @var array<string, mixed> $decoded */
             $delivered = $action === FederationPushProtocol::ACTION_LEAF_SHARE_OFFER
                 ? $this->pushLeafOffer($manager, $decoded)
                 : $this->pushLeafRevocation($manager, $decoded);
@@ -307,7 +308,7 @@ final class FederationPushDispatcher
      * what the HTTP side already validated (all four non-empty strings); an
      * incomplete request is a measured false, never a half-built frame.
      *
-     * @param array<array-key, mixed> $decoded decoded request body — every key
+     * @param array<string, mixed> $decoded decoded request body — every key
      *        is re-narrowed through self::field(), never trusted as string
      */
     private function pushLeafOffer(FederationPeerManager $manager, array $decoded): bool
@@ -329,7 +330,7 @@ final class FederationPushDispatcher
     }
 
     /**
-     * @param array<array-key, mixed> $decoded see pushLeafOffer's field law
+     * @param array<string, mixed> $decoded see pushLeafOffer's field law
      */
     private function pushLeafRevocation(FederationPeerManager $manager, array $decoded): bool
     {

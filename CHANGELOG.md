@@ -6,6 +6,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — psalm-clean leaf-push payload types (review hub__asphp C5 round-1, Major, 2026-11-04)
+- `FederationPushDispatcher::pushLeafOffer()`/`pushLeafRevocation()` declared
+  their decoded request body `array<array-key, mixed>` while passing it to
+  `self::field()` — declared `array<string, mixed>` — a deterministic
+  `MixedArgumentTypeCoercion` red on the CI Psalm gate (5 errors, run
+  41777833912). The docblocks now carry `array<string, mixed>`, the decode
+  boundary asserts it exactly where `is_array()` has narrowed it — the file's
+  own idiom — and every key still re-narrows through `field()`, never
+  trusted. Zero behavior change.
+
 ### Fixed — leaf federation link lifecycle owned by the :8805 worker (review hub__asphp, Critical, 2026-11-04)
 - **Defect:** every leaf-role federation intent ran inside the HTTP worker
   against a `FederationPeerManager` that could not own the link: admin
