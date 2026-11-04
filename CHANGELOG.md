@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Docs — the Psalm red window 969ccaff..9da6bd1f named in the permanent record (review hub__asphp chain round-2, I-R2-1, 2026-11-04)
+
+- Disclosure the chain left unnamed: `969ccaff` landed the two
+  `$connection->websocketType = BINARY_TYPE_ARRAYBUFFER` pins (leaf dial in
+  `FederationPeerManager::establishConnection()`, master arm in
+  `FederationRelayController::onConnect()`) and left the Psalm job RED — the
+  vendored Workerman exposes `$websocketType` as a magic property Psalm does
+  not resolve on the pinned version. Sole red across exactly one window:
+  run 41783731735 at `969ccaff` and run 41784551218 at `9da6bd1f`, each 2 ×
+  `UndefinedPropertyAssignment` (psalm.dev/038) at
+  `src/Federation/FederationPeerManager.php:1315` and
+  `src/Http/Controllers/FederationRelayController.php:89`.
+- `8feedd50` closes it annotation-only — the full diff is three
+  `@psalm-suppress UndefinedPropertyAssignment` lines plus two explanatory
+  comments, zero behavior lines. The assignments are load-bearing wire law
+  (the BINARY opcode pins) and the property genuinely exists on the vendor
+  class; the analyzer just cannot see it. CI 41785197172 at that tip is
+  12/12 green, Psalm among them.
+- `8feedd50` itself carried an empty commit body and no CHANGELOG entry;
+  this entry is the retroactive record the `256f8ab4` bless-forward-fix
+  disclosure standard asks for. Attestation:
+  `.reviews/2026-11-03/REVIEW-HUB-M89-R2.md` C4 (psalm state) + C5 (origin
+  CI job-list reads).
+
 ### Fixed — federation leaf-link callbacks carry the S312 exception barrier (review hub__asphp, R1 Major, 2026-11-04)
 
 - The fourth arm of the dispatch-barrier finding: the LEAF legs installed by
