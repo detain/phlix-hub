@@ -43,9 +43,14 @@ use Workerman\Timer;
  * ()} (identity-safe teardown, capped ladder). The worker survives; only the
  * poisoned link recycles.
  *
- * The close/error arms' own catches are deliberately a BACKSTOP: their callee
- * (scheduleReconnect) is self-contained under the current wiring, so their
- * teeth are the source-shape pin below, honestly disclosed.
+ * The close/error legs are the R2 rotation: bare routes to the
+ * identity-guarded handlers handleLeafClose()/handleLeafError() — a stale
+ * event on a superseded socket is refused there (scheduleReconnect() would
+ * otherwise close the SUCCESSOR occupying the slot) — and the handlers' own
+ * catches stay a BACKSTOP: their callee is self-contained under the current
+ * wiring, so their extra teeth are the source-shape pin below, honestly
+ * disclosed. The behavior pins for the identity guard need no socket: the
+ * handlers are the public-for-harness doors.
  */
 final class FederationLeafLinkBarrierTest extends TestCase
 {
@@ -201,12 +206,14 @@ final class FederationLeafLinkBarrierTest extends TestCase
 
     /**
      * Every event-loop callback the leaf link installs carries a Throwable
-     * barrier INSIDE its block (hello send, close and error arms contain into
-     * the link teardown or a survivor log); the inbound leg routes through
-     * the guarded seam. The close/error catches are a backstop under the
-     * current self-contained scheduleReconnect() — this pin is their tooth
-     * against a future throwing callee, and it is why no behavioral throw
-     * vector exists for them.
+     * barrier at its law seat (hello send contains inline; close and error
+     * route through their identity-guarded handlers; the inbound leg routes
+     * through the guarded seam). R2 rotation: the close/error blocks stay
+     * bare routes — their barrier AND the $conn-identity refusal live in
+     * handleLeafClose()/handleLeafError(), asserted here at the handler
+     * text, so an untracked socket can neither arm the ladder nor be
+     * treated as the live link. The handler catches remain the backstop
+     * pin against a future throwing callee.
      */
     public function testEstablishConnectionClosuresCarryBarriers(): void
     {
@@ -240,6 +247,30 @@ final class FederationLeafLinkBarrierTest extends TestCase
                 continue;
             }
 
+            if ($name === 'onClose' || $name === 'onError') {
+                $handler = $name === 'onClose' ? 'handleLeafClose' : 'handleLeafError';
+                self::assertStringContainsString(
+                    '$this->' . $handler . '($conn',
+                    $block,
+                    "the {$name} leg must stay a bare route to its guarded handler",
+                );
+                $text = self::methodText(
+                    new ReflectionMethod(FederationPeerManager::class, $handler),
+                );
+                self::assertStringContainsString(
+                    '$conn !== $this->masterConnection',
+                    $text,
+                    "the {$handler}() seat must carry the connection-identity guard (R2)",
+                );
+                self::assertStringContainsString(
+                    'catch (Throwable',
+                    $text,
+                    "the {$handler}() seat must carry the barrier",
+                );
+
+                continue;
+            }
+
             self::assertStringContainsString('catch (Throwable', $block, "the {$name} callback must be contained");
         }
 
@@ -266,6 +297,113 @@ final class FederationLeafLinkBarrierTest extends TestCase
             3,
             preg_match_all("/'class'\s*=>\s*get_class\(/", $worker),
         );
+    }
+
+    // ------------------------------------------- close-arm identity (R2)
+
+    /**
+     * Review hub__asphp R2-Major: the leaf close-arms must carry the
+     * connection-identity law the message/handshake legs already honor. A
+     * stale close event from a SUPERSEDED socket must be refused outright:
+     * scheduleReconnect() closes whatever occupies the slot, so acting on a
+     * dead connection's event would tear down the live successor link —
+     * the exact cross-generation damage the identity guard exists to deny.
+     */
+    public function testStaleCloseEventRefusedAndSuccessorLinkSurvives(): void
+    {
+        $this->forceWorkermanRuntime();
+        $manager = $this->peerManager();
+        $manager->claimLeafLinkOwnership();
+
+        $successor = $this->createMock(AsyncTcpConnection::class);
+        $successor->expects(self::never())->method('close');
+        $stale = $this->createMock(AsyncTcpConnection::class);
+        $this->writeProp($manager, 'masterConnection', $successor);
+
+        $manager->handleLeafClose($stale);
+
+        self::assertSame(
+            $successor,
+            $this->readProp($manager, 'masterConnection'),
+            'a stale close may not untrack the live successor',
+        );
+        self::assertSame([], $this->armedTimers(), 'a stale event may not arm the ladder');
+        $log = (string) file_get_contents($this->logFile);
+        self::assertStringContainsString('stale close', $log, 'the refusal is attributed');
+        self::assertStringNotContainsString('connection error', $log);
+    }
+
+    /**
+     * The other half of the guard: the CURRENT connection's close passes
+     * identity and hands the link to exactly one capped-ladder timer —
+     * the historical re-arm law, unchanged.
+     */
+    public function testCurrentCloseEventStillHandsLinkToTheCappedLadder(): void
+    {
+        $this->forceWorkermanRuntime();
+        $manager = $this->peerManager();
+        $manager->claimLeafLinkOwnership();
+
+        $conn = $this->createMock(AsyncTcpConnection::class);
+        $this->writeProp($manager, 'masterConnection', $conn);
+
+        $manager->handleLeafClose($conn);
+
+        $armed = $this->armedTimers();
+        self::assertCount(1, $armed, 'the live close arms exactly one ladder');
+        self::assertSame(5.0, $armed[0]['interval']);
+        self::assertNull(
+            $this->readProp($manager, 'masterConnection'),
+            'scheduleReconnect owns the slot clear (unchanged law)',
+        );
+    }
+
+    /**
+     * The error arm carries the same identity law (it reaches the same
+     * scheduleReconnect teardown): a stale error event on a superseded
+     * socket logs its refusal and touches NOTHING a live link owns.
+     */
+    public function testStaleErrorEventRefusedAndSuccessorLinkSurvives(): void
+    {
+        $this->forceWorkermanRuntime();
+        $manager = $this->peerManager();
+        $manager->claimLeafLinkOwnership();
+
+        $successor = $this->createMock(AsyncTcpConnection::class);
+        $successor->expects(self::never())->method('close');
+        $this->writeProp($manager, 'masterConnection', $successor);
+
+        $manager->handleLeafError($this->createMock(AsyncTcpConnection::class), 111, 'zombie-echo');
+
+        self::assertSame($successor, $this->readProp($manager, 'masterConnection'));
+        self::assertSame([], $this->armedTimers(), 'a stale error may not arm the ladder');
+        $log = (string) file_get_contents($this->logFile);
+        self::assertStringContainsString('stale error', $log);
+        self::assertStringNotContainsString('zombie-echo', $log, 'a refused event logs no payload');
+    }
+
+    /**
+     * The live error event keeps the historical posture: attributed
+     * warning (code + reason) then exactly one ladder.
+     */
+    public function testCurrentErrorEventLogsAndArmsOnce(): void
+    {
+        $this->forceWorkermanRuntime();
+        $manager = $this->peerManager();
+        $manager->claimLeafLinkOwnership();
+
+        $conn = $this->createMock(AsyncTcpConnection::class);
+        $this->writeProp($manager, 'masterConnection', $conn);
+
+        $manager->handleLeafError($conn, 112, 'stream-died');
+
+        $armed = $this->armedTimers();
+        self::assertCount(1, $armed);
+        self::assertSame(5.0, $armed[0]['interval']);
+        $log = (string) file_get_contents($this->logFile);
+        self::assertStringContainsString('connection error', $log);
+        self::assertStringContainsString('stream-died', $log);
+        self::assertStringContainsString('112', $log);
     }
 
     // ------------------------------------------------------------- harness

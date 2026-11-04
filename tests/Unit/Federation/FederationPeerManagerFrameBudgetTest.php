@@ -221,10 +221,11 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
     /**
      * Over budget: frame refused (false), ONE warning carrying the peer id
      * and the frame's byte size, the link dropped via close(), the slot
-     * cleared — and the drop SELF-HEALS: the vendor destroy → onClose →
-     * scheduleReconnect chain arms exactly one capped-ladder timer (initial
-     * 5 s), the same ladder every other link loss re-uses. No proliferation,
-     * no dead chain.
+     * cleared — and the drop SELF-HEALS via the guard's OWN ladder arm (R2
+     * revision): the identity-guarded close arm REFUSES this slot-first
+     * teardown, so guardIncomingFrame() calls scheduleReconnect() directly,
+     * arming exactly one capped-ladder timer (initial 5 s), the same ladder
+     * every other link loss re-uses. No proliferation, no dead chain.
      */
     public function testOverBudgetDropsLinkOnceAndReusesTheCappedLadder(): void
     {
@@ -240,14 +241,15 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
 
         $closeCount = 0;
         $connection = new AsyncTcpConnection('ws://127.0.0.1:1');
-        $connection->onClose = static function () use (&$closeCount, $manager): void {
+        $connection->onClose = static function () use (&$closeCount, $manager, $connection): void {
             $closeCount++;
-            // Reproduce the production wiring the venue cannot install (the
-            // real closure is created inside establishConnection, which needs
-            // a socket that unit-venue connect() refuses to leave alive).
-            $schedule = new ReflectionMethod($manager, 'scheduleReconnect');
-            $schedule->setAccessible(true);
-            $schedule->invoke($manager);
+            // Reproduce the production arm faithfully (the real closure is
+            // created inside establishConnection, which the unit venue
+            // cannot keep alive): the identity-guarded handler sees the
+            // slot already cleared by the guard and REFUSES to act — the
+            // ladder must therefore be armed by the guard itself, which is
+            // exactly what this pin now measures.
+            $manager->handleLeafClose($connection);
         };
         $this->setMasterConnection($manager, $connection);
 

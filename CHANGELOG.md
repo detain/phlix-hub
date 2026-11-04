@@ -6,6 +6,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — leaf close/error arms re-check the connection identity (review hub__asphp, R2 Major, 2026-11-04)
+
+- The finding: the message/handshake legs compare the event's socket by
+  identity; the leaf link's `onClose`/`onError` arms did not. Acting on a
+  late event from a SUPERSEDED socket ran `scheduleReconnect()`, whose
+  cleanup closes whatever occupies the slot — a stale event therefore tore
+  down the live successor link (cross-generation teardown).
+- Cure: both arms are now bare routes to identity-guarded handlers
+  `handleLeafClose()`/`handleLeafError()` — `$conn !== masterConnection`
+  refuses the event with one attributed stale line and touches nothing;
+  live events keep the historical posture (ladder, warning with code +
+  reason) under the same backstop catch. Corollary law moved with it: the
+  budget drop in `guardIncomingFrame()` clears the slot BEFORE closing, so
+  its teardown is exactly the shape the guards refuse — the drop now arms
+  its OWN ladder explicitly (the historical destroy()-side-effect re-arm
+  would have stranded the link under the new guards); the null-slot shape
+  stays side-effect-free (pinned).
+- Pins (red-measured at the pre-cure tip: 4 errors, methods absent):
+  stale-close refused / successor survives, live-close still hands the
+  capped ladder (5 s head), stale-error refused payload-free, live-error
+  logs attributed + arms once. Barrier source pin rotated to assert the
+  guard AND the catch at the handler seat; the frame-budget suite's
+  production-faithful fake now drives the real handler refusal and measures
+  the guard's self-arm.
+
 ### Fixed — the 429 auth envelope gains its human sentence (review hub__enduser, HUB-m13, 2026-11-05)
 
 - `AuthController::rateLimited()` was the one failure frame in the class

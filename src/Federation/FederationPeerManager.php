@@ -1192,10 +1192,13 @@ class FederationPeerManager
      * and the link is dropped — the plain-close {@see
      * self::failHelloTimeout()} idiom, not a 1013 reject envelope: 1013 is
      * the INBOUND-server refusal shape on :8805; on the outbound leg the
-     * honest refusal is drop-and-backoff, and destroy() fires onClose →
-     * {@see self::scheduleReconnect()}, whose capped ladder (60 s) re-dials
-     * precisely when the 60 s window rolls over. Self-healing by
-     * construction; the budget can never strand the link permanently.
+     * honest refusal is drop-and-backoff, and the drop itself arms the
+     * capped ladder (R2 revision: the identity-guarded close arm refuses
+     * this slot-first teardown, so the explicit {@see
+     * self::scheduleReconnect()} below replaced the historical
+     * destroy()-side-effect re-arm; the 60 s cap re-dials precisely when
+     * the window rolls over). Self-healing by construction; the budget can
+     * never strand the link permanently.
      *
      * Vacuity arms pinned deliberately: null limiter (fail-open) or an
      * empty {@see self::$masterPeerId} (no identity to key — belt for
@@ -1234,12 +1237,22 @@ class FederationPeerManager
             $conn?->close();
         } catch (Throwable $e) {
             // Same belt as failHelloTimeout(): a throw while tearing down a
-            // dying socket must not escape the frame callback — clear the
-            // slot and re-arm the ladder directly.
+            // dying socket must not escape the frame callback — the ladder
+            // is armed by the block right below, whatever the close did.
             LoggerFactory::get(LogChannels::RELAY)->error(
                 'FederationPeerManager: frame-budget link teardown failed',
                 ['error' => $e->getMessage()],
             );
+        }
+
+        if ($conn !== null) {
+            // Self-heal law, R2 revision (review hub__asphp): the drop arms
+            // its OWN ladder. The historical re-arm rode the unguarded
+            // onClose side-effect; the identity-guarded arms now REFUSE a
+            // teardown whose slot was already cleared (this one), so the
+            // explicit call replaces the side-effect — reconnectScheduled
+            // keeps the whole thing single-shot either way. A null slot was
+            // never a socket: no ladder, no side effects (pinned).
             $this->scheduleReconnect();
         }
 
@@ -1358,42 +1371,22 @@ class FederationPeerManager
             $this->handleInboundLeafFrame($data);
         };
 
-        // On close — schedule reconnect. The catch is a BACKSTOP: the
-        // current scheduleReconnect() is self-contained, so the pin for
-        // this arm's barrier is the source-shape law in
-        // FederationLeafLinkBarrierTest, not a behavioral throw vector.
-        $this->masterConnection->onClose = function (
-            /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn
-        ): void {
-            try {
-                $this->scheduleReconnect();
-            } catch (Throwable $e) {
-                LoggerFactory::get(LogChannels::RELAY)->error(
-                    'FederationPeerManager: close callback threw; the worker survived',
-                    ['error' => $e->getMessage(), 'class' => get_class($e)],
-                );
-            }
+        // On close — route through the identity-guarded handler (review
+        // hub__asphp R2 Major): a stale event from a superseded socket is
+        // refused THERE, because scheduleReconnect() closes whatever
+        // occupies the slot — honoring a dead connection's event would
+        // tear down the live successor link.
+        $this->masterConnection->onClose = function (AsyncTcpConnection $conn): void {
+            $this->handleLeafClose($conn);
         };
 
-        // On error — schedule reconnect (same backstop law as the close arm)
+        // On error — the same identity law as the close arm (R2 Major twin)
         $this->masterConnection->onError = function (
-            /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn,
+            AsyncTcpConnection $conn,
             int $code,
             string $reason
         ): void {
-            $logger = LoggerFactory::get(LogChannels::RELAY);
-            $logger->warning('FederationPeerManager: connection error', [
-                'code' => $code,
-                'reason' => $reason,
-            ]);
-            try {
-                $this->scheduleReconnect();
-            } catch (Throwable $e) {
-                $logger->error(
-                    'FederationPeerManager: error callback threw; the worker survived',
-                    ['error' => $e->getMessage(), 'class' => get_class($e)],
-                );
-            }
+            $this->handleLeafError($conn, $code, $reason);
         };
 
         try {
@@ -1621,6 +1614,85 @@ class FederationPeerManager
         );
 
         $this->closeLinkAndReschedule();
+    }
+
+    /**
+     * Identity-guarded close arm of the leaf link (review hub__asphp,
+     * R2 Major): act ONLY when the event's connection is still the one this
+     * process tracks. scheduleReconnect() closes whatever occupies the
+     * slot, so a late close from a superseded socket would tear down the
+     * successor link — the same cross-generation law the master-side
+     * hello-auth guard states: capture the object, compare by identity, a
+     * stale carrier is inert. The retained backstop catch is the barrier
+     * pin against a future throwing callee.
+     *
+     * @internal Public for the barrier harness; the socket callback is the
+     *           production caller.
+     *
+     * @param AsyncTcpConnection $conn The connection whose close event fired.
+     *
+     * @return void
+     */
+    public function handleLeafClose(AsyncTcpConnection $conn): void
+    {
+        if ($conn !== $this->masterConnection) {
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: stale close event on a superseded socket — refused, live link intact',
+            );
+
+            return;
+        }
+
+        try {
+            $this->scheduleReconnect();
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'FederationPeerManager: close callback threw; the worker survived',
+                ['error' => $e->getMessage(), 'class' => get_class($e)],
+            );
+        }
+    }
+
+    /**
+     * Identity-guarded error arm (R2 Major twin of {@see
+     * self::handleLeafClose()}): a stale error event may neither log as if
+     * the live link errored — payload and all — nor schedule the
+     * slot-owning teardown. Live events keep the historical posture
+     * (attributed warning, then the capped ladder) under the same backstop
+     * law.
+     *
+     * @internal Public for the barrier harness.
+     *
+     * @param AsyncTcpConnection $conn   The connection whose error event fired.
+     * @param int                $code   Vendor error code.
+     * @param string             $reason Vendor error reason.
+     *
+     * @return void
+     */
+    public function handleLeafError(AsyncTcpConnection $conn, int $code, string $reason): void
+    {
+        if ($conn !== $this->masterConnection) {
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: stale error event on a superseded socket — refused, live link intact',
+            );
+
+            return;
+        }
+
+        $logger = LoggerFactory::get(LogChannels::RELAY);
+        $logger->warning('FederationPeerManager: connection error', [
+            'code' => $code,
+            'reason' => $reason,
+        ]);
+
+        try {
+            $this->scheduleReconnect();
+        } catch (Throwable $e) {
+            $logger->error(
+                'FederationPeerManager: error callback threw; the worker survived',
+                ['error' => $e->getMessage(), 'class' => get_class($e)],
+            );
+        }
     }
 
     /**
