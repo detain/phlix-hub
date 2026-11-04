@@ -6,6 +6,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Docs — the chain's tail disclosure gap recorded: 7de89021 and d667a20b (review hub__asphp R3, minor F-R3-5, 2026-11-04)
+
+- The chain's own disclosure standard (35a9e440, retroactively recording
+  8feedd50's missing entry under the 256f8ab4 bless-forward-fix precedent)
+  was re-broken by the chain's tail: both commits landed with subject-only
+  bodies and no CHANGELOG entry. Recorded here, prepended — history stays
+  verbatim:
+- `7de89021` (prose-only, forgivable class): the register truth pass —
+  class-header item 5 now states the validate-then-charge law and the
+  FrameBudgetTest wiring-pin comment re-anchors (rescue Minor 3's
+  register-prose cure).
+- `d667a20b` (behavioral-class forward-fix, zero body): +5 lines in
+  `FederationWorker::onWebSocketConnect` — `$clientIp` initialised to `''`
+  before the connect gate's try, silencing psalm's
+  `PossiblyUndefinedVariable` across the catch boundary. Semantically
+  inert (a non-null `$state` proves the resolve+hit pair ran, and that
+  assignment precedes every read), but it is src/ and the permanent record
+  was one step behind the code.
+
 ### Fixed — immediate rejection arm contained: symmetric close() throw-safety inside WebSocketCloseFrame::reject (review hub__asphp R3, minor F-R3-4)
 
 - 36cd1f1a wrapped the DEFERRED rejection arm ("a close() that throws
