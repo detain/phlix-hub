@@ -1152,7 +1152,7 @@ development fallbacks.
 | `HUB_AUDIT_RETENTION_DAYS` | `365` | Days of `audit_logs` the maintenance reaper retains (R19-11). Deliberately env-only, **not** a `hub_settings` key — an operator dial, not an admin-UI one. Must be ≥ 1: non-positive or oversized values are clamped back to `365` with a logged warning — a `0` here can never arm a wipe-everything sweep |
 | `HUB_MCP_PLAYBACK_CONTROL` | `false` | Registers the `playback_control` MCP tool — the only MCP tool that mutates server state. **Read the S261 review warning in [`config/server.php`](config/server.php) before enabling** (retroactively activates the scope on pre-existing tokens) |
 | `HUB_MCP_SSE_KEEPALIVE` / `HUB_MCP_SSE_MAX_SECONDS` | `15` / `900` | `GET /mcp` SSE keep-alive interval and hard stream-lifetime ceiling |
-| `HUB_RELAY_RECONNECT_DRAIN_GRACE` | `5.0` | Seconds an incumbent tunnel keeps draining in-flight requests after a validated server reconnect displaces it (`0` = hard displacement) |
+| `HUB_RELAY_RECONNECT_DRAIN_GRACE` | `5.0` | Seconds an incumbent tunnel keeps draining in-flight requests after a validated server reconnect displaces it (`0` = hard displacement). Live twin: `server.relay.reconnect_drain_grace_seconds` |
 
 > The six listen-port envs were wired through `config/server.php` in R14-15 — before that the
 > auxiliary ports existed only as `?? <default>` fallbacks no config set (configurability
@@ -1712,6 +1712,7 @@ are denied by design and belong in the [env reference](#configuration-reference)
 | **Per-user server cap** `server.max_servers_per_user` · **per-server user cap** `server.max_users_per_server` | Quotas enforced AT REDEEM — claiming a code or sharing past the cap fails `quota.exceeded` (resets on release, never a timer). | live |
 | **Metrics** `server.metrics.enabled` / `server.metrics.retention_days` | Opt-in usage metrics kept on the hub; retention prunes per day. | enabled: **restart** · retention: live |
 | **Relay rate limits** `server.rate_limit` (JSON) | The live dial for the 429 throttles — a store blob merged OVER the boot-time `PHLIX_HUB_RATELIMIT_*` env defaults (see *Rate limiting* in the [configuration reference](#configuration-reference)). | **restart** |
+| **Relay drain grace** `server.relay.reconnect_drain_grace_seconds` | Seconds an incumbent tunnel keeps draining in-flight requests when a validated server reconnect displaces it (`0` = hard displacement). Live-read per displacement, clamped 0–300. | live |
 | **Sonarr / Radarr** `server.arr.{sonarr,radarr}.{enabled,url}` | Request fulfilment backends. The API keys stay env-only by design (never settable through the store). | live |
 | **Token lifetimes** `auth.access_ttl` · `auth.refresh_ttl` · `server.enrollment_ttl` | JWT lifetimes for sessions and server enrollment. | live |
 
