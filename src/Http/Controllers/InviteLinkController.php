@@ -204,6 +204,16 @@ final class InviteLinkController
                 'token' => $link->token,
                 'expires_at' => $link->expiresAt,
                 'id' => $link->id,
+                // HUB-m29 [review hub__webux]: echo the EFFECTIVE fields the
+                // server normalized — permission (any-string passthrough),
+                // max_uses (clamp), library_id (blank-to-null) and the
+                // resolved expiry above. All values come from the model, the
+                // same source the list endpoint reads, so what the owner sees
+                // in the 201 is exactly what gets enforced: coercion is now
+                // visible at creation instead of silent. Wire-ADDITIVE keys.
+                'permission' => $link->permission,
+                'max_uses' => $link->maxUses,
+                'library_id' => $link->libraryId,
             ]);
         } catch (InvalidArgumentException $e) {
             $code = $e->getCode();

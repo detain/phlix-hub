@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — the invite-link 201 echoes the effective fields (review hub__webux, HUB-m29, 2026-11-05)
+
+- `createInviteLink()` coerced silently: `max_uses` fell to 1 unless
+  numeric, `expires_in` to "never" unless a positive number,
+  `permission` passed ANY non-empty string through, blank
+  `library_id` became null — but the 201 only carried
+  `{url, token, expires_at, id}`, so the inviter could not see what
+  had actually been created.
+- The 201 body now ALSO echoes `permission`, `max_uses` and
+  `library_id` — read from the created MODEL (the same source the
+  list endpoint serves), making the echo server-side truth rather
+  than a request parrot. Wire-ADDITIVE keys; openapi pre-flight:
+  the `InviteLink` schema already declared `additionalProperties:
+  true`, and it gained honest `permission`/`library_id` property
+  rows this time. `OpenApiSpecMatchesRouterTest` and redocly lint
+  (38 pre-existing warnings, count unchanged) verified green.
+- Tests: the 201-success pin gained the effective-field asserts, and
+  `testCreateInviteLinkEchoesCoercedEffectiveValues` drives the typo
+  shapes (`max_uses: "two"`, `expires_in: 0`, `permission:
+  "godmode"`) with a handler double asserting the NORMALIZED
+  arguments it receives — the visible-passthrough of `godmode` is
+  now the documented, shown behavior instead of a silent one.
+
 ### Fixed — leaf close/error arms re-check the connection identity (review hub__asphp, R2 Major, 2026-11-04)
 
 - The finding: the message/handshake legs compare the event's socket by

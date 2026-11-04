@@ -6154,6 +6154,14 @@ components:
           description: "Absolute Unix expiry epoch; null for links that never expire."
         max_uses:
           type: integer
+        permission:
+          type: string
+          description: |-
+            Enforced permission level. The create handler passes ANY non-empty string through
+            (documented behavior); the 201 and listed links echo the STORED value, never a guess.
+        library_id:
+          type: [string, "null"]
+          description: "Library the share scopes to; null means every library on the server."
       additionalProperties: true
     InviteLinkList:
       type: object

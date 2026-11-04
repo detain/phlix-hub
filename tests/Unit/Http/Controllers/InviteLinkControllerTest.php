@@ -115,6 +115,79 @@ final class InviteLinkControllerTest extends TestCase
         self::assertSame('token123', $decoded['token']);
         self::assertSame('https://hub.example.com/invite/token123', $decoded['url']);
         self::assertSame('link-1', $decoded['id']);
+        // HUB-m29 [review hub__webux]: the 201 echoes the EFFECTIVE fields
+        // too, so silent coercion can no longer happen invisibly to the owner.
+        self::assertSame('read', $decoded['permission']);
+        self::assertSame(1, $decoded['max_uses']);
+        self::assertSame('lib-1', $decoded['library_id']);
+        self::assertSame($link->expiresAt, $decoded['expires_at']);
+    }
+
+    /**
+     * HUB-m29 [review hub__webux]: the coercion arms (permission is a
+     * any-string passthrough, non-numeric max_uses falls to 1, a
+     * non-positive expires_in means "never expires") must be VISIBLE on the
+     * response — the body carries what the link will actually enforce, not
+     * what the caller typed.
+     */
+    public function testCreateInviteLinkEchoesCoercedEffectiveValues(): void
+    {
+        $this->handler->method('createInviteLink')
+            ->willReturnCallback(
+                function (
+                    string $ownerId,
+                    string $serverId,
+                    ?string $libraryId,
+                    string $permission,
+                    int $maxUses,
+                    ?int $expiresAt,
+                ): InviteLink {
+                    // The handler double persists EXACTLY what the controller
+                    // normalized — proving the echo is server-side truth
+                    // (the model), not an echo of the request body.
+                    self::assertSame('godmode', $permission);
+                    self::assertSame(1, $maxUses);
+                    self::assertNull($expiresAt);
+
+                    return new InviteLink(
+                        id: 'link-2',
+                        ownerUserId: $ownerId,
+                        serverId: $serverId,
+                        libraryId: $libraryId,
+                        permission: $permission,
+                        maxUses: $maxUses,
+                        useCount: 0,
+                        expiresAt: $expiresAt,
+                        createdAt: time(),
+                        url: 'https://hub.example.com/invite/token456',
+                        token: 'token456',
+                    );
+                },
+            );
+
+        $request = new Request();
+        $request->path = '/api/v1/me/invite-links';
+        $request->method = 'POST';
+        $request->userId = 'user-1';
+        $request->body = [
+            'server_id' => 'server-1',
+            'permission' => 'godmode',
+            'max_uses' => 'two',
+            'expires_in' => 0,
+        ];
+
+        $response = $this->controller->createInviteLink($request);
+        self::assertSame(201, $response->statusCode);
+
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR);
+        // A typo'd permission still rides through (documented passthrough) —
+        // but now the owner SEES 'godmode' in their own 201 instead of
+        // believing the request was honored as something else.
+        self::assertSame('godmode', $decoded['permission']);
+        self::assertSame(1, $decoded['max_uses']);
+        self::assertNull($decoded['library_id']);
+        self::assertNull($decoded['expires_at']);
     }
 
     public function testCreateInviteLinkReturns403WhenNotServerOwner(): void
