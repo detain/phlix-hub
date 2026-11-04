@@ -1711,7 +1711,7 @@ are denied by design and belong in the [env reference](#configuration-reference)
 | **Invite default expiry** `invite.default_expiry_seconds` | How long a new invite link stays valid when the creator doesn't pick a lifetime. | live |
 | **Per-user server cap** `server.max_servers_per_user` · **per-server user cap** `server.max_users_per_server` | Quotas enforced AT REDEEM — claiming a code or sharing past the cap fails `quota.exceeded` (resets on release, never a timer). | live |
 | **Metrics** `server.metrics.enabled` / `server.metrics.retention_days` | Opt-in usage metrics kept on the hub; retention prunes per day. | enabled: **restart** · retention: live |
-| **Relay rate limits** `server.rate_limit` (JSON) | The real dial for the 429 throttles — env overrides for these knobs do NOT exist. | **restart** |
+| **Relay rate limits** `server.rate_limit` (JSON) | The live dial for the 429 throttles — a store blob merged OVER the boot-time `PHLIX_HUB_RATELIMIT_*` env defaults (see *Rate limiting* in the [configuration reference](#configuration-reference)). | **restart** |
 | **Sonarr / Radarr** `server.arr.{sonarr,radarr}.{enabled,url}` | Request fulfilment backends. The API keys stay env-only by design (never settable through the store). | live |
 | **Token lifetimes** `auth.access_ttl` · `auth.refresh_ttl` · `server.enrollment_ttl` | JWT lifetimes for sessions and server enrollment. | live |
 
@@ -1780,8 +1780,14 @@ HTTP endpoints answer **429** with `Retry-After` and
 listeners (:8802/:8803/:8804/:8805) reject the handshake with close code
 **1013 (Try Again Later)** instead. The live dial is the `server.rate_limit`
 hub-setting JSON blob (Admin → Settings) — **restart required** after edits,
-because limiter profiles are per-worker singletons. There are no
-`PHLIX_HUB_RATELIMIT_*` env knobs (a doc fiction retired in Major 8). A
+because limiter profiles are per-worker singletons. That blob is merged OVER
+the boot-time `PHLIX_HUB_RATELIMIT_*` env defaults, which DO exist for
+fourteen of the sixteen limiter profiles (plus the shared `cap`) — the full
+table lives in *Rate limiting* in the
+[configuration reference](#configuration-reference). Major 8 retired exactly
+two fabricated seams (`client_relay_token`, `client_request_create`): those
+two profiles are literal-only, every other profile's `max`/`window` is
+env-settable at boot. A
 single NAT behind many clients shares one IP bucket — raise the bucket or
 front-load, don't fight the throttle.
 

@@ -290,8 +290,11 @@ return [
     // bindings are repointed to the shared DB-backed DbRateLimiter (table
     // login_rate_limit, migration 040_login_rate_limit), so ALL workers share
     // one counter per bucket and the budgets are ACTUAL, not
-    // ~max×HUB_WORKERS as they were (HB-4.6 "Option B"). Any surface's `max`/`window` — and the shared `cap` (key-count
-    // ceiling) — is env-overridable; absent keys fall back to the
+    // ~max×HUB_WORKERS as they were (HB-4.6 "Option B"). Every env-seamed
+    // surface's `max`/`window` — and the shared `cap` (key-count
+    // ceiling) — is env-overridable; only client_relay_token and
+    // client_request_create are literal-only (no PHLIX_HUB_RATELIMIT_*
+    // seam). Absent keys fall back to the
     // RateLimitProfiles defaults.
     'rate_limit' => (static function (): array {
         $envInt = static fn (string $k, int $d): int => is_numeric($v = getenv($k)) ? (int) $v : $d;
