@@ -1308,7 +1308,7 @@ at boot per worker).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HUB_JWT_SECRET` | _(none in prod)_ | **Required in production.** ≥32-byte HMAC secret. A denylisted placeholder literal is refused at boot with `exit 1` (R14-08 pre-flight, folded into `resolveSecret()` so console commands and workers enforce it too); unset = hard boot refusal (`MissingJwtSecretException`) outside dev, random per-process fallback inside dev (`APP_ENV`/`HUB_ENV` `dev|local` or `HUB_JWT_ALLOW_DEV_SECRET=1`). The Docker entrypoint generates + persists one to `/var/phlix/config/hub_jwt_secret` when unset |
+| `HUB_JWT_SECRET` | _(none in prod)_ | **Required in production.** ≥32-byte HMAC secret. A denylisted placeholder literal is refused at boot with `exit 1` (R14-08 pre-flight, folded into `resolveSecret()` so console commands and workers enforce it too); unset = hard boot refusal (`MissingJwtSecretException`) outside dev, random per-process fallback inside dev (`APP_ENV`/`HUB_ENV` `dev\|local` or `HUB_JWT_ALLOW_DEV_SECRET=1`). The Docker entrypoint generates + persists one to `/var/phlix/config/hub_jwt_secret` when unset |
 | `HUB_JWT_ACCESS_TTL` | `3600` | Access-token lifetime (seconds) |
 | `HUB_JWT_REFRESH_TTL` | `604800` | Refresh-token lifetime (seconds) |
 
