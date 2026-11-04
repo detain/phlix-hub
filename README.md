@@ -640,6 +640,13 @@ php start.php start                # start the Hub (Ctrl-C to stop)
 curl http://localhost:8800/health  # => {"status":"ok",...}
 ```
 
+There is deliberately **no `.env.example`** in this repo: nothing here loads a
+`.env` file (no dotenv in the lock), and the former example carried
+`XDEBUG_TRIGGER` as plain text, so it was removed as a footgun — the
+Configuration reference's XDEBUG row records that history. The `export` lines
+above are the whole dev bootstrap; the complete env vocabulary with defaults
+lives in the [Configuration reference](#configuration-reference) below.
+
 Then open <http://localhost:8800/app/signup> to create the first account — it is auto-promoted to
 **admin**. On a public deployment make sure that first signup is *yours* before opening `:8800`
 to the network, then lock registration down: `HUB_SIGNUPS_ENABLED=false` at boot, or flip the

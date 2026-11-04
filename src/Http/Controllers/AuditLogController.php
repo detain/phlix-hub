@@ -18,6 +18,15 @@ use Phlix\Hub\Http\Response;
 /**
  * Audit log viewer API — hub admin only.
  *
+ * List-shape convention (review hub__fedev Info / HUB-30, 2026-11-04): this
+ * is the hub's only PAGINATED list surface — `{logs, total, limit, offset}`
+ * (index() below). Pagination metadata rides only where the repository can
+ * truncate a result; every other hub list returns the full array under its
+ * snake_case resource key (`{servers}`, `{users}`, `{invite_links}`,
+ * `{outgoing, incoming}`). A new surface that can outgrow its page must
+ * choose deliberately between the two homes and keep the snake_case
+ * wrapping — no `items`/`data` drift.
+ *
  * @package Phlix\Hub\Http\Controllers
  */
 final class AuditLogController

@@ -6,6 +6,42 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Docs — info batch 2: php.ini xdebug inertness disclosure, README `.env.example` absence cross-ref, list-shape convention law, reason-free close-code pointer, empty-slot-safe refusal wording (HUB-20/27/30/32/72) — 2026-11-04
+
+- **docker/php.ini `[xdebug]` carries its own truth (HUB-20).** The container base
+  (`ghcr.io/detain/phlix-base`, built from the phlix-server repo's `Dockerfile.base` —
+  symbol cite) never installs the extension, so the section was inert weight implying a
+  debug story the image does not have. The block now discloses the inertness, the
+  bare-metal split (the installer's own generated ini — never this file), the measured-live
+  `${XDEBUG_MODE:-off}` expansion syntax, and the entrypoint's `/tmp/xdebug` pre-creation.
+  Comment-only: zero directive bytes moved.
+- **README quick start answers the `.env.example` question in place (HUB-32).** The rationale
+  existed but sat buried in the Configuration reference's `XDEBUG_TRIGGER` row — deliberate
+  removal (nothing loads `.env` files; the former example leaked `XDEBUG_TRIGGER` as plain
+  text). The quick start cross-refs it now, discharging the ipd finding without resurrecting
+  the footgun.
+- **List-shape law named at its paginated exemplar (HUB-30).** `AuditLogController`'s class
+  docblock states the convention the fedev review banked: pagination metadata rides only
+  where the repository can truncate; every other hub list ships the full array under its
+  snake_case resource key; new surfaces must choose deliberately.
+- **Reason-free close frames point at their meaning (HUB-27).** Devtools show a bare
+  4401/1013/1011 by design; the `WebSocketCloseFrame` docblock now names the two places a
+  human decodes it — the docs/websockets.md "Rejection close codes" table and the rejecting
+  emitter's docblock.
+- **Leaf-refusal lines stopped claiming a link state they cannot see (HUB-72).** The
+  identity-guard arms fire both when a successor displaced the slot and when
+  `guardIncomingFrame`'s deliberate slot-first teardown left it EMPTY; the old "superseded
+  socket … live link intact" wording was forensically misleading during a budget flood
+  (REVIEW-HUB-MIN5). Reworded to the true-in-both-shapes "non-current socket — refused",
+  with the empty-slot case disclosed in the docblock. The refusal behavior itself is the
+  pinned law and is untouched; zero test asserted the old string (measure-from-red: no pin
+  rotation).
+- **Pointered, not taken here:** HUB-05 (quota copy would need const→method runtime
+  interpolation — structural, reviewer's own "not a defect"), HUB-08 (429/maintenance copy
+  honesty — "consistency note only", wire-value change = owner copy call), HUB-15
+  (migration 030 bare MODIFYs — DDL guard against the checksum-reapply law, "align if ever
+  touched"). Register: `.reviews/2026-11-03/FIX-INFO-2H.md`.
+
 ### Docs — hubby.md ghost cites eradicated; cross-repo doc cites qualified (review hub__ipd, HUB-m46, 2026-11-04)
 
 - Fourteen `(hubby.md H1.N)` cite phrases — six in `src/Application.php`, two in

@@ -1654,8 +1654,12 @@ class FederationPeerManager
      * slot, so a late close from a superseded socket would tear down the
      * successor link — the same cross-generation law the master-side
      * hello-auth guard states: capture the object, compare by identity, a
-     * stale carrier is inert. The retained backstop catch is the barrier
-     * pin against a future throwing callee.
+     * stale carrier is inert. The same arm also fires when the slot is
+     * merely EMPTY — guardIncomingFrame's deliberate slot-first teardown
+     * can leave no successor at all (REVIEW-HUB-MIN5 Info, 2026-11-04) —
+     * so the refusal line names no successor and claims nothing about a
+     * live link. The retained backstop catch is the barrier pin against a
+     * future throwing callee.
      *
      * @internal Public for the barrier harness; the socket callback is the
      *           production caller.
@@ -1668,7 +1672,7 @@ class FederationPeerManager
     {
         if ($conn !== $this->masterConnection) {
             LoggerFactory::get(LogChannels::RELAY)->warning(
-                'FederationPeerManager: stale close event on a superseded socket — refused, live link intact',
+                'FederationPeerManager: stale close event on a non-current socket — refused',
             );
 
             return;
@@ -1704,7 +1708,7 @@ class FederationPeerManager
     {
         if ($conn !== $this->masterConnection) {
             LoggerFactory::get(LogChannels::RELAY)->warning(
-                'FederationPeerManager: stale error event on a superseded socket — refused, live link intact',
+                'FederationPeerManager: stale error event on a non-current socket — refused',
             );
 
             return;

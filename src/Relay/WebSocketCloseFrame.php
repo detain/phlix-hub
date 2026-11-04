@@ -39,6 +39,13 @@ use Workerman\Connection\TcpConnection;
  * (`$connection->close("\x88\x02\x03\xe8", true)` for code 1000): FIN set,
  * opcode 8, unmasked (server→client), 2-byte big-endian status, no reason.
  *
+ * The reason-free shape is deliberate (review hub__enduser Info / HUB-27,
+ * 2026-11-04; RFC 6455 permits it): the hub widens no wire surface even on
+ * close, so browser devtools show the peer a bare number (4401 / 1013 /
+ * 1011). Its human meaning lives in two places: the close-code table of
+ * docs/websockets.md (the "Rejection close codes" section) and the docblock
+ * at the rejecting emitter.
+ *
  * @package Phlix\Hub\Relay
  * @since 0.12.0
  */
