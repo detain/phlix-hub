@@ -6,6 +6,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — exception barrier on the :8805 federation dispatch path keeps the count=1 worker alive (review hub__asphp, Major M-A, 2026-11-04)
+- The federation worker runs `count=1` and its doctrine (S312/M-HUB-03,
+  MaintenanceWorker class header) is that ANY Throwable escaping a Workerman
+  callback takes `Worker::stopAll(250)` through the process. Three dispatch
+  sites still called DB-touching code unwrapped: the WS-message dispatch (a
+  throwing `federation_peers` read inside `handleHubHello` escaped the
+  controller straight into the event loop), the WS-close dispatch (same via
+  `handleConnectionClosed`, which additionally leaked the controller's static
+  connection/decoder maps because its `unset` sat after the throwing call),
+  and the Channel-bridge subscription (leaf verbs run
+  `connectToMaster`/`pushLibraryShare` live work with nothing between them
+  and the broker callback). Each was a silent crash-loop that dropped every
+  live leaf link.
+- Cure: `FederationWorker::onMessage`/`onClose` wrap the controller dispatch
+  in a `Throwable` barrier — one RELAY error line (hub id, direction, error),
+  the poisoned socket refused with `handler_error` on the message path, the
+  process kept alive. The controller's `onClose` cleanup moved into a
+  `finally` so the map invariants hold even through the rethrown-to-the-barrier
+  path. The broker now subscribes a named barrier,
+  `FederationWorker::onPushCommand()`, which contains the command, logs, and
+  publishes NO reply — the malformed-command doctrine: the bridge degrades to
+  a measured false on its own timeout rather than being handed a verdict
+  nobody executed.
+- `tests/Unit/Relay/FederationWorkerExceptionBarrierTest.php` (4 tests):
+  contained throw + exactly one named error line + liveness (dispatch keeps
+  reaching the controller after the storm), statics cleared through the
+  throwing close, zero published replies on the leaf-verb throw, and a
+  source-shape pin so the subscription can never be re-swapped to the raw
+  `$dispatcher->onCommand(...)` callable. Measured red at tip: the probe
+  exceptions escaped `onMessage`/`onClose` verbatim, the barrier method did
+  not exist, and the source pin had nothing to find.
+
 ### Fixed — "Major N" marker form glossed + a help-channel pointer (review hub__newcomer, Minor, 2026-11-04)
 - The campaign-markers glossary listed the `S261`/`R-HUB-13`-style forms
   but skipped the bare severity-number form the docs actually use

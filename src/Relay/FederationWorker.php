@@ -419,8 +419,21 @@ final class FederationWorker
             // Channel\callback class that neither an array nor a Closure can
             // satisfy. The runtime only does is_callable(), so a first-class
             // callable is correct here.
+            // S312 barrier (review hub__asphp M-A): leaf verbs run live DB
+            // work in the owner seat; a throw out of this callback would kill
+            // the count=1 process exactly like the WS-dispatch vectors. Route
+            // through the named barrier so the subscription stays greppable
+            // and the containment is unit-testable on its own. (Plain closure,
+            // not `$this->onPushCommand($dispatcher, ...)`: first-class
+            // callable argument binding is not parseable on this PHP build —
+            // only the bare `f(...)` form exists.)
             /** @psalm-suppress InvalidArgument */
-            ChannelClient::on(FederationPushProtocol::COMMAND_EVENT, $dispatcher->onCommand(...));
+            ChannelClient::on(
+                FederationPushProtocol::COMMAND_EVENT,
+                function (mixed $data) use ($dispatcher): void {
+                    $this->onPushCommand($dispatcher, $data);
+                },
+            );
 
             $logger->info('Federation master push: worker joined channel broker', [
                 'channel_host' => $this->channelHost,
@@ -583,7 +596,26 @@ final class FederationWorker
             return;
         }
 
-        $controller->onMessage($connection, $data);
+        // S312/M-HUB-03 exception-barrier law (review hub__asphp M-A): this
+        // dispatch runs in the count=1 :8805 process. A throwing DB call
+        // inside the controller (getPeerByPublicKey et al.) escaping this
+        // callback takes Worker::stopAll(250) through the process — a silent
+        // crash-loop that kills every live leaf link. Contain per dispatch:
+        // one error line, drop the poisoned socket (its own onClose does the
+        // map cleanup), keep the worker alive for every other peer.
+        try {
+            $controller->onMessage($connection, $data);
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'Federation worker: dispatch threw; kept alive',
+                [
+                    'hub_id'    => $hubId,
+                    'direction' => 'message',
+                    'error'     => $e->getMessage(),
+                ],
+            );
+            $connection->close('handler_error');
+        }
     }
 
     /**
@@ -596,6 +628,7 @@ final class FederationWorker
     public function onClose(TcpConnection $connection): void
     {
         $connId = spl_object_id($connection);
+        $hubId = self::$connHubIds[$connId] ?? null;
         unset(self::$connHubIds[$connId]);
 
         $controller = $this->resolveController();
@@ -603,7 +636,55 @@ final class FederationWorker
             return;
         }
 
-        $controller->onClose($connection);
+        // Same S312 barrier (review hub__asphp M-A): handleConnectionClosed
+        // performs live DB work; a throw escaping here would crash-loop the
+        // process on the teardown path itself. The controller guarantees its
+        // own map cleanup under try/finally, so containment is log-only —
+        // there is no surviving socket to close.
+        try {
+            $controller->onClose($connection);
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'Federation worker: dispatch threw; kept alive',
+                [
+                    'hub_id'    => $hubId,
+                    'direction' => 'close',
+                    'error'     => $e->getMessage(),
+                ],
+            );
+        }
+    }
+
+    /**
+     * Exception barrier for the Channel-bridge command dispatch.
+     *
+     * The :8805 worker is count=1 and {@see FederationPushDispatcher::onCommand()}
+     * executes leaf verbs that touch the database in the owner seat
+     * (connectToMaster / pushLibraryShare et al.). A Throwable escaping the
+     * broker callback runs Worker::stopAll(250) through the process exactly
+     * like the WS-dispatch vectors (S312/M-HUB-03 law, review hub__asphp M-A).
+     * Contain, log, and publish NO reply — the no-fabricated-verdict doctrine
+     * of the malformed-command path: the bridge's publisher side degrades to
+     * a measured false on its own timeout rather than being handed a lie.
+     *
+     * @param FederationPushDispatcher $dispatcher The resolved command executor.
+     * @param mixed                    $data       Raw broker command payload.
+     *
+     * @return void
+     */
+    public function onPushCommand(FederationPushDispatcher $dispatcher, mixed $data): void
+    {
+        try {
+            $dispatcher->onCommand($data);
+        } catch (Throwable $e) {
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'Federation worker: push command threw; kept alive',
+                [
+                    'direction' => 'push_command',
+                    'error'     => $e->getMessage(),
+                ],
+            );
+        }
     }
 
     /**

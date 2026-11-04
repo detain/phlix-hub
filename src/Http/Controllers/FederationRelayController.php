@@ -223,8 +223,16 @@ final class FederationRelayController
         $hubId = self::$connHubIds[$connId] ?? null;
 
         if ($hubId !== null) {
-            $this->frameHandler->handleConnectionClosed($hubId, $connection);
-            unset(self::$connHubIds[$connId], self::$connDecoders[$connId]);
+            // Map cleanup must survive a throwing handler (review hub__asphp
+            // M-A): handleConnectionClosed does live DB work, and a leak here
+            // would alias a recycled spl_object_id onto a dead hub's entry.
+            // Containment/logging belongs to the worker's S312 barrier — the
+            // throw re-runs from here on purpose, once the invariants hold.
+            try {
+                $this->frameHandler->handleConnectionClosed($hubId, $connection);
+            } finally {
+                unset(self::$connHubIds[$connId], self::$connDecoders[$connId]);
+            }
         }
     }
 }
