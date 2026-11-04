@@ -1324,38 +1324,52 @@ class FederationPeerManager
         $hubConfigFinal = $hubConfig;
         $self = $this;
 
-        // On successful connect — send `hub_hello`
+        // On successful connect — send `hub_hello`, under the S312 barrier:
+        // the hello encode/read runs on the resident loop; an escape takes
+        // the count=1 worker down, so a failure is contained into the
+        // identity-safe link teardown and the capped ladder re-runs the
+        // ceremony from scratch.
         $this->masterConnection->onConnect = static function (
             /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn
         ) use (
             $hubConfigFinal,
             $self
         ): void {
-            $self->sendHubHello($hubConfigFinal);
+            try {
+                $self->sendHubHello($hubConfigFinal);
+            } catch (Throwable $e) {
+                $self->containLeafCallback($e, 'hello send');
+            }
         };
 
-        // On message — budget, then handle frames. The guard runs BEFORE
-        // handleMessage so an over-budget frame is dropped without reaching
-        // ANY parse/dispatch path (drop-before-parse is the whole point of
-        // routing this at the closure: handleMessage's isTextFrame branch
-        // feeds the shared decoder and the controller fan-out immediately).
+        // On message — route through the guarded seam: budget first
+        // (drop-before-parse), parse/dispatch under the S312 barrier. The
+        // seam is the law's seat; the closure must stay a bare call.
         $this->masterConnection->onMessage = function (
             /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn,
             string $data
         ): void {
-            if ($this->guardIncomingFrame($data)) {
-                $this->handleMessage($data);
-            }
+            $this->handleInboundLeafFrame($data);
         };
 
-        // On close — schedule reconnect
+        // On close — schedule reconnect. The catch is a BACKSTOP: the
+        // current scheduleReconnect() is self-contained, so the pin for
+        // this arm's barrier is the source-shape law in
+        // FederationLeafLinkBarrierTest, not a behavioral throw vector.
         $this->masterConnection->onClose = function (
             /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn
         ): void {
-            $this->scheduleReconnect();
+            try {
+                $this->scheduleReconnect();
+            } catch (Throwable $e) {
+                LoggerFactory::get(LogChannels::RELAY)->error(
+                    'FederationPeerManager: close callback threw; the worker survived',
+                    ['error' => $e->getMessage(), 'class' => get_class($e)],
+                );
+            }
         };
 
-        // On error — schedule reconnect
+        // On error — schedule reconnect (same backstop law as the close arm)
         $this->masterConnection->onError = function (
             /** @scrutinizer ignore-unused */ AsyncTcpConnection $conn,
             int $code,
@@ -1366,7 +1380,14 @@ class FederationPeerManager
                 'code' => $code,
                 'reason' => $reason,
             ]);
-            $this->scheduleReconnect();
+            try {
+                $this->scheduleReconnect();
+            } catch (Throwable $e) {
+                $logger->error(
+                    'FederationPeerManager: error callback threw; the worker survived',
+                    ['error' => $e->getMessage(), 'class' => get_class($e)],
+                );
+            }
         };
 
         try {
@@ -1390,7 +1411,13 @@ class FederationPeerManager
             self::HELLO_ACK_TIMEOUT_SECONDS,
             static function () use ($selfRef, $connForTimeout): void {
                 $selfRef->clearAckTimeoutTimerId();
-                $selfRef->failHelloTimeout($connForTimeout);
+                // S312: the tick rides the resident loop; a throw out of the
+                // zombie-trip path would kill the count=1 process.
+                try {
+                    $selfRef->failHelloTimeout($connForTimeout);
+                } catch (Throwable $e) {
+                    $selfRef->containLeafCallback($e, 'hello-ack timeout tick');
+                }
             },
             [],
             false,
@@ -1485,6 +1512,61 @@ class FederationPeerManager
         } else {
             $this->handleBinaryFrame($data);
         }
+    }
+
+    /**
+     * The guarded inbound-frame seam of the leaf link (review hub__asphp,
+     * R1 Major — fourth arm of the M-A finding): budget first
+     * (drop-before-parse), then parse/dispatch under the S312/M-HUB-03
+     * barrier.
+     *
+     * Everything the fan-out reaches is live DB work on the count=1 :8805
+     * loop — `handleHelloAck` reads and writes the peer/session stores, the
+     * share path persists offers — and ONE throwing read used to run
+     * Worker::stopAll(250) through the process, dropping every other link
+     * and every verified stamp with it. A throw here is LINK-scoped damage:
+     * contain it into {@see self::containLeafCallback()}.
+     *
+     * @internal Public for the barrier harness; the socket callback is the
+     *           production caller.
+     *
+     * @param string $data Raw frame payload.
+     *
+     * @return void
+     */
+    public function handleInboundLeafFrame(string $data): void
+    {
+        if (!$this->guardIncomingFrame($data)) {
+            return;
+        }
+
+        try {
+            $this->handleMessage($data);
+        } catch (Throwable $e) {
+            $this->containLeafCallback($e, 'inbound frame handler');
+        }
+    }
+
+    /**
+     * One contained leaf-link callback failure: a single attributed error
+     * line (message AND exception class), then the identity-safe teardown —
+     * timers cancelled, verified latch dropped, poisoned socket closed,
+     * capped ladder re-armed. The worker SURVIVES; only the link that threw
+     * is recycled.
+     *
+     * @param Throwable $e       The escaped throw being contained.
+     * @param string    $surface Human name of the failing callback.
+     *
+     * @return void
+     */
+    private function containLeafCallback(Throwable $e, string $surface): void
+    {
+        LoggerFactory::get(LogChannels::RELAY)->error(
+            'FederationPeerManager: ' . $surface . ' threw; containing leaf link; the worker survived',
+            ['error' => $e->getMessage(), 'class' => get_class($e)],
+        );
+
+        $this->closeLinkAndReschedule();
     }
 
     /**
@@ -2169,7 +2251,15 @@ class FederationPeerManager
         $this->heartbeatTimerId = Timer::add(
             15,
             static function () use ($self): void {
-                $self->sendHeartbeat();
+                // S312: the tick rides the resident loop; a throwing
+                // encode/send/store read is contained into the link
+                // teardown (the ladder re-establishes), never into
+                // Worker::stopAll(250).
+                try {
+                    $self->sendHeartbeat();
+                } catch (Throwable $e) {
+                    $self->containLeafCallback($e, 'heartbeat tick');
+                }
             },
         );
     }

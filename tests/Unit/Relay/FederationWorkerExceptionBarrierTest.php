@@ -33,6 +33,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionProperty;
 use RuntimeException;
+use TypeError;
 use stdClass;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -125,6 +126,7 @@ final class FederationWorkerExceptionBarrierTest extends TestCase
                     static fn (array $ctx): bool => ($ctx['hub_id'] ?? null) === self::HUB_ID
                         && ($ctx['direction'] ?? null) === 'message'
                         && ($ctx['error'] ?? null) === 'barrier-probe-down'
+                        && ($ctx['class'] ?? null) === RuntimeException::class
                 ),
             );
 
@@ -149,6 +151,52 @@ final class FederationWorkerExceptionBarrierTest extends TestCase
     }
 
     // --------------------------------------------------- site 2: WS close
+
+    /**
+     * Review Info twin: the barrier answers EVERY Throwable shape — a
+     * TypeError (loop-killing Error, not Exception) is contained with its
+     * CLASS logged — and liveness extends to a SECOND, unrelated peer: the
+     * count=1 worker keeps serving sockets that never poisoned it.
+     */
+    public function testErrorVectorIsContainedAndASecondPeerKeepsServing(): void
+    {
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->method('getPeerById')->willReturnCallback(
+            static fn (string $id): array => ['id' => $id]
+        );
+        $hubRepo->method('getPeerByPublicKey')
+            ->willThrowException(new TypeError('barrier-error-vector'));
+
+        $worker = $this->worker($this->controller($hubRepo), $hubRepo);
+        $poisoned = $this->connection('198.51.100.8');
+        $worker->onWebSocketConnect($poisoned, $this->upgradeRequest());
+        $poisoned->context = $this->established();
+
+        $logger = $this->injectRelayLogger();
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(
+                self::stringContains('kept alive'),
+                self::callback(
+                    static fn (array $ctx): bool => ($ctx['class'] ?? null) === TypeError::class
+                        && ($ctx['error'] ?? null) === 'barrier-error-vector'
+                ),
+            );
+
+        $worker->onMessage($poisoned, '{"type":"hub_hello","public_key":"pk"}');
+
+        // Second peer on the same live worker: full round trip unaffected.
+        $bystander = $this->connection('198.51.100.9');
+        $worker->onWebSocketConnect($bystander, $this->upgradeRequest());
+        $bystander->context = $this->established();
+        $worker->onMessage($bystander, '[1,2]');
+
+        self::assertSame(
+            ['Missing frame type'],
+            $this->closePayloads($bystander),
+            'the untouched peer still reaches the controller — process alive, loop intact',
+        );
+    }
 
     public function testThrowingCloseDispatchIsContainedAndStaticsAreCleared(): void
     {
@@ -189,6 +237,7 @@ final class FederationWorkerExceptionBarrierTest extends TestCase
                     static fn (array $ctx): bool => ($ctx['hub_id'] ?? null) === self::HUB_ID
                         && ($ctx['direction'] ?? null) === 'close'
                         && ($ctx['error'] ?? null) === 'close-probe-down'
+                        && ($ctx['class'] ?? null) === RuntimeException::class
                 ),
             );
 
@@ -242,6 +291,7 @@ final class FederationWorkerExceptionBarrierTest extends TestCase
                 self::callback(
                     static fn (array $ctx): bool => ($ctx['direction'] ?? null) === 'push_command'
                         && ($ctx['error'] ?? null) === 'leaf-verb-down'
+                        && ($ctx['class'] ?? null) === RuntimeException::class
                 ),
             );
 

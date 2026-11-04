@@ -137,23 +137,38 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
         );
 
         $body = (string) ($block[0] ?? '');
-        $guardAt = strpos($body, '$this->guardIncomingFrame($data)');
-        $handleAt = strpos($body, '$this->handleMessage($data)');
+        // The r1 law (guard gates dispatch, drop-before-parse) now rides the
+        // GUARDED SEAM (review hub__asphp R1: every inbound leg runs through
+        // handleInboundLeafFrame); the closure must stay a bare route to it.
+        self::assertStringContainsString(
+            '$this->handleInboundLeafFrame($data)',
+            $body,
+            'the live onMessage closure must route through the guarded seam',
+        );
+        $seamText = implode('', array_slice(
+            $lines,
+            (new ReflectionMethod(FederationPeerManager::class, 'handleInboundLeafFrame'))->getStartLine() - 1,
+            (new ReflectionMethod(FederationPeerManager::class, 'handleInboundLeafFrame'))->getEndLine()
+                - (new ReflectionMethod(FederationPeerManager::class, 'handleInboundLeafFrame'))->getStartLine()
+                + 1,
+        ));
+        $guardAt = strpos($seamText, '$this->guardIncomingFrame($data)');
+        $handleAt = strpos($seamText, '$this->handleMessage($data)');
 
         self::assertIsInt(
             $guardAt,
-            'the live onMessage closure must call guardIncomingFrame() — the r1 defect was its absence',
+            'the guarded seam must call guardIncomingFrame() — the r1 defect was its absence',
         );
-        self::assertIsInt($handleAt, 'the live onMessage closure must still dispatch via handleMessage()');
+        self::assertIsInt($handleAt, 'the guarded seam must still dispatch via handleMessage()');
         self::assertLessThan(
             $handleAt,
             $guardAt,
             'guard runs BEFORE parse/dispatch (drop-before-parse law)',
         );
         self::assertStringContainsString(
-            'if ($this->guardIncomingFrame($data)) {',
-            $body,
-            'the guard result must GATE the dispatch, not merely precede it',
+            'if (!$this->guardIncomingFrame($data)) {',
+            $seamText,
+            'the guard result must GATE the dispatch (early-return form), not merely precede it',
         );
     }
 

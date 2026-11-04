@@ -612,6 +612,7 @@ final class FederationWorker
                     'hub_id'    => $hubId,
                     'direction' => 'message',
                     'error'     => $e->getMessage(),
+                    'class'     => get_class($e),
                 ],
             );
             $connection->close('handler_error');
@@ -650,6 +651,7 @@ final class FederationWorker
                     'hub_id'    => $hubId,
                     'direction' => 'close',
                     'error'     => $e->getMessage(),
+                    'class'     => get_class($e),
                 ],
             );
         }
@@ -682,6 +684,7 @@ final class FederationWorker
                 [
                     'direction' => 'push_command',
                     'error'     => $e->getMessage(),
+                    'class'     => get_class($e),
                 ],
             );
         }

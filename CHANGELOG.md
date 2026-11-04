@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — federation leaf-link callbacks carry the S312 exception barrier (review hub__asphp, R1 Major, 2026-11-04)
+
+- The fourth arm of the dispatch-barrier finding: the LEAF legs installed by
+  `FederationPeerManager::establishConnection()` were bare at tip — a throwing
+  DB read under `hub_hello_ack` fan-out, a failing hello send, a heartbeat
+  tick or an ack-timeout trip ran `Worker::stopAll(250)` through the count=1
+  :8805 process. 69560af7 armed the master-side surfaces; this cures the leaf
+  side and says so out loud (review Minor: no silent deferrals).
+- Cure mirrors the worker idiom: inbound frames route through the new guarded
+  seam `handleInboundLeafFrame()` (budget first — the drop-before-parse law
+  moves into the seam, frame-budget source pin rotated accordingly), every
+  loop-adjacent callback (hello send, close, error, ack tick, heartbeat tick)
+  carries a Throwable catch, and containment is LINK-scoped: one attributed
+  error line (message AND exception class) + `containLeafCallback()` driving
+  the identity-safe `closeLinkAndReschedule()` teardown into the capped
+  ladder. The close/error catches are a disclosed backstop — their callee is
+  self-contained under current wiring, so their teeth are the source-shape pin.
+- Review Info items landed together: containment lines now log the exception
+  CLASS everywhere (worker sites included), and the barrier suite gained an
+  Error-class vector pin plus a second-peer liveness pin.
+- Tests: `FederationLeafLinkBarrierTest` (5, red-first at tip 3E/2F measured);
+  `FederationWorkerExceptionBarrierTest` gained the Error/second-peer leg;
+  duration cache blessed for the new file.
+
 ### Fixed — federation frames left the wire on the TEXT opcode; BINARY pinned at both link seams (review hub__asphp, Major M-B, 2026-11-04)
 - `FederationWorker` (:8805) sends every relay envelope through the vendored
   Websocket protocol, which defaults `$connection->websocketType` to
