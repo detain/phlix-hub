@@ -98,6 +98,14 @@ final class AuthControllerTest extends TestCase
         $decoded = json_decode($response->body, true);
         self::assertSame('rate_limited', $decoded['code']);
         self::assertSame('Too Many Requests', $decoded['error']);
+        // HUB-m13 [review hub__enduser]: the 429 is not exempt from this
+        // class's house law — every code pairs with a human `message`, and
+        // the sentence's seconds agree with the Retry-After header (the one
+        // value the client is actually told, so the pair must not drift).
+        self::assertSame(
+            'Too many attempts — try again in ' . (int) $response->headers['Retry-After'] . ' seconds.',
+            $decoded['message'],
+        );
     }
 
     /**
@@ -390,6 +398,11 @@ final class AuthControllerTest extends TestCase
         /** @var array<string, mixed> $decoded */
         $decoded = json_decode($response->body, true);
         self::assertSame('rate_limited', $decoded['code']);
+        // HUB-m13: the register leg pairs the same way (law of errorFrame()).
+        self::assertSame(
+            'Too many attempts — try again in ' . (int) $response->headers['Retry-After'] . ' seconds.',
+            $decoded['message'],
+        );
     }
 
     public function testLoginJsonReturns200(): void

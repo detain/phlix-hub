@@ -175,17 +175,29 @@ final class AuthController
     }
 
     /**
-     * Build the shared 429 rate-limit envelope (status + `Retry-After` header
-     * + `code: 'rate_limited'`), matching the central mapping in
-     * {@see \Phlix\Hub\Application}. Kept local so auth trips never fall
-     * through to the generic 401/400/500 paths above.
+     * Build the shared 429 rate-limit envelope. The status, the `Retry-After`
+     * header and the machine `code: 'rate_limited'` match the central mapping
+     * in {@see \Phlix\Hub\Application::rateLimitResponse()}; on top of that
+     * pair this local frame also carries the human `message` sentence, which
+     * is this class's own house law ({@see errorFrame()} sentences every
+     * code, and the test-suite header names it) — an auth throttle in front
+     * of a person must never be a bare machine frame. Wire-ADDITIVE against
+     * the central `{error, code}` shape: legacy readers are untouched, no
+     * new code. Kept local so auth trips never fall through to the generic
+     * 401/400/500 paths above.
      */
     private static function rateLimited(RateLimitException $e): Response
     {
+        $retryAfter = $e->retryAfterSeconds();
+
         return (new Response())
             ->status(429)
-            ->header('Retry-After', (string) $e->retryAfterSeconds())
-            ->json(['error' => 'Too Many Requests', 'code' => 'rate_limited']);
+            ->header('Retry-After', (string) $retryAfter)
+            ->json([
+                'error' => 'Too Many Requests',
+                'code' => 'rate_limited',
+                'message' => 'Too many attempts — try again in ' . $retryAfter . ' seconds.',
+            ]);
     }
 
     /**

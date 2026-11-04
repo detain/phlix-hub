@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — the 429 auth envelope gains its human sentence (review hub__enduser, HUB-m13, 2026-11-05)
+
+- `AuthController::rateLimited()` was the one failure frame in the class
+  that skipped the house `errorFrame()` law — the body was a bare
+  `{error, code}` with no `message`, so a throttled human saw a machine
+  token. The frame now carries `'Too many attempts — try again in N
+  seconds.'` with N equal to the `Retry-After` header (pinned as an
+  equality on both the login and register legs, so header and sentence
+  can never drift apart).
+- Wire-ADDITIVE: status, `Retry-After` and `code: rate_limited` still
+  match the central `Application::rateLimitResponse()` mapping (the
+  docblock now names the exact match set instead of a blanket claim);
+  the `message` key is already legal under the openapi `Error` schema's
+  declared legacy-mirror field. No new codes, no consumer breakage.
+
 ### Fixed — the leaf link's frame budget charges only protocol-shaped frames (review hub__asphp, R2 Major, 2026-11-04)
 
 - The finding: `handleInboundLeafFrame()` armed the shared per-peer limiter
