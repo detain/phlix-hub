@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — docs truth: rate-limit env denial vs live seams, stale watch-party seam carve-out, two torn tables (reviews hub__docmaint, hub__newcomer, hub__enduser, hub__writer, 2026-11-04)
+- **Defect:** the troubleshooting prose denied the very dials the configuration
+  reference documents: the 429 section ("There are no
+  `PHLIX_HUB_RATELIMIT_*` env knobs (a doc fiction retired in Major 8)") and
+  the Settings-toggle row ("env overrides for these knobs do NOT exist")
+  over-generalized Major 8's scoped correction — `config/server.php` reads
+  fifteen boot-time `PHLIX_HUB_RATELIMIT_*` seams (fourteen of the sixteen
+  limiter profiles plus the shared `cap`); only the two fabricated ones
+  (`client_relay_token`, `client_request_create`) are literal-only. The
+  Watch Party caveat still recited the Major 38 carve-out ("page always
+  dials `hostname:8804` regardless of that seam") although the cure shipped
+  at this repo's pin: `web-ui/`'s `buildRelayUrl` (source and the shipped
+  `index-*.js` chunk both carry it) consults `window.__PHLIX__.wsUrl`/
+  `wsPath` seam-first before the same-origin `:8804` fallback — TLS-hub
+  operators were steered away from a page that works. Two load-bearing
+  tables rendered broken on unescaped in-cell pipes: the `HUB_JWT_SECRET`
+  row of the Auth table (`` `dev|local` `` split its 3-column row into 4)
+  and the `admin_delegation` row of `docs/websockets.md`'s "Sync payloads"
+  table (`"grant"|"revoke"` split its 4-column row into 5), tearing the
+  grid for every row beneath.
+- **Cure (docs + config comment, zero behavior change):** the 429 and
+  toggle-table prose now state the M8 scope truthfully (env defaults are the
+  config-file layer, the `server.rate_limit` store blob merges over them and
+  still requires the restart; fourteen profiles plus `cap` are env-settable),
+  mirrored in the `config/server.php` rate-limit docblock; the Watch Party
+  section states the shipped seam law and closes Major 38; both table cells
+  escape their pipes (`dev\|local`, `"grant"\|"revoke"`), restoring the
+  column grid.
+
 ### Fixed — installer usage examples drop the fabricated v0.2.0 tag pin; branch-or-tag wording parity (review hub__newcomer major, 2026-11-04)
 - **Defect:** the `--help` usage heredoc in `scripts/install.sh` still
   counseled `--update --branch v0.2.0 -y` — a tag that has never existed on
