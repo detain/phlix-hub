@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — psalm (tests) red since 42693425 cured: the frame-budget recorder is a named fixture (review hub__asphp R3, major F-R3-3)
+
+- The CI "Psalm (tests)" job had been RED on every hub push since
+  42693425: `FederationPeerManagerFrameBudgetTest::recordingLimiter()`
+  returned its inline anonymous class through an intersection `@return`
+  (`RateLimiterInterface&object{hits: list<string>}`) that psalm cannot
+  infer — InvalidReturnType + InvalidReturnStatement (psalm.dev/011/128).
+  Measured red at the tip in the docker psalm venue (`--config=psalm-tests.xml`,
+  CI's command; the venue image lacks swoole, so three untouched files emit
+  known Swoole-absence noise — unrelated to this finding); origin-attributed
+  at jobs 126431972384 (42693425),
+  126432374699 (a86aa2a6), 126432835997 (cb345a84), 126433109137
+  (fe7be52b), 126434445854 (36cd1f1a).
+- Cure: the double is hoisted verbatim (window numbers included) into
+  `tests/Support/Federation/RecordingFrameBudgetLimiter.php` — a named
+  class implementing `RateLimiterInterface` with a typed public
+  `list<string> $hits`, no intersection needed (S306's own hoist law:
+  PSR-12 allows one class per file). Zero production behavior change;
+  the suite's 10 pins pass unchanged. `tests/Support/RecordingRateLimiter`
+  was deliberately NOT reused — its 4/900 login-window numbers would
+  silently re-shape this suite's fixture narrative. No bless row owed:
+  the ParallelTestRunner fail-loud law covers `*Test.php` files only,
+  and the touched test file's row already exists.
+
 ### Fixed — error-code census rotated for the chain's own extractions (review hub__asphp R3, major F-R3-2)
 
 - Hub master CI had been RED on every push since cb345a84: the

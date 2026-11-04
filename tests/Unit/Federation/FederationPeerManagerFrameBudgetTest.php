@@ -20,6 +20,7 @@ use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Hub\Ed25519KeyManager;
+use Phlix\Hub\Tests\Support\Federation\RecordingFrameBudgetLimiter;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use Phlix\Hub\Tests\Support\WorkermanTimerRuntimeControl;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -441,33 +442,16 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
     // ------------------------------------------------------------- helpers
 
     /**
-     * Anonymous always-unlimited limiter recording every key it was asked
-     * to charge (the R2 pins observe the CHARGE set, not the verdict).
-     *
-     * @return \Phlix\Hub\Common\RateLimit\RateLimiterInterface&object{hits: list<string>}
+     * The always-unlimited limiter recording every key it was asked to
+     * charge (the R2 pins observe the CHARGE set, not the verdict). The
+     * double lives as a named support class — R3 cure (review hub__asphp
+     * F-R3-3): the previous inline anonymous class forced an intersection
+     * `@return` psalm cannot infer, and the CI Psalm (tests) job had been
+     * red on every push since 42693425.
      */
-    private function recordingLimiter(): object
+    private function recordingLimiter(): RecordingFrameBudgetLimiter
     {
-        return new class () implements \Phlix\Hub\Common\RateLimit\RateLimiterInterface {
-            /** @var list<string> */
-            public array $hits = [];
-
-            public function hit(string $key): \Phlix\Hub\Common\RateLimit\RateLimitState
-            {
-                $this->hits[] = $key;
-
-                return new \Phlix\Hub\Common\RateLimit\RateLimitState(1, 120, time() + 60, false, 121);
-            }
-
-            public function reset(string $key): void
-            {
-            }
-
-            public function peek(string $key): \Phlix\Hub\Common\RateLimit\RateLimitState
-            {
-                return new \Phlix\Hub\Common\RateLimit\RateLimitState(0, 120, 0, false, 120);
-            }
-        };
+        return new RecordingFrameBudgetLimiter();
     }
 
     /**
