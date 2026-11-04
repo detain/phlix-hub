@@ -583,13 +583,28 @@ final class FederationWorker
         // unchanged pass-through: the controller owns that lifecycle and
         // bounds them itself. 120/60s is heartbeat-dominated headroom
         // (4/min/link legit); over budget: one warning + close 1013, the
-        // leaf's ladder re-dials. Fails OPEN (unlimited) when unresolvable.
+        // leaf's ladder re-dials. Fails OPEN (unlimited) when unresolvable —
+        // and, R2-symmetric with the connect gate above, when the supplied
+        // limiter's hit() THROWS: contained with one named error line, the
+        // frame still dispatches, the resident worker stays alive.
         $hubId = self::$connHubIds[spl_object_id($connection)] ?? null;
         if ($hubId !== null) {
             $limiter = $this->frameLimiter();
             if ($limiter !== null) {
-                $state = $limiter->hit('federation_frame:' . $hubId);
-                if ($state->limited) {
+                try {
+                    $state = $limiter->hit('federation_frame:' . $hubId);
+                } catch (Throwable $e) {
+                    LoggerFactory::get(LogChannels::RELAY)->error(
+                        'Federation: frame limiter threw — failing open (unlimited)',
+                        [
+                            'hub_id' => $hubId,
+                            'error'  => $e->getMessage(),
+                        ],
+                    );
+                    $state = null;
+                }
+
+                if ($state !== null && $state->limited) {
                     LoggerFactory::get(LogChannels::RELAY)->warning(
                         'Federation: inbound frame budget exceeded for peer',
                         [

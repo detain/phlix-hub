@@ -274,25 +274,9 @@ final class FederationWorkerRateLimitTest extends TestCase
             }
         );
 
-        $throwing = new class implements RateLimiterInterface {
-            public function hit(string $key): RateLimitState
-            {
-                throw new RuntimeException('limiter backend exploded mid-probe');
-            }
-
-            public function reset(string $key): void
-            {
-            }
-
-            public function peek(string $key): RateLimitState
-            {
-                throw new RuntimeException('unreachable in this fixture');
-            }
-        };
-
         $worker = $this->worker([
             FederationHubRepository::class => $hubRepo,
-            RateLimitProfiles::FEDERATION_CONNECT => $throwing,
+            RateLimitProfiles::FEDERATION_CONNECT => $this->explodingLimiter(),
         ]);
 
         $logger = $this->injectRelayLogger();
@@ -308,6 +292,47 @@ final class FederationWorkerRateLimitTest extends TestCase
 
         self::assertSame(1, $dbReads, 'a throwing hit() must not starve the connect of DB validation');
         self::assertNull($connection->onWebSocketConnected ?? null, 'no rejection may be armed on the fail-open path');
+    }
+
+    /**
+     * The frame leg's twin of the connect-gate law (R2, third :8805 survivor-
+     * sweep site): the per-peer budget sat OUTSIDE the S312 dispatch barrier,
+     * so an exploding limiter backend threw through the bare gate region of
+     * the count=1 worker — same stopAll class, same containment cure. Fail
+     * open here means the frame still dispatches: the controller's own
+     * 'Missing frame type' refusal is the reached marker (a 1013 frame would
+     * prove the limiter swallowed the leg).
+     */
+    public function testFrameLimiterThrowingOnHitFailsOpenToDispatch(): void
+    {
+        $hubRepo = $this->createMock(FederationHubRepository::class);
+        $hubRepo->method('getPeerById')->willReturnCallback(
+            fn (string $id): array => ['id' => $id]
+        );
+
+        $worker = $this->worker([
+            FederationHubRepository::class => $hubRepo,
+            RateLimitProfiles::FEDERATION_FRAME => $this->explodingLimiter(),
+        ]);
+
+        $logger = $this->injectRelayLogger();
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(
+                self::stringContains('frame limiter threw'),
+                self::anything(),
+            );
+
+        $connection = $this->connection('198.51.100.9');
+        $worker->onWebSocketConnect($connection, $this->upgradeRequest());
+        $connection->context = $this->established();
+        $worker->onMessage($connection, '[1,2]');
+
+        self::assertSame(
+            ['Missing frame type'],
+            $this->closePayloads($connection),
+            'a throwing frame hit() must not starve dispatch — controller refusal is the reached marker',
+        );
     }
 
     // ------------------------------------------------------- frame limiter
@@ -526,6 +551,30 @@ final class FederationWorkerRateLimitTest extends TestCase
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /**
+     * A limiter whose hit() throws mid-probe — the external-backend
+     * explosion shape both fail-open gates must contain (connect leg and
+     * frame leg share the fixture).
+     */
+    private function explodingLimiter(): RateLimiterInterface
+    {
+        return new class implements RateLimiterInterface {
+            public function hit(string $key): RateLimitState
+            {
+                throw new RuntimeException('limiter backend exploded mid-probe');
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): RateLimitState
+            {
+                throw new RuntimeException('unreachable in this fixture');
+            }
+        };
+    }
 
     /**
      * Fake container: every entry resolves; ids named in $throwOn ALWAYS

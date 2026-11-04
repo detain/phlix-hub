@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — third :8805 survivor-sweep site: frame-limiter gate made throw-safe (review hub__asphp R2, minor)
+
+- `FederationWorker::onMessage()`'s per-peer frame budget ran
+  `$limiter->hit()` in the bare pre-dispatch region — the S312 barrier
+  contains the controller dispatch, not the gate above it — so an
+  exploding limiter backend threw through the count=1 resident worker
+  (the same stopAll class as the two sites cured before it). The gate
+  now wraps the probe: one named error line (`frame limiter threw —
+  failing open (unlimited)`) and the frame still dispatches — fully
+  symmetric with the connect gate.
+- Pin: `FederationWorkerRateLimitTest::testFrameLimiterThrowingOnHitFailsOpenToDispatch`
+  (red-first: measured the throwable escaping `FederationWorker.php:591`
+  pre-cure; the controller's own `Missing frame type` refusal is the
+  reached-dispatch marker). The connect leg's fixture refactored onto
+  the shared `explodingLimiter()` helper.
+
 ### Fixed — survivor-sweep residue: rejection arm and connect throttle made throw-safe (review hub__asphp R2, minor)
 
 - `WebSocketCloseFrame::reject()`'s pre-handshake deferred arm closed bare:
