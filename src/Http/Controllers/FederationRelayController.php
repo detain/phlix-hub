@@ -86,6 +86,9 @@ final class FederationRelayController
             );
         }
 
+        // The vendored Workerman exposes $websocketType as a magic @property
+        // that Psalm does not resolve on this pinned version.
+        /** @psalm-suppress UndefinedPropertyAssignment */
         $connection->websocketType = Websocket::BINARY_TYPE_ARRAYBUFFER;
 
         $connId = spl_object_id($connection);

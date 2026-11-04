@@ -1312,6 +1312,9 @@ class FederationPeerManager
         // fails such links. The client handshake itself is sent RAW (bypasses
         // the encoder), and the vendor only `??=`-defaults the type after
         // handshake completion, so a pre-set pin governs every later send.
+        // Magic vendor @property (see FederationRelayController) — Psalm
+        // does not resolve it on this pinned workerman.
+        /** @psalm-suppress UndefinedPropertyAssignment */
         $this->masterConnection->websocketType = Ws::BINARY_TYPE_ARRAYBUFFER;
 
         if ($dialPlan['transport'] !== '') {

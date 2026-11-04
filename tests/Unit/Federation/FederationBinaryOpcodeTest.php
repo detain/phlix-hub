@@ -155,6 +155,7 @@ final class FederationBinaryOpcodeTest extends TestCase
     {
         $connection = $this->connection('198.51.100.22');
         $connection->context = $this->established();
+        /** @psalm-suppress UndefinedPropertyAssignment — magic vendor @property */
         $connection->websocketType = Websocket::BINARY_TYPE_ARRAYBUFFER;
 
         foreach (["\x00\x01short", '{"type":"hub_hello_ack"}'] as $payload) {
