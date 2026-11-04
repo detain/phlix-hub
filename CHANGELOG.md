@@ -6,6 +6,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — migrator cite role labels swapped to truth (review hub__docmaint, Minor, 2026-11-04)
+- The wave-1 entry below records the re-anchored install.sh cites as `:1449`
+  (first install) and `:1865` (update); opening `scripts/install.sh` shows the
+  two labels were backwards — `:1449` sits inside `do_update()` (the UPDATE
+  path), while `:1865` is the section-5 migrator call in the main
+  FIRST-INSTALL flow. The README now reads `:1449` (update) and `:1865` (first
+  install). Forward correction: the mislabeled entry stands verbatim per the
+  append-only history rule.
+
 ### Fixed — hub minors wave-1: three README docs-hygiene cures (review hub__docmaint, hub__newcomer, Minor, 2026-11-04)
 - `server.relay.reconnect_drain_grace_seconds` was the one store key of the
   18-key `HubSettingsRepository::ALLOWED_KEYS` census invisible in the README:

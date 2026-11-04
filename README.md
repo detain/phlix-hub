@@ -815,8 +815,8 @@ Run the migrator as **root** — the env file is mode 600 root-owned, so an
 unprivileged re-execution of the `grep | xargs` form would silently expand to an
 empty environment and the runner would fall back to `config/database.php`
 defaults instead of your step-2 password (the installer itself runs as root end
-to end, so its own migrator calls at `scripts/install.sh:1449` (first install)
-and `:1865` (update) inherit the real environment):
+to end, so its own migrator calls at `scripts/install.sh:1449` (update) and
+`:1865` (first install) inherit the real environment):
 
 ```bash
 sudo bash -c 'set -a; . /etc/phlix-hub.env; set +a; php /opt/phlix-hub/scripts/run-migrations.php'
