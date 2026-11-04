@@ -598,6 +598,10 @@ composer install
 export HUB_DB_HOST=127.0.0.1 HUB_DB_USER=phlix_hub HUB_DB_PASSWORD=phlix_hub HUB_DB_NAME=phlix_hub
 export HUB_JWT_SECRET="$(openssl rand -hex 32)"
 
+# Create the schema + dev user first — run-migrations.php only builds tables,
+# it never creates the database (same grants as step 2 of the production install).
+sudo mysql -e "CREATE DATABASE IF NOT EXISTS phlix_hub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER IF NOT EXISTS 'phlix_hub'@'127.0.0.1' IDENTIFIED BY 'phlix_hub'; GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON phlix_hub.* TO 'phlix_hub'@'127.0.0.1'; FLUSH PRIVILEGES"
+
 php scripts/run-migrations.php     # create the tables (idempotent)
 php start.php start                # start the Hub (Ctrl-C to stop)
 
