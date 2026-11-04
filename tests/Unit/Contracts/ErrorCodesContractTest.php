@@ -219,9 +219,12 @@ final class ErrorCodesContractTest extends TestCase
         'Http/Controllers/OAuthController.php::consent' =>
             'excluded: RFC 6749 authorization code in the consent redirect query params —'
             . ' registry-excluded by design (see class docblock)',
-        'Federation/FederationPeerManager.php::establishConnection' =>
+        'Federation/FederationPeerManager.php::handleLeafError' =>
             'excluded: Workerman onError($conn, int $code, $reason) callback context — the `code` is'
             . ' a numeric socket error written to the LOG, never to a wire body',
+        'Relay/WebSocketCloseFrame.php::reject' =>
+            'excluded: numeric WS close code written to the LOG context of the contained rejection'
+            . ' arm, never to a wire body (the wire carries the RFC 6455 frame built by bytes())',
         'Alexa/AuditLogAlexaRejectionAuditor.php::record' =>
             'excluded: audit-log context column (operator-facing rejection record), not an HTTP/relay'
             . ' wire body; the wire emit is AlexaSignatureMiddleware::reject, policed by its law test',

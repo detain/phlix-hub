@@ -6,6 +6,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — error-code census rotated for the chain's own extractions (review hub__asphp R3, major F-R3-2)
+
+- Hub master CI had been RED on every push since cb345a84: the
+  `CODE_RIDING_VARIABLE_SITES` census in
+  `tests/Unit/Contracts/ErrorCodesContractTest.php` still registered
+  `Federation/FederationPeerManager.php::establishConnection` after
+  cb345a84 moved the Workerman onError arm body into `handleLeafError`,
+  and 36cd1f1a's `'code' => $code` log line added a new code-riding site
+  in `Relay/WebSocketCloseFrame::reject` that was never enumerated — the
+  registry was not rotated in the same commits as the extractions.
+- Cure as the gate instructs: the stale key is renamed to
+  `handleLeafError` carrying the same reason (numeric socket error, LOG
+  only, never a wire body), and `reject` joins the excluded section
+  (numeric WS close code in the contained rejection arm's LOG context;
+  the wire frame is built by `bytes()`). Measured red at d667a20b — the
+  drift message's Added/Removed sets verbatim — green after the
+  rotation; origin-attributed at cb345a84 job 126432836021, fe7be52b
+  job 126433109351, 36cd1f1a job 126434445819.
+
 ### Fixed — third :8805 survivor-sweep site: frame-limiter gate made throw-safe (review hub__asphp R2, minor)
 
 - `FederationWorker::onMessage()`'s per-peer frame budget ran
