@@ -1205,7 +1205,11 @@ class FederationPeerManager
      * Vacuity arms pinned deliberately: null limiter (fail-open) or an
      * empty {@see self::$masterPeerId} (no identity to key — belt for
      * hand-built/ceremony-pre states where the guard cannot run meaningfully)
-     * both pass frames through unlimited.
+     * both pass frames through unlimited. A limiter whose hit() THROWS is
+     * contained the same way — one named error line, the frame proceeds
+     * unlimited (R3 survivor sweep, review hub__asphp F-R3-1: DbRateLimiter
+     *::hit issues uncaught queries, so the dead-pool shape was the venue's
+     * last escape leg into the count=1 worker).
      *
      * @internal Visible for tests (mirrors {@see self::failHelloTimeout()}'s
      *           law); not part of the dial API — production calls come only
@@ -1219,7 +1223,32 @@ class FederationPeerManager
             return true;
         }
 
-        $state = $limiter->hit('federation_frame:' . $this->masterPeerId);
+        // The catch arm below RETURNS, so past this block $state is
+        // definitely the limiter's RateLimitState (flow-proven).
+        try {
+            $state = $limiter->hit('federation_frame:' . $this->masterPeerId);
+        } catch (Throwable $e) {
+            // R3 survivor sweep (review hub__asphp F-R3-1): the third
+            // limiter leg of the :8805 venue and the last bare one.
+            // DbRateLimiter::hit issues uncaught queries — a dead pool is
+            // the ordinary production shape — and this guard runs from a
+            // deliberately bare onMessage closure: the throw would reach
+            // Workerman's funnel and stopAll(250) the count=1 resident
+            // worker, taking every other live link with it. Contain it:
+            // ONE named line, treat as unlimited, frame proceeds, link
+            // untouched — fully symmetric with the master-side frame gate
+            // (FederationWorker::onMessage).
+            LoggerFactory::get(LogChannels::RELAY)->error(
+                'FederationPeerManager: frame limiter threw — failing open (unlimited)',
+                [
+                    'master_peer_id' => $this->masterPeerId,
+                    'error'          => $e->getMessage(),
+                ],
+            );
+
+            return true;
+        }
+
         if (!$state->limited) {
             return true;
         }

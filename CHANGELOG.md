@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — leaf-side frame-budget charge leg folded into the :8805 barrier (review hub__asphp R3, major F-R3-1)
+
+- `FederationPeerManager::guardIncomingFrame()` ran `$limiter->hit()` BARE,
+  outside the seam's own try — and the production caller (the leaf onMessage
+  closure) is deliberately a bare route to the seam. A throwing limiter
+  (`DbRateLimiter::hit` issues uncaught queries; a dead pool is the ordinary
+  production shape) escaped into Workerman's callback funnel and took the
+  count=1 :8805 worker down via `Worker::stopAll(250)` — dropping every
+  other live leaf link. This was the third of the venue's three limiter
+  sites and the only one the R2 survivor sweep left uncured and
+  undisclosed (F-R3-1; the two master-side siblings landed at 36cd1f1a and
+  142e5825).
+- Cure mirrors the master-side frame gate verbatim: catch `Throwable`, one
+  named containment line (`frame limiter threw — failing open (unlimited)`
+  with peer id + reason), treat as unlimited, proceed. The guard's docblock
+  now states the third fail-open arm.
+- Pin: `FederationPeerManagerFrameBudgetTest::testThrowingFrameLimiterFailsOpenWithOneContainmentLine`
+  — red-first, measured at the parent: the `RuntimeException` escaped
+  `FederationPeerManager.php:1222` verbatim (PHPUnit error, stack printed);
+  post-cure the suite is OK 11 tests/37 assertions (+1/+5), the pin asserts
+  fail-open verdict, exactly one containment line, link intact, no ladder
+  armed. No bless row owed (pre-existing file row); psalm both corpora and
+  phpcs both standards green on the changed files.
+
 ### Fixed — psalm (tests) red since 42693425 cured: the frame-budget recorder is a named fixture (review hub__asphp R3, major F-R3-3)
 
 - The CI "Psalm (tests)" job had been RED on every hub push since

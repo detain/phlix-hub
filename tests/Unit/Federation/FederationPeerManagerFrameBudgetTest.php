@@ -439,6 +439,64 @@ final class FederationPeerManagerFrameBudgetTest extends TestCase
         );
     }
 
+    // --------------------------------------- limiter-failure containment (R3)
+
+    /**
+     * Review hub__asphp R3 (F-R3-1): the leaf-side charge leg was the third
+     * limiter site of the :8805 venue and the only one left bare — a
+     * throwing DbRateLimiter (its hit() issues uncaught queries; a dead
+     * pool is the ordinary production shape) escaped the onMessage closure
+     * into Workerman's callback funnel and took the count=1 resident worker
+     * down with every other live link. The cure mirrors the master-side
+     * frame gate (FederationWorker::onMessage): catch Throwable, ONE named
+     * containment line, treat as unlimited — the frame proceeds, the link
+     * is untouched, no ladder is armed. Red at parent: the throwable
+     * escapes guardIncomingFrame() verbatim.
+     */
+    public function testThrowingFrameLimiterFailsOpenWithOneContainmentLine(): void
+    {
+        $limiter = new class () implements \Phlix\Hub\Common\RateLimit\RateLimiterInterface {
+            public function hit(string $key): \Phlix\Hub\Common\RateLimit\RateLimitState
+            {
+                throw new \RuntimeException('dead pool: hit() cannot read');
+            }
+
+            public function reset(string $key): void
+            {
+            }
+
+            public function peek(string $key): \Phlix\Hub\Common\RateLimit\RateLimitState
+            {
+                throw new \RuntimeException('dead pool: peek() cannot read');
+            }
+        };
+
+        $connection = new AsyncTcpConnection('ws://127.0.0.1:1');
+        $manager = $this->peerManager();
+        $manager->setReceiveFrameLimiter($limiter);
+        $this->setMasterPeerId($manager, 'peer-exploding');
+        $this->setMasterConnection($manager, $connection);
+
+        self::assertTrue(
+            $manager->guardIncomingFrame('{"type":"hub_hello_ack"}'),
+            'a throwing limiter must fail OPEN (unlimited) — never limited, never fatal',
+        );
+
+        $lines = array_values(array_filter(
+            explode("\n", trim((string) file_get_contents($this->logFile))),
+            static fn (string $line): bool => trim($line) !== '',
+        ));
+        self::assertCount(1, $lines, 'exactly one containment line, no error amplification');
+        self::assertStringContainsString('frame limiter threw — failing open', $lines[0]);
+
+        self::assertSame([], $this->armedTimers(), 'fail-open must not arm the reconnect ladder');
+        self::assertSame(
+            $connection,
+            $this->readProp($manager, 'masterConnection'),
+            'fail-open must not drop the live link',
+        );
+    }
+
     // ------------------------------------------------------------- helpers
 
     /**
