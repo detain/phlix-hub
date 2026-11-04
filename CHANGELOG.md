@@ -6,6 +6,60 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Chore [wave-5] — re-vendor `@phlix/ui` #v0.99.16 + `/app` SPA regen — 2026-11-04
+
+- Tag-form re-pin of the served SPA's vendored library, hub leg of the wave-5
+  consumer cascade (the last JS-family member: server/tizen/windows/mobile all
+  landed at #v0.99.16 origin-verified before this push). GATE ground truth: ui
+  master `4d89b3a7d98aa3b22cea59ee6e74ee6594a5ea89` = annotated tag
+  `v0.99.16` (tag object `743a4b382bfa2667ef82e78ba156fbb7e8d5cfc7`),
+  ls-remote-verified same-window; delta vs v0.99.15 is the contracts pin
+  `#v0.5.5 -> #v0.5.6` plus the dist version-stamp literal (bundles
+  `phlix-ui.js` md5 `a43ff080…`, `player.js` md5 `372d2c51…`, 886 dist files —
+  equal to the RELEASE-UI-v09916 register).
+- `web-ui`: tarball pin `v0.99.15 -> v0.99.16`; lock surgical **7+/7−** (`npm
+  install --package-lock-only` under npm 11 + `NPM_CONFIG_USERCONFIG=/dev/null`
+  rotated the root echo, the ui node's version/resolved/integrity and its
+  contracts dep-spec; the resolver left the nested `node_modules/@phlix/contracts`
+  node at `0.5.5@e2159816`, so it was hand-rotated to `0.5.6@
+  c89c8420cd4d50e51f232885754cb74c92a9e05c` — the v0.5.6 tag peel,
+  ls-remote-verified — and the edit proven IDEMPOTENT by a re-run of
+  `--package-lock-only` (lock sha256 unchanged: `cfc1572e…`). NESTED syncplay
+  leg: MEASURED honest-zero — the lock/installed nodes already carry
+  `0.1.7@1a80b1d1` (rotated by the gate-2 lane) and the v0.99.16 payload holds
+  `#v0.1.7` (tag-tree checked), so no rotation was owed. Installed bytes
+  verified against source-of-truth: `diff -r` of `node_modules/@phlix/ui` vs
+  the codeload v0.99.16 tag tree is byte-identical apart from npm's own
+  metadata swap (`- .gitignore` / `+ .npmignore`; dist subtree `diff -r` exit
+  0, 886 files); the contracts trio in `node_modules` carries `5d1783a7`
+  (held) / `90b79e35` (moved — regen #36) / `8c92c070` (held), matching the
+  release register.
+- `public/assets/app` rebuilt: **198 files**, aggregate md5
+  `00952dc68fedb0b3f116567d7b787733`
+  (`find public/assets/app -type f | sort | xargs md5sum | md5sum` after
+  `cd web-ui && npm run build`); deterministic across 2 consecutive clean-slate
+  builds (directory purged before each). Disclosed shape: the first pre-docblock
+  build produced aggregate `b957ef88…`; the era-prose rotation legitimately
+  moved the maps (sourcemap `sourcesContent` embeds the docblocks) — the
+  COMMITTED bundle is the final source state, proven by re-build reproducing
+  `00952dc6…`. The `0.99.16` version stamp rides `index-XOWspFR8.js`; zero
+  stale `0.99.15` stamp sites remain in the bundle.
+- Era-prose: the four pin-era docblocks (`HubPageHint.vue`, `i18n/index.ts`,
+  `shareLiveness.ts`, `watchPartyWire.ts`) rotated `v0.99.15 -> v0.99.16` per
+  the ee481593/bd47bc5a cascade precedent, each claim RE-VERIFIED at the new
+  pin (the `safeHref` cite still lands on `dist/index.d.ts:218`; the relay dial
+  exports still on `dist/index.d.ts:16`; `PageHint` remains runtime-barrel-only;
+  the locale catalog and dial primitives remain entry-exported). Test
+  rotations: MEASURED ZERO — targeted
+  `--filter 'Spa|SharedUiController|StaticAsset|UiPinSkew|ViteAssets|RuntimeNpmGuidance'`
+  green before and after the regen (229 tests / 1314 assertions / 0 failures /
+  0 errors / 0 skipped; parent 229T/1314A == tip — zero new test files, so no
+  durations.json bless owed). PHP src untouched (zero changes).
+- S181 note: local re-derived sweep at this tree reads ALL CURRENT — 14 rows /
+  0 blocking across the 7-probe universe (hub/server/tizen/windows ui pins at
+  `v0.99.16`; windows/tizen/mobile/ui contracts at `v0.5.6`; expected ABSENT
+  rows honest); the skew job on this push is the CI attestation.
+
 ### Chore [endgame gate2] — re-vendor `@phlix/ui` #v0.99.15 + `/app` SPA regen — 2026-11-04
 
 - Tag-form re-pin of the served SPA's vendored library, hub half of endgame
