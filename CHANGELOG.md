@@ -6,6 +6,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — HUB_PUBLIC_DOMAIN row states the placeholder-default consequence (review hub__newcomer, Minor, 2026-11-04)
+- The env table advertised the `phlix.media` default with three words of
+  prose while the introduction disclaims any vendor-run public instance.
+  An operator who never sets the var gets `<label>.phlix.media` access
+  URLs — `config/server.php` defaults `public_domain` to it and
+  `ServerManageController`/`ServerDetailController` build user-visible
+  addresses from that value — pointing at a domain they do not control.
+  The row now carries the consequence and the required action.
+
 ### Fixed — migrator cite role labels swapped to truth (review hub__docmaint, Minor, 2026-11-04)
 - The wave-1 entry below records the re-anchored install.sh cites as `:1449`
   (first install) and `:1865` (update); opening `scripts/install.sh` shows the
