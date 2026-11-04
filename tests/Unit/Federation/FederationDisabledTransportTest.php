@@ -132,7 +132,7 @@ final class FederationDisabledTransportTest extends TestCase
 
     private function peerManager(?callable $enabledResolver): FederationPeerManager
     {
-        return new FederationPeerManager(
+        $manager = new FederationPeerManager(
             $this->hubRepo,
             $this->sessions,
             $this->createMock(FederationLibraryShareRepository::class),
@@ -141,6 +141,13 @@ final class FederationDisabledTransportTest extends TestCase
             $this->keyManager,
             $enabledResolver,
         );
+        // Owner-side venue (review hub__asphp): these tests exercise the
+        // :8805 worker's dial/park ladder — the instance must carry the boot
+        // claim for the doors to open. Non-owner refusal is pinned in
+        // FederationLeafLinkOwnershipTest.
+        $manager->claimLeafLinkOwnership();
+
+        return $manager;
     }
 
     // -------------------------------------------------------- frame handler

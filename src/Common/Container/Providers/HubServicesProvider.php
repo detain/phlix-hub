@@ -1384,12 +1384,23 @@ final class HubServicesProvider implements ServiceProviderInterface
             // :8805-side half: resolved through the SAME container the WS
             // callbacks use, so it holds the process-real
             // FederationConnectionManager whose registrations carry the H-4
-            // verified stamps.
+            // verified stamps — and (review hub__asphp) the process-real
+            // FederationPeerManager too: the leaf lifecycle commands the
+            // dispatcher executes must run on the instance bootstrap-
+            // claimed ownership of, which only THIS container's singleton
+            // ever is.
             FederationPushDispatcher::class => factory(static function (
                 FederationConnectionManager $connMgr,
+                FederationPeerManager $peerManager,
             ): FederationPushDispatcher {
-                return new FederationPushDispatcher(LoggerFactory::get(LogChannels::RELAY), $connMgr);
-            })->parameter('connMgr', get(FederationConnectionManager::class)),
+                return new FederationPushDispatcher(
+                    LoggerFactory::get(LogChannels::RELAY),
+                    $connMgr,
+                    null,
+                    $peerManager,
+                );
+            })->parameter('connMgr', get(FederationConnectionManager::class))
+                ->parameter('peerManager', get(FederationPeerManager::class)),
 
             FederationMasterPusher::class => factory(static function (
                 FederationHubRepository $hubRepo,
@@ -1440,7 +1451,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 FederationSessionManager $sessions,
                 FederationLibraryShareRepository $libraryShares,
                 FederationAdminDelegationRepository $adminDel,
-                FederationPeerManager $peerManager,
+                FederationPushBridge $leafRequests,
                 AuditLogger $audit,
                 FederationMasterPusher $masterPusher,
             ) use ($federationEnabledBoot): FederationController {
@@ -1449,8 +1460,13 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $sessions,
                     $libraryShares,
                     $adminDel,
-                    $peerManager,
+                    // Review hub__asphp: the admin path only REQUESTS leaf
+                    // link work; the bridge carries the intent to the :8805
+                    // worker, which executes it on its own claimed
+                    // FederationPeerManager. The controller no longer holds
+                    // (and could not correctly use) one here.
                     $audit,
+                    $leafRequests,
                     $masterPusher,
                     // LIVE federation.enabled gates ADMIN MUTATIONS only.
                     HubSettingsResolvers::bool('federation.enabled', $federationEnabledBoot),
@@ -1459,7 +1475,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->parameter('sessions', get(FederationSessionManager::class))
                 ->parameter('libraryShares', get(FederationLibraryShareRepository::class))
                 ->parameter('adminDel', get(FederationAdminDelegationRepository::class))
-                ->parameter('peerManager', get(FederationPeerManager::class))
+                ->parameter('leafRequests', get(FederationPushBridge::class))
                 ->parameter('audit', get(AuditLogger::class))
                 ->parameter('masterPusher', get(FederationMasterPusher::class)),
 
@@ -1489,8 +1505,12 @@ final class HubServicesProvider implements ServiceProviderInterface
                     // probe. Surviving links still re-admit frames instantly
                     // (per-frame gates); the enabled-path backoff ladder is
                     // unchanged. Explicit triggers (FederationController::
-                    // putHubConfig role change / ::toggleRelay enable) still
-                    // dial immediately when enabled.
+                    // putHubConfig role change / ::toggleRelay enable) reach
+                    // this instance through the worker's leaf commands, via
+                    // the push bridge — review hub__asphp: the HTTP process's
+                    // own instance of this class REFUSES every lifecycle call
+                    // (no rogue second link, no disconnect theater); only the
+                    // :8805 worker's bootstrap-claimed one may dial.
                     HubSettingsResolvers::bool('federation.enabled', $federationEnabledBoot),
                     // Slot 8 (tlsExtensionProbe): null = read the real
                     // extension state (the seam is for unit tests only).

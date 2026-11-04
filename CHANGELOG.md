@@ -6,6 +6,50 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — leaf federation link lifecycle owned by the :8805 worker (review hub__asphp, Critical, 2026-11-04)
+- **Defect:** every leaf-role federation intent ran inside the HTTP worker
+  against a `FederationPeerManager` that could not own the link: admin
+  connect/disconnect dialed or closed an HTTP-process socket (a rogue second
+  `AsyncTcpConnection` sharing the hub identity — the master's hubId-keyed
+  registration then EVICTS the legitimate :8805 link and the two processes'
+  reconnect ladders ping-pong forever), disconnect answered success while the
+  worker's real link and ladder survived untouched, and leaf up-pushes
+  (`createOutgoingShare`/`revokeOutgoingShare`) returned silently on the
+  HTTP instance's always-null `masterConnection` — offers vanished with no
+  log, no counter, and (unlike the master side) no hello-time replay.
+- **Cure (one boundary, already-proven machinery):** leaf intents now cross
+  from HTTP to the :8805 federation worker over the SAME Channel broker the
+  master-side pushes use. Four new `FederationPushProtocol` leaf verbs
+  (`leaf_connect`, `leaf_disconnect`, `leaf_share_offer`,
+  `leaf_share_revocation`, addressed with `leaf_hub_id: ''` — no new event,
+  table or wire codes) ride `FederationPushBridge::dispatchLeaf()`; the
+  container-identical `FederationPushDispatcher` executes them against the
+  worker's own claimed `FederationPeerManager` and answers a measured
+  `delivered` verdict. Ownership is structural:
+  `FederationPeerManager::bootstrapFromWorker()` is the sole claim of
+  `leafLinkOwned`, and the lifecycle doors
+  (`connectToMaster`/`disconnectFromMaster`) plus the push methods refuse
+  LOUD (RELAY error naming the cure, counted via
+  `getRefusedUnownedCalls()`/`getRefusedOutboundPushes()`, zero DB reads,
+  zero sockets) for any non-owner. Pushes additionally refuse when no live
+  link exists or the H-4 channel is unverified, and the leaf now replays its
+  active outgoing shares the moment a handshake verifies — the symmetric
+  convergence the master's `pushLibrarySharesToLeaf` always had (idempotent
+  via the repository's ON DUPLICATE KEY upsert; fail-soft by law: a replay
+  throw never takes the fresh link down). `FederationController` holds no
+  `FederationPeerManager` any more (structural law pin in the wiring guard)
+  and is request-only; response wire shapes are byte-identical.
+- **Tests:** `FederationLeafLinkOwnershipTest` (23 cases: non-owner refusals
+  touch nothing, boot is the sole claim, owner double-connect cannot spawn a
+  second socket, bridge legs round-trip connect-arm/disconnect-dead/push
+  verdicts, envelope law for both families, batched replay + fail-soft);
+  the controller/guard/manager/round-trip/wiring families rotated to the new
+  law (disclosed: send-verdict push fixtures now carry the verified stamp —
+  the old ones exercised a gate the cure retired). Durations cache re-blessed
+  from the serial Unit run; full Unit 5371 tests green except three
+  PRE-EXISTING `RelayProxyBridgeTest` host reds (ext-swoole absent on this
+  machine; master fails identically standalone — CI installs swoole).
+
 ### Fixed — docs truth: rate-limit env denial vs live seams, stale watch-party seam carve-out, two torn tables (reviews hub__docmaint, hub__newcomer, hub__enduser, hub__writer, 2026-11-04)
 - **Defect:** the troubleshooting prose denied the very dials the configuration
   reference documents: the 429 section ("There are no

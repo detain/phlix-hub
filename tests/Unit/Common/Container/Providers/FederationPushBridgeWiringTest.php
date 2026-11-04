@@ -8,16 +8,21 @@ use DI\Container;
 use DI\ContainerBuilder;
 use Phlix\Hub\Common\Container\Providers\HubServicesProvider;
 use Phlix\Hub\Common\Logger\LoggerFactory;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Federation\FederationConnectionManager;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationMasterPusher;
+use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationPushBridge;
 use Phlix\Hub\Federation\FederationPushDispatcher;
+use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Tests\Support\LoggerFactoryIsolation;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 use ReflectionProperty;
 use Workerman\MySQL\Connection;
 
+use function DI\factory;
 use function mkdir;
 use function sys_get_temp_dir;
 use function uniqid;
@@ -82,6 +87,14 @@ final class FederationPushBridgeWiringTest extends TestCase
         (new HubServicesProvider())->register($builder, $appConfig);
         $builder->addDefinitions([
             Connection::class => $this->createMock(Connection::class),
+            // Production ships this entry via CoreServicesProvider; the leaf
+            // rework (review hub__asphp) makes the dispatcher chain resolve
+            // the full peer-manager tree, which reaches the session/share
+            // repositories' logger parameters. A minimal stand-in keeps this
+            // test about WHAT is shared, not about the logger stack.
+            StructuredLogger::class => factory(
+                static fn (): StructuredLogger => new StructuredLogger('wiring-test', []),
+            ),
         ]);
 
         return $builder->build();
@@ -185,5 +198,53 @@ final class FederationPushBridgeWiringTest extends TestCase
 
         self::assertSame($container->get(FederationConnectionManager::class), $connMgr);
         self::assertInstanceOf(FederationHubRepository::class, $container->get(FederationHubRepository::class));
+    }
+
+    public function testTheDispatcherExecutesLeafCommandsOnTheContainerPeerManager(): void
+    {
+        // Review hub__asphp: the :8805 dispatcher is the leaf link's executor.
+        // If it held a SECOND FederationPeerManager, leaf commands would drive
+        // a link that owns no socket — the exact split-brain the rework cures.
+        $container = $this->buildContainer();
+
+        $dispatcher = $container->get(FederationPushDispatcher::class);
+        self::assertInstanceOf(FederationPushDispatcher::class, $dispatcher);
+        $prop = new ReflectionProperty(FederationPushDispatcher::class, 'peerManager');
+        $prop->setAccessible(true);
+        /** @var mixed $peerManager */
+        $peerManager = $prop->getValue($dispatcher);
+
+        self::assertInstanceOf(FederationPeerManager::class, $peerManager);
+        self::assertSame(
+            $container->get(FederationPeerManager::class),
+            $peerManager,
+            'the dispatcher must run leaf lifecycle against the very instance the worker bootstrapped',
+        );
+    }
+
+    public function testTheControllerHoldsNoFederationPeerManager(): void
+    {
+        // Structural law pin (review hub__asphp): the HTTP-side controller's
+        // constructor must never gain a FederationPeerManager parameter back
+        // — leaf intents leave the process only as bridge commands.
+        $parameters = (new ReflectionClass(FederationController::class))
+            ->getConstructor()
+            ?->getParameters() ?? [];
+
+        foreach ($parameters as $parameter) {
+            $type = (string) ($parameter->getType() ?? '');
+            self::assertStringNotContainsString(
+                FederationPeerManager::class,
+                $type,
+                'FederationController must be request-only: no peer-manager parameter',
+            );
+        }
+
+        $types = array_map(static fn ($p): string => (string) ($p->getType() ?? ''), $parameters);
+        self::assertContains(
+            '?Phlix\Hub\Federation\FederationPushBridge',
+            $types,
+            'the controller must carry the nullable leaf-request bridge',
+        );
     }
 }

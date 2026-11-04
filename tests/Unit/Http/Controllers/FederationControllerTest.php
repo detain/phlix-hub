@@ -7,11 +7,13 @@ namespace Phlix\Hub\Tests\Unit\Http\Controllers;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Hub\Federation\FederationAdminDelegationRepository;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationMasterPusher;
-use Phlix\Hub\Federation\FederationPeerManager;
+use Phlix\Hub\Federation\FederationPushBridge;
+use Phlix\Hub\Federation\FederationPushProtocol;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Http\Request;
@@ -30,10 +32,22 @@ final class FederationControllerTest extends TestCase
     private FederationSessionManager&MockObject $sessions;
     private FederationLibraryShareRepository&MockObject $libraryShares;
     private FederationAdminDelegationRepository&MockObject $adminDel;
-    private FederationPeerManager&MockObject $peerManager;
     private AuditLogger&MockObject $audit;
     private FederationMasterPusher&MockObject $masterPusher;
     private FederationController $controller;
+
+    /**
+     * Leaf commands the controller published (review hub__asphp rework): the
+     * controller holds NO FederationPeerManager any more — leaf intents leave
+     * this process only as bridge commands, so THAT is what these tests
+     * observe now. A real FederationPushBridge (final — never mock the
+     * transport) answers synchronously through its injected publisher,
+     * exactly the round-trip harness idiom from
+     * FederationPushChannelRoundTripTest.
+     *
+     * @var list<array{event: string, data: array<string, mixed>}>
+     */
+    private array $leafCommands = [];
 
     protected function setUp(): void
     {
@@ -43,7 +57,6 @@ final class FederationControllerTest extends TestCase
         $this->sessions = $this->createMock(FederationSessionManager::class);
         $this->libraryShares = $this->createMock(FederationLibraryShareRepository::class);
         $this->adminDel = $this->createMock(FederationAdminDelegationRepository::class);
-        $this->peerManager = $this->createMock(FederationPeerManager::class);
         $this->audit = $this->createMock(AuditLogger::class);
         $this->masterPusher = $this->createMock(FederationMasterPusher::class);
 
@@ -52,9 +65,49 @@ final class FederationControllerTest extends TestCase
             $this->sessions,
             $this->libraryShares,
             $this->adminDel,
-            $this->peerManager,
             $this->audit,
+            $this->recordingLeafBridge($this->leafCommands, true),
             $this->masterPusher,
+        );
+    }
+
+    /**
+     * Real bridge whose publisher captures the command and answers the reply
+     * synchronously with a fixed delivered verdict (the fake of the whole
+     * :8805 process at this test's boundary).
+     *
+     * @param list<array{event: string, data: array<string, mixed>}> $commands
+     */
+    private function recordingLeafBridge(array &$commands, bool $delivered): FederationPushBridge
+    {
+        $commands = [];
+
+        $bridge = null;
+        $bridge = new FederationPushBridge(
+            new StructuredLogger('fed-controller-leaf-test', []),
+            static function (string $event, array $data) use (&$commands, &$bridge, $delivered): void {
+                $commands[] = ['event' => $event, 'data' => $data];
+                /** @var FederationPushBridge $bridge */
+                $bridge->onReply([
+                    'request_id' => $data['request_id'],
+                    'delivered' => $delivered,
+                ]);
+            },
+        );
+
+        return $bridge;
+    }
+
+    /**
+     * Actions of the leaf commands published so far, in order.
+     *
+     * @return list<string>
+     */
+    private function leafCommandActions(): array
+    {
+        return array_map(
+            static fn (array $c): string => is_string($c['data']['action'] ?? null) ? $c['data']['action'] : '',
+            $this->leafCommands,
         );
     }
 
@@ -447,7 +500,6 @@ final class FederationControllerTest extends TestCase
             'relay_enabled' => 0,
             'admin_delegation_enabled' => 0,
         ]);
-        $this->peerManager->expects(self::once())->method('connectToMaster');
 
         $request = new Request();
         $request->path = '/api/v1/me/federation/peers/peer-1/relay';
@@ -460,6 +512,14 @@ final class FederationControllerTest extends TestCase
         self::assertSame(200, $response->statusCode);
         $body = self::arrayNode(json_decode($response->body, true));
         self::assertTrue($body['relay_enabled']);
+        // Review hub__asphp: relay enable on a leaf hub REQUESTS the worker
+        // dial; it no longer touches a peer manager that could not own the
+        // link (this test's unconfigured hub config is leaf).
+        self::assertSame(
+            [FederationPushProtocol::ACTION_LEAF_CONNECT],
+            $this->leafCommandActions(),
+            'toggleRelay must request exactly the worker-side connect',
+        );
     }
 
     public function testToggleRelayReturns404WhenPeerNotFound(): void
@@ -1041,8 +1101,9 @@ final class FederationControllerTest extends TestCase
                 static fn (array $row): bool => $row['id'] === 'share-x'
                     && $row['library_id'] === 'lib-1'
             ));
-        // Leaf-side push must NOT run on a master (masterConnection is null there).
-        $this->peerManager->expects(self::never())->method('pushLibraryShare');
+        // Leaf-side commands must NOT run on a master (review hub__asphp:
+        // the master's pushes go DOWN via the master pusher only).
+        self::assertSame([], $this->leafCommandActions());
 
         $request = new Request();
         $request->method = 'POST';
@@ -1061,14 +1122,13 @@ final class FederationControllerTest extends TestCase
         self::assertSame('active', $body['status']);
     }
 
-    public function testLeafCreateOutgoingShareStillPushesUpToMaster(): void
+    public function testLeafCreateOutgoingShareRequestsWorkerUpPush(): void
     {
         // getHubConfig null → leaf path (mirrors unconfigured/leaf deployments).
         $this->hubRepo->method('getHubConfig')->willReturn(null);
         $this->hubRepo->method('getPeerById')->willReturn(['id' => 'peer-1']);
 
         $this->masterPusher->expects(self::never())->method('pushOffer');
-        $this->peerManager->expects(self::once())->method('pushLibraryShare');
 
         $request = new Request();
         $request->method = 'POST';
@@ -1081,6 +1141,20 @@ final class FederationControllerTest extends TestCase
         ];
 
         self::assertSame(201, $this->controller->createOutgoingShare($request)->statusCode);
+
+        self::assertSame(
+            [FederationPushProtocol::ACTION_LEAF_SHARE_OFFER],
+            $this->leafCommandActions(),
+            'leaf share create must REQUEST the worker-side up-push',
+        );
+        $offerCommand = $this->leafCommands[0]['data'];
+        self::assertSame('', $offerCommand['leaf_hub_id'], 'leaf family addresses the worker itself');
+        self::assertIsString($offerCommand['payload']);
+        $offerPayload = self::arrayNode(json_decode($offerCommand['payload'], true));
+        self::assertSame('My Movies', $offerPayload['library_name']);
+        self::assertSame('lib-1', $offerPayload['library_id']);
+        self::assertSame('read', $offerPayload['permission']);
+        self::assertIsString($offerPayload['share_id']);
     }
 
     public function testMasterRevokeOutgoingSharePushesRevocationDownToLeaf(): void
@@ -1096,13 +1170,75 @@ final class FederationControllerTest extends TestCase
         $this->masterPusher->expects(self::once())
             ->method('pushRevocation')
             ->with('peer-1', 'share-1');
-        $this->peerManager->expects(self::never())->method('pushLibraryShareRevoked');
+        self::assertSame([], $this->leafCommandActions(), 'master revoke emits no leaf commands');
 
         $request = new Request();
         $request->method = 'DELETE';
         $request->userId = 'admin-1';
 
         self::assertSame(204, $this->controller->revokeOutgoingShare($request, ['id' => 'share-1'])->statusCode);
+    }
+
+    public function testLeafRevokeOutgoingShareRequestsWorkerUpPush(): void
+    {
+        // getHubConfig null → leaf path (same posture as the leaf-create test).
+        $this->hubRepo->method('getHubConfig')->willReturn(null);
+        $this->libraryShares->method('getOutgoingShareById')->willReturn([
+            'id' => 'share-1',
+            'peer_id' => 'peer-1',
+            'library_id' => 'lib-1',
+            'permission' => 'read',
+        ]);
+
+        $this->masterPusher->expects(self::never())->method('pushRevocation');
+
+        $request = new Request();
+        $request->method = 'DELETE';
+        $request->userId = 'admin-1';
+
+        self::assertSame(204, $this->controller->revokeOutgoingShare($request, ['id' => 'share-1'])->statusCode);
+        self::assertSame([FederationPushProtocol::ACTION_LEAF_SHARE_REVOCATION], $this->leafCommandActions());
+        $rawRevocation = $this->leafCommands[0]['data']['payload'];
+        self::assertIsString($rawRevocation);
+        $payload = self::arrayNode(json_decode($rawRevocation, true));
+        self::assertSame('share-1', $payload['share_id']);
+    }
+
+    public function testRoleChangeToLeafRequestsWorkerDisconnectThenConnect(): void
+    {
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['role' => 'leaf'];
+
+        $response = $this->controller->putHubConfig($request);
+
+        self::assertSame(200, $response->statusCode);
+        // Review hub__asphp: the pair crosses as REQUESTS in order — the old
+        // code ran them against a process-local instance that owned neither.
+        self::assertSame(
+            [
+                FederationPushProtocol::ACTION_LEAF_DISCONNECT,
+                FederationPushProtocol::ACTION_LEAF_CONNECT,
+            ],
+            $this->leafCommandActions(),
+        );
+    }
+
+    public function testDeactivationRequestsWorkerDisconnectOnly(): void
+    {
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['is_active' => true];
+
+        self::assertSame(200, $this->controller->putHubConfig($request)->statusCode);
+        self::assertSame([], $this->leafCommandActions(), 'activating sends no leaf command');
+
+        $this->leafCommands = [];
+        $request->body = ['is_active' => false];
+        self::assertSame(200, $this->controller->putHubConfig($request)->statusCode);
+        self::assertSame([FederationPushProtocol::ACTION_LEAF_DISCONNECT], $this->leafCommandActions());
     }
 
     public function testDeletePeerClosesLiveFederationConnection(): void

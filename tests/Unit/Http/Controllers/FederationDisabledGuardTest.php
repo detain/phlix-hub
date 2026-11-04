@@ -9,7 +9,6 @@ use Phlix\Hub\Federation\FederationAdminDelegationRepository;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationMasterPusher;
-use Phlix\Hub\Federation\FederationPeerManager;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Http\Controllers\FederationController;
 use Phlix\Hub\Http\Request;
@@ -61,8 +60,11 @@ final class FederationDisabledGuardTest extends TestCase
             $this->createMock(FederationSessionManager::class),
             $this->createMock(FederationLibraryShareRepository::class),
             $this->createMock(FederationAdminDelegationRepository::class),
-            $this->createMock(FederationPeerManager::class),
             $this->createMock(AuditLogger::class),
+            // Bridge never reached: every mutator 409s before touching it
+            // (review hub__asphp moved the old peerManager slot's occupant out
+            // of the controller entirely — the guard law is unchanged).
+            null,
             $this->createMock(FederationMasterPusher::class),
             static fn (): bool => false,
         );
@@ -121,8 +123,8 @@ final class FederationDisabledGuardTest extends TestCase
             $this->createMock(FederationSessionManager::class),
             $this->createMock(FederationLibraryShareRepository::class),
             $this->createMock(FederationAdminDelegationRepository::class),
-            $this->createMock(FederationPeerManager::class),
             $this->createMock(AuditLogger::class),
+            null,
             $this->createMock(FederationMasterPusher::class),
             static function () use (&$on): bool {
                 return $on;

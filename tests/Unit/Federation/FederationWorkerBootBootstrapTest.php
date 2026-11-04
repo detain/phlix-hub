@@ -448,7 +448,7 @@ final class FederationWorkerBootBootstrapTest extends TestCase
 
     private function peerManager(?callable $enabledResolver): FederationPeerManager
     {
-        return new FederationPeerManager(
+        $manager = new FederationPeerManager(
             $this->hubRepo,
             $this->createMock(FederationSessionManager::class),
             $this->createMock(FederationLibraryShareRepository::class),
@@ -457,6 +457,13 @@ final class FederationWorkerBootBootstrapTest extends TestCase
             $this->keyManager,
             $enabledResolver,
         );
+        // These tests exercise the :8805 worker's seat (review hub__asphp):
+        // the pre-boot M-7 disconnect is now an OWNER-side act (an HTTP
+        // process's instance can't flip this flag at all — the refusal IS
+        // the cure), and bootstrapFromWorker re-claims idempotently.
+        $manager->claimLeafLinkOwnership();
+
+        return $manager;
     }
 
     /** Simulate the exact state a forked child inherits from a poisoned master. */

@@ -232,6 +232,9 @@ final class FederationMasterTlsDialTest extends TestCase
             new Ed25519KeyManager($this->dir . '/keys/leaf-ed25519.pem'),
             static fn (): bool => true,
         );
+        // Owner-side venue (review hub__asphp): real-socket ceremony tests run
+        // in the worker's seat — claim before dialing.
+        $manager->claimLeafLinkOwnership();
         $managerRef = $manager;
 
         putenv('PHLIX_FEDERATION_CA_BUNDLE=' . $this->certs['ca']);
@@ -339,6 +342,8 @@ final class FederationMasterTlsDialTest extends TestCase
             new Ed25519KeyManager($this->dir . '/keys/leaf-ed25519.pem'),
             static fn (): bool => true,
         );
+        // Owner-side venue (review hub__asphp) — see the claim note above.
+        $manager->claimLeafLinkOwnership();
 
         putenv('PHLIX_FEDERATION_CA_BUNDLE=' . $this->certs['other_ca']);
 

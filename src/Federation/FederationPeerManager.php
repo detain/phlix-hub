@@ -65,7 +65,11 @@ use Workerman\Timer;
  *      onWorkerStart) arms or dials in the child's real event loop — a
  *      pre-fork master dial cannot connect and its pcntl-armed chain would
  *      fork-poison every child's reconnect latch (2026-10-05 lane).
- *   7. Pushes local library share changes to master when connected
+ *   7. Pushes local library share changes to master when connected — and
+ *      LOUDLY (log + counted) refuses them when the link is not live and
+ *      verified: review hub__asphp retired the silent no-op return, which
+ *      made a leaf push that never touched a socket indistinguishable from
+ *      success in the HTTP caller's seat
  *   8. Per-generation stream isolation: the binary FrameDecoder is one
  *      shared instance, so establishConnection() resets it at the head of
  *      every dial — a link that tore mid-frame must never splice its
@@ -73,6 +77,26 @@ use Workerman\Timer;
  *      reset-or-replaced nowhere else, and onClose is not guaranteed on
  *      every teardown path, so the establish seam is the convergence
  *      point of all generation transitions)
+ *
+ * ## The leaf link has exactly ONE owning process (review hub__asphp Critical)
+ *
+ * This class is container-built per process: every HTTP worker, every CLI run
+ * and the `:8805` federation worker each hold a PRIVATE instance with private
+ * socket state. Only the worker's instance ever calls
+ * {@see self::bootstrapFromWorker()} — and that call is the sole claim of the
+ * ownership stamp below. The lifecycle doors (connectToMaster,
+ * disconnectFromMaster) and the outbound pushes REFUSE LOUDLY in every
+ * non-owner, because an HTTP-side call there was never a request against the
+ * live link at all: it either dialed a rogue SECOND AsyncTcpConnection under
+ * this hub's identity (the master's hubId-keyed registration evicts the
+ * legitimate :8805 link and the two processes' backoff ladders ping-pong the
+ * link between them forever) or theater-touched a dead instance's fields
+ * while the real link and ladder kept running unbothered. HTTP processes
+ * REQUEST leaf lifecycle and share pushes across the durable channel
+ * boundary instead — {@see FederationPushBridge::dispatchLeaf()} →
+ * {@see FederationPushDispatcher::onCommand()}, executed in the worker on the
+ * one instance that owns the socket. The reconnect ladder needs no request:
+ * it already lives in the owner and ticks itself.
  *
  * @package Phlix\Hub\Federation
  */
@@ -105,6 +129,37 @@ class FederationPeerManager
      * @var AsyncTcpConnection|null
      */
     private ?AsyncTcpConnection $masterConnection = null;
+
+    /**
+     * Review hub__asphp (Critical): does THIS process own the leaf link?
+     *
+     * Set exclusively by {@see self::bootstrapFromWorker()} — the call only
+     * the `:8805` federation worker makes in its onWorkerStart, on the single
+     * count=1 child that can hold a live event-loop dial. Every other
+     * process's container-built instance keeps this false, which is what the
+     * loud refusals in connectToMaster()/disconnectFromMaster()/the push sites
+     * test. Production code outside the worker never sets it; the public
+     * claim seam exists so unit harnesses (and any future testable boot
+     * venue) can simulate the owner honestly.
+     */
+    private bool $leafLinkOwned = false;
+
+    /**
+     * Count of leaf lifecycle/push calls REFUSED because this process does not
+     * own the link (review hub__asphp; diagnostics — a rising count outside the
+     * `:8805` worker names a caller that forgot to cross the boundary).
+     */
+    private int $refusedUnownedCalls = 0;
+
+    /**
+     * Count of outbound leaf pushes refused for lacking a LIVE VERIFIED link
+     * (no socket / H-4 ceremony unverified / no origin hub id). Sits beside
+     * {@see self::$droppedOutboundFrames} — that one counts frames the socket
+     * itself refused AFTER acceptance; this counts refusals BEFORE any frame
+     * existed. Review hub__asphp: silence was the defect, this is the cure's
+     * telemetry.
+     */
+    private int $refusedOutboundPushes = 0;
 
     /**
      * M-HUB-01: leaf→master frames Workerman REFUSED to take (send() ===
@@ -154,6 +209,109 @@ class FederationPeerManager
         );
 
         return false;
+    }
+
+    /**
+     * The live, VERIFIED link a leaf push may ride — or null after a loud,
+     * counted refusal (review hub__asphp: pushes without a link must fail
+     * LOUD and measurably, never as a silent return that looks like success).
+     *
+     * Returning the narrowed handle keeps the push sites phpstan-honest
+     * without re-reading the property behind the check.
+     *
+     * ## Why channelVerified gates OUTBOUND pushes too
+     *
+     * The H-4 law is that transport liveness authorises nothing before the
+     * signed ceremony completes — the inbound side enforces it per frame.
+     * Offering shares over a half-handshake link would send claims the master
+     * must (and does) refuse, making the leaf's push theater for exactly the
+     * window the ceremony exists to quarantine.
+     *
+     * @param string $operation push site name (log/counter attribution).
+     * @param string $detail    the share id being pushed (log attribution).
+     */
+    private function pushableLink(string $operation, string $detail): ?AsyncTcpConnection
+    {
+        if (!$this->leafLinkOwned) {
+            $this->refuseUnownedLeafAction($operation);
+
+            return null;
+        }
+
+        $connection = $this->masterConnection;
+        if ($connection === null) {
+            $this->refuseOutboundPush($operation, $detail, 'no leaf link in this process');
+
+            return null;
+        }
+
+        if (!$this->channelVerified) {
+            $this->refuseOutboundPush($operation, $detail, 'H-4 channel not verified');
+
+            return null;
+        }
+
+        return $connection;
+    }
+
+    /**
+     * One counted-and-logged refusal of an outbound push (see
+     * {@see self::pushableLink()} and the origin-id arm in pushLibraryShare()).
+     */
+    private function refuseOutboundPush(string $operation, string $detail, string $why): void
+    {
+        ++$this->refusedOutboundPushes;
+        LoggerFactory::get(LogChannels::RELAY)->warning(
+            'FederationPeerManager: outbound leaf push refused — ' . $why,
+            [
+                'operation' => $operation,
+                'share_id' => $detail,
+                'total_refused' => $this->refusedOutboundPushes,
+            ],
+        );
+    }
+
+    /**
+     * The ownership refusal shared by the lifecycle doors and the pushes
+     * (review hub__asphp). LOUD by construction — an error line naming the
+     * cure, because a caller that reaches here is a wiring bug in the making:
+     * leaf intents belong across the boundary
+     * ({@see FederationPushBridge::dispatchLeaf()}), never in a non-owner.
+     * Zero DB reads, zero sockets: nothing here can touch the link.
+     */
+    private function refuseUnownedLeafAction(string $operation): void
+    {
+        ++$this->refusedUnownedCalls;
+        LoggerFactory::get(LogChannels::RELAY)->error(
+            'FederationPeerManager: ' . $operation . ' refused — this process does not own the leaf '
+            . 'link (the :8805 federation worker does, via bootstrapFromWorker()). Request it across '
+            . 'the boundary instead: FederationPushBridge::dispatchLeaf() with the matching '
+            . 'FederationPushProtocol::ACTION_LEAF_* action.',
+            ['total_refused_unowned' => $this->refusedUnownedCalls],
+        );
+    }
+
+    /**
+     * Claim leaf-link ownership for THIS process (review hub__asphp).
+     *
+     * The ONLY production caller is {@see self::bootstrapFromWorker()} itself;
+     * unit harnesses use this seam to exercise owner-side behavior honestly
+     * instead of poking the property. An HTTP process that calls this has
+     * defeated the guard — which is precisely why the controller no longer
+     * even holds this class (see the wiring guard in
+     * FederationLeafLinkOwnershipTest).
+     */
+    public function claimLeafLinkOwnership(): void
+    {
+        $this->leafLinkOwned = true;
+    }
+
+    /**
+     * Whether THIS process's instance owns the leaf link.
+     */
+    public function ownsLeafLink(): bool
+    {
+        return $this->leafLinkOwned;
     }
 
     /**
@@ -371,10 +529,30 @@ class FederationPeerManager
      * connected this is a no-op. An explicit call re-arms auto-reconnect
      * after a deliberate disconnect.
      *
+     * OWNER-ONLY (review hub__asphp): in a process that did not claim the
+     * link via {@see self::bootstrapFromWorker()} this refuses LOUD with zero
+     * side effects — no settings read, no DB read, no socket. The HTTP admin
+     * path reaches it exclusively via the channel commands the `:8805` worker
+     * executes on its own claimant instance; the reconnect ladder calls it
+     * inside the owner.
+     *
      * @return void
      */
     public function connectToMaster(): void
     {
+        // Review hub__asphp (Critical): a non-owner dial here was the rogue
+        // second link — same hub identity, and the master's hubId-keyed
+        // registration EVICTS the legitimate :8805 link, after which the two
+        // processes' backoff ladders ping-pong the connection forever. The
+        // refusal is unconditional and first: an unowned instance must not
+        // even reach the enabled-gate arming below, or every HTTP process
+        // would park its own private ladder against a link it cannot own.
+        if (!$this->leafLinkOwned) {
+            $this->refuseUnownedLeafAction('connectToMaster()');
+
+            return;
+        }
+
         // W5 kill switch: no dials while federation is off. Deliberately
         // BEFORE the enabled path's state mutation (intentionalDisconnect
         // stays as-is) so toggling the setting cannot silently re-arm a link
@@ -463,7 +641,10 @@ class FederationPeerManager
      * RUNNING worker's event loop. Called by
      * {@see \Phlix\Hub\Relay\FederationWorker::onWorkerStart()} — the single
      * boot dialer, because that worker is count=1 (the same law the push-
-     * dispatcher subscription documents).
+     * dispatcher subscription documents). The call is ALSO the sole claim of
+     * leaf-link ownership (review hub__asphp): from this point the lifecycle
+     * doors in this class open for THIS process's instance and stay shut,
+     * loudly, for every other process's instance of it.
      *
      * Why the boot dial cannot live in the master (STEP-0 repro, 2026-10-05):
      * {@see \Workerman\Worker::runAll()} only creates the event loop INSIDE
@@ -505,6 +686,16 @@ class FederationPeerManager
      */
     public function bootstrapFromWorker(): void
     {
+        // Review hub__asphp (Critical): THE CLAIM. First act, ahead of the
+        // latch reset and every branch below — including the
+        // intentionalDisconnect early return: an owner that holds a dropped
+        // link must keep its doors actionable (a later connect/disconnect
+        // REQUEST lands on this instance), while non-owners stay refused.
+        // The worker's onWorkerStart runs per child after fork, so the single
+        // child re-claims for itself; no other process ever reaches this
+        // method, which is exactly what makes the flag the boundary it is.
+        $this->leafLinkOwned = true;
+
         // Latch-reset law: fork copies master process state, and any
         // master-armed chain state a child inherits is untrustworthy by
         // construction — the timer it names belongs to a scheduler that can
@@ -687,10 +878,23 @@ class FederationPeerManager
      * onClose callback cannot schedule a reconnect, and any already-armed
      * reconnect timer is deleted rather than left to fire (M-7).
      *
+     * OWNER-ONLY (review hub__asphp): from a non-owner this was theater — it
+     * flipped flags on a private instance that had never held the worker's
+     * socket, so the real link AND its ladder kept running while the HTTP
+     * response reported success. The refusal is total: a non-owner may not
+     * even set intentionalDisconnect, or it would poison its own harmless
+     * instance state against a future legitimate claim.
+     *
      * @return void
      */
     public function disconnectFromMaster(): void
     {
+        if (!$this->leafLinkOwned) {
+            $this->refuseUnownedLeafAction('disconnectFromMaster()');
+
+            return;
+        }
+
         $this->intentionalDisconnect = true;
         $this->cancelHeartbeatTimer();
         $this->cancelAckTimeoutTimer();
@@ -722,23 +926,33 @@ class FederationPeerManager
     }
 
     /**
-     * Push an outgoing library share to the master hub if connected.
+     * Push an outgoing library share offer to the master hub.
+     *
+     * Review hub__asphp (Critical): the old shape was `void` with a SILENT
+     * `masterConnection === null` return — an HTTP caller could not tell a
+     * delivered offer from one that never existed, and in production it was
+     * ALWAYS the latter, because this instance lived in a different process
+     * from the link. Now: owner law, H-4 verified law (a half-handshake link
+     * gets loud refusals, not claims the master must drop), every refusal
+     * counted + logged, and the send verdict returned for the dispatcher that
+     * owes an explicit `delivered` reply.
      *
      * @param string $shareId    Share UUID.
      * @param string $libraryId   Library UUID.
      * @param string $libraryName Library name.
      * @param string $permission Permission level ('read'|'readwrite').
      *
-     * @return void
+     * @return bool true only when the live verified link took the frame.
      */
     public function pushLibraryShare(
         string $shareId,
         string $libraryId,
         string $libraryName,
         string $permission,
-    ): void {
-        if ($this->masterConnection === null) {
-            return;
+    ): bool {
+        $connection = $this->pushableLink('library_share_offer', $shareId);
+        if ($connection === null) {
+            return false;
         }
 
         // M-5: every offer carries `peer_id` = THIS hub's own
@@ -751,11 +965,9 @@ class FederationPeerManager
             ? $hubConfig['id']
             : '';
         if ($originHubId === '') {
-            LoggerFactory::get(LogChannels::RELAY)->warning(
-                'FederationPeerManager: cannot push share without a configured hub id',
-                ['share_id' => $shareId],
-            );
-            return;
+            $this->refuseOutboundPush('library_share_offer', $shareId, 'this hub has no configured id');
+
+            return false;
         }
 
         $payload = json_encode([
@@ -772,20 +984,25 @@ class FederationPeerManager
         ], JSON_THROW_ON_ERROR);
 
         $frame = $this->encoder->encode(RelayFrameType::DATA, 0, $payload);
-        $this->trackOutboundSend($this->masterConnection->send($frame), 'library_share_offer');
+
+        return $this->trackOutboundSend($connection->send($frame), 'library_share_offer');
     }
 
     /**
      * Push a library share revocation to the master hub if connected.
      *
+     * Same loud/measured law as {@see self::pushLibraryShare()} (review
+     * hub__asphp).
+     *
      * @param string $shareId Share UUID being revoked.
      *
-     * @return void
+     * @return bool true only when the live verified link took the frame.
      */
-    public function pushLibraryShareRevoked(string $shareId): void
+    public function pushLibraryShareRevoked(string $shareId): bool
     {
-        if ($this->masterConnection === null) {
-            return;
+        $connection = $this->pushableLink('library_share_revoked', $shareId);
+        if ($connection === null) {
+            return false;
         }
 
         $payload = json_encode([
@@ -793,7 +1010,107 @@ class FederationPeerManager
         ], JSON_THROW_ON_ERROR);
 
         $frame = $this->encoder->encode(RelayFrameType::DATA, 0, $payload);
-        $this->trackOutboundSend($this->masterConnection->send($frame), 'library_share_revoked');
+
+        return $this->trackOutboundSend($connection->send($frame), 'library_share_revoked');
+    }
+
+    /**
+     * Re-push every ACTIVE outgoing share to the master right after the H-4
+     * ceremony verified this link (mirrors the master-side
+     * {@see FederationFrameHandler::pushLibrarySharesToLeaf()} replay, which
+     * the same review cites as the precedent this side lacked).
+     *
+     * Review hub__asphp: leaf→master share pushes created during a link gap
+     * used to evaporate — the silent no-op — and the master never learned of
+     * them until the operator re-saved. With the replay, a share created while
+     * the link was down (or refused because it was) converges at the next
+     * successful hello; the master's handleIncomingOffer is an
+     * INSERT..ON DUPLICATE KEY UPDATE on the same (id, peer) row, so replaying
+     * what already arrived is idempotent BY DESIGN.
+     *
+     * Fail-soft by law: this runs INSIDE the ack handler on the resident
+     * worker's hot path — a repository or encode throw may never take the
+     * freshly verified link down (the heartbeat and the frame gates are the
+     * link's actual job). One loud line and a counted skip is the ceiling.
+     *
+     * @param array<array-key, mixed> $hubConfig this hub's own config row
+     */
+    private function replayActiveOutgoingShares(array $hubConfig): void
+    {
+        $connection = $this->masterConnection;
+        if ($connection === null || !$this->channelVerified || $this->masterPeerId === '') {
+            return;
+        }
+
+        try {
+            $activeShares = $this->libraryShares->getActiveOutgoingSharesForPeer($this->masterPeerId);
+            if ($activeShares === []) {
+                return;
+            }
+
+            /** @var string $originHubId */
+            $originHubId = is_string($hubConfig['id'] ?? null) ? $hubConfig['id'] : '';
+            if ($originHubId === '') {
+                $this->refuseOutboundPush('library_share_replay', '', 'this hub has no configured id');
+
+                return;
+            }
+
+            $shares = [];
+            foreach ($activeShares as $share) {
+                /** @var array<string, mixed> $share */
+                $shareId = self::shareColumn($share, 'id');
+                $libraryId = self::shareColumn($share, 'library_id');
+                if ($shareId === '' || $libraryId === '') {
+                    // Corrupt row: skipping it loudly beats poisoning the
+                    // one batched frame the healthy shares ride.
+                    $this->refuseOutboundPush(
+                        'library_share_replay',
+                        $shareId,
+                        'stored row is missing id or library_id',
+                    );
+
+                    continue;
+                }
+
+                $status = self::shareColumn($share, 'status');
+                $shares[] = [
+                    'id' => $shareId,
+                    // Wire identity: the ORIGINATING hub's own id (M-5).
+                    'peer_id' => $originHubId,
+                    'library_id' => $libraryId,
+                    'library_name' => self::shareColumn($share, 'library_name'),
+                    'permission' => self::shareColumn($share, 'permission'),
+                    'status' => $status !== '' ? $status : 'active',
+                ];
+            }
+
+            if ($shares === []) {
+                return;
+            }
+
+            $payload = json_encode(['shares' => $shares], JSON_THROW_ON_ERROR);
+            $frame = $this->encoder->encode(RelayFrameType::DATA, 0, $payload);
+            $this->trackOutboundSend($connection->send($frame), 'library_share_replay');
+        } catch (Throwable $e) {
+            // Fail-soft law above: the link stays up; the loss is loud.
+            $this->refuseOutboundPush('library_share_replay', '', 'replay threw: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * A share row column as the string the wire needs, '' when the driver
+     * handed back anything else (defensive read, mirrors the controller's
+     * coercion idiom).
+     *
+     * @param array<string, mixed> $row
+     */
+    private static function shareColumn(array $row, string $key): string
+    {
+        /** @var mixed $value */
+        $value = $row[$key] ?? null;
+
+        return is_string($value) ? $value : '';
     }
 
     /**
@@ -804,6 +1121,37 @@ class FederationPeerManager
     public function isConnected(): bool
     {
         return $this->masterConnection !== null;
+    }
+
+    /**
+     * Live leaf socket OR an armed re-dial — the measured state a leaf
+     * connect/disconnect command answers with (review hub__asphp): a connect
+     * that only armed the ladder (dial refused while disabled parks it) is
+     * honestly "armed", and a disconnect that leaves neither is "down". NOT a
+     * hope-flag: every branch of connectToMaster()/disconnectFromMaster()
+     * leaves this reading the truth of what THIS owner's instance now does.
+     */
+    public function linkLiveOrArmed(): bool
+    {
+        return $this->masterConnection !== null || $this->reconnectScheduled;
+    }
+
+    /**
+     * Total leaf lifecycle/push calls refused for lacking ownership
+     * (diagnostics; review hub__asphp).
+     */
+    public function getRefusedUnownedCalls(): int
+    {
+        return $this->refusedUnownedCalls;
+    }
+
+    /**
+     * Total outbound leaf pushes refused without a live verified link
+     * (diagnostics; review hub__asphp).
+     */
+    public function getRefusedOutboundPushes(): int
+    {
+        return $this->refusedOutboundPushes;
     }
 
     /**
@@ -1284,6 +1632,15 @@ class FederationPeerManager
         // over the same session nonce, then open the channel for payloads.
         $this->sendHelloAuth($hubId, $sessionId, $nonce);
         $this->channelVerified = true;
+
+        // Review hub__asphp: the leaf side of the hello-time replay the master
+        // has always performed (pushLibrarySharesToLeaf). Shares created while
+        // this link was down were pushed into a null socket and gone forever;
+        // now the active set converges the moment the ceremony verifies. After
+        // the stamp, before the heartbeat: the replay rides the just-opened
+        // channel, and a replay failure must never gate the heartbeat itself
+        // (fail-soft law inside the method).
+        $this->replayActiveOutgoingShares($hubConfig);
 
         // Start heartbeat timer
         $this->startHeartbeatTimer();

@@ -13,12 +13,15 @@ namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Common\Support\Ids;
 use Phlix\Hub\Common\Logger\AuditLogger;
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Federation\FederationAdminDelegationRepository;
 use Phlix\Hub\Federation\FederationHubConfig;
 use Phlix\Hub\Federation\FederationHubRepository;
 use Phlix\Hub\Federation\FederationLibraryShareRepository;
 use Phlix\Hub\Federation\FederationMasterPusher;
-use Phlix\Hub\Federation\FederationPeerManager;
+use Phlix\Hub\Federation\FederationPushBridge;
+use Phlix\Hub\Federation\FederationPushProtocol;
 use Phlix\Hub\Federation\FederationSessionManager;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
@@ -102,8 +105,17 @@ final class FederationController
         private readonly FederationSessionManager $sessions,
         private readonly FederationLibraryShareRepository $libraryShares,
         private readonly FederationAdminDelegationRepository $adminDel,
-        private readonly FederationPeerManager $peerManager,
         private readonly AuditLogger $audit,
+        // Review hub__asphp (Critical): the leaf link belongs to the :8805
+        // federation worker, so this HTTP-side controller holds NO
+        // FederationPeerManager any more — an instance here could only dial a
+        // rogue second link, push into a null socket, or fake a teardown.
+        // Leaf intents (connect/disconnect/share pushes) are REQUESTED across
+        // the channel broker via this bridge; the worker executes them on the
+        // instance that owns the socket and answers with a measured bool.
+        // Null only on deployments predating the bridge: requests log loud
+        // and stay inert; the DB truth still lands.
+        private readonly ?FederationPushBridge $leafRequests = null,
         // Master-side live push of share create/revoke. Null on deployments
         // predating the pusher; leaf-role hubs never use it.
         private readonly ?FederationMasterPusher $masterPusher = null,
@@ -122,7 +134,8 @@ final class FederationController
      * Reads (GETs) and putHubConfig are deliberately NOT routed through this:
      * disabling federation must never blind the admin to its state, and
      * per-peer is_active is orthogonal config CRUD (the dial gate lives in
-     * FederationPeerManager::connectToMaster(), not here).
+     * FederationPeerManager::connectToMaster() — which in the worker's hands
+     * only, per the leaf-link ownership law below — not here).
      */
     private function guardFederationDisabled(): ?Response
     {
@@ -192,10 +205,14 @@ final class FederationController
             // If role is changing, update is_master flag
             $this->hubRepo->updateRole($roleRaw);
 
-            // On role change, trigger peer manager reconnect
-            $this->peerManager->disconnectFromMaster();
+            // On role change, request the worker re-establish its links.
+            // Review hub__asphp: a role switch invalidates whatever leaf link
+            // the :8805 worker holds (this hub is not a leaf any more, or is
+            // one now) — but the socket is the worker's, so both acts are
+            // REQUESTS it executes on its own instance, in order.
+            $this->requestLeafLink(FederationPushProtocol::ACTION_LEAF_DISCONNECT);
             if ($roleRaw === 'leaf') {
-                $this->peerManager->connectToMaster();
+                $this->requestLeafLink(FederationPushProtocol::ACTION_LEAF_CONNECT);
             }
         }
 
@@ -257,9 +274,11 @@ final class FederationController
                 : (is_string($isActiveRaw) && $isActiveRaw === 'true');
             $this->hubRepo->updateActive($isActive);
 
-            // If deactivating, disconnect from master
+            // If deactivating, request the worker take the leaf link down
+            // (review hub__asphp: this used to mutate an HTTP-local instance
+            // while the real :8805 link and its ladder kept running).
             if (!$isActive) {
-                $this->peerManager->disconnectFromMaster();
+                $this->requestLeafLink(FederationPushProtocol::ACTION_LEAF_DISCONNECT);
             }
         }
 
@@ -575,9 +594,15 @@ final class FederationController
 
         $this->hubRepo->updatePeerToggles($peerId, $relayEnabled, $adminDelEnabled);
 
-        // If enabling relay and this hub is leaf, connect to master
-        if ($relayEnabled) {
-            $this->peerManager->connectToMaster();
+        // If enabling relay and this hub is leaf, request the worker dial.
+        // Review hub__asphp: the role test used to be implicit (an HTTP-side
+        // connectToMaster on the wrong role no-oped inside the wrong process);
+        // now it is explicit here, and the request crosses to the only process
+        // whose dial door opens. A master hub enabling relay on a peer needs
+        // no outbound action at all — that link is INBOUND and the master
+        // listener already accepts it.
+        if ($relayEnabled && !$this->isMasterHub()) {
+            $this->requestLeafLink(FederationPushProtocol::ACTION_LEAF_CONNECT);
         }
 
         $this->audit->logAdminAction(
@@ -732,8 +757,10 @@ final class FederationController
         if ($this->isMasterHub()) {
             // Master role: the row is persisted 'active'; push it down the
             // leaf's live WS now so the offer converges without waiting for
-            // the leaf's next hello-replay. (PeerManager's push is the leaf
-            // side — it dials UP, and is a no-op here.)
+            // the leaf's next hello-replay. (The leaf-side UP-push is a
+            // worker-owned command — see the else arm; on a master hub the
+            // peer's link is INBOUND and this process owns the push via the
+            // master pusher's local-first/bridge triage.)
             $shareRow = $this->libraryShares->getOutgoingShareById($shareId) ?? [
                 'id' => $shareId,
                 'library_id' => $libraryIdRaw,
@@ -742,8 +769,20 @@ final class FederationController
             ];
             $this->masterPusher?->pushOffer($peerIdRaw, $shareRow);
         } else {
-            // Leaf role: push the share up to the master hub if connected.
-            $this->peerManager->pushLibraryShare($shareId, $libraryIdRaw, $libraryNameRaw, $permissionRaw);
+            // Leaf role: REQUEST the worker push the share up to the master
+            // over ITS verified outbound link (review hub__asphp: calling
+            // pushLibraryShare() on an HTTP-local instance here was the
+            // silent-into-nothing this cure retires; the offer row is already
+            // committed, and the worker's hello replay converges regardless).
+            $this->requestLeafLink(
+                FederationPushProtocol::ACTION_LEAF_SHARE_OFFER,
+                json_encode([
+                    'share_id' => $shareId,
+                    'library_id' => $libraryIdRaw,
+                    'library_name' => $libraryNameRaw,
+                    'permission' => $permissionRaw,
+                ], JSON_THROW_ON_ERROR),
+            );
         }
 
         $this->audit->logLibraryShareCrossHub($peerIdRaw, $libraryIdRaw, $permissionRaw, 'created');
@@ -801,8 +840,13 @@ final class FederationController
             // usable on the leaf until its next reconnect.
             $this->masterPusher?->pushRevocation($peerId, $shareId);
         } else {
-            // Leaf role: push revocation up to the master hub if connected.
-            $this->peerManager->pushLibraryShareRevoked($shareId);
+            // Leaf role: REQUEST the worker push the revocation up over its
+            // verified link (review hub__asphp — same law as the offer arm;
+            // the row is already 'revoked' in this database either way).
+            $this->requestLeafLink(
+                FederationPushProtocol::ACTION_LEAF_SHARE_REVOCATION,
+                json_encode(['share_id' => $shareId], JSON_THROW_ON_ERROR),
+            );
         }
 
         if ($peerId !== '' && $libraryId !== '') {
@@ -1142,6 +1186,44 @@ final class FederationController
         }
 
         return (new Response())->status(400)->json($payload);
+    }
+
+    /**
+     * Request one leaf-link lifecycle/push action from the `:8805` worker
+     * (review hub__asphp Critical): this HTTP process never touches the leaf
+     * link — it publishes the INTENT and the worker executes it on the one
+     * instance that owns the socket, answering with its measured verdict.
+     *
+     * The response contract is deliberately UNCHANGED for every caller: the
+     * DB truth commits before the request goes out, and whether or not the
+     * command lands, the worker converges on boot/next hello (share rows and
+     * hub config are re-read there — same doctrine as FederationMasterPusher's
+     * advisory pushes). What is no longer allowed is SILENCE: an undelivered
+     * intent, or a deployment without the bridge, gets one loud warning
+     * naming the action. No new wire codes (contract law).
+     */
+    private function requestLeafLink(string $action, string $payload = ''): bool
+    {
+        $bridge = $this->leafRequests;
+        if ($bridge === null) {
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'Federation leaf request dropped: no push bridge wired to the admin controller',
+                ['action' => $action],
+            );
+
+            return false;
+        }
+
+        $delivered = $bridge->dispatchLeaf($action, $payload);
+        if (!$delivered) {
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'Federation leaf request not confirmed by the :8805 worker (link state unchanged'
+                . ' by this request; DB truth is committed and the worker converges on boot/hello)',
+                ['action' => $action],
+            );
+        }
+
+        return $delivered;
     }
 
     /**

@@ -110,11 +110,14 @@ final class FederationPushBridge
     }
 
     /**
-     * Ask the `:8805` worker to execute one master-side push.
+     * Ask the `:8805` worker to execute one push command.
+     *
+     * Master-side verbs (offer/revocation/close_peer) pass a real leaf hub id;
+     * the leaf family arrives through {@see dispatchLeaf()} with ''.
      *
      * @param string $action     One of the {@see FederationPushProtocol} ACTION_* constants.
      * @param string $leafHubId  Connection key (the leaf's own hub uuid).
-     * @param string $payload    JSON DATA payload; '' for {@see FederationPushProtocol::ACTION_CLOSE_PEER}.
+     * @param string $payload    JSON payload per the action's law; '' where the action says so.
      *
      * @return bool True only when the `:8805` worker measured the delivery (or
      *              the teardown) and said so on this worker's reply event.
@@ -140,7 +143,7 @@ final class FederationPushBridge
                 // committed; the leaf converges on its next hello. Name the
                 // action + target loudly — an undelivered REVOCATION in
                 // particular is the state operators must be able to see.
-                $this->logger->error('Federation master push command: publish failed', [
+                $this->logger->error('Federation push command: publish failed', [
                     'action' => $action,
                     'leaf_hub_id' => $leafHubId,
                     'error' => $e->getMessage(),
@@ -161,7 +164,7 @@ final class FederationPushBridge
             // Timed out, or the broker/subscriber is not there at all. Under-
             // claim: "not confirmed delivered" — which is exactly what this
             // process can honestly say.
-            $this->logger->warning('Federation master push command: no delivery reply', [
+            $this->logger->warning('Federation push command: no delivery reply', [
                 'request_id' => $requestId,
                 'action' => $action,
                 'leaf_hub_id' => $leafHubId,
@@ -173,7 +176,7 @@ final class FederationPushBridge
         /** @var mixed $delivered */
         $delivered = $reply['delivered'] ?? null;
         if (!is_bool($delivered)) {
-            $this->logger->warning('Federation master push command: reply carried no usable delivered flag', [
+            $this->logger->warning('Federation push command: reply carried no usable delivered flag', [
                 'request_id' => $requestId,
                 'action' => $action,
                 'leaf_hub_id' => $leafHubId,
@@ -183,6 +186,28 @@ final class FederationPushBridge
         }
 
         return $delivered;
+    }
+
+    /**
+     * Ask the `:8805` worker to execute one LEAF-side command
+     * (connect/disconnect/share-push: {@see FederationPushProtocol::LEAF_ACTIONS}).
+     *
+     * Review hub__asphp (Critical): this is the door an HTTP process knocks on
+     * for the leaf link it does NOT own. The envelope keeps the same five
+     * fields; `leaf_hub_id` is '' because a leaf command addresses the
+     * consuming process's own single outbound link, not one of its inbound
+     * peers. The bool answer is the worker's MEASURED verdict (link live or
+     * armed / teardown complete / frame sent), never this process's wish.
+     *
+     * @param string $action  One of the ACTION_LEAF_* constants.
+     * @param string $payload JSON request fields; '' for the lifecycle verbs.
+     *
+     * @return bool True only when the `:8805` worker measured the outcome and
+     *              said so on this worker's reply event.
+     */
+    public function dispatchLeaf(string $action, string $payload = ''): bool
+    {
+        return $this->dispatch($action, '', $payload);
     }
 
     /**

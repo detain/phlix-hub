@@ -337,7 +337,12 @@ final class FederationWorker
      * ({@see FederationPushBridge}) can only become real writes here — via
      * {@see FederationPushDispatcher}, resolved from this process's container
      * so it holds the SAME {@see \Phlix\Hub\Federation\FederationConnectionManager}
-     * the handshake callbacks stamp. Mirrors
+     * the handshake callbacks stamp — AND, since review hub__asphp, the same
+     * is true of the LEAF side: the dispatcher is wired to THIS process's
+     * {@see \Phlix\Hub\Federation\FederationPeerManager} (again container-
+     * identical, the very instance the ARM above bootstrapped and claimed),
+     * so leaf connect/disconnect/share commands execute on the one object
+     * that may legally open and close the outbound link. Mirrors
      * {@see \Phlix\Hub\SyncPlay\SyncPlayRelayWorker::onWorkerStart()}.
      *
      * The join is wrapped so a broker failure logs and CONTINUES: the WS

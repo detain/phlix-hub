@@ -141,6 +141,11 @@ final class FederationPeerManagerTest extends TestCase
             $this->audit,
             $this->leafKeyManager,
         );
+        // Review hub__asphp law rotation: every lifecycle call in this file is
+        // an OWNER-side exercise (the :8805 worker's venue); the manager must
+        // carry the boot claim for those doors to open. The non-owner refusal
+        // is pinned separately in FederationLeafLinkOwnershipTest.
+        $this->manager->claimLeafLinkOwnership();
 
         // Ack/rebase paths log through LoggerFactory::get(RELAY).
         $this->loggerTmp = sys_get_temp_dir() . '/phlix-hub-fed-peer-' . bin2hex(random_bytes(6));
@@ -511,7 +516,7 @@ final class FederationPeerManagerTest extends TestCase
      */
     private function managerWithTlsProbe(?callable $probe): FederationPeerManager
     {
-        return new FederationPeerManager(
+        $manager = new FederationPeerManager(
             $this->hubRepo,
             $this->sessions,
             $this->libraryShares,
@@ -521,6 +526,10 @@ final class FederationPeerManagerTest extends TestCase
             null,
             $probe,
         );
+        // Owner-side venue (review hub__asphp) — see the setUp note.
+        $manager->claimLeafLinkOwnership();
+
+        return $manager;
     }
 
     /**
@@ -1387,7 +1396,16 @@ final class FederationPeerManagerTest extends TestCase
     }
 
     /**
-     * Attach a fake master socket whose send() answers with a fixed verdict.
+     * Attach a fake master socket whose send() answers with a fixed verdict,
+     * stamped as the worker-owner's live VERIFIED link.
+     *
+     * Review hub__asphp law rotation (disclosed): the old push site checked
+     * only `masterConnection !== null`, so the old fixture set only the
+     * socket. Outbound pushes now ride the same H-4 verified channel the
+     * inbound gate enforces — an unverified fixture must (and separately
+     * does, in FederationLeafLinkOwnershipTest) get refused, so reaching the
+     * send verdict requires the stamp. The M-HUB-01 verdict law these tests
+     * pin is otherwise untouched.
      */
     private function attachSendVerdictConnection(?bool $verdict): void
     {
@@ -1396,6 +1414,9 @@ final class FederationPeerManagerTest extends TestCase
         $property = new ReflectionProperty($this->manager, 'masterConnection');
         $property->setAccessible(true);
         $property->setValue($this->manager, $conn);
+        $verified = new ReflectionProperty($this->manager, 'channelVerified');
+        $verified->setAccessible(true);
+        $verified->setValue($this->manager, true);
     }
 
     /**
@@ -1407,7 +1428,7 @@ final class FederationPeerManagerTest extends TestCase
     {
         $this->attachSendVerdictConnection(false);
 
-        $this->manager->pushLibraryShareRevoked('share-uuid-1');
+        self::assertFalse($this->manager->pushLibraryShareRevoked('share-uuid-1'));
 
         self::assertSame(1, $this->manager->getDroppedOutboundFrames());
     }
@@ -1420,7 +1441,9 @@ final class FederationPeerManagerTest extends TestCase
     {
         $this->attachSendVerdictConnection(null);
 
-        $this->manager->pushLibraryShareRevoked('share-uuid-1');
+        // Buffered (null verdict): the frame was TAKEN — the push's own bool
+        // says so, the counter stays silent (backpressure is not loss).
+        self::assertTrue($this->manager->pushLibraryShareRevoked('share-uuid-1'));
 
         self::assertSame(0, $this->manager->getDroppedOutboundFrames());
     }

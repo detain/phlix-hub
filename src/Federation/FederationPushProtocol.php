@@ -30,17 +30,32 @@ namespace Phlix\Hub\Federation;
  * ## Command / reply shapes
  *
  * Command (published on {@see COMMAND_EVENT} by
- * {@see FederationPushBridge::dispatch()}):
+ * {@see FederationPushBridge::dispatch()} /
+ * {@see FederationPushBridge::dispatchLeaf()}):
  *  - `request_id`   unique per dispatch (hex), echoed in the reply.
  *  - `reply_event`  the publishing worker's own reply event.
  *  - `action`       one of {@see ACTION_OFFER}, {@see ACTION_REVOCATION},
- *                   {@see ACTION_CLOSE_PEER}.
+ *                   {@see ACTION_CLOSE_PEER} (master-side, push DOWN to a leaf)
+ *                   or {@see ACTION_LEAF_CONNECT}, {@see ACTION_LEAF_DISCONNECT},
+ *                   {@see ACTION_LEAF_SHARE_OFFER},
+ *                   {@see ACTION_LEAF_SHARE_REVOCATION} (leaf-side, review
+ *                   hub__asphp: the leaf link's lifecycle and its UP-pushes are
+ *                   owned by the `:8805` worker, so HTTP processes may only
+ *                   REQUEST them through this exact boundary).
  *  - `leaf_hub_id`  the connection key (the leaf's own hub uuid), never the
- *                   local peer row id — resolve() already translated.
- *  - `payload`      JSON payload for offer/revocation ('' for close_peer). The
- *                   BINARY frame is encoded WS-side by {@see FederationPushDispatcher}
- *                   so wire-encoding authority stays in the process that speaks
- *                   the socket protocol.
+ *                   local peer row id — resolve() already translated. For the
+ *                   LEAF family it is exactly `''`: the command addresses the
+ *                   command-consuming process's own single outbound link (the
+ *                   worker is count=1 — the same law that makes the master-side
+ *                   map safe), not one of its inbound peers.
+ *  - `payload`      JSON payload for offer/revocation ('' for close_peer,
+ *                   leaf_connect and leaf_disconnect; for the leaf share family
+ *                   it carries the REQUEST fields — the wire payload and the
+ *                   BINARY frame are built WS-side by
+ *                   {@see FederationPushDispatcher}/the worker's own
+ *                   {@see FederationPeerManager}, so wire-encoding AND
+ *                   originating-identity authority stay in the process that
+ *                   speaks the socket protocol).
  *
  * Reply (published on the command's `reply_event`):
  *  - `request_id`   echo of the command's id.
@@ -76,6 +91,58 @@ final class FederationPushProtocol
      * Goodbye + unmap + close the peer's live WS (payload: '').
      */
     public const ACTION_CLOSE_PEER = 'close_peer';
+
+    /**
+     * Establish (or arm) THIS process's single leaf→master link (payload: '').
+     *
+     * Review hub__asphp (Critical): the admin HTTP worker used to call
+     * FederationPeerManager::connectToMaster() on its OWN per-process instance
+     * — dialing a rogue second link under this hub's identity, or silently
+     * doing nothing to the worker's real one. The intent now crosses this
+     * boundary and the `:8805` worker executes it on the instance that owns
+     * the link; `delivered` answers the measured state (link live OR a re-dial
+     * armed), never a hope.
+     */
+    public const ACTION_LEAF_CONNECT = 'leaf_connect';
+
+    /**
+     * Tear THIS process's leaf link down and stop the reconnect ladder
+     * (payload: ''). `delivered` is the measured "no live socket and no armed
+     * re-dial" after the worker runs disconnectFromMaster() (M-7 law applies
+     * inside the owner, where it can actually hold).
+     */
+    public const ACTION_LEAF_DISCONNECT = 'leaf_disconnect';
+
+    /**
+     * Push an outgoing-share offer UP to the master over the worker's verified
+     * leaf link (payload: the REQUEST fields
+     * `{"share_id":"<uuid>","library_id":"<uuid>","library_name":"...","permission":"read|readwrite"}`).
+     * The worker builds the wire payload — including the M-5 originating
+     * `peer_id` — itself; `delivered` is the frame's send verdict, and a
+     * missing/unverified link refuses LOUD (review hub__asphp: the silent
+     * no-op return is the defect this retires).
+     */
+    public const ACTION_LEAF_SHARE_OFFER = 'leaf_share_offer';
+
+    /**
+     * Push a share revocation UP to the master (payload:
+     * `{"share_id":"<uuid>"}`). Same loud-failure law as
+     * {@see ACTION_LEAF_SHARE_OFFER}.
+     */
+    public const ACTION_LEAF_SHARE_REVOCATION = 'leaf_share_revocation';
+
+    /**
+     * The leaf-command family: envelope law is `leaf_hub_id === ''` and the
+     * lifecycle verbs carry `payload === ''` (see the class docblock).
+     *
+     * @var list<string>
+     */
+    public const LEAF_ACTIONS = [
+        self::ACTION_LEAF_CONNECT,
+        self::ACTION_LEAF_DISCONNECT,
+        self::ACTION_LEAF_SHARE_OFFER,
+        self::ACTION_LEAF_SHARE_REVOCATION,
+    ];
 
     /**
      * How long an HTTP worker waits for the delivery reply.

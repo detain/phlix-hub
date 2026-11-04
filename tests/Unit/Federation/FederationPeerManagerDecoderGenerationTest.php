@@ -90,6 +90,9 @@ final class FederationPeerManagerDecoderGenerationTest extends TestCase
             $this->audit,
             new Ed25519KeyManager($this->keyDir . '/leaf-ed25519.pem'),
         );
+        // Owner-side venue (review hub__asphp): generation tests drive
+        // disconnect/dial on the worker's instance — claim first.
+        $this->manager->claimLeafLinkOwnership();
 
         // Reconnect/ack paths log through LoggerFactory::get(RELAY).
         $this->loggerTmp = sys_get_temp_dir() . '/phlix-hub-fed-decgen-' . bin2hex(random_bytes(6));
