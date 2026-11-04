@@ -6,6 +6,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — the putSettings docblock's consumer claims are now the truth (review xrepo__hub-ui Major 2, 2026-11-04)
+
+- `HubSettingsController::putSettings()` documented itself as consumed by
+  "the shared @phlix/ui admin Settings page" with a coordinate cite
+  `phlix-ui/src/pages/admin/SettingsPage.vue:288-291`. Half was always false
+  and the half that was true had rotted: at the ui pin the cited lines are
+  `restartPendingKeys` code, and the shipped page speaks
+  `/api/v1/admin/settings` — the mirror `registerAdminSettingsRoutes()` runs
+  (same handler, same auth + admin gate). The page DOES read the `errors`
+  map (verified at ui tip `2b0a8ea9`): `e.body.errors` lands in `fieldErrors`
+  (400 arm) and `envelope.errors` in `describeSaveRejection()` (422 arm) —
+  now cited by symbol, never by line again (the `d1be13f8` re-anchor law).
+  The "SSR consumer reads only `success`" sentence is gone; the grep census at
+  tip finds no such consumer anywhere (and the sentence was born in `e2b384b8`
+  — the mirror commit whose own comment tells the opposite story). The
+  `/me/hub-settings` alias itself is stated for what it
+  is: admin-gated API surface with no shipped page, kept deliberately.
+- The same drifted `SettingsPage.vue:288-291` coordinate inside
+  `AdminSettingsRoutesTest`'s errors-map test docblock carries the same
+  symbol-cite treatment. Comments only — zero behavior lines, zero wire
+  change; the 400/`errors` envelope the mirror serves stays byte-identical.
+
 ### Docs — the Psalm red window 969ccaff..9da6bd1f named in the permanent record (review hub__asphp chain round-2, I-R2-1, 2026-11-04)
 
 - Disclosure the chain left unnamed: `969ccaff` landed the two

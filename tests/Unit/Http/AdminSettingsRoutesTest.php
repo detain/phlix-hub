@@ -361,8 +361,10 @@ final class AdminSettingsRoutesTest extends TestCase
      * The hub PUT must emit the SERVER's validation-error shape:
      * `{success:false, error:'Validation failed', errors:{key: message}}`.
      *
-     * `phlix-ui`'s shared admin SettingsPage reads `e.body.errors` to paint
-     * inline per-field messages (`SettingsPage.vue:288-291`). The hub used to
+     * `phlix-ui`'s shared admin SettingsPage reads `e.body.errors` into its
+     * `fieldErrors` state to paint inline per-field messages — symbol cite,
+     * not a line number (coordinate cites rot; see the re-anchor precedent
+     * @d1be13f8). The hub used to
      * return a single `error` code with no `errors` map, so hub admins got a
      * generic toast and no highlighted field.
      */

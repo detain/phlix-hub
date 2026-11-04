@@ -272,9 +272,17 @@ final class HubSettingsController
      *
      * The `data` envelope echoes the re-resolved effective settings and the
      * new overridden list so the shared `@phlix/ui` admin Settings page can
-     * refresh its "custom" badges from the save response without a second GET.
-     * It is purely additive: the SSR `/api/v1/me/hub-settings` consumer reads
-     * only `success`.
+     * refresh its "custom" badges from the save response without a second GET
+     * (its save path applies the result through `applySettings`). It is purely
+     * additive: a consumer that only reads `success` is unaffected.
+     *
+     * Consumer path (review xrepo__hub-ui truth pass): the shipped admin page
+     * speaks `/api/v1/admin/settings` — the mirror registered by
+     * `registerAdminSettingsRoutes()` in src/Application.php runs THIS handler
+     * behind the SAME auth + admin gate. This `/me/hub-settings` alias has no
+     * shipped UI consumer of its own; it is the admin-gated per-user API
+     * surface kept for automation and portal parity, not for a page that
+     * never calls it.
      *
      * Response shape (validation error, 400):
      * {
@@ -285,9 +293,11 @@ final class HubSettingsController
      *
      * The `errors` MAP (not a single first-failure `error` code) is the shape
      * the shared `@phlix/ui` admin Settings page consumes: it reads
-     * `e.body.errors` to paint inline per-field messages
-     * (`phlix-ui/src/pages/admin/SettingsPage.vue:288-291`). It is identical,
-     * field for field, to the server's
+     * `e.body.errors` into its `fieldErrors` state (400 arm) and
+     * `envelope.errors` in `describeSaveRejection()` (422 lock-out arm) to
+     * paint inline per-field messages — symbols cited, not line numbers:
+     * coordinate cites rot (the sibling re-anchor precedent @d1be13f8). It is
+     * identical, field for field, to the server's
      * {@see \Phlix\Server\Http\Controllers\Admin\AdminSettingsController::update()}
      * so one page component can serve both back ends. Every submitted key is
      * checked, so the user sees ALL problems at once rather than one per
