@@ -24,6 +24,7 @@ use Phlix\Shared\Relay\RelayFrameType;
 use RuntimeException;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
+use Workerman\Protocols\Ws;
 use Workerman\Timer;
 
 /**
@@ -1302,6 +1303,16 @@ class FederationPeerManager
         }
 
         $this->masterConnection = new AsyncTcpConnection($dialPlan['uri'], $dialPlan['socket_context']);
+
+        // M-B (review hub__asphp): pin the BINARY opcode (0x82) on the leaf
+        // dial immediately at the SOLE construction site (the same law the
+        // dial-construction tripwire enforces). The vendored Ws encoder
+        // defaults every send to the TEXT opcode and DATA payloads routinely
+        // carry bytes that are not valid UTF-8 — a strict RFC 6455 peer
+        // fails such links. The client handshake itself is sent RAW (bypasses
+        // the encoder), and the vendor only `??=`-defaults the type after
+        // handshake completion, so a pre-set pin governs every later send.
+        $this->masterConnection->websocketType = Ws::BINARY_TYPE_ARRAYBUFFER;
 
         if ($dialPlan['transport'] !== '') {
             // Must precede connect(): connect() reads the transport to pick

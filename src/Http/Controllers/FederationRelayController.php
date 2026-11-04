@@ -15,8 +15,11 @@ use Phlix\Hub\Federation\FederationConnectionManager;
 use Phlix\Hub\Federation\FederationFrameHandler;
 use Phlix\Hub\Relay\FrameDecoder;
 use Phlix\Hub\Relay\InvalidFrameTypeException;
+use RuntimeException;
 use Throwable;
 use Workerman\Connection\ConnectionInterface;
+use Workerman\Connection\TcpConnection;
+use Workerman\Protocols\Websocket;
 
 use function json_decode;
 use function ord;
@@ -69,6 +72,22 @@ final class FederationRelayController
      */
     public function onConnect(ConnectionInterface $connection, string $hubId): void
     {
+        // M-B (review hub__asphp): pin the BINARY opcode (0x82) at the single
+        // master-side registration seam — every later send on this connection
+        // (controller, connection manager, frame handler, push dispatcher)
+        // reuses the same object, and the vendored Ws/Websocket encoders
+        // default to the TEXT opcode while DATA payloads routinely carry bytes
+        // that are not valid UTF-8. The raw handshake response bypasses the
+        // encoder, and the vendor only `??=`-defaults the type after handshake
+        // completion, so this pre-set pin governs every framed send.
+        if (!$connection instanceof TcpConnection) {
+            throw new RuntimeException(
+                'Federation relay controller requires a Workerman TCP connection to pin the binary opcode',
+            );
+        }
+
+        $connection->websocketType = Websocket::BINARY_TYPE_ARRAYBUFFER;
+
         $connId = spl_object_id($connection);
 
         // Store hubId → connection mapping

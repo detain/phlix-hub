@@ -6,6 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — federation frames left the wire on the TEXT opcode; BINARY pinned at both link seams (review hub__asphp, Major M-B, 2026-11-04)
+- `FederationWorker` (:8805) sends every relay envelope through the vendored
+  Websocket protocol, which defaults `$connection->websocketType` to
+  `BINARY_TYPE_BLOB` (0x81, TEXT). DATA payloads routinely embed frame-length
+  bytes >= 0x80 that are not valid UTF-8, so a strict RFC 6455 peer fails text
+  frames carrying them — the estate tolerated it only because both endpoints
+  parse by content, not opcode. The H-5 envelope law already declares BINARY.
+- Cure: pin `BINARY_TYPE_ARRAYBUFFER` (0x82) once per connection at the two
+  construction/registration seams — `FederationRelayController::onConnect()`
+  (master side; every later send reuses that object) and
+  `FederationPeerManager::establishConnection()` (leaf side; set immediately
+  after the sole `new AsyncTcpConnection` site, before any callback or
+  connect). Raw handshake sends bypass the encoder, and the vendor only
+  `??=`-defaults the type post-handshake, so a pre-set pin survives every
+  subsequent framed send (JSON handshakes ride 0x82 as RFC-valid binary).
+- The master pin sits behind an `instanceof TcpConnection` guard that throws
+  loudly otherwise — the worker's connect-arm barrier turns that fail-loud
+  into a clean refused connection, never a silent TEXT link.
+- `tests/Unit/Federation/FederationBinaryOpcodeTest.php` (new, blessed into
+  `scripts/parallel/test-durations.json`): full-upgrade master flow asserted
+  through real `Websocket::encode` bytes (first byte 0x82, invalid-UTF-8
+  payload), a repeat-encode vendor-semantics proof, the leaf dial asserted on
+  the REAL `establishConnection` construction (Select loop, 127.0.0.1:1,
+  destroy teardown), and a source scan pinning exactly two opcode
+  assignments, both `BINARY_TYPE_ARRAYBUFFER`, one per named seam.
+  Measured red at tip: 3 conviction legs fail, the semantics leg is green by
+  design; a `& 0x0F` masking mistake was caught during red-first verification
+  (0x82 & 0x0F == 2) before shipping.
+
 ### Fixed — SPA shell bootstrap injection fails loud when the <head> anchor is missing (review hub__fedev, Minor, 2026-11-04)
 - `shell()` stamped the nonce'd `window.__PHLIX__` block with
   `preg_replace('/<head>/i', ..., 1) ?? $html` — a preg error (null) and a
