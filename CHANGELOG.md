@@ -6,6 +6,44 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Docs — info batch 3: exception-barrier boundary law, relay-strip mirror pointer, tls.md cite tail ×3, m46 site-count truth + config residue, wave-1 failure-mode precision (HUB-68/69, HUB-17 tail) — 2026-11-04
+
+- **HUB-68 — `FederationWorker`'s header speaks the barrier's boundary.** The
+  S312/M-HUB-03 contain-per-dispatch exception barrier is attested at the
+  :8805 federation venue only; the :8802/:8803/:8804 sibling relay workers
+  name their frame handlers without an attested barrier of this kind, and the
+  class header's silence read as blanket assurance. One boundary sentence
+  added, symbol-only cites per the batch-1 HUB-70 law.
+- **FIX-SRV-M16 hub-side mirror.** `ServerProxyController::STRIPPED_REQUEST_HEADERS`
+  now records that phlix-server re-defends the same headers at its own edge
+  (`RelayConsumer::buildRequest()` → `isForwardedTrustHeader()`, server
+  `510bb43d`) — the strip is a belt, and neither peer may depend on the other.
+- **tls.md cite tail closed (3).** Batch 1's register qualified
+  `DnsAliasManagerTest:77` (proof: the line now reads
+  `phlix-docs/docs/hub-admin/tls.md`); the remaining bare sites carry the
+  repo prefix too — the allocation-law docblock, its fabricated
+  `provisionCertificate` mock message (re-aligned byte-for-byte to the live
+  `TlsCertificateManager::NOT_IMPLEMENTED_MESSAGE`, which ships the docs-site
+  URL; the test asserts only the message prefix, zero pins moved), and
+  `HubServerPathContractTest`'s `SERVER_SUBDOMAIN_PATH` docblock pair. A
+  repo-wide sweep finds no unqualified `docs/hub-admin/tls.md` comment cites
+  remaining; the two wire-visible sites (501 message and `Link:` header)
+  stay absolute-URL exactly as batch 1 deliberately left them.
+- **m46 site-count truth + its genuine miss.** The `(S75 / updates.md #48)`
+  qualification record claims "all five sites"; `git show f2c9cc91` carries
+  SIX qualifying hunks (Application.php ×2, HubServicesProvider.php,
+  AdminUpdatesController.php, CoreUpdateCheckService.php,
+  CoreUpdateCheckServiceTest.php). The record stands verbatim; this is the
+  correction. And the sweep left a seventh site unqualified —
+  `config/updates.php:4` (already bare at `f2c9cc91^`) — now carrying the
+  same `phlix-docs docs/old/updates.md #48` form as its six siblings.
+- **HUB-69 — wave-1 entry-3 failure-mode precision.** The recorded "dies on
+  `Unknown database 'phlix_hub'`" holds when the `phlix_hub` user
+  pre-exists; on a truly clean machine the user is absent too, so the first
+  death is MySQL 1045 Access denied. The cure covers both worlds (its
+  `sudo mysql` line creates user AND database); the record stays verbatim
+  and this note sharpens the diagnosis.
+
 ### Docs — info batch 2: php.ini xdebug inertness disclosure, README `.env.example` absence cross-ref, list-shape convention law, reason-free close-code pointer, empty-slot-safe refusal wording (HUB-20/27/30/32/72) — 2026-11-04
 
 - **docker/php.ini `[xdebug]` carries its own truth (HUB-20).** The container base

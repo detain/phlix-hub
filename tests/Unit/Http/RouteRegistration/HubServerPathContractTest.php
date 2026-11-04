@@ -68,7 +68,8 @@ final class HubServerPathContractTest extends RouteRegistrationTestCase
      *
      * with `{serverId}` standing in for the interpolated `$this->serverId`.
      * Also published as the public contract by phlix-docs
-     * (`docs/hub-admin/tls.md`, `docs/dev/tls-certificates.md`) and repeated in
+     * (`phlix-docs/docs/hub-admin/tls.md`,
+     * `phlix-docs/docs/dev/tls-certificates.md`) and repeated in
      * {@see \Phlix\Hub\Http\Controllers\SubdomainController}'s own docblock.
      */
     private const SERVER_SUBDOMAIN_PATH = '/api/v1/servers/{serverId}/subdomain';

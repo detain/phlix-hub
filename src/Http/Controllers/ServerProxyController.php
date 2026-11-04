@@ -80,6 +80,11 @@ final class ServerProxyController
      * server's — the tunnel itself is the trust boundary; identity is conveyed
      * via the `X-Phlix-Relay-User` header instead).
      *
+     * Belt, never the sole gate the far peer leans on: phlix-server mirrors
+     * this defense at its own edge (`RelayConsumer::buildRequest()` →
+     * `isForwardedTrustHeader()`, server 510bb43d, review FIX-SRV-M16) —
+     * neither peer may depend on the other's strip for the trust posture.
+     *
      * @var list<string>
      */
     private const STRIPPED_REQUEST_HEADERS = [

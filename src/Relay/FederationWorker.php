@@ -70,6 +70,16 @@ use function trim;
  *      leaf-side outbound link in THIS process shares it (both roles, one
  *      budget per remote peer — keys never collide across roles).
  *
+ * Exception-barrier boundary (S312/M-HUB-03): the contain-per-dispatch
+ * barrier is attested at THIS :8805 venue only — {@see self::onMessage()}
+ * carries the law and its reasoning. The sibling relay workers (:8802
+ * {@see RelayWorker}, :8803 {@see ClientRelayWorker}, :8804
+ * {@see \Phlix\Hub\SyncPlay\SyncPlayRelayWorker}) name their frame handlers
+ * without an attested barrier of this kind; whether each needs one is
+ * unexamined, and this sentence marks the boundary so the header's silence
+ * is never read as an assurance (review hub__asphp M-A follow-through,
+ * HUB-68).
+ *
  * @package Phlix\Hub\Relay
  */
 final class FederationWorker

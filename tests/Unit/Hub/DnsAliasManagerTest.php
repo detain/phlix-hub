@@ -123,7 +123,7 @@ class DnsAliasManagerTest extends TestCase
      * throws RuntimeException (ACME not implemented). Subdomain
      * allocation must still succeed — and not even call the cert
      * manager — so DNS works while operators install TLS material
-     * out-of-band; see docs/hub-admin/tls.md.
+     * out-of-band; see phlix-docs/docs/hub-admin/tls.md.
      */
     public function testAllocateSubdomainDoesNotInvokeCertProvisioning(): void
     {
@@ -154,7 +154,8 @@ class DnsAliasManagerTest extends TestCase
         $this->certManager->method('provisionCertificate')
             ->willThrowException(new \RuntimeException(
                 'ACME certificate provisioning is not implemented in this build. '
-                . 'Provision certs out-of-band — see docs/hub-admin/tls.md.',
+                . 'Provision certs out-of-band — see '
+                . 'https://detain.github.io/phlix-docs/hub-admin/tls.',
             ));
 
         $this->expectException(\RuntimeException::class);

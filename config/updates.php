@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Core (hub application) update-check settings — S75 / updates.md #48.
+ * Core (hub application) update-check settings — S75 / phlix-docs docs/old/updates.md #48.
  *
  * The hub periodically fetches the repository's root `VERSION` marker and
  * compares it against the compiled {@see \Phlix\Hub\Version::VERSION}
