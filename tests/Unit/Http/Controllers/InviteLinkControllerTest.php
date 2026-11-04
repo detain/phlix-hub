@@ -124,11 +124,12 @@ final class InviteLinkControllerTest extends TestCase
     }
 
     /**
-     * HUB-m29 [review hub__webux]: the coercion arms (permission is a
-     * any-string passthrough, non-numeric max_uses falls to 1, a
-     * non-positive expires_in means "never expires") must be VISIBLE on the
-     * response — the body carries what the link will actually enforce, not
-     * what the caller typed.
+     * HUB-m29 [review hub__webux]: the coercion arms (non-numeric max_uses
+     * falls to 1, a non-positive expires_in means "never expires") must be
+     * VISIBLE on the response — the body carries what the link will actually
+     * enforce, not what the caller typed. Permission is forwarded verbatim to
+     * the handler, which admits only read/readwrite (any other value 400s
+     * "Invalid permission level" before persisting).
      */
     public function testCreateInviteLinkEchoesCoercedEffectiveValues(): void
     {
@@ -181,9 +182,11 @@ final class InviteLinkControllerTest extends TestCase
 
         /** @var array<string, mixed> $decoded */
         $decoded = json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR);
-        // A typo'd permission still rides through (documented passthrough) —
-        // but now the owner SEES 'godmode' in their own 201 instead of
-        // believing the request was honored as something else.
+        // The mock stands in for an accepted permission; the real handler 400s
+        // anything outside read/readwrite before persisting. The law pinned
+        // here: the 201 echoes the DTO's STORED permission verbatim — never a
+        // re-guess of the request body — so what the owner sees is exactly
+        // what enforcement will use.
         self::assertSame('godmode', $decoded['permission']);
         self::assertSame(1, $decoded['max_uses']);
         self::assertNull($decoded['library_id']);

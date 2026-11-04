@@ -205,7 +205,7 @@ final class InviteLinkController
                 'expires_at' => $link->expiresAt,
                 'id' => $link->id,
                 // HUB-m29 [review hub__webux]: echo the EFFECTIVE fields the
-                // server normalized — permission (any-string passthrough),
+                // server normalized — permission (stored value, never a guess),
                 // max_uses (clamp), library_id (blank-to-null) and the
                 // resolved expiry above. All values come from the model, the
                 // same source the list endpoint reads, so what the owner sees

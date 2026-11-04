@@ -6,6 +6,46 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed — derived-cures wave: entry-point cite truth, qualified legacy changelog cites, InviteLink permission spec truth — 2026-11-04
+
+- **DERIV-HUB-2 (zombie docblock, cured):** `CoreServicesProvider` class-header prose claimed its
+  `db_config_path`/`logger_config_path` container entries are supplied "on every request via
+  `public/index.php`" — the hub has no `public/` directory and never served through one; the sole
+  HTTP entry point is `start.php` (its :202-203 inject both entries; :19 states the law). Cite now
+  reads `start.php`. Behavior untouched.
+- **DERIV-HUB-3 (bare cites, cured):** the 11 remaining bare `updates.md #50` docblock cites —
+  8 src files (ServerProxyController, UserQuotaController, ConnectionResponseSink,
+  RelaySessionManager, Tunnel, TunnelManagerInterface, TunnelManager, ClientConnection) plus 3
+  same-class test headers (ConnectionResponseSinkTest, UserThrottleRouteRegistrationTest,
+  TokenBucketTest) — qualified to `phlix-docs docs/old/updates.md #50`, the form the landed #48
+  batch established. Prose-only; zero lines exceed the 120-column corpus floor.
+- **DERIV-HUB-4 (spec over-claim, cured):** the `InviteLink.permission` schema description in
+  `openapi.yaml` claimed "The create handler passes ANY non-empty string through (documented
+  behavior)". It never did: `InviteLinkHandler::createInviteLink` admits only `read`/`readwrite`
+  (strict `in_array` guard, :69-71) and throws `InvalidArgumentException('Invalid permission
+  level', 400)` before persisting; `InviteLinkController::createInviteLink` maps that code-400
+  arm to `400 invalid_request` carrying the crafted message. The operation's request-body param
+  already declared `enum: [read, readwrite]` — the schema description contradicted it. Description
+  now states the acceptance set, the pre-persist 400, and the stored-echo law. Same-class prose
+  lies corrected in place: the controller's 201 echo comment (`any-string passthrough` → stored
+  value) and two `InviteLinkControllerTest` comments — the mocked handler double stands in for an
+  ACCEPTED permission (the real 400 path is unreachable under the double); the test pins the 201's
+  verbatim DTO echo, not server acceptance. Historical fe7be52b-era bullets above stand VERBATIM
+  per the append-only law; this entry is their forward correction. No wire shape, status code,
+  or error envelope moved.
+- **DERIV-HUB-1 (E2 triage, hub-side): zero raw-Throwable survivors, no commit owed.** The flagged
+  getMessage-in-JSON arms are typed-domain catches with crafted messages (RelayController :105 —
+  `JwtHeader::kid` returns null, never throws; ServerClaimController :155/:167/:234 → `mapError()`
+  matches code strings, constant per-arm messages, default arm constant `An unexpected error
+  occurred` + `hub.internal_error`), log-only arrays (HubRestartController :171 — wire carries the
+  constant `Restart could not be scheduled`), or the central catch sending the constant
+  `Internal Server Error` envelope (Application :2428, never-echo law at :2432-2434). Proof-lines
+  recorded in `.reviews/2026-11-03/FIX-DERIVED-HUB.md`.
+- **DERIV-HUB-5 (TLS wire-halves): already aligned, no commit owed.** `TlsCertificateManager`
+  `NOT_IMPLEMENTED_MESSAGE` (:43-47), the 501 `Link: <…hub-admin/tls>; rel="help"` header and the
+  `docs` field emitted by `SubdomainController::refreshCertificate` (:183-189) all cite the same
+  live absolute docs URL since the landed 0de93ad0 (HUB-17) cure; the row premise was stale.
+
 ### Changed — route snapshot currency-sync to server `58530ec2` + contracts export re-vendor (412 → 415 tuples) — 2026-11-04
 
 - **The standing `Server Route Snapshot Currency` red, cured.** Live phlix-server master carries
