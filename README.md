@@ -170,11 +170,14 @@ wherever it first appears.
 - **claim code** — the human-typed `ABCD-1234` pairing handoff (see
   *Connecting a media server*).
 - **campaign markers** — codes like `S261`, `R-HUB-13`, `M-HUB-10`,
-  `HB-4.6`, `R14-08`, bare commit SHAs, or "review hub__asphp M2" are
-  provenance tags from this project's tracked review/audit campaign (each
-  names a finding, requirement, or decision, not a public issue link). They
-  say *why* a rule exists; the code and behavior they reference is what
-  ships.
+  `HB-4.6`, `R14-08`, a bare severity finding number ("Major 15"), bare
+  commit SHAs, or "review hub__asphp M2" are provenance tags from this
+  project's tracked review/audit campaign (each names a finding,
+  requirement, or decision, not a public issue link). The severity-number
+  form counts ranked findings in that campaign's Critical/Major tracks;
+  the sentence citing one states its disposition there and then (cured,
+  retired). They say *why* a rule exists; the code and behavior they
+  reference is what ships.
 - **watch party / group / room** — one concept, three names, by layer (the
   naming-layers map phlix-server's README publishes, carried here): the
   **canonical wire** says *group* (`syncplay_group_*` frames, `group_id`);
@@ -1808,6 +1811,13 @@ shell: `bin/phlix user:list` to find the account, `bin/phlix user:promote
 'username-or-email'` to restore admin (it toggles — `--revoke` demotes,
 refusing to remove the last admin). If the LAST admin disables themselves behind
 `auth.signups_disabled`, the CLI path remains open — it needs no web session.
+
+### Getting help
+
+There is no support inbox — the issue tracker at
+<https://github.com/detain/phlix-hub/issues> is the only channel, and docs
+confusion is a valid issue there. If a page of this README lost you, say
+which page: that is the report.
 
 ## Testing & quality
 

@@ -6,6 +6,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — "Major N" marker form glossed + a help-channel pointer (review hub__newcomer, Minor, 2026-11-04)
+- The campaign-markers glossary listed the `S261`/`R-HUB-13`-style forms
+  but skipped the bare severity-number form the docs actually use
+  ("Major 38", "Major 8", "Major 15"). The glossary now names the form
+  and its disposition rule — the sentence citing one states cured/
+  retired right there, so a reader never wonders if it gates behavior.
+- The README carried no "where do I file this" pointer anywhere for a
+  self-host-only product. A `### Getting help` closer under
+  *Troubleshooting* now names the issue tracker as the sole channel —
+  `###` under an existing `##` heading, so the `##`-depth TOC stays
+  exact.
+
 ### Fixed — HUB_PUBLIC_DOMAIN row states the placeholder-default consequence (review hub__newcomer, Minor, 2026-11-04)
 - The env table advertised the `phlix.media` default with three words of
   prose while the introduction disclaims any vendor-run public instance.
