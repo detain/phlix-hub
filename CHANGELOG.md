@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — deadlock retries decide on wire codes, not English text (review hub__srphp, HUB-m56, 2026-11-05)
+
+- `ServerReaper`'s three sweeps each carried a verbatim copy of the same
+  retry ladder, and every copy gated retry-vs-abort on
+  `strpos($e->getMessage(), 'Deadlock')`. MySQL renders error 1213 in the
+  CONNECTION's language (`lc_messages`), so a hub talking to a non-English
+  server silently lost every deadlock retry and threw at the caller. One
+  shared `runWithDeadlockRetry(callable, label)` now drives all three,
+  deciding on `isDeadlockError()`: driver errno 1213 in
+  `PDOException::errorInfo`, or SQLSTATE 40001 as the exception code.
+  Message text is consulted nowhere; ladder semantics are unchanged
+  (3 attempts, 50 ms x attempt backoff, the `attempt`/`max_retries`
+  debug context keys — the latter now pinned).
+- Tests: the two hand-rolled-PDOException heartbeat fixtures (empty
+  `errorInfo`, code 0) reddened exactly under the typed discriminator —
+  the rethrow one had been passing vacuously at the old fixture and now
+  counts its 3 ladder attempts — and were rotated to the realistic
+  pdo_mysql shape. Gained: an SQLSTATE-only arm pin, a prose-only-must-
+  NOT-retry teeth pin (the mutation that re-adds the substring check
+  reddens exactly those two), an audit-sweep shared-ladder pin, and the
+  debug-line context pin. The federation-sweep leg re-ran GREEN against
+  a REAL MySQL deadlock on a scratch schema (integration gate).
+
 ### Fixed — the putSettings docblock's consumer claims are now the truth (review xrepo__hub-ui Major 2, 2026-11-04)
 
 - `HubSettingsController::putSettings()` documented itself as consumed by

@@ -123,6 +123,29 @@ final class ServerReaper
     private const FEDERATION_SESSION_SWEEP_BATCH_SIZE = 1000;
 
     /**
+     * Attempts (initial pass + retries) allowed for one deadlock-prone sweep.
+     *
+     * @var int
+     */
+    private const DEADLOCK_MAX_ATTEMPTS = 3;
+
+    /**
+     * MySQL's deadlock error number (`ER_LOCK_DEADLOCK`).
+     *
+     * @var int
+     */
+    private const MYSQL_DEADLOCK_ERRNO = 1213;
+
+    /**
+     * SQLSTATE class for serialization failures — the code MySQL ships for
+     * error 1213, carried in {@see \PDOException::$errorInfo}[0] and as the
+     * exception's `getCode()`.
+     *
+     * @var string
+     */
+    private const SQLSTATE_SERIALIZATION_FAILURE = '40001';
+
+    /**
      * Hard ceiling (~100 years) for any retention window in days.
      *
      * Mirrors phlix-server's StatsCollector::retentionDays() cap idiom: a
@@ -363,16 +386,15 @@ final class ServerReaper
      * Retention semantics are unchanged: at most one batch of
      * {@see HEARTBEAT_SWEEP_BATCH_SIZE} rows older than the cutoff is deleted
      * per call; any leftover backlog is drained by the next tick. The bounded
-     * deadlock-retry loop is retained as a backstop.
+     * deadlock-retry ladder ({@see runWithDeadlockRetry()}) is retained as a
+     * backstop.
      *
      * @return int Number of rows deleted.
      */
     public function sweepHeartbeats(): int
     {
-        $maxRetries = 3;
-
-        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            try {
+        return $this->runWithDeadlockRetry(
+            function (): int {
                 // Phase 1: non-locking read of the expired PKs, PK-ordered so
                 // phase 2 acquires row locks in a deterministic order.
                 /** @var mixed $rows */
@@ -426,20 +448,9 @@ final class ServerReaper
                 }
 
                 return $count;
-            } catch (\PDOException $e) {
-                if ($attempt === $maxRetries || strpos($e->getMessage(), 'Deadlock') === false) {
-                    throw $e;
-                }
-                $this->logger->debug('ServerReaper: heartbeat sweep deadlock, retrying', [
-                    'attempt' => $attempt,
-                    'max_retries' => $maxRetries,
-                    'error' => $e->getMessage(),
-                ]);
-                usleep(50000 * $attempt);
-            }
-        }
-
-        return 0;
+            },
+            'heartbeat sweep',
+        );
     }
 
     /**
@@ -458,10 +469,8 @@ final class ServerReaper
      */
     public function sweepAuditLogs(): int
     {
-        $maxRetries = 3;
-
-        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            try {
+        return $this->runWithDeadlockRetry(
+            function (): int {
                 // Phase 1: non-locking read of the expired PKs, PK-ordered so
                 // phase 2 acquires row locks in a deterministic order.
                 // idx_created_at (migration 029) keeps it a tight range scan.
@@ -516,20 +525,9 @@ final class ServerReaper
                 }
 
                 return $count;
-            } catch (\PDOException $e) {
-                if ($attempt === $maxRetries || strpos($e->getMessage(), 'Deadlock') === false) {
-                    throw $e;
-                }
-                $this->logger->debug('ServerReaper: audit sweep deadlock, retrying', [
-                    'attempt' => $attempt,
-                    'max_retries' => $maxRetries,
-                    'error' => $e->getMessage(),
-                ]);
-                usleep(50000 * $attempt);
-            }
-        }
-
-        return 0;
+            },
+            'audit sweep',
+        );
     }
 
     /**
@@ -555,10 +553,8 @@ final class ServerReaper
      */
     public function sweepDeadFederationSessions(): int
     {
-        $maxRetries = 3;
-
-        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            try {
+        return $this->runWithDeadlockRetry(
+            function (): int {
                 /** @var mixed $rows */
                 $rows = $this->db->query(
                     'SELECT id FROM federation_sessions
@@ -611,13 +607,48 @@ final class ServerReaper
                 }
 
                 return $count;
+            },
+            'federation session sweep',
+        );
+    }
+
+    /**
+     * Run one sweep through the bounded deadlock-retry ladder.
+     *
+     * HUB-m56 [review hub__srphp]: the three sweeps used to carry three
+     * verbatim copies of the same retry loop, and the retry-vs-abort decision
+     * in each copy hinged on `strpos($e->getMessage(), 'Deadlock')` — English
+     * error text. MySQL renders error 1213 in the CONNECTION's language
+     * (`lc_messages`), so a hub talking to a non-English server would silently
+     * lose every deadlock retry and start throwing at the caller instead. The
+     * decision now runs off the error's wire identity — driver errno 1213 in
+     * {@see \PDOException::$errorInfo}, or the SQLSTATE serialization-failure
+     * class '40001' — and the message text is consulted nowhere.
+     *
+     * Preserved ladder semantics: {@see DEADLOCK_MAX_ATTEMPTS} attempts total,
+     * linear backoff (50 ms x attempt), one debug line per retry carrying the
+     * sweep label plus the `attempt`/`max_retries` context keys, and the final
+     * PDOException re-thrown untouched when the ladder is exhausted — or when
+     * the error is not a deadlock at all.
+     *
+     * @param callable(): int $sweep One sweep pass; returns the deleted-row count.
+     * @param string          $what  Human label for the retry log line, e.g. 'heartbeat sweep'.
+     *
+     * @return int Number of rows deleted by the first pass that did not deadlock.
+     */
+    private function runWithDeadlockRetry(callable $sweep, string $what): int
+    {
+        for ($attempt = 1; $attempt <= self::DEADLOCK_MAX_ATTEMPTS; $attempt++) {
+            try {
+                return $sweep();
             } catch (\PDOException $e) {
-                if ($attempt === $maxRetries || strpos($e->getMessage(), 'Deadlock') === false) {
+                if ($attempt === self::DEADLOCK_MAX_ATTEMPTS || !self::isDeadlockError($e)) {
                     throw $e;
                 }
-                $this->logger->debug('ServerReaper: federation session sweep deadlock, retrying', [
+
+                $this->logger->debug('ServerReaper: ' . $what . ' deadlock, retrying', [
                     'attempt' => $attempt,
-                    'max_retries' => $maxRetries,
+                    'max_retries' => self::DEADLOCK_MAX_ATTEMPTS,
                     'error' => $e->getMessage(),
                 ]);
                 usleep(50000 * $attempt);
@@ -625,6 +656,27 @@ final class ServerReaper
         }
 
         return 0;
+    }
+
+    /**
+     * Is this PDOException a MySQL deadlock (driver errno 1213 / SQLSTATE 40001)?
+     *
+     * Only machine-visible fields are read: a hand-rolled `new PDOException(...)`
+     * (tests, or a driver that never populated `errorInfo`) carries neither, and
+     * a localized "Deadlock found" sentence alone is deliberately NOT treated as
+     * a deadlock — the old substring check retried on English text the server
+     * never promised to speak.
+     */
+    private static function isDeadlockError(\PDOException $e): bool
+    {
+        // Driver errno arm: pdo_mysql populates errorInfo as
+        // ['40001', 1213, 'Deadlock found ...'] — strict int identity against
+        // 1213, no string casts anywhere.
+        if (is_array($e->errorInfo) && ($e->errorInfo[1] ?? null) === self::MYSQL_DEADLOCK_ERRNO) {
+            return true;
+        }
+
+        return (string) $e->getCode() === self::SQLSTATE_SERIALIZATION_FAILURE;
     }
 
     /**

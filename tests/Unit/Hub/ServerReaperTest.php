@@ -181,26 +181,58 @@ final class ServerReaperTest extends TestCase
         self::assertSame(0, $reaper->sweepHeartbeats());
     }
 
+    /**
+     * Realistic pdo_mysql deadlock exception — the shape the wire actually
+     * carries: SQLSTATE '40001' as the exception code plus the populated
+     * `errorInfo` triple (['40001', 1213, 'Deadlock found ...']). HUB-m56
+     * [review hub__srphp]: the retry-vs-abort decision runs off these
+     * machine-visible fields, never off the English message text.
+     */
+    private static function realisticDeadlockException(): \PDOException
+    {
+        $deadlock = new \PDOException(
+            'SQLSTATE[40001]: Serialization failure: 1213 Deadlock found '
+            . 'when trying to get lock; try restarting transaction',
+            40001,
+        );
+        $deadlock->errorInfo = [
+            '40001',
+            1213,
+            'Deadlock found when trying to get lock; try restarting transaction',
+        ];
+
+        return $deadlock;
+    }
+
     public function testSweepHeartbeatsRetriesOnDeadlockThenSucceeds(): void
     {
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
 
+        $deadlock = self::realisticDeadlockException();
         $deleteAttempts = 0;
         $db->method('query')->willReturnCallback(
-            function (string $sql, $params = null) use (&$deleteAttempts): int|array {
+            function (string $sql, $params = null) use (&$deleteAttempts, $deadlock): int|array {
                 if (str_starts_with(ltrim($sql), 'SELECT')) {
                     return [['id' => 'aaa'], ['id' => 'bbb']];
                 }
                 $deleteAttempts++;
                 if ($deleteAttempts === 1) {
-                    throw new \PDOException(
-                        'SQLSTATE[40001]: Serialization failure: 1213 Deadlock found',
-                    );
+                    throw $deadlock;
                 }
                 return 2;
             },
         );
+
+        // The preserved debug contract (HUB-m56 rotation): sweep label in the
+        // composed message, plus the attempt/max_retries context keys.
+        $logger->expects(self::once())
+            ->method('debug')
+            ->with(
+                'ServerReaper: heartbeat sweep deadlock, retrying',
+                self::callback(static fn (array $context): bool => $context['attempt'] === 1
+                    && $context['max_retries'] === 3),
+            );
 
         $reaper = new ServerReaper($db, $logger, 60, 180, 7);
         $count = $reaper->sweepHeartbeats();
@@ -214,18 +246,132 @@ final class ServerReaperTest extends TestCase
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
 
+        $deadlock = self::realisticDeadlockException();
+        $deleteAttempts = 0;
         $db->method('query')->willReturnCallback(
-            function (string $sql, $params = null): array {
+            function (string $sql, $params = null) use (&$deleteAttempts, $deadlock): array {
                 if (str_starts_with(ltrim($sql), 'SELECT')) {
                     return [['id' => 'aaa']];
                 }
-                throw new \PDOException('1213 Deadlock found');
+                $deleteAttempts++;
+                throw $deadlock;
             },
         );
 
         $reaper = new ServerReaper($db, $logger, 60, 180, 7);
         $this->expectException(\PDOException::class);
-        $reaper->sweepHeartbeats();
+        try {
+            $reaper->sweepHeartbeats();
+        } finally {
+            // The ladder must have been EXHAUSTED before the throw — 3 total
+            // attempts — not bypassed on the first one (HUB-m56: distinguish
+            // 'rethrown after retries' from 'never recognized as deadlock').
+            self::assertSame(3, $deleteAttempts);
+        }
+    }
+
+    /**
+     * HUB-m56 second discriminator arm: a driver path that carries only the
+     * SQLSTATE serialization class ('40001') with an empty errorInfo is still
+     * a deadlock and still gets its retry.
+     */
+    public function testSweepHeartbeatsRetriesOnSqlStateAloneWithoutErrorInfo(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $sqlStateOnly = new \PDOException('Serialization failure: try restarting transaction', 40001);
+        $sqlStateOnly->errorInfo = [];
+
+        $deleteAttempts = 0;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$deleteAttempts, $sqlStateOnly): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    return [['id' => 'aaa']];
+                }
+                $deleteAttempts++;
+                if ($deleteAttempts === 1) {
+                    throw $sqlStateOnly;
+                }
+                return 1;
+            },
+        );
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 7);
+        self::assertSame(1, $reaper->sweepHeartbeats());
+        self::assertSame(2, $deleteAttempts);
+    }
+
+    /**
+     * HUB-m56 teeth: the English sentence is NO LONGER the trigger. A bare
+     * hand-rolled PDOException('1213 Deadlock found') — the exact message the
+     * old substring check retried on — must abort immediately when it carries
+     * neither errorInfo 1213 nor SQLSTATE 40001. Retrying on text the server
+     * never promised to speak is what this cure removes.
+     */
+    public function testSweepHeartbeatsDoesNotRetryOnDeadlockProseWithoutWireCodes(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $proseOnly = new \PDOException('1213 Deadlock found');
+
+        $deleteAttempts = 0;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$deleteAttempts, $proseOnly): array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    return [['id' => 'aaa']];
+                }
+                $deleteAttempts++;
+                throw $proseOnly;
+            },
+        );
+
+        // Zero retry debug lines: the exception never enters the ladder.
+        $logger->expects(self::never())->method('debug');
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 7);
+        $this->expectException(\PDOException::class);
+        try {
+            $reaper->sweepHeartbeats();
+        } finally {
+            self::assertSame(1, $deleteAttempts, 'Non-deadlock wire shape must not be retried');
+        }
+    }
+
+    /**
+     * HUB-m56 shared-ladder proof: the second call site (audit sweep) got the
+     * same typed-discriminator ladder — a realistic deadlock retries once and
+     * succeeds. (The federation-sweep site is pinned against REAL deadlocks
+     * by tests/Integration/Hub/FederationSessionSweepRealDbTest.)
+     */
+    public function testSweepAuditLogsRetriesOnDeadlockThenSucceeds(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $deadlock = self::realisticDeadlockException();
+        $deleteAttempts = 0;
+        $db->method('query')->willReturnCallback(
+            function (string $sql, $params = null) use (&$deleteAttempts, $deadlock): int|array {
+                if (str_starts_with(ltrim($sql), 'SELECT')) {
+                    return [['id' => 'uuid-a']];
+                }
+                $deleteAttempts++;
+                if ($deleteAttempts === 1) {
+                    throw $deadlock;
+                }
+                return 1;
+            },
+        );
+
+        $logger->expects(self::once())
+            ->method('debug')
+            ->with('ServerReaper: audit sweep deadlock, retrying', self::anything());
+
+        $reaper = new ServerReaper($db, $logger, 60, 180, 7, 90);
+        self::assertSame(1, $reaper->sweepAuditLogs());
+        self::assertSame(2, $deleteAttempts);
     }
 
     public function testSweepAuditLogsSelectsExpiredIdsThenDeletesByPrimaryKey(): void
