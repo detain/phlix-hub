@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — SPA shell bootstrap injection fails loud when the <head> anchor is missing (review hub__fedev, Minor, 2026-11-04)
+- `shell()` stamped the nonce'd `window.__PHLIX__` block with
+  `preg_replace('/<head>/i', ..., 1) ?? $html` — a preg error (null) and a
+  zero-count (an index.html whose `<head>` carries attributes, or has none
+  at all) both fell through SILENTLY: the SPA booted on guessed defaults,
+  the validated wsUrl/wsPath seam vanished, and no operator signal fired —
+  against the fail-loud posture of every other broken-build branch in the
+  same method.
+- The replacement count is now an asserted out-param: anything other than
+  exactly one injection routes through the shared `unavailable()` 503 path
+  with the cause logged. Four tests added: the two fail-loud arms measured
+  RED at the parent (200 + no bootstrap), plus shape pins — a bare
+  `<HEAD>` still injects (the literal replacement normalizes the tag to
+  lowercase; pinned as intentional), and a doubly-`<head>` shell injects
+  exactly once.
+
 ### Fixed — HubSettingsRepository consumer cites re-anchored to drift-proof symbols (review hub__ipd + hub__docmaint, Minor, 2026-11-04)
 - The admission-rules block mandated `file:line` cites for each allow-listed
   key while its own cites had rotted: `src/Metrics/MetricsFlushService.php`

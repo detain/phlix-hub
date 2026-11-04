@@ -166,7 +166,25 @@ final class SharedUiController
             . $configJson . '</script>' . "\n";
         /** @var string $htmlContent */
         $htmlContent = $html;
-        $htmlContent = preg_replace('/<head>/i', "<head>\n" . $configScript, $htmlContent, 1) ?? $htmlContent;
+        // HUB-m18 (review hub__fedev): the old `?? $htmlContent` swallowed both
+        // a preg error and a zero-count (no bare `<head>` to anchor on — e.g.
+        // an attributed `<head data-built=...>` from a changed build) into a
+        // SILENT pass-through: the SPA booted with guessed defaults and the
+        // validated wsUrl/wsPath seam vanished with no operator signal. Route
+        // a non-injection through the same fail-loud unavailable() posture as
+        // the manifest/path guards above; the count out-param is the tooth
+        // (an uppercase bare <HEAD> still matches via /i, so shape tolerance
+        // is preserved).
+        $replaceCount = 0;
+        $replacement = preg_replace('/<head>/i', "<head>\n" . $configScript, $htmlContent, 1, $replaceCount);
+        if ($replacement === null || $replaceCount !== 1) {
+            return $this->unavailable(
+                'shell index.html has no <head> anchor for the bootstrap injection'
+                    . ' — refusing to serve an unconfigured shell',
+                true,
+            );
+        }
+        $htmlContent = $replacement;
 
         return (new Response())
             ->html($htmlContent)

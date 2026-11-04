@@ -228,6 +228,85 @@ final class SharedUiControllerCspTest extends TestCase
     }
 
     /**
+     * HUB-m18 (review hub__fedev): an index.html whose `<head>` carries an
+     * attribute does not match the bare-anchor regex. Silently returning the
+     * UNSTAMPED shell would boot the SPA with guessed defaults — apiBase
+     * inference and the wsUrl/wsPath seam vanish with no operator signal,
+     * contradicting the fail-loud posture of every other broken-build branch
+     * in the same method. Pin: such a shell must route through unavailable()
+     * (503, no bootstrap, cause in the log).
+     */
+    public function testShellWithAttributedHeadFailsLoudInsteadOfSilentPassThrough(): void
+    {
+        $root = $this->makeShellRoot(indexHtml: '<!doctype html><html lang="en"><head data-built="v2">'
+            . '<title>Hub</title></head><body><div id="phlix-app"></div>'
+            . '<script type="module" src="/assets/app/index.js"></script></body></html>');
+
+        $response = (new SharedUiController($root))->shell(new Request(), []);
+
+        self::assertSame(503, $response->statusCode);
+        self::assertStringNotContainsString('window.__PHLIX__', $response->body);
+        self::assertStringNotContainsString('<script nonce=', $response->body);
+        self::assertStringContainsString(
+            'shell index.html has no <head> anchor for the bootstrap injection',
+            $this->capturedLoggerOutput(),
+        );
+    }
+
+    /**
+     * The same gate must fire when the shell has no `<head>` tag at all
+     * (a minified/foreign index sneaking into public/assets/app/).
+     */
+    public function testShellWithoutAnyHeadTagFailsLoud(): void
+    {
+        $root = $this->makeShellRoot(indexHtml: '<!doctype html><html><body><div id="phlix-app"></div></body></html>');
+
+        $response = (new SharedUiController($root))->shell(new Request(), []);
+
+        self::assertSame(503, $response->statusCode);
+        self::assertStringNotContainsString('window.__PHLIX__', $response->body);
+    }
+
+    /**
+     * Count-out teeth, not substring guesswork: an uppercase bare `<HEAD>`
+     * still matches (the regex keeps its /i arm) and still injects exactly
+     * once — the guard counts replacements, so matching shapes must not
+     * degrade into 503s.
+     */
+    public function testUppercaseBareHeadStillInjectsOnce(): void
+    {
+        $root = $this->makeShellRoot(indexHtml: '<!doctype html><html><HEAD><title>Hub</title></HEAD>'
+            . '<body><div id="phlix-app"></div></body></html>');
+
+        $response = (new SharedUiController($root))->shell(new Request(), []);
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame(1, substr_count($response->body, 'window.__PHLIX__ ='));
+        // The replacement is a literal "<head>" (not a back-reference), so a
+        // matched uppercase tag normalizes to lowercase in the output — a
+        // pre-existing, HTML-harmless quirk, pinned here so the HUB-m18 guard
+        // is never "fixed" into rejecting its own replacement shape.
+        self::assertMatchesRegularExpression('/<head>\s*<script nonce="/', $response->body);
+    }
+
+    /**
+     * The guard replaces ONE occurrence, so a malformed shell with two bare
+     * `<head>` tags gets exactly one bootstrap block — and the surviving
+     * second literal must not smuggle a second untrusted script position.
+     */
+    public function testDoublyMalformedHeadInjectsExactlyOnce(): void
+    {
+        $root = $this->makeShellRoot(indexHtml: '<!doctype html><html><head><head>'
+            . '<title>Hub</title></head><body><div id="phlix-app"></div></body></html>');
+
+        $response = (new SharedUiController($root))->shell(new Request(), []);
+
+        self::assertSame(200, $response->statusCode);
+        self::assertSame(1, substr_count($response->body, 'window.__PHLIX__ ='));
+        self::assertSame(1, substr_count($response->body, '<script nonce='));
+    }
+
+    /**
      * R12-02 default payload shape: keys present, socket hints null so the
      * client keeps its legacy same-origin derivation.
      */
@@ -352,14 +431,23 @@ final class SharedUiControllerCspTest extends TestCase
     // ---- helpers -----------------------------------------------------------
 
     /**
+     * Default shell fixture: a bare `<head>` (what Vite emits) so shell()
+     * reaches its success branch.
+     */
+    private const DEFAULT_INDEX_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        . '<title>Hub</title></head><body><div id="phlix-app"></div>'
+        . '<script type="module" src="/assets/app/index.js"></script></body></html>';
+
+    /**
      * Build a throwaway `public/` root with a valid Vite manifest (so the
      * bundle-exists gate passes). When $writeIndex is true, drop a real
      * `index.html` at SHELL_RELATIVE_PATH so shell() returns 200; when false the
      * physical file is missing and shell() falls through to its 503.
+     * $indexHtml overrides the shell bytes (attribute-laden `<head>` arms).
      *
      * @return non-empty-string absolute publicRoot path
      */
-    private function makeShellRoot(bool $writeIndex = true): string
+    private function makeShellRoot(bool $writeIndex = true, ?string $indexHtml = null): string
     {
         $base = realpath(sys_get_temp_dir());
         self::assertNotFalse($base);
@@ -373,10 +461,7 @@ final class SharedUiControllerCspTest extends TestCase
         self::assertNotFalse(file_put_contents($appDir . '/.vite/manifest.json', $manifest));
 
         if ($writeIndex) {
-            $index = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-                . '<title>Hub</title></head><body><div id="phlix-app"></div>'
-                . '<script type="module" src="/assets/app/index.js"></script></body></html>';
-            self::assertNotFalse(file_put_contents($appDir . '/index.html', $index));
+            self::assertNotFalse(file_put_contents($appDir . '/index.html', $indexHtml ?? self::DEFAULT_INDEX_HTML));
         }
 
         $real = realpath($root);
