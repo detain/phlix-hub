@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — installer usage examples drop the fabricated v0.2.0 tag pin; branch-or-tag wording parity (review hub__newcomer major, 2026-11-04)
+- **Defect:** the `--help` usage heredoc in `scripts/install.sh` still
+  counseled `--update --branch v0.2.0 -y` — a tag that has never existed on
+  origin. The previous cure swept the README's stale-pin advice but not the
+  script's own examples, leaving the same trap where an operator following
+  the README looks next. With `set -euo pipefail`, the depth-1 fetch fails
+  loudly on "couldn't find remote ref v0.2.0" — bad counsel, broken command.
+- **Cure (docs-only):** the example now uses `--branch master`, with a
+  comment mirroring the README rule — until a valid release tag is cut,
+  `master` is the only sound value, and the lone `v*` tag (`v1.0.0`) is a
+  stale pre-versioning-scheme relic. The `--branch` option line now reads
+  "Git branch or tag name to install", matching the install-flags table.
+
 ### Fixed — README install pin advice: stale v1.0.0 tag trap (review hub__newcomer critical, 2026-11-04)
 - **Defect:** the Quick Start told operators to pin "the published release tags
   ... with `--branch <vX.Y.Z>`" and the update example was `--branch v1.0.0`.

@@ -96,7 +96,7 @@ Options:
   --jwt-secret SECRET     JWT signing secret              (default: random 32-byte)
   --service-user USER     System user to run as           (default: www-data)
   --workers N             HTTP worker processes           (default: 4)
-  --branch NAME           Git branch to install           (default: master)
+  --branch NAME           Git branch or tag name to install (default: master)
   --repo URL              Git repository URL              (default: detain/phlix-hub)
   --tls                   Force TLS / HAProxy + certbot setup
   --no-tls                Skip TLS; HAProxy serves plain HTTP on :80
@@ -133,7 +133,9 @@ Examples:
   sudo bash install.sh --update -y
 
   # Update and switch to a different branch / tag
-  sudo bash install.sh --update --branch v0.2.0 -y
+  # Until a valid release tag is cut, master is the only sound value — the
+  # only v* tag on origin (v1.0.0) is a stale pre-versioning-scheme relic.
+  sudo bash install.sh --update --branch master -y
 EOF
 }
 
