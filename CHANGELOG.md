@@ -6,6 +6,53 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Chore [endgame gate2] — re-vendor `@phlix/ui` #v0.99.15 + `/app` SPA regen — 2026-11-04
+
+- Tag-form re-pin of the served SPA's vendored library, hub half of endgame
+  gate 2 (owner verbatim: the ui rebuild+tag "needs done too ... for ui server
+  and hub"). GATE-1 ground truth: ui master `36c04fbe792bbb8d04d01719d8c1829b1b9fadf4`
+  = annotated tag `v0.99.15` (tag object `74c9e1e3fded7563b3c59c5ce27e9ee1b07b501b`),
+  origin-verified by the release lane.
+- `web-ui`: `@phlix/ui` tarball pin `v0.99.14 -> v0.99.15`; lock surgical
+  7+/7- (`npm install --package-lock-only` under npm 11 +
+  `NPM_CONFIG_USERCONFIG=/dev/null` rotated the root echo, the ui node's
+  version/resolved/integrity and its syncplay dep-spec; the nested
+  `node_modules/@phlix/syncplay` node was left at `0.1.6@081687742` by the
+  resolver, so it was hand-rotated to `0.1.7@1a80b1d1c` — the v0.1.7 tag peel —
+  and the edit proven IDEMPOTENT by a re-run of `--package-lock-only`
+  (byte-identical lock). Installed bytes verified against source-of-truth: the
+  vendored `dist/phlix-ui.js`/`dist/player.js` md5s equal the GATE-1 register's
+  (`3bad5b07…`/`330cc731…`) and the syncplay tree is byte-ident to the v0.1.7
+  tag (the v0.1.6 npm git-cache staleness class from gate 1 did NOT fire).
+- `public/assets/app` rebuilt: 198 files, aggregate md5
+  `cc186bfb434912e5e8b27ec5e4dd0a69`
+  (`find public/assets/app -type f | sort | xargs md5sum | md5sum` after
+  `cd web-ui && npm run build`); deterministic across 4 consecutive builds and
+  re-proven byte-identical from a clean slate (committed bundle restored,
+  `.vite` caches purged) — the S253 gate's own condition. One first-post-edit
+  build diverged (stale `public/assets/app/.vite` leftovers); the clean-slate
+  proof bounds it to the cache, not the toolchain.
+- Leave-gate copy proof (the substantive new vendored surface): the syncplay
+  leave-confirm copy is NEW in v0.99.15 — zero `leaveConfirm` at the v0.99.14
+  tag, one at v0.99.15 — and `Leave “{name}”? Others lose sync if you host.`
+  is present verbatim in `public/assets/app/assets/useMessages-ZsJ3YcDm-zUhbvZQn.js`
+  post-regen (absent pre-regen); the `0.99.15` version stamp rides
+  `index-Bxu3Kblf.js`.
+- Era-prose: the four pin-era docblocks (`HubPageHint.vue`, `i18n/index.ts`,
+  `shareLiveness.ts`, `watchPartyWire.ts`) rotated `v0.99.14 -> v0.99.15` per
+  the bd47bc5a cascade precedent, each claim RE-VERIFIED at the new pin (the
+  `safeHref` cite still lands on `dist/index.d.ts:218`; `PageHint` remains
+  runtime-barrel-only; the locale catalog and dial primitives remain
+  entry-exported). Test rotations: MEASURED ZERO — targeted
+  `--filter 'Spa|SharedUiController|StaticAsset|UiPinSkew|ViteAssets|RuntimeNpmGuidance'`
+  green before and after the regen (229 tests / 1314 assertions / 0 failures /
+  0 errors / 0 skipped; full PHP suites held off per S439 — a concurrent
+  server lane).
+- S181 note: hub's own pin row is CURRENT after this commit; the gate's
+  windows/tizen rows are graded against those repos' live master pins, which
+  hold `#v0.99.14` until endgame gate 3 lands — the skew job's verdict on this
+  push reflects that staggered state, not a hub defect.
+
 ### Docs — forward-correction: the hub DOES track a public/ directory (the SPA bundle); what was deleted is public/index.php — and the DERIV-HUB-3 "11" counts files, not cites — 2026-11-04
 
 - **Serving-layout prose (corrects the DERIV-HUB-2 bullet below, 229a58d8):** that entry claimed
