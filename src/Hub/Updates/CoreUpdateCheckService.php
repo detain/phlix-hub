@@ -18,7 +18,7 @@ use Throwable;
 use Workerman\Timer;
 
 /**
- * Core (hub application) update check — S75 / updates.md #48.
+ * Core (hub application) update check — S75 / phlix-docs docs/old/updates.md #48.
  *
  * Fetches the repository's root `VERSION` marker and compares it against the
  * compiled {@see Version::VERSION} constant. The outcome is PERSISTED in

@@ -15,7 +15,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Contract tests for the shared-admin-console log routes wired by
- * {@see \Phlix\Hub\Application::registerAdminLogRoutes()} (hubby.md H1.1).
+ * {@see \Phlix\Hub\Application::registerAdminLogRoutes()}.
  *
  * These verify the three `/api/v1/admin/logs*` paths the redesigned `@phlix/ui`
  * `AdminLogsApi` calls dispatch to the right {@see LogController} method and are

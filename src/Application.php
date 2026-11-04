@@ -717,19 +717,19 @@ final class Application
 
         // Shared admin console log-viewer routes — the @phlix/ui AdminLogsApi
         // calls `/api/v1/admin/logs*`; mirror the `/api/v1/me/logs*` routes
-        // onto that path so the shared admin pages work on the hub (hubby.md H1.1).
+        // onto that path so the shared admin pages work on the hub.
         $this->registerAdminLogRoutes();
 
         // Shared admin console settings routes — the @phlix/ui AdminSettingsApi
         // calls `/api/v1/admin/settings`; mirror the `/api/v1/me/hub-settings`
         // surface onto that path so the shared admin Settings page works on the
-        // hub (hubby.md H1.2). Same HubSettingsController, same auth + admin gate.
+        // hub. Same HubSettingsController, same auth + admin gate.
         $this->registerAdminSettingsRoutes();
 
         // Phase 10: graceful hub restart — POST /api/v1/admin/restart (SIGUSR2).
         $this->registerAdminRestartRoutes();
 
-        // Core update check (S75 / updates.md #48) — read the update status the
+        // Core update check (S75 / phlix-docs docs/old/updates.md #48) — read the update status the
         // maintenance worker polls for, and toggle the poll on/off.
         $this->registerAdminUpdatesRoutes();
 
@@ -737,14 +737,14 @@ final class Application
         // AdminUsersApi calls `/api/v1/admin/users*`; this serves that surface
         // (list/get/create/update/delete + set-admin/reset-password, and an
         // always-empty per-user profiles list) so the shared admin Users page
-        // works on the hub (hubby.md H1.3). Same auth + admin gate.
+        // works on the hub. Same auth + admin gate.
         $this->registerAdminUserRoutes();
 
         // Shared admin console dashboard routes — the @phlix/ui
         // AdminHubDashboardApi (HubDashboardPage) calls
         // `/api/v1/admin/dashboard/{summary,activity}`; this serves the
         // hub-scoped headline counters + recent-activity feed aggregated from
-        // existing tables (hubby.md H1.4). Same auth + admin gate.
+        // existing tables. Same auth + admin gate.
         $this->registerAdminDashboardRoutes();
 
         // Federation management routes.
@@ -1703,7 +1703,7 @@ final class Application
 
     /**
      * Wire the core update-check API (admin-only) under `/api/v1/admin/updates`
-     * (S75 / updates.md #48).
+     * (S75 / phlix-docs docs/old/updates.md #48).
      *
      * `GET /api/v1/admin/updates/status`   — current + latest version, whether
      * an update is available, the last check time, and the copy-to-clipboard
@@ -1734,7 +1734,7 @@ final class Application
      * list/get/create/update/delete plus set-admin and reset-password, and a
      * per-user profiles list that is always empty on the hub (no profiles
      * subsystem). Same {@see AdminUserController}, same auth + admin gate as
-     * the other admin APIs (hubby.md H1.3).
+     * the other admin APIs.
      */
     private function registerAdminUserRoutes(): void
     {
@@ -1803,7 +1803,7 @@ final class Application
      * `GET /summary` (hub-scoped headline counters) and
      * `GET /activity?limit=` (recent audit events as the activity feed);
      * {@see AdminDashboardController} aggregates both from existing tables.
-     * Same auth + admin gate as the other admin APIs (hubby.md H1.4).
+     * Same auth + admin gate as the other admin APIs.
      */
     private function registerAdminDashboardRoutes(): void
     {

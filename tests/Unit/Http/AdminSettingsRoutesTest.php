@@ -17,7 +17,7 @@ use Workerman\MySQL\Connection;
 
 /**
  * Contract tests for the shared-admin-console settings routes wired by
- * {@see \Phlix\Hub\Application::registerAdminSettingsRoutes()} (hubby.md H1.2).
+ * {@see \Phlix\Hub\Application::registerAdminSettingsRoutes()}.
  *
  * These verify the two `/api/v1/admin/settings` paths the redesigned
  * `@phlix/ui` admin Settings page calls dispatch to the right

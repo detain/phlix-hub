@@ -20,7 +20,7 @@ use ReflectionClass;
 use Workerman\Timer;
 
 /**
- * {@see CoreUpdateCheckService} — S75 / updates.md #48.
+ * {@see CoreUpdateCheckService} — S75 / phlix-docs docs/old/updates.md #48.
  *
  * Everything is driven over a round-tripping `hub_settings` double
  * ({@see InMemoryHubSettingsConnection}) so a "the check persisted it" claim

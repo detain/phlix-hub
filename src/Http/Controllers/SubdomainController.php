@@ -136,7 +136,7 @@ final class SubdomainController
 
         // tls_cert_path / tls_key_path are populated iff an operator
         // has installed cert material at the conventional location
-        // (see docs/hub-admin/tls.md). Automated ACME provisioning is
+        // (see phlix-docs/docs/hub-admin/tls.md). Automated ACME provisioning is
         // not implemented in this build, so a fresh subdomain returns
         // empty strings for these two fields — clients should treat
         // that as "DNS is wired up, TLS is pending operator action".

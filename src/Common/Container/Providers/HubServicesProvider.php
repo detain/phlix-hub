@@ -1192,7 +1192,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new HubSettingsController($settings);
             })->parameter('settings', get(HubSettingsRepository::class)),
 
-            // --- Core update check (S75 / updates.md #48) -------------------
+            // --- Core update check (S75 / phlix-docs docs/old/updates.md #48) -------------------
             // The fetcher is bound to its INTERFACE so the service can never
             // acquire a blocking implementation by accident; the concrete
             // class is the only thing that touches the network, and it does so
@@ -1299,7 +1299,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new UserPasswordController($auth);
             })->parameter('auth', get(AuthManager::class)),
 
-            // Shared admin console user-management API (hubby.md H1.3). Reuses
+            // Shared admin console user-management API. Reuses
             // the existing UserRepository and AuditLogger; gated [auth, admin]
             // at the route group in Application::registerAdminUserRoutes().
             AdminUserController::class => factory(static function (
@@ -1316,7 +1316,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 return new AuditLogController($repo);
             })->parameter('repo', get(AuditLogRepository::class)),
 
-            // Shared admin console dashboard API (hubby.md H1.4). Injects the
+            // Shared admin console dashboard API. Injects the
             // StatsRepository for the summary counters and reuses
             // AuditLogRepository for the activity feed; gated [auth, admin] at
             // the route group in Application::registerAdminDashboardRoutes().

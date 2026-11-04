@@ -16,7 +16,7 @@ use Workerman\MySQL\Connection;
 
 /**
  * Contract tests for the shared-admin-console user routes wired by
- * {@see \Phlix\Hub\Application::registerAdminUserRoutes()} (hubby.md H1.3).
+ * {@see \Phlix\Hub\Application::registerAdminUserRoutes()}.
  *
  * These verify the `/api/v1/admin/users*` paths the redesigned `@phlix/ui`
  * `AdminUsersApi` calls dispatch to the right {@see AdminUserController}

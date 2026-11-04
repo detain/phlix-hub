@@ -17,7 +17,7 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
 /**
- * Admin JSON API for the hub dashboard (hubby.md H1.4).
+ * Admin JSON API for the hub dashboard (shared admin console parity).
  *
  * Serves the `/api/v1/admin/dashboard/*` surface the redesigned shared
  * `@phlix/ui` admin console (`AdminHubDashboardApi`, the `HubDashboardPage`

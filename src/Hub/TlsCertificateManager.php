@@ -20,7 +20,7 @@ use RuntimeException;
  * in this build. Calling
  * {@see provisionCertificate()} or the underlying ACME challenge will
  * throw a {@see RuntimeException}. Operators must provision certs
- * out-of-band — see docs/hub-admin/tls.md.
+ * out-of-band — see phlix-docs/docs/hub-admin/tls.md.
  *
  * The read-side helpers ({@see getCertificatePath()},
  * {@see getPrivateKeyPath()}) honestly return null when the on-disk
@@ -77,7 +77,7 @@ class TlsCertificateManager
      *
      * NOT IMPLEMENTED. This build does not ship automated ACME
      * provisioning. Operators must install certs out-of-band; see
-     * docs/hub-admin/tls.md.
+     * phlix-docs/docs/hub-admin/tls.md.
      *
      * @param string $subdomain Subdomain label (e.g. "abc12345").
      *

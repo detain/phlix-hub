@@ -19,7 +19,7 @@ use Workerman\MySQL\Connection;
 
 /**
  * Contract tests for the shared-admin-console dashboard routes wired by
- * {@see \Phlix\Hub\Application::registerAdminDashboardRoutes()} (hubby.md H1.4).
+ * {@see \Phlix\Hub\Application::registerAdminDashboardRoutes()}.
  *
  * These verify the two `/api/v1/admin/dashboard/*` paths the redesigned
  * `@phlix/ui` `AdminHubDashboardApi` (the `HubDashboardPage` client) calls

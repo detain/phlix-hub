@@ -132,7 +132,7 @@ class DnsAliasManager
         // NOTE: TLS provisioning is intentionally NOT triggered here.
         // In this build TlsCertificateManager::provisionCertificate()
         // throws RuntimeException (ACME not implemented); operators
-        // install certs out-of-band — see docs/hub-admin/tls.md.
+        // install certs out-of-band — see phlix-docs/docs/hub-admin/tls.md.
         // Allocating the subdomain (DNS record + DB row) must still
         // succeed independently. Use refreshCertificate() for an
         // explicit cert-refresh call site that surfaces the
@@ -236,7 +236,7 @@ class DnsAliasManager
      * In this build, automated ACME provisioning is not implemented;
      * {@see TlsCertificateManager::provisionCertificate()} throws
      * {@see \RuntimeException}. Callers should catch it and surface
-     * a 501 Not Implemented to the client. See docs/hub-admin/tls.md.
+     * a 501 Not Implemented to the client. See phlix-docs/docs/hub-admin/tls.md.
      *
      * @param string $serverId Server UUID.
      *

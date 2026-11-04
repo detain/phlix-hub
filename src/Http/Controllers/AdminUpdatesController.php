@@ -18,7 +18,7 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 
 /**
- * Core update-check admin API (S75 / updates.md #48).
+ * Core update-check admin API (S75 / phlix-docs docs/old/updates.md #48).
  *
  * `GET /api/v1/admin/updates/status`    — current version, latest known
  * version, whether an update is available, when the last check ran, and the
