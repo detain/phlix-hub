@@ -6,6 +6,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed — HubSettingsRepository consumer cites re-anchored to drift-proof symbols (review hub__ipd + hub__docmaint, Minor, 2026-11-04)
+- The admission-rules block mandated `file:line` cites for each allow-listed
+  key while its own cites had rotted: `src/Metrics/MetricsFlushService.php`
+  named a path that does not exist (the file lives at
+  `src/Stats/Metrics/MetricsFlushService.php`), and the JWT/signup consumer
+  coordinates (`JwtHandler.php:264`, `AuthManager.php:236`/`:269`,
+  `AuthServicesProvider.php:113`/`:231`) each sat off their targets at tip —
+  `:231` landed on an unrelated DI parameter line entirely.
+- Rule 1 now mandates name-anchored `File::method()` cites; the drifted
+  comments were rewritten to the resolver factories by name
+  (`AuthServicesProvider::makeTtlResolver()` /
+  `makeSignupsDisabledResolver()`), the wrong path was corrected, and the
+  stale `EnrollmentJwtService.php:98` line-number tail was dropped.
+  Comments-only change: zero behavior moved, and no test pinned the old
+  literals (grep at tip).
+
 ### Fixed — exception barrier on the :8805 federation dispatch path keeps the count=1 worker alive (review hub__asphp, Major M-A, 2026-11-04)
 - The federation worker runs `count=1` and its doctrine (S312/M-HUB-03,
   MaintenanceWorker class header) is that ANY Throwable escaping a Workerman

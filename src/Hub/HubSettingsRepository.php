@@ -63,8 +63,11 @@ class HubSettingsRepository
      *
      * 1. **A real runtime consumer must read the EFFECTIVE value.** Not the
      *    config default — the effective value, via {@see getEffective()}. Cite
-     *    the `file:line` in the comment beside the key. A key with no such
-     *    consumer is a toggle that does nothing and must NOT be listed.
+     *    the consumer by name — `File::method()` plus its path, not a raw line
+     *    number: this block's own `file:line` cites drifted (review
+     *    hub__ipd / hub__docmaint) while name anchors stay greppable. A key
+     *    with no such consumer is a toggle that does nothing and must NOT be
+     *    listed.
      *    Adding a fresh `config/*.php` entry so the key "resolves" does not
      *    count: that only makes it read `null` instead of nothing.
      * 2. **Never rename a config key to make an allow-list key resolve.** The
@@ -87,23 +90,25 @@ class HubSettingsRepository
     public const array ALLOWED_KEYS = [
         // config/server.php
         // LIVE: EnrollmentJwtService::createEnrollmentJwt() reads the effective
-        // value per mint — src/Hub/EnrollmentJwtService.php:98.
+        // value per mint — src/Hub/EnrollmentJwtService.php.
         'server.enrollment_ttl' => 'int',
         // config/auth.php
-        // LIVE: JwtHandler::getAccessTtl()/getRefreshTtl() resolve the effective
-        // value per token mint through the TTL resolver installed by
-        // AuthServicesProvider — src/Auth/JwtHandler.php:264 and
-        // src/Common/Container/Providers/AuthServicesProvider.php:113.
+        // LIVE: JwtHandler::getAccessTtl()/getRefreshTtl()
+        // (src/Auth/JwtHandler.php) resolve the effective value per token
+        // mint through the resolver AuthServicesProvider::makeTtlResolver()
+        // wires into the JwtHandler definition
+        // (src/Common/Container/Providers/AuthServicesProvider.php).
         'auth.access_ttl'  => 'int',
         'auth.refresh_ttl' => 'int',
         // config/auth.php ('signups_disabled' twin of 'signups_enabled').
-        // LIVE: AuthManager::registrationsAreClosed() consults the effective
-        // value per signup through the resolver installed by
-        // AuthServicesProvider — src/Auth/AuthManager.php:236 (gate),
-        // src/Auth/AuthManager.php:269 (call site),
-        // src/Common/Container/Providers/AuthServicesProvider.php:231
-        // (resolver). Degrades to the boot-time HUB_SIGNUPS_ENABLED flag when
-        // no row / no pool / settings read fails.
+        // LIVE: AuthManager::registrationsAreClosed() (src/Auth/AuthManager.
+        // php — consulted by AuthManager::register()) checks the effective
+        // value per signup through the resolver
+        // AuthServicesProvider::makeSignupsDisabledResolver() wires into the
+        // AuthManager definition (src/Common/Container/Providers/
+        // AuthServicesProvider.php). Degrades to the boot-time
+        // HUB_SIGNUPS_ENABLED flag when no row / no pool / settings read
+        // fails.
         'auth.signups_disabled' => 'bool',
 
         // ---- Phase-6 settings program (W5, 2026-10-03) -------------------
@@ -146,7 +151,7 @@ class HubSettingsRepository
         // workers (graceful restart picks it up); restart:true in meta.
         'server.metrics.enabled' => 'bool',
         // LIVE: MetricsFlushService::prune() re-reads per prune tick (count=1
-        // relay worker timer) — src/Metrics/MetricsFlushService.php.
+        // relay worker timer) — src/Stats/Metrics/MetricsFlushService.php.
         'server.metrics.retention_days' => 'int',
 
         // config/server.php 'relay' section.
