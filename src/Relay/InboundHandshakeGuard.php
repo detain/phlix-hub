@@ -65,9 +65,14 @@ use function spl_object_id;
  * No new close codes, no envelopes.
  *
  * CONFIG GATE: seconds come from `relay.ws_handshake_timeout_seconds`
- * (config/server.php, env `HUB_WS_HANDSHAKE_TIMEOUT_SECONDS`), default 10 s
- * — generous against real TCP+TLS+upgrade round-trips (<1 s in practice),
- * bounded against the 10-minute observed hold. `0` disables the deadline
+ * (config/server.php, env `HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS`), default
+ * 30 s. Healthy TCP+TLS+upgrade round-trips finish <1 s in practice; the
+ * worst LEGITIMATE class is a retransmit storm (initial-SYN loss, Linux RTO
+ * 1 s doubling — ≈ 7 s can burn before TLS even starts, ≈ 9-11 s total at
+ * cellular RTTs, REVIEW-HUB-GUARD §5), so a 10 s bound sat at the edge of
+ * closing real clients. 30 s erases that false-positive class at negligible
+ * detection cost: the stall class this guard defends against holds sockets
+ * for MINUTES (10 min observed live). `0` disables the deadline
  * (same "`0` = off" law as `reconnect_drain_grace_seconds` beside it).
  * Federation `:8805` is deliberately NOT governed (owner-reel surface; it
  * keeps its bare {@see InboundPackageCap} connect handler).
@@ -75,19 +80,24 @@ use function spl_object_id;
 final class InboundHandshakeGuard
 {
     /**
-     * Default pre-upgrade deadline in seconds. Sane bound for
-     * TCP + TLS handshake + first HTTP request on a healthy path; the
-     * observed stall class holds sockets for MINUTES.
+     * Default pre-upgrade deadline in seconds. Healthy TCP + TLS + upgrade
+     * completes <1 s; the worst LEGITIMATE class — a retransmit storm (SYN
+     * loss, Linux RTO 1 s doubling) — reaches ≈ 9-11 s before the upgrade
+     * lands (REVIEW-HUB-GUARD §5 math), so the bound sits at 30 s: it closes
+     * the false-positive class entirely, while the defended stall class holds
+     * sockets for MINUTES (10 min observed live) makes the slack near-free
+     * detection cost.
      */
-    public const DEFAULT_TIMEOUT_SECONDS = 10.0;
+    public const DEFAULT_TIMEOUT_SECONDS = 30.0;
 
     /**
      * Armed deadlines keyed by `spl_object_id(TcpConnection)`.
      *
-     * @var array<int, int> connection id => one-shot timer id (0 IS a valid
-     *                        id: Events\Event/StreamSelect allocate their
-     *                        first timer id as 0 — never test these ids for
-     *                        truthiness, only null/absence)
+     * @var array<int, int> connection id => one-shot timer id. 0 IS a valid
+     *                        id (Events\Event can allocate its first id as 0;
+     *                        Select/Ev/Swoole start at 1), so ids are handled
+     *                        by identity, never by truthiness — existence is
+     *                        slot null/absence, acting is $held === $timerId.
      */
     private static array $armed = [];
 
@@ -221,10 +231,11 @@ final class InboundHandshakeGuard
         $timerId = 0;
 
         try {
-            // One-shot (persistent=false) → vendor routes through the event
-            // driver's delay(); every driver in this release can return 0 as
-            // a real id, hence the by-reference identity capture below and
-            // the `!== null`-style existence checks everywhere.
+            // One-shot (persistent=false) → vendor routes this through the
+            // event driver's delay(); Events\Event can hand back 0 as a real
+            // id (StreamSelect/Ev/Swoole start at 1), hence the by-reference
+            // identity capture below and the `!== null`-style existence
+            // checks everywhere — a timer id is never tested for truthiness.
             $expire = static function () use (
                 $connection,
                 $connectionId,

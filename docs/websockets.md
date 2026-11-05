@@ -48,7 +48,9 @@ sockets that completed the WS upgrade. BEFORE the upgrade, on `:8802`, `:8803`
 and `:8804`, `Phlix\Hub\Relay\InboundHandshakeGuard` closes a connection that
 completed TCP (and TLS, if configured) but never sent its HTTP upgrade request:
 after `relay.ws_handshake_timeout_seconds` (`HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS`,
-default 10 s, `0` disables) one WARN line carries `reason: "handshake_timeout"`,
+default 30 s — healthy upgrades land <1 s and the worst legitimate case, a TCP
+retransmit storm, reaches only ≈ 9-11 s, while stall-class sockets have been
+observed held for MINUTES; `0` disables) one WARN line carries `reason: "handshake_timeout"`,
 the `listener`, `remote_ip` and the byte counts, and the socket is closed. No WS
 close frame is emitted — a pre-`101` close frame would be HTTP garbage on the
 wire (the L-4 two-phase law), so the plain transport close is the contract.

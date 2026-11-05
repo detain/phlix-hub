@@ -50,11 +50,12 @@ use function substr_count;
  * Scripted-loop harness (no real sleeps): a fake {@see EventInterface} is
  * installed into `Timer::$event`, so `Timer::add(..., persistent:false)`
  * takes its real delegation branch and the test owns fire timing. The fake
- * allocates ids from 0 ON PURPOSE — Events\Event and StreamSelect both hand
- * out 0 as the first timer id (the estate's M-S1 lesson), and its offDelay
- * deliberately LEAVES the callback fireable (adversarial driver simulation),
- * so the guard's own map-identity gate must be what renders a cancelled
- * deadline inert — not vendor luck.
+ * allocates ids from 0 ON PURPOSE — Events\Event's first timer id really is
+ * 0 while StreamSelect/Ev/Swoole start at 1, so the fake is STRICTER than
+ * production (the estate's M-S1 lesson), and its offDelay deliberately
+ * LEAVES the callback fireable (adversarial driver simulation), so the
+ * guard's own map-identity gate must be what renders a cancelled deadline
+ * inert — not vendor luck.
  *
  * Wire law: successful clients see byte-identical behavior — their deadline
  * is cancelled before the worker writes anything. No close codes, no
@@ -205,6 +206,36 @@ final class InboundHandshakeGuardTest extends TestCase
         );
     }
 
+    public function testStaleCallbackIsInertWhenTheSlotWasReArmedByIdentity(): void
+    {
+        // REVIEW-HUB-GUARD F-C: the ONE scenario the fire-path identity clause
+        // ($held !== $timerId) guards — the slot re-armed while the stale
+        // callback is still fireable (the adversarial driver guarantees
+        // fireability, so only the clause can make this inert). Weakening the
+        // clause to a bare null check (mutation M2) reddens this test.
+        $connection = $this->makeSilentConnection();
+        $connection->expects($this->once())->method('close');
+
+        $this->armGuard(10.0)($connection); // id 0 arms the slot
+        InboundHandshakeGuard::cancel($connection);
+        $this->armGuard(10.0)($connection); // id 1 re-arms the SAME object
+
+        $this->assertSame([10.0, 10.0], $this->loop->delays, 'both arms must take the real delay branch');
+        $this->assertSame([0], $this->loop->cancelled, 'cancel must del() the first id even though 0 is falsy');
+        $this->assertSame(1, InboundHandshakeGuard::armedCount());
+
+        // The departed deadline fires late: the live arm owns the slot now —
+        // identity gate must refuse it with no act, no log, no slot loss.
+        $this->loop->fire(0);
+        $this->assertSame('', $this->capturedLoggerOutput(), 'a superseded deadline must be inert');
+        $this->assertSame(1, InboundHandshakeGuard::armedCount(), 'the stale fire must not consume the live slot');
+
+        // The live deadline (id 1) still owns the connection and acts once.
+        $this->loop->fire(1);
+        $this->assertStringContainsString('"reason":"handshake_timeout"', $this->capturedLoggerOutput());
+        $this->assertSame(0, InboundHandshakeGuard::armedCount());
+    }
+
     public function testDoubleFireClosesExactlyOnce(): void
     {
         $connection = $this->makeSilentConnection();
@@ -275,9 +306,9 @@ final class InboundHandshakeGuardTest extends TestCase
     public function testResolveTimeoutSecondsParsesBoundaryValues(): void
     {
         // Missing / slop → default (fail to SAFE bound, not to off).
-        $this->assertSame(10.0, InboundHandshakeGuard::resolveTimeoutSeconds(null));
-        $this->assertSame(10.0, InboundHandshakeGuard::resolveTimeoutSeconds('abc'));
-        $this->assertSame(10.0, InboundHandshakeGuard::resolveTimeoutSeconds(-1));
+        $this->assertSame(30.0, InboundHandshakeGuard::resolveTimeoutSeconds(null));
+        $this->assertSame(30.0, InboundHandshakeGuard::resolveTimeoutSeconds('abc'));
+        $this->assertSame(30.0, InboundHandshakeGuard::resolveTimeoutSeconds(-1));
         // Negative is a typo, not a policy — it must not flip the guard OFF.
         $this->assertSame(5.0, InboundHandshakeGuard::resolveTimeoutSeconds('5'));
         $this->assertSame(5.5, InboundHandshakeGuard::resolveTimeoutSeconds(5.5));

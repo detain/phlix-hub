@@ -205,13 +205,16 @@ return [
         // (TLS handshake included when the surface speaks wss://). A client
         // that completes transport then goes silent used to be held
         // ~indefinitely (10 min observed live); the hub now closes it and
-        // logs `reason=handshake_timeout`. Default 10 s is generous against
-        // real TCP+TLS+upgrade round-trips; `0` disables the deadline
+        // logs `reason=handshake_timeout`. Default 30 s clears the worst
+        // legitimate case (a TCP retransmit storm reaches ≈ 9-11 s before the
+        // upgrade lands — REVIEW-HUB-GUARD §5), while the stall class this
+        // defends against holds sockets for MINUTES (10 min observed live);
+        // `0` disables the deadline
         // (same "`0` = off" law as the drain grace beside it); a negative
         // value is a typo, not a policy → parsed to the default. Federation
         // :8805 is NOT governed (owner-reel surface).
         // Consumer: \Phlix\Hub\Relay\InboundHandshakeGuard via Application.
-        'ws_handshake_timeout_seconds' => $envFloat('HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS', 10.0),
+        'ws_handshake_timeout_seconds' => $envFloat('HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS', 30.0),
     ],
 
     // Relay worker TLS (wss://) settings.

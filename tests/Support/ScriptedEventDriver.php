@@ -24,9 +24,11 @@ use function count;
  *
  * Two adversarial-by-design properties pin guard code, not vendor behavior:
  *
- *  - ids are allocated from 0 (Events\Event and StreamSelect both hand out 0
- *    as their first timer id — the estate's M-S1 lesson: a guard must never
- *    treat a falsy-but-valid id as "no timer");
+ *  - ids are allocated from 0 ON PURPOSE: Events\Event really does hand out 0
+ *    as its first timer id, while StreamSelect/Ev/Swoole start at 1 — the fake
+ *    is therefore STRICTER than production, and every guard must survive it
+ *    (the estate's M-S1 lesson: a guard must never treat a falsy-but-valid
+ *    id as "no timer");
  *  - {@see self::offDelay()} RECORDS the cancel but LEAVES THE CALLBACK
  *    FIREABLE, so a test can simulate a driver that fires a cancelled timer
  *    late; code under test must be inert by its own bookkeeping gates, not

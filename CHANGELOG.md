@@ -6,6 +6,43 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed [hub-handshake-bound] — the inbound WS-upgrade deadline default moves 10 s → 30 s; the guard's timer-id-0 prose corrected; the fire-path identity gate gains test teeth (REVIEW-HUB-GUARD F-A/F-B/F-C + §5) — 2026-11-05
+
+- The adversarial review of `2138def5` (`.reviews/2026-11-05/REVIEW-HUB-GUARD.md`,
+  verdict SHIP, 0 critical / 0 major / 3 minor) landed its fix-now class here;
+  the [hub-handshake-timeout] entry below stays verbatim history.
+- Bound: `InboundHandshakeGuard::DEFAULT_TIMEOUT_SECONDS`, the
+  `relay.ws_handshake_timeout_seconds` config default and the docs/websockets.md
+  paragraph all move 10.0 → 30.0. §5 math: the worst LEGITIMATE client class —
+  a retransmit storm (initial-SYN loss, Linux RTO 1 s doubling) — burns ≈ 7 s
+  before TLS even starts and can reach ≈ 9-11 s total, so 10 s sat at the edge
+  of closing real cellular clients; the stall class the guard defends against
+  holds sockets for MINUTES (10 min observed live), making the slack
+  near-free detection cost. Healthy-path truth unchanged: <1 s. The env knob
+  keeps its real name, the `0`-off law and the boundary parse; the
+  resolveTimeoutSeconds default goldens were re-pinned from measured red.
+- F-A: the guard's own CONFIG GATE docblock named the env
+  `HUB_WS_HANDSHAKE_TIMEOUT_SECONDS` — one word short of the `HUB_RELAY_WS_`
+  name the code/config/docs carry; corrected (an operator following the
+  docblock was setting a variable nothing reads).
+- F-B: the "Events\Event AND StreamSelect allocate their first timer id 0"
+  claim was FALSE for StreamSelect (vendor `Events/Select.php:108` starts at
+  1; Ev and Swoole likewise). Guard class/property/arm comments, the scripted
+  driver header and the test header now state the truth: Event CAN return 0;
+  the fake allocating from 0 is the STRICTER-than-production adversarial
+  choice; ids are keyed by identity, never by truthiness.
+- F-C: mutation M2 (weakening the fire-path identity clause to a bare null
+  check) had SURVIVED the original suite — no test re-armed a connection
+  while the stale callback was still fireable. New
+  `testStaleCallbackIsInertWhenTheSlotWasReArmedByIdentity` builds exactly
+  that scenario (arm id 0 → cancel → re-arm id 1 on the same object → fire
+  the stale id inert, no act/no log/no slot loss → fire the live id for the
+  one WARN + close). Locally measured: planted M2 reddens EXACTLY this test
+  (16/1F), clone-free probe restored byte-exact (cmp). The SyncPlay
+  behavioral half of the finding stays structurally pinned (2x cancel-site
+  scan) per the reviewer's own "not blocking" disposition — production
+  analysis shows double-arming one object is unreachable through the wiring.
+
 ### Added [hub-handshake-timeout] — config-gated inbound WS-upgrade deadline on :8802/:8803/:8804; a stalled TLS client can no longer squat on the hub (HOST-3 H3-3) — 2026-11-05
 
 - Context (live-host review `.reviews/2026-11-05/HOST-3.md`, item 5 / flag H3-3):
