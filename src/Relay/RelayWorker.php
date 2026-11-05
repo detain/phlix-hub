@@ -640,19 +640,19 @@ final class RelayWorker
         try {
             /** @var array<string, mixed>|null $hello */
             $hello = json_decode($data, true, 2, JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            $connection->close('invalid_hello');
+        } catch (Throwable $e) {
+            $this->rejectHelloBeforeTunnel($connection, 'invalid_hello', 'json_decode_failed', $e->getMessage());
             return;
         }
 
         if (!is_array($hello)) {
-            $connection->close('invalid_hello');
+            $this->rejectHelloBeforeTunnel($connection, 'invalid_hello', 'hello_json_not_an_object');
             return;
         }
 
         $serverId = $hello['server_id'] ?? null;
         if (!is_string($serverId) || $serverId === '') {
-            $connection->close('missing_server_id');
+            $this->rejectHelloBeforeTunnel($connection, 'missing_server_id', 'server_id_absent_or_empty');
             return;
         }
 
@@ -704,6 +704,55 @@ final class RelayWorker
     }
 
     /**
+     * Reject a HELLO that fails the wire-shape boundary, before any tunnel exists.
+     *
+     * F-4 (live-host observability review .reviews/2026-11-05/HOST-2.md): the
+     * boundary rejects in {@see handleHello()} used to close the connection in
+     * total silence while the Tunnel-side HELLO rejects ({@see
+     * Tunnel::handleHelloFrame()}) logged theirs — an operator chasing a
+     * misbehaving client saw nothing in the relay channel. These three paths now
+     * warn with the reject reason and the shape-failure class, mirroring the
+     * tunnel reject idiom. LOG-ONLY: the close reason on the wire is unchanged.
+     *
+     * REDACTION LAW: never add the raw payload or any value extracted from it to
+     * the context. A HELLO carries the server's durable enrollment JWT (a bearer
+     * credential); the shape-failure class and the parser message — which never
+     * echoes payload bytes — are the entire observation. `remote_ip` is the only
+     * correlator because server_id/tunnel_id do not exist yet: the payload
+     * failed to parse far enough to trust them.
+     *
+     * @param TcpConnection $connection  The offending server connection.
+     * @param string        $reason      Close reason sent on the wire (unchanged behavior).
+     * @param string        $shapeFailure Machine class of the boundary failure.
+     * @param string|null   $parserError json_decode error message, when one exists.
+     *
+     * @return void
+     */
+    private function rejectHelloBeforeTunnel(
+        TcpConnection $connection,
+        string $reason,
+        string $shapeFailure,
+        ?string $parserError = null,
+    ): void {
+        /** @var array<string, mixed> $context */
+        $context = [
+            'reason' => $reason,
+            'shape_failure' => $shapeFailure,
+            'remote_ip' => $connection->getRemoteIp(),
+        ];
+        if ($parserError !== null) {
+            $context['parser_error'] = $parserError;
+        }
+
+        LoggerFactory::get(LogChannels::RELAY)->warning(
+            'Relay: server HELLO rejected before tunnel creation',
+            $context,
+        );
+
+        $connection->close($reason);
+    }
+
+    /**
      * Handle server connection close.
      *
      * @param TcpConnection $connection Server connection.
@@ -714,31 +763,56 @@ final class RelayWorker
     {
         $connId = spl_object_id($connection);
 
-        if (isset(self::$connTunnels[$connId])) {
-            $tunnel = self::$connTunnels[$connId];
-
-            // S4 metrics: record the FINAL cumulative byte counts. Deliberately
-            // NOT closeConnection() — that would drop the registry row before the
-            // next flush persists it; the flush service TTL-prunes the now-idle
-            // row afterwards (mirrors the server's WS close hook).
-            $this->metrics?->touchConnection(
-                $tunnel->tunnelId,
-                $connection->bytesRead,
-                $connection->bytesWritten,
+        if (!isset(self::$connTunnels[$connId])) {
+            // F-3 (live-host observability review .reviews/2026-11-05/HOST-2.md):
+            // a stalled TLS handshake surfaces HERE and nothing used to be
+            // logged. Workerman's ssl transport destroys the connection when a
+            // handshake fails or the peer half-closes mid-handshake (vendor
+            // TcpConnection::baseRead() -> doSslHandshake()/emitSslHandshakeFailure()
+            // -> destroy()), so a peer that sent only a ClientHello and never
+            // completed the handshake reaches onClose WITHOUT ever registering
+            // a tunnel — the exact CLOSE_WAIT signature seen live on :8802.
+            // Operators could not see these accepted connections being dropped;
+            // this line names the lifecycle event. The byte counts carry the
+            // fingerprint: ClientHello-only peers read ~1.5k and write ~0,
+            // instant probes read/write 0. Nothing payload-derived is logged, so
+            // no redaction duty attaches. LOG-ONLY: behavior is unchanged — the
+            // unregistered connection was and remains simply ignored.
+            LoggerFactory::get(LogChannels::RELAY)->info(
+                'Relay: server connection closed without a tunnel',
+                [
+                    'remote_addr' => $connection->getRemoteAddress() ?: 'unknown',
+                    'bytes_read' => $connection->bytesRead,
+                    'bytes_written' => $connection->bytesWritten,
+                ],
             );
 
-            $tunnel->onServerClose();
-            unset(self::$connTunnels[$connId]);
-
-            // H-1: evict the dead tunnel from the manager's routing AND pending
-            // maps. Without this the CLOSED tunnel lingers forever — the idle
-            // reaper cannot see it (allTunnels() yields ACTIVE-only by design)
-            // and nothing else removes it, so the resident relay worker's maps
-            // grew unbounded with every disconnect. The identity check means a
-            // promoted replacement is never evicted by the old connection's
-            // deferred close landing after the swap.
-            $this->evictTunnel($tunnel);
+            return;
         }
+
+        $tunnel = self::$connTunnels[$connId];
+
+        // S4 metrics: record the FINAL cumulative byte counts. Deliberately
+        // NOT closeConnection() — that would drop the registry row before the
+        // next flush persists it; the flush service TTL-prunes the now-idle
+        // row afterwards (mirrors the server's WS close hook).
+        $this->metrics?->touchConnection(
+            $tunnel->tunnelId,
+            $connection->bytesRead,
+            $connection->bytesWritten,
+        );
+
+        $tunnel->onServerClose();
+        unset(self::$connTunnels[$connId]);
+
+        // H-1: evict the dead tunnel from the manager's routing AND pending
+        // maps. Without this the CLOSED tunnel lingers forever — the idle
+        // reaper cannot see it (allTunnels() yields ACTIVE-only by design)
+        // and nothing else removes it, so the resident relay worker's maps
+        // grew unbounded with every disconnect. The identity check means a
+        // promoted replacement is never evicted by the old connection's
+        // deferred close landing after the swap.
+        $this->evictTunnel($tunnel);
     }
 
     /**

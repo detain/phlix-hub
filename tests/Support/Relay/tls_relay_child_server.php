@@ -39,6 +39,7 @@
 
 declare(strict_types=1);
 
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
 use Psr\Container\ContainerInterface;
@@ -61,6 +62,21 @@ require __DIR__ . '/../../../vendor/autoload.php';
 Worker::$logFile = $markerDir . '/workerman.log';
 Worker::$pidFile = $markerDir . '/workerman.pid';
 Worker::$statusFile = $markerDir . '/workerman.status';
+
+// The production relay process boots with an initialised LoggerFactory (DI
+// core-services provider), and the F-3/F-4 observability lines (2026-11-05)
+// put relay-channel logging ON the live HELLO-reject and tunnel-less-close
+// paths — so this bare harness must perform the same one-time bootstrap. The
+// capture is pinned into the test-owned marker dir, mirroring the workerman
+// scratch discipline above; the E2E asserts wire verdicts, never log text,
+// but the line the process really emits must land somewhere real (S345 law).
+$relayLoggerConfig = $markerDir . '/logger.php';
+file_put_contents(
+    $relayLoggerConfig,
+    "<?php return ['default' => 'relay_e2e', 'handlers' => ['relay_e2e' => "
+    . "['type' => 'stream', 'path' => '" . $markerDir . "/relay.log', 'level' => 'debug']]];",
+);
+LoggerFactory::init($relayLoggerConfig);
 
 /**
  * PSR-11 stub with no bindings: the relay connect hook resolves the rate

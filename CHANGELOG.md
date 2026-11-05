@@ -6,6 +6,47 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-relay-obs] — relay-channel observability for silent HELLO-boundary rejects (F-4) and tunnel-less connection closes (F-3) — 2026-11-05
+
+- Context (live-host review `.reviews/2026-11-05/HOST-2.md`, flags F-3/F-4): the
+  relay channel logged the Tunnel-side HELLO rejects, but the earlier wire-shape
+  boundary in `RelayWorker::handleHello()` closed connections in total silence,
+  and peers whose TLS handshake stalled (observed live: ~1.5 kB ClientHello-only,
+  hub-side CLOSE_WAIT) were destroyed by the vendor transport and surfaced in
+  `onClose()` with no tunnel ever registered — also invisible. Operators could
+  see neither class of dropped connection on the production host.
+- `RelayWorker::rejectHelloBeforeTunnel()` — the three boundary rejects (JSON
+  parser throw, non-object JSON, absent/empty `server_id`) now warn with the
+  reject reason, a machine-readable `shape_failure` class and `remote_ip`. The
+  close reasons on the wire are byte-identical (`invalid_hello` /
+  `missing_server_id`); the pre-existing pins in `RelayWorkerTest`
+  (`testMalformedHelloClosesConnection` / `testHelloMissingServerIdClosesConnection`)
+  stayed green UNMODIFIED — the zero-behavior-change proof. REDACTION LAW is
+  documented at the helper and pinned with teeth: a HELLO payload can carry the
+  server's durable enrollment JWT (bearer credential) and is NEVER logged — the
+  suite plants a fake token in a rejected HELLO and asserts its absence from the
+  capture.
+- `RelayWorker::onClose()` — restructured to the early-exit guard form; a close
+  with no registered tunnel now logs one INFO lifecycle line naming the event,
+  with `remote_addr` and the cumulative byte counts (the ClientHello-only
+  fingerprint: ~1.5k read, 0 written, versus 0/0 for instant probes). Nothing
+  payload-derived is on this path, so no redaction duty attaches. Log-only: the
+  unregistered connection was and remains simply ignored. The ~2-minute
+  handshake cutoff itself belongs to the OS/vendor timer, not repo code —
+  inventing a repo-side timer would be a behavior change and was deliberately
+  not done.
+- `tests/Support/Relay/tls_relay_child_server.php` (the real-TLS E2E child) now
+  bootstraps `LoggerFactory` once, pinned into the test-owned marker dir —
+  mirroring the production process, where DI core-services initialises the
+  factory before the relay worker logs (the new boundary lines execute on the
+  E2E's real `missing_server_id` reject path; caught by that suite, fixed in
+  this commit).
+- Tests: `RelayWorkerObservabilityTest` — 5 tests / 50 assertions, four
+  red-first at the parent, the fifth a negative guard pin (a tunnelled close
+  never logs the without-tunnel line). Blessed into
+  `scripts/parallel/test-durations.json` in the same commit (runner law).
+- No new error codes, no wire or schema change, no migrations.
+
 ### Fixed [hub-relay-tls] — :8802 TLS boot material made fail-fast; signpost scheme tracks config; real-TLS loopback E2E pins the inbound relay handshake — 2026-11-05
 
 - Context (owner-host investigation `.reviews/2026-11-05/HOST-1.md`): the hub's
