@@ -178,6 +178,9 @@ final class ClientRelayWorker
         private readonly ContainerInterface $container,
         private readonly int $port = self::DEFAULT_PORT,
         private readonly int $count = 1,
+        // HOST-3 H3-3: pre-upgrade deadline (relay.ws_handshake_timeout_seconds,
+        // <= 0 disables); see InboundHandshakeGuard.
+        private readonly float $handshakeTimeoutSeconds = InboundHandshakeGuard::DEFAULT_TIMEOUT_SECONDS,
     ) {
         ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-client-relay-ws (:8803)');
     }
@@ -199,7 +202,13 @@ final class ClientRelayWorker
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         // Minor 57: declared inbound package cap pinned at TCP-accept (law in
         // InboundPackageCap) — this surface no longer inherits it from vendor.
-        $worker->onConnect = InboundPackageCap::onConnect();
+        // HOST-3 H3-3: wrapped in the repo-owned handshake deadline (silent
+        // pre-upgrade sockets are closed, not held).
+        $worker->onConnect = InboundHandshakeGuard::compose(
+            InboundPackageCap::onConnect(),
+            $this->handshakeTimeoutSeconds,
+            'client-relay-ws :' . $this->port,
+        );
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
         // Per-worker metrics wiring: resolve this worker's collector and arm the
@@ -311,6 +320,10 @@ final class ClientRelayWorker
      */
     public function onWebSocketConnect(TcpConnection $connection, WorkermanRequest $request): void
     {
+        // HOST-3 H3-3: upgrade arrived — disarm the handshake deadline before
+        // any refuse branch below (see RelayWorker::onWebSocketConnect).
+        InboundHandshakeGuard::cancel($connection);
+
         $logger = LoggerFactory::get(LogChannels::RELAY);
         $connId = spl_object_id($connection);
 
@@ -470,6 +483,10 @@ final class ClientRelayWorker
      */
     public function onClose(TcpConnection $connection): void
     {
+        // HOST-3 H3-3: never leave a deadline armed for a dead connection
+        // (idempotent; see RelayWorker::onClose).
+        InboundHandshakeGuard::cancel($connection);
+
         $connId = spl_object_id($connection);
         unset(self::$connServerIds[$connId]);
 

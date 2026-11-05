@@ -22,6 +22,8 @@ use Phlix\Hub\Common\Support\ProcessLocalTopology;
 use Phlix\Hub\Hub\ClientRelayTokenService;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Relay\ClientRelayWorker;
+use Phlix\Hub\Relay\InboundHandshakeGuard;
+use Phlix\Hub\Relay\InboundPackageCap;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Relay\WebSocketCloseFrame;
@@ -392,6 +394,8 @@ final class SyncPlayRelayWorker
      * @param float              $inboundBurstBytes         Per-client inbound burst
      *        capacity; see {@see self::INBOUND_BURST_BYTES}. A non-positive value
      *        disables the per-client budget entirely (diagnostics only).
+     * @param float              $handshakeTimeoutSeconds TCP-accept → WS-upgrade
+     *        deadline ({@see InboundHandshakeGuard}); <= 0 disables the guard.
      *
      * The channel and inbound-budget parameters are TRAILING and DEFAULTED on
      * purpose: every existing call site (`Application::run()`, the unit suite)
@@ -406,6 +410,9 @@ final class SyncPlayRelayWorker
         private readonly int $channelPort = RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
         private readonly float $inboundRateBytesPerSecond = self::INBOUND_RATE_BYTES_PER_SECOND,
         private readonly float $inboundBurstBytes = self::INBOUND_BURST_BYTES,
+        // HOST-3 H3-3: pre-upgrade deadline (relay.ws_handshake_timeout_seconds,
+        // <= 0 disables); see InboundHandshakeGuard.
+        private readonly float $handshakeTimeoutSeconds = InboundHandshakeGuard::DEFAULT_TIMEOUT_SECONDS,
     ) {
         ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-syncplay-relay-ws (:8804)');
     }
@@ -449,7 +456,13 @@ final class SyncPlayRelayWorker
         // Minor 57: declared inbound package cap pinned at TCP-accept (law in
         // \Phlix\Hub\Relay\InboundPackageCap) — this surface no longer
         // inherits it from vendor.
-        $worker->onConnect = \Phlix\Hub\Relay\InboundPackageCap::onConnect();
+        // HOST-3 H3-3: wrapped in the repo-owned handshake deadline (silent
+        // pre-upgrade sockets are closed, not held).
+        $worker->onConnect = InboundHandshakeGuard::compose(
+            InboundPackageCap::onConnect(),
+            $this->handshakeTimeoutSeconds,
+            'syncplay-relay-ws :' . $this->port,
+        );
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
         $worker->onWorkerStart = [$this, 'onWorkerStart'];
@@ -627,6 +640,10 @@ final class SyncPlayRelayWorker
      */
     public function onWebSocketConnect(TcpConnection $connection, WorkermanRequest $request): void
     {
+        // HOST-3 H3-3: upgrade arrived — disarm the handshake deadline before
+        // any refuse branch below (see RelayWorker::onWebSocketConnect).
+        InboundHandshakeGuard::cancel($connection);
+
         $logger = LoggerFactory::get(LogChannels::RELAY);
 
         // Parse server_id from path: /syncplay/{server_id}
@@ -1398,6 +1415,11 @@ final class SyncPlayRelayWorker
      */
     public function onClose(TcpConnection $connection): void
     {
+        // HOST-3 H3-3: never leave a deadline armed for a dead connection
+        // (idempotent; see RelayWorker::onClose). Must run BEFORE the
+        // client-null early return below.
+        InboundHandshakeGuard::cancel($connection);
+
         $connId = spl_object_id($connection);
         $client = self::$clients[$connId] ?? null;
 

@@ -43,6 +43,18 @@ pings), so the story is stated per surface, traced from code:
 Window math, close-path details and the honest gaps are in each port's own
 section below.
 
+**Pre-upgrade deadline (HOST-3 H3-3).** The liveness columns above govern
+sockets that completed the WS upgrade. BEFORE the upgrade, on `:8802`, `:8803`
+and `:8804`, `Phlix\Hub\Relay\InboundHandshakeGuard` closes a connection that
+completed TCP (and TLS, if configured) but never sent its HTTP upgrade request:
+after `relay.ws_handshake_timeout_seconds` (`HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS`,
+default 10 s, `0` disables) one WARN line carries `reason: "handshake_timeout"`,
+the `listener`, `remote_ip` and the byte counts, and the socket is closed. No WS
+close frame is emitted — a pre-`101` close frame would be HTTP garbage on the
+wire (the L-4 two-phase law), so the plain transport close is the contract.
+`:8805` federation is not governed (owner-reel). A completed upgrade cancels the
+deadline permanently; healthy clients never observe this path.
+
 ---
 
 ## The binary frame format (`:8802`, `:8803`, `:8805`)
@@ -149,6 +161,10 @@ against it, so the shape documented here is the shape executed.
    (`GET /.well-known/jwks.json`), registers a `Tunnel` in `TunnelManager`, and
    answers **JSON text** `HELLO_ACK` with a relay session id and a tunnel id.
 3. Everything after that is binary `RelayFrame`.
+
+A connection that establishes transport but never reaches step 1 (no HTTP
+upgrade at all) is closed at the pre-upgrade deadline above — one WARN with
+`reason: "handshake_timeout"`, then a plain transport close.
 
 ### Rate limiting and close codes
 

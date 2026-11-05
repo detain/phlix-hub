@@ -22,6 +22,7 @@ use Phlix\Hub\Common\RateLimit\RateLimiter;
 use Phlix\Hub\Federation\FederationPushBridge;
 use Phlix\Hub\Health\HealthController;
 use Phlix\Hub\Relay\ClientRelayWorker;
+use Phlix\Hub\Relay\InboundHandshakeGuard;
 use Phlix\Hub\Relay\RelayProxyBridge;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\RelayWorker;
@@ -2542,6 +2543,14 @@ final class Application
         // listener); default false keeps warn-only with the boot advisory.
         /** @var bool $relayRequireTls */
         $relayRequireTls = (bool) ($this->config['relay_require_tls'] ?? false);
+        // HOST-3 (H3-3): one shared TCP-accept → WS-upgrade deadline for the
+        // governed trio (:8802/:8803/:8804), parsed once at boot by the
+        // guard's own boundary parser (env slop → default, `0` → off).
+        /** @var mixed $relayConfig */
+        $relayConfig = $this->config['relay'] ?? [];
+        /** @var mixed $wsHandshakeTimeoutRaw */
+        $wsHandshakeTimeoutRaw = is_array($relayConfig) ? ($relayConfig['ws_handshake_timeout_seconds'] ?? null) : null;
+        $wsHandshakeTimeoutSeconds = InboundHandshakeGuard::resolveTimeoutSeconds($wsHandshakeTimeoutRaw);
         $relayWorker = new RelayWorker(
             $this->container,
             $relayPort,
@@ -2552,6 +2561,7 @@ final class Application
             $relayTlsCert,
             $relayTlsKey,
             $relayRequireTls,
+            $wsHandshakeTimeoutSeconds,
         );
         // R14-01/R16-01: the relay worker's own onWorkerStart is set inside
         // RelayWorker::start() (a file outside this lane), so prepend the
@@ -2566,7 +2576,7 @@ final class Application
         $clientRelayPort = is_int($clientRelayPortRaw)
             ? $clientRelayPortRaw
             : (int) (is_numeric($clientRelayPortRaw) ? $clientRelayPortRaw : ClientRelayWorker::DEFAULT_PORT);
-        $clientRelayWorker = new ClientRelayWorker($this->container, $clientRelayPort);
+        $clientRelayWorker = new ClientRelayWorker($this->container, $clientRelayPort, 1, $wsHandshakeTimeoutSeconds);
         // R14-01/R16-01: prepend the curated-hook step to this worker's
         // class-owned onWorkerStart (same wrap law as the relay worker).
         CoroutineHooks::wrap($clientRelayWorker->start(), $this->config);
@@ -2589,6 +2599,9 @@ final class Application
             $this->container,
             $channelHost,
             $channelPort,
+            // Named: the 6th/7th positions are the inbound byte-budget pair;
+            // the deadline rides the trailing parameter (HOST-3 H3-3).
+            handshakeTimeoutSeconds: $wsHandshakeTimeoutSeconds,
         );
         // R14-01/R16-01: prepend the curated-hook step to this worker's
         // class-owned onWorkerStart (same wrap law as the relay worker).

@@ -102,6 +102,11 @@ final class RelayWorker
      *                                         (config `relay_require_tls` /
      *                                         HUB_RELAY_REQUIRE_TLS, mirroring the
      *                                         server's PHLIX_RELAY_REQUIRE_TLS).
+     * @param float              $handshakeTimeoutSeconds TCP-accept → WS-upgrade
+     *                                         deadline from
+     *                                         `relay.ws_handshake_timeout_seconds`
+     *                                         ({@see InboundHandshakeGuard});
+     *                                         <= 0 disables the guard.
      */
     public function __construct(
         private readonly ContainerInterface $container,
@@ -113,6 +118,7 @@ final class RelayWorker
         private readonly ?string $tlsCert = null,
         private readonly ?string $tlsKey = null,
         private readonly bool $requireTls = false,
+        private readonly float $handshakeTimeoutSeconds = InboundHandshakeGuard::DEFAULT_TIMEOUT_SECONDS,
     ) {
         ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-relay-ws (:8802)');
     }
@@ -331,7 +337,14 @@ final class RelayWorker
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         // Minor 57: declared inbound package cap pinned at TCP-accept (law in
         // InboundPackageCap) — this surface no longer inherits it from vendor.
-        $worker->onConnect = InboundPackageCap::onConnect();
+        // HOST-3 H3-3: the cap handler is wrapped in the repo-owned handshake
+        // deadline — a socket that never completes its WS upgrade is closed
+        // after relay.ws_handshake_timeout_seconds instead of held ~forever.
+        $worker->onConnect = InboundHandshakeGuard::compose(
+            InboundPackageCap::onConnect(),
+            $this->handshakeTimeoutSeconds,
+            'relay-ws :' . $this->port,
+        );
         // Fired with each deframed WS message payload (HELLO text, then frames).
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
@@ -549,6 +562,12 @@ final class RelayWorker
      */
     public function onWebSocketConnect(TcpConnection $connection, WorkermanRequest $request): void
     {
+        // HOST-3 H3-3: the upgrade arrived — the handshake deadline has done
+        // its job. Cancel FIRST, before any limiter/refuse branch, so a
+        // rate-limited connection (closed below) can never have its deadline
+        // fire against a reused object id later.
+        InboundHandshakeGuard::cancel($connection);
+
         // HB-4.6e: throttle inbound server relay-connects by remote IP BEFORE any
         // HELLO processing, closing the H-H1 tunnel-displacement DoS surface (a
         // flood of connects on :8802). The server_id is not yet known here (it
@@ -761,6 +780,11 @@ final class RelayWorker
      */
     public function onClose(TcpConnection $connection): void
     {
+        // HOST-3 H3-3: a socket that died (or was rejected) before upgrading
+        // must not leave its deadline armed — cancel is idempotent and keeps
+        // the guard's map bounded to live pre-upgrade connections.
+        InboundHandshakeGuard::cancel($connection);
+
         $connId = spl_object_id($connection);
 
         if (!isset(self::$connTunnels[$connId])) {

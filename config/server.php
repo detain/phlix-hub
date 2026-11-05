@@ -199,6 +199,19 @@ return [
         // deploy/network blip does not instantly kill active playback. `0`
         // disables the drain (immediate hard displacement).
         'reconnect_drain_grace_seconds' => $envFloat('HUB_RELAY_RECONNECT_DRAIN_GRACE', 5.0),
+        // HOST-3 (H3-3): deadline (seconds) an inbound WebSocket listener of
+        // the governed trio — :8802 relay, :8803 client-mount, :8804
+        // SyncPlay — waits for the HTTP `Upgrade` request after TCP-accept
+        // (TLS handshake included when the surface speaks wss://). A client
+        // that completes transport then goes silent used to be held
+        // ~indefinitely (10 min observed live); the hub now closes it and
+        // logs `reason=handshake_timeout`. Default 10 s is generous against
+        // real TCP+TLS+upgrade round-trips; `0` disables the deadline
+        // (same "`0` = off" law as the drain grace beside it); a negative
+        // value is a typo, not a policy → parsed to the default. Federation
+        // :8805 is NOT governed (owner-reel surface).
+        // Consumer: \Phlix\Hub\Relay\InboundHandshakeGuard via Application.
+        'ws_handshake_timeout_seconds' => $envFloat('HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS', 10.0),
     ],
 
     // Relay worker TLS (wss://) settings.

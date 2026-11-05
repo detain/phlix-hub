@@ -6,6 +6,59 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added [hub-handshake-timeout] — config-gated inbound WS-upgrade deadline on :8802/:8803/:8804; a stalled TLS client can no longer squat on the hub (HOST-3 H3-3) — 2026-11-05
+
+- Context (live-host review `.reviews/2026-11-05/HOST-3.md`, item 5 / flag H3-3):
+  the hub had NO repo-side policy for connections that complete TCP+TLS on a WS
+  listener and then never send the HTTP upgrade — observed live the hub held one
+  inbound ~10 minutes (the ~2-minute cutoff the sibling [hub-relay-obs] entry
+  recorded is the OS/vendor timer plus client-side destruction, not hub
+  judgement). Silent sockets are how this program lost hours; the hub must not
+  keep them.
+- New `src/Relay/InboundHandshakeGuard.php`: `compose()` wraps each guarded
+  worker's `onConnect` (the inner `InboundPackageCap::onConnect()` ALWAYS runs
+  first, then a one-shot non-persistent `Timer::add` arms for the configured
+  seconds); `onWebSocketConnect` cancels on its first statement and every
+  guarded `onClose` cancels as its first action. At expiry the connection is
+  closed with ONE WARN — `reason: "handshake_timeout"`, `listener`,
+  `remote_ip`, `timeout_seconds`, `elapsed_seconds`, `bytes_read`/
+  `bytes_written` (the F-3 fingerprint fields; ZERO payload bytes anywhere,
+  redaction law canary-pinned). A `close()` against a dead socket is caught and
+  logged; an identity gate (the slot stores the armed timer id and fire compares
+  it) plus a STATUS_ESTABLISHED gate make double-fire and post-cancel races
+  inert. Workerman 5.2's Select/Event drivers allocate the FIRST timer id 0, so
+  no sentinel is used — cancel deletes id 0 and the gate compares identity, not
+  nonzero-ness (the M-S1 class, avoided deliberately).
+- Config gate: `relay.ws_handshake_timeout_seconds` in `config/server.php`,
+  sourced from `HUB_RELAY_WS_HANDSHAKE_TIMEOUT_SECONDS`, default `10.0` (ON).
+  `0` disables, mirroring the adjacent `reconnect_drain_grace_seconds` law.
+  Negative/non-numeric values fall back to the default rather than silently
+  switching the guard OFF — a typo must not become policy. An arm failure (no
+  event loop yet) is contained as one loud ERROR line instead of killing the
+  accept path.
+- Surfaces governed: `:8802` RelayWorker, `:8803` ClientRelayWorker,
+  `:8804` SyncPlayRelayWorker. Federation `:8805` is deliberately NOT governed
+  (owner-reel; source-scan pins assert the guard string is absent there while
+  the package cap stays). Successful clients see zero wire change: the guard
+  only ever closes sockets that had NOT upgraded, and `Application` threads the
+  resolved seconds into all three constructors.
+- Tests: `tests/Unit/Relay/InboundHandshakeGuardTest.php` (15 tests,
+  136 assertions) + `tests/Support/ScriptedEventDriver.php` (named
+  `EventInterface` fake with scripted fire — zero real sleeps; `offDelay`
+  records cancellation but LEAVES the callback fireable, adversarially pinning
+  the identity gate). Red-first measured at the parent: 15 tests / 15 errors
+  (`Class Phlix\Hub\Relay\InboundHandshakeGuard not found`). Pinned: a silent
+  inbound is closed exactly once at the bound and its WARN context field-set is
+  pinned CLOSED-WORLD; a canary enrollment JWT on the connection is absent from
+  the log; a timely upgrade cancels (`cancelled === [0]` — id 0 is a real id)
+  and a late fire is inert; double-fire closes once; an already-CLOSING socket
+  is neither closed again nor logged; a throwing close is contained; `0`
+  disables while the package cap still lands through `compose`; a real
+  `TcpConnection` gets the cap through the composed callback; source scans
+  assert compose + exactly two cancels per governed worker and federation
+  absence. The duration cache is re-blessed from one serial Unit profile IN
+  THIS COMMIT — new files are blessed as they are added (S468 law).
+
 ### Fixed [hub-relay-obs] — relay-channel observability for silent HELLO-boundary rejects (F-4) and tunnel-less connection closes (F-3) — 2026-11-05
 
 - Context (live-host review `.reviews/2026-11-05/HOST-2.md`, flags F-3/F-4): the
