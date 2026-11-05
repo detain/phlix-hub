@@ -31,6 +31,8 @@ use Workerman\Worker;
 
 use function count;
 use function is_array;
+use function is_file;
+use function is_readable;
 use function is_string;
 use function json_decode;
 use function spl_object_id;
@@ -91,8 +93,10 @@ final class RelayWorker
      * @param string              $channelHost Host of the workerman/channel broker (cross-process proxy).
      * @param int                 $channelPort Port of the workerman/channel broker.
      * @param bool                $useTls      Enable TLS (wss://) on the relay WebSocket.
-     * @param string|null         $tlsCert     Path to TLS certificate file (PEM).
-     * @param string|null         $tlsKey      Path to TLS private key file (PEM).
+     * @param string|null         $tlsCert     Path to TLS certificate file (PEM); must be a
+     *                                         readable file — enforced pre-bind by
+     *                                         {@see self::assertTlsMaterialReadable()}.
+     * @param string|null         $tlsKey      Path to TLS private key file (PEM), same law.
      * @param bool                $requireTls  M21 fail-closed posture: refuse to bind
      *                                         plaintext ws:// when true and TLS is off
      *                                         (config `relay_require_tls` /
@@ -193,6 +197,78 @@ final class RelayWorker
     }
 
     /**
+     * The canonical bind-time TLS context for the :8802 listener (M21).
+     *
+     * Single source of truth so the production bind, the unit shape law, and
+     * the real-TLS loopback E2E child all speak from one builder — drift
+     * between them is the failure mode this seam exists to prevent. The
+     * hardening list (AEAD-only ciphers, secp384r1, compression off, OpenSSL
+     * security level 2) is the server-side half of the estate TLS posture;
+     * `allow_self_signed`/`verify_peer` here describe whether THIS listener
+     * validates CLIENT certificates (it does not — tunnel authentication is
+     * the enrollment JWT inside the HELLO, not mTLS). Peer validation of the
+     * hub certificate is the dialing server's duty (`PHLIX_RELAY_TLS_VERIFY`,
+     * phlix-server RelayConsumer::buildSslContext — strict by default).
+     *
+     * @param string $certPath local_cert PEM bundle; already validated by
+     *                         {@see self::assertTlsMaterialReadable()}.
+     * @param string $keyPath  local_pk PEM path.
+     *
+     * @return array{ssl: array<string, mixed>} Workerman socket context.
+     */
+    public static function relayTlsContext(string $certPath, string $keyPath): array
+    {
+        return [
+            'ssl' => [
+                'ciphers' => 'ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS',
+                'ecdh_curve' => 'secp384r1',
+                'disable_compression' => true,
+                'security_level' => 2,
+                'local_cert' => $certPath,
+                'local_pk' => $keyPath,
+                'allow_self_signed' => true,
+                'verify_peer' => false,
+            ],
+        ];
+    }
+
+    /**
+     * Fail fast, pre-bind, on TLS material that is not a readable file.
+     *
+     * Without this check a configured-but-missing PEM surfaces only when
+     * Workerman's `stream_socket_server()` rejects the ssl context mid-boot —
+     * possibly after other listeners already bound (a half-started hub) and
+     * with an error text that never names the operator knob at fault. The
+     * message must name the failing env var, the resolved path, the failed
+     * condition, and both ways out (fix the path, or go back to plaintext
+     * with the boot advisory). Red-first law: the parent happily built the
+     * ssl context from nonexistent paths.
+     *
+     * @param string $certPath HUB_RELAY_TLS_CERT value.
+     * @param string $keyPath  HUB_RELAY_TLS_KEY value.
+     *
+     * @return void
+     *
+     * @throws \InvalidArgumentException When either path is not a readable file.
+     */
+    public static function assertTlsMaterialReadable(string $certPath, string $keyPath): void
+    {
+        $checks = ['HUB_RELAY_TLS_CERT' => $certPath, 'HUB_RELAY_TLS_KEY' => $keyPath];
+        foreach ($checks as $envName => $path) {
+            if (is_file($path) && is_readable($path)) {
+                continue;
+            }
+
+            $state = is_file($path) ? 'exists but is not readable' : 'does not exist';
+            throw new \InvalidArgumentException(
+                'TLS enabled for relay worker but ' . $envName . ' (' . $path . ') ' . $state
+                    . '. Point HUB_RELAY_TLS_CERT/HUB_RELAY_TLS_KEY at existing PEM files, '
+                    . 'or set HUB_RELAY_TLS=false to bind plaintext ws:// with the boot advisory.',
+            );
+        }
+    }
+
+    /**
      * Start the relay WebSocket worker.
      *
      * Creates the Workerman Worker instance. The worker is not actually
@@ -229,25 +305,18 @@ final class RelayWorker
         // rather than null — passing null throws a TypeError on the non-TLS path.
         $sslContext = [];
 
-        // Enable TLS (wss://) when configured.
+        // Enable TLS (wss://) when configured. The material is validated before
+        // the Worker is even constructed: a configured-but-unreadable PEM must
+        // fail the boot loudly and deterministically, never as a cryptic
+        // OpenSSL digest from a half-booted hub (TLS-lane fail-fast law).
         if ($this->useTls) {
             if ($this->tlsCert === null || $this->tlsKey === null) {
                 throw new \InvalidArgumentException(
                     'TLS enabled for relay worker but HUB_RELAY_TLS_CERT and/or HUB_RELAY_TLS_KEY env vars are not set',
                 );
             }
-            $sslContext = [
-                'ssl' => [
-                    'ciphers' => 'ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS',
-                    'ecdh_curve' => 'secp384r1',
-                    'disable_compression' => true,
-                    'security_level' => 2,
-                    'local_cert' => $this->tlsCert,
-                    'local_pk' => $this->tlsKey,
-                    'allow_self_signed' => true,
-                    'verify_peer' => false,
-                ],
-            ];
+            self::assertTlsMaterialReadable($this->tlsCert, $this->tlsKey);
+            $sslContext = self::relayTlsContext($this->tlsCert, $this->tlsKey);
         }
 
         $worker = new Worker("websocket://0.0.0.0:{$this->port}", $sslContext);

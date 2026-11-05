@@ -4778,6 +4778,14 @@ x-phlix-websockets:
     port: 8802
     portSource: "config/server.php `relay_port` (default 8802); Application::run()"
     url: "ws://hub.example.com:8802"
+    tls: >-
+      Opt-in, config-driven: `HUB_RELAY_TLS=true` with `HUB_RELAY_TLS_CERT`/`HUB_RELAY_TLS_KEY`
+      pointing at readable PEMs binds this listener as `wss://` (hardened server-side context,
+      validated fail-fast pre-bind — an unreadable configured path aborts boot loudly). Default
+      stays plaintext `ws://` with a once-per-boot security advisory; `HUB_RELAY_REQUIRE_TLS=true`
+      turns a plaintext bind into a boot refusal. Dialers verify strictly by default
+      (phlix-server `PHLIX_RELAY_TLS_VERIFY`, `PHLIX_RELAY_TLS_CAFILE`). Real-TLS loopback E2E:
+      tests/Unit/Relay/RelayWorkerTlsHandshakeE2ETest.php.
     path: "/"
     worker: "Phlix\\Hub\\Relay\\RelayWorker"
     direction: "media server → hub (outbound, so it traverses NAT)"

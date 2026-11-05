@@ -79,11 +79,18 @@ final class RelayWorkerTlsPostureTest extends TestCase
         $this->recordedWarnings = [];
     }
 
+    /**
+     * @return void
+     */
     protected function tearDown(): void
     {
         parent::tearDown();
         RelayWorker::reset();
         LoggerFactory::reset();
+        foreach ($this->scratchFiles as $path) {
+            @unlink($path);
+        }
+        $this->scratchFiles = [];
     }
 
     /**
@@ -263,6 +270,15 @@ final class RelayWorkerTlsPostureTest extends TestCase
     {
         $this->seedRecordingLogger();
 
+        // TLS-lane fixture flip (reviewed): this test previously pointed the
+        // cert/key args at deliberately ABSENT /tmp paths, which was only ever
+        // green because the parent never looked at the paths. The listener now
+        // fails fast on unreadable material (RelayWorker::assertTlsMaterialReadable),
+        // so the secure-path leg carries real scratch PEMs. The pinned law is
+        // UNCHANGED: a wss:// bind cries no wolf and rides the ssl transport.
+        $cert = $this->writeScratchPem('cert');
+        $key = $this->writeScratchPem('key');
+
         $worker = new RelayWorker(
             $this->container,
             self::PORT,
@@ -270,14 +286,32 @@ final class RelayWorkerTlsPostureTest extends TestCase
             '127.0.0.1',
             RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
             true,
-            '/tmp/phlix-m21-absent-cert.pem',
-            '/tmp/phlix-m21-absent-key.pem',
+            $cert,
+            $key,
             true,
         );
         $workerman = $worker->start();
 
         self::assertSame([], $this->recordedWarnings, 'a wss:// bind must never cry wolf');
         self::assertSame('ssl', $workerman->transport);
+    }
+
+    /** @var array<int, string> Scratch PEM paths removed in tearDown(). */
+    private array $scratchFiles = [];
+
+    /**
+     * Write a throwaway file for the secure-path fixture (content is
+     * irrelevant to the pre-bind law under test: existence + readability).
+     */
+    private function writeScratchPem(string $role): string
+    {
+        $path = sys_get_temp_dir() . '/phlix-m21-' . $role . '-' . bin2hex(random_bytes(6)) . '.pem';
+        if (file_put_contents($path, "-----BEGIN PHLEX SCRATCH " . strtoupper($role) . "-----\n") === false) {
+            self::fail("could not write scratch $role pem to $path");
+        }
+        $this->scratchFiles[] = $path;
+
+        return $path;
     }
 
     // ---- 7. config law -------------------------------------------------------

@@ -126,16 +126,29 @@ final class RelayController
         $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : getenv('HUB_PUBLIC_DOMAIN');
         $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : 'your-hub-host';
 
+        // TLS-lane signpost truth: the steered SCHEME tracks the listener's bind-time
+        // posture (config `relay_tls` / HUB_RELAY_TLS — same truthiness idiom as
+        // config/server.php). Announcing `ws://` against a wss:// bind (or the
+        // reverse) sends operators into the endless-reconnect shape RelayConsumer
+        // itself documents; before this seam the scheme was hardcoded `ws://`
+        // whatever the hub was actually serving on :8802. The PORT remains the
+        // fixed default — that limitation is documented, unchanged.
+        $relayTls = filter_var(
+            ($v = getenv('HUB_RELAY_TLS')) !== false && $v !== '' ? $v : 'false',
+            FILTER_VALIDATE_BOOLEAN,
+        );
+        $wsEndpoint = ($relayTls ? 'wss://' : 'ws://') . $hubWsHost . ':8802';
+
         return (new Response())
             ->header('Link', '<' . $docsUrl . '>; rel="help"')
-            ->header('X-WS-Endpoint', 'ws://' . $hubWsHost . ':8802')
+            ->header('X-WS-Endpoint', $wsEndpoint)
             ->status(501)
             ->json([
                 'error'   => 'NOT_IMPLEMENTED_VIA_HTTP',
                 'code'    => 'relay.ws_http_endpoint',
                 'message' => 'Relay tunnel must be established via WebSocket.'
-                    . ' Connect to ws://' . $hubWsHost . ':8802 with your enrollment JWT.',
-                'ws_endpoint' => 'ws://' . $hubWsHost . ':8802',
+                    . ' Connect to ' . $wsEndpoint . ' with your enrollment JWT.',
+                'ws_endpoint' => $wsEndpoint,
                 'protocol'    => 'See docs/dev/relay-protocol for the WS framing specification',
                 'docs'        => $docsUrl,
             ]);

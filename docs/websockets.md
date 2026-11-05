@@ -130,6 +130,16 @@ stand up a credential-bearing cleartext listener when the operator has mandated
 TLS. This is the listen-side mirror of the server's `PHLIX_RELAY_REQUIRE_TLS`
 dial-side knob (phlix-server `config/relay.php`); the warn-only default is
 deliberate estate posture — flip both sides in one wave, never one alone.
+Configured material is additionally **fail-fast pre-bind**: booting with
+`relay_tls` on and either PEM path not a readable file aborts the hub loudly
+naming the failing env var (`RelayWorker::assertTlsMaterialReadable`), never a
+half-booted listener that dies cryptically inside `stream_socket_server()`.
+The bind-time context itself — AEAD-only cipher list, `secp384r1`, compression
+off, OpenSSL security level 2 — is the single builder
+`RelayWorker::relayTlsContext()`, and the real-TLS loopback E2E
+(`tests/Unit/Relay/RelayWorkerTlsHandshakeE2ETest.php`) completes a genuine
+strict-verify handshake, WebSocket upgrade, and HELLO verdict round trip
+against it, so the shape documented here is the shape executed.
 
 ### Handshake
 
@@ -157,9 +167,11 @@ An authentication failure is a `HELLO`-time `ERROR` frame with code
 `POST /api/v1/servers/{id}/relay` on the HTTP surface is a **signpost only**: it
 always answers `501` with an `X-WS-Endpoint` header pointing at this socket.
 The steer is built from `HUB_WS_HOST` (falling back to `HUB_PUBLIC_DOMAIN`,
-then the `your-hub-host` placeholder) with a **fixed** `ws://` scheme and the
-**fixed default port** `8802` — neither tracks a TLS-terminating proxy nor a
-`HUB_RELAY_PORT` that has been env-moved. Behind either of those deployment
+then the `your-hub-host` placeholder); the **scheme tracks the listener's TLS
+posture** — `wss://` when `HUB_RELAY_TLS` is on, the `ws://` default otherwise
+— while the **port stays the fixed default** `8802`; the steer tracks neither a
+TLS-terminating proxy nor a `HUB_RELAY_PORT` that has been env-moved. Behind
+either of those deployment
 shapes, read the header as a host hint only and set the server's
 `config/relay.php` `hub_wss_url` explicitly; it is that URL `phlix-server`
 actually dials.

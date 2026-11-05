@@ -6,6 +6,61 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-relay-tls] — :8802 TLS boot material made fail-fast; signpost scheme tracks config; real-TLS loopback E2E pins the inbound relay handshake — 2026-11-05
+
+- Context (owner-host investigation `.reviews/2026-11-05/HOST-1.md`): the hub's
+  relay listener already serves real TLS today when configured — the reported
+  "hub-side relay TLS is dead code / `SyncPlay/SyncPlayRelayHttp.php`
+  `handleSslConnection()`" root-cause matches NOTHING in this repository (the
+  file never existed in any commit; `stream_socket_enable_crypto` lives only in
+  vendored Workerman's ACCEPT path, which the live host proved functional with
+  a strict `openssl s_client` handshake + WS upgrade). The stall root-causes on
+  the SERVER's Swoole-loop TLS client, owned by the sibling server lane
+  (phase-2). This entry lands what the disk audit DID find missing:
+- `RelayWorker::relayTlsContext()` — the bind-time ssl context (AEAD-only
+  ciphers, secp384r1, compression off, security level 2) is now a single public
+  canonical builder, consumed by production `start()` and by the new E2E child,
+  so docs/tests/production can no longer drift.
+- `RelayWorker::assertTlsMaterialReadable()` — new pre-bind fail-fast:
+  `HUB_RELAY_TLS=true` with a configured-but-unreadable
+  `HUB_RELAY_TLS_CERT`/`KEY` path now aborts boot with an actionable error
+  naming the env var, the path and both ways out, instead of half-booting and
+  dying cryptically inside `stream_socket_server()` (red-first: the parent
+  happily built a Worker around nonexistent paths). Absent TLS config behaves
+  exactly as before — plaintext default, one loud advisory,
+  `HUB_RELAY_REQUIRE_TLS` refusal all UNCHANGED (default-off estate law).
+- `RelayController` (:8800 signpost) — `X-WS-Endpoint` / `ws_endpoint` /
+  message SCHEME now tracks `HUB_RELAY_TLS` (`wss://…:8802` on a TLS bind)
+  instead of the hardcoded `ws://`; a steered scheme that contradicts the
+  listener is the endless-reconnect footgun the server's own docs name.
+  Default-off behavior byte-identical (`ws://`); the fixed-`8802`-port
+  limitation stands unchanged (documented).
+- Tests: `RelayWorkerTlsMaterialTest` (context shape + guard laws);
+  `RelayWorkerTlsHandshakeE2ETest` + `tests/Support/Relay/tls_relay_child_server.php`
+  — the FIRST real-TLS INBOUND :8802 proof: genuine `RelayWorker::start()`
+  output bound by a child workerman process, strict stream client (throwaway
+  CA, verify_peer + peer_name against the leaf IP SAN, literal 127.0.0.1 dial
+  per venue law e5f5dd9), TLS1.2/1.3 handshake → WS 101 + accept-hash →
+  masked HELLO deframed into production `handleHello()` → 'missing_server_id'
+  verdict received over the encrypted socket; the other-CA leg must die at the
+  handshake and the listener must survive it whole.
+  `RelayWorkerTlsPostureTest` secure-path fixture flipped from deliberately
+  absent /tmp paths to readable scratch PEMs — the pinned law (no advisory +
+  ssl transport on the secure bind) is unchanged; only the fixture could not
+  survive the new pre-bind guard, and passing unreadable material there was
+  never intended behavior.
+- `FederationMasterDialConstructionTest` (src `wss://`-literal tripwire)
+  amended with ONE named announcement exemption for the new signpost steer:
+  the hub PROVIDES :8802 and only ANNOUNCES its URL there — the literal can
+  never reach a client constructor from an HTTP controller. The exemption is
+  reciprocally pinned (named file must still announce; must stay free of
+  `AsyncTcpConnection` and `->transport`), so dial-side strictness keeps the
+  full-strength sweep and the carve-out cannot silently grow or rot.
+- Docs: `docs/websockets.md` :8802 section gains the fail-fast material law and
+  the scheme-tracking signpost truth; `openapi.yaml` `x-phlix-websockets` :8802
+  entry gains a `tls:` block stating shipped-vs-default honestly.
+- No new wire codes; no listener-default flips; :8803/:8804/:8805 untouched.
+
 ### Chore [wave-5] — re-vendor `@phlix/ui` #v0.99.16 + `/app` SPA regen — 2026-11-04
 
 - Tag-form re-pin of the served SPA's vendored library, hub leg of the wave-5

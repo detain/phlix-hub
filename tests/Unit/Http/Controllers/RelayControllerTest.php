@@ -163,6 +163,74 @@ final class RelayControllerTest extends TestCase
     }
 
     /**
+     * TLS-lane signpost truth: when the hub's relay listener is configured for
+     * TLS (HUB_RELAY_TLS), the steered endpoint must carry wss:// — pointing
+     * operators at ws:// against a wss bind is the endless-reconnect footgun
+     * the server's own docs name. Red on the parent: the scheme was hardcoded.
+     */
+    public function testSignpostsWssSchemeWhenRelayTlsIsEnabled(): void
+    {
+        $restore = getenv('HUB_RELAY_TLS');
+        putenv('HUB_RELAY_TLS=true');
+
+        try {
+            $token = $this->jwtService->createEnrollmentJwt('server-uuid-tls');
+            $request = new Request();
+            $request->headers['Authorization'] = 'Bearer ' . $token;
+            $request->headers['Upgrade'] = 'websocket';
+
+            $response = $this->controller->handle($request, ['id' => 'server-uuid-tls']);
+            $body = $this->decodeJsonBody($response->body);
+
+            self::assertSame(501, $response->statusCode);
+            self::assertIsString($body['ws_endpoint']);
+            self::assertIsString($body['message']);
+            self::assertStringStartsWith('wss://', $body['ws_endpoint']);
+            self::assertStringStartsWith('wss://', $response->headers['X-WS-Endpoint']);
+            self::assertStringContainsString('wss://', $body['message']);
+            self::assertStringContainsString(':8802', $body['ws_endpoint']);
+        } finally {
+            if (is_string($restore)) {
+                putenv('HUB_RELAY_TLS=' . $restore);
+            } else {
+                putenv('HUB_RELAY_TLS');
+            }
+        }
+    }
+
+    /**
+     * The default-off estate posture: with HUB_RELAY_TLS unset the signpost
+     * keeps steering at ws:// — exactly the bind the plaintext-default listener
+     * performs. A flip here would be the same major-tier owner call as the
+     * listener default itself (warn-only, both sides move together).
+     */
+    public function testSignpostKeepsPlaintextSchemeWhenRelayTlsIsUnset(): void
+    {
+        $restore = getenv('HUB_RELAY_TLS');
+        putenv('HUB_RELAY_TLS');
+
+        try {
+            $token = $this->jwtService->createEnrollmentJwt('server-uuid-plain');
+            $request = new Request();
+            $request->headers['Authorization'] = 'Bearer ' . $token;
+            $request->headers['Upgrade'] = 'websocket';
+
+            $response = $this->controller->handle($request, ['id' => 'server-uuid-plain']);
+            $body = $this->decodeJsonBody($response->body);
+
+            self::assertIsString($body['ws_endpoint']);
+            self::assertStringStartsWith('ws://', $body['ws_endpoint']);
+            self::assertStringStartsWith('ws://', $response->headers['X-WS-Endpoint']);
+        } finally {
+            if (is_string($restore)) {
+                putenv('HUB_RELAY_TLS=' . $restore);
+            } else {
+                putenv('HUB_RELAY_TLS');
+            }
+        }
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function decodeJsonBody(string $body): array

@@ -41,7 +41,9 @@ use Workerman\Worker;
  *      implied (pinned against the vendor, not re-derived from our prose).
  *   4. Source tripwires: exactly ONE AsyncTcpConnection construction site
  *      for dials in src/, fed from the plan; src contains no quoted
- *      'wss://' literal and no peer-verification weakening.
+ *      'wss://' literal (save the named, reciprocally-pinned announcement
+ *      file — an HTTP signpost that can never dial) and no peer-verification
+ *      weakening.
  *
  * The full behavior proof — SNI + peer_name + verify_peer actually working
  * through this seam over a live TLS socket — lives in
@@ -250,7 +252,13 @@ final class FederationMasterDialConstructionTest extends TestCase
      * cannot false-red the pin:
      *
      *   1. No quoted 'wss://' string literal anywhere in src/ — that URI is
-     *      the constructor-throw shape; the seam maps upstream of it.
+     *      the constructor-throw shape; the seam maps upstream of it. ONE
+     *      named exemption: $announcementOnlyFiles are HTTP-response steer
+     *      TEXT (the :8802 signpost telling operators what to dial — the hub
+     *      provides that socket, it never dials it), so the literal there can
+     *      never reach a client constructor. The exemption is reciprocally
+     *      pinned: it must stay live (dead exemptions are law rot) and the
+     *      exempt file must stay dial-free.
      *   2. In the CLIENT-DIAL file (per the construction-site tripwire,
      *      exactly one exists) no verify_peer=>false / allow_self_signed=>true
      *      / capture_peer_cert off. Scope is deliberate: src/Relay/
@@ -268,8 +276,12 @@ final class FederationMasterDialConstructionTest extends TestCase
         $clientDialFiles = [
             'Federation/FederationPeerManager.php',
         ];
+        $announcementOnlyFiles = [
+            'Http/Controllers/RelayController.php',
+        ];
 
         $violations = [];
+        $announcements = [];
         $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($srcRoot));
         /** @var \SplFileInfo $file */
         foreach ($iterator as $file) {
@@ -280,6 +292,10 @@ final class FederationMasterDialConstructionTest extends TestCase
             $code = self::codeOnlyContents($file->getPathname());
 
             if (preg_match("/(['\"])wss:\\/\\/\\1/", $code) === 1) {
+                if (in_array($relative, $announcementOnlyFiles, true)) {
+                    $announcements[] = $relative;
+                    continue;
+                }
                 $violations[] = "$relative: quoted wss:// string literal (the constructor-throw shape)";
             }
 
@@ -298,6 +314,30 @@ final class FederationMasterDialConstructionTest extends TestCase
             $violations,
             'Strict TLS is law for hub CLIENT dials — see FederationPeerManager::buildMasterDialPlan.',
         );
+
+        // The announcement exemption stays EXACTLY the named set: every named
+        // file must still carry the literal (a dead exemption is law rot — the
+        // signpost lane either keeps announcing wss:// or removes its name
+        // from the list), and no unnamed file slipped through.
+        self::assertSame(
+            $announcementOnlyFiles,
+            $announcements,
+            'the wss:// announcement carve-out drifted — reconcile the file list with the code',
+        );
+        foreach ($announcementOnlyFiles as $announcementFile) {
+            $announcementCode = self::codeOnlyContents($srcRoot . '/' . $announcementFile);
+            // The exemption is only safe while the file cannot dial at all.
+            self::assertStringNotContainsString(
+                'AsyncTcpConnection',
+                $announcementCode,
+                "$announcementFile holds the wss:// announcement exemption and must stay dial-free",
+            );
+            self::assertStringNotContainsString(
+                '->transport',
+                $announcementCode,
+                "$announcementFile holds the wss:// announcement exemption and must stay dial-free",
+            );
+        }
     }
 
     /**
