@@ -14,7 +14,7 @@
  *    `SyncPlayRelayWorker::parseServerId`
  *    `~^/syncplay/([^/?#]+)/?(?:[?#].*)?$~`; port fixed by
  *    `SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port. The pinned
- *    `@phlix/ui` (v0.99.17) DOES export this dial law at its package entry —
+ *    `@phlix/ui` (v0.99.19) DOES export this dial law at its package entry —
  *    `buildHubRelayUrl(hubBaseUrl, serverId)` + `HUB_SYNC_PLAY_PORT = 8804`
  *    (`dist/index.d.ts:16`; runtime entry `dist/phlix-ui.js`) — so this
  *    module re-states the law by CHOICE, not necessity: the ui's socket API

@@ -6,6 +6,74 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Chore [playback-1106] — re-vendor `@phlix/ui` #v0.99.19 + `/app` SPA regen — 2026-11-06
+
+- Tag-form re-pin of the served SPA's vendored library, hub leg of the
+  playback-fix v0.99.19 cascade (the release carries the mini-master rung
+  audio law — bare-rung pinned loads point at the per-rung `*_master.m3u8`
+  indexes so multi-audio sources stop rendering silent — plus the `.19`
+  me-safety leg: `probeRungPlaylist` 404→legacy fallback once per pick, the
+  synthesized `Original` audio entry for muxed-HLS feeds, and the stale
+  audio-menu cure; hub skips the no-consumer v0.99.18 intermediate and takes
+  the final shape in one served bundle). GATE ground truth: ui master
+  `a6c9d466a9a8d99076128c0c9928d99de0cc14b7` = annotated tag `v0.99.19`
+  (tag object `f9b89669d6d9e567373bd21f4ea7601dad4f497e`, peel == master),
+  ls-remote-verified at dispatch; bundles `phlix-ui.js` md5
+  `feadba0155082abfd8178f0a19ebaf4d`, `player.js` md5
+  `9af331187aff3c7a7a555c7216e7ff07`, PlayerPage carriers `kwMAZlDu.js` md5
+  `2aba040e291a38be42da1a7e7d99f4b6` + `DAswZ8i8.cjs` md5
+  `14a50c008b001f47f6b697d047513f27`, dist aggregate (house recipe)
+  `7edf06dc3d4da48be3d447d2bd7392d8`, 886 dist files — all equal to the ui
+  release register.
+- `web-ui`: tarball pin `v0.99.17 -> v0.99.19`; lock surgical **4+/4−** (`npm
+  install --package-lock-only` under npm 11 + `NPM_CONFIG_USERCONFIG=/dev/null`
+  rotated exactly the root echo and the ui node's version/resolved/integrity).
+  Nested contracts/syncplay legs: MEASURED honest-zero — v0.99.19 declares the
+  same `#v0.5.6` / `#v0.1.7` upstream deps as v0.99.17 (tag payload checked),
+  so no node rotation was owed. Idempotency proven: re-running
+  `--package-lock-only` left the lock sha256 unchanged (`61811a9b…`). Installed
+  bytes verified against source-of-truth: `diff -r` of `node_modules/@phlix/ui`
+  vs the codeload v0.99.19 tag tree is byte-identical apart from npm's own
+  metadata swap (`- .gitignore` / `+ .npmignore`; dist subtree `diff -r` exit
+  0, 886 files), and all five register md5s above hold on the installed dist.
+- `public/assets/app` rebuilt: **198 files**, aggregate md5
+  `ae35cf446d19333f4aebe3296cc5cdd6` (same
+  `find public/assets/app -type f | sort | xargs md5sum | md5sum` recipe after
+  `cd web-ui && npm run build`); deterministic across 2 consecutive clean-slate
+  builds, the second preceded by a fresh `npm ci` — the exact posture the S253
+  `spa-bundle` CI gate reproduces. The four era-docblock rotations below were
+  applied BEFORE both builds, so the committed bundle reproduces its own source
+  state. The `0.99.19` version stamp rides `index-B5ape8FZ.js`; zero stale
+  `0.99.17`/`0.99.18` stamp sites remain, the dead `.18`-era ui carriers
+  (`B9VdsRF6`/`CUXjKXBl`) are absent, and no `.17`-era `PlayerPage-DWjFG2nP`
+  references survive. File-set delta sanity: 125 deletions ↔ 125 additions with
+  EQUAL logical name sets — every moved file is a content-hash rotation only
+  (the ui carrier rename `PlayerPage-DWjFG2nP-*` → `PlayerPage-kwMAZlDu-CkpiI_95.js`
+  is the new pin flowing into hub chunks); `.vite/manifest.json` + `index.html`
+  modified in place. LAW pins grepped on the new bundle set: `_master.m3u8` and
+  `rung mini-master unavailable` both hit `assets/PlayerPage-kwMAZlDu-CkpiI_95.js`
+  (+ `.map`) — the .19 player cure rides hub's served bundle.
+- Era-prose: the four pin-era docblocks (`HubPageHint.vue`, `i18n/index.ts`,
+  `shareLiveness.ts`, `watchPartyWire.ts`) rotated `v0.99.17 -> v0.99.19` per
+  the bd47bc5a/ee481593/c511395d/a73e43b3 cascade precedent, each claim
+  RE-VERIFIED at the new pin (the `safeHref` cite still lands on
+  `dist/index.d.ts:218`; the relay dial exports still on `dist/index.d.ts:16`;
+  `PageHint` remains runtime-barrel-only — 0 hits in `dist/index.d.ts`, 2 in
+  `dist/phlix-ui.js`; the locale catalog remains entry-exported at
+  `dist/index.d.ts:255`/`:256`). Test rotations: MEASURED ZERO — the `web-ui`
+  node suite reads 152/152 green at the new pin (the `ui-pin-currency.test.ts`
+  tripwire follows the pin by design), and targeted
+  `--filter 'Spa|SharedUiController|StaticAsset|UiPinSkew|ViteAssets|RuntimeNpmGuidance'`
+  was OK 230 tests / 1325 assertions / 0 failures / 0 errors (zero new test
+  files, so no durations.json bless owed). PHP src untouched (zero changes).
+- S181 note: the local `scripts/report-ui-pin-skew.php` sweep re-derived at
+  this tree reads the HUB row OK at `v0.99.19` (14 rows enumerated); the
+  server/windows/tizen rows are STALE at `v0.99.17` — 2 behind — declared
+  cascade lag, not this diff (the server re-vendor is the concurrent sibling
+  leg; windows/tizen follow). The skew job on this push therefore reports those
+  external rows red ON PURPOSE — the bd47bc5a/a73e43b3-era "sole-red
+  S181-external" precedent, which greens when the sibling pins land.
+
 ### Chore [playback-1106] — re-vendor `@phlix/ui` #v0.99.17 + `/app` SPA regen — 2026-11-06
 
 - Tag-form re-pin of the served SPA's vendored library, hub leg of the
