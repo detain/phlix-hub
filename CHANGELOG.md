@@ -6,6 +6,62 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Chore [playback-1106] — re-vendor `@phlix/ui` #v0.99.17 + `/app` SPA regen — 2026-11-06
+
+- Tag-form re-pin of the served SPA's vendored library, hub leg of the
+  playback-fix v0.99.17 cascade (the fix cures the hosted-web player: an
+  autoplay-forced mute leaked into every later media item of a session;
+  server's web-ui lands the same bump in its own queued lane). GATE ground
+  truth: ui master `b958fb574744bb490ff573d70f7fbe134bdf721f` = annotated tag
+  `v0.99.17` (tag object `4515df9c1d84f5e276032c4e219054913212aaab`,
+  peel == master), ls-remote-verified at dispatch; the release carries the ONE
+  player fix (`autoplayMuted` law in `src/stores/usePlayerStore.ts`, shipped in
+  the shared chunk `usePlayerStore-BpohCwDP.js` + `.cjs` twin) plus its release
+  fold; bundles `phlix-ui.js` md5 `e00ff69ccfb857c9ec011ded49fbe042`,
+  `player.js` md5 `903b503cfeee4e22420d653a0dae590a`, 886 dist files — all
+  equal to the ui release register.
+- `web-ui`: tarball pin `v0.99.16 -> v0.99.17`; lock surgical **4+/4−** (`npm
+  install --package-lock-only` under npm 11 + `NPM_CONFIG_USERCONFIG=/dev/null`
+  rotated exactly the root echo and the ui node's version/resolved/integrity).
+  Nested contracts/syncplay legs: MEASURED honest-zero — v0.99.17 declares the
+  same `#v0.5.6` / `#v0.1.7` upstream deps as v0.99.16 (tag payload checked),
+  so no node rotation was owed. Idempotency proven: re-running
+  `--package-lock-only` left the lock sha256 unchanged (`2ef1a541…`). Installed
+  bytes verified against source-of-truth: `diff -r` of `node_modules/@phlix/ui`
+  vs the codeload v0.99.17 tag tree is byte-identical apart from npm's own
+  metadata swap (`- .gitignore` / `+ .npmignore`; dist subtree `diff -r` exit
+  0, 886 files), and the two register bundle md5s above hold on the installed
+  dist.
+- `public/assets/app` rebuilt: **198 files**, aggregate md5
+  `6a9277fce91f4ae1241c6ff527ad600c`
+  (`find public/assets/app -type f | sort | xargs md5sum | md5sum` after
+  `cd web-ui && npm run build`); deterministic across 2 consecutive clean-slate
+  builds (directory purged before each). The four era-docblock rotations below
+  were applied BEFORE both builds, so the committed bundle reproduces its own
+  source state directly (no pre-rotation intermediate, unlike the v0.99.16
+  sequence). The `0.99.17` version stamp rides `index-DDfBuSqH.js`; zero stale
+  `0.99.16` stamp sites remain in the bundle; the autoplay-mute fix rides
+  `assets/usePlayerStore-BpohCwDP-NzbVD84q.js`.
+- Era-prose: the four pin-era docblocks (`HubPageHint.vue`, `i18n/index.ts`,
+  `shareLiveness.ts`, `watchPartyWire.ts`) rotated `v0.99.16 -> v0.99.17` per
+  the bd47bc5a/ee481593/c511395d cascade precedent, each claim RE-VERIFIED at
+  the new pin (the `safeHref` cite still lands on `dist/index.d.ts:218`; the
+  relay dial exports still on `dist/index.d.ts:16`; `PageHint` remains
+  runtime-barrel-only; the locale catalog remains entry-exported). Test
+  rotations: MEASURED ZERO — the `web-ui` node suite reads 152/152 green before
+  and after (the `ui-pin-currency.test.ts` tripwire follows the pin by design),
+  and targeted `--filter 'Spa|SharedUiController|StaticAsset|UiPinSkew|ViteAssets|RuntimeNpmGuidance'`
+  was OK 230 tests / 1325 assertions / 0 failures / 0 errors at parent and at
+  tip (zero new test files, so no durations.json bless owed). PHP src
+  untouched (zero changes).
+- S181 note: local re-derived sweep at this tree reads the HUB row OK at
+  `v0.99.17` (14 rows enumerated); the server/windows/tizen rows are STALE at
+  `v0.99.16` — declared cascade lag, not this diff (the server web-ui re-pin is
+  queued; windows/tizen have no v0.99.17 consumer in-flight). The skew job on
+  this push therefore reports those external rows red ON PURPOSE — the
+  bd47bc5a-era "sole-red S181-external" precedent, which greens when the sibling
+  pins land.
+
 ### Fixed [hub-updates-fastly-fallback] — the core update check falls back
 to `api.github.com` when the Fastly-hosted `raw.githubusercontent.com`
 marker leg fails (operator read-timeout self-heal) — 2026-11-05
