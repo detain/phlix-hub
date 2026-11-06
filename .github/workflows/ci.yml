@@ -298,9 +298,9 @@ jobs:
       - name: Build and enable php-uv
         # Pinned [owner ruling 2026-11-06] to the SAME full SHA
         # scripts/install.sh's phlix_build_uv compiles — e56d640371a5d99eea2e9437cf4739c82e82d99e,
-        # upstream master HEAD at pin time AND the peel of annotated tag v0.3.1
-        # (git ls-remote verified 2026-11-06). Fresh-install and CI must build
-        # the same bytes. The server S309 law applies verbatim: an unpinned
+        # upstream master HEAD at pin time AND the commit tagged v0.3.1
+        # (lightweight tag — its ref resolves directly to the same full-40).
+        # Fresh-install and CI must build the same bytes. The server S309 law applies verbatim: an unpinned
         # --depth=1 HEAD clone here is a supply-chain surface, and --depth=1
         # reaches only the tip — a full clone is what makes the fixed SHA
         # durably checkoutable. A rev-parse self-verify fails the job LOUD if
@@ -565,9 +565,9 @@ jobs:
       - name: Build and enable php-uv
         # Pinned [owner ruling 2026-11-06] to the SAME full SHA
         # scripts/install.sh's phlix_build_uv compiles — e56d640371a5d99eea2e9437cf4739c82e82d99e,
-        # upstream master HEAD at pin time AND the peel of annotated tag v0.3.1
-        # (git ls-remote verified 2026-11-06). Fresh-install and CI must build
-        # the same bytes. The server S309 law applies verbatim: an unpinned
+        # upstream master HEAD at pin time AND the commit tagged v0.3.1
+        # (lightweight tag — its ref resolves directly to the same full-40).
+        # Fresh-install and CI must build the same bytes. The server S309 law applies verbatim: an unpinned
         # --depth=1 HEAD clone here is a supply-chain surface, and --depth=1
         # reaches only the tip — a full clone is what makes the fixed SHA
         # durably checkoutable. A rev-parse self-verify fails the job LOUD if

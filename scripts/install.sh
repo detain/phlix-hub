@@ -384,7 +384,8 @@ phlix_build_uv() {
   log "Building php-uv from source"
   # Pinned [owner ruling 2026-11-06] to e56d640371a5d99eea2e9437cf4739c82e82d99e
   # ("Add missing header file bump") — upstream master HEAD at pin time AND the
-  # peel of annotated tag v0.3.1, re-verified the same day via
+  # commit tagged v0.3.1 (lightweight tag: its ref resolves directly to this
+  # same full-40, no peel object), re-verified the same day via
   # `git ls-remote https://github.com/bwoebi/php-uv.git HEAD refs/tags/v0.3.1`.
   # The owner's production host already runs this commit; the repo (fresh
   # install AND CI) must build the same bytes, so the floating `--depth=1` HEAD

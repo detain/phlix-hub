@@ -20,8 +20,8 @@ floating `--depth=1` HEAD clone — fresh-install/CI parity, owner ruling
   the production host already runs).
 - Pin: e56d640371a5d99eea2e9437cf4739c82e82d99e — re-verified the same day
   via `git ls-remote https://github.com/bwoebi/php-uv.git HEAD
-  refs/tags/v0.3.1`: upstream master HEAD AND the peel of annotated tag
-  v0.3.1. Delta taken from the 670a609 era (11 commits): orphan-ADDREF
+  refs/tags/v0.3.1`: upstream master HEAD AND the commit tagged v0.3.1
+  (lightweight tag — its ref resolves directly to the same full-40). Delta taken from the 670a609 era (11 commits): orphan-ADDREF
   refcount-leak fix (issue #118), three arginfo-error fixes, deleted .dep
   build cruft, PHP 8.6 build fixes, the 0.3.1 release prep itself.
 - Shape mirrors the server's S309 durable idiom: FULL clone (never
