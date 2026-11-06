@@ -300,6 +300,173 @@ final class AsyncVersionMarkerFetcherTest extends TestCase
         self::assertStringContainsString('invalid url', $seen[0][1]);
     }
 
+    // ===== Fastly → api.github.com fallback leg ==============================
+
+    private const GITHUB_URL = 'https://raw.githubusercontent.com/detain/phlix-hub/master/VERSION';
+
+    private const GITHUB_FALLBACK_URL =
+        'https://api.github.com/repos/detain/phlix-hub/contents/VERSION?ref=master';
+
+    /**
+     * (a) A transport error on a raw-github marker re-issues against
+     * api.github.com with the derived contents URL and the raw-accept header; a
+     * success there is a CLEAN status with no fallback trace.
+     */
+    public function testAGithubRawErrorFallsBackToApiContentsAndSucceeds(): void
+    {
+        $client  = $this->client();
+        $fetcher = new AsyncVersionMarkerFetcher(5, $client);
+
+        $seen = [];
+        $fetcher->fetch(self::GITHUB_URL, static function (?string $body, ?string $error) use (&$seen): void {
+            $seen[] = [$body, $error];
+        });
+
+        self::assertSame(1, $client->requestCount());
+        self::assertSame(self::GITHUB_URL, $client->urlOf(0), 'the primary leg is the raw marker');
+
+        // The primary leg fails — this is the Fastly read-timeout symptom.
+        ($client->errorOf(0))(new \RuntimeException('read timeout'));
+
+        self::assertSame([], $seen, 'the fallback is in flight; nothing completes yet');
+        self::assertSame(2, $client->requestCount(), 'exactly one fallback leg');
+        self::assertSame(self::GITHUB_FALLBACK_URL, $client->urlOf(1));
+
+        $headers = $client->optionsOf(1)['headers'] ?? null;
+        self::assertIsArray($headers, 'the fallback must carry an Accept header');
+        self::assertSame('application/vnd.github.raw', $headers['Accept'] ?? null);
+
+        ($client->successOf(1))($this->response("0.9.9\n"));
+
+        self::assertSame([["0.9.9\n", null]], $seen, 'a successful fallback is a clean status');
+    }
+
+    /**
+     * (b) When BOTH legs fail, the error combines the primary message with the
+     * fallback's so the operator sees the original timeout and why the backup
+     * also failed — exactly one completion.
+     */
+    public function testWhenBothLegsFailTheMessagesCombine(): void
+    {
+        $client  = $this->client();
+        $fetcher = new AsyncVersionMarkerFetcher(5, $client);
+
+        $seen = [];
+        $fetcher->fetch(self::GITHUB_URL, static function (?string $body, ?string $error) use (&$seen): void {
+            $seen[] = [$body, $error];
+        });
+
+        $primary = 'read 185.199.111.133:443 timeout after 10 seconds';
+        ($client->errorOf(0))(new \RuntimeException($primary));
+        ($client->errorOf(1))(new \RuntimeException('connection refused'));
+
+        self::assertSame([[null, $primary . ' (fallback: connection refused)']], $seen);
+    }
+
+    /**
+     * (c) A non-github marker URL (operator mirror) must NOT trigger a second
+     * request — the fallback is scoped to the raw-github shape only.
+     */
+    public function testANonGithubErrorIssuesNoFallback(): void
+    {
+        $client  = $this->client();
+        $fetcher = new AsyncVersionMarkerFetcher(5, $client);
+
+        $seen = [];
+        $fetcher->fetch(self::URL, static function (?string $body, ?string $error) use (&$seen): void {
+            $seen[] = [$body, $error];
+        });
+
+        ($client->errorOf(0))(new \RuntimeException('connection refused'));
+
+        self::assertSame(1, $client->requestCount(), 'a non-github URL gets no fallback leg');
+        self::assertSame([[null, 'connection refused']], $seen);
+    }
+
+    /**
+     * (d) A successful primary leg is exactly ONE request — the fallback must
+     * never fire on success (zero extra traffic on the happy path).
+     */
+    public function testAGithubSuccessIssuesNoFallback(): void
+    {
+        $client  = $this->client();
+        $fetcher = new AsyncVersionMarkerFetcher(5, $client);
+
+        $seen = [];
+        $fetcher->fetch(self::GITHUB_URL, static function (?string $body, ?string $error) use (&$seen): void {
+            $seen[] = [$body, $error];
+        });
+
+        ($client->successOf(0))($this->response('1.2.3'));
+
+        self::assertSame(1, $client->requestCount(), 'a healthy marker costs one request');
+        self::assertSame([['1.2.3', null]], $seen);
+    }
+
+    /**
+     * (e) The byte cap re-applies to the FALLBACK body identically: an oversized
+     * fallback response is rejected, not parsed.
+     */
+    public function testTheByteCapAppliesToTheFallbackBody(): void
+    {
+        $client  = $this->client();
+        $fetcher = new AsyncVersionMarkerFetcher(5, $client);
+
+        $seen = [];
+        $fetcher->fetch(self::GITHUB_URL, static function (?string $body, ?string $error) use (&$seen): void {
+            $seen[] = [$body, $error];
+        });
+
+        ($client->errorOf(0))(new \RuntimeException('read timeout'));
+        $oversized = str_repeat('x', AsyncVersionMarkerFetcher::MAX_BODY_BYTES + 1);
+        ($client->successOf(1))($this->response($oversized));
+
+        self::assertCount(1, $seen);
+        self::assertNull($seen[0][0]);
+        self::assertStringContainsString('exceeds', (string) $seen[0][1]);
+    }
+
+    /**
+     * (f) The ref is carried verbatim from the primary URL, so a version-tag
+     * (or master) marker stays the same marker on the fallback host.
+     *
+     * @return array<string, array{string, string}>
+     */
+    public static function refProvider(): array
+    {
+        return [
+            'master' => [
+                'https://raw.githubusercontent.com/detain/phlix-hub/master/VERSION',
+                'https://api.github.com/repos/detain/phlix-hub/contents/VERSION?ref=master',
+            ],
+            'version tag' => [
+                'https://raw.githubusercontent.com/detain/phlix-hub/v0.4.0/VERSION',
+                'https://api.github.com/repos/detain/phlix-hub/contents/VERSION?ref=v0.4.0',
+            ],
+            'nested path' => [
+                'https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh',
+                'https://api.github.com/repos/detain/phlix-hub/contents/scripts/install.sh?ref=master',
+            ],
+        ];
+    }
+
+    /**
+     * @dataProvider refProvider
+     */
+    public function testTheFallbackPreservesRefAndPath(string $primary, string $expectedFallback): void
+    {
+        $client  = $this->client();
+        $fetcher = new AsyncVersionMarkerFetcher(5, $client);
+
+        $fetcher->fetch($primary, static function (?string $body, ?string $error): void {
+        });
+
+        ($client->errorOf(0))(new \RuntimeException('read timeout'));
+
+        self::assertSame(2, $client->requestCount());
+        self::assertSame($expectedFallback, $client->urlOf(1));
+    }
+
     /**
      * Every `[callable, args, persistent, interval]` tuple currently queued in
      * `Timer::$tasks`.

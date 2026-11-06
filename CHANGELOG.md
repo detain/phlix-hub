@@ -6,6 +6,42 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-updates-fastly-fallback] — the core update check falls back
+to `api.github.com` when the Fastly-hosted `raw.githubusercontent.com`
+marker leg fails (operator read-timeout self-heal) — 2026-11-05
+
+- Symptom: the admin banner "Update check is not working — read
+  185.199.111.133:443 timeout after 10 seconds". `raw.githubusercontent.com`
+  is served from GitHub's Fastly anycast POPs; on the operator host a read
+  against one POP completes the TCP connection but returns no bytes within
+  the socket timeout. Workerman's `AsyncTcpConnection`/`ConnectionPool` dials
+  ONLY the first `getaddrinfo` answer, so a single dead POP poisons every
+  fetch regardless of the other three addresses — the marker leg is
+  unrecoverable from that host by retry alone. (Error provenance:
+  `vendor/workerman/http-client/src/ConnectionPool.php`
+  `read <addr> timeout after <n> seconds`, surfaced as
+  `CoreUpdateStatus.lastError` by `AdminUpdatesController`.)
+- Fix, inside `AsyncVersionMarkerFetcher` so the
+  `VersionMarkerFetcherInterface` and config surface are unchanged: a
+  transport error whose URL matches the raw-github shape re-issues ONCE
+  against `https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}`
+  with `Accept: application/vnd.github.raw`. That host lives on GitHub's own
+  `140.82.x` infrastructure — NOT Fastly — and the raw-accept response is the
+  bare file bytes, so `MAX_BODY_BYTES` and the downstream `MARKER_PATTERN`
+  are unaffected. One fallback leg, no ladder; it runs through the SAME
+  single-shot `$complete` latch, so a caller still gets exactly one
+  completion. A fallback failure combines both messages
+  (`<primary> (fallback: <secondary>)`); non-github URLs (an operator mirror
+  via `HUB_UPDATES_MARKER_URL`) get no second request, and a successful
+  primary leg still costs exactly one request.
+- Tests: `AsyncVersionMarkerFetcherTest` grows 11→19 (a github raw error falls
+  back and succeeds; both-fail combines; non-github errors do not; github
+  success does not; the byte cap re-applies to the fallback body; the ref/path
+  are carried verbatim for master / a version tag / a nested path). The
+  `RecordingVersionHttpClient` double now records every leg. Mutation probes
+  M1 (strip fallback), M2 (widen trigger to any URL) and M3 (drop the Accept
+  header) each redden the covering tests.
+
 ### Fixed [hub-install-php-uv-pin] — php-uv now builds from a pinned
 immutable commit (e56d640 = tag v0.3.1) on every hub surface, replacing the
 floating `--depth=1` HEAD clone — fresh-install/CI parity, owner ruling
