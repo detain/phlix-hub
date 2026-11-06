@@ -6,6 +6,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-install-php-uv-pin] — php-uv now builds from a pinned
+immutable commit (e56d640 = tag v0.3.1) on every hub surface, replacing the
+floating `--depth=1` HEAD clone — fresh-install/CI parity, owner ruling
+(HOST-5 addendum #5) — 2026-11-06
+
+- Why: `phlix_build_uv` in `scripts/install.sh` and both
+  `Build and enable php-uv` steps in `.github/workflows/ci.yml` cloned
+  bwoebi/php-uv at HEAD with no checkout — non-reproducible builds and a
+  supply-chain surface, the exact condition the server recipe retired with
+  S309 (whose 670a609 pin had itself aged nearly three years; the owner
+  ruled to rotate the estate's php-uv pin to current upstream HEAD, which
+  the production host already runs).
+- Pin: e56d640371a5d99eea2e9437cf4739c82e82d99e — re-verified the same day
+  via `git ls-remote https://github.com/bwoebi/php-uv.git HEAD
+  refs/tags/v0.3.1`: upstream master HEAD AND the peel of annotated tag
+  v0.3.1. Delta taken from the 670a609 era (11 commits): orphan-ADDREF
+  refcount-leak fix (issue #118), three arginfo-error fixes, deleted .dep
+  build cruft, PHP 8.6 build fixes, the 0.3.1 release prep itself.
+- Shape mirrors the server's S309 durable idiom: FULL clone (never
+  `--depth=1` — a shallow clone reaches only the tip, so a fixed SHA goes
+  uncheckoutable the moment upstream moves), detached checkout of the
+  full-40 pin, rev-parse self-verify that fails LOUD (die / red job) on
+  mismatch. The `already loaded — skipping build` idempotence guard and
+  the ini write path are untouched; no hub test pins a uv SHA (grep census
+  over tests/ + docs/ + scripts/: zero hits), so no tripwire rotated.
+- Lockstep law: the phlix-server `install.sh` / CI /
+  `docker/Dockerfile.base` PHP_UV_REF pins rotate to the same commit in
+  the sibling server lane (e4ac0c86); both repos' pins move in one wave
+  from here on, as documented inline in both recipes.
+
 ### Fixed [hub-install-xdebug-disarm] — the production install path no
 longer installs or enables xdebug, and `--update` dis-migrates an
 enablement an older recipe left — coroutine-teardown GPF class, owner

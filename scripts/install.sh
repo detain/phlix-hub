@@ -382,9 +382,28 @@ phlix_build_uv() {
   [ -n "$confd" ] || die "Could not determine PHP conf.d directory for php-uv."
   tmp="$(mktemp -d)"
   log "Building php-uv from source"
-  git clone --depth=1 https://github.com/bwoebi/php-uv.git "$tmp/php-uv"
+  # Pinned [owner ruling 2026-11-06] to e56d640371a5d99eea2e9437cf4739c82e82d99e
+  # ("Add missing header file bump") — upstream master HEAD at pin time AND the
+  # peel of annotated tag v0.3.1, re-verified the same day via
+  # `git ls-remote https://github.com/bwoebi/php-uv.git HEAD refs/tags/v0.3.1`.
+  # The owner's production host already runs this commit; the repo (fresh
+  # install AND CI) must build the same bytes, so the floating `--depth=1` HEAD
+  # clone ends here and the server-side S309 durable form takes over: FULL
+  # clone (NOT --depth=1 — a shallow clone reaches only the tip, so the fixed
+  # SHA would go uncheckoutable the moment upstream moves), detached checkout
+  # of the full-40 pin, and a rev-parse self-verify so a bad or force-moved
+  # pin fails LOUD before anything is compiled. Upstream since the old 670a609
+  # era the server recipe carried: orphan-ADDREF refcount-leak fix (issue
+  # #118), three arginfo-error fixes, deleted .dep build cruft, PHP 8.6 build
+  # fixes and the 0.3.1 release itself. The phlix-server install.sh / CI /
+  # docker/Dockerfile.base PHP_UV_REF pins are the sibling half of this law —
+  # like the Swoole pin above, move both repos' pins in the same wave.
+  git clone https://github.com/bwoebi/php-uv.git "$tmp/php-uv"
   (
     cd "$tmp/php-uv"
+    git checkout --quiet --detach e56d640371a5d99eea2e9437cf4739c82e82d99e
+    test "$(git rev-parse HEAD)" = e56d640371a5d99eea2e9437cf4739c82e82d99e ||
+      die "php-uv did not detach to the pinned commit e56d640371a5d99eea2e9437cf4739c82e82d99e."
     phpize
     ./configure --with-uv
     make -j"$(nproc)"

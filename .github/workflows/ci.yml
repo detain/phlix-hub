@@ -296,10 +296,24 @@ jobs:
         run: php scripts/assert-required-extensions.php
 
       - name: Build and enable php-uv
+        # Pinned [owner ruling 2026-11-06] to the SAME full SHA
+        # scripts/install.sh's phlix_build_uv compiles — e56d640371a5d99eea2e9437cf4739c82e82d99e,
+        # upstream master HEAD at pin time AND the peel of annotated tag v0.3.1
+        # (git ls-remote verified 2026-11-06). Fresh-install and CI must build
+        # the same bytes. The server S309 law applies verbatim: an unpinned
+        # --depth=1 HEAD clone here is a supply-chain surface, and --depth=1
+        # reaches only the tip — a full clone is what makes the fixed SHA
+        # durably checkoutable. A rev-parse self-verify fails the job LOUD if
+        # the pin is ever stale or the commit force-moved. Keep in lockstep
+        # with scripts/install.sh here AND the phlix-server pins (its
+        # install.sh / phpunit.yml / docker/Dockerfile.base PHP_UV_REF).
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
-          git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv
-          cd /tmp/php-uv && phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
+          git clone https://github.com/bwoebi/php-uv.git /tmp/php-uv
+          cd /tmp/php-uv
+          git checkout --quiet --detach e56d640371a5d99eea2e9437cf4739c82e82d99e
+          test "$(git rev-parse HEAD)" = e56d640371a5d99eea2e9437cf4739c82e82d99e
+          phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
           echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
 
       - name: Verify swoole + uv loaded
@@ -549,10 +563,24 @@ jobs:
         run: php scripts/assert-required-extensions.php
 
       - name: Build and enable php-uv
+        # Pinned [owner ruling 2026-11-06] to the SAME full SHA
+        # scripts/install.sh's phlix_build_uv compiles — e56d640371a5d99eea2e9437cf4739c82e82d99e,
+        # upstream master HEAD at pin time AND the peel of annotated tag v0.3.1
+        # (git ls-remote verified 2026-11-06). Fresh-install and CI must build
+        # the same bytes. The server S309 law applies verbatim: an unpinned
+        # --depth=1 HEAD clone here is a supply-chain surface, and --depth=1
+        # reaches only the tip — a full clone is what makes the fixed SHA
+        # durably checkoutable. A rev-parse self-verify fails the job LOUD if
+        # the pin is ever stale or the commit force-moved. Keep in lockstep
+        # with scripts/install.sh here AND the phlix-server pins (its
+        # install.sh / phpunit.yml / docker/Dockerfile.base PHP_UV_REF).
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
-          git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv
-          cd /tmp/php-uv && phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
+          git clone https://github.com/bwoebi/php-uv.git /tmp/php-uv
+          cd /tmp/php-uv
+          git checkout --quiet --detach e56d640371a5d99eea2e9437cf4739c82e82d99e
+          test "$(git rev-parse HEAD)" = e56d640371a5d99eea2e9437cf4739c82e82d99e
+          phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
           echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
 
       - name: Verify swoole + uv loaded
