@@ -422,79 +422,75 @@ phlix_install_swoole_uv() {
 }
 
 # ---------------------------------------------------------------------------
-# Xdebug installation and configuration
+# Xdebug disarmament - production path
 # ---------------------------------------------------------------------------
 
-# Install and configure Xdebug with trace mode enabled via trigger value.
-# Idempotent: skips if xdebug is already loaded.
-phlix_install_xdebug() {
-  local confd xdebug_ini
+# Owner ruling 2026-11-05 (host evidence .reviews/2026-11-05/HOST-5.md Q6/Q8
+# + the HOST-6 re-check): the production path no longer installs or enables
+# xdebug. Every observed fault in the swoole-era evidence set was a general
+# protection fault INSIDE xdebug.so at coroutine teardown - and the hub runs
+# swoole-HOOKED workers (S433 boot line delivers mask 0x42fe, the exact
+# regime where the fault lives). The owner disabled xdebug on the live host
+# (conf.d enablement removed + restart): 0 xdebug segments across all 38
+# processes, 0 faults since - the class is dead. This script previously
+# installed php-xdebug and wrote its own conf.d enablement, so it must stop
+# re-arming the fault generator on every install/update, and must migrate
+# hosts the old recipe already touched.
+#
+# Law: remove the ENABLEMENT (the conf.d entry that loads the zend extension
+# in every worker), never purge the package - installed-but-disarmed is
+# inert, and package removal is the operator's call. Fail-soft by design:
+# missing tools or permissions warn and continue; an update must never
+# abort over a debugger nobody asked for.
+phlix_disarm_xdebug() {
+  local confd entry armed="no" incomplete="no"
   confd="$(phlix_php_confd_dir)"
-  [ -n "$confd" ] || die "Could not determine PHP conf.d directory for Xdebug."
 
-  # Check if xdebug is already loaded
-  if php -m 2>/dev/null | grep -qi '^xdebug$'; then
-    info "Xdebug already loaded — skipping installation."
+  # Detect an enablement we can act on: the apt php-xdebug package links an
+  # NN-xdebug.ini into each scanned conf.d, and this script's pre-2026-11
+  # recipe wrote zz-xdebug.ini. A loaded-now extension also counts - it may
+  # be armed from a version/SAPI dir this run cannot see.
+  if [ -n "$confd" ]; then
+    for entry in "$confd"/*xdebug*.ini; do
+      [ -e "$entry" ] || continue
+      armed="yes"
+      break
+    done
+  fi
+  if [ "$armed" = "no" ] && php -m 2>/dev/null | grep -qi '^xdebug$'; then
+    armed="yes"
+  fi
+  [ "$armed" = "yes" ] || return 0
+
+  log "Disarming xdebug (coroutine-teardown GPF class - HOST-5 Q8, owner ruling)"
+  if command -v phpdismod >/dev/null 2>&1; then
+    if phpdismod -v ALL -s ALL xdebug >/dev/null 2>&1; then
+      info "phpdismod xdebug completed for all versions/SAPIs."
+    else
+      warn "phpdismod xdebug exited non-zero (permissions?) - continuing with conf.d sweep."
+    fi
+  else
+    warn "phpdismod not found - removing the visible conf.d enablement directly."
+  fi
+  # phpdismod manages only mods-available symlinks; the installer-generated
+  # zz-xdebug.ini is a plain file it cannot know about. Sweep whatever still
+  # exists in the scan dir this run can see.
+  if [ -n "$confd" ]; then
+    for entry in "$confd"/*xdebug*.ini; do
+      [ -e "$entry" ] || continue
+      if rm -f "$entry" 2>/dev/null; then
+        info "Removed xdebug enablement: $entry"
+      else
+        incomplete="yes"
+        warn "Could not remove $entry - remove it manually, then restart the hub."
+      fi
+    done
+  fi
+  if [ "$incomplete" = "yes" ]; then
+    warn "NOTICE: xdebug disarm is INCOMPLETE on this host - an enablement could not be removed (see the warnings above). Finish it manually and restart the hub; leaving it armed re-introduces the coroutine-teardown GPF class (HOST-5 Q8)."
     return 0
   fi
-
-  log "Installing and configuring Xdebug"
-
-  # Ensure the trace output directory exists
-  mkdir -p /tmp/xdebug
-  chmod 755 /tmp/xdebug
-
-  xdebug_ini="${confd}/zz-xdebug.ini"
-  # Use XDEBUG_TRIGGER env var for the trigger value. Set XDEBUG_TRIGGER to a
-  # secure random value in production (e.g. openssl rand -hex 16) to prevent
-  # unauthorized Xdebug activation. Defaults to "devdebug" for local dev.
-  cat > "$xdebug_ini" <<'XDEBUG_EOF'
-; Default mode is OFF - use XDEBUG_MODE env var to enable
-; Options: off, develop, trace, debug (can combine with comma: "develop,trace")
-xdebug.mode = ${XDEBUG_MODE:-off}
-xdebug.start_with_request = trigger
-xdebug.trigger_value = "${XDEBUG_TRIGGER:-devdebug}"
-xdebug.trace_output_dir = /tmp/xdebug
-xdebug.max_nesting_level = 512
-xdebug.collect_assignments = 1
-xdebug.collect_return_value = 1
-XDEBUG_EOF
-
-  info "Xdebug configured: mode=\${XDEBUG_MODE:-off}, trigger_value=\${XDEBUG_TRIGGER:-devdebug}"
-  info "Set XDEBUG_MODE=develop,trace to enable xdebug (default: off)"
-  info "Trace output will be written to /tmp/xdebug"
-}
-
-# ---------------------------------------------------------------------------
-# Xdebug toggle helpers
-# ---------------------------------------------------------------------------
-
-# Enable xdebug with develop + trace modes. Usage: phlix_xdebug_enable
-phlix_xdebug_enable() {
-  export XDEBUG_MODE="develop,trace"
-  local confd xdebug_ini
-  confd="$(phlix_php_confd_dir)"
-  xdebug_ini="${confd}/zz-xdebug.ini"
-  if [ -f "$xdebug_ini" ]; then
-    sed -i 's/^xdebug\.mode = .*/xdebug.mode = develop,trace/' "$xdebug_ini"
-    info "Xdebug enabled: mode=develop,trace (xdebug.ini updated, restart PHP to apply)"
-  else
-    info "Xdebug enabled: mode=develop,trace (set XDEBUG_MODE=develop,trace env var)"
-  fi
-}
-
-# Disable xdebug. Usage: phlix_xdebug_disable
-phlix_xdebug_disable() {
-  export XDEBUG_MODE="off"
-  local confd xdebug_ini
-  confd="$(phlix_php_confd_dir)"
-  xdebug_ini="${confd}/zz-xdebug.ini"
-  if [ -f "$xdebug_ini" ]; then
-    sed -i 's/^xdebug\.mode = .*/xdebug.mode = off/' "$xdebug_ini"
-    info "Xdebug disabled (xdebug.ini updated, restart PHP to apply)"
-  else
-    info "Xdebug disabled (set XDEBUG_MODE=off env var)"
-  fi
+  warn "NOTICE: xdebug was armed on this host and is now dis-armed (conf.d enablement removed; the package stays installed - not purged, by design). The production path never re-arms it: with swoole, an active xdebug faults at coroutine teardown with a general protection fault inside xdebug.so - the ONLY demonstrated production fault generator in the whole swoole-era evidence set (HOST-5 Q6/Q8; class verified dead on the live host by HOST-6). If you genuinely need xdebug for LOCAL debugging, re-enable it deliberately (phpenmod xdebug) and restart the services."
 }
 
 # Preflight: Workerman needs process-control / posix / socket primitives that
@@ -1464,8 +1460,9 @@ do_update() {
   phlix_check_disabled_functions
   log "Ensuring Swoole + php-uv extensions are installed"
   phlix_install_swoole_uv
-  log "Ensuring Xdebug is installed and configured"
-  phlix_install_xdebug
+  # Xdebug is no longer installed or enabled here (coroutine-teardown GPF
+  # class, HOST-5 Q8, owner ruling). Dis-migrate hosts the old recipe armed.
+  phlix_disarm_xdebug
 
   # 3. Clear any leftover Smarty compile cache from pre-SPA installs.
   # (The Smarty SSR UI was retired — nothing writes these dirs anymore; the
@@ -1747,7 +1744,6 @@ apt-get install -y ca-certificates curl git unzip openssl >/dev/null
 # get an older PHP — the version check below will warn if that's the case.
 apt-get install -y \
   php-cli php-mysql php-mbstring php-curl php-xml php-bcmath php-gd php-zip \
-  php-xdebug \
   mysql-server >/dev/null
 if [ "$SKIP_HAPROXY" = "yes" ]; then
   info "Skipping HAProxy install (--no-proxy)."
@@ -1781,9 +1777,9 @@ phlix_check_disabled_functions
 log "Ensuring Swoole + php-uv extensions are installed"
 phlix_install_swoole_uv
 
-# Xdebug — install + configure if not already present
-log "Ensuring Xdebug is installed and configured"
-phlix_install_xdebug
+# Xdebug — NOT installed on the production path (coroutine-teardown GPF
+# class, HOST-5 Q8, owner ruling). Disarm any enablement an old recipe left.
+phlix_disarm_xdebug
 
 # ---------------------------------------------------------------------------
 # 2. Application code

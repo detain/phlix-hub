@@ -6,6 +6,66 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-install-xdebug-disarm] — the production install path no
+longer installs or enables xdebug, and `--update` dis-migrates an
+enablement an older recipe left — coroutine-teardown GPF class, owner
+ruling (HOST-5 Q6/Q8, live-host cure confirmed by HOST-6) — 2026-11-05
+
+- Why: every fault observed in the whole swoole-era host evidence set was
+  a general protection fault INSIDE xdebug.so at coroutine teardown
+  (HOST-5 Q6 — kernel attribution, 6/6 post-rebuild probe traps and the
+  3 pre-rebuild exit-139s; crash locus `Socket::ssl_shutdown` in a
+  coroutine-SHUTDOWN interaction). The hub runs swoole-HOOKED workers
+  (S433 boot line delivers mask 0x42fe) — the exact regime where the
+  fault lives. The owner removed the conf.d enablement on the live host
+  and restarted: 0 xdebug segments in all 38 processes, 0 faults since
+  (HOST-6 "DEAD CLASS"). Owner ruling: "if xdebug is a problem it should
+  be disabled and possibly removed from the scripts/install.sh from hub
+  and server which both set it up and enable it."
+- `scripts/install.sh` production-path removals: `php-xdebug` dropped
+  from the apt package list; the whole `phlix_install_xdebug` generator
+  (its `zz-xdebug.ini` write + `/tmp/xdebug` world-dir + trigger-value
+  comment block) and both toggle helpers (`phlix_xdebug_enable`,
+  `phlix_xdebug_disable`) are gone — zero call sites remain; the update
+  and fresh-install paths now call the new `phlix_disarm_xdebug`.
+- `phlix_disarm_xdebug` (the dis-migration): detects an armed host via a
+  visible conf.d `*xdebug*.ini` enablement or a loaded-now `php -m`;
+  dis-ables with `phpdismod -v ALL -s ALL xdebug` when available
+  (the script's existing ftp-disarm idiom) and always sweeps the visible
+  conf.d afterwards — phpdismod cannot know about the plain
+  installer-generated `zz-xdebug.ini`. Removes the ENABLEMENT, never
+  purges the package (installed-but-disarmed is inert; package removal
+  is the operator's call). Fail-soft by design: missing tool, failing
+  phpdismod, or an unremovable entry warns and continues — an update
+  never aborts over a debugger. Prints a one-time NOTICE citing the
+  teardown-GPF class, with an honest INCOMPLETE variant when a removal
+  could not be performed. Idempotent: a clean host is a silent no-op.
+  Verified on executed harness: clean/armed/absent-phpdismod/perm-fail
+  ×4 scenarios, both notice branches, RC=0 throughout.
+- Docs truth: the README Configuration rows for `XDEBUG_MODE`/
+  `XDEBUG_TRIGGER` no longer cite the (now nonexistent) installer-
+  generated bare-metal ini — the container `[xdebug]` block reference is
+  kept (still live as an opt-in if a debug-capable base ever ships) and
+  the docker/php.ini disclosure comment now states the bare-metal path
+  was removed rather than pointing at it as "the path that really gets
+  Xdebug". Stale line-number cites on the touched rows rotated to
+  section references.
+- Tripwires: xdebug appears in NO production extension contract —
+  `scripts/assert-required-extensions.php`, `RequiredPhpExtensionsTest`
+  and `CrossRepoPathAssertCiWiringTest` carry zero mentions (measured,
+  nothing to re-pin). The CI-COVERAGE uses stay untouched BY DESIGN:
+  the workflow's `coverage: xdebug` shape and the test-support isolation
+  family (`SwooleShutdownIsolation`, `SwooleFixtureProcess`, fixtures,
+  throttle-load test) exist precisely because CI collects coverage under
+  xdebug — `StaticAnalysisScopeTest` even pins that the phpstan job
+  deliberately lacks it. Targeted suites
+  `RequiredPhpExtensionsTest|StaticAnalysisScopeTest|AdminUpdatesRouteRegistration|CoreUpdateCheckService|CoreUpdateCheckWorker|HubRestartController|CrossRepoPathAssertCiWiring|CoverageArtifactGate`:
+  154 tests / 659 assertions identical before and after (zero reds —
+  honest zero, no re-pin was owed). `bash -n scripts/install.sh` clean.
+- Sibling law: the phlix-server half of the owner ruling is owned by its
+  own lane (server tip still carries its installer — untouched here).
+
+
 ### Fixed [hub-install-swoole-pin] — scripts/install.sh compiled Swoole from floating master: pinned `--branch v6.2.4` + server-idiom rev-parse self-verify; the refuted kernel-floor comment replaced with measured truth (HOST-5 Q5 disposition (ii)) — 2026-11-05
 
 - The floating clone (pre-fix :295): `git clone --depth=1` with NO `--branch`
