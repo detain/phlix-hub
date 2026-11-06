@@ -6,6 +6,93 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Chore [theme-1106] — re-vendor `@phlix/ui` #v0.99.21 + `/app` SPA regen — 2026-11-06
+
+- Tag-form re-pin of the served SPA's vendored library, hub leg of the theme
+  persistence cascade (v0.99.21 is the ui cut `01acaa1264736fa9c744fc902044c9ad511b93ba`
+  atop v0.99.20: the web-portal theme picker gains SERVER-SIDE persistence —
+  GET/PUT `/api/v1/users/me/settings` with once-per-login adoption, a debounced
+  queue-PUT and an echo guard (phlix-ui `16431658`), plus picker disclosures,
+  catalogue force-refresh at mount and per-user Plugins-page copy). GATE ground
+  truth: annotated tag `v0.99.21` (tag object `bf70c58f1f1dc0fbb549cd6f69a3c807875b9a03`,
+  peel `01acaa12…`), ls-remote-verified from this lane; codeload tarball HTTP
+  200 (26,780,271 bytes); bundles `phlix-ui.js` md5 `7e4c16b5b1bd3c2630e8c1435875f992`,
+  `player.js` md5 `fcb3596cf78dc7ecf67228b18b31152e`, PlayerPage carrier
+  `BTz2s3yI.js` md5 `5b5ac8271efe2ab3ce8c808bc29ea326`, dist aggregate (house
+  recipe `find dist -type f | sort | xargs md5sum | md5sum` from the package
+  root) `34c01469d35a5de87eb55ba487ae5368`, 888 dist files (886 + the two new
+  declaration files) — all five figures EXECUTED on both the codeload tarball
+  tree and the installed `node_modules` tree, not copied from the release
+  register. HUB DEGRADATION LAW (honest): the hub serves NO route on either
+  verb of `/api/v1/users/me/settings` (ServerProxyController exclusion — route
+  absence proven by the ui lane's contract read), so on this host the new
+  sync store's single catch makes every settings call a silent no-op: the
+  theme choice stays localStorage-only here, zero console errors, zero UI
+  regression. No hub routes were added — the hub-themes advisory stays
+  owner-gated.
+- `web-ui`: tarball pin `v0.99.20 -> v0.99.21`; lock surgical **4+/4−** (`npm
+  install --package-lock-only` under npm 11 + `NPM_CONFIG_USERCONFIG=/dev/null`
+  rotated exactly the root echo and the ui node's version/resolved/integrity).
+  Nested contracts/syncplay legs: MEASURED honest-zero — v0.99.21 declares the
+  same `#v0.5.6` / `#v0.1.7` upstream deps as v0.99.20 (tag payload checked),
+  so no node rotation was owed. Idempotency proven: re-running
+  `--package-lock-only` left the lock sha256 unchanged (`98efeb0c…`). Installed
+  bytes verified against source-of-truth: `diff -r` of `node_modules/@phlix/ui`
+  vs the codeload v0.99.21 tag tree is byte-identical apart from npm's own
+  metadata swap (`- .gitignore` / `+ .npmignore`; dist subtree `diff -r` exit
+  0), and all register md5s above hold on the installed dist.
+- `public/assets/app` rebuilt: **198 files**, aggregate md5
+  `b4de57ee023fda5e29c22cae8fe390b8` (`find public/assets/app -type f | sort |
+  xargs md5sum | md5sum` after `cd web-ui && npm run build`); deterministic
+  across 2 consecutive clean-slate builds, the second preceded by a fresh
+  `npm ci` — the exact posture the S253 `spa-bundle` CI gate reproduces. The
+  four era-docblock rotations below were applied BEFORE both builds, so the
+  committed bundle reproduces its own source state. The `0.99.21` version
+  stamp rides `index-Cf7UEmlf.js`; zero stale `0.99.20` stamp sites remain and
+  the dead `.20`-era ui carrier (`BUnWXFam`) is absent. File-set delta sanity:
+  125 deletions ↔ 125 additions with hash-stripped label multisets EQUAL
+  (computed proof) — unlike the .20 wave's carrier-rename-only delta, here the
+  WHOLE lazy-route graph rehashed (both vite hash slots on ~every chunk)
+  because .21's theme-sync store now rides in the shared import closure;
+  visible renames `PlayerPage-BUnWXFam-CW1Git5c.js ->
+  PlayerPage-BTz2s3yI-Wd9lEZbf.js`, `index-nLfwwGHV.js -> index-Cf7UEmlf.js`,
+  `index-C7vHkC-H.css -> index-RQ9MNlCN.css`; `.vite/manifest.json` +
+  `index.html` modified in place. LAW pins grepped on the new bundle set:
+  `users/me/settings` and `/api/v1/themes` both hit `assets/index-Cf7UEmlf.js`
+  (+ `.map`) — the .21 persistence feature rides hub's served bundle — and the
+  `PlayerPage-BTz2s3yI` carrier appears 5× in the manifest.
+- Era-prose: the four pin-era docblocks (`HubPageHint.vue`, `i18n/index.ts`,
+  `shareLiveness.ts`, `watchPartyWire.ts`) rotated `v0.99.20 -> v0.99.21` per
+  the a73e43b3/31dd1298/2f89e812 cascade precedent, each claim RE-VERIFIED at
+  the new pin (the `safeHref` cite still lands on `dist/index.d.ts:218`; the
+  relay dial exports still on `dist/index.d.ts:16`; `PageHint` remains
+  runtime-barrel-only — 0 hits in `dist/index.d.ts`, 2 in `dist/phlix-ui.js`,
+  declaration only at `dist/components/ui/PageHint.vue.d.ts`; the locale
+  catalog remains entry-exported at `dist/index.d.ts:255`/`:256`). Test
+  rotations: MEASURED ZERO — the `web-ui` node suite reads 152/152 green at the
+  new pin (the `ui-pin-currency.test.ts` tripwire follows the pin by design),
+  and targeted `--filter
+  'Spa|SharedUiController|StaticAsset|UiPinSkew|ViteAssets|RuntimeNpmGuidance'`
+  was OK 230 tests / 1325 assertions / 0 failures / 0 errors (identical to the
+  .20-era figures; zero new test files, so no durations.json bless owed).
+  PHP src untouched (zero changes). `composer validate --strict` OK;
+  `scripts/security-audit-check.php` PASS (97 locked packages, 0 advisories);
+  the S440 guard surfaces are zero-diff in this commit.
+- S181 note (HONEST, superseding the dispatch premise): while this lane ran,
+  the ui lane shipped `849e9100 perf(player)` and cut **v0.99.22** (tag object
+  `abc9566c…`, peel `a4ede939…` == live master) — so the live newest tag is
+  now .22 and the "UI Pin Skew" job, which grades every consumer row against
+  the LIVE ladder, is expected to report RED on this push with hub 1 behind —
+  NOT because this diff lagged its dispatch (v0.99.21 was the attested newest
+  tag when the wave was cut and the pin bump verified), but because
+  the estate-wide target just moved. The local sweep at this tree enumerates:
+  hub/server rows at `v0.99.21` (1 behind), windows/tizen rows at `v0.99.20`
+  (2 behind) — declared cascade lag under the bd47bc5a/a73e43b3/31dd1298/
+  2f89e812-era "S181-external sole-red" precedent, greens when a follow-up
+  estate wave re-pins all four consumers to the final ladder top. Deploy note:
+  this is repo-only; the live hub.phlix host still serves the earlier-era
+  bundle — host deploy is the owner's separate call.
+
 ### Chore [playback-1106] — re-vendor `@phlix/ui` #v0.99.20 + `/app` SPA regen — 2026-11-06
 
 - Tag-form re-pin of the served SPA's vendored library, hub leg of the
