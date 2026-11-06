@@ -6,6 +6,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Chore [player-fps-1106] — re-vendor `@phlix/ui` #v0.99.22 + `/app` SPA regen — 2026-11-06
+
+- Tag-form re-pin of the served SPA's vendored library to v0.99.22 (tag object
+  `abc9566c`, peel `a4ede939` == ui master tip, ls-remote-verified): the player page no
+  longer re-rasterises live CSS blurs on every video repaint (poster backdrop and ambient
+  glow pre-rendered to bitmaps; hidden chrome drops `backdrop-filter`) — field-measured on
+  Firefox ~6–9 presented fps → ~24. `web-ui/package.json` + lock surgical 4+/4- (npm 11
+  `--package-lock-only`, `NPM_CONFIG_USERCONFIG=/dev/null`); declared edges hold
+  (contracts `#v0.5.6`, syncplay `#v0.1.7`). Fresh `npm ci`: `phlix-ui.js` `a3a8aa84`.
+- `/app` rebuilt: deterministic ×2 (`diff -r` clean), 198 files, aggregate md5 recipe
+  `854531263d9a52bdfa2de37736ef8a3a`; stamp `0.99.22` on `index-CEVDkTRo.js`, zero
+  `0.99.21` residue; carrier `PlayerPage-BbWPOZn8-0LrJ6Rbn.js` carries `is-preblurred`.
+- Four pin-era docblocks rotated v0.99.21 → v0.99.22 (`HubPageHint.vue`, `i18n/index.ts`,
+  `shareLiveness.ts`, `watchPartyWire.ts`); their claims hold at the new pin — v0.99.22
+  touched only player internals (no barrel, locale or wire-law change).
+- Gates: web-ui `node --test` 152/152; PHP ApplicationStaticAssetCache 17/49,
+  SpaBrowserFloor 3/9, SharedUiControllerCsp 43/345, S280ContractsRouteManifestParity 5/16,
+  RuntimeNpmGuidanceStrings 10/106, ServerProxyController 1194/5133, UiPinSkewCiWiring
+  12/48, SpaBundleCiWiring 7/30, SnapshotCurrencyCiWiring 13/46, UiPinSkewReporter 14/100.
+  PHP src untouched.
+
 ### Chore [theme-1106] — re-vendor `@phlix/ui` #v0.99.21 + `/app` SPA regen — 2026-11-06
 
 - Tag-form re-pin of the served SPA's vendored library, hub leg of the theme
