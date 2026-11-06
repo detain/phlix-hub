@@ -287,20 +287,62 @@ phlix_build_swoole() {
     info "Swoole already loaded — skipping build."
     return 0
   fi
-  local confd tmp
+  local confd tmp swoole_head
   confd="$(phlix_php_confd_dir)"
   [ -n "$confd" ] || die "Could not determine PHP conf.d directory for Swoole."
   tmp="$(mktemp -d)"
   log "Building Swoole from source (this can take several minutes)"
-  git clone --depth=1 https://github.com/swoole/swoole-src.git "$tmp/swoole"
+  # Pinned [HOST-5 Q5 disposition (ii)] to release tag v6.2.4 — the exact
+  # build the owner's production hub runs. Build truth (HOST-5 Q1): the host's
+  # /root/swoole-src sits at tag v6.2.4 and its HEAD equals the tag's peel —
+  # v6.2.4 is a lightweight tag AT c7e514509451beafd4d70ce5b78943d51e76381c
+  # (re-verified 2026-11-05 via git ls-remote https://github.com/swoole/swoole-src).
+  # This mirrors the phlix-server scripts/install.sh pin idiom (S482) so both
+  # recipes drift together; keep this ref in lockstep with the server side
+  # (whose docker/Dockerfile.base ARG SWOOLE_REF is the estate build SSOT and
+  # whose ThirdPartyClonePinGuardTest holds the recorded SHA for its half —
+  # the hub carries no analogue guard test yet, so the law is human: move both
+  # pins in the same wave). `--depth=1 --branch <tag>` is safe where S309
+  # rejected `--depth=1` + bare SHA: a tag always resolves to its own commit
+  # even in a shallow clone. The rev-parse check makes a force-moved tag fail
+  # the install LOUD before anything is compiled — if you hit it, re-verify
+  # the tag upstream, then re-pin here AND in phlix-server together.
+  git clone --depth=1 --branch v6.2.4 https://github.com/swoole/swoole-src.git "$tmp/swoole"
+  swoole_head="$(git -C "$tmp/swoole" rev-parse HEAD)"
+  test "$swoole_head" = c7e514509451beafd4d70ce5b78943d51e76381c ||
+    die "swoole-src tag v6.2.4 resolved to $swoole_head, not the pinned commit c7e514509451beafd4d70ce5b78943d51e76381c — upstream moved the tag; verify it before compiling."
   (
     cd "$tmp/swoole"
     phpize
-    # Flags copied verbatim from the phlix-server docker/Dockerfile.base — do
-    # not change them here; change them there (the source of truth) and
-    # re-sync. --enable-iouring / --enable-uring-socket build on any kernel
-    # but only activate at RUNTIME on Linux kernel >= 5.6; older kernels
-    # silently fall back to epoll.
+    # Canonical flag set, byte-parity with phlix-server scripts/install.sh's
+    # phlix_build_swoole, which copies it verbatim from phlix-server
+    # docker/Dockerfile.base (the source of truth). Do not change them here;
+    # change them there and re-sync both recipes, refs included. For the
+    # record: --enable-zstd / --enable-brotli have been in this list on BOTH
+    # sides since their blocks were written (git blame: 8fc1bfe21 here) —
+    # HOST-5's "hub omits them" read was refuted by disk; do not re-"add" them.
+    #
+    # ONE DELIBERATE DIVERGENCE FROM THE DOCKER IMAGE (S163): Dockerfile.base
+    # gates --enable-iouring / --enable-uring-socket behind `ARG
+    # SWOOLE_IOURING`, default OFF — Docker's default seccomp profile blocks
+    # the io_uring syscalls and every Workerman worker died with
+    # "Iouring::Iouring(): ... Operation not permitted" in a refork loop. A
+    # HOST install has no such sandbox (the systemd unit even sets
+    # LimitMEMLOCK=infinity), so they stay ON here.
+    #
+    # KERNEL FLOOR — MEASURED (this paragraph supersedes the REFUTED claim
+    # once recorded here: "build on any kernel ... older kernels silently
+    # fall back to epoll"). NO silent epoll fallback exists once the uring
+    # flags are compiled in. The server-side S200 measurement (phlix-server
+    # docker/Dockerfile.base note, measured at 6.2.1) found the io_uring path
+    # uses ops added in kernel 6.9 and its ctor REJECTS anything older —
+    # FATAL at ring init ("The Iouring::ftruncate() requires `6.9` or higher
+    # Linux kernel", exit 1). A pre-6.9 host compiling these flags carries
+    # that same fatal risk; kernel-gating the host build is a behavior change
+    # deliberately not made (flagged as a code question in the
+    # server__devops review). Not re-measured at 6.2.4; the floor holds on
+    # the observed production host — kernel 7.0, this v6.2.4 build, io_uring
+    # + uring_socket active and healthy in production (HOST-5 Q1/Q7).
     ./configure \
       --enable-swoole \
       --enable-sockets \

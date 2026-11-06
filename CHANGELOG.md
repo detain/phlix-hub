@@ -6,6 +6,52 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-install-swoole-pin] — scripts/install.sh compiled Swoole from floating master: pinned `--branch v6.2.4` + server-idiom rev-parse self-verify; the refuted kernel-floor comment replaced with measured truth (HOST-5 Q5 disposition (ii)) — 2026-11-05
+
+- The floating clone (pre-fix :295): `git clone --depth=1` with NO `--branch`
+  and NO verification — every fresh hub install compiled an unreviewed moving
+  master. Fresh installs now clone release tag v6.2.4, the exact build the
+  owner's production hub runs (HOST-5 Q1: `php --ri swoole` 6.2.4; host
+  /root/swoole-src HEAD equals the tag's peel — v6.2.4 is a lightweight tag
+  AT c7e514509451beafd4d70ce5b78943d51e76381c, re-verified in this lane via
+  `git ls-remote https://github.com/swoole/swoole-src` AND a live
+  `--depth=1 --branch v6.2.4` clone that resolved exactly there). A
+  `swoole_head` rev-parse assert now dies LOUD before anything is compiled
+  if upstream force-moves the tag. The idiom mirrors phlix-server's S482
+  pin (clone `--branch` + self-verify + move-together comment) so both
+  recipes drift together. The hub still carries no analogue of the server's
+  ThirdPartyClonePinGuardTest — porting one is a follow-up candidate; until
+  then the pin-move law is stated in the in-product comment. The
+  skip-conditional is untouched: already-loaded hosts still print "Swoole
+  already loaded — skipping build", so the owner's 6.2.4 binary is safe on
+  `--update` and re-install (HOST-5 Q5 read-verified the gate fires).
+- The refuted comment (pre-fix :299-303) claimed the uring flags "build on
+  any kernel but only activate at RUNTIME on Linux kernel >= 5.6; older
+  kernels silently fall back to epoll" — FALSE per the server-side S200
+  measurement: the 6.2.x io_uring path needs kernel 6.9 and its ctor
+  REJECTS anything older (FATAL at ring init, exit 1); no silent fallback
+  exists once the flags are compiled in. The replacement paragraph carries
+  the measured floor, the S163 docker-seccomp divergence note (flags ON on
+  hosts, OFF-gated in the image), an honest "not re-measured at 6.2.4"
+  disclosure, and the healthy-host observation (kernel 7.0, io_uring +
+  uring_socket active in production — HOST-5 Q1/Q7).
+- Flag parity MEASURED, not assumed: HOST-5 claimed the hub omitted
+  `--enable-zstd`/`--enable-brotli`. Disk refutes it — git blame (8fc1bfe21)
+  shows both flags have been in the hub list since the block was written,
+  and the 16 configure flags are byte-parity with the server's. Nothing was
+  added for that (a comment records the fact so a future audit cannot
+  double-"fix" it); no debug/trace flags were added either (HOST-5 Q9:
+  diagnostic-only, deliberately kept out of the recipes).
+- Evidence: the four suites referencing `scripts/install.sh`
+  (AdminUpdatesRouteRegistration / CoreUpdateCheckService /
+  CoreUpdateCheckWorker / HubRestartController — they pin the update-command
+  string and ExecReload signal, not the build function) ran serially:
+  OK (74 tests, 274 assertions). `bash -n` clean; shellcheck surfaces only
+  the pre-existing SC2120 pair also present at the parent commit. Repo-wide
+  grep found no tripwire carrying a swoole ref (no v6.2.x/SWOOLE_REF/pinned
+  SHA outside the clone line itself), so nothing needed re-pinning from a
+  measured red; docs carry no build-recipe version prose to keep truthful.
+
 ### Changed [hub-handshake-bound] — the inbound WS-upgrade deadline default moves 10 s → 30 s; the guard's timer-id-0 prose corrected; the fire-path identity gate gains test teeth (REVIEW-HUB-GUARD F-A/F-B/F-C + §5) — 2026-11-05
 
 - The adversarial review of `2138def5` (`.reviews/2026-11-05/REVIEW-HUB-GUARD.md`,
