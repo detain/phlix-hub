@@ -6,6 +6,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [w10L4 SH-048] — the federation HELLO_ACK reaper is released only at ceremony success; heartbeat mirror failures are counted — 2026-11-07
+
+- `handleHelloAck()` cancelled the M-6 ack-timeout as its FIRST statement,
+  before any guard. Two early-return gates — hub config unreadable
+  (transient DB miss) and an ack with no dialed peer — then left the link
+  open, UNverified, heartbeat never armed, and no timeout: exactly the
+  permanent zombie the timer exists to reap (TCP up, session absent,
+  `isConnected()` still reporting live to admin surfaces). The master's
+  stale-handshake closure is heartbeat-triggered, and the zombie never
+  sends one, so neither side self-healed.
+- Cure: the reaper is cancelled only after the ceremony verifies (next to
+  the `channelVerified` stamp). Every refusal path either tears the link
+  down through `closeLinkAndReschedule()`/`refuseHelloAck()` (both cancel)
+  or now deliberately leaves the one-shot armed, so a half-verified link
+  rejoins the reconnect ladder within the timeout. The config-miss gate
+  also gained its missing RELAY warning — the eventual close must not look
+  unexplained.
+- Same review's minor: the 15 s heartbeat tick swallowed every
+  `touchHeartbeatByPeerId()` failure behind a bare `// Ignore`, against the
+  class law that refusals are counted and logged. The write stays
+  fail-soft (a projection, never a transport dependency), but a
+  consecutive-failure ledger now warns on the first failure and every 20th
+  tick (~5 min), mirroring the reconnect-hold throttle family; one
+  successful write clears the ledger.
+- Tests: four `FederationPeerManagerTest` cases — config-miss ack keeps the
+  armed timer slot intact (red at parent), dial-less ack keeps it too and
+  still writes its audited false-row (red at parent), ceremony success
+  releases the slot (law pin, green both sides), and the mirror throttle
+  emits exactly warn-at-1 / warn-at-20 / warn-again-after-a-successful-
+  reset across 22 ticks (red at parent: the silence).
+
+
 ### Fixed [w10L4 SH-047] — the relay proxy refuses admission under a degraded event loop instead of misbehaving on it — 2026-11-07
 
 - Without ext-swoole the hub boots degraded ON PURPOSE (start.php warns and

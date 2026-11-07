@@ -1462,4 +1462,154 @@ final class FederationPeerManagerTest extends TestCase
 
         self::assertSame(2, $this->manager->getDroppedOutboundFrames());
     }
+
+    /**
+     * Stamp the ack-timeout timer slot as if connectToMaster()'s one-shot
+     * were armed (the production arm lives at :1440-era; reflection keeps the
+     * test off the real dial path).
+     */
+    private function stampAckTimeoutTimer(?int $id): void
+    {
+        $property = new ReflectionProperty($this->manager, 'ackTimeoutTimerId');
+        $property->setAccessible(true);
+        $property->setValue($this->manager, $id);
+    }
+
+    /**
+     * SH-048 (review hub__asphp #2): a HELLO_ACK that arrives while the hub
+     * config cannot be read must NOT disarm the M-6 reaper. The old
+     * handleHelloAck() cancelled the ack timeout as its FIRST statement, so
+     * both silent gates below (config miss, dial-less ack) could leave the
+     * link permanently half-open: TCP up, no session, no heartbeat, no
+     * timer — exactly the zombie class the timer exists to reap, and
+     * isConnected() kept reporting it live to the admin surfaces. The cure
+     * cancels only at ceremony success, so the one-shot now closes the link
+     * and rejoins the reconnect ladder.
+     */
+    public function testHubConfigMissKeepsAckTimeoutArmed(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $this->hubRepo->method('getHubConfig')->willReturn(null);
+
+        $conn = $this->createMock(AsyncTcpConnection::class);
+        $conn->expects(self::never())->method('close');
+        $property = new ReflectionProperty($this->manager, 'masterConnection');
+        $property->setAccessible(true);
+        $property->setValue($this->manager, $conn);
+
+        $this->stampAckTimeoutTimer(4242);
+
+        $this->invokeHandleHelloAck($this->signedAck(
+            sodium_crypto_sign_secretkey($this->masterKp),
+            'unbound-session',
+            'master-uuid-miss',
+        ));
+
+        self::assertSame(4242, $this->readProperty('ackTimeoutTimerId'));
+        self::assertNull($this->readProperty('sessionId'));
+    }
+
+    /**
+     * SH-048, dial-less arm: an ack that belongs to no dial keeps the reaper
+     * armed too (audited refusal, socket left for the timeout — the audit
+     * false-row stays pinned as shipped law).
+     */
+    public function testDiallessAckKeepsAckTimeoutArmed(): void
+    {
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
+        $this->audit->expects(self::once())
+            ->method('logHubConnect')
+            ->with('own-leaf-id', 'master', 'master-uuid-dialless', false);
+
+        $conn = $this->createMock(AsyncTcpConnection::class);
+        $conn->expects(self::never())->method('close');
+        $property = new ReflectionProperty($this->manager, 'masterConnection');
+        $property->setAccessible(true);
+        $property->setValue($this->manager, $conn);
+
+        $this->stampAckTimeoutTimer(777);
+
+        $this->invokeHandleHelloAck($this->signedAck(
+            sodium_crypto_sign_secretkey($this->masterKp),
+            'unbound-session',
+            'master-uuid-dialless',
+        ));
+
+        self::assertSame(777, $this->readProperty('ackTimeoutTimerId'));
+        self::assertNull($this->readProperty('sessionId'));
+    }
+
+    /**
+     * The other half of the SH-048 law: ceremony success DOES release the
+     * reaper (deterministic slot free — failHelloTimeout()'s own guard would
+     * no-op a late tick, but the armed-until-fire state must not linger).
+     */
+    public function testCeremonySuccessCancelsAckTimeout(): void
+    {
+        $this->setMasterPeerId('peer-master-1');
+        $this->hubRepo->method('getHubConfig')->willReturn(['id' => 'own-leaf-id']);
+        $this->hubRepo->method('getPeerById')->with('peer-master-1')->willReturn($this->masterPeerRow(
+            base64_encode(sodium_crypto_sign_publickey($this->masterKp)),
+            null,
+        ));
+        $this->sessions->method('registerSession')->willReturn('local-sess-1');
+
+        $this->stampAckTimeoutTimer(555);
+
+        $this->invokeHandleHelloAck($this->signedAck(
+            sodium_crypto_sign_secretkey($this->masterKp),
+            'master-sess-9',
+            'master-uuid-77',
+        ));
+
+        self::assertSame('master-sess-9', $this->readProperty('sessionId'));
+        self::assertNull($this->readProperty('ackTimeoutTimerId'));
+        $this->manager->disconnectFromMaster();
+    }
+
+    /**
+     * SH-048 (#3): the heartbeat mirror write may stay fail-soft, but a
+     * persistently-failing mirror must not be silent either — the class law
+     * counts and logs refusals. Warning fires on the FIRST consecutive
+     * failure and every 20th tick (~5 min at the 15 s cadence); one success
+     * resets the ledger so the next first-failure warns again.
+     */
+    public function testHeartbeatMirrorWriteFailuresWarnThrottled(): void
+    {
+        $this->attachSendVerdictConnection(true);
+        $this->setMasterPeerId('peer-master-1');
+        $logFile = $this->startFileLogger();
+
+        $calls = 0;
+        $this->sessions->method('touchHeartbeatByPeerId')->willReturnCallback(
+            static function (string $peerId) use (&$calls): bool {
+                $calls++;
+                if ($calls <= 20 || $calls === 22) {
+                    throw new \RuntimeException('db down');
+                }
+                return true;
+            },
+        );
+
+        $method = new ReflectionMethod($this->manager, 'sendHeartbeat');
+        $method->setAccessible(true);
+        try {
+            for ($i = 0; $i < 22; $i++) {
+                $method->invoke($this->manager);
+            }
+
+            // Failures #1 and #20 warn; #21 succeeds (ledger reset); #22 is a
+            // NEW first-failure and warns again. 1..19 stay quiet.
+            $log = (string) file_get_contents($logFile);
+            self::assertSame(22, $calls);
+            self::assertSame(
+                3,
+                substr_count($log, 'local heartbeat mirror write failed'),
+                'Expected exactly warn-at-1, warn-at-20, warn-again-after-reset',
+            );
+            self::assertStringContainsString('db down', $log);
+        } finally {
+            $this->stopFileLogger($logFile);
+        }
+    }
 }

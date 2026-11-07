@@ -109,7 +109,10 @@ class FederationPeerManager
      * Seconds to wait for `hub_hello_ack` after TCP connect before declaring the
      * link a zombie and dropping it so the reconnect path re-runs the
      * handshake (M-6 — previously isConnected() was true forever while the
-     * master silently ignored a half-registered leaf).
+     * master silently ignored a half-registered leaf). SH-048: the reaper is
+     * cancelled only at ceremony success — refusal paths cancel through the
+     * link teardown they perform, and the config-miss / dial-less gates in
+     * handleHelloAck() deliberately leave it armed.
      */
     private const int HELLO_ACK_TIMEOUT_SECONDS = 10;
 
@@ -340,6 +343,18 @@ class FederationPeerManager
      * @var bool
      */
     private bool $reconnectHoldAnnounced = false;
+
+    /**
+     * Consecutive failures of the local heartbeat mirror write
+     * (`touchHeartbeatByPeerId`) on the 15 s heartbeat tick. Drives the
+     * first/every-20th RELAY warning throttle in sendHeartbeat() — the write
+     * stays fail-soft (a projection, never a transport dependency), but the
+     * class law counts and names refusals instead of swallowing them
+     * (SH-048). Reset by any successful write.
+     *
+     * @var int
+     */
+    private int $heartbeatMirrorFailures = 0;
 
     /**
      * True between a deliberate disconnectFromMaster() and the next explicit
@@ -1781,8 +1796,6 @@ class FederationPeerManager
      */
     private function handleHelloAck(array $msg): void
     {
-        $this->cancelAckTimeoutTimer();
-
         /** @var mixed $sessionIdRaw */
         $sessionIdRaw = $msg['session_id'] ?? null;
         $sessionId = is_string($sessionIdRaw) ? $sessionIdRaw : null;
@@ -1801,6 +1814,19 @@ class FederationPeerManager
 
         $hubConfig = $this->hubRepo->getHubConfig();
         if ($hubConfig === null) {
+            // SH-048 (review hub__asphp #2): the ack-timeout reaper is NOT
+            // cancelled at this gate — the entry-cancel used to disarm it for
+            // every ack, and a config miss (transient DB blip) then parked
+            // the link forever: TCP up, no session, no heartbeat, no timer.
+            // Left armed, the one-shot fires failHelloTimeout(), the socket
+            // closes, and the reconnect ladder re-runs the handshake. The
+            // refusal is logged because the eventual close must not look
+            // unexplained in the RELAY channel.
+            LoggerFactory::get(LogChannels::RELAY)->warning(
+                'FederationPeerManager: HELLO_ACK received while hub config is unavailable '
+                . '— link left to the ack timeout',
+            );
+
             return;
         }
 
@@ -1808,6 +1834,10 @@ class FederationPeerManager
         $hubId = is_string($hubConfig['id'] ?? null) ? $hubConfig['id'] : '';
 
         if ($this->masterPeerId === '') {
+            // SH-048: same law on the dial-less gate — the reaper stays
+            // armed. An ack belonging to no dial must not sit on a live
+            // socket either; the timeout closes it and the ladder re-runs a
+            // handshake that HAS a dial.
             LoggerFactory::get(LogChannels::RELAY)->warning(
                 'FederationPeerManager: HELLO_ACK without a dialed peer — ignored',
             );
@@ -1886,6 +1916,16 @@ class FederationPeerManager
         // over the same session nonce, then open the channel for payloads.
         $this->sendHelloAuth($hubId, $sessionId, $nonce);
         $this->channelVerified = true;
+
+        // SH-048 (review hub__asphp #2): THIS is where the M-6 ack-timeout
+        // reaper is released — ceremony success, not handleHelloAck() entry.
+        // Every failure path either tears the link down through
+        // closeLinkAndReschedule()/refuseHelloAck() (both cancel) or stops at
+        // one of the two gates above, which deliberately leave the one-shot
+        // armed so the half-verified zombie reaps itself. failHelloTimeout()
+        // would no-op a late tick after this point (its sessionId/conn
+        // guard), but the slot is freed deterministically here.
+        $this->cancelAckTimeoutTimer();
 
         // Review hub__asphp: the leaf side of the hello-time replay the master
         // has always performed (pushLibrarySharesToLeaf). Shares created while
@@ -2453,8 +2493,30 @@ class FederationPeerManager
         if ($this->masterPeerId !== '') {
             try {
                 $this->sessions->touchHeartbeatByPeerId($this->masterPeerId);
-            } catch (Throwable) {
-                // Ignore
+                // SH-048 (#3): a healthy write clears the failure ledger —
+                // the throttle counts CONSECUTIVE failures.
+                $this->heartbeatMirrorFailures = 0;
+            } catch (Throwable $e) {
+                // Fail-soft is kept: the mirror row is a dashboard/lease
+                // projection, never a link-transport dependency — the tick
+                // must not die, and the RELAY frame above already landed.
+                // Silence is what the review charged: a persistently-failing
+                // mirror (quota, deadlock, dropped table) vanished for the
+                // life of the resident process behind a bare `// Ignore`.
+                // Warn on the first consecutive failure and every 20th tick
+                // (~5 minutes at this cadence), the reconnectHoldAnnounced
+                // one-line-per-window family.
+                $this->heartbeatMirrorFailures++;
+                if ($this->heartbeatMirrorFailures === 1 || $this->heartbeatMirrorFailures % 20 === 0) {
+                    LoggerFactory::get(LogChannels::RELAY)->warning(
+                        'FederationPeerManager: local heartbeat mirror write failed',
+                        [
+                            'peer_id' => $this->masterPeerId,
+                            'consecutive_failures' => $this->heartbeatMirrorFailures,
+                            'error' => $e->getMessage(),
+                        ],
+                    );
+                }
             }
         }
     }
