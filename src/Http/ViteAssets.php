@@ -21,6 +21,14 @@ use RuntimeException;
  */
 final class ViteAssets
 {
+    /**
+     * The public URL base the SPA build is served under. Single source in this
+     * class for BOTH facts it expresses: where the manifest lives inside
+     * public/ and what prefix the entry URL needs. Must stay equal to
+     * web-ui/vite.config.ts's `base` — the two ends of one wire.
+     */
+    private const string URL_BASE = '/assets/app/';
+
     private readonly string $manifestPath;
 
     /**
@@ -28,17 +36,26 @@ final class ViteAssets
      */
     public function __construct(private readonly string $publicRoot)
     {
-        $this->manifestPath = $this->publicRoot . '/assets/app/.vite/manifest.json';
+        $this->manifestPath = $this->publicRoot . self::URL_BASE . '.vite/manifest.json';
     }
 
     /**
-     * Returns the path to the entry JavaScript file from the Vite manifest.
+     * Returns the PUBLIC URL of the entry JavaScript chunk from the Vite
+     * manifest, composed with the build's base — i.e. a URL that actually
+     * resolves when fetched (browser-side) and maps 1:1 onto the committed
+     * file on disk (server-side: publicRoot . the returned URL).
      *
-     * @return string Absolute path to the entry JS asset.
+     * (The name used to be getEntryJsPath() and the value was '/' . file —
+     * the manifest's `file` entries are base-RELATIVE ('assets/index-X.js'),
+     * so that string was neither a filesystem path under public/ nor a
+     * fetchable URL: it 404'd everywhere. ViteAssetsEntryUrlTest pins the
+     * composition against the committed bundle.)
+     *
+     * @return string Absolute public URL, e.g. '/assets/app/assets/index-X.js'.
      *
      * @throws RuntimeException If the manifest file does not exist.
      */
-    public function getEntryJsPath(): string
+    public function getEntryJsUrl(): string
     {
         if (! file_exists($this->manifestPath)) {
             throw new RuntimeException(
@@ -57,7 +74,9 @@ final class ViteAssets
 
         foreach ($manifest as $entry) {
             if (($entry['isEntry'] ?? false) === true && isset($entry['file'])) {
-                return '/' . $entry['file'];
+                /** @var string $file */
+                $file = $entry['file'];
+                return self::URL_BASE . ltrim($file, '/');
             }
         }
 

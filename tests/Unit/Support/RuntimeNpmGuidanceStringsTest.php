@@ -45,7 +45,7 @@ use function unlink;
  * The S466 finding is a wrong-signal defect in SHIPPED runtime strings, not in CI
  * wiring. Five sites — the four `503 — Shared UI not built` responses in
  * {@see SharedUiController::shell()} and the `Vite manifest not found` exception in
- * {@see ViteAssets::getEntryJsPath()} — directed `cd web-ui && npm install && npm run
+ * {@see ViteAssets::getEntryJsUrl()} — directed `cd web-ui && npm install && npm run
  * build`. A bare install floats resolution against the host `~/.npmrc`; the estate CI
  * law (the `spa-bundle:` gate and this repo's documented build command) is
  * `NPM_CONFIG_USERCONFIG=/dev/null npm ci`. Nothing else in the suite referenced these
@@ -382,7 +382,7 @@ final class RuntimeNpmGuidanceStringsTest extends TestCase
     {
         $message = null;
         try {
-            (new ViteAssets(self::MISSING_ROOT))->getEntryJsPath();
+            (new ViteAssets(self::MISSING_ROOT))->getEntryJsUrl();
         } catch (RuntimeException $exception) {
             $message = $exception->getMessage();
         }

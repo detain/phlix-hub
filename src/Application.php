@@ -128,7 +128,11 @@ final class Application
      *
      *  - `php`  — never hand out raw script sources through the static leg;
      *  - `map`  — source maps reconstruct the SPA's original sources (the
-     *             hub ships 102 `.js.map` files under public/assets/app);
+     *             committed hub build ships `.js.map` files under
+     *             public/assets/app — web-ui/vite.config.ts keeps
+     *             `sourcemap: true` so operators can symbolicate stack
+     *             traces ON DISK; the count of maps moves every release,
+     *             this deny never does);
      *  - `tpl`  — template sources (hub has none today; kept so a future
      *             template drop cannot become an exposure).
      *

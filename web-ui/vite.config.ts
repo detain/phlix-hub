@@ -18,6 +18,13 @@ export default defineConfig({
         target: 'baseline-widely-available',
         outDir: resolve(__dirname, '../public/assets/app'),
         emptyOutDir: true,
+        // Maps are BUILT and committed for on-disk symbolication (operator
+        // debugging of hashed stack traces), but NEVER served: the hub static
+        // leg's DENIED_STATIC_EXTENSIONS (src/Application.php, byte-coordinated
+        // with phlix-server's HttpHandler) 404s every `.map` fetch, so
+        // browser DevTools shows the built bundle, not the sources. If a
+        // future build stops emitting maps, the deny rule stays — do not
+        // "fix" the DevTools 404s by serving maps.
         sourcemap: true,
         manifest: true,
     },

@@ -561,6 +561,7 @@ phlix_check_disabled_functions() {
 # unit template in section 6 and the `--update` retrofit in do_update).
 PHLIX_SYSCTL_FILE="/etc/sysctl.d/99-phlix-hub-net.conf"
 PHLIX_LIMITS_FILE="/etc/security/limits.d/99-phlix-hub.conf"
+PHLIX_LOGROTATE_FILE="/etc/logrotate.d/phlix-hub-workerman"
 
 # $1 (optional): the account to grant the PAM nofile limits to. Defaults to
 # $SERVICE_USER. do_update passes the User= parsed out of the live unit, which
@@ -681,6 +682,45 @@ ${limits_user}      hard    nofile  1048576
 LIMITS_EOF
   chmod 644 "$PHLIX_LIMITS_FILE"
   info "PAM nofile: soft 65536 / hard 1048576 for root and '$limits_user'."
+}
+
+# Workerman's own log gets the rotation the five Monolog channels do internally.
+# start.php pins Worker::$logFile to <install>/.logs/workerman.log and Workerman
+# only ever appends — without this drop-in it is the one log file on the box
+# that grows without ceiling (a repeating listen error fills it within days).
+# Idempotent like the tuning halves: we own the file outright and rewrite it.
+phlix_apply_workerman_logrotate() {
+  log "Applying workerman.log rotation ($PHLIX_LOGROTATE_FILE)"
+  mkdir -p "$(dirname "$PHLIX_LOGROTATE_FILE")"
+  cat > "$PHLIX_LOGROTATE_FILE" <<LOGROTATE_EOF
+# Managed by phlix-hub scripts/install.sh — rewritten on every --update.
+#
+# The hub writes six log files; five rotate themselves (the Monolog channels
+# in config/logger.php keep 30 files each). Workerman's own log is the sixth:
+# start.php pins Worker::$logFile into this install's .logs/ directory, and
+# Workerman appends forever — the only hub log with no self-rotation.
+#
+# copytruncate is MANDATORY, not a preference: the master opens the file once
+# and every forked worker inherits that fd, so a rename+create rotation would
+# leave the whole daemon appending to the rotated-away inode until restart
+# (the live log looks frozen while the .1 file never stops growing).
+#
+# maxsize, not size: "size" rotates only on the interval even if the file
+# exploded an hour in; "maxsize" rotates at the first weekly run past the
+# threshold, bounding worst-case growth by the cron cadence.
+${INSTALL_PATH}/.logs/workerman.log {
+    weekly
+    rotate 8
+    maxsize 64M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+LOGROTATE_EOF
+  chmod 644 "$PHLIX_LOGROTATE_FILE"
+  info "workerman.log: weekly / maxsize 64M / rotate 8 / copytruncate."
 }
 
 # Parse the User= line from a systemd unit. Empty when the file is absent
@@ -1324,7 +1364,7 @@ do_uninstall() {
   # NOT restore the previous LIVE sysctl values: we never recorded them, and
   # phlix-server may be co-installed and still relying on the same knobs (it
   # ships its own identically-valued drop-in, so its file survives this).
-  for f in "$PHLIX_SYSCTL_FILE" "$PHLIX_LIMITS_FILE"; do
+  for f in "$PHLIX_SYSCTL_FILE" "$PHLIX_LIMITS_FILE" "$PHLIX_LOGROTATE_FILE"; do
     [ -f "$f" ] && { log "Removing tuning drop-in $f"; rm -f "$f"; }
   done
 
@@ -1582,6 +1622,7 @@ ExecStartPre=/usr/bin/env bash ${INSTALL_PATH}/scripts/wait-for-free-ports.sh -t
   local unit_user=""
   unit_user="$(phlix_systemd_unit_user "$SERVICE_FILE")"
   phlix_apply_kernel_tuning "${unit_user:-$SERVICE_USER}"
+  phlix_apply_workerman_logrotate
 
   if [ -f "$SERVICE_FILE" ] && ! grep -q '^LimitNOFILE=' "$SERVICE_FILE" 2>/dev/null; then
     log "Adding LimitNOFILE=1048576 to systemd unit (systemd default soft is 1024)"
@@ -1824,6 +1865,7 @@ fi
 # exist; must also land before the unit is written in section 6. Also
 # re-applied by do_update.
 phlix_apply_kernel_tuning
+phlix_apply_workerman_logrotate
 
 log "Fetching application code into $INSTALL_PATH"
 if [ -d "$INSTALL_PATH/.git" ]; then

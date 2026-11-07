@@ -15,6 +15,7 @@ use Phlix\Hub\Http\Controllers\SharedUiController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Tests\Support\TempLoggerCapture;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 /**
  * R12-03 / R12-05 / R12-02 coverage for the hub SPA shell.
@@ -304,6 +305,42 @@ final class SharedUiControllerCspTest extends TestCase
         self::assertSame(200, $response->statusCode);
         self::assertSame(1, substr_count($response->body, 'window.__PHLIX__ ='));
         self::assertSame(1, substr_count($response->body, '<script nonce='));
+    }
+
+    /**
+     * The injection is LITERAL-SAFE by construction: `$N` back-reference
+     * sequences inside the bootstrap block survive VERBATIM. The old
+     * `preg_replace` replacement-string path consumed them — measured on the
+     * shipped shape, a literal `$1` in the injected block VANISHED even with
+     * no matching capture group (unmatched groups substitute empty), and with
+     * a capturing pattern a present group would have been substituted IN.
+     * Today's config grammars are `$`-free, so this pins the trap shut for
+     * every future field, not just the current payload.
+     */
+    public function testBootstrapInjectionPreservesDollarSequencesVerbatim(): void
+    {
+        $block = '<script nonce="QUFCRUNkTm9uY2VWYWx1ZQ==">window.__PHLIX__ = '
+            . '{"wsUrl":"wss://relay.example/ws$1${name}x","menu":["$&","$$","$0","$10"]};</script>' . "\n";
+
+        $method = new ReflectionMethod(SharedUiController::class, 'injectBootstrapBlock');
+        $method->setAccessible(true);
+        $result = $method->invoke(null, '<html><head></head><body></body></html>', $block);
+
+        self::assertIsString($result, 'a well-formed <head> must inject, not fail loud');
+        // The whole block, dollar sequences and all, rides verbatim…
+        self::assertStringContainsString($block, $result);
+        // …belt-and-suspenders on the exact corruption classes the old code
+        // exhibited (group-less $1 erasure) and the Perl idioms that must
+        // survive as literals.
+        self::assertStringContainsString('/ws$1${name}x', $result);
+        self::assertStringContainsString('"$&","$$","$0","$10"', $result);
+
+        // Null posture unchanged (the HUB-m18 fail-loud route): no anchor,
+        // no injection — and through the seam, not just shell().
+        self::assertNull(
+            $method->invoke(null, '<html><body></body></html>', $block),
+            'without a <head> anchor the seam must yield null so the caller fail-louds'
+        );
     }
 
     /**

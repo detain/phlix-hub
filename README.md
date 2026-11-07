@@ -632,7 +632,7 @@ export HUB_JWT_SECRET="$(openssl rand -hex 32)"
 
 # Create the schema + dev user first — run-migrations.php only builds tables,
 # it never creates the database (same grants as step 2 of the production install).
-sudo mysql -e "CREATE DATABASE IF NOT EXISTS phlix_hub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER IF NOT EXISTS 'phlix_hub'@'127.0.0.1' IDENTIFIED BY 'phlix_hub'; GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, REFERENCES ON phlix_hub.* TO 'phlix_hub'@'127.0.0.1'; FLUSH PRIVILEGES"
+sudo mysql -e "CREATE DATABASE IF NOT EXISTS phlix_hub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER IF NOT EXISTS 'phlix_hub'@'127.0.0.1' IDENTIFIED BY 'phlix_hub'; GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON phlix_hub.* TO 'phlix_hub'@'127.0.0.1'; FLUSH PRIVILEGES"
 
 php scripts/run-migrations.php     # create the tables (idempotent)
 php start.php start                # start the Hub (Ctrl-C to stop)
@@ -735,7 +735,7 @@ CREATE DATABASE phlix_hub
 CREATE USER 'phlix_hub'@'127.0.0.1' IDENTIFIED BY 'CHANGE-ME-strong-password';
 
 -- Least privilege: only the rights the app needs on its own schema.
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, REFERENCES
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
   ON phlix_hub.* TO 'phlix_hub'@'127.0.0.1';
 
 FLUSH PRIVILEGES;
@@ -745,9 +745,14 @@ Notes:
 
 - The migration runner issues `CREATE TABLE` / `ALTER TABLE`, so `CREATE`, `ALTER`, and `INDEX`
   are required in addition to the CRUD grants.
-- `DROP` is required too: migration `049_invite_token_hash_unique.sql` normalizes a legacy
-  index by issuing `ALTER TABLE … DROP INDEX` on its rebuild paths, which MySQL gates on the
-  `DROP` privilege. (The grant is consumed only on that migration's index-normalization path.)
+- `DROP` is NOT required — an earlier version of this note claimed `049_invite_token_hash_unique.sql`
+  needed it for its `ALTER TABLE … DROP INDEX` rebuild path. That claim was falsified by
+  execution on MySQL 8.0.46 (the version the CI service and the `mysql:8.0` deploy family
+  run): a user holding exactly the grants above — `SHOW GRANTS` captured, no `DROP` anywhere —
+  completed both a standalone `ALTER TABLE … DROP INDEX` (rc 0) and the full 37-migration
+  fresh-install chain including 049's composite `MODIFY` + `ADD UNIQUE` + drop of
+  010's `idx_token_hash`; `SHOW INDEX` confirmed the plain index gone and
+  `uk_invite_links_token_hash` in its place. Index drops ride the `ALTER` privilege.
 - If the Hub runs on a **different host** than MySQL, create the user for that host (or `'%'`)
   and set `HUB_DB_HOST` accordingly. Make sure MySQL's `bind-address` allows remote connections.
 - MySQL distinguishes `'localhost'` (unix socket) from `'127.0.0.1'` (TCP). The Hub uses TCP, so

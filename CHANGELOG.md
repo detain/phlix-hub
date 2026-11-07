@@ -6,6 +6,61 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [w08L6] — review wave: graceful-stop budget pinned under the unit's, workerman.log rotation drop-in, tunnel JWT wiring guard, entry-asset URL composition, literal-safe bootstrap injection, source-map deny prose, README grant-list truth pass — 2026-11-06
+
+- `start.php` now pins `Worker::$stopTimeout = 20`. Workerman SIGKILLs each
+  worker two seconds (vendor default) after a stop/reload signal — while the
+  shipped systemd unit grants `TimeoutStopSec=30` — so every `systemctl stop`
+  cut relay tunnels and in-flight proxy streams 28 seconds early. The pin
+  keeps the daemon's own escalation strictly under the unit's budget; the
+  pairing is now enforced by `StopTimeoutBudgetTest` (either side moving
+  alone reddens there). No unit-file change: this reclaims budget the
+  service already had.
+- `scripts/install.sh` ships a logrotate drop-in
+  (`/etc/logrotate.d/phlix-hub-workerman`) for Workerman's own log — the one
+  of the hub's six log files with no self-rotation (the five Monolog channels
+  rotate internally). Written on fresh install, rewritten on `--update`,
+  removed on uninstall alongside the sysctl/PAM drop-ins the installer
+  already owns; `copytruncate` (the daemon inherits the open fd, rename-based
+  rotation would freeze the live log) and `maxsize` bounding are pinned by
+  `WorkermanLogRotationPinTest` against future rewrites of the script.
+- New wiring guard `TunnelManagerJwtWiringTest`: the container-built
+  `TunnelManager` must carry a REAL `EnrollmentJwtService` (typed DI boundary
+  — null is rejected there, not injected), and `acceptServer()` must thread
+  that same instance into every `Tunnel`. The tunnel HELLO validator treats a
+  null service as test-only "skip validation", so a silent wiring drop would
+  have fail-opened enrollment auth on :8802 with zero test signal; this
+  closes that.
+- `ViteAssets::getEntryJsPath()` was renamed `getEntryJsUrl()` and now
+  composes the vite base: manifest `file` values are base-relative
+  (`assets/index-X.js`) under base `/assets/app/`, so the old `'/' . file`
+  string was neither a path under `public/` nor a fetchable URL — it 404'd in
+  every direction (its sole caller discarded it as a manifest-existence
+  probe, which is the only reason nothing felt it). `ViteAssetsEntryUrlTest`
+  pins the composition against the committed bundle: the returned URL maps
+  1:1 onto an existing file.
+- The SPA shell's `window.__PHLIX__` bootstrap injection moved to a
+  `preg_replace_callback` seam (`injectBootstrapBlock`): in the old
+  `preg_replace` replacement string, `$N` sequences are back-references —
+  measured, a literal `$1` inside the injected block vanished even with no
+  matching group. Today's config grammars are `$`-free, so this closes the
+  trap for every future field rather than papering a live bug. The fail-loud
+  HUB-m18 posture (exactly one `<head>` anchor or 503) is preserved and now
+  pin-tested directly, dollars included.
+- Source-map posture documented truthfully: the `DENIED_STATIC_EXTENSIONS`
+  docblock no longer carries a per-release file count (the `map` deny is
+  count-independent; the committed-build prose now says so and
+  `web-ui/vite.config.ts` gained the matching law comment at `sourcemap:
+  true` — maps stay on-disk for operator symbolication, the static leg keeps
+  404ing them to browsers).
+- README grant truth pass (both copies): the quick-start one-liner and the
+  production GRANT block dropped `DROP` from their privilege lists, matching
+  what `scripts/install.sh` actually grants, and the note claiming migration
+  049 needs `DROP` was rewritten to the executed evidence — on MySQL 8.0.46
+  a user holding exactly the documented grants (no `DROP`) applied the full
+  37-migration fresh-install chain including 049's composite
+  `ALTER TABLE … DROP INDEX` path: index drops ride the `ALTER` privilege.
+
 ### Fixed [w07L8] — review wave: batched federation session reaper, liveness parity on the pool's blocking borrow, signing-key overlap doc truth, `DROP` in the canonical GRANT, `HUB_PORT`-aware image healthcheck, metrics config single-sourced — 2026-11-06
 
 - `FederationSessionManager::reapDeadSessions()` now ends each dead session with

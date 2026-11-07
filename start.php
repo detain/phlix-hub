@@ -105,6 +105,18 @@ $workerLogFile = __DIR__ . '/.logs/workerman.log';
 $ensureWritableDir(dirname($workerLogFile), 'workerman log (.logs/)');
 Worker::$logFile = $workerLogFile;
 
+// Graceful-stop budget. Workerman's master sends each child SIGTERM and then
+// SIGKILLs it after Worker::$stopTimeout seconds; the vendor default is TWO
+// (vendor/workerman/workerman/src/Worker.php). That is shorter than a relay
+// drain: `systemctl stop phlix-hub` (and `docker stop`) would cut live tunnels
+// and in-flight proxy streams at 2s even though the shipped systemd unit
+// (scripts/install.sh) allows TimeoutStopSec=30. Pin the daemon's own budget
+// just under the unit's so a stop gets real drain time instead of letting 28
+// seconds of granted budget go unused. Paired with the unit value by
+// tests/Unit/Bootstrap/StopTimeoutBudgetTest.php — keep the two coherent if
+// either ever moves.
+Worker::$stopTimeout = 20;
+
 // -----------------------------------------------------------------------------
 // 3. Load server config, then pin the pid/status files FROM IT
 // -----------------------------------------------------------------------------

@@ -102,7 +102,7 @@ final class SharedUiController
         // Validate build exists via ViteAssets manifest check.
         try {
             $viteAssets = new ViteAssets($this->publicRoot);
-            $viteAssets->getEntryJsPath();
+            $viteAssets->getEntryJsUrl();
         } catch (\RuntimeException) {
             return $this->unavailable('vite manifest unreadable — the bundle was never built', true);
         }
@@ -166,18 +166,8 @@ final class SharedUiController
             . $configJson . '</script>' . "\n";
         /** @var string $htmlContent */
         $htmlContent = $html;
-        // HUB-m18 (review hub__fedev): the old `?? $htmlContent` swallowed both
-        // a preg error and a zero-count (no bare `<head>` to anchor on — e.g.
-        // an attributed `<head data-built=...>` from a changed build) into a
-        // SILENT pass-through: the SPA booted with guessed defaults and the
-        // validated wsUrl/wsPath seam vanished with no operator signal. Route
-        // a non-injection through the same fail-loud unavailable() posture as
-        // the manifest/path guards above; the count out-param is the tooth
-        // (an uppercase bare <HEAD> still matches via /i, so shape tolerance
-        // is preserved).
-        $replaceCount = 0;
-        $replacement = preg_replace('/<head>/i', "<head>\n" . $configScript, $htmlContent, 1, $replaceCount);
-        if ($replacement === null || $replaceCount !== 1) {
+        $replacement = self::injectBootstrapBlock($htmlContent, $configScript);
+        if ($replacement === null) {
             return $this->unavailable(
                 'shell index.html has no <head> anchor for the bootstrap injection'
                     . ' — refusing to serve an unconfigured shell',
@@ -189,6 +179,54 @@ final class SharedUiController
         return (new Response())
             ->html($htmlContent)
             ->header('Content-Security-Policy', self::contentSecurityPolicy($nonce));
+    }
+
+    /**
+     * Inject the per-request bootstrap <script> right after the shell's
+     * `<head>` open tag — LITERAL-SAFE by construction.
+     *
+     * HUB-m18 (review hub__fedev): the original `preg_replace(...) ?? $htmlContent`
+     * swallowed both a preg error and a zero-count (no bare `<head>` to anchor
+     * on — e.g. an attributed `<head data-built=...>` from a changed build)
+     * into a SILENT pass-through: the SPA booted with guessed defaults and the
+     * validated wsUrl/wsPath seam vanished with no operator signal. That
+     * posture is kept: exactly one anchor or null, and the caller fail-louds
+     * through unavailable().
+     *
+     * Follow-up (same review family): the injection side had that posture, the
+     * replacement side had none. In a `preg_replace` replacement string, `$N`
+     * sequences are BACK-REFERENCES — measured on this file's own shape, a
+     * literal `$1` inside the injected block VANISHED (unmatched groups
+     * substitute empty), and with a capturing pattern any present group would
+     * have been substituted in. The block now rides a
+     * `preg_replace_callback` return: the string is inserted verbatim, so no
+     * `$` or `\` in the JSON (or in any future config field's value) can ever
+     * be re-read as a substitution reference. The HUB-m18 count tooth survives
+     * as the callback-invocation counter, and an uppercase bare <HEAD> still
+     * matches via /i — shape tolerance preserved.
+     *
+     * @param string $html         Shell index.html contents.
+     * @param string $configScript The nonce-stamped bootstrap block to insert.
+     *
+     * @return string|null The injected document, or null when the caller must
+     *                     fail loud (no exactly-one `<head>` anchor).
+     */
+    private static function injectBootstrapBlock(string $html, string $configScript): ?string
+    {
+        $replaceCount = 0;
+        $replaced = preg_replace_callback(
+            '/<head>/i',
+            /** @param list<string> $matches */
+            static function (array $matches) use ($configScript, &$replaceCount): string {
+                unset($matches);
+                $replaceCount++;
+                return "<head>\n" . $configScript;
+            },
+            $html,
+            1,
+        );
+
+        return ($replaced === null || $replaceCount !== 1) ? null : $replaced;
     }
 
     /**
