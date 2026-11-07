@@ -216,9 +216,7 @@ final class SharedUiController
         $replaceCount = 0;
         $replaced = preg_replace_callback(
             '/<head>/i',
-            /** @param list<string> $matches */
             static function (array $matches) use ($configScript, &$replaceCount): string {
-                unset($matches);
                 $replaceCount++;
                 return "<head>\n" . $configScript;
             },
