@@ -62,6 +62,13 @@ use function strtoupper;
  * {@see TcpConnection::$maxSendBufferSize}) the sink parks the producing
  * coroutine until `onBufferDrain`, so the upstream relay→hub channel fills and
  * exerts real back-pressure rather than letting the hub queue an unbounded body.
+ * The park is a coroutine await: it requires an await-capable event loop
+ * (Swoole/Fiber). Under a degraded boot the vendor `Channel` falls back to the
+ * non-blocking Memory driver whose `pop()` answers false at once regardless of
+ * the timeout — the park would misread a live-but-slow browser as gone. The
+ * proxy admission gate ({@see \Phlix\Hub\Runtime\CoroutineRuntime}, enforced in
+ * {@see \Phlix\Hub\Http\Controllers\ServerProxyController::proxy()}) keeps this
+ * class off that path, so the park is only ever reached when it can wait.
  *
  * ### Per-user bandwidth throttle (S43, phlix-docs docs/old/updates.md #50)
  * When constructed with a {@see TokenBucket} (built from the owning user's durable
@@ -74,7 +81,12 @@ use function strtoupper;
  * other request; and because a paced (slow) sink stops pulling the bridge's
  * capacity-bounded stream channel, throttling exerts real upstream back-pressure
  * through the SAME bounded mechanism as a slow browser, so the hub never buffers
- * without bound.
+ * without bound. (Load-bearing qualifier on "yields": `Timer::sleep()` only
+ * suspends the current coroutine under the Swoole/Fiber loop classes — its
+ * default arm is a raw `usleep()` that would freeze the worker. The proxy
+ * admission gate in {@see \Phlix\Hub\Http\Controllers\ServerProxyController::proxy()}
+ * (\{@see \Phlix\Hub\Runtime\CoroutineRuntime}) guarantees that arm is never
+ * what this pacing runs against.)
  *
  * ### Short fixed-length responses force-close the connection
  * A fixed-length head promises exactly N body bytes over what may be a
@@ -301,7 +313,10 @@ final class ConnectionResponseSink implements RelayResponseSink
         // Per-user bandwidth throttle (S43, phlix-docs docs/old/updates.md #50). Pace this fragment
         // against the connection's token bucket BEFORE releasing it; Unlimited
         // (null bucket) skips entirely so the fast path is byte-for-byte
-        // unchanged. The wait yields the coroutine — never a blocking sleep — and
+        // unchanged. The wait yields the coroutine — never a blocking sleep —
+        // (an await-capable loop is guaranteed upstream: the proxy admission
+        // gate refuses this path under a degraded Select/Event boot, where the
+        // vendor Timer::sleep default arm would block the worker) and
         // back-pressures the upstream relay→hub channel through the same bounded
         // mechanism as a slow browser, so throttling grows no unbounded buffer.
         $this->awaitThrottleBudget();
@@ -360,7 +375,9 @@ final class ConnectionResponseSink implements RelayResponseSink
      * The sleeper suspends only THIS coroutine (via {@see Timer::sleep()}), so
      * the event loop and every other request on the worker keep running while a
      * throttled stream waits (Cardinal rule: no blocking sleep in a resident
-     * worker).
+     * worker — under the degraded Select/Event loops that rule is structurally
+     * unachievable, which is why the proxy admission gate (CoroutineRuntime)
+     * exists: this pacing only ever runs on an await-capable loop).
      *
      * @return void
      */

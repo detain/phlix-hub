@@ -23,6 +23,7 @@ use Phlix\Hub\Relay\TokenBucket;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\QuotaFrames;
 use Phlix\Hub\Http\Response;
+use Phlix\Hub\Runtime\CoroutineRuntime;
 use Phlix\Shared\Hub\ServerInfoDto;
 use Workerman\Connection\TcpConnection;
 
@@ -1121,6 +1122,41 @@ final class ServerProxyController
         ]);
 
         $timeout = $this->replyTimeoutForPath($request->method, $path);
+
+        // SH-047 (review hub__asphp #1): both relay-delivery arms below await
+        // on coroutine primitives — the bridge parks on a Channel pop for the
+        // server's reply, the sink parks on buffer-drain and token-budget
+        // waits. Under a degraded boot (no ext-swoole: start.php warns and
+        // continues; Workerman runs the Select/Event loop) the vendor Channel
+        // silently becomes the Memory driver whose pop() answers false AT
+        // ONCE, so every request would fabricate a 504 from a living tunnel
+        // (measured: buffered arm returns null immediately) and the sink's
+        // back-pressure park would force-close a just-connected browser.
+        // Refuse at admission instead: honest 503 naming the missing
+        // extension, zero bytes over the relay. `provider_unavailable` is the
+        // registered non-derivable-recovery 503 code (MaintenanceGate
+        // precedent, Application dispatch) — no Retry-After: recovery is an
+        // operator install + restart, not a wait.
+        if (!CoroutineRuntime::isAwaitCapable()) {
+            $this->logger->warning(
+                'Relay proxy: refused — coroutine runtime inactive (degraded boot without ext-swoole)',
+                [
+                    'server_id' => $serverId,
+                    'user_id' => $userId,
+                    'method' => $request->method,
+                    'path' => $path,
+                ],
+            );
+
+            return (new Response())->error(
+                503,
+                'provider_unavailable',
+                'The relay proxy requires the Swoole coroutine runtime',
+                ['message' => 'This hub is running without ext-swoole: the relay proxy cannot '
+                    . 'deliver server traffic in degraded mode. Install/enable ext-swoole and '
+                    . 'restart the hub.'],
+            );
+        }
 
         // Large byte-serving reads (HLS/DASH segments, direct-play stream) are
         // streamed straight to the browser without buffering the whole body on

@@ -33,6 +33,9 @@ use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
 use Workerman\Connection\TcpConnection;
+use Workerman\Events\Fiber;
+use Workerman\Events\Select;
+use Workerman\Worker;
 
 use function array_keys;
 use function array_pop;
@@ -6703,5 +6706,156 @@ final class ServerProxyControllerTest extends TestCase
             $getWire,
             'CONTROL: on a GET the server\'s stale Content-Length is stripped and recomputed from the body',
         );
+    }
+
+    /**
+     * SH-047 (review hub__asphp #1): the relay proxy's delivery machinery
+     * awaits on coroutine primitives that only exist under a coroutine loop —
+     * the bridge parks on `Channel::pop()` (buffered and streaming alike) and
+     * the sink parks on back-pressure drain / token-bucket budget. On the
+     * degraded resident loops (no ext-swoole) the vendor Channel silently
+     * becomes the non-blocking Memory driver — pop() answers `false`
+     * immediately, timeout ignored — so every proxy request would either
+     * fabricate a 504 `gateway.timeout` from a living tunnel or, on the sink's
+     * park, close a just-connected browser. The admission gate must refuse
+     * BEFORE forwarding: 503 `provider_unavailable`, zero bytes over the relay,
+     * no producer scheduled.
+     */
+    public function testDegradedRuntimeRefusesStreamingProxyWithoutForwarding(): void
+    {
+        $previousLoop = Worker::$eventLoopClass;
+        Worker::$eventLoopClass = Select::class;
+        try {
+            $info = $this->createMock(ServerInfoHandler::class);
+            $info->method('getOwnerAndStatus')->willReturn([
+                'userId' => 'user-1',
+                'status' => 'online',
+                'relayActive' => true,
+            ]);
+
+            $forwarded = null;
+            $bridge = null;
+            $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+                $forwarded = $data;
+                /** @var RelayProxyBridge $bridge */
+                $bridge->onReply([
+                    'request_id' => $data['request_id'],
+                    'status' => 200,
+                    'headers' => ['Content-Type' => 'application/octet-stream'],
+                    'body' => 'payload',
+                ]);
+            };
+            $bridge = $this->bridge($publisher);
+
+            $controller = $this->controller($info, $bridge);
+            $response = $controller->proxy(
+                $this->request('GET', 'user-1'),
+                ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+            );
+
+            $this->assertSame(503, $response->statusCode);
+            $this->assertNull($forwarded, 'Degraded runtime must refuse before the relay bridge is used.');
+            $this->assertNull(
+                $response->getStreamProducer(),
+                'A refused request may not schedule a producer that would park on inert coroutine primitives.',
+            );
+            /** @var array<string, mixed> $body */
+            $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+            $this->assertSame('provider_unavailable', $body['code'] ?? null);
+            $this->assertIsString($body['message'] ?? null);
+            $this->assertStringContainsString('ext-swoole', (string) $body['message']);
+        } finally {
+            Worker::$eventLoopClass = $previousLoop;
+        }
+    }
+
+    /**
+     * The buffered arm is equally inert under the degraded loop — its reply
+     * await is the SAME Memory-driver pop() that answers false instantly, so
+     * the gate covers both paths, not just streaming.
+     */
+    public function testDegradedRuntimeRefusesBufferedProxyWithoutForwarding(): void
+    {
+        $previousLoop = Worker::$eventLoopClass;
+        Worker::$eventLoopClass = Select::class;
+        try {
+            $info = $this->createMock(ServerInfoHandler::class);
+            $info->method('getOwnerAndStatus')->willReturn([
+                'userId' => 'user-1',
+                'status' => 'online',
+                'relayActive' => true,
+            ]);
+
+            $forwarded = false;
+            $bridge = $this->bridge(function (string $event, array $data) use (&$forwarded): void {
+                $forwarded = true;
+            });
+
+            $controller = $this->controller($info, $bridge);
+            $response = $controller->proxy(
+                $this->request('GET', 'user-1'),
+                ['id' => 'srv-1', 'path' => 'api/v1/libraries'],
+            );
+
+            $this->assertSame(503, $response->statusCode);
+            $this->assertFalse($forwarded);
+            /** @var array<string, mixed> $body */
+            $body = json_decode($response->body, true, 8, JSON_THROW_ON_ERROR);
+            $this->assertSame('provider_unavailable', $body['code'] ?? null);
+        } finally {
+            Worker::$eventLoopClass = $previousLoop;
+        }
+    }
+
+    /**
+     * Anti-over-gate control: an await-capable loop must still stream exactly as
+     * before — gate off, producer scheduled, forwarding happens when the
+     * worker drives it. Fiber is used as the loop class because it is the
+     * await-capable driver constructible in a unit context (the vendor Fiber
+     * channel serves a synchronously-pushed reply without ext-swoole); the
+     * Swoole::class verdict itself is pinned at the predicate level by
+     * {@see \Phlix\Hub\Tests\Unit\Runtime\CoroutineRuntimeTest}.
+     */
+    public function testAwaitCapableRuntimeStillStreamsAndForwards(): void
+    {
+        $previousLoop = Worker::$eventLoopClass;
+        Worker::$eventLoopClass = Fiber::class;
+        try {
+            $info = $this->createMock(ServerInfoHandler::class);
+            $info->method('getOwnerAndStatus')->willReturn([
+                'userId' => 'user-1',
+                'status' => 'online',
+                'relayActive' => true,
+            ]);
+
+            /** @var array<string, mixed>|null $forwarded */
+            $forwarded = null;
+            $bridge = null;
+            $publisher = function (string $event, array $data) use (&$bridge, &$forwarded): void {
+                $forwarded = $data;
+                /** @var RelayProxyBridge $bridge */
+                $bridge->onReply([
+                    'request_id' => $data['request_id'],
+                    'status' => 200,
+                    'headers' => ['Content-Type' => 'application/octet-stream'],
+                    'body' => 'payload',
+                ]);
+            };
+            $bridge = $this->bridge($publisher);
+
+            $controller = $this->controller($info, $bridge);
+            $response = $controller->proxy(
+                $this->request('GET', 'user-1'),
+                ['id' => 'srv-1', 'path' => 'media/item-123/stream'],
+            );
+
+            $this->assertNotNull($response->getStreamProducer(), 'Capable loop must keep the streaming path.');
+            $this->drive($response);
+            $this->assertSame(200, $response->statusCode);
+            $this->assertIsArray($forwarded);
+            $this->assertSame('/media/item-123/stream', $forwarded['path']);
+        } finally {
+            Worker::$eventLoopClass = $previousLoop;
+        }
     }
 }

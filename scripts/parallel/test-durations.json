@@ -273,6 +273,7 @@
         "tests/Unit/Requests/RequestManagerTest.php": 0.009,
         "tests/Unit/Requests/RequestNotificationTest.php": 0.001,
         "tests/Unit/Runtime/CoroutineHooksTest.php": 0.003,
+        "tests/Unit/Runtime/CoroutineRuntimeTest.php": 0.023,
         "tests/Unit/Runtime/CuratedHookDeliveryProbeTest.php": 0,
         "tests/Unit/Runtime/HookEnforcementGuardTest.php": 0.009,
         "tests/Unit/Runtime/SwooleRuntimeTest.php": 0.002,

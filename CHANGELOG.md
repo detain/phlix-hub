@@ -6,6 +6,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [w10L4 SH-047] — the relay proxy refuses admission under a degraded event loop instead of misbehaving on it — 2026-11-07
+
+- Without ext-swoole the hub boots degraded ON PURPOSE (start.php warns and
+  continues), but the relay proxy's delivery machinery was written for one
+  runtime: it awaits on `Workerman\Coroutine\Channel::pop()` with a timeout,
+  and the vendor Channel picks its driver from `Worker::$eventLoopClass` —
+  for the degraded `Select`/`Event` loops it silently becomes the
+  non-blocking `Memory` driver whose `pop()` answers `false` IMMEDIATELY
+  when empty. Every buffered proxy call therefore fabricated a 504
+  `gateway.timeout` from a living tunnel (reproduced live in the new test),
+  every streaming read answered empty, and the response sink's
+  back-pressure park would have read a just-connected browser as gone and
+  force-closed it. The class docblocks even promised "NEVER a blocking
+  sleep()" while the degraded `Timer::sleep()` default arm is a raw
+  `usleep()` that freezes the resident worker mid-throttle.
+- Cure at admission: new `Runtime\CoroutineRuntime::isAwaitCapable()` (true
+  only for the Swoole/Fiber loop classes or a not-yet-initialised loop;
+  Swow is classified incapable because `Timer::sleep()` has no Swow arm),
+  and `ServerProxyController::proxy()` refuses BOTH relay arms with a 503
+  on the registered `provider_unavailable` code (MaintenanceGate precedent,
+  no Retry-After — recovery is an operator install + restart) naming
+  ext-swoole in the message, before any byte touches the tunnel. Sink
+  docblocks now state the loop requirement honestly and point at the gate.
+- Tests: new `CoroutineRuntimeTest` truth table (6 cases, duration cache
+  blessed in this commit) + three `ServerProxyControllerTest` cases —
+  degraded streaming refuses 503 without forwarding or scheduling a
+  producer, degraded buffered refuses too (its false-504 was measured at
+  parent), and an await-capable (Fiber) loop still streams and forwards —
+  red-first measured at parent (2 failures / 7 errors).
+
 ### Test [w10L4 fold] — the log-viewer 500 read-failure arm gains its law pin — 2026-11-07
 
 - The w09L5 batch shipped `tail()`'s Throwable catch (failure reason to the
