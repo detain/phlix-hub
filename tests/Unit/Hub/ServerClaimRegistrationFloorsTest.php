@@ -266,7 +266,12 @@ final class ServerClaimRegistrationFloorsTest extends TestCase
         $response = $this->handler($db)->handleNewClaim($this->request($mine));
 
         self::assertFalse($inserted, 'A fingerprint match inside the window must reuse, not grow.');
-        self::assertSame('MINE-CODE', $response->claimCode);
+        // SH-049: the reuse identity is the CLAIM ID (the poll secret the
+        // console already holds) — the code itself is re-MINTED, because the
+        // stored hash is one-way and the original display form is
+        // unrecoverable by design.
+        self::assertNotSame('MINE-CODE', $response->claimCode);
+        self::assertMatchesRegularExpression('/^[A-Z2-9]{4}-[A-Z2-9]{4}$/', $response->claimCode);
         self::assertSame('mine-1', $response->claimId);
     }
 

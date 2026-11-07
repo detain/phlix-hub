@@ -87,13 +87,13 @@ final class ClaimServerCapTest extends TestCase
     private function seedFlow(?int $ownedCount): void
     {
         $this->responder = function (string $sql, array $params) use ($ownedCount) {
-            // R19-01: the claim lookup moved from REPLACE(claim_code,'-','')
+            // R19-01 → SH-049: the claim lookup moved from REPLACE(claim_code,'-','')
             // (non-sargable, full-table FOR UPDATE lock storm) to the indexed
-            // generated column — matcher follows the new predicate shape.
-            if (str_contains($sql, 'FROM server_claims WHERE claim_code_norm')) {
+            // generated column, and now to the sha256 hash column — matcher
+            // follows the current predicate shape.
+            if (str_contains($sql, 'FROM server_claims WHERE claim_code_hash')) {
                 return [[
                     'id'                        => 'claim-row-1',
-                    'claim_code'                => 'DR4Q-7AXB',
                     'expires_at'                => time() + 600,
                     'claimed_by'                => null,
                     'public_key_jwk'            => '{"kty":"OKP","crv":"Ed25519","x":"aaa"}',
@@ -209,7 +209,7 @@ final class ClaimServerCapTest extends TestCase
         $lockIdx   = -1;
         $countIdx  = -1;
         foreach ($this->statements as $i => $sql) {
-            if ($claimIdx === -1 && str_contains($sql, 'FROM server_claims WHERE claim_code_norm')) {
+            if ($claimIdx === -1 && str_contains($sql, 'FROM server_claims WHERE claim_code_hash')) {
                 $claimIdx = $i;
             }
             if ($lockIdx === -1 && str_contains($sql, 'FROM users WHERE id = :uid FOR UPDATE')) {

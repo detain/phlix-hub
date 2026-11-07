@@ -6,6 +6,55 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security [w10L4 SH-049] — server pairing codes are sha256 at rest; the enrollment poll consumes single-winner — 2026-11-07
+
+- `server_claims` stored the 8-character pairing code in PLAINTEXT
+  (`claim_code`, plus migration 048's generated lookup twin
+  `claim_code_norm`) while every other bearer family in this hub — invite
+  links, client relay tokens, MCP PATs, OAuth codes — hashes its secret at
+  rest. Claim codes were the odd ones out: any row dump carried live
+  pairing material for the full 600 s window.
+- Migration `052_claim_code_hash`: the table now carries
+  `claim_code_hash CHAR(64)` (ascii/ascii_bin — no collation can fold or
+  pad-compare two hashes) with a UNIQUE key, and the two plaintext columns
+  are gone. The guard follows 048's probe-and-PREPARE idiom across the
+  half-states a crash-window replay or hand-patch can leave. Honest
+  trade, stated in the header: every outcome except the healthy no-op
+  PURGES the table — claims are transient by doctrine, and preserving rows
+  would have meant copying plaintext into the hash column mid-window. An
+  in-flight pairing on upgrade re-POSTs and gets a fresh code for the same
+  keypair (next bullet); at most one console re-read.
+- Handler: the INSERT and the FOR UPDATE lookup move to
+  `sha256(normalise(code))` — normalise-then-hash keeps the lenient
+  display variants ("dr4q 7axb") collapsing onto one row app-side, and the
+  single const-access row lock (R19-01) rides the new unique key unchanged.
+  The duplicate-retry arm can no longer re-deliver a stored code (it is
+  one-way by design), so it ROTATES instead: a fresh code under the same
+  claim id, hash rewritten in place, remaining TTL carried forward —
+  re-issuing never extends the pairing window. The retry-window scan no
+  longer projects any code column at all.
+- Same review's info row: `getClaimStatus()` paired-with-SQL-then-DELETE
+  let two concurrent polls each mint an enrollment JWT. The DELETE is now
+  first and its affected-rows answer is the single-winner arbiter — the
+  winner mints after winning, the loser reads the row as gone and reports
+  `expired` with no JWT material produced.
+- No new wire codes; the API surface keeps the dashed display form in
+  request and response verbatim — only the at-rest shape changed. Log and
+  audit payloads stay fingerprint-only (R20-04).
+- Tests: the claim unit suite rotates to the hash regime (INSERT param
+  equality + plaintext-key absence, lookup predicate/params on the hash,
+  reuse arm rewritten as rotation, two new poll pins for the
+  single-winner law, a window-projection pin); `ClaimServerCapTest`
+  matchers and `ServerClaimRegistrationFloorsTest`'s reuse identity
+  assertion follow the new shape; `MigrationFileTest` gains the 052 row.
+  The 048-era real-MySQL file is superseded by `ClaimCodeHashRealDbTest`
+  (schema shape + legacy-column absence, EXPLAIN `const` on
+  `uk_server_claims_code_hash`, display-variant collapse rejected 1062 on
+  the key's own name, end-to-end mint→lenient-claim pairing, the unchanged
+  M-HUB-12 audit floor); `ServerClaimCapLockRealDbTest`'s seed helper
+  hashes at rest. Red-first measured before the source change; the real
+  venue caught the clause-assembly defect the mocks could not see.
+
 ### Fixed [w10L4 SH-048] — the federation HELLO_ACK reaper is released only at ceremony success; heartbeat mirror failures are counted — 2026-11-07
 
 - `handleHelloAck()` cancelled the M-6 ack-timeout as its FIRST statement,

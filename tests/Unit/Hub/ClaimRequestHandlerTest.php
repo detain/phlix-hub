@@ -170,6 +170,19 @@ final class ClaimRequestHandlerTest extends TestCase
         self::addToAssertionCount(1);
         self::assertSame($response->claimId, $inserted['id']);
         self::assertMatchesRegularExpression(self::UUID_V4_REGEX, (string) $inserted['id']);
+
+        // SH-049 (review hub__secaudit #1): the pairing code is persisted ONLY
+        // as a sha256 over its canonical normalised form (separators stripped,
+        // uppercased) — the same normalisation the fingerprint law uses. The
+        // plaintext display form rides the wire to the console once and never
+        // touches the table, so a row dump cannot pair any server.
+        self::assertArrayNotHasKey('claim_code', $inserted);
+        self::assertSame(
+            hash('sha256', strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $response->claimCode))),
+            $inserted['claim_code_hash'] ?? null,
+            'stored value must be sha256 of the normalised code the response carries',
+        );
+        self::assertSame(64, strlen((string) ($inserted['claim_code_hash'] ?? '')));
     }
 
     /**
@@ -222,30 +235,49 @@ final class ClaimRequestHandlerTest extends TestCase
         );
     }
 
-    public function testHandleNewClaimReturnsExistingCodeForDuplicateRequest(): void
+    /**
+     * SH-049 (review hub__secaudit #1): the duplicate-retry arm can no longer
+     * re-deliver a stored code — the database holds only its one-way hash, so
+     * the row is NEVER a bearer of display material. The honest shape is
+     * ROTATION: the retry re-issues a FRESH code under the SAME claim id
+     * (poll-continuity law preserved), an UPDATE rewrites the hash, nothing
+     * INSERTs (no table growth under retry pile-up), and the remaining TTL is
+     * carried forward untouched — re-issuing must not extend the pairing
+     * window.
+     */
+    public function testHandleNewClaimRotatesCodeForDuplicateRequest(): void
     {
-        $existingCode = 'ABCD-1234';
         $existingClaimId = 'claim-existing-123';
+        $existingExpiresAt = time() + 300;
 
         $sharedJwk = $this->validEd25519Jwk();
 
         $db = $this->createMock(Connection::class);
+        $updates = [];
+        $inserts = 0;
         $db->method('query')
             ->willReturnCallback(function (
                 string $sql,
                 array $params,
             ) use (
-                $existingCode,
                 $existingClaimId,
-                $sharedJwk
+                $existingExpiresAt,
+                $sharedJwk,
+                &$updates,
+                &$inserts
 ) {
                 if (str_contains($sql, 'SELECT') && str_contains($sql, 'claimed_by IS NULL')) {
                     return [[
                         'id' => $existingClaimId,
-                        'claim_code' => $existingCode,
-                        'expires_at' => time() + 300,
+                        'expires_at' => $existingExpiresAt,
                         'public_key_jwk' => json_encode($sharedJwk),
                     ]];
+                }
+                if (str_contains($sql, 'UPDATE server_claims')) {
+                    $updates[] = $params;
+                }
+                if (str_contains($sql, 'INSERT INTO server_claims')) {
+                    $inserts++;
                 }
                 return [];
             });
@@ -265,8 +297,21 @@ final class ClaimRequestHandlerTest extends TestCase
 
         $response = $handler->handleNewClaim($request);
 
-        self::assertSame($existingCode, $response->claimCode);
         self::assertSame($existingClaimId, $response->claimId);
+        self::assertSame(9, strlen($response->claimCode));
+        self::assertMatchesRegularExpression('/^[A-Z2-9]{4}-[A-Z2-9]{4}$/', $response->claimCode);
+        self::assertCount(1, $updates, 'the rotated code must rewrite the stored hash');
+        self::assertSame(
+            hash('sha256', strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $response->claimCode))),
+            $updates[0]['claim_code_hash'] ?? null,
+        );
+        self::assertSame($existingClaimId, $updates[0]['id'] ?? null);
+        self::assertSame(0, $inserts, 'a retry must not grow the table');
+        self::assertSame(
+            max(0, $existingExpiresAt - time()),
+            $response->expiresIn,
+            'rotation carries the REMAINING ttl — it never extends the pairing window',
+        );
     }
 
     public function testGetClaimStatusReturnsPendingForUnclaimedRow(): void
@@ -311,8 +356,15 @@ final class ClaimRequestHandlerTest extends TestCase
     public function testGetClaimStatusReturnsEnrollmentWhenPaired(): void
     {
         $db = $this->createMock(Connection::class);
-        // SELECT returns the paired row; the follow-up DELETE returns null.
-        $db->method('query')->willReturnCallback(function (string $sql) {
+        // SH-049: consumption is DELETE-FIRST — the winning poll is the caller
+        // whose DELETE reports one row. The follow-up DELETE answers 1 here.
+        // Only server_claims traffic is ordered — minting the JWT reads its
+        // TTL from hub_settings, and that SELECT belongs AFTER the win.
+        $order = [];
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$order) {
+            if (str_contains($sql, 'server_claims')) {
+                $order[] = str_contains($sql, 'SELECT') ? 'select' : 'delete';
+            }
             if (str_contains($sql, 'SELECT')) {
                 return [[
                     'id' => 'claim-1',
@@ -322,7 +374,7 @@ final class ClaimRequestHandlerTest extends TestCase
                     'expires_at' => time() + 600,
                 ]];
             }
-            return null;
+            return 1;
         });
         $handler = $this->makeHandler($db);
 
@@ -334,17 +386,90 @@ final class ClaimRequestHandlerTest extends TestCase
         self::assertNotEmpty($result['enrollment_jwt'] ?? '');
         // A signed JWT is three dot-separated segments (two dots).
         self::assertSame(2, substr_count((string) ($result['enrollment_jwt'] ?? ''), '.'));
+        self::assertSame(
+            ['select', 'delete'],
+            $order,
+            'consumption must be the SECOND statement — mint only after winning the DELETE',
+        );
     }
 
     /**
-     * R19-01 + R20-04 law pins, driven through one full claim:
+     * SH-049 (review hub__secaudit #3, single-winner consumption): two
+     * concurrent polls of one paired claim used to BOTH mint enrollment JWTs
+     * (SELECT → mint → DELETE ordered nothing). The DELETE's affected-rows
+     * answer is now the arbiter: the loser (zero rows — the row vanished under
+     * the winner's DELETE) reports `expired` and mints NOTHING.
+     */
+    public function testGetClaimStatusLoserOfConcurrentPollMintsNothing(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $order = [];
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$order) {
+            if (str_contains($sql, 'server_claims')) {
+                $order[] = str_contains($sql, 'SELECT') ? 'select' : 'delete';
+            }
+            if (str_contains($sql, 'SELECT')) {
+                return [[
+                    'id' => 'claim-1',
+                    'status' => 'paired',
+                    'claimed_by' => 'user-1',
+                    'paired_server_id' => 'server-1',
+                    'expires_at' => time() + 600,
+                ]];
+            }
+            return 0;
+        });
+        $handler = $this->makeHandler($db);
+
+        $result = $handler->getClaimStatus('claim-1');
+
+        self::assertSame(['status' => 'expired'], $result);
+        self::assertSame(
+            ['select', 'delete'],
+            $order,
+            'a lost consumption DELETE stops the flow — no JWT material is produced',
+        );
+    }
+
+    /**
+     * SH-049: the retry-dedupe window scan must not project any bearer form of
+     * the pairing code either — the stored hash is a one-way secret-stand-in
+     * and even IT has no reason to travel; the arm needs only id, TTL, and
+     * the JWK to identify the retry.
+     */
+    public function testDuplicateLookupWindowProjectsNoCodeColumns(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $windowSql = null;
+        $db->method('query')->willReturnCallback(function (string $sql, array $params) use (&$windowSql) {
+            if (str_contains($sql, 'claimed_by IS NULL')) {
+                $windowSql = $sql;
+            }
+            return [];
+        });
+        $handler = $this->makeHandler($db);
+
+        $handler->handleNewClaim(new ClaimRequest(
+            serverName: 'Projection Probe',
+            version: '0.11.0',
+            publicKeysJwk: $this->validEd25519Jwk(),
+            hostnameCandidates: [],
+            protocolVersion: 'v1',
+        ));
+
+        self::assertIsString($windowSql, 'the new-claim path must consult the dedupe window');
+        self::assertStringNotContainsString('claim_code', $windowSql);
+    }
+
+    /**
+     * R19-01 + R20-04 + SH-049 law pins, driven through one full claim:
      *
-     *  1. The locking read matches the indexed generated column
-     *     (`claim_code_norm = :code` — migration 048) and no longer applies
-     *     REPLACE() to the column (a non-sargable predicate turned every
-     *     FOR UPDATE into a full-table next-key lock storm).
-     *  2. The bind param carries the normalised (stripped + uppercased) code,
-     *     so lenient input matches the stored display form.
+     *  1. The locking read matches the hash column (`claim_code_hash = :hash`
+     *     — migration 052) with equality on a UNIQUE index — still a single
+     *     const-access row lock, and no REPLACE() anywhere.
+     *  2. The bind param carries sha256 of the NORMALISED (stripped +
+     *     uppercased) input, so lenient display variants still hit the row —
+     *     and the plaintext never appears in SQL or params.
      *  3. Neither the logger nor the audit trail ever receives the claim code
      *     in plaintext (raw or normalised) — only the sha256 fingerprint under
      *     `claim_code_fp`. The code is a pairing bearer secret; logs and
@@ -362,7 +487,6 @@ final class ClaimRequestHandlerTest extends TestCase
 
                     return [[
                         'id' => 'claim-norm-1',
-                        'claim_code' => 'DR4Q-7AXB',
                         'expires_at' => time() + 600,
                         'claimed_by' => null,
                         'public_key_jwk' => '{"kty":"OKP","crv":"Ed25519","x":"aaa"}',
@@ -403,9 +527,15 @@ final class ClaimRequestHandlerTest extends TestCase
         $handler->handleClaimCode('dr4q-7axb ', 'user-norm-1');
 
         self::assertCount(1, $selects, 'exactly one locking claim read');
-        self::assertStringContainsString('WHERE claim_code_norm = :code FOR UPDATE', $selects[0]['sql']);
+        self::assertStringContainsString('WHERE claim_code_hash = :hash FOR UPDATE', $selects[0]['sql']);
         self::assertStringNotContainsString('REPLACE(', $selects[0]['sql']);
-        self::assertSame(['code' => 'DR4Q7AXB'], $selects[0]['params']);
+        self::assertStringNotContainsString('claim_code_norm', $selects[0]['sql']);
+        $expectedHash = hash('sha256', 'DR4Q7AXB');
+        self::assertSame(['hash' => $expectedHash], $selects[0]['params']);
+
+        // No plaintext code anywhere in the SQL or the bind params — the
+        // statement travels with the one-way form only (SH-049).
+        self::assertStringNotContainsString('DR4Q', $selects[0]['sql']);
 
         // No plaintext code anywhere in the log or audit payloads.
         $haystack = json_encode(['logs' => $logContexts, 'audit' => $auditRecords], JSON_THROW_ON_ERROR);

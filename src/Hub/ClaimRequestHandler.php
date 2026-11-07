@@ -22,11 +22,18 @@ use Workerman\MySQL\Connection;
 
 /**
  * On `handleClaimCode`:
- *   1. Looks up claim code in server_claims (with lock).
+ *   1. Looks up the claim by sha256 of the NORMALISED code — the hash column's
+ *      UNIQUE index, locked FOR UPDATE (SH-049; the plaintext and its 048
+ *      generated twin are retired from rest by migration 052).
  *   2. Validates not expired, not already claimed.
- *   3. Atomically updates claimed_by, claimed_at and deletes the claim row.
+ *   3. Marks the row `paired` with the claiming user inside the transaction
+ *      (the row itself is consumed later, by the enrollment poll below).
  *   4. Inserts servers row with status 'online'.
  *   5. Returns enrollment JWT via EnrollmentJwtService.
+ *
+ * On `getClaimStatus` (the headless server's poll): the row is consumed
+ * DELETE-FIRST — the affected-rows answer is the single-winner arbiter, so
+ * two concurrent polls mint at most one enrollment JWT (SH-049 #3).
  *
  * @package Phlix\Hub\Hub
  */
@@ -198,13 +205,26 @@ class ClaimRequestHandler
         if ($existingRow !== null) {
             /** @var array<string, mixed> $row */
             $row = $existingRow;
-            /** @var string */
-            $claimCode = is_string($row['claim_code'] ?? null) ? $row['claim_code'] : '';
             /** @var int */
             $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
             /** @var string */
             $claimId = is_string($row['id'] ?? null) ? $row['id'] : '';
-            $this->logger->info('Returning existing claim code for duplicate request', [
+            // SH-049 (review hub__secaudit #1): re-DELIVERY of a stored code is
+            // structurally gone — the row holds only its one-way hash, which is
+            // exactly the point. The honest shape is ROTATION: a FRESH code
+            // under the SAME claim id (the headless console polls by id, so
+            // pairing continuity survives a retry), its hash rewritten in place,
+            // and the REMAINING TTL carried forward — re-issuing never extends
+            // the 600 s pairing window.
+            $claimCode = $this->generateClaimCode();
+            $this->db->query(
+                'UPDATE server_claims SET claim_code_hash = :claim_code_hash WHERE id = :id',
+                [
+                    'claim_code_hash' => self::claimCodeHash(self::normalizeClaimCode($claimCode)),
+                    'id' => $claimId,
+                ],
+            );
+            $this->logger->info('Re-issued claim code for duplicate pairing request', [
                 // R20-04: the claim code is a 10-minute pairing bearer secret —
                 // it never goes to logs or the audit trail in plaintext. The
                 // sha256 fingerprint keeps records correlatable per code.
@@ -231,14 +251,17 @@ class ClaimRequestHandler
 
         $this->db->query(
             'INSERT INTO server_claims
-                (id, claim_code, server_name, version, public_key_jwk,
+                (id, claim_code_hash, server_name, version, public_key_jwk,
                  hostname_candidates_json, protocol_version, expires_at, created_at)
              VALUES
-                (:id, :claim_code, :server_name, :version, :public_key_jwk,
+                (:id, :claim_code_hash, :server_name, :version, :public_key_jwk,
                  :hostname_candidates_json, :protocol_version, :expires_at, :created_at)',
             [
                 'id' => $claimId,
-                'claim_code' => $claimCode,
+                // SH-049: the row stores sha256 of the normalised code, never
+                // the code. The display form is handed to the console exactly
+                // once, in the response below.
+                'claim_code_hash' => self::claimCodeHash(self::normalizeClaimCode($claimCode)),
                 'server_name' => $request->serverName,
                 'version' => $request->version,
                 'public_key_jwk' => json_encode($request->publicKeysJwk),
@@ -297,7 +320,7 @@ class ClaimRequestHandler
     {
         // Strip separators/spaces first, THEN uppercase, so lenient input
         // like "dr4q 7axb" or "dr4q-7axb" normalises to "DR4Q7AXB".
-        $normalizedCode = strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $claimCode));
+        $normalizedCode = self::normalizeClaimCode($claimCode);
         if ($normalizedCode === '') {
             // M12 de-amplification: every failed LOOKUP below is a file-log
             // warning, NOT an audit_logs row. Per-guess DB writes made the
@@ -328,23 +351,23 @@ class ClaimRequestHandler
         // between the read and the writes.
         $this->db->beginTrans();
         try {
-            // R19-01: match the STORED generated column `claim_code_norm`
-            // (migration 048) instead of wrapping claim_code in REPLACE(). The
-            // functional predicate could not use any index, so this FOR UPDATE
-            // full-scanned and next-key-locked the whole table, serialising
-            // every pairing. Equality against claim_code_norm is a single
-            // const-access hit on uk_server_claims_code_norm — the row lock
-            // lands exactly on the claimed row. claim_code itself stays the
-            // dashed display form (e.g. ABCD-1234); the column derives the
-            // de-dashed value, and its utf8mb4_unicode_ci collation matches
-            // this method's uppercased normaliser.
+            // R19-01 → SH-049: match on the sha256 hash column (migration 052).
+            // The original REPLACE(claim_code,'-','') predicate could not use
+            // any index, so this FOR UPDATE full-scanned and next-key-locked
+            // the whole table, serialising every pairing; 048's generated
+            // column fixed the lock shape but stored the code itself in
+            // plaintext. Equality on hash-of-normalised-input keeps the single
+            // const-access row lock on uk_server_claims_code_hash — and the
+            // statement now carries no recoverable bearer material at all:
+            // lenient display variants ("dr4q 7axb") normalise app-side before
+            // hashing, so the collation trick is retired with the column.
             /** @var list<array<string, mixed>> $rows */
             $rows = $this->db->query(
-                'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, '
+                'SELECT id, user_id, server_name, version, jwks_json, '
                 . 'hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, claimed_by, '
-                . 'claimed_at, paired_at, paired_server_id FROM server_claims WHERE claim_code_norm = :code FOR '
+                . 'claimed_at, paired_at, paired_server_id FROM server_claims WHERE claim_code_hash = :hash FOR '
                 . 'UPDATE',
-                ['code' => $normalizedCode],
+                ['hash' => self::claimCodeHash($normalizedCode)],
             );
 
             if (empty($rows)) {
@@ -492,8 +515,9 @@ class ClaimRequestHandler
      *
      * Returns `{status: pending}` while the claim is unclaimed, and once a
      * user has claimed it on the hub portal `{status: claimed}` plus a
-     * freshly-minted enrollment JWT — then consumes the claim so the JWT
-     * can't be fetched again. Unknown or expired claims report `expired`.
+     * freshly-minted enrollment JWT — consumption is DELETE-FIRST (SH-049 #3):
+     * the DELETE's affected-rows answer is the single-winner arbiter, so the
+     * JWT can't be fetched twice. Unknown or expired claims report `expired`.
      *
      * The enrollment JWT is regenerated here from paired_server_id rather
      * than stored at rest, so no bearer credential lingers in the database.
@@ -506,7 +530,7 @@ class ClaimRequestHandler
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, '
+            'SELECT id, user_id, server_name, version, jwks_json, '
             . 'hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, claimed_by, '
             . 'claimed_at, paired_at, paired_server_id FROM server_claims WHERE id = :id',
             ['id' => $claimId],
@@ -527,10 +551,21 @@ class ClaimRequestHandler
         $expiresAt = is_int($row['expires_at'] ?? null) ? $row['expires_at'] : 0;
 
         if ($status === 'paired' && is_string($claimedBy) && $claimedBy !== '' && $serverId !== '') {
+            // SH-049 #3 (review hub__secaudit): consume BEFORE minting. The
+            // DELETE's affected-rows answer is the single-winner arbiter —
+            // SELECT → mint → DELETE ordered nothing, so two concurrent polls
+            // of one paired row each minted their own enrollment JWT. Exactly
+            // one caller wins the row (1) and mints AFTER winning; the loser
+            // (0 — the row is already gone) reports `expired` with no JWT
+            // material produced at all.
+            /** @var mixed $consumed */
+            $consumed = $this->db->query('DELETE FROM server_claims WHERE id = :id', ['id' => $claimId]);
+            if (self::affectedRows($consumed) !== 1) {
+                return ['status' => 'expired'];
+            }
+
             $jwtService = $this->makeEnrollmentJwtService();
             $enrollmentJwt = $jwtService->createEnrollmentJwt($serverId);
-            // One-time retrieval: drop the claim now the server has its JWT.
-            $this->db->query('DELETE FROM server_claims WHERE id = :id', ['id' => $claimId]);
 
             return [
                 'status' => 'claimed',
@@ -562,9 +597,43 @@ class ClaimRequestHandler
      */
     public static function claimCodeFingerprint(string $claimCode): string
     {
-        $normalized = strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $claimCode));
+        return substr(hash('sha256', self::normalizeClaimCode($claimCode)), 0, 8);
+    }
 
-        return substr(hash('sha256', $normalized), 0, 8);
+    /**
+     * Canonical claim-code normalisation shared by the fingerprint, the
+     * at-rest hash and the lookup predicate: strip every non-alphanumeric
+     * (dashes, spaces), THEN uppercase — "dr4q 7axb" and "DR4Q-7AXB" both
+     * become "DR4Q7AXB". Case-insensitive matching lives here, app-side, so
+     * the stored form needs no collation help (SH-049).
+     */
+    private static function normalizeClaimCode(string $claimCode): string
+    {
+        return strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $claimCode));
+    }
+
+    /**
+     * The at-rest bearer form: sha256 over the ALREADY-normalised code
+     * (callers pass normalizeClaimCode() output or the method's own
+     * normalised value — never double-normalise). One-way parity with the
+     * invite-link, client-relay-token, MCP-PAT and OAuth families; display
+     * variants map to one hash, so lookup equality is variant-tolerant while
+     * a row dump reveals nothing pairable (SH-049, review hub__secaudit #1).
+     */
+    private static function claimCodeHash(string $normalizedCode): string
+    {
+        return hash('sha256', $normalizedCode);
+    }
+
+    /**
+     * Narrow Connection::query()'s DML result to an affected-rows count
+     * (same idiom as src/Requests/RequestManager.php): a non-numeric or
+     * absent answer reads as 0 — the conservative side of the single-winner
+     * law in getClaimStatus (0 rows = the row is gone = lost the race).
+     */
+    private static function affectedRows(mixed $result): int
+    {
+        return is_numeric($result) ? (int) $result : 0;
     }
 
     /**
@@ -742,7 +811,7 @@ class ClaimRequestHandler
         $fingerprint = $this->jwkFingerprint($publicKeyJwk);
         /** @var list<array<string, mixed>> $rows */
         $rows = $this->db->query(
-            'SELECT id, claim_code, claim_code_norm, user_id, server_name, version, jwks_json, '
+            'SELECT id, user_id, server_name, version, jwks_json, '
              . 'hostname_candidates_json, protocol_version, public_key_jwk, status, expires_at, '
              . 'claimed_by, claimed_at, paired_at, paired_server_id FROM server_claims'
              . "\n             WHERE claimed_by IS NULL AND expires_at > :now"

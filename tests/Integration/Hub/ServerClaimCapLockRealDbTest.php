@@ -226,14 +226,20 @@ final class ServerClaimCapLockRealDbTest extends RealDatabaseTestCase
 
     private function insertClaimRow(string $id, string $claimCode): void
     {
+        // SH-049: the table stores only sha256 of the canonical normalised
+        // code — display input here behaves exactly like the handler's own
+        // hashing arm.
         $this->db->query(
             'INSERT INTO server_claims
-                (id, claim_code, server_name, version, jwks_json, hostname_candidates_json,
+                (id, claim_code_hash, server_name, version, jwks_json, hostname_candidates_json,
                  public_key_jwk, protocol_version, expires_at, created_at)
-             VALUES (:id, :claim_code, :server_name, :version, :jwks, :hosts, :jwk, :pv, :exp, :now)',
+             VALUES (:id, :claim_code_hash, :server_name, :version, :jwks, :hosts, :jwk, :pv, :exp, :now)',
             [
                 'id' => $id,
-                'claim_code' => $claimCode,
+                'claim_code_hash' => hash(
+                    'sha256',
+                    strtoupper((string) preg_replace('/[^a-zA-Z0-9]/', '', $claimCode)),
+                ),
                 'server_name' => 'cap-lock-probe',
                 'version' => '0.12.0',
                 'jwks' => '{}',
