@@ -210,9 +210,6 @@ final class ErrorCodesContractTest extends TestCase
             'excluded: the emitted code flows through REJECTION_CODE_MAP (registered alexa.* dotted'
             . ' twins landed in the W3 hub emit wave); map values AND the whole frame shape are'
             . ' pinned by \Phlix\Hub\Tests\Unit\Http\Middleware\AlexaRejectionCodeMapLawTest',
-        'Hub/ClaimRequestHandler.php::handleClaimCode' =>
-            'excluded: `code` is the user-facing CLAIM PAIRING CODE (redeemable secret echoed back'
-            . ' to the claiming client), not a member of the error-code vocabulary',
         'OAuth/AuthorizationCodeService.php::mint' =>
             'excluded: RFC 6749 §4.1.2 authorization code returned by the mint record —'
             . ' registry-excluded by design (see class docblock)',
