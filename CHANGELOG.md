@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Documentation [w10L4 SH-095] — README coordinate currency and one missing posture override — 2026-11-07
+
+- The `v1.0.0`-relic warning quoted a fixed commit count ("834 commits
+  behind") that rots on every push; the figure is de-numbered to
+  "hundreds of commits" with a note that no fixed count is quoted.
+- The all-interfaces bind law cited four stale worker lines; re-anchored
+  to disk at this tip: `RelayWorker.php:328`, `ClientRelayWorker.php:198`,
+  `SyncPlayRelayWorker.php:451`, `FederationWorker.php:318`. The
+  `hub_signing_key_path` read cite moved `HubServicesProvider.php:179` →
+  `:180`.
+- `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD` (`config/database.php` — the
+  explicit escape that admits the published `phlix_hub` password literal
+  when `HUB_DB_PASSWORD` is unset, instead of the boot refusal) was never
+  documented anywhere. One row added to the Configuration reference
+  Database table, default "unset — refuse", scoped honestly as a
+  development/testing escape.
+- Attestation, no change: the two XDEBUG rows already carry the cured
+  symbolic shape (`docker/php.ini` §[xdebug] block, zero line-cites) —
+  that finding's cure landed earlier and was re-verified on disk.
+
 ### Security [w10L4 SH-049] — server pairing codes are sha256 at rest; the enrollment poll consumes single-winner — 2026-11-07
 
 - `server_claims` stored the 8-character pairing code in PLAINTEXT

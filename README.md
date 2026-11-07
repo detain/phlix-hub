@@ -333,7 +333,8 @@ curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/ins
 > pre-dates this repo's versioning scheme: the product is on the 0.x line
 > (`VERSION` and `Version::VERSION` are 0.5.0, and `CHANGELOG.md` records
 > releases up to 0.5.0 — none of which have ever been tagged). That
-> tag sits 834 commits behind `master`; an install or `--update` that reaches
+> tag sits hundreds of commits behind `master` (the count grows daily, so no
+> fixed figure is quoted here); an install or `--update` that reaches
 > it silently rolls you back five months of fixes. Until a real release tag
 > exists, the SHA pin above is the audited-state path, and `--branch` should
 > name `master`. Once valid tags are cut (`v0.5.0` or later), pin those.
@@ -439,7 +440,7 @@ starts cleanly and then fails closed in ways that look like data loss.
 |-------|-------|------------------------|
 | **Database** | MySQL schema `phlix_hub` (credentials in `/etc/phlix-hub.env`) | Every server registration, user, claim code, invite, share, quota row, federation peer/key registration, rate-limit history, audit trail and the migration ledger. Restore **only onto a schema migrated to the same or a newer code version** (the `migrations` table checksums files; see *[6. Run migrations](#6-run-migrations)* in the production install below). |
 | **JWT session secret** | `HUB_JWT_SECRET` inside `/etc/phlix-hub.env` (chmod 600) | Signs every access/refresh token (`config/auth.php`; ≥32 bytes). If it is lost, changed, or the env file is restored from a different era, **every issued session becomes unverifiable**: all users are logged out at once and refresh tokens cannot save them. When the var is missing entirely, `AuthServicesProvider` falls back to a process-local random secret — tokens die on every restart, so never run production without it. |
-| **Hub signing key** | `config/hub-signing-key.pem`, mode **0600**, auto-generated on first boot by `HubServicesProvider` → `Ed25519KeyManager` (path override: add `'hub_signing_key_path' => '<absolute path>'` to the array in `config/server.php` — the shipped file does not define the key, and `HubServicesProvider.php:179` reads it from there, so the override is an operator edit, not an env var) | The hub's Ed25519 identity. It signs enrollment artifacts servers present on pairing and is the master-side key in the federation mutual proof-of-key ceremony. If it is lost and a fresh one is generated, **already-registered servers fail verification** (re-pair them) and **federation peers whose leaf keys were registered under the old identity refuse the hub** until trust is re-established with each peer. |
+| **Hub signing key** | `config/hub-signing-key.pem`, mode **0600**, auto-generated on first boot by `HubServicesProvider` → `Ed25519KeyManager` (path override: add `'hub_signing_key_path' => '<absolute path>'` to the array in `config/server.php` — the shipped file does not define the key, and `HubServicesProvider.php:180` reads it from there, so the override is an operator edit, not an env var) | The hub's Ed25519 identity. It signs enrollment artifacts servers present on pairing and is the master-side key in the federation mutual proof-of-key ceremony. If it is lost and a fresh one is generated, **already-registered servers fail verification** (re-pair them) and **federation peers whose leaf keys were registered under the old identity refuse the hub** until trust is re-established with each peer. |
 
 Everything else is derived and safe to lose: `.logs/` and `var/` (DI container
 cache, Swoole HOME lock, Workerman pid/status).
@@ -839,9 +840,9 @@ straight before step 7 starts the daemon:
   keep it loopback-only; exposed directly it is the whole control plane.
 - `:8802`, `:8803`, `:8804`, `:8805` (relay, client-relay, SyncPlay, federation)
   **always bind all interfaces** — the worker code hard-codes the bind address
-  (`websocket://0.0.0.0:<port>` in `RelayWorker.php:253`,
-  `ClientRelayWorker.php:195`, `SyncPlayRelayWorker.php:444`,
-  `FederationWorker.php:308`). `HUB_HOST` restricts **only** `:8800`. Setting
+  (`websocket://0.0.0.0:<port>` in `RelayWorker.php:328`,
+  `ClientRelayWorker.php:198`, `SyncPlayRelayWorker.php:451`,
+  `FederationWorker.php:318`). `HUB_HOST` restricts **only** `:8800`. Setting
   `HUB_HOST=127.0.0.1` behind nginx still leaves every relay listener on the
   public interface unless you firewall it.
 - The installer-managed path opens `ufw` rules per-port only **when ufw is
@@ -1362,6 +1363,7 @@ at boot per worker).
 | `HUB_DB_USER` | `phlix_hub` | MySQL user |
 | `HUB_DB_PASSWORD` | `phlix_hub` | MySQL password |
 | `HUB_DB_NAME` | `phlix_hub` | MySQL database name |
+| `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD` | unset — **refuse** | When `HUB_DB_PASSWORD` is unset, admits the published `phlix_hub` literal fallback instead of refusing boot (`config/database.php` throws `RuntimeException` naming this var). Development/testing escape only — dev/local `APP_ENV`/`HUB_ENV` and PHPUnit already pass without it; never set on a reachable host |
 | `DB_POOL_ENABLED` | `1` | Coroutine connection pool (each coroutine leases its own connection). `0` falls back to the single mutex-serialized socket |
 | `DB_POOL_SIZE` | `8` | Pool size per connection name **per worker** — keep `workers × connection names × DB_POOL_SIZE` under MySQL `max_connections` |
 
