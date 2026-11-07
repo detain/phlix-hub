@@ -210,4 +210,51 @@ final class LogControllerTest extends TestCase
         $body = self::arrayNode(json_decode($controller->index($this->req([]))->body, true));
         $this->assertSame([], $body['files']);
     }
+
+    /**
+     * w09L5 MINOR fold (review hub__copywriter era chain): the tail() 500-catch
+     * arm — added so read failures stop vanishing unlogged — ships UNPINNED
+     * without this case. The filesystem cannot drive it from a unit context
+     * (is_file() gates dirs/fifos away and root bypasses chmod, so no real
+     * file reliably fails fopen), hence the constructor's optional
+     * $tailReader seam. This pins both halves of the arm's law: the wire
+     * frame is the registered byte-identical 500 envelope whose REASON never
+     * rides the response, and the reason DOES reach the hub HTTP log channel.
+     * Mutation check: strip the catch and the injected throw escapes this
+     * test red — nothing else covers the arm.
+     */
+    public function testTailReadFailureIs500EnvelopeWithReasonOnTheLogChannelOnly(): void
+    {
+        $logFile = $this->dir . '/channel.log';
+        file_put_contents(
+            $this->dir . '/logger.php',
+            "<?php return ['default' => 'file', 'handlers' => ['file' => "
+            . "['type' => 'stream', 'path' => '" . $logFile . "', 'level' => 'debug']]];",
+        );
+        \Phlix\Hub\Common\Logger\LoggerFactory::reset();
+        \Phlix\Hub\Common\Logger\LoggerFactory::init($this->dir . '/logger.php');
+        try {
+            $controller = new LogController($this->dir, static function (string $path, int $maxBytes): string {
+                throw new \RuntimeException('injected-open-failure');
+            });
+
+            $resp = $controller->tail($this->req(['file' => 'app.log']));
+
+            $this->assertSame(500, $resp->statusCode);
+            $body = self::arrayNode(json_decode($resp->body, true));
+            $this->assertSame('Failed to read log file', $body['error']);
+            $this->assertSame('hub.internal_error', $body['code']);
+            $this->assertStringContainsString('HTTP log', self::stringNode($body['message']));
+            // The reason never reaches the wire — it is operator-channel only.
+            $this->assertStringNotContainsString('injected-open-failure', $resp->body);
+
+            $written = is_file($logFile) ? (string) file_get_contents($logFile) : '';
+            $this->assertStringContainsString('injected-open-failure', $written);
+            $this->assertStringContainsString('app.log', $written);
+        } finally {
+            \Phlix\Hub\Common\Logger\LoggerFactory::reset();
+            @unlink($logFile);
+            @unlink($this->dir . '/logger.php');
+        }
+    }
 }

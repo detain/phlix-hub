@@ -52,10 +52,29 @@ final class LogController
     /** @var int Bytes read from the end of the file when tailing (bounds memory). */
     private const TAIL_BYTES = 512 * 1024;
 
-    public function __construct(string $logDir)
+    /**
+     * @var \Closure(string, int): string Tail-read operation, see ctor.
+     */
+    private readonly \Closure $tailReader;
+
+    /**
+     * @param string             $logDir     Canonical log directory.
+     * @param (callable(string, int): string)|null $tailReader Read seam for
+     *        tail(): the 500-catch arm's law (reason to the HTTP log channel,
+     *        never to the wire) is otherwise undriveable from a unit context
+     *        — is_file() gates dirs/fifos away before the try, and root
+     *        bypasses chmod, so no filesystem state reliably fails fopen in
+     *        CI. Default: the real {@see self::readTail()}. tailAll keeps its
+     *        direct read on purpose: per-file failures there are a
+     *        skip-and-continue policy, not this arm.
+     */
+    public function __construct(string $logDir, ?callable $tailReader = null)
     {
         $real = realpath($logDir);
         $this->logDir = ($real !== false && is_dir($real)) ? $real : '';
+        /** @var callable(string, int): string $reader */
+        $reader = $tailReader ?? [$this, 'readTail'];
+        $this->tailReader = \Closure::fromCallable($reader);
     }
 
     /**
@@ -134,7 +153,7 @@ final class LogController
         }
 
         try {
-            $content = $this->readTail($real, self::TAIL_BYTES);
+            $content = ($this->tailReader)($real, self::TAIL_BYTES);
         } catch (Throwable $e) {
             // Wire law: the envelope gains only registered codes and prose —
             // the failure REASON (permissions? I/O?) never rides the wire, it

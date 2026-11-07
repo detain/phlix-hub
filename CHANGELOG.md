@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Test [w10L4 fold] — the log-viewer 500 read-failure arm gains its law pin — 2026-11-07
+
+- The w09L5 batch shipped `tail()`'s Throwable catch (failure reason to the
+  hub HTTP log channel, registered-code 500 to the wire) without a test: no
+  unit context can drive `readTail()`'s only throw path through the
+  filesystem (`is_file()` gates dirs/fifos away before the try, and CI runs
+  as root, which bypasses chmod). `LogController` gains an optional
+  `$tailReader` constructor seam — default is the real reader, production
+  behavior byte-identical; `tailAll()` keeps its direct call on purpose
+  (per-file failures there are a skip-and-continue policy, not this arm).
+  One new case pins both halves of the law: the injected read failure
+  answers the registered 500 envelope while the reason never rides the wire
+  and DOES land on the HTTP channel. Mutation-proven: narrowing the catch
+  reddens exactly that case.
+
 ### Fixed [w09L5] — review wave: restart ack names its cost, rate-limit retry copy made honest, log-viewer refusals join the envelope law, cap copy states its bounds and remedy, TLS log voice unified, docs orthography declared and swept, README Security/Server-Traffic truths, logrotate rationale un-inverted — 2026-11-07
 
 - The admin restart ack (`POST /api/v1/admin/restart`) now names what the
