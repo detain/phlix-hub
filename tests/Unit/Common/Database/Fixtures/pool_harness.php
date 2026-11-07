@@ -206,6 +206,38 @@ switch ($scenario) {
         echo $dump($conns) . "\n";
         break;
 
+    // Same hand-off, but the connection parked in idle DIES before it is handed
+    // over (DB idle-timeout/failover during B's wait). The blocking borrow must
+    // run the SAME liveness probe the non-blocking arm runs, retire the corpse
+    // (close + freed slot) and hand B a FRESH connection — never lease a corpse.
+    case 'exhaust_dead':
+        /** @var list<RecordingConnection> $conns */
+        $conns = [];
+        run(static function () use ($makePool, $findCall, &$conns): void {
+            $pool = $makePool(1, $conns);
+            $leased = new Channel(1);
+            $hold = new Channel(1);
+            $done = new Channel(1);
+            Coroutine::create(static function () use ($pool, $leased, $hold): void {
+                $pool->query('SELECT A');
+                $leased->push(true);
+                $hold->pop();      // keep the lease until told to release
+            });                   // ends here → defer parks the (soon dead) conn
+            $leased->pop();
+            Coroutine::create(static function () use ($pool, $done): void {
+                $pool->query('SELECT B'); // blocks in idle->pop(10.0)
+                $done->push(true);
+            });
+            Coroutine::sleep(0.05);   // B is now parked in idle->pop()
+            $conns[0]->alive = false; // the DB end dies while B waits
+            $hold->push(true);        // A releases the corpse → B unblocks
+            $done->pop();
+            $idxB = $findCall($conns, 'query:SELECT B');
+            echo "idxB={$idxB}\n";
+        });
+        echo $dump($conns) . "\n";
+        break;
+
     // maxSize=1: A never releases, so B's acquire() blocks then THROWS a bounded
     // "pool exhausted" RuntimeException rather than hanging forever. (~10 s: the
     // hardcoded idle->pop(10.0) timeout — proves the anti-deadlock guard fires.)

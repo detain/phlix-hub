@@ -118,8 +118,13 @@ EXPOSE 8800 8802 8803 8804 8805
 # period that outlives the observer makes the state decorative — phlix-server
 # shipped 180s and its boot gate could never see a bad one (S163 review F1).
 # scripts/docker-boot-smoke.sh asserts this stays <= MAX_START_PERIOD.
+# The URL follows HUB_PORT — the daemon's own listen-port env (config/server.php
+# resolves it, default 8800) — so a hub moved off 8800 keeps a REAL healthcheck
+# instead of curling a dead port forever. HEALTHCHECK CMD runs via /bin/sh, so
+# the expansion happens inside the container at probe time; the :-8800 default
+# mirrors the daemon's own default exactly.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8800/health || exit 1
+    CMD curl -fsS "http://127.0.0.1:${HUB_PORT:-8800}/health" || exit 1
 
 USER nobody
 

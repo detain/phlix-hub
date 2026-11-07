@@ -355,6 +355,18 @@ final class PooledMySQLConnection extends Connection
         if ($conn === false) {
             throw new \RuntimeException('pool exhausted: no idle connection available after 10 s');
         }
+        // Liveness parity with the non-blocking arm above: the connection that
+        // is handed over here sat idle while its holder finished, and the DB
+        // may have closed it (idle timeout / failover) in exactly that window
+        // — the longer the waiter was parked, the likelier a corpse. Probe it
+        // before leasing; retire-and-retry keeps the waiter bounded (each
+        // retirement frees a created-slot, so the recursion ends at a live or
+        // fresh connection, or at the throw above).
+        if (!$this->isConnectionAlive($conn)) {
+            $conn->closeConnection();
+            $this->created--;
+            return $this->acquire();
+        }
         return $conn;
     }
 

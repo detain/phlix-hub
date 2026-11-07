@@ -36,12 +36,17 @@ use RuntimeException;
  * outgoing key (kid + raw public key) in a sidecar file alongside the new key,
  * stamped with an expiry {@see OVERLAP_TTL_SECONDS} into the future. While that
  * expiry is in the future, the previous key is still "active" for verification
- * and is published in the JWKS, so 7-day enrollment JWTs minted before the
- * rotation keep validating until they naturally expire. After the overlap
- * window passes, the previous key is dropped (and its sidecar pruned) and its
- * tokens are rejected. Only the public half is retained — the hub never signs
- * with the old key after rotating, so the old private key is intentionally not
- * kept.
+ * and is published in the JWKS — so an enrollment JWT minted before the
+ * rotation keeps validating until its overlap window lapses, NOT until the
+ * token's own expiry. The window is the key's, not the token's: the default
+ * enrollment JWT lives 7 days, so a token already older than the window at
+ * rotation time stops validating at rotation + 24 h even though its `exp` is
+ * later. Operator consequence: rotating the signing key means every paired
+ * server must re-mint its enrollment JWT within 24 hours (the heartbeat
+ * re-enrollment path does exactly that). After the overlap window passes, the
+ * previous key is dropped (and its sidecar pruned) and its tokens are
+ * rejected. Only the public half is retained — the hub never signs with the
+ * old key after rotating, so the old private key is intentionally not kept.
  *
  * @phpstan-type ActiveKey array{kid: string, public: string, expiresAt: int|null}
  *
@@ -330,8 +335,12 @@ final class Ed25519KeyManager
      *
      * The outgoing key's PUBLIC half (kid + raw public key) is retained for
      * {@see OVERLAP_TTL_SECONDS} (24h) so enrollment JWTs minted under it keep
-     * validating — and stay published in the JWKS — until they naturally
-     * expire. After that window the previous key is dropped on next access.
+     * validating — and stay published in the JWKS — until that overlap window
+     * lapses. Validation is bounded by the window, never by the token's own
+     * expiry (the default enrollment JWT lives 7 days), so calling this method
+     * requires every paired server to re-mint its enrollment JWT within 24
+     * hours. After the window the previous key is dropped on next access and
+     * its tokens are rejected.
      */
     public function rotate(): void
     {

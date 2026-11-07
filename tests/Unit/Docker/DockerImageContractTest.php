@@ -246,9 +246,13 @@ final class DockerImageContractTest extends TestCase
         );
 
         self::assertMatchesRegularExpression(
-            '#curl\s+-fsS\s+http://127\.0\.0\.1:8800/health#',
+            // The probe follows HUB_PORT (the daemon's own listen-port env,
+            // config/server.php) with the same :-8800 default the daemon uses —
+            // a hub moved off 8800 must still curl its REAL port. A hardcoded
+            // 8800 here would silently health-check a dead listener.
+            '#curl\s+-fsS\s+"?http://127\.0\.0\.1:\$\{HUB_PORT:-8800\}/health"#',
             $dockerfile,
-            'the healthcheck must hit /health on the daemon\'s own port',
+            'the healthcheck must hit /health on the daemon\'s own port — which HUB_PORT can move',
         );
 
         $matched = preg_match('/--start-period=(\d+)s/', $dockerfile, $m);

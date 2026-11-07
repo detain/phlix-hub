@@ -6,6 +6,52 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [w07L8] — review wave: batched federation session reaper, liveness parity on the pool's blocking borrow, signing-key overlap doc truth, `DROP` in the canonical GRANT, `HUB_PORT`-aware image healthcheck, metrics config single-sourced — 2026-11-06
+
+- `FederationSessionManager::reapDeadSessions()` now ends each dead session with
+  ONE batched `UPDATE … WHERE id IN (:sid0, …)` per table per chunk (bounded at
+  500 ids, named binds only) instead of two single-row statements PER session,
+  and de-duplicates peer ids so N dead sessions of one peer rewrite that peer
+  exactly once. A mass eviction (link flap / peer restart storm) no longer
+  serialises thousands of round-trips through one blocking reaper tick.
+  Statement-shape and bind-map pins replace the old per-row call-count pin
+  (5 → 3 queries for two dead sessions) in the same commit, measured from the
+  rotation; the returned count and the audit log keep counting every reaped row.
+- `PooledMySQLConnection::acquire()`'s blocking exhaustion borrow (the
+  `idle->pop(10.0)` arm) now runs the SAME `SELECT 1` liveness probe as the
+  non-blocking arm before leasing: a connection that died while the waiter was
+  parked (DB idle-timeout/failover mid-wait) is closed, its slot released, and
+  the waiter retried onto a fresh connection instead of receiving a corpse and
+  eating "server has gone away" on its first real query. New coroutine-harness
+  scenario proves the retire-and-retry (dead hand-off → replacement connection,
+  FD closed); the live-hand-off scenario now additionally pins that the blocking
+  arm probes at all (red on the parent shape, both measured).
+- `Ed25519KeyManager` docblocks corrected to the shipped law: a rotated-out key
+  validates enrollment JWTs for the 24-hour OVERLAP window — NOT until the
+  token's own (default 7-day) expiry. The class header and `rotate()` now state
+  the operator consequence: rotating the signing key requires every paired
+  server to re-mint its enrollment JWT within 24 h (the heartbeat re-enrollment
+  path does this). Behavior was always the overlap law
+  (`EnrollmentJwtService::validateEnrollmentJwt()` and its tests); only the
+  prose disagreed.
+- README: the canonical `GRANT` (production install) and the quickstart one-liner
+  gain `DROP`. Migration `049_invite_token_hash_unique.sql` normalizes a legacy
+  index by issuing `ALTER TABLE … DROP INDEX` on its rebuild paths — a privilege
+  MySQL gates on `DROP` — which the documented grant set did not include. A note
+  records that the grant is consumed only by that migration path.
+- Dockerfile: the image `HEALTHCHECK` now probes
+  `http://127.0.0.1:${HUB_PORT:-8800}/health` instead of hardcoded `8800`, so a
+  hub moved off 8800 via `HUB_PORT` keeps a real health signal rather than
+  curling a dead port forever (the `:-8800` default mirrors the daemon's own
+  default). `DockerImageContractTest` pin rotated in the same commit to demand
+  the HUB_PORT form; start-period and EXPOSE pins untouched and holding.
+- `config/server.php`: the inline `metrics` block — a hand-copied twin of
+  `config/metrics.php` (same seven env knobs, same explicit-branch boolean law)
+  — is replaced by `'metrics' => require __DIR__ . '/metrics.php'`, making that
+  file's own header ("threaded via config/server.php") literally true and ending
+  the two-copies-of-one-law drift hazard. Env semantics identical; no test
+  required the former duplication.
+
 ### Chore [player-fps-1106] — re-vendor `@phlix/ui` #v0.99.22 + `/app` SPA regen — 2026-11-06
 
 - Tag-form re-pin of the served SPA's vendored library to v0.99.22 (tag object

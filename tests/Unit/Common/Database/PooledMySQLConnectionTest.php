@@ -229,6 +229,38 @@ final class PooledMySQLConnectionTest extends TestCase
 
         self::assertStringContainsString('idxB=0', $out, "B must reuse A's freed connection (index 0)\n{$out}");
         self::assertStringContainsString('conns=1', $out, "pool must NOT exceed maxSize=1\n{$out}");
+        // The blocking borrow must PROBE the connection it is handed — the same
+        // liveness law the non-blocking borrow has — before leasing it.
+        self::assertStringContainsString('query:SELECT A|probe|query:SELECT B', $out, $out);
+    }
+
+    /**
+     * Pool-exhaustion (liveness parity): the connection parked in the idle
+     * channel can die WHILE a coroutine blocks on idle->pop() (DB idle-timeout
+     * or failover during the wait). The blocking arm must run the SAME liveness
+     * probe the non-blocking borrow runs — retire the corpse (close + freed
+     * slot) and hand the waiter a FRESH connection, never lease a dead socket
+     * for a cryptic "server has gone away" on the first real query.
+     */
+    public function testExhaustedPoolBlocksThenRetiresADeadHandedConnection(): void
+    {
+        $out = $this->runHarness('exhaust_dead');
+
+        self::assertStringContainsString(
+            'idxB=1',
+            $out,
+            "B must land on a FRESH connection after the corpse is retired\n{$out}"
+        );
+        self::assertStringContainsString(
+            'conns=2',
+            $out,
+            "retiring the dead hand-off must open exactly one replacement\n{$out}"
+        );
+        self::assertStringContainsString(
+            'probe|close',
+            $out,
+            "the blocking borrow must PROBE before retiring, and close the corpse\n{$out}"
+        );
     }
 
     /**

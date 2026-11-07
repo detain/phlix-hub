@@ -263,34 +263,15 @@ return [
         ],
     ],
 
-    // Metrics / live-traffic telemetry (S4). See config/metrics.php for defaults;
-    // this array is threaded into the DI container and also read directly by
-    // HubServicesProvider::boot() for the flush timer interval.
-    'metrics' => (static function (): array {
-        // NB: must NOT be written `in_array(...) ?: $d` — in_array() returns
-        // false for "false"/"0"/"no"/"off", and `false ?: $d` then falls back to
-        // the default, so that form can NEVER return false (it hard-wires the
-        // flag on and defeats PHLIX_HUB_METRICS_ENABLED=false). Explicit branch:
-        // unset/empty → default, otherwise honour the truthy/falsy value.
-        $envBool = static function (string $k, bool $d): bool {
-            $raw = getenv($k);
-            if ($raw === false || $raw === '') {
-                return $d;
-            }
-            return in_array(strtolower($raw), ['1', 'true', 'yes', 'on'], true);
-        };
-        $envInt = static fn (string $k, int $d): int => is_numeric($v = getenv($k)) ? (int) $v : $d;
-
-        return [
-            'enabled'                  => $envBool('PHLIX_HUB_METRICS_ENABLED', true),
-            'flush_interval_seconds'   => $envInt('PHLIX_HUB_METRICS_FLUSH_INTERVAL', 5),
-            'bucket_seconds'           => $envInt('PHLIX_HUB_METRICS_BUCKET_SECONDS', 10),
-            'retention_days'           => $envInt('PHLIX_HUB_METRICS_RETENTION_DAYS', 7),
-            'connection_ttl_seconds'   => $envInt('PHLIX_HUB_METRICS_CONNECTION_TTL', 15),
-            'route_cardinality_cap'    => $envInt('PHLIX_HUB_METRICS_ROUTE_CAP', 200),
-            'latency_buckets_ms'       => [10, 50, 100, 250, 500, 1000, 2500, 5000],
-        ];
-    })(),
+    // Metrics / live-traffic telemetry (S4). THE single source is
+    // config/metrics.php — requiring it here (as that file's own header
+    // documents) replaces a hand-copied twin whose two copies of seven env
+    // knobs could only drift. The shape metrics.php returns is key-identical
+    // to the former inline block. This value is threaded into the DI container
+    // and also read directly by HubServicesProvider::boot() for the flush timer
+    // interval; the metrics provider's own @include fallback now lands on the
+    // same file this key comes from.
+    'metrics' => require __DIR__ . '/metrics.php',
 
     // Per-surface rate limiting (HB-4.6). Each surface gets its OWN RateLimiter
     // (see Phlix\Hub\Common\RateLimit\RateLimitProfiles); a single login-grade

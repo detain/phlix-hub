@@ -274,10 +274,16 @@ final class FederationSessionManagerTest extends TestCase
             ['id' => 'dead-session-2', 'peer_id' => 'dead-peer-2'],
         ];
 
-        // 1 select + 2 sessions * (1 update session + 1 update peer) = 5 total
-        $db->expects(self::exactly(5))
+        // 1 select + ONE batched sessions UPDATE + ONE batched peers UPDATE = 3.
+        // The reaper's statement count no longer grows per dead row — the old
+        // shape (2 UPDATEs PER session) serialised a mass eviction through
+        // thousands of single-row round-trips.
+        /** @var list<array{0: string, 1: array<int|string, mixed>|null}> $calls */
+        $calls = [];
+        $db->expects(self::exactly(3))
             ->method('query')
-            ->willReturnCallback(function (string $sql) use ($deadSessions) {
+            ->willReturnCallback(function (string $sql, ?array $bind = null) use ($deadSessions, &$calls): array {
+                $calls[] = [$sql, $bind];
                 if (str_contains($sql, 'SELECT id, peer_id FROM federation_sessions')) {
                     return $deadSessions;
                 }
@@ -297,6 +303,79 @@ final class FederationSessionManagerTest extends TestCase
         $count = $manager->reapDeadSessions(60);
 
         self::assertSame(2, $count);
+        self::assertStringContainsString(
+            'UPDATE federation_sessions SET alive = 0 WHERE id IN (:sid0, :sid1)',
+            $calls[1][0],
+            'both session ids must be reaped by ONE batched statement'
+        );
+        self::assertEquals(
+            ['sid0' => 'dead-session-1', 'sid1' => 'dead-session-2'],
+            $calls[1][1],
+            'ids travel as named binds — never interpolated into the SQL'
+        );
+        self::assertStringContainsString(
+            'UPDATE federation_peers SET status = :status WHERE id IN (:peer0, :peer1)',
+            $calls[2][0]
+        );
+        self::assertEquals(
+            ['status' => 'disconnected', 'peer0' => 'dead-peer-1', 'peer1' => 'dead-peer-2'],
+            $calls[2][1]
+        );
+    }
+
+    /**
+     * N dead sessions of ONE peer used to rewrite that peer's status N times.
+     * The batched law de-duplicates peer ids: the peers UPDATE carries each
+     * distinct peer exactly once, while the session count still logs every row.
+     */
+    public function testReapDeadSessionsBatchesAndDeduplicatesPeerUpdates(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+
+        $deadSessions = [
+            ['id' => 's-1', 'peer_id' => 'peer-a'],
+            ['id' => 's-2', 'peer_id' => 'peer-a'],
+            ['id' => 's-3', 'peer_id' => 'peer-b'],
+        ];
+
+        /** @var list<array{0: string, 1: array<int|string, mixed>|null}> $calls */
+        $calls = [];
+        $db->expects(self::exactly(3))
+            ->method('query')
+            ->willReturnCallback(function (string $sql, ?array $bind = null) use ($deadSessions, &$calls): array {
+                $calls[] = [$sql, $bind];
+                if (str_contains($sql, 'SELECT id, peer_id FROM federation_sessions')) {
+                    return $deadSessions;
+                }
+                return [];
+            });
+
+        $logger->expects(self::once())
+            ->method('info')
+            ->with(
+                'Reaped dead federation sessions',
+                self::callback(function (array $context) {
+                    return $context['count'] === 3 && $context['threshold_seconds'] === 60;
+                })
+            );
+
+        $manager = new FederationSessionManager($db, $logger);
+        self::assertSame(3, $manager->reapDeadSessions(60));
+
+        self::assertStringContainsString(
+            'WHERE id IN (:sid0, :sid1, :sid2)',
+            $calls[1][0]
+        );
+        self::assertStringContainsString(
+            'UPDATE federation_peers SET status = :status WHERE id IN (:peer0, :peer1)',
+            $calls[2][0],
+            'peer-a held two dead sessions but appears exactly once in the batch'
+        );
+        self::assertEquals(
+            ['status' => 'disconnected', 'peer0' => 'peer-a', 'peer1' => 'peer-b'],
+            $calls[2][1]
+        );
     }
 
     public function testReapDeadSessionsWithCustomThreshold(): void

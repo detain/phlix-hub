@@ -47,6 +47,14 @@ class FederationSessionManager
     public const int PENDING_HANDSHAKE_TIMEOUT_SECONDS = 30;
 
     /**
+     * Upper bound on the IN-list of each batched statement inside
+     * {@see reapDeadSessions()}. A long outage can make thousands of sessions
+     * stale at once; chunking keeps every statement's parameter list and
+     * packet size bounded instead of growing with the dead-row count.
+     */
+    private const int REAP_BATCH_SIZE = 500;
+
+    /**
      * session UUID → pending handshake state, in-process (master side only).
      *
      * Lives here — not in the frame handler — because the handshake is
@@ -389,39 +397,82 @@ class FederationSessionManager
             ['threshold' => $thresholdSeconds],
         );
 
-        $count = 0;
+        if ($rows === []) {
+            return 0;
+        }
+
+        // Batched instead of 2 statements PER dead session: a mass eviction
+        // (link flap, peer restart storm) used to serialise thousands of
+        // single-row round-trips through one blocking tick of the reaper. The
+        // work is now one bounded-IN UPDATE per table per chunk — constant
+        // statement count per chunk regardless of row count. Peer ids are
+        // de-duplicated: N dead sessions of one peer used to rewrite that
+        // peer's status N times.
+        /** @var list<string> $sessionIds */
+        $sessionIds = [];
+        /** @var array<string, true> $peerIdSet */
+        $peerIdSet = [];
         foreach ($rows as $row) {
             /** @var mixed $rawSessionId */
             $rawSessionId = $row['id'] ?? null;
             /** @var mixed $rawPeerId */
             $rawPeerId = $row['peer_id'] ?? null;
-            $sessionId = is_string($rawSessionId) ? $rawSessionId : '';
-            $peerId = is_string($rawPeerId) ? $rawPeerId : '';
-
-            $this->db->query(
-                'UPDATE federation_sessions SET alive = 0 WHERE id = :id',
-                ['id' => $sessionId],
-            );
-
-            $this->db->query(
-                'UPDATE federation_peers SET status = :status WHERE id = :id',
-                [
-                    'id' => $peerId,
-                    'status' => 'disconnected',
-                ],
-            );
-
-            $count++;
+            if (is_string($rawSessionId) && $rawSessionId !== '') {
+                $sessionIds[] = $rawSessionId;
+            }
+            if (is_string($rawPeerId) && $rawPeerId !== '') {
+                $peerIdSet[$rawPeerId] = true;
+            }
         }
 
-        if ($count > 0) {
-            $this->logger->info('Reaped dead federation sessions', [
-                'count' => $count,
-                'threshold_seconds' => $thresholdSeconds,
-            ]);
+        foreach (array_chunk($sessionIds, self::REAP_BATCH_SIZE) as $batch) {
+            [$placeholders, $params] = self::inListPlaceholders('sid', $batch);
+            $this->db->query(
+                "UPDATE federation_sessions SET alive = 0 WHERE id IN ({$placeholders})",
+                $params,
+            );
         }
+
+        /** @var list<string> $peerIds */
+        $peerIds = array_keys($peerIdSet);
+        foreach (array_chunk($peerIds, self::REAP_BATCH_SIZE) as $batch) {
+            [$placeholders, $params] = self::inListPlaceholders('peer', $batch);
+            $this->db->query(
+                "UPDATE federation_peers SET status = :status WHERE id IN ({$placeholders})",
+                ['status' => 'disconnected'] + $params,
+            );
+        }
+
+        $count = count($rows);
+        $this->logger->info('Reaped dead federation sessions', [
+            'count' => $count,
+            'threshold_seconds' => $thresholdSeconds,
+        ]);
 
         return $count;
+    }
+
+    /**
+     * Build one `:prefixN`-keyed IN-list for a batched UPDATE: Workerman's
+     * Connection binds named parameters only (positional `?` breaks bindMore —
+     * house DB law), so every value gets its own name. Values are NEVER
+     * interpolated into the SQL — they travel in the returned bind map.
+     *
+     * @param list<string> $values
+     *
+     * @return array{0: string, 1: array<string, string>} [":prefix0, :prefix1, …", name => value]
+     */
+    private static function inListPlaceholders(string $prefix, array $values): array
+    {
+        $names = [];
+        $params = [];
+        foreach ($values as $i => $value) {
+            $name = $prefix . $i;
+            $names[] = ':' . $name;
+            $params[$name] = $value;
+        }
+
+        return [implode(', ', $names), $params];
     }
 
     /**
