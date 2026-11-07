@@ -778,7 +778,7 @@ never deny federation to paired hubs (identical to `:8802`/`:8803`).
 
 ### Signed handshake (JSON text frames)
 
-The federation channel is authenticated by a **mutual Ed25519 proof-of-key
+The federation link is authenticated by a **mutual Ed25519 proof-of-key
 ceremony** (H-4). Knowledge of the `hub_id` is only a routing hint — it proves
 nothing. All three handshake messages ride JSON **text** WebSocket frames (never
 binary `0x09`/`0x0A`, which are retired wire types):
@@ -824,13 +824,13 @@ binary `0x09`/`0x0A`, which are retired wire types):
 Both ends derive the canonical strings from the one shared helper,
 `Phlix\Hub\Federation\FederationHandshake`, so the two sides cannot drift.
 
-### Verified-channel gate
+### Verified-link gate
 
 The connection is marked **verified** only after both proofs succeed. Until
 then, every sync payload — offers, revocations, admin delegations — is **dropped
 and audited** on both roles (`logFailedAuth('federation_data_frame_before_verification')`).
 Master-side pushes (`FederationMasterPusher::pushOffer` / `pushRevocation`)
-refuse to send on an unverified channel. The only unverified-path exemption is
+refuse to send on an unverified link. The only unverified-path exemption is
 teardown (`closePeerConnection`, which sends `DISCONNECTED` and closes).
 
 ### Sync payloads (binary `DATA` envelopes, JSON discriminator)

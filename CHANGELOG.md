@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Documentation [w10L4 SH-098] — pairing-law nouns made consistent across the docs — 2026-11-07
+
+- The README's own terms law says member-facing copy says *watch party*
+  (wire says *group*, internals say *room*); two member-facing rows still
+  said "rooms". Brought the feature bullet and the Pages table into the
+  declared copy.
+- "Federation tunnel" / "Hub-to-hub peer tunnel" / "federation channel" /
+  "Verified-channel gate" were four spellings of one thing; the glossary's
+  canonical noun is **federation link**. All four unified (two README port
+  tables, the websockets.md handshake prose, and the gate heading — the
+  heading carries no TOC or anchor references, verified by grep before
+  renaming).
+- The "claim code is glossed inline wherever it first appears" claim in
+  the terms intro was false — its first prose use carries no gloss. The
+  sentence now states what is actually true: defined in the glossary,
+  format spelled out in the pairing walkthrough.
+
 ### Documentation [w10L4 SH-097] — secret-carrier hygiene in the docs and one dead cross-ref — 2026-11-07
 
 - `docs/ui-asset-rebuild.md` troubleshooting fix wrote the fresh JWT secret

@@ -145,7 +145,7 @@ This README is the operator/API reference; those pages are the illustrated path.
   peer today (the reserved envelope is documented as such on `:8805` in the OpenAPI spec).
 - **Watch Party (SyncPlay relay)** — watches in lockstep across devices: the hub carries the
   synchronized-playback messages (play/pause/seek) for viewers outside your home
-  network, with a **Watch Party** page at `/app/watch-party` for hosting and joining rooms.
+  network, with a **Watch Party** page at `/app/watch-party` for hosting and joining watch parties.
   Account-scoped today — see [Watching with family and
   friends](#watching-with-family-and-friends) for what that means before you invite
   anyone.
@@ -180,8 +180,9 @@ This README is the operator/API reference; those pages are the illustrated path.
 ## Terms used in this document
 
 Plain definitions for the vocabulary this README leans on — the jargon wall a
-reader hit otherwise. Also see the model case: "claim code" is glossed inline
-wherever it first appears.
+reader hit otherwise. "Claim code" is the worked example: it is defined in the
+glossary below, and the pairing walkthrough spells out its format where the
+flow uses it.
 
 - **SPA** — single-page application: the Vue app under `/app` that loads once
   and redraws itself client-side; the hub's entire web UI.
@@ -260,7 +261,7 @@ process group:
 | Relay (server-facing) | `8802` | Servers connect here to open their outbound tunnel |
 | Relay (client-facing) | `8803` | Client-mount WS (`GET /client/{server_id}`). ⚠ **Declared unavailable** in the multi-process topology: every mount is refused with close 1011 (`client_mount_bridge_unavailable`) — see `docs/websockets.md`; live client↔server traffic rides the HTTP relay proxy (`/api/v1/servers/{id}/proxy/*`) |
 | SyncPlay relay | `8804` | Synchronized-playback clients (`GET /syncplay/{server_id}`) |
-| Federation | `8805` | Hub-to-hub peer tunnel |
+| Federation | `8805` | Federation link — the leaf hub dials the master for hub-to-hub shares |
 
 Every WebSocket surface is documented in [`docs/websockets.md`](docs/websockets.md); the `:8800`
 HTTP surface is described by [`openapi.yaml`](openapi.yaml).
@@ -1575,7 +1576,7 @@ Full protocol reference in [`docs/websockets.md`](docs/websockets.md).
 | Server tunnel | `8802` | Server opens its outbound tunnel here |
 | `GET /client/{server_id}` | `8803` | Client mount — ⚠ **declared unavailable**: every authenticated mount is refused with close 1011 (`client_mount_bridge_unavailable`); live traffic rides the `:8800` HTTP relay proxy |
 | `GET /syncplay/{server_id}` | `8804` | SyncPlay client joins a synchronized-playback session |
-| Federation tunnel | `8805` | Peer hub connects for hub-to-hub shares |
+| Federation link | `8805` | The leaf hub dials the master for hub-to-hub shares |
 
 ## Watching with family and friends
 
@@ -1743,7 +1744,7 @@ entry merely reflects that.
 | **Shares** (`/app/shares`) | Grant other members access to your paired server's libraries. |
 | **Shared With Me** (`/app/shared-with-me`) | Libraries other members have granted you. |
 | **Invite Links** (`/app/invite-links`) | Create single-use signed invites — one step creates the account AND the library share; the recipient lands on the public `/app/invite/:token` page. |
-| **Watch Party** (`/app/watch-party`) | Host or join a synchronized viewing room on your selected server. |
+| **Watch Party** (`/app/watch-party`) | Host or join a watch party for synchronized viewing on your selected server. |
 | **Requests** (`/app/requests`) | Jellyseerr-style request queue: ask for movies/series; admins approve. |
 | **Security** (`/app/settings/security`) | Your own password change. Session revocation is not offered — sign-in tokens expire on their own (the page says so too). |
 | **MCP tokens** (`/app/mcp-tokens`) | Personal access tokens for MCP/API access — every user manages their own. |
