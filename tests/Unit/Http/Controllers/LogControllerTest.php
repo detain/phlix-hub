@@ -114,6 +114,37 @@ final class LogControllerTest extends TestCase
         $this->assertSame(404, $resp->statusCode);
     }
 
+    public function testTailRefusalFramesSpeakTheHouseEnvelope(): void
+    {
+        // Review hub__copywriter: these frames were the corpus's prose-only
+        // holdouts. Each now dual-places a REGISTERED stable code and an
+        // actionable message beside its untouched legacy `error` prose; the
+        // literals' registry membership is ErrorCodesContractTest's job —
+        // this pin guards the SHAPE and the actionable next moves.
+        $reachable = new LogController($this->dir);
+
+        $bad = json_decode($reachable->tail($this->req(['file' => 'notes.txt']))->body, true);
+        $this->assertIsArray($bad);
+        $this->assertSame('Invalid log file name', $bad['error']);
+        $this->assertSame('invalid_request', $bad['code']);
+        $this->assertIsString($bad['message']);
+        $this->assertStringContainsString('bare *.log file name', $bad['message']);
+
+        $absentDir = new LogController('/nonexistent/phlix-hub/logs');
+        $gone = json_decode($absentDir->tail($this->req(['file' => 'app.log']))->body, true);
+        $this->assertIsArray($gone);
+        $this->assertSame('Log directory not available', $gone['error']);
+        $this->assertSame('storage_unavailable', $gone['code']);
+        $this->assertStringContainsString('.logs/', $gone['message']);
+
+        $missing = json_decode($reachable->tail($this->req(['file' => 'nope.log']))->body, true);
+        $this->assertIsArray($missing);
+        $this->assertSame('Log file not found', $missing['error']);
+        $this->assertSame('not_found', $missing['code']);
+        // The actionable half of the finding: the answer names where to look.
+        $this->assertStringContainsString('GET /api/v1/me/logs', $missing['message']);
+    }
+
     public function testTailAllMergesEveryLogFileTaggedBySource(): void
     {
         $controller = new LogController($this->dir);

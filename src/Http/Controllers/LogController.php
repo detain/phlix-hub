@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Http\Controllers;
 
+use Phlix\Hub\Common\Logger\LogChannels;
+use Phlix\Hub\Common\Logger\LoggerFactory;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Throwable;
@@ -101,24 +103,56 @@ final class LogController
         $rawFile = $this->queryString($request, 'file');
         $file = basename($rawFile);
         if ($file === '' || preg_match('/^[A-Za-z0-9._-]+\.log$/', $file) !== 1) {
-            return (new Response())->status(400)->json(['error' => 'Invalid log file name']);
+            return (new Response())->status(400)->json([
+                'error' => 'Invalid log file name',
+                'code' => 'invalid_request',
+                'message' => 'The file parameter must be a bare *.log file name from the '
+                    . 'hub log directory (like app.log) — paths and other extensions are refused.',
+            ]);
         }
 
         $lines = $this->queryLines($request);
 
         if ($this->logDir === '') {
-            return (new Response())->status(404)->json(['error' => 'Log directory not available']);
+            return (new Response())->status(404)->json([
+                'error' => 'Log directory not available',
+                'code' => 'storage_unavailable',
+                'message' => 'The hub writes its logs to the .logs/ directory at the root of '
+                    . 'the hub install; it does not exist or is unreadable — check that '
+                    . 'directory before retrying.',
+            ]);
         }
 
         $real = realpath($this->logDir . '/' . $file);
         if ($real === false || !is_file($real) || dirname($real) !== $this->logDir) {
-            return (new Response())->status(404)->json(['error' => 'Log file not found']);
+            return (new Response())->status(404)->json([
+                'error' => 'Log file not found',
+                'code' => 'not_found',
+                'message' => 'No such *.log file in the hub log directory — '
+                    . 'GET /api/v1/me/logs lists the files that exist.',
+            ]);
         }
 
         try {
             $content = $this->readTail($real, self::TAIL_BYTES);
-        } catch (Throwable) {
-            return (new Response())->status(500)->json(['error' => 'Failed to read log file']);
+        } catch (Throwable $e) {
+            // Wire law: the envelope gains only registered codes and prose —
+            // the failure REASON (permissions? I/O?) never rides the wire, it
+            // goes to the HTTP channel an operator reads (SharedUiController
+            // idiom: estate logger, not bare error_log, so level routing and
+            // the HUB_LOG_DIR/HUB_LOG_LEVEL seams are respected).
+            LoggerFactory::get(LogChannels::HTTP)->warning(sprintf(
+                'LogController tail failed for %s: %s',
+                $real,
+                $e->getMessage(),
+            ));
+
+            return (new Response())->status(500)->json([
+                'error' => 'Failed to read log file',
+                'code' => 'hub.internal_error',
+                'message' => 'The hub could not read the log file — the hub HTTP log '
+                    . 'channel carries the read-failure reason.',
+            ]);
         }
 
         $all = $content === '' ? [] : explode("\n", rtrim($content, "\n"));

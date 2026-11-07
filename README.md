@@ -110,7 +110,7 @@ social layer. Skip it when either of those is already solved another way:
 Run a hub when you want remote access **without opening inbound ports** (servers dial
 *out* to it), a **directory** of your servers with liveness, **library sharing** and
 **invite links** for people who don't have accounts on the server itself, **media
-requests** (Sonarr/Radarr fulfilment), or **hub-to-hub federation**.
+requests** (Sonarr/Radarr fulfillment), or **hub-to-hub federation**.
 
 The step-by-step user journeys — what-the-hub-is, remote-access, self-hosting,
 claiming a server, library sharing, sharing with friends, invite links, requests —
@@ -144,22 +144,22 @@ This README is the operator/API reference; those pages are the illustrated path.
   master-side wire push is not implemented, so no `admin_delegation` frame ever reaches the
   peer today (the reserved envelope is documented as such on `:8805` in the OpenAPI spec).
 - **Watch Party (SyncPlay relay)** — watches in lockstep across devices: the hub carries the
-  synchronised-playback messages (play/pause/seek) for viewers outside your home
+  synchronized-playback messages (play/pause/seek) for viewers outside your home
   network, with a **Watch Party** page at `/app/watch-party` for hosting and joining rooms.
   Account-scoped today — see [Watching with family and
   friends](#watching-with-family-and-friends) for what that means before you invite
   anyone.
 - **Media requests** — a Jellyseerr-class request queue. Users request movies/series; admins
-  approve, and the Hub talks to Sonarr/Radarr to fulfil them.
+  approve, and the Hub talks to Sonarr/Radarr to fulfill them.
 - **Web UI & admin console** — the hub's front door is a Vue SPA (the shared `@phlix/ui` design
   system) served at `/app` (`/` redirects to `/app/servers`). Every signed-in user gets **My Servers**,
   **Server Detail**, **Search**, **Shares**, **Shared With Me**, **Watch Party**, **Invite Links**,
-  **Requests**, **Security** (own password/sessions), **MCP tokens** (own API credentials), and the
+  **Requests**, **Security** (own password change), **MCP tokens** (own API credentials), and the
   media-browsing surfaces (music, books, audiobooks, photos) for the selected server; there is a
   public **invite-acceptance** page at `/app/invite/:token` (the target of the public
   `GET /invite/{token}` link). **Federation**, **Federation Shares**, and the `requiresAdmin`
-  **admin console** at `/app/admin/*` (Hub Dashboard, Users, Logs, Settings, Audit Logs, request
-  approval) are admin-only — the nav hides them for members and every `/api/v1/admin/*` endpoint
+  **admin console** at `/app/admin/*` (Hub Dashboard, Server Traffic, Users, Logs, Settings,
+  Audit Logs, request approval) are admin-only — the nav hides them for members and every `/api/v1/admin/*` endpoint
   gates server-side regardless. See [Portal admin basics](#portal-admin-basics) for a page-by-page
   guide. The Vue SPA is
   now the **only** web UI: the legacy server-rendered (Smarty) pages have been **deleted** and their old
@@ -207,6 +207,12 @@ wherever it first appears.
   the sentence citing one states its disposition there and then (cured,
   retired). They say *why* a rule exists; the code and behavior they
   reference is what ships.
+- **orthography** — this README and the files under `docs/` are American in
+  spelling (`behavior`, `synchronized`, `fulfill`, `initialize`,
+  `serialized`, `unrecognized`), the convention the config/env vocabulary
+  and the vendored contracts already speak (review hub__writer). Code
+  identifiers and quotations from sibling repos keep their source spelling
+  verbatim; the sweep may not "correct" a quote.
 - **watch party / group / room** — one concept, three names, by layer (the
   naming-layers map phlix-server's README publishes, carried here): the
   **canonical wire** says *group* (`syncplay_group_*` frames, `group_id`);
@@ -253,7 +259,7 @@ process group:
 | HTTP | `8800` | REST API + the Vue SPA (`/app`; legacy page paths 302-redirect here) + `/health` |
 | Relay (server-facing) | `8802` | Servers connect here to open their outbound tunnel |
 | Relay (client-facing) | `8803` | Client-mount WS (`GET /client/{server_id}`). ⚠ **Declared unavailable** in the multi-process topology: every mount is refused with close 1011 (`client_mount_bridge_unavailable`) — see `docs/websockets.md`; live client↔server traffic rides the HTTP relay proxy (`/api/v1/servers/{id}/proxy/*`) |
-| SyncPlay relay | `8804` | Synchronised-playback clients (`GET /syncplay/{server_id}`) |
+| SyncPlay relay | `8804` | Synchronized-playback clients (`GET /syncplay/{server_id}`) |
 | Federation | `8805` | Hub-to-hub peer tunnel |
 
 Every WebSocket surface is documented in [`docs/websockets.md`](docs/websockets.md); the `:8800`
@@ -266,7 +272,7 @@ Supporting pieces:
 - **MySQL** is accessed through a coroutine connection pool (`workerman/mysql`, a
   mysqli wrapper; each coroutine leases its own connection — see `DB_POOL_ENABLED`
   in the configuration reference). The pool is
-  initialised lazily so `/health` stays up even if the database is briefly unreachable.
+  initialized lazily so `/health` stays up even if the database is briefly unreachable.
 - **JWT** auth is symmetric (HS256); Ed25519 keys are used for signing enrollment/relay material,
   and the public key set is served at `/.well-known/jwks.json`.
 
@@ -548,7 +554,7 @@ and picks the right one per SNI hostname.
 The first install snapshots any pre-Phlix `haproxy.cfg` to
 `/etc/haproxy/haproxy.cfg.pre-phlix.bak`.
 
-**Uninstall behaviour**: `--uninstall` removes only that project's fragment and rebuilds. If
+**Uninstall behavior**: `--uninstall` removes only that project's fragment and rebuilds. If
 other Phlix projects remain, their frontend stays untouched. When the **last** Phlix project
 is uninstalled, the rebuilder restores the pre-Phlix snapshot (or removes `haproxy.cfg`
 outright if there was no pre-Phlix config) and stops/disables `haproxy`.
@@ -1209,12 +1215,12 @@ development fallbacks.
 
 > The six listen-port envs were wired through `config/server.php` in R14-15 — before that the
 > auxiliary ports existed only as `?? <default>` fallbacks no config set (configurability
-> theater). Defaults are byte-identical to the previous literals, so behaviour with the envs
+> theater). Defaults are byte-identical to the previous literals, so behavior with the envs
 > unset is unchanged.
 
 #### Security & posture envs
 
-Verified against `config/` and the consuming classes; each default preserves shipped behaviour.
+Verified against `config/` and the consuming classes; each default preserves shipped behavior.
 Where a live `hub_settings` twin exists (admin-console override), it is named. Exactly two
 twin'd keys carry `restart: true` in the vendored schema (`@phlix/shared` `hub-settings.schema.json`):
 `server.metrics.enabled` and `server.rate_limit` — for those, the admin-console value is read at
@@ -1332,7 +1338,9 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 The relay-side metrics accumulators and their MySQL rollups. These knobs tune COLLECTION;
 what they feed is the admin-gated REST surface `GET /api/v1/admin/metrics/`
 (`snapshot` / `history` / `connections` / `routes` — see `src/Application.php`,
-`registerMetricsRoutes()`) — **not** a Prometheus scrape endpoint. The `enabled` flag has a
+`registerMetricsRoutes()`) — **not** a Prometheus scrape endpoint; the **Server
+Traffic** admin page (`/app/admin/metrics`) is what renders those four series. The
+`enabled` flag has a
 live twin in the vendored settings schema: `server.metrics.enabled` (`restart: true` — read
 at boot per worker).
 
@@ -1354,7 +1362,7 @@ at boot per worker).
 | `HUB_DB_USER` | `phlix_hub` | MySQL user |
 | `HUB_DB_PASSWORD` | `phlix_hub` | MySQL password |
 | `HUB_DB_NAME` | `phlix_hub` | MySQL database name |
-| `DB_POOL_ENABLED` | `1` | Coroutine connection pool (each coroutine leases its own connection). `0` falls back to the single mutex-serialised socket |
+| `DB_POOL_ENABLED` | `1` | Coroutine connection pool (each coroutine leases its own connection). `0` falls back to the single mutex-serialized socket |
 | `DB_POOL_SIZE` | `8` | Pool size per connection name **per worker** — keep `workers × connection names × DB_POOL_SIZE` under MySQL `max_connections` |
 
 ### Auth ([`config/auth.php`](config/auth.php))
@@ -1371,10 +1379,10 @@ at boot per worker).
 |----------|---------|-------------|
 | `HUB_SONARR_URL` | `http://localhost:8989` | Sonarr base URL |
 | `HUB_SONARR_API_KEY` | _(empty)_ | Sonarr API key |
-| `HUB_SONARR_ENABLED` | `0` | Enable Sonarr fulfilment |
+| `HUB_SONARR_ENABLED` | `0` | Enable Sonarr fulfillment |
 | `HUB_RADARR_URL` | `http://localhost:7878` | Radarr base URL |
 | `HUB_RADARR_API_KEY` | _(empty)_ | Radarr API key |
-| `HUB_RADARR_ENABLED` | `0` | Enable Radarr fulfilment |
+| `HUB_RADARR_ENABLED` | `0` | Enable Radarr fulfillment |
 
 ## Database schema
 
@@ -1400,7 +1408,7 @@ A deployment running a non-default sql_mode must re-verify both paths.
 | `users` | Hub accounts (Argon2id passwords; unique email + username) |
 | `invite_links` | Single-use signed invite links |
 | `login_rate_limit` | Shared, cross-worker login rate-limit buckets (one row per key; the only DB-backed limiter) |
-| `auth_signup_guard` | First-admin election mutex — a single-row INSERT serialises concurrent registrations, so exactly one first user can ever self-elect |
+| `auth_signup_guard` | First-admin election mutex — a single-row INSERT serializes concurrent registrations, so exactly one first user can ever self-elect |
 | `auth_revoked_refresh_tokens` | Revocation registry: logouts record the `jti` of a presented refresh JWT, and token refresh refuses anything recorded here |
 | `mcp_tokens` | Personal Access Tokens for the MCP endpoint (`POST /mcp`) — user-scoped, space-delimited scopes, SHA-256 hash only at rest |
 | `oauth_clients` | Long-lived registry of OAuth 2.0 clients using the hub as authorization server (operator-managed) |
@@ -1507,6 +1515,7 @@ The Vue admin console at `/app/admin/*` is backed by these admin-gated endpoints
 | `GET`/`PUT`/`DELETE` | `/api/v1/admin/users/{id}` | Fetch / update / delete an account |
 | `POST` | `/api/v1/admin/users/{id}/set-admin` | Grant / revoke admin |
 | `POST` | `/api/v1/admin/users/{id}/reset-password` | Set a new password |
+| `GET` | `/api/v1/admin/metrics/{snapshot,history,connections,routes}` | Relay traffic rollups — the four series the **Server Traffic** admin page renders (collectors tuned by *Metrics* in the [configuration reference](#configuration-reference)) |
 | `GET` | `/api/v1/admin/logs`, `/logs/tail`, `/logs/tail-all` | Browse / tail the hub log files |
 | `GET`/`PUT` | `/api/v1/admin/settings` | Read / persist hub settings |
 | `GET` | `/api/v1/admin/users/{id}/bandwidth` | Read any user's current-period relay usage + caps (incl. `throttle_bps`) |
@@ -1557,12 +1566,12 @@ Full protocol reference in [`docs/websockets.md`](docs/websockets.md).
 |----------|------|-------|
 | Server tunnel | `8802` | Server opens its outbound tunnel here |
 | `GET /client/{server_id}` | `8803` | Client mount — ⚠ **declared unavailable**: every authenticated mount is refused with close 1011 (`client_mount_bridge_unavailable`); live traffic rides the `:8800` HTTP relay proxy |
-| `GET /syncplay/{server_id}` | `8804` | SyncPlay client joins a synchronised-playback session |
+| `GET /syncplay/{server_id}` | `8804` | SyncPlay client joins a synchronized-playback session |
 | Federation tunnel | `8805` | Peer hub connects for hub-to-hub shares |
 
 ## Watching with family and friends
 
-A **watch party** is what Phlix calls a synchronised-playback group (the protocol
+A **watch party** is what Phlix calls a synchronized-playback group (the protocol
 messages say `group`, the internals say `room`, members see **Watch Party**):
 press play on one device and every participant's player follows — start, pause,
 seek, in step. The human journey lives in the user guide:
@@ -1728,7 +1737,7 @@ entry merely reflects that.
 | **Invite Links** (`/app/invite-links`) | Create single-use signed invites — one step creates the account AND the library share; the recipient lands on the public `/app/invite/:token` page. |
 | **Watch Party** (`/app/watch-party`) | Host or join a synchronized viewing room on your selected server. |
 | **Requests** (`/app/requests`) | Jellyseerr-style request queue: ask for movies/series; admins approve. |
-| **Security** (`/app/settings/security`) | Your own password change and session hygiene. |
+| **Security** (`/app/settings/security`) | Your own password change. Session revocation is not offered — sign-in tokens expire on their own (the page says so too). |
 | **MCP tokens** (`/app/mcp-tokens`) | Personal access tokens for MCP/API access — every user manages their own. |
 
 The media-browsing surfaces (music `/app/music/*`, books `/app/books/*`,
@@ -1741,6 +1750,7 @@ unlinked — they have no data to show; pair or re-select under My Servers first
 | Page | What it's for |
 |---|---|
 | **Dashboard** | Hub-wide counts: users, servers, parties, traffic. |
+| **Server Traffic** (`/app/admin/metrics`) | Relay traffic charts — snapshot, history, connections, per-route — fed by the metrics collectors. Data appears only with `server.metrics.enabled` on (the toggle is restart-gated: it re-reads at worker boot). |
 | **Users** | Create users (the on-ramp when signups are closed), edit, promote/demote admin, reset a member's password, delete. |
 | **Logs** | Recent hub log lines in the browser — no SSH needed. |
 | **Settings** | The hub settings store — the toggles are the next table. |
@@ -1766,7 +1776,7 @@ are denied by design and belong in the [env reference](#configuration-reference)
 | **Metrics** `server.metrics.enabled` / `server.metrics.retention_days` | Opt-in usage metrics kept on the hub; retention prunes per day. | enabled: **restart** · retention: live |
 | **Relay rate limits** `server.rate_limit` (JSON) | The live dial for the 429 throttles — a store blob merged OVER the boot-time `PHLIX_HUB_RATELIMIT_*` env defaults (see *Rate limiting* in the [configuration reference](#configuration-reference)). | **restart** |
 | **Relay drain grace** `server.relay.reconnect_drain_grace_seconds` | Seconds an incumbent tunnel keeps draining in-flight requests when a validated server reconnect displaces it (`0` = hard displacement). Live-read per displacement, clamped 0–300. | live |
-| **Sonarr / Radarr** `server.arr.{sonarr,radarr}.{enabled,url}` | Request fulfilment backends. The API keys stay env-only by design (never settable through the store). | live |
+| **Sonarr / Radarr** `server.arr.{sonarr,radarr}.{enabled,url}` | Request fulfillment backends. The API keys stay env-only by design (never settable through the store). | live |
 | **Token lifetimes** `auth.access_ttl` · `auth.refresh_ttl` · `server.enrollment_ttl` | JWT lifetimes for sessions and server enrollment. | live |
 
 ## Troubleshooting
@@ -1929,7 +1939,7 @@ and the nightly trigger):
 - **Security Audit** (`composer-audit`) — Composer dependency audit.
 - **Real MCP client SSE session** (`mcp-e2e`, S329) — boots the real hub on `:8800` against
   the MySQL service, mints PATs through the real `McpTokenService`, and drives the official
-  `@modelcontextprotocol/sdk` client through initialise → tools/list → one tool call → clean
+  `@modelcontextprotocol/sdk` client through initialize → tools/list → one tool call → clean
   close. A JUnit gate (`scripts/assert-mcp-e2e-ran.php`) fails when any required case is
   absent, skipped, or asserted nothing — never a bare green.
 - **Cross-Repo Path Contract** (`cross-repo-paths`) — paths that sibling repositories cite

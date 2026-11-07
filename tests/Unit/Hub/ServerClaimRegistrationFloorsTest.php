@@ -376,7 +376,12 @@ final class ServerClaimRegistrationFloorsTest extends TestCase
         // If a future lane changes it, both this pin and every floor test's
         // semantics must be revisited together — silence here means drift.
         $reflection = new \ReflectionClass(ClaimRequestHandler::class);
-        $constants = $reflection->getConstants(\ReflectionProperty::class::IS_PRIVATE);
+        // All constants, not one visibility: the two hostname bounds are
+        // PUBLIC now by design (the pairing-bounds refusal in
+        // ServerClaimController::mapError() quotes the numbers at callers,
+        // so validator and copy cannot drift). This pin guards the VALUES —
+        // visibility must never narrow what the census sees.
+        $constants = $reflection->getConstants();
 
         self::assertSame(self::FLOOR, $constants['MAX_CLAIM_TABLE_ROWS']);
         self::assertSame(50, $constants['CLAIM_LOOKUP_WINDOW']);

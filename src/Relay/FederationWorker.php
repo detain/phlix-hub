@@ -256,7 +256,7 @@ final class FederationWorker
             . 'Enable federation TLS (HUB_FEDERATION_TLS=true + HUB_FEDERATION_TLS_CERT/KEY), '
             . 'or — only if this master is proxy-fronted with TLS terminated upstream, which '
             . 'this listener cannot verify from inside — unset HUB_FEDERATION_REQUIRE_TLS to '
-            . 'return to warn-only behavior.';
+            . 'return to warn-only behaviour.';
     }
 
     /**

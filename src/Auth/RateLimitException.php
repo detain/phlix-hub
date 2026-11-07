@@ -58,4 +58,29 @@ final class RateLimitException extends RuntimeException
             limit: 0,
         ))->retryAfter($now);
     }
+
+    /**
+     * The human sentence paired with a `Retry-After` value (review
+     * hub__copywriter). Single source so the wire header and the prose can
+     * never disagree:
+     * {@see \Phlix\Hub\Http\Controllers\AuthController::rateLimited()}
+     * and the test-suite's re-composition pins both call this formatter with
+     * the SAME number the header carries.
+     *
+     * Three honest arms, because {@see retryAfterSeconds()} floors at zero:
+     * a window that has already rolled says 'now' (never 'in 0 seconds');
+     * one second reads as a unit, not as '1 seconds'.
+     */
+    public static function retryAfterMessage(int $retryAfterSeconds): string
+    {
+        if ($retryAfterSeconds <= 0) {
+            return 'Too many attempts — you may try again now.';
+        }
+
+        if ($retryAfterSeconds === 1) {
+            return 'Too many attempts — try again in 1 second.';
+        }
+
+        return 'Too many attempts — try again in ' . $retryAfterSeconds . ' seconds.';
+    }
 }

@@ -44,16 +44,19 @@ class ClaimRequestHandler
      * 16 covers the largest realistic multi-homed advertise set — LAN IPv4,
      * global IPv6, link-local IPv6, mDNS, DDNS alias, relay alias ≈ 8 — with
      * 2× headroom, while a flood payload can no longer park an unbounded
-     * list inside one INSERT.
+     * list inside one INSERT. Public: the refusal frame in
+     * ServerClaimController::mapError() states this number to callers, so
+     * the bound ships from one source.
      */
-    private const int MAX_HOSTNAME_CANDIDATES = 16;
+    public const int MAX_HOSTNAME_CANDIDATES = 16;
 
     /**
      * Per-candidate length bound: RFC-1035 caps a text domain name at 253
      * octets (IPv6 literals need 45); anything longer is not a hostname an
-     * operator typed, it is flood padding.
+     * operator typed, it is flood padding. Public with the count bound above
+     * for the same reason — the refusal copy quotes both numbers.
      */
-    private const int MAX_HOSTNAME_LENGTH = 253;
+    public const int MAX_HOSTNAME_LENGTH = 253;
 
     /**
      * Rows the duplicate-retry window scan inspects (was `LIMIT 1`).

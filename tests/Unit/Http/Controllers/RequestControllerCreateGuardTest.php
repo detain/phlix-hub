@@ -20,6 +20,7 @@ use Phlix\Hub\Http\Controllers\RequestController;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Requests\RequestManager;
 use Phlix\Hub\Requests\RequestNotification;
+use Phlix\Hub\Tests\Support\DecodedJsonAssertions;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -40,6 +41,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class RequestControllerCreateGuardTest extends TestCase
 {
+    use DecodedJsonAssertions;
+
     /** @var RequestManager&\PHPUnit\Framework\MockObject\MockObject */
     private RequestManager $manager;
     /** @var RequestNotification&\PHPUnit\Framework\MockObject\MockObject */
@@ -182,6 +185,14 @@ final class RequestControllerCreateGuardTest extends TestCase
         self::assertSame('quota.exceeded', $decoded['code']);
         self::assertSame('requests', $decoded['quota_kind']);
         self::assertSame('on_release', $decoded['quota_reset']);
+        // Review hub__copywriter: this was the family's only cap text without
+        // its reset path; the remedy clause is the cure — pin it (the frame
+        // shape above stays generic on purpose: error and message are the
+        // same string by law).
+        self::assertStringContainsString(
+            'an admin approval or rejection frees a slot',
+            self::stringNode($decoded['message']),
+        );
         self::assertIsString($decoded['error']);
         self::assertSame($decoded['error'], $decoded['message']);
     }

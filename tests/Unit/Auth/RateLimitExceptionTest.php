@@ -10,7 +10,9 @@ use PHPUnit\Framework\TestCase;
 /**
  * Unit tests for {@see RateLimitException::retryAfterSeconds()} — the
  * `max(0, resetAt - now)` helper that feeds the HTTP 429 `Retry-After`
- * header (HB-4.6g).
+ * header (HB-4.6g) — and for {@see RateLimitException::retryAfterMessage()},
+ * the human sentence that must speak the same number truthfully
+ * (review hub__copywriter: no "0 seconds", no "1 seconds").
  *
  * @package Phlix\Hub\Tests\Unit\Auth
  */
@@ -41,5 +43,37 @@ final class RateLimitExceptionTest extends TestCase
         $retryAfter = $e->retryAfterSeconds();
         self::assertGreaterThan(0, $retryAfter);
         self::assertLessThanOrEqual(30, $retryAfter);
+    }
+
+    public function testRetryAfterMessageSpeaksThePluralWindow(): void
+    {
+        self::assertSame(
+            'Too many attempts — try again in 45 seconds.',
+            RateLimitException::retryAfterMessage(45),
+        );
+    }
+
+    public function testRetryAfterMessageUsesTheSingularUnitForOneSecond(): void
+    {
+        // 1 is a legitimate retryAfter() value (the window resets one second
+        // out); the sentence must not read "1 seconds".
+        self::assertSame(
+            'Too many attempts — try again in 1 second.',
+            RateLimitException::retryAfterMessage(1),
+        );
+    }
+
+    public function testRetryAfterMessageNeverSaysZeroSeconds(): void
+    {
+        // The floored arm: a window that already rolled reads as 'now',
+        // never as "0 seconds".
+        self::assertSame(
+            'Too many attempts — you may try again now.',
+            RateLimitException::retryAfterMessage(0),
+        );
+        self::assertSame(
+            'Too many attempts — you may try again now.',
+            RateLimitException::retryAfterMessage(-5),
+        );
     }
 }

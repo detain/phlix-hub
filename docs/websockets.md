@@ -555,7 +555,7 @@ and only `syncplay_playback_sync` (a state report, not a command) reaches everyo
 Separate dialects, deliberately separate echo semantics — see SPEC §9.1.
 
 **Each dialect has its own floor.** The legacy catalog above is a *floor, not a
-closed set*: `SyncPlayRelayWorker::onMessage()` relays any unrecognised but
+closed set*: `SyncPlayRelayWorker::onMessage()` relays any unrecognized but
 *properly-named bare* `type` verbatim to the rest of the room, so bare clients can
 agree on extensions without the hub knowing about them — with one exception
 (M-HUB-39): the four names the hub itself emits as bare *responses*

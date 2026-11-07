@@ -328,7 +328,12 @@ final class ServerClaimController
                 400,
                 'invalid_payload',
                 'Bad Request',
-                ['message' => 'hostnameCandidates exceed the pairing bounds'],
+                // A refusal the caller can act on states its limits (review
+                // hub__copywriter), like the field-marker arm below — the
+                // numbers are the handler's constants, never a re-typed copy.
+                ['message' => 'hostnameCandidates exceed the pairing bounds (max '
+                    . ClaimRequestHandler::MAX_HOSTNAME_CANDIDATES . ' candidates, '
+                    . ClaimRequestHandler::MAX_HOSTNAME_LENGTH . ' bytes each)'],
             ),
             // R-HUB-14 (minors sweep): the two legacy field markers from
             // ClaimRequestHandler::validateClaimRequest rode the 500 default

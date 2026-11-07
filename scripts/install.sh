@@ -705,9 +705,12 @@ phlix_apply_workerman_logrotate() {
 # leave the whole daemon appending to the rotated-away inode until restart
 # (the live log looks frozen while the .1 file never stops growing).
 #
-# maxsize, not size: "size" rotates only on the interval even if the file
-# exploded an hour in; "maxsize" rotates at the first weekly run past the
-# threshold, bounding worst-case growth by the cron cadence.
+# maxsize, not size: the man page is explicit that `size` is mutually
+# exclusive with the time interval — with it, the weekly mark below would be
+# dead and a quiet-but-old log would never rotate at all. `maxsize`
+# considers BOTH size and age: the file rotates on its weekly mark, and just
+# as readily on any logrotate run that finds it past the threshold, bounding
+# worst-case growth by the cron cadence.
 ${INSTALL_PATH}/.logs/workerman.log {
     weekly
     rotate 8

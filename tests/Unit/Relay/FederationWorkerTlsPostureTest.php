@@ -192,7 +192,7 @@ final class FederationWorkerTlsPostureTest extends TestCase
             'HUB_FEDERATION_REQUIRE_TLS=1',
             'Federation inbound is NOT started',
             'HUB_FEDERATION_TLS=true',
-            'warn-only behavior',
+            'warn-only behaviour',
             ':' . self::PORT,
         ];
         foreach ($needles as $needle) {

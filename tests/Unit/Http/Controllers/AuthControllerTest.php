@@ -102,8 +102,10 @@ final class AuthControllerTest extends TestCase
         // class's house law — every code pairs with a human `message`, and
         // the sentence's seconds agree with the Retry-After header (the one
         // value the client is actually told, so the pair must not drift).
+        // The agreement is now expressed through the same formatter the
+        // controller composes with (plural-aware, zero-window arm included).
         self::assertSame(
-            'Too many attempts — try again in ' . (int) $response->headers['Retry-After'] . ' seconds.',
+            RateLimitException::retryAfterMessage((int) $response->headers['Retry-After']),
             $decoded['message'],
         );
     }
@@ -400,7 +402,7 @@ final class AuthControllerTest extends TestCase
         self::assertSame('rate_limited', $decoded['code']);
         // HUB-m13: the register leg pairs the same way (law of errorFrame()).
         self::assertSame(
-            'Too many attempts — try again in ' . (int) $response->headers['Retry-After'] . ' seconds.',
+            RateLimitException::retryAfterMessage((int) $response->headers['Retry-After']),
             $decoded['message'],
         );
     }

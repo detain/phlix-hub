@@ -185,7 +185,7 @@ final class RelayWorkerTlsPostureTest extends TestCase
             'HUB_RELAY_REQUIRE_TLS=1',
             'enrollment JWT',
             'HUB_RELAY_TLS=true',
-            'warn-only behavior',
+            'warn-only behaviour',
             ':' . self::PORT,
         ];
         foreach ($needles as $needle) {

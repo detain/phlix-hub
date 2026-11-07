@@ -196,7 +196,7 @@ final class AuthController
             ->json([
                 'error' => 'Too Many Requests',
                 'code' => 'rate_limited',
-                'message' => 'Too many attempts — try again in ' . $retryAfter . ' seconds.',
+                'message' => RateLimitException::retryAfterMessage($retryAfter),
             ]);
     }
 

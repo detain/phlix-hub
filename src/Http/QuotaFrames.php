@@ -93,8 +93,16 @@ final class QuotaFrames
      */
     public const COLLABORATORS_TEXT = 'This server has reached its collaborator limit';
 
-    /** Human copy of the per-user pending-request cap refusal (M-HUB-23). */
-    public const REQUESTS_TEXT = 'You have too many pending requests';
+    /**
+     * Human copy of the per-user pending-request cap refusal (M-HUB-23).
+     * The family's only cap text that omitted its reset path (review
+     * hub__copywriter): RequestManager rows leave 'pending' exactly when an
+     * admin approves or rejects them (approveRequest()/rejectRequest() —
+     * there is no expiry leg), so the clause says precisely that, in the
+     * second-person register Minor 59 ratified for account-owned caps, and
+     * still without a terminal period (M58).
+     */
+    public const REQUESTS_TEXT = 'You have too many pending requests — an admin approval or rejection frees a slot';
 
     private function __construct()
     {

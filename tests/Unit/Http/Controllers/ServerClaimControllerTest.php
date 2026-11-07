@@ -272,6 +272,13 @@ final class ServerClaimControllerTest extends TestCase
         self::assertSame('invalid_payload', $frame['code']);
         self::assertSame('Bad Request', $frame['error']);
         self::assertStringContainsString('hostnameCandidates', $frame['message']);
+        // Review hub__copywriter: the refusal must state its numbers — and
+        // they are the handler's constants, interpolated, never re-typed.
+        self::assertStringContainsString(
+            'max ' . ClaimRequestHandler::MAX_HOSTNAME_CANDIDATES . ' candidates, '
+            . ClaimRequestHandler::MAX_HOSTNAME_LENGTH . ' bytes each',
+            $frame['message'],
+        );
     }
 
     public function testNewClaimMapsLegacyFieldMarkersToInvalidPayloadFrame(): void

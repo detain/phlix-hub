@@ -159,9 +159,15 @@ class HubRestartController
 
             $this->scheduleSignal((int) $pid);
 
+            // The ack names what the operator just caused (review
+            // hub__webux): SIGUSR2 is graceful but not invisible — workers
+            // finish in-flight work and cycle, so live relay tunnels drop.
+            // The reconnect itself belongs to the servers' own backoff
+            // ladder, so no timing is promised here.
             return (new Response())->json([
                 'success' => true,
-                'message' => 'Restart signal sent.',
+                'message' => 'Restart signal sent — workers are cycling; active relay tunnels '
+                . 'will drop and servers reconnect on their own.',
             ]);
         } catch (Throwable $e) {
             // Constant wire message: raw exception text can carry pid-file paths

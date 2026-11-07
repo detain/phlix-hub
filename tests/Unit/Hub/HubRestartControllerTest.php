@@ -122,7 +122,14 @@ final class HubRestartControllerTest extends TestCase
         /** @var array{success: true, message: string} $body */
         $body = $this->decode($response->body);
         self::assertTrue($body['success']);
-        self::assertSame('Restart signal sent.', $body['message']);
+        // Review hub__webux: the ack must disclose the restart's own cost
+        // (workers cycle, relay tunnels drop) — rotating this literal with
+        // the copy, strict identity keeps the pin's teeth.
+        self::assertSame(
+            'Restart signal sent — workers are cycling; active relay tunnels will drop '
+                . 'and servers reconnect on their own.',
+            $body['message'],
+        );
     }
 
     /**

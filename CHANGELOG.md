@@ -6,6 +6,66 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [w09L5] — review wave: restart ack names its cost, rate-limit retry copy made honest, log-viewer refusals join the envelope law, cap copy states its bounds and remedy, TLS log voice unified, docs orthography declared and swept, README Security/Server-Traffic truths, logrotate rationale un-inverted — 2026-11-07
+
+- The admin restart ack (`POST /api/v1/admin/restart`) now names what the
+  click just cost: "Restart signal sent." became "Restart signal sent —
+  workers are cycling; active relay tunnels will drop and servers reconnect on
+  their own." (review hub__webux). No reconnect timing is promised — that is
+  the servers' own backoff ladder. The wire pin rotated in the same commit.
+- The 429 auth retry sentence is now produced by one formatter
+  (`RateLimitException::retryAfterMessage()`, review hub__copywriter): the
+  floored `Retry-After` value could render "try again in 0 seconds" or
+  "1 seconds". Three honest arms — a rolled window says you may try again
+  now, one second reads as one second — and the header and the sentence are
+  composed from the same number, so the pair can still never drift (the
+  controller-boundary pins re-express that agreement through the formatter).
+- The log viewer's four refusal frames (its `tail` answer, reached as both
+  `GET /api/v1/me/logs/tail` and the mirrored `/api/v1/admin/logs/tail`) gained
+  the keys their sibling endpoints already dual-place (review hub__copywriter):
+  each keeps its legacy `error` prose and adds a REGISTERED `code`
+  (`invalid_request`, `storage_unavailable`, `not_found`, `hub.internal_error`)
+  plus an actionable `message` — the file-not-found answer now points at
+  `GET /api/v1/me/logs` to list what exists. Zero new wire codes. The 500 read
+  failure also stopped vanishing unlogged: the reason rides the HTTP log
+  channel (estate logger, the SharedUiController idiom), never the wire.
+- Two refusal texts state the remedy their own code knows (review
+  hub__copywriter): the `hostnameCandidates` pairing-bounds refusal quotes its
+  numbers (max 16 candidates, 253 bytes each) — and the numbers are the
+  handler's own constants (turned public for exactly this), so validator and
+  copy cannot drift. The pending-requests cap says how a slot frees: an admin
+  approval or rejection (there is no expiry leg), period-free per the family's
+  M58 copy law.
+- House voice for operator log copy (review hub__copywriter): the relay and
+  federation plaintext-refusal strings end "…return to warn-only behaviour."
+  like the -ise register the rest of src speaks; the TLS-posture needle lists
+  rotated in the same commit. The docblock at `RelayWorker.php` quoting the
+  server sibling's `config/relay.php` keeps its quotation verbatim — a quote
+  is not a spelling defect.
+- Docs orthography, declared and swept (review hub__writer): the README's
+  terms list gained an **orthography** entry declaring American spelling
+  canonical for README and `docs/`, and the 17 outlier word-sites that
+  contradicted it were swept (`behaviour`, `synchronised`, `initialised`,
+  `serialis*`, `fulfil*`, `unrecognised`). `src/` docblocks stay as the
+  review's own follow-up batch — this is a docs-only change.
+- README Security truth (review hub__pm): the feature tour promised "own
+  password/sessions" and "session hygiene", but the shipped Security page is a
+  password change and a not-offered passkeys note — no session list, no
+  revoke, no `/me/sessions` surface exists. The README now says what the page
+  says: session revocation is not offered; sign-in tokens expire on their own.
+- README Server Traffic truth (review hub__pm): the shipped admin page at
+  `/app/admin/metrics` was invisible to the README. It now appears in the
+  Features enumeration, the page-by-page admin tour (with its opt-in,
+  restart-gated data rule), the Admin API table (the four
+  `/api/v1/admin/metrics/*` routes), and the *Metrics* config section names it
+  as what those knobs feed.
+- `scripts/install.sh`'s logrotate rationale was inverted (w08L6 deep-dive):
+  the man page says `size` is mutually exclusive with the time interval — it
+  does NOT rotate "only on the interval"; `maxsize` is what considers both
+  size and age. The comment now states that truth; the shipped policy
+  (`weekly` + `maxsize 64M`) already matched it — no directive moved, and
+  `WorkermanLogRotationPinTest` guards the directives through this rewrite.
+
 ### Fixed [w08L6] — review wave: graceful-stop budget pinned under the unit's, workerman.log rotation drop-in, tunnel JWT wiring guard, entry-asset URL composition, literal-safe bootstrap injection, source-map deny prose, README grant-list truth pass — 2026-11-06
 
 - `start.php` now pins `Worker::$stopTimeout = 20`. Workerman SIGKILLs each

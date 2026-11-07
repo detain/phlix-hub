@@ -199,7 +199,7 @@ final class RelayWorker
             . 'proxy-fronted; under require_tls the hub will not start a '
             . 'credential-bearing cleartext listener. Enable TLS (HUB_RELAY_TLS=true + '
             . 'HUB_RELAY_TLS_CERT/KEY) or unset HUB_RELAY_REQUIRE_TLS to return to '
-            . 'warn-only behavior.';
+            . 'warn-only behaviour.';
     }
 
     /**
