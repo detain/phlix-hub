@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Documentation [w10L4 SH-097] — secret-carrier hygiene in the docs and one dead cross-ref — 2026-11-07
+
+- `docs/ui-asset-rebuild.md` troubleshooting fix wrote the fresh JWT secret
+  through a command-line argument (`echo "HUB_JWT_SECRET=…" | sudo tee`),
+  leaving the expanded secret in a process argv visible to local `ps`.
+  Replaced with the repo's own stdin idiom: an unquoted heredoc into
+  `sudo tee -a … >/dev/null`, exactly as the production-install env-file
+  block in README does it.
+- The same doc cross-referenced "README §Installation (manual)" — a
+  heading that does not exist. Repointed to §Production install on
+  Ubuntu → "4. Environment configuration", where the placeholder-refusal
+  semantics actually live.
+- README Docker quickstart: added a note at the `docker run` block that
+  every credential-carrying `-e VAR=value` (the `HUB_DB_PASSWORD` form it
+  shows, and the optional explicit-`HUB_JWT_SECRET` line below it) passes
+  the secret via argv — `--env-file` is the argv-free carrier, with the
+  honest caveat that docker performs no shell expansion in env-files.
+
 ### Documentation [w10L4 SH-095] — README coordinate currency and one missing posture override — 2026-11-07
 
 - The `v1.0.0`-relic warning quoted a fixed commit count ("834 commits

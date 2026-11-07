@@ -1112,6 +1112,12 @@ docker run -d --name phlix-hub \
   phlix-hub
 ```
 
+> `-e VAR=value` puts the secret's VALUE into the `docker run` process argv —
+> visible to any local `ps`/accounting for the life of the command. Prefer
+> `--env-file` (a chmod-600 file of `KEY=value` lines; note docker does not
+> expand shell syntax in env-files, so write literal values there) for every
+> credential-carrying `-e` above, including the explicit-JWT form below.
+
 `HUB_JWT_SECRET` may be passed explicitly (`-e HUB_JWT_SECRET="$(openssl rand -hex 32)"`) or
 left unset: the entrypoint then generates one key **once** and persists it to
 `/var/phlix/config/hub_jwt_secret` — mount that path as a volume (as above) so sessions survive
