@@ -15,6 +15,8 @@ use Phlix\Hub\Common\Support\Ids;
 use InvalidArgumentException;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use PDOException;
+use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -88,88 +90,141 @@ class LibrarySharingHandler
             throw new InvalidArgumentException('Invalid permission level', 400);
         }
 
-        // uk_library_share is a PERMANENT UNIQUE on
-        // (owner_user_id, collaborator_user_id, library_id), and revoke is a
-        // soft-delete. So a revoked row still occupies the tuple: re-sharing
-        // after revoke must UPDATE-reactivate it, never INSERT (which would
-        // hit a duplicate-key 500 forever). Look the tuple up across ALL
-        // states, then branch on the row's revocation.
-        $existingShare = $this->findAnyShareByTuple($ownerId, $collaboratorId, $libraryId);
-        if ($existingShare !== null && !$existingShare->isRevoked()) {
-            throw new InvalidArgumentException('Share already exists', 409);
-        }
-
-        $now = time();
-
-        if ($existingShare !== null) {
-            // Minors campaign M-HUB-25: the quota is enforced on EVERY grant
-            // path, reactivation included. The revoked collaborator is absent
-            // from the distinct ACTIVE count, so the cap check projects them
-            // as +1 — the old exemption let revoke-then-add-others-then-
-            // reactivate overshoot server.max_users_per_server without bound.
-            $this->assertWithinShareCap($serverId, $existingShare->collaboratorUserId, $now);
-
-            return $this->reactivateShare(
-                $existingShare,
-                $serverId,
-                $libraryName,
-                $permission,
-                $expiresAt,
-                $ownerId,
-                $now,
+        // SH-052 (review hub__dba-code): the check-then-write window — tuple
+        // occupancy read, collaborator cap count, and the write that acts on
+        // both — now runs in ONE transaction behind the server row's PK
+        // anchor. Before this each statement autocommitted separately, so two
+        // concurrent grants of the same tuple could BOTH read it free and one
+        // INSERT died as a raw 1062→500, and two concurrent first-shares to
+        // different collaborators could both count the same stale set and
+        // land an overshoot past server.max_users_per_server. The anchor
+        // serialises every grant for one server in the same order
+        // (servers anchor → tuple read → count → write), so the loser of a
+        // race waits for the winner's COMMIT and re-reads honestly — the
+        // ClaimRequestHandler::assertWithinServerCap idiom, applied to the
+        // surface whose docblock only had the caveat.
+        $this->db->beginTrans();
+        try {
+            // Lock the server row BEFORE anything the grant decision depends
+            // on. Ownership was proven above, before any lock — so a
+            // stranger cannot park on server rows. If a raw-SQL operator
+            // deletes the row between that check and this lock, the FOR
+            // UPDATE still gap-locks the same key rival grants target.
+            $this->db->query(
+                'SELECT id FROM servers WHERE id = :sid FOR UPDATE',
+                ['sid' => $serverId],
             );
+
+            // uk_library_share is a PERMANENT UNIQUE on
+            // (owner_user_id, collaborator_user_id, library_id), and revoke is a
+            // soft-delete. So a revoked row still occupies the tuple: re-sharing
+            // after revoke must UPDATE-reactivate it, never INSERT (which would
+            // hit a duplicate-key 500 forever). Look the tuple up across ALL
+            // states, then branch on the row's revocation.
+            $existingShare = $this->findAnyShareByTuple($ownerId, $collaboratorId, $libraryId);
+            if ($existingShare !== null && !$existingShare->isRevoked()) {
+                throw new InvalidArgumentException('Share already exists', 409);
+            }
+
+            $now = time();
+
+            if ($existingShare !== null) {
+                // Minors campaign M-HUB-25: the quota is enforced on EVERY grant
+                // path, reactivation included. The revoked collaborator is absent
+                // from the distinct ACTIVE count, so the cap check projects them
+                // as +1 — the old exemption let revoke-then-add-others-then-
+                // reactivate overshoot server.max_users_per_server without bound.
+                $this->assertWithinShareCap($serverId, $existingShare->collaboratorUserId, $now);
+
+                $granted = $this->reactivateShare(
+                    $existingShare,
+                    $serverId,
+                    $libraryName,
+                    $permission,
+                    $expiresAt,
+                    $ownerId,
+                    $now,
+                );
+            } else {
+                // Per-server collaborator quota (server.max_users_per_server, W5).
+                // A user already active on another library of this same server is
+                // already inside the distinct count, so extending them a new
+                // library is free (see assertWithinShareCap). 0 (default) =
+                // unlimited, preserving the pre-setting behavior byte-for-byte.
+                $this->assertWithinShareCap($serverId, $collaboratorId, $now);
+
+                /** @var string $shareId */
+                $shareId = $this->generateUuid();
+
+                try {
+                    $this->db->query(
+                        'INSERT INTO library_shares
+                            (id, owner_user_id, collaborator_user_id, server_id, library_id, library_name,
+                             permission_level, granted_by, created_at, expires_at)
+                         VALUES
+                            (:id, :owner_user_id, :collaborator_user_id, :server_id, :library_id, :library_name,
+                             :permission_level, :granted_by, :created_at, :expires_at)',
+                        [
+                            'id' => $shareId,
+                            'owner_user_id' => $ownerId,
+                            'collaborator_user_id' => $collaboratorId,
+                            'server_id' => $serverId,
+                            'library_id' => $libraryId,
+                            'library_name' => $libraryName,
+                            'permission_level' => $permission,
+                            'granted_by' => $ownerId,
+                            'created_at' => $now,
+                            'expires_at' => $expiresAt,
+                        ],
+                    );
+                } catch (PDOException $duplicate) {
+                    // Belt for the ONE window the anchor cannot span: two
+                    // DIFFERENT servers serialise on disjoint anchors, yet
+                    // uk_library_share keys the bare (owner, collaborator,
+                    // library) tuple. Answer that collision as the conflict it
+                    // is — byte-identical to the live-tuple 409 — instead of
+                    // letting a 1062 surface as a 500. Every other SQL error
+                    // rethrows untouched.
+                    $message = $duplicate->getMessage();
+                    if (!str_contains($message, '1062') && !str_contains($message, 'Duplicate entry')) {
+                        throw $duplicate;
+                    }
+                    throw new InvalidArgumentException('Share already exists', 409);
+                }
+
+                $this->logger->info('Library shared', [
+                    'share_id' => $shareId,
+                    'owner_id' => $ownerId,
+                    'collaborator_id' => $collaboratorId,
+                    'library_id' => $libraryId,
+                    'permission' => $permission,
+                ]);
+
+                $granted = new LibraryShare(
+                    id: $shareId,
+                    ownerUserId: $ownerId,
+                    collaboratorUserId: $collaboratorId,
+                    serverId: $serverId,
+                    libraryId: $libraryId,
+                    libraryName: $libraryName,
+                    permissionLevel: $permission,
+                    createdAt: $now,
+                    expiresAt: $expiresAt,
+                );
+            }
+
+            $this->db->commitTrans();
+        } catch (Throwable $e) {
+            $this->db->rollBackTrans();
+            throw $e;
         }
 
-        // Per-server collaborator quota (server.max_users_per_server, W5).
-        // A user already active on another library of this same server is
-        // already inside the distinct count, so extending them a new library
-        // is free (see assertWithinShareCap). 0 (default) = unlimited,
-        // preserving the pre-setting behavior byte-for-byte.
-        $this->assertWithinShareCap($serverId, $collaboratorId, $now);
-
-        /** @var string $shareId */
-        $shareId = $this->generateUuid();
-
-        $this->db->query(
-            'INSERT INTO library_shares
-                (id, owner_user_id, collaborator_user_id, server_id, library_id, library_name,
-                 permission_level, granted_by, created_at, expires_at)
-             VALUES
-                (:id, :owner_user_id, :collaborator_user_id, :server_id, :library_id, :library_name,
-                 :permission_level, :granted_by, :created_at, :expires_at)',
-            [
-                'id' => $shareId,
-                'owner_user_id' => $ownerId,
-                'collaborator_user_id' => $collaboratorId,
-                'server_id' => $serverId,
-                'library_id' => $libraryId,
-                'library_name' => $libraryName,
-                'permission_level' => $permission,
-                'granted_by' => $ownerId,
-                'created_at' => $now,
-                'expires_at' => $expiresAt,
-            ],
-        );
-
-        $this->logger->info('Library shared', [
-            'share_id' => $shareId,
-            'owner_id' => $ownerId,
-            'collaborator_id' => $collaboratorId,
-            'library_id' => $libraryId,
-            'permission' => $permission,
-        ]);
-
-        return new LibraryShare(
-            id: $shareId,
-            ownerUserId: $ownerId,
-            collaboratorUserId: $collaboratorId,
-            serverId: $serverId,
-            libraryId: $libraryId,
-            libraryName: $libraryName,
-            permissionLevel: $permission,
-            createdAt: $now,
-            expiresAt: $expiresAt,
-        );
+        // No belt null-check here: the branch above is EXHAUSTIVE by
+        // construction — every path that reaches commit assigns $granted
+        // (reactivate or fresh), every failure throws before it, and phpstan
+        // proves the type. A guard that cannot fire only launders a lie about
+        // the states this method can produce.
+        return $granted;
     }
 
     /**
@@ -191,10 +246,16 @@ class LibrarySharingHandler
      * Expiry uses PHP's clock bound as a parameter — MySQL NOW() would mix
      * server timezones into the predicate (estate TZ-skew lesson).
      *
-     * Honest caveat: concurrent first-shares to two DIFFERENT new users are
-     * not serialised against this count (no row lock spans it), so a rare
-     * small overshoot is possible on a quota guard, mirroring the claim-cap
-     * posture in ClaimRequestHandler.
+     * Locking: since SH-052 this count is NOT free-floating any more —
+     * shareLibrary calls it strictly behind the `servers` PK-row
+     * `FOR UPDATE` anchor inside one explicit transaction, so concurrent
+     * grants of the same server serialise anchor → read → count → write and
+     * the loser's count includes the winner's just-committed collaborator.
+     * The claim path anchors on the `users` PK row
+     * (ClaimRequestHandler::assertWithinServerCap); this one keys on the
+     * dimension its invariant counts by — the server. Disjoint anchors cannot
+     * cycle: every grant takes the servers row first and share/library rows
+     * only afterwards, in this fixed order.
      *
      * @throws InvalidArgumentException ('SERVER_SHARE_CAP_REACHED', 409) when
      *         admitting this collaborator would exceed the cap.

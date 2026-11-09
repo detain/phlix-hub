@@ -74,6 +74,8 @@ final class MigrationFileTest extends TestCase
             '050_federation_peer_public_key_hash.sql',
             '051_token_prune_revoked_at_index.sql',
             '052_claim_code_hash.sql',
+            '053_oauth_prune_sweep_indexes.sql',
+            '054_drop_redundant_relay_user_quota_index.sql',
         ];
         $files = array_map('basename', glob(self::MIGRATIONS_DIR . '/*.sql') ?: []);
         sort($files);

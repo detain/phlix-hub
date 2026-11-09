@@ -70,7 +70,26 @@ return [
     // `server.max_users_per_server` in ALLOWED_KEYS; LIVE consumer:
     // LibrarySharingHandler::shareLibrary() INSERT-branch count.
     'max_users_per_server' => $envInt('HUB_MAX_USERS_PER_SERVER', 0),
+    // Workerman daemon log. SINGLE SOURCE OF TRUTH: start.php assigns
+    // `Worker::$logFile` FROM THIS VALUE (SH-059 — before that pin this key
+    // had zero consumers and HUB_WORKERMAN_LOG was a documented dead knob).
+    // Keep the default inside .logs/: the hardened systemd unit only lists
+    // .logs/, var/ and config/ in ReadWritePaths, and the install.sh logrotate
+    // drop-in rotates THIS default path — a custom value needs its own unit.
     'workerman_log' => $envStr('HUB_WORKERMAN_LOG', __DIR__ . '/../.logs/workerman.log'),
+
+    // SH-050: the skill identity the /alexa/skill gate pins every verified
+    // request to. The signature chain proves a request came from AMAZON; this
+    // value is what proves it was addressed to THIS skill (any Echo developer
+    // can point any skill at any endpoint, and their requests carry valid
+    // Amazon signatures). Copy it from the Skills Console — it is printed in
+    // JSON under "Skill Endpoint Information" as applicationId.
+    // Nullable on purpose: unset on dev/test hubs means "identity gate
+    // inactive" (PHPUnit posture, config/database.php's dev-detection family);
+    // unset on a PRODUCTION boot is a fail-closed rejection of every request,
+    // resolved by HubServicesProvider — the same "misconfiguration is loud,
+    // not permissive" doctrine as the JWT secret.
+    'alexa_application_id' => ($v = getenv('HUB_ALEXA_APPLICATION_ID')) !== false && $v !== '' ? $v : null,
 
     // PID file for graceful reload (SIGUSR2). SINGLE SOURCE OF TRUTH: start.php
     // assigns `Worker::$pidFile` FROM THIS VALUE, and the DI container hands the

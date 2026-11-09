@@ -59,14 +59,29 @@ final class RefreshTokenRevocationServiceTest extends TestCase
 
     public function testRevokePrunesFirstThenInsertsBoundRow(): void
     {
+        // Seed one stale row so the sweep speaks BOTH phases — on an empty
+        // table the protocol correctly stops after the key SELECT, and the
+        // ordering law would go unpinned.
+        $this->table['stale-jti'] = ['user_id' => 'u-0', 'expires_at' => $this->now - 86_400 - 1];
+
         $service = new RefreshTokenRevocationService($this->makeFakeDb());
 
         self::assertTrue($service->revoke('abc123', 'u-9', $this->now + 7200));
 
-        self::assertCount(2, $this->log, 'revoke() must sweep stale rows before writing');
-        self::assertStringContainsString('DELETE FROM auth_revoked_refresh_tokens', $this->log[0]['sql']);
+        // SH-053: the prune is the two-phase keyed sweep (non-locking key
+        // SELECT, then DELETE by PK), then the write — three statements.
+        self::assertSame(
+            [
+                'SELECT jti FROM auth_revoked_refresh_tokens'
+                    . ' WHERE expires_at < NOW() - INTERVAL 86400 SECOND ORDER BY jti LIMIT 1000',
+                'DELETE FROM auth_revoked_refresh_tokens WHERE jti IN (:id_0)',
+            ],
+            [$this->log[0]['sql'], $this->log[1]['sql']],
+            'revoke() must sweep stale rows by key before writing',
+        );
+        self::assertSame(['id_0' => 'stale-jti'], $this->log[1]['params']);
 
-        $insert = $this->log[1];
+        $insert = $this->log[2];
         self::assertStringContainsString('INSERT IGNORE INTO auth_revoked_refresh_tokens', $insert['sql']);
         // Never interpolate the values into SQL: expiry travels as a bound
         // unix int rendered by FROM_UNIXTIME.
@@ -154,8 +169,11 @@ final class RefreshTokenRevocationServiceTest extends TestCase
                 /** @var array<string, mixed> $params */
                 $this->log[] = ['sql' => $sql, 'params' => $params];
 
-                if (str_starts_with(ltrim($sql), 'DELETE')) {
-                    return $this->applyPrune($sql);
+                if (str_starts_with(ltrim($sql), 'DELETE FROM auth_revoked_refresh_tokens WHERE jti IN')) {
+                    return $this->applyKeyedDelete($sql, $params);
+                }
+                if (str_starts_with(ltrim($sql), 'SELECT jti FROM auth_revoked_refresh_tokens')) {
+                    return $this->applyKeySelect($sql);
                 }
                 if (str_starts_with(ltrim($sql), 'INSERT')) {
                     return $this->applyInsert($params);
@@ -216,18 +234,49 @@ final class RefreshTokenRevocationServiceTest extends TestCase
     }
 
     /**
-     * The DELETE literal embeds the grace as an `INTERVAL 86400 SECOND`
-     * constant; parse it back out rather than re-hardcoding it, so a service
-     * change to the interval is honoured by the fake instead of contradicted.
+     * Phase 1 of the keyed sweep (SH-053). The DELETE/SELECT literals embed
+     * the grace as an `INTERVAL 86400 SECOND` constant and the batch as a
+     * `LIMIT n`; parse both back out rather than re-hardcoding them, so a
+     * service change to either is honoured by the fake instead of
+     * contradicted.
+     *
+     * @return list<array{jti: string}>
      */
-    private function applyPrune(string $sql): int
+    private function applyKeySelect(string $sql): array
     {
-        preg_match('/INTERVAL (\d+) SECOND/', $sql, $m);
-        $grace = isset($m[1]) ? (int) $m[1] : 0;
+        preg_match('/INTERVAL (\d+) SECOND/', $sql, $graceMatch);
+        preg_match('/LIMIT (\d+)$/', $sql, $limitMatch);
+        $grace = isset($graceMatch[1]) ? (int) $graceMatch[1] : 0;
+        $limit = isset($limitMatch[1]) ? (int) $limitMatch[1] : 0;
 
-        $removed = 0;
+        $keys = [];
         foreach ($this->table as $jti => $row) {
             if ($row['expires_at'] < $this->now - $grace) {
+                $keys[] = $jti;
+                if ($limit > 0 && count($keys) >= $limit) {
+                    break;
+                }
+            }
+        }
+
+        return array_map(static fn (string $jti): array => ['jti' => $jti], $keys);
+    }
+
+    /**
+     * Phase 2: the DELETE names its PKs through `:id_<n>` placeholders — the
+     * fake resolves them from the bound params, never re-derives the sweep
+     * predicate (that is phase 1's job; re-deriving here would let a bug in
+     * phase 1 hide).
+     *
+     * @param array<string, mixed> $params
+     */
+    private function applyKeyedDelete(string $sql, array $params): int
+    {
+        preg_match_all('/:(id_\d+)/', $sql, $placeholders);
+        $removed = 0;
+        foreach ($placeholders[1] as $name) {
+            $jti = $params[$name] ?? null;
+            if (is_string($jti) && isset($this->table[$jti])) {
                 unset($this->table[$jti]);
                 $removed++;
             }

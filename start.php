@@ -96,13 +96,29 @@ LoggerFactory::init($loggerConfigPath);
 // pool is initialised lazily by the container the first time a service
 // asks for a Connection.
 
+// The server config is loaded HERE — before the two bootstrap pins that must
+// read from it — because it is a pure array-returning file (its $envStr/
+// $envInt/$envFloat closures read the environment at include time and nothing
+// else), so one include serves every later reader. SH-059: 'workerman_log'
+// below is exactly why the include had to move up; a config key with zero
+// consumers is a dead seam advertising a knob that does nothing.
+/** @var array<string, mixed> $serverConfig */
+$serverConfig = include $configDir . '/server.php';
+
 // Workerman's default log file is `workerman.log` in the current
-// directory. Pin it to the install's .logs/ dir so the location is
-// explicit and survives future systemd hardening (ProtectSystem=strict
-// + ReadWritePaths) without needing a code change. phlix-server hit
-// this exact EROFS path when its hardened unit shipped first.
-$workerLogFile = __DIR__ . '/.logs/workerman.log';
-$ensureWritableDir(dirname($workerLogFile), 'workerman log (.logs/)');
+// directory. Pin it FROM config/server.php's 'workerman_log' key so the
+// advertised HUB_WORKERMAN_LOG knob becomes the live seam its README rows
+// claim it is (SH-059 — the key existed with zero consumers). The config's
+// own default still lands inside the install's .logs/ dir, so the location
+// stays explicit and survives systemd hardening (ProtectSystem=strict +
+// ReadWritePaths) unchanged; phlix-server hit this exact EROFS path when its
+// hardened unit shipped first. The install.sh logrotate drop-in targets the
+// default path — a custom HUB_WORKERMAN_LOG needs its own rotation (noted,
+// out of scope here).
+$workerLogFile = is_string($serverConfig['workerman_log'] ?? null) && $serverConfig['workerman_log'] !== ''
+    ? (string) $serverConfig['workerman_log']
+    : __DIR__ . '/.logs/workerman.log';
+$ensureWritableDir(dirname($workerLogFile), 'workerman log (config server.php workerman_log)');
 Worker::$logFile = $workerLogFile;
 
 // Graceful-stop budget. Workerman's master sends each child SIGTERM and then
@@ -118,11 +134,8 @@ Worker::$logFile = $workerLogFile;
 Worker::$stopTimeout = 20;
 
 // -----------------------------------------------------------------------------
-// 3. Load server config, then pin the pid/status files FROM IT
+// 3. Pin the pid/status files FROM the server config (loaded in section 2)
 // -----------------------------------------------------------------------------
-
-/** @var array<string, mixed> $serverConfig */
-$serverConfig = include $configDir . '/server.php';
 
 // -----------------------------------------------------------------------------
 // 3b. Coroutine runtime — set Swoole as the eventLoop driver and enable a

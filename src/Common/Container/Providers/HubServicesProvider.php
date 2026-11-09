@@ -207,6 +207,20 @@ final class HubServicesProvider implements ServiceProviderInterface
         /** @var array<array-key, mixed> $arrBootConfig */
         $arrBootConfig = is_array($appConfig['arr'] ?? null) ? $appConfig['arr'] : [];
 
+        // SH-050. The skill-identity half of the Alexa gate. Resolved HERE at
+        // container build (not lazily per request) so the value the middleware
+        // pins envelopes against is fixed for the process lifetime, and the
+        // fail-closed posture is decided where every other fail-loud boot
+        // posture lives. `alexa_application_id` is nullable by design
+        // (config/server.php); dev/PHPUnit keeps it OPTIONAL, a non-dev boot
+        // without it rejects EVERY request at the gate — an unset identity is
+        // an unset half of a signature check, not a pass-through.
+        $alexaApplicationId = is_string($appConfig['alexa_application_id'] ?? null)
+            && $appConfig['alexa_application_id'] !== ''
+            ? (string) $appConfig['alexa_application_id']
+            : null;
+        $alexaIdentityRequired = !self::alexaIdentityOptional();
+
         // 🐛 S269 — the comment that used to sit here claimed "AuditLogRepository
         // must be registered before AuditLogger so PHP-DI can auto-inject it as
         // the optional nullable constructor param". That was wrong on both
@@ -618,6 +632,9 @@ final class HubServicesProvider implements ServiceProviderInterface
             AlexaSignatureMiddleware::class => factory(static function (
                 RateLimiterInterface $rateLimiter,
                 AlexaRejectionAuditorInterface $auditor,
+            ) use (
+                $alexaApplicationId,
+                $alexaIdentityRequired,
             ): AlexaSignatureMiddleware {
                 return new AlexaSignatureMiddleware(
                     new CurlCertChainFetcher(),
@@ -625,6 +642,9 @@ final class HubServicesProvider implements ServiceProviderInterface
                     $rateLimiter,
                     $auditor,
                     [],
+                    AlexaSignatureMiddleware::CACHE_TTL_SECONDS,
+                    $alexaApplicationId,
+                    $alexaIdentityRequired,
                 );
             })->parameter('rateLimiter', get(RateLimitProfiles::ALEXA))
                 ->parameter('auditor', get(AlexaRejectionAuditorInterface::class)),
@@ -982,18 +1002,24 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->parameter('jwtService', get(EnrollmentJwtService::class)),
 
             LibrarySharingHandler::class => factory(static function (
-                Connection $db,
                 UserRepository $users,
             ) use ($maxUsersBoot): LibrarySharingHandler {
                 return new LibrarySharingHandler(
-                    $db,
+                    // Dedicated 'txn' connection (SH-052, mirroring the
+                    // ClaimRequestHandler binding above): shareLibrary wraps its
+                    // check-then-write window in an explicit transaction, so it
+                    // must not run on the 'mysql' pool where the cid<0
+                    // maintenance reapers would trip 2014 / "already active
+                    // transaction" mid-window (see config/database.php). The
+                    // remaining methods are single-statement autocommit
+                    // reads/writes — exactly what the 'txn' facade serves well.
+                    ConnectionPool::getConnection('txn'),
                     $users,
                     LoggerFactory::get(LogChannels::HUB),
                     // LIVE server.max_users_per_server (0 = unlimited).
                     HubSettingsResolvers::int('server.max_users_per_server', $maxUsersBoot, 0, 10000),
                 );
-            })->parameter('db', get(Connection::class))
-                ->parameter('users', get(UserRepository::class)),
+            })->parameter('users', get(UserRepository::class)),
 
             LibraryShareController::class => factory(static function (
                 LibrarySharingHandler $handler,
@@ -1546,6 +1572,35 @@ final class HubServicesProvider implements ServiceProviderInterface
         /** @var mixed $value */
         $value = $config[$key] ?? null;
         return is_string($value) && $value !== '' ? $value : $default;
+    }
+
+    /**
+     * SH-050: is this boot a place where the Alexa skill-identity gate may
+     * stay unconfigured?
+     *
+     * The membership test mirrors `config/database.php`'s dev-fallback closure
+     * and `AuthServicesProvider::isTestEnvironment()` — the same three families
+     * (dev env names, an explicit test env, PHPUnit's own marker constants) —
+     * so a hub that devolves onto permissive behaviour does so only where the
+     * JWT secret and the dev DB password already do. Any other boot REQUIRES
+     * the configured application id or the gate rejects every request.
+     */
+    private static function alexaIdentityOptional(): bool
+    {
+        foreach (['HUB_ENV', 'APP_ENV'] as $name) {
+            $value = getenv($name);
+            if (is_string($value) && in_array(strtolower(trim($value)), ['dev', 'development', 'local'], true)) {
+                return true;
+            }
+        }
+
+        foreach (['HUB_ENV', 'APP_ENV', 'PHLIX_ENV'] as $name) {
+            if (getenv($name) === 'test') {
+                return true;
+            }
+        }
+
+        return defined('PHPUNIT_COMPOSER_INSTALL') || defined('__PHPUNIT_PHAR__');
     }
 
     /**

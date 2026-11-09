@@ -251,6 +251,19 @@ final class AlexaSignatureMiddleware
      *        chain may be reused. Lowering it only costs fetches; it can never
      *        weaken a verdict, because every cache hit is re-checked against the
      *        leaf's own `notAfter` as well.
+     * @param string|null $applicationId The skill's `amzn1.ask.skill.*` id this
+     *        hub belongs to (config `alexa_application_id` / env
+     *        HUB_ALEXA_APPLICATION_ID, SH-050). A verified request whose envelope
+     *        carries ANY OTHER application id — or none — is rejected: the
+     *        signature only proves the request came from Amazon, not that it was
+     *        addressed to THIS skill, so any developer linking their own skill to
+     *        this endpoint's URL could otherwise drive it. Null means
+     *        unconfigured; {@see $unconfiguredIsRejection} decides the verdict.
+     * @param bool $unconfiguredIsRejection Production posture for a null
+     *        {@see $applicationId}: reject (what the container wires outside
+     *        dev/test) rather than skip. The middleware's own default is false so
+     *        every pre-existing construction keeps exact behaviour — the
+     *        provider, not the default, carries the fail-closed law.
      */
     public function __construct(
         private readonly CertChainFetcherInterface $fetcher,
@@ -259,6 +272,8 @@ final class AlexaSignatureMiddleware
         private readonly AlexaRejectionAuditorInterface $auditor,
         private readonly array $caBundlePaths = [],
         private readonly int $cacheTtlSeconds = self::CACHE_TTL_SECONDS,
+        private readonly ?string $applicationId = null,
+        private readonly bool $unconfiguredIsRejection = false,
     ) {
     }
 
@@ -339,7 +354,14 @@ final class AlexaSignatureMiddleware
         }
 
         // (6) Replay window, read from the bytes just verified.
-        return $this->rejectTimestamp($request, $rawBody);
+        $timestampProblem = $this->rejectTimestamp($request, $rawBody);
+        if ($timestampProblem !== null) {
+            return $timestampProblem;
+        }
+
+        // (7) SH-050: skill identity, from the same verified bytes. Last arm,
+        // because everything it reads has only just become trustworthy.
+        return $this->rejectApplicationId($request, $rawBody);
     }
 
     /**
@@ -719,6 +741,74 @@ final class AlexaSignatureMiddleware
         }
 
         // The single allow. Everything above this line returns a Response.
+        return null;
+    }
+
+    /**
+     * SH-050: the signature proves the request came from AMAZON; it does not
+     * prove it was addressed to THIS skill.
+     *
+     * Every skill on the whole Echo platform can be pointed at any HTTPS
+     * endpoint by its developer, and a request from another developer's skill
+     * carries a perfectly valid Amazon signature — the cert chain and body
+     * checks above are origin proofs, not destination proofs. Without this arm
+     * any Alexa developer who learns the endpoint URL can drive hub intent
+     * handling with payloads this skill was never designed or reviewed for.
+     * Amazon's own contract answers the gap: the verified body carries
+     * `request.application.applicationId`, and the device console prints the
+     * same id in JSON under Skills Kit's "Skill Endpoint Information" — the
+     * value to configure is a copy-paste, not a guess.
+     *
+     * Posture:
+     *  - id configured → the envelope must carry EXACTLY this id (constant
+     *    time). Absent, non-string, or foreign → reject.
+     *  - id unconfigured and strict (production) → reject. A gate whose
+     *    identity half is unset is not a gate: the alternative — skipping —
+     *    is exactly the hole this card closes, silently re-opened by an
+     *    operator who forgets one env var.
+     *  - id unconfigured and permissive (dev/PHPUnit, wired by the provider)
+     *    → allow, so the pre-existing suite semantics are untouched and
+     *    local development does not require a skill to exist.
+     *
+     * The rejection travels the EXISTING ALEXA_VERIFICATION_ERROR arm: the
+     * detail names the precise cause, but the client-visible literals stay
+     * byte-identical to every other verification failure — a foreign-skill
+     * probe learns nothing it could not already learn from a bad signature,
+     * and the contracts error registry (FROZEN) gains no new code.
+     */
+    private function rejectApplicationId(Request $request, string $verifiedRawBody): ?Response
+    {
+        /** @var mixed $decoded */
+        $decoded = json_decode($verifiedRawBody, true);
+        /** @var mixed $requestNode */
+        $requestNode = is_array($decoded) ? ($decoded['request'] ?? null) : null;
+        /** @var mixed $applicationNode */
+        $applicationNode = is_array($requestNode) ? ($requestNode['application'] ?? null) : null;
+        /** @var mixed $envelopeApplicationId */
+        $envelopeApplicationId = is_array($applicationNode)
+            ? ($applicationNode['applicationId'] ?? null)
+            : null;
+
+        if ($this->applicationId === null && !$this->unconfiguredIsRejection) {
+            return null; // dev/test posture — see method docblock.
+        }
+
+        if ($this->applicationId === null) {
+            return $this->reject(
+                $request,
+                'ALEXA_VERIFICATION_ERROR',
+                'HUB_ALEXA_APPLICATION_ID is not configured on a non-dev hub',
+            );
+        }
+
+        if (!is_string($envelopeApplicationId) || !hash_equals($this->applicationId, $envelopeApplicationId)) {
+            return $this->reject(
+                $request,
+                'ALEXA_VERIFICATION_ERROR',
+                'request.application.applicationId does not name this skill',
+            );
+        }
+
         return null;
     }
 

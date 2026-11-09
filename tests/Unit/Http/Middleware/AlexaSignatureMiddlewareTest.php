@@ -64,10 +64,12 @@ use RuntimeException;
  * prove that "rejected" tests are not all passing at some earlier guard: it holds
  * every other input correct and breaks only the signature, and asserts the code
  * is `ALEXA_SIGNATURE_INVALID`. {@see testAStaleTimestampIsRejectedAfterAValidSignature()}
- * is the same argument one step further on — the timestamp check is the LAST
- * thing the middleware does, so reaching it at all proves the URL check, the
- * fetch, the chain verification, the SAN check and `openssl_verify()` all ran and
- * all passed.
+ * is the same argument one step further on — since SH-050 the timestamp check is
+ * the SECOND-TO-LAST guard (the skill-identity arm follows it), so reaching the
+ * stale-timestamp rejection at all proves the URL check, the fetch, the chain
+ * verification, the SAN check and `openssl_verify()` all ran and all passed, and
+ * {@see testAForeignApplicationIdIsRejectedAfterAnOtherwisePerfectRequest()}
+ * carries the argument to the true end of the pipeline.
  *
  * @package Phlix\Hub\Tests\Unit\Http\Middleware
  */
@@ -834,11 +836,124 @@ final class AlexaSignatureMiddlewareTest extends TestCase
     }
 
     // ---------------------------------------------------------------------
+    // SH-050: skill identity — request.application.applicationId
+    // ---------------------------------------------------------------------
+
+    private const OUR_SKILL = 'amzn1.ask.skill.w16-hub-own-skill-0000';
+
+    /**
+     * The end-of-pipeline anti-vacuity leg for the identity arm: every other
+     * input is perfect (valid chain, genuine signature, fresh timestamp) and
+     * ONLY the applicationId differs. The inline control with our own id
+     * proves the rejection below cannot be an earlier guard in disguise.
+     */
+    public function testAForeignApplicationIdIsRejectedAfterAnOtherwisePerfectRequest(): void
+    {
+        $fixture = AlexaCertificateFixture::shared();
+        $fetcher = new RecordingCertChainFetcher($fixture->chain('valid'));
+        $middleware = $this->middleware($fetcher, self::OUR_SKILL);
+
+        $ours = self::body(null, self::OUR_SKILL);
+        self::assertNull(
+            $middleware(self::request($ours, $fixture->sign($ours))),
+            'control: an envelope naming our own skill must pass the identity arm',
+        );
+
+        $theirs = self::body(null, 'amzn1.ask.skill.someone-elses-skill');
+        $this->assertRejected(
+            $middleware(self::request($theirs, $fixture->sign($theirs))),
+            'ALEXA_VERIFICATION_ERROR',
+            // (assertRejected pins both channels of the dual-placement frame)
+        );
+    }
+
+    public function testAnEnvelopeWithoutAnApplicationObjectIsRejectedWhenIdentityIsConfigured(): void
+    {
+        $fixture = AlexaCertificateFixture::shared();
+        $fetcher = new RecordingCertChainFetcher($fixture->chain('valid'));
+        $middleware = $this->middleware($fetcher, self::OUR_SKILL);
+
+        $body = self::body(); // pre-SH-050 shape: no request.application at all
+        $this->assertRejected(
+            $middleware(self::request($body, $fixture->sign($body))),
+            'ALEXA_VERIFICATION_ERROR',
+        );
+    }
+
+    public function testAnUnconfiguredIdentityStaysInertOnThePermissivePosture(): void
+    {
+        $fixture = AlexaCertificateFixture::shared();
+        $fetcher = new RecordingCertChainFetcher($fixture->chain('valid'));
+        // dev/test wiring (HubServicesProvider's alexaIdentityOptional arm):
+        // no id, not strict — the identity arm skips, every other guard lives.
+        $middleware = $this->middleware($fetcher, null, false);
+
+        $body = self::body(null, 'amzn1.ask.skill.anything-at-all');
+        self::assertNull(
+            $middleware(self::request($body, $fixture->sign($body))),
+            'the permissive posture must not reject on identity grounds',
+        );
+    }
+
+    public function testAnUnconfiguredIdentityRejectsEverythingOnTheStrictPosture(): void
+    {
+        $fixture = AlexaCertificateFixture::shared();
+        $fetcher = new RecordingCertChainFetcher($fixture->chain('valid'));
+        $middleware = $this->middleware($fetcher, null, true);
+
+        // Even an envelope that names the id an operator LATER configures is
+        // rejected while the hub runs with none: there is nothing to match,
+        // and "matches a value we never loaded" is the permissive hole again.
+        $body = self::body(null, self::OUR_SKILL);
+        $this->assertRejected(
+            $middleware(self::request($body, $fixture->sign($body))),
+            'ALEXA_VERIFICATION_ERROR',
+        );
+    }
+
+    /**
+     * Static source-pins (the repo's tripwire idiom): the constructor arms
+     * above are toothless if production wiring never passes the values.
+     * config/server.php must keep the nullable env seam and
+     * HubServicesProvider must feed BOTH params into the middleware it
+     * builds — this is where the fail-closed law actually lives.
+     */
+    public function testTheProductionWiringCarriesTheIdentitySeams(): void
+    {
+        $repoRoot = dirname(__DIR__, 4);
+
+        $config = file_get_contents($repoRoot . '/config/server.php');
+        self::assertIsString($config);
+        self::assertMatchesRegularExpression(
+            '/\'alexa_application_id\' => \(\$v = getenv\(\'HUB_ALEXA_APPLICATION_ID\'\)\)'
+                . ' !== false && \$v !== \'\' \? \$v : null,/',
+            $config,
+            'config/server.php must keep the nullable HUB_ALEXA_APPLICATION_ID seam',
+        );
+
+        $provider = file_get_contents($repoRoot . '/src/Common/Container/Providers/HubServicesProvider.php');
+        self::assertIsString($provider);
+        $start = strpos($provider, 'AlexaSignatureMiddleware::class => factory');
+        self::assertIsInt($start, 'the Alexa middleware binding must exist in the provider');
+        $slice = substr($provider, $start, 1200);
+        self::assertStringContainsString('$alexaApplicationId,', $slice);
+        self::assertStringContainsString('$alexaIdentityRequired,', $slice);
+        self::assertStringContainsString(
+            '$appConfig[\'alexa_application_id\'] ?? null',
+            $provider,
+            'the configured id must come from the server config array',
+        );
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
 
-    private function middleware(CertChainFetcherInterface $fetcher): AlexaSignatureMiddleware
-    {
+    private function middleware(
+        CertChainFetcherInterface $fetcher,
+        ?string $applicationId = null,
+        bool $unconfiguredIsRejection = false,
+    ): AlexaSignatureMiddleware {
         return new AlexaSignatureMiddleware(
             $fetcher,
             // A StructuredLogger with no handlers configured: real class, real
@@ -847,6 +962,14 @@ final class AlexaSignatureMiddlewareTest extends TestCase
             self::generousLimiter(),
             new RecordingAlexaRejectionAuditor(),
             AlexaCertificateFixture::shared()->trustedCaBundle(),
+            AlexaSignatureMiddleware::CACHE_TTL_SECONDS,
+            // SH-050 arms: the defaults here mirror the constructor's, so
+            // every pre-existing call site keeps its exact behaviour; the
+            // identity tests pass them explicitly. The PRODUCTION posture
+            // (configured id / strict-on) is wired by HubServicesProvider,
+            // which the source pin at the end of the SH-050 section checks.
+            $applicationId,
+            $unconfiguredIsRejection,
         );
     }
 
@@ -881,20 +1004,28 @@ final class AlexaSignatureMiddlewareTest extends TestCase
     }
 
     /**
-     * An Alexa-shaped request envelope. `$timestamp` defaults to now.
+     * An Alexa-shaped request envelope. `$timestamp` defaults to now;
+     * `$applicationId` (SH-050) adds the `request.application` object Amazon
+     * ships in real envelopes — omitted by default, which is exactly the
+     * shape a pre-SH-050 test suite built.
      */
-    private static function body(?string $timestamp = null): string
+    private static function body(?string $timestamp = null, ?string $applicationId = null): string
     {
+        $request = [
+            'type' => 'IntentRequest',
+            'requestId' => 'amzn1.echo-api.request.s90-test',
+            'timestamp' => $timestamp ?? gmdate('Y-m-d\TH:i:s\Z'),
+            'locale' => 'en-US',
+            'intent' => ['name' => 'PhlixTitleRuntimeIntent'],
+        ];
+        if ($applicationId !== null) {
+            $request['application'] = ['applicationId' => $applicationId];
+        }
+
         return (string) json_encode([
             'version' => '1.0',
             'session' => ['sessionId' => 'amzn1.echo-api.session.s90-test'],
-            'request' => [
-                'type' => 'IntentRequest',
-                'requestId' => 'amzn1.echo-api.request.s90-test',
-                'timestamp' => $timestamp ?? gmdate('Y-m-d\TH:i:s\Z'),
-                'locale' => 'en-US',
-                'intent' => ['name' => 'PhlixTitleRuntimeIntent'],
-            ],
+            'request' => $request,
         ]);
     }
 

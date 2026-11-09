@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\Auth;
 
+use Phlix\Hub\Common\Database\KeySweeper;
 use Workerman\MySQL\Connection;
 
 use function is_array;
@@ -47,6 +48,13 @@ class RefreshTokenRevocationService
 {
     /** Retention grace kept for symmetry with the OAuth stores' prune arm. */
     private const int PRUNE_GRACE_SECONDS = 86400;
+
+    /**
+     * Rows one sweep may delete — the same batch ceiling the OAuth/MCP/relay
+     * pruners give {@see KeySweeper} (SH-053), so no credential-store prune in
+     * this codebase issues an unbounded wide-predicate DELETE any more.
+     */
+    private const int PRUNE_BATCH_SIZE = 1000;
 
     public function __construct(private readonly Connection $db)
     {
@@ -107,16 +115,27 @@ class RefreshTokenRevocationService
      * Delete rows whose token has itself expired (plus a short grace so a
      * clock-skewed mint cannot resurrect a pruned jti inside the window).
      *
+     * SH-053: the two-phase keyed sweep (non-locking `SELECT jti … LIMIT n`,
+     * then `DELETE … WHERE jti IN (…)`), not one unbounded wide-predicate
+     * DELETE — this was the last credential-store pruner still holding a
+     * range-scoped next-key lock across `idx_auth_revoked_refresh_expires_at`
+     * while a concurrent logout tried to INSERT (review hub__dba-code #3).
+     * The PK here is `jti` (migration 047 has no surrogate `id`), so the
+     * sweeper keys on the registry's real primary key.
+     *
      * @return int Rows deleted.
      */
     public function pruneExpired(): int
     {
-        /** @var mixed $result */
-        $result = $this->db->query(
-            'DELETE FROM auth_revoked_refresh_tokens'
-                . ' WHERE expires_at < NOW() - INTERVAL ' . self::PRUNE_GRACE_SECONDS . ' SECOND',
+        $sweeper = new KeySweeper(
+            $this->db,
+            'auth_revoked_refresh_tokens',
+            self::PRUNE_BATCH_SIZE,
+            'jti',
         );
 
-        return is_numeric($result) ? (int) $result : 0;
+        return $sweeper->sweep(
+            'expires_at < NOW() - INTERVAL ' . self::PRUNE_GRACE_SECONDS . ' SECOND',
+        );
     }
 }

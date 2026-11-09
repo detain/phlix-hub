@@ -191,7 +191,6 @@ final class AuthServicesProvider implements ServiceProviderInterface
             })->parameter('auditRepo', get(AuditLogRepository::class)),
 
             AuthManager::class => factory(static function (
-                UserRepository $repo,
                 JwtHandler $jwt,
                 AuditLogger $audit,
                 StructuredLogger $logger,
@@ -208,6 +207,22 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // single-statement autocommit write/read, exactly like the
                 // DbRateLimiter's use of 'mysql'.
                 //
+                // SH-051: the UserRepository is built ON THIS SAME $txn handle —
+                // deliberately NOT the container's `UserRepository::class`
+                // binding, which rides the 'mysql' pool. register() opens its
+                // transaction on $txn and then writes the user row through the
+                // repository; with the repo on 'mysql' the transaction wrapped
+                // only the election guard, the INSERT auto-committed outside it,
+                // and a rolled-back registration left an orphan non-admin user
+                // (plus a released guard) behind — the docblock on
+                // AuthManager::electFirstAdminAtomically and the class prose
+                // here promised what the wiring did not deliver. Every read the
+                // login path performs through this repository is a
+                // single-statement autocommit on the txn facade, which is
+                // exactly what the 'mysql' pool was doing for it.
+                // tests/Unit/Auth/RegistrationTransactionWiringTest.php pins
+                // handle identity; do not re-split them.
+                //
                 // Both limiter closures are pinned BY NAME: two parameters share
                 // the RateLimiterInterface type, so type autowiring alone cannot
                 // tell the login bucket from the signup bucket (the bare
@@ -215,7 +230,7 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 $txn = ConnectionPool::getConnection('txn');
 
                 return new AuthManager(
-                    $repo,
+                    new UserRepository($txn),
                     $jwt,
                     $audit,
                     $logger,

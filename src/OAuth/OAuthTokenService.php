@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\OAuth;
 
+use Phlix\Hub\Common\Database\KeySweeper;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
@@ -79,6 +80,12 @@ final class OAuthTokenService
 
     /** Refresh-token lifetime (30 days). */
     public const int REFRESH_TTL_SECONDS = 2592000;
+
+    /**
+     * Rows one sweep may delete, per arm — the same batch ceiling the MCP and
+     * relay-token pruners give {@see KeySweeper} (SH-053).
+     */
+    private const int PRUNE_BATCH_SIZE = 1000;
 
     private int $accessTtl;
 
@@ -435,16 +442,24 @@ final class OAuthTokenService
      * detection. The 1-day arm of the expiry predicate is the SAME grace for
      * the same reason: a code rotated moments ago must still be answerable.
      *
+     * SH-053: each arm is an independent {@see KeySweeper} batch (review hub
+     * Minor 42's two-phase shape, applied to the store it had not reached —
+     * review hub__dba-code #3). A single `OR` DELETE made InnoDB next-key-lock
+     * the union of both index spans on every tick; two keyed sweeps delete at
+     * most {@see PRUNE_BATCH_SIZE} PK rows each and take no range locks, which
+     * is also why `revoked_at` got its own index (migration 053) — the
+     * grace-revoked arm's predicate is not an `IS NOT NULL`-only range like
+     * the MCP sibling's, so the timestamp half needs the index to stay tight.
+     *
      * @return int Rows deleted.
      */
     public function pruneExpired(): int
     {
-        /** @var mixed $result */
-        $result = $this->db->query(
-            'DELETE FROM oauth_tokens WHERE expires_at < NOW() - INTERVAL 1 DAY'
-                . ' OR (revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL 1 DAY)',
-        );
+        $sweeper = new KeySweeper($this->db, 'oauth_tokens', self::PRUNE_BATCH_SIZE);
 
-        return is_numeric($result) ? (int) $result : 0;
+        return $sweeper->sweep('expires_at < NOW() - INTERVAL 1 DAY')
+            + $sweeper->sweep(
+                'revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL 1 DAY',
+            );
     }
 }

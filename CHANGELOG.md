@@ -6,6 +6,82 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [w16L7 SH-050 · SH-051 · SH-052 · SH-053 · SH-054 · SH-059] — the review hub dba/secaudit/devops card, six findings, one wave — 2026-11-09
+
+- **SH-050 (Alexa destination proof).** The signature chain proved a request
+  came from AMAZON, never that it was addressed to THIS skill: any Echo
+  developer pointing any skill at the endpoint produced perfectly valid
+  signatures. The verified envelope's
+  `request.application.applicationId` is now pinned constant-time against a
+  new `HUB_ALEXA_APPLICATION_ID` config seam, checked after signature,
+  cert-chain and timestamp all pass. Unset on dev/test (mirroring the JWT
+  secret's and dev-DB password's environment families) leaves the arm inert
+  so the existing suite semantics are untouched; unset on a production boot
+  rejects EVERY request — an unset identity half is not a gate. Rejections
+  travel the existing `ALEXA_VERIFICATION_ERROR` arm: client-visible literals
+  byte-identical, contracts registry gains no new code.
+  (`src/Http/Middleware/AlexaSignatureMiddleware.php`, `config/server.php`,
+  `src/Common/Container/Providers/HubServicesProvider.php`, README.)
+- **SH-051 (registration transaction scope).** `AuthManager::register()`
+  opened its transaction on the dedicated `txn` handle while the container
+  built its `UserRepository` on the pool-`mysql` binding — the user INSERT
+  auto-committed OUTSIDE the transaction its caller believed protected it, so
+  any failure after the INSERT (admin promotion, election, lost connection)
+  rolled the guard back and left a committed non-admin orphan user behind —
+  the exact "half-registered" state the guard election exists to prevent.
+  The repository is now constructed on the SAME `txn` handle inside
+  `AuthServicesProvider`'s factory. Pinned two ways: container reflection on
+  handle identity, and a real-MySQL trigger that fails the first-admin
+  promotion — before the cure it left `users` holding the orphan row; after,
+  `users` AND `auth_signup_guard` are both empty and the same username
+  re-registers cleanly. (`src/Common/Container/Providers/AuthServicesProvider.php`,
+  `tests/Integration/Container/RegistrationTransactionWiringTest.php`.)
+- **SH-052 (share-cap race).** `LibrarySharingHandler::shareLibrary()` read
+  the tuple, counted collaborators, and wrote — all lock-free: two
+  concurrent grants could both pass the cap and the uk collision could land
+  as a raw 500. The handler now rides the `txn` handle and wraps the grant
+  section in BEGIN → `SELECT id FROM servers … FOR UPDATE` (the same anchor
+  shape M-HUB-24 gave the claim path; disjoint servers/users anchors cannot
+  cycle) → tuple read → count → INSERT/reactivate → COMMIT, every rejection
+  rolling back; a racing duplicate key on the INSERT is mapped to the
+  existing byte-identical `Share already exists` 409. Response shapes:
+  zero new wire codes. (`src/Hub/LibrarySharingHandler.php`,
+  `src/Common/Container/Providers/HubServicesProvider.php`,
+  `tests/Unit/Hub/LibraryShareGrantTransactionTest.php`.)
+- **SH-053 (unbounded credential prunes).** Four stores —
+  `oauth_tokens`, `oauth_authorization_codes`, `oauth_consent_requests`,
+  `auth_revoked_refresh_tokens` — still deleted with one wide-predicate
+  `DELETE`, holding next-key locks across their expiry indexes against every
+  concurrent mint on each 60s reaper tick. All four now speak the two-phase
+  keyed sweep (`KeySweeper`: non-locking PK batch SELECT, then
+  `DELETE … WHERE <pk> IN (…)`), 1000-row batch ceiling per arm, matching
+  the relay/MCP siblings; `KeySweeper` gained a constructor-validated PK
+  column because the revocation registry is keyed by `jti` (migration 047 has
+  no surrogate id). Migration 053 adds the two indexes the new arms need to
+  stay tight (`oauth_tokens.revoked_at`,
+  `oauth_consent_requests.consumed_at`). Predicates preserved exactly —
+  including the §4.14.2 rotation-reuse grace on revoked tokens and the
+  OR-not-AND consumed-ticket law. (`src/Common/Database/KeySweeper.php`,
+  `src/Auth/RefreshTokenRevocationService.php`, `src/OAuth/*.php`,
+  `migrations/053_oauth_prune_sweep_indexes.sql`, `tests/Unit/OAuth/`.)
+- **SH-054 (redundant quota index).** `relay_user_quotas` carried a
+  single-column `user_id` key alongside PRIMARY KEY
+  (`user_id`, `period_start`) — pure leftmost-prefix duplication the 035
+  comment rationalised as "not redundant". Every per-flow accounting upsert
+  maintained a second full copy for zero read benefit. 035 is immutable
+  under the checksum law; migration 054 drops the index under whatever name
+  it actually carries (shape probe), no-op once gone.
+  (`migrations/054_drop_redundant_relay_user_quota_index.sql`.)
+- **SH-059 (dead log seam).** `config/server.php` advertised
+  `workerman_log`/`HUB_WORKERMAN_LOG` (with a README row) since long ago
+  while `start.php` pinned `Worker::$logFile` to a literal beside it — the
+  key had zero consumers and the documented knob moved nothing. The pin now
+  honours the config value, the include moved above both pins that read it
+  (one include, no re-run of the env closures), and a static source-pin test
+  keeps the seam from silently dying again.
+  (`start.php`, `config/server.php`,
+  `tests/Unit/Bootstrap/WorkermanLogSeamPinTest.php`.)
+
 ### Documentation [w10L4 SH-098] — pairing-law nouns made consistent across the docs — 2026-11-07
 
 - The README's own terms law says member-facing copy says *watch party*

@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\OAuth;
 
+use Phlix\Hub\Common\Database\KeySweeper;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
@@ -68,6 +69,12 @@ final class AuthorizationCodeService
 {
     /** Authorization code lifetime in seconds. */
     public const int DEFAULT_TTL_SECONDS = 60;
+
+    /**
+     * Rows one sweep may delete — the same batch ceiling the MCP and
+     * relay-token pruners give {@see KeySweeper} (SH-053).
+     */
+    private const int PRUNE_BATCH_SIZE = 1000;
 
     private int $ttlSeconds;
 
@@ -223,23 +230,24 @@ final class AuthorizationCodeService
     }
 
     /**
-     * Delete codes that expired more than a day ago, and every consumed one.
+     * Delete codes that expired more than a day ago.
      *
      * ⚠ The 1-day grace on the expiry arm is what keeps {@see replayedCodeId()}
-     * able to answer for a code redeemed moments ago — but the consumed arm
-     * deletes those immediately, which would defeat it. Consumed rows are
-     * therefore kept for the same day: the predicate is
-     * `expires_at < NOW() - INTERVAL 1 DAY`, applied to both arms.
+     * able to answer for a code redeemed moments ago — a consumed row deletes
+     * itself through the same expiry predicate once a day has passed. An eager
+     * `consumed_at IS NOT NULL` arm would defeat it, so consumed rows are kept
+     * for the same day as expired ones.
+     *
+     * SH-053: {@see KeySweeper} batch, not one unbounded wide-predicate DELETE
+     * (review hub__dba-code #3) — the expiry arm rides the existing
+     * `expires_at` index and the sweep names PK rows explicitly.
      *
      * @return int Rows deleted.
      */
     public function pruneExpired(): int
     {
-        /** @var mixed $result */
-        $result = $this->db->query(
-            'DELETE FROM oauth_authorization_codes WHERE expires_at < NOW() - INTERVAL 1 DAY',
-        );
+        $sweeper = new KeySweeper($this->db, 'oauth_authorization_codes', self::PRUNE_BATCH_SIZE);
 
-        return is_numeric($result) ? (int) $result : 0;
+        return $sweeper->sweep('expires_at < NOW() - INTERVAL 1 DAY');
     }
 }

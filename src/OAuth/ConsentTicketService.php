@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Hub\OAuth;
 
+use Phlix\Hub\Common\Database\KeySweeper;
 use Phlix\Hub\Common\Support\Ids;
 use Workerman\MySQL\Connection;
 
@@ -65,6 +66,12 @@ final class ConsentTicketService
      * submitted by a later visitor to the same machine.
      */
     public const int DEFAULT_TTL_SECONDS = 600;
+
+    /**
+     * Rows one sweep may delete, per arm — the same batch ceiling the MCP and
+     * relay-token pruners give {@see KeySweeper} (SH-053).
+     */
+    private const int PRUNE_BATCH_SIZE = 1000;
 
     private int $ttlSeconds;
 
@@ -197,18 +204,22 @@ final class ConsentTicketService
      *
      * Note the operator is OR, not AND — with AND only rows that were BOTH
      * long-expired AND consumed would go, leaving the common
-     * consumed-immediately rows to accumulate forever.
+     * consumed-immediately rows to accumulate forever. The two halves are
+     * kept as SEPARATE predicates by construction, never re-fused into one
+     * `OR` scan.
+     *
+     * SH-053: each arm is an independent {@see KeySweeper} batch (review
+     * hub__dba-code #3). The consumed arm is an `IS NOT NULL`-only range —
+     * the same shape the MCP sibling prunes — and needed its own index on
+     * `consumed_at` (migration 053) for the key-selection scan to stay tight.
      *
      * @return int Rows deleted.
      */
     public function pruneExpired(): int
     {
-        /** @var mixed $result */
-        $result = $this->db->query(
-            'DELETE FROM oauth_consent_requests'
-                . ' WHERE expires_at < NOW() - INTERVAL 1 DAY OR consumed_at IS NOT NULL',
-        );
+        $sweeper = new KeySweeper($this->db, 'oauth_consent_requests', self::PRUNE_BATCH_SIZE);
 
-        return is_numeric($result) ? (int) $result : 0;
+        return $sweeper->sweep('expires_at < NOW() - INTERVAL 1 DAY')
+            + $sweeper->sweep('consumed_at IS NOT NULL');
     }
 }

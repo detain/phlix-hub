@@ -26,10 +26,14 @@ use Workerman\MySQL\Connection;
  * index at all (migration 051 adds both). The cure is the shape this class
  * enforces:
  *
- *  1. a plain non-locking `SELECT id … WHERE <arm> ORDER BY id LIMIT n` (takes
- *     no row/gap locks; an index range scan keeps it tight), then
- *  2. `DELETE … WHERE id IN (:id_0, …)` — locks exactly the named PRIMARY KEY
- *     rows, acquired in PK order.
+ *  1. a plain non-locking `SELECT <pk> … WHERE <arm> ORDER BY <pk> LIMIT n`
+ *     (takes no row/gap locks; an index range scan keeps it tight), then
+ *  2. `DELETE … WHERE <pk> IN (:id_0, …)` — locks exactly the named PRIMARY
+ *     KEY rows, acquired in PK order.
+ *
+ * `<pk>` defaults to `id` and is constructor-validated like the table name;
+ * a natural-key table (the `jti`-keyed refresh-revocation registry) passes
+ * its real PK column rather than staying outside the law (SH-053).
  *
  * A deadlocked sweep is a pure loss (nothing was committed), so the whole
  * attempt retries — three tries per {@see self::MAX_ATTEMPTS} call, matching
@@ -62,17 +66,31 @@ final class KeySweeper
      * @param Connection $db       MySQL connection (worker-pool borrow semantics unchanged).
      * @param string     $table    Swept table, SQL identifier form.
      * @param int        $batchSize Upper bound of PK rows one sweep may delete.
+     * @param string     $pkColumn Name of the PRIMARY KEY column the sweep keys
+     *        on (SQL identifier form). `id` is the hub-schema default; a
+     *        natural-key table names its real PK instead — the
+     *        `auth_revoked_refresh_tokens` registry is keyed by `jti`
+     *        (migration 047) and SH-053 routes it through this same
+     *        two-phase shape rather than leaving it a wide-predicate DELETE.
      *
-     * @throws RuntimeException On a non-identifier table name or a batch size below 1.
+     * @throws RuntimeException On a non-identifier table or PK column name, or
+     *         a batch size below 1.
      */
     public function __construct(
         private readonly Connection $db,
         private readonly string $table,
         private readonly int $batchSize,
+        private readonly string $pkColumn = 'id',
     ) {
         if (preg_match(self::TABLE_PATTERN, $table) !== 1) {
             throw new RuntimeException(
                 "KeySweeper: table must match " . self::TABLE_PATTERN . " (a code literal, not input), got: {$table}"
+            );
+        }
+        if (preg_match(self::TABLE_PATTERN, $pkColumn) !== 1) {
+            throw new RuntimeException(
+                "KeySweeper: pk column must match " . self::TABLE_PATTERN
+                    . " (a code literal, not input), got: {$pkColumn}"
             );
         }
         if ($batchSize < 1) {
@@ -124,9 +142,9 @@ final class KeySweeper
     {
         /** @var mixed $rows */
         $rows = $this->db->query(
-            'SELECT id FROM ' . $this->table .
+            'SELECT ' . $this->pkColumn . ' FROM ' . $this->table .
             ' WHERE ' . $whereSql .
-            ' ORDER BY id LIMIT ' . $this->batchSize,
+            ' ORDER BY ' . $this->pkColumn . ' LIMIT ' . $this->batchSize,
             $params,
         );
 
@@ -135,7 +153,7 @@ final class KeySweeper
             /** @var list<array<string, mixed>> $rows */
             foreach ($rows as $row) {
                 /** @var mixed $rawId */
-                $rawId = $row['id'] ?? null;
+                $rawId = $row[$this->pkColumn] ?? null;
                 if (is_string($rawId) && $rawId !== '') {
                     $ids[] = $rawId;
                 }
@@ -147,7 +165,9 @@ final class KeySweeper
 
     /**
      * Phase 2 — delete exactly those rows by PRIMARY KEY. Colon-free named
-     * placeholders (workerman/mysql prepends `:`).
+     * placeholders (workerman/mysql prepends `:`); the placeholder labels
+     * themselves stay `id_<n>` — they are anonymous bind names, not schema
+     * identifiers.
      *
      * @param list<string> $ids
      */
@@ -163,7 +183,7 @@ final class KeySweeper
 
         /** @var mixed $result */
         $result = $this->db->query(
-            'DELETE FROM ' . $this->table . ' WHERE id IN (' . implode(', ', $placeholders) . ')',
+            'DELETE FROM ' . $this->table . ' WHERE ' . $this->pkColumn . ' IN (' . implode(', ', $placeholders) . ')',
             $params,
         );
 
