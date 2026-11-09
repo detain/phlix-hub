@@ -6,6 +6,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Chore [ui-25-1109] — re-vendor `@phlix/ui` #v0.99.25 + `/app` SPA regen — 2026-11-09
+
+- Tag-form re-pin of the served SPA's vendored library v0.99.22 → v0.99.25 (tag object
+  `52ea3cb7`, peel `6e1ce2d8` == ui master tip, ls-remote-verified; ui-ci run `42702476767`
+  success): carries the w15L2/w16L1 review-cure waves (login guidance, anchor music nav,
+  catalog-rails i18n 533→542, SyncPlay contracts-SSOT truth, color-mix fallbacks; stacked-
+  overlay focus routing, SyncPlay reconnect park ladder, socketHint producer truth, dead
+  wire-DTO deletions). `web-ui/package.json` 1+/1-; lock 7+/7- (npm 11 `--package-lock-only`,
+  `NPM_CONFIG_USERCONFIG=/dev/null`): ui triple + root echo + contracts edge-echo `#v0.5.6`→
+  `#v0.5.7`; npm left the hoisted `@phlix/contracts` node stale (same defect disclosed at the
+  server .24 wave) — hand-repaired to `0.5.7`/`bedfe69b` (v0.5.7 peel, ls-remote-verified,
+  fresh-resolve oracle cross-checked), re-run proved lock idempotent. syncplay holds `#v0.1.7`.
+- Fresh `npm ci` (node 24.20.0, npm 11.19.0): installed tree byte-identical to the codeload tag
+  — `phlix-ui.js` `0083016a`, `player.js` `0dad2a06`, dist aggregate `25f62b3b`.
+- `/app` rebuilt: deterministic ×2 (`diff -r` clean), 198 files, aggregate md5 recipe
+  `f3c302d40f38e7cb31cc174bb80ffc63`; stamp `0.99.25` on `index-BkJX2Vpd.js`, zero `0.99.22`
+  residue; carrier rotates `PlayerPage-BbWPOZn8-…` → `PlayerPage-Bp-fkb06-CGqbc3Gf.js`; delta
+  is a full rehash (139↔139 rename-equal, 2 in-place) — the contracts edge moved inside the
+  shared import closure. Post-stage third rebuild equals the staged tree (S253-equivalent).
+- Four pin-era docblocks rotated v0.99.22 → v0.99.25 (`HubPageHint.vue`, `i18n/index.ts`,
+  `shareLiveness.ts`, `watchPartyWire.ts`); all claims re-executed at the new pin at unchanged
+  coordinates (`safeHref` `dist/index.d.ts:218`; `buildHubRelayUrl`/`HUB_SYNC_PLAY_PORT` `:16`;
+  PageHint runtime-barrel-only: 0 type-barrel hits, decl at `components/ui/PageHint.vue.d.ts`;
+  locale exports `:255`/`:256`).
+- Gates: web-ui `node --test` 152/152 (39 suites, baseline-exact — `ui-pin-currency` followed
+  the pin); PHP cohort `--filter 'Spa|SharedUiController|StaticAsset|UiPinSkew|ViteAssets|
+  RuntimeNpmGuidance'` OK 233/1340 (+3/+15 vs the .21-era figure, pre-existing test growth at
+  the intervening tip, zero failures); composer validate --strict; security-audit-check 97
+  packages clean. PHP src untouched. No new wire codes, no migrations.
+
 ### Fixed [w16L7 SH-050 · SH-051 · SH-052 · SH-053 · SH-054 · SH-059] — the review hub dba/secaudit/devops card, six findings, one wave — 2026-11-09
 
 - **SH-050 (Alexa destination proof).** The signature chain proved a request

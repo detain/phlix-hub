@@ -133,7 +133,7 @@ export function formatLastSeen(unixSeconds: number | null | undefined, nowMs: nu
  * Blocklist sanitizer for wire-supplied link destinations — PORT of @phlix/ui's
  * `safeHref` (M-UI-11 law, home `src/utils/safeHref.ts` in the phlix-ui repo),
  * reproduced byte-faithfully. The pin this file last named predates the
- * primitive's barrel publication; the vendored v0.99.22 package DOES export
+ * primitive's barrel publication; the vendored v0.99.25 package DOES export
  * `safeHref` (`dist/index.d.ts:218`), so this copy is now RETIRABLE — the
  * retire (delete the port, import from the package, re-pin the node tests onto
  * the package export) is registered as a follow-up at [tag-wave C2], kept out
