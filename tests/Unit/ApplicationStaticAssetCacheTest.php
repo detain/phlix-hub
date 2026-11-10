@@ -548,7 +548,7 @@ final class ApplicationStaticAssetCacheTest extends TestCase
         }
 
         $required = [
-            '$fastPathMethod = self::staticFastPathMethodDisposition((string) $request->method());',
+            '$fastPathMethod = self::staticFastPathMethodDisposition($request->method());',
             '$fastPathMethod !== null',
             '&& !self::isDeniedStaticPath($file[\'real\'])',
             '&& !self::isStaticHtmlDenial($file[\'real\'])',

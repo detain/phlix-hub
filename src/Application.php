@@ -2412,7 +2412,7 @@ final class Application
                 //    per-request by SharedUiController::shell() with the
                 //    CSP nonce; the build artifact must never answer direct).
                 $path = $request->path();
-                $fastPathMethod = self::staticFastPathMethodDisposition((string) $request->method());
+                $fastPathMethod = self::staticFastPathMethodDisposition($request->method());
                 if (
                     $fastPathMethod !== null
                     && $path !== ''
@@ -2700,6 +2700,7 @@ final class Application
         $syncplayRequireTls = (bool) ($this->config['syncplay_require_tls'] ?? false);
         // Boundary parse, not a blind cast: env slop falls back to the
         // historical default rather than binding a garbage host.
+        /** @var mixed $wsBindHostRaw */
         $wsBindHostRaw = $this->config['ws_bind_host'] ?? '0.0.0.0';
         $wsBindHost = is_string($wsBindHostRaw) && $wsBindHostRaw !== ''
             ? $wsBindHostRaw
