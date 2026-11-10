@@ -342,7 +342,7 @@ final class RelayWorker
             }
 
             foreach ($decision['warnings'] as $bootWarning) {
-                LoggerFactory::get(LogChannels::RELAY)->warning((string) $bootWarning);
+                LoggerFactory::get(LogChannels::RELAY)->warning($bootWarning);
             }
 
             $materialWatch = new TlsMaterialWatch('relay-ws :' . $this->port, $envPaths);

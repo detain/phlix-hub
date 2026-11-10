@@ -315,7 +315,7 @@ final class FederationWorker
             }
 
             foreach ($decision['warnings'] as $bootWarning) {
-                LoggerFactory::get(LogChannels::RELAY)->warning((string) $bootWarning);
+                LoggerFactory::get(LogChannels::RELAY)->warning($bootWarning);
             }
 
             $materialWatch = new TlsMaterialWatch('federation-ws :' . $this->port, $envPaths);
