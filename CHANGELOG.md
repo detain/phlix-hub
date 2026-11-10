@@ -12,6 +12,37 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fixed [hub-w21L6] — SH-071: the static-serving fast path gets a method gate (GET/HEAD only, HEAD bodyless), a hashed-asset detector that actually matches what Vite ships, and a hub-only raw-HTML denial — 2026-11-10
+
+- Method gate: previously any method with a static-looking path got the file
+  — HEAD received a full entity (keep-alive framing desync: the vendor encoder
+  has no HEAD suppression) and POST/PUT/DELETE could read files off disk. The
+  fast path now consults `staticFastPathMethodDisposition()`; GET keeps its
+  byte-identical legacy shape (wire-pinned against the real committed
+  manifest), HEAD answers through the estate's S247 `BodylessResponse` with
+  the GET-equivalent authoritative `Content-Length`, every other method falls
+  through to the router's uniform 404 — deliberately NOT 405: the hub has no
+  verb oracle anywhere by documented law and this surface would not start one.
+- Hashed detection: the `.hex6-12.` classifier never fired on the shipped
+  bundle (census: zero matches across every committed file — Vite glues mixed
+  base64url hashes with a DASH), so every immutable chunk was served with the
+  short revalidating shape. `isHashedAssetPath()` keeps the legacy branch and
+  adds the exact 7-8-char dash-hash tail (boundary disclosed in the docblock);
+  a census test walks the committed assets tree so a future rename class can't
+  silently fall out. This also makes the `Response::html()` docblock's promise
+  that hashed assets stay immutable true for the first time.
+- Raw shell denial: `public/assets/app/index.html` is build metadata, yet the
+  fast path served it ahead of the router — a nonce-less, runtime-config-less
+  SPA shell cached for a day. A hub-only `isStaticHtmlDenial()` arm refuses
+  `.html`/`.htm` on this path (the live shell stays
+  `SharedUiController::shell()`); the cross-repo coordinated
+  `DENIED_STATIC_EXTENSIONS` list (server twin 85c06de1, estate-pinned) stays
+  byte-identical.
+- The gates were extracted from the `onMessage` closure into named public
+  static seams so each is unit-pinnable; a source pin keeps the closure's
+  wiring to them load-bearing (red-first transcript + five named mutation
+  convictions in .reviews/2026-11-10/FIX-hub-w21L6.md).
+
 ### Added [hub-w21L6] — LW-082-b: the `:8804` canonical dialect gets a hub-side SSOT constant pair; the catalog test derives from it (plus a token-scan binding the constants to the dispatch literals) — tests-only + docblock-visible constants, zero behavior change — 2026-11-10
 
 - `SyncPlayRelayWorker` now carries `CANONICAL_MESSAGE_TYPES` (the SPEC §3

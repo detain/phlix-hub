@@ -71,6 +71,7 @@ use Phlix\Hub\Http\Middleware\EnrollmentJwtMiddleware;
 use Phlix\Hub\Http\Middleware\HubProtocolMiddleware;
 use Phlix\Hub\Http\Middleware\OAuthResourceMiddleware;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Http\BodylessResponse;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Http\Router;
 use Phlix\Hub\Stats\Metrics\MetricsCollector;
@@ -430,6 +431,156 @@ final class Application
     private static function stripWeakEtag(string $etag): string
     {
         return str_starts_with($etag, 'W/') ? substr($etag, 2) : $etag;
+    }
+
+    /**
+     * SH-071 (hub__fedev#1): classify a request path as a content-hashed
+     * immutable asset. The legacy `.hex6-12.` branch is retained unchanged —
+     * it merely never matched the toolchain that actually ships here. Vite
+     * emits mixed-case base64url hashes glued with a DASH before the
+     * extension (`Foo-DeZOGC0--DAyU1OvF.js`, `…-6fWv1k7M.woff2`), and the
+     * hash segment is 8 chars with an occasional 7-char trim of trailing
+     * `-`/`_`. The Vite branch therefore demands a dash followed by an
+     * exact 7-to-8 char base64url run terminating the basename. Known
+     * boundary (disclosed, never silent): a hand-named file whose FINAL dash
+     * segment is exactly 7-8 chars classifies immutable too; the assets/
+     * tree is Vite-owned by the SPA-rebuild law, and the misclassification
+     * cost is revalidation latency on a name a human would have made longer.
+     */
+    public static function isHashedAssetPath(string $path): bool
+    {
+        if (preg_match('/\.([a-f0-9]{6,12})\./i', $path) === 1) {
+            return true;
+        }
+
+        return preg_match('/-[A-Za-z0-9_-]{7,8}\.(?:js|mjs|css|woff2?|ttf|otf)$/', $path) === 1;
+    }
+
+    /**
+     * SH-071 (hub__fedev#2): which HTTP methods may take the static-file
+     * fast path at all, and with which entity shape. `GET` sends the body,
+     * `HEAD` gets the byte-identical headers with an authoritative
+     * Content-Length and NO body ({@see BodylessResponse}, S247); every other
+     * method returns null and falls through to the router, which answers the
+     * hub's uniform 404 envelope — deliberately NOT 405: the hub's documented
+     * no-verb-oracle posture (Router) refuses to confirm that a path exists
+     * under some other method, and inventing 405 for this one surface would
+     * split that law.
+     */
+    public static function staticFastPathMethodDisposition(string $method): ?string
+    {
+        return match (strtoupper($method)) {
+            'GET' => 'body',
+            'HEAD' => 'head',
+            default => null,
+        };
+    }
+
+    /**
+     * SH-071 (hub__fedev#3): refuse raw SPA shells on the static fast path.
+     * The committed `public/assets/app/index.html` is build metadata — the
+     * live shell is `SharedUiController::shell()`, which injects the request
+     * CSP nonce and runtime config. Serving the file bytes directly handed
+     * out a nonce-less shell (cached for a day, CSP baseline only) at a URL
+     * no router route claims. This gate is HUB-ONLY on purpose: the
+     * coordinated estate DENIED list (php/map/tpl, server twin 85c06de1)
+     * stays byte-identical; the extension law below is a fast-path guard,
+     * not an exposure list.
+     */
+    public static function isStaticHtmlDenial(string $realPath): bool
+    {
+        return in_array(
+            strtolower(pathinfo($realPath, PATHINFO_EXTENSION)),
+            ['html', 'htm'],
+            true,
+        );
+    }
+
+    /**
+     * SH-071: build the fast-path reply for an admitted static file — the
+     * whole MIME-map + cache-decision + response-shape sequence, extracted
+     * from the onMessage closure so the wire contract is unit-pinnable.
+     * `$disposition` is one of {@see self::staticFastPathMethodDisposition()}
+     * results ('body' | 'head'). GET byte-shape (headers, validators,
+     * entity) is unchanged from the pre-SH-071 closure apart from the
+     * hashed-detection fix; HEAD is new and bodyless by construction.
+     *
+     * @param array{real: string, mtime: int, size: int} $file  Memoized stat.
+     * @param string      $path             Request path (hash classifier).
+     * @param string      $disposition      'body' | 'head'.
+     * @param string|null $ifNoneMatch      Raw If-None-Match header.
+     * @param string|null $ifModifiedSince  Raw If-Modified-Since header.
+     */
+    public static function buildStaticFastPathResponse(
+        string $disposition,
+        string $path,
+        array $file,
+        ?string $ifNoneMatch,
+        ?string $ifModifiedSince,
+    ): \Workerman\Protocols\Http\Response {
+        $real = $file['real'];
+        // Extension-first MIME map — mime_content_type() sniffs content via
+        // libmagic and returns text/plain for CSS/JS/JSON/SVG, which makes
+        // the browser refuse to apply stylesheets / execute scripts.
+        $ext = strtolower(pathinfo($real, PATHINFO_EXTENSION));
+        $mimeMap = [
+            'css' => 'text/css; charset=utf-8',
+            'js' => 'application/javascript; charset=utf-8',
+            'mjs' => 'application/javascript; charset=utf-8',
+            'json' => 'application/json; charset=utf-8',
+            'html' => 'text/html; charset=utf-8',
+            'txt' => 'text/plain; charset=utf-8',
+            'xml' => 'application/xml; charset=utf-8',
+            'svg' => 'image/svg+xml',
+            'ico' => 'image/x-icon',
+            'png' => 'image/png',
+            'jpg' => 'image/jpeg',
+            'jpeg' => 'image/jpeg',
+            'gif' => 'image/gif',
+            'webp' => 'image/webp',
+            'woff' => 'font/woff',
+            'woff2' => 'font/woff2',
+            'ttf' => 'font/ttf',
+            'otf' => 'font/otf',
+            'pdf' => 'application/pdf',
+            'wasm' => 'application/wasm',
+        ];
+        $mime = $mimeMap[$ext] ?? null;
+        if ($mime === null && function_exists('mime_content_type')) {
+            $detected = mime_content_type($real);
+            if (is_string($detected) && $detected !== '') {
+                $mime = $detected;
+            }
+        }
+        $mime ??= 'application/octet-stream';
+        $decision = self::computeStaticCacheDecision(
+            $mime,
+            self::isHashedAssetPath($path),
+            $file['mtime'],
+            $file['size'],
+            $ifNoneMatch,
+            $ifModifiedSince,
+        );
+
+        if ($decision['status'] === 304) {
+            return new \Workerman\Protocols\Http\Response(304, $decision['headers']);
+        }
+
+        if ($disposition === 'head') {
+            // RFC 9110 §9.3.2: a HEAD carries the GET's field values minus
+            // the entity; BodylessResponse makes our Content-Length the
+            // authoritative one instead of Workerman's appended `: 0`.
+            return new BodylessResponse(
+                200,
+                $decision['headers'] + ['Content-Length' => (string) $file['size']],
+                '',
+            );
+        }
+
+        $response = new \Workerman\Protocols\Http\Response(200, $decision['headers']);
+        $response->withFile($real);
+
+        return $response;
     }
 
     /**
@@ -2250,12 +2401,24 @@ final class Application
             $status = 200;
             try {
                 // 1. Static-file fast path. Serve files under public/
-                //    directly (CSS, JS, images, fonts). Refuses traversal
-                //    via realpath() prefix check; refuses the
+                //    directly (CSS, JS, images, fonts). GET and HEAD only —
+                //    SH-071: the method gate replaces a path-only guard that
+                //    let HEAD receive a body (keep-alive framing desync) and
+                //    let POST/PUT/DELETE read files off disk. Refuses
+                //    traversal via realpath() prefix check; refuses the
                 //    DENIED_STATIC_EXTENSIONS list (raw .php sources and
-                //    .js.map source reconstruction, R20-03).
+                //    .js.map source reconstruction, R20-03) and — hub-only
+                //    gate — raw .html shells (the live SPA shell is emitted
+                //    per-request by SharedUiController::shell() with the
+                //    CSP nonce; the build artifact must never answer direct).
                 $path = $request->path();
-                if ($path !== '' && $path !== '/' && !str_starts_with($path, '/api/')) {
+                $fastPathMethod = self::staticFastPathMethodDisposition((string) $request->method());
+                if (
+                    $fastPathMethod !== null
+                    && $path !== ''
+                    && $path !== '/'
+                    && !str_starts_with($path, '/api/')
+                ) {
                     $candidate = $publicRoot . $path;
                     // Memoized realpath + stat (mtime/size) — no per-hit
                     // realpath()/is_file()/stat() syscalls on the loop.
@@ -2264,69 +2427,20 @@ final class Application
                         $file !== false
                         && str_starts_with($file['real'], $publicRoot . DIRECTORY_SEPARATOR)
                         && !self::isDeniedStaticPath($file['real'])
+                        && !self::isStaticHtmlDenial($file['real'])
                     ) {
-                        $real = $file['real'];
-                        // Extension-first MIME map — mime_content_type()
-                        // sniffs content via libmagic and returns text/plain
-                        // for CSS/JS/JSON/SVG, which makes the browser
-                        // refuse to apply stylesheets / execute scripts.
-                        $ext = strtolower(pathinfo($real, PATHINFO_EXTENSION));
-                        $mimeMap = [
-                            'css' => 'text/css; charset=utf-8',
-                            'js' => 'application/javascript; charset=utf-8',
-                            'mjs' => 'application/javascript; charset=utf-8',
-                            'json' => 'application/json; charset=utf-8',
-                            'html' => 'text/html; charset=utf-8',
-                            'txt' => 'text/plain; charset=utf-8',
-                            'xml' => 'application/xml; charset=utf-8',
-                            'svg' => 'image/svg+xml',
-                            'ico' => 'image/x-icon',
-                            'png' => 'image/png',
-                            'jpg' => 'image/jpeg',
-                            'jpeg' => 'image/jpeg',
-                            'gif' => 'image/gif',
-                            'webp' => 'image/webp',
-                            'woff' => 'font/woff',
-                            'woff2' => 'font/woff2',
-                            'ttf' => 'font/ttf',
-                            'otf' => 'font/otf',
-                            'pdf' => 'application/pdf',
-                            'wasm' => 'application/wasm',
-                        ];
-                        $mime = $mimeMap[$ext] ?? null;
-                        if ($mime === null && function_exists('mime_content_type')) {
-                            $detected = mime_content_type($real);
-                            if (is_string($detected) && $detected !== '') {
-                                $mime = $detected;
-                            }
-                        }
-                        $mime ??= 'application/octet-stream';
-                        // Hashed assets (e.g. app.abc123def456.js) are immutable —
-                        // long max-age + immutable, no revalidation. Non-hashed
-                        // paths get a short max-age + ETag/Last-Modified so a
-                        // conditional GET can be answered 304 (no body).
-                        $isHashedAsset = (bool) preg_match('/\.([a-f0-9]{6,12})\./i', $path);
                         /** @var string|null $ifNoneMatch */
                         $ifNoneMatch = $request->header('if-none-match');
                         /** @var string|null $ifModifiedSince */
                         $ifModifiedSince = $request->header('if-modified-since');
-                        $decision = self::computeStaticCacheDecision(
-                            $mime,
-                            $isHashedAsset,
-                            $file['mtime'],
-                            $file['size'],
+                        $resp = self::buildStaticFastPathResponse(
+                            $fastPathMethod,
+                            $path,
+                            $file,
                             is_string($ifNoneMatch) ? $ifNoneMatch : null,
                             is_string($ifModifiedSince) ? $ifModifiedSince : null,
                         );
-                        if ($decision['status'] === 304) {
-                            $status = 304;
-                            $connection->send(
-                                new \Workerman\Protocols\Http\Response(304, $decision['headers']),
-                            );
-                            return;
-                        }
-                        $resp = new \Workerman\Protocols\Http\Response(200, $decision['headers']);
-                        $resp->withFile($real);
+                        $status = $resp->getStatusCode();
                         $connection->send($resp);
                         return;
                     }

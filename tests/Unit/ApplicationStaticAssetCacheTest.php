@@ -18,6 +18,9 @@ final class ApplicationStaticAssetCacheTest extends TestCase
 {
     private const string CSS_MIME = 'text/css; charset=utf-8';
 
+    /** A real committed non-hashed asset (JSON, revalidating shape). */
+    private const string NON_HASHED_ASSET = '/assets/app/.vite/manifest.json';
+
     private function etagFor(int $mtime, int $size): string
     {
         return sprintf('"%x-%x"', $mtime, $size);
@@ -324,5 +327,241 @@ final class ApplicationStaticAssetCacheTest extends TestCase
             ->getConstant('DENIED_STATIC_EXTENSIONS');
 
         $this->assertSame(['php', 'map', 'tpl'], $constant);
+    }
+
+    // ---- SH-071: hashed-asset detection over the real Vite bundle ----------
+
+    /**
+     * The legacy detector (`.hex6-12.`) never fired on a single committed
+     * chunk: Vite hashes use mixed-case base64url segments glued with a DASH
+     * (`Foo-DeZOGC0--DAyU1OvF.js`), so every immutable candidate was served
+     * with the short-max-age revalidating shape. The detector must therefore
+     * keep the legacy branch (additive) and learn the dash-hashed shape.
+     */
+    public function testIsHashedAssetPathMatchesRealViteChunkNames(): void
+    {
+        // Real committed names (census test below enforces all of them).
+        $hashed = [
+            '/assets/app/assets/AdminLayout-DeZOGC0--DAyU1OvF.js',
+            '/assets/app/assets/CommandPalette-MAUsLYzl-Bj_6TB9X.js',
+            '/assets/app/assets/jetbrains-mono-var-latin-6fWv1k7M.woff2',
+            // Generic Vite-era shapes.
+            '/assets/app/assets/index-abcdefgh.js',
+            '/assets/app/assets/style-ZYXWVUTS.css',
+            '/assets/app/assets/x-Ab3Cd5Ef.mjs',
+            // Legacy dotted-hex branch stays honoured (purely additive).
+            '/assets/app/app.abc123def456.js',
+        ];
+        foreach ($hashed as $path) {
+            $this->assertTrue(Application::isHashedAssetPath($path), $path);
+        }
+
+        $plain = [
+            '/assets/app/index.html',
+            '/assets/app/.vite/manifest.json',
+            // Maps end in .map — pathinfo extension is not in the set.
+            '/assets/app/assets/AdminLayout-DeZOGC0--DAyU1OvF.js.map',
+            // No dash segment before the extension at all.
+            '/assets/app/logo.png',
+            // Final segment run is 10 chars — longer than a Vite hash; the
+            // exact {7,8} boundary must refuse (disclosed in the docblock).
+            '/assets/app/vendor-library-abcdefghij.js',
+        ];
+        foreach ($plain as $path) {
+            $this->assertFalse(Application::isHashedAssetPath($path), $path);
+        }
+    }
+
+    public function testHashedAssetPathCensusOverCommittedBundle(): void
+    {
+        $publicRoot = dirname(__DIR__, 2) . '/public';
+        $assetsDir = $publicRoot . '/assets/app/assets';
+        $hashedExtensions = ['js', 'mjs', 'css', 'woff', 'woff2', 'ttf', 'otf'];
+
+        $walked = 0;
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($assetsDir, \FilesystemIterator::SKIP_DOTS),
+        );
+        /** @var \SplFileInfo $entry */
+        foreach ($iterator as $entry) {
+            if (!$entry->isFile()) {
+                continue;
+            }
+            $extension = strtolower($entry->getExtension());
+            if ($extension === 'map') {
+                $path = substr($entry->getPathname(), strlen($publicRoot));
+                $this->assertFalse(
+                    Application::isHashedAssetPath($path),
+                    "source map must stay revalidatable: $path",
+                );
+                continue;
+            }
+            if (!in_array($extension, $hashedExtensions, true)) {
+                continue;
+            }
+            $path = substr($entry->getPathname(), strlen($publicRoot));
+            $walked++;
+            $this->assertTrue(
+                Application::isHashedAssetPath($path),
+                "hashed Vite output must classify immutable: $path",
+            );
+        }
+
+        // Zero walked files would make the loop vacuous — the bundle ships
+        // dozens of chunks; a floor keeps the census honest across eras.
+        $this->assertGreaterThan(20, $walked);
+        $this->assertFalse(Application::isHashedAssetPath('/assets/app/index.html'));
+    }
+
+    // ---- SH-071: fast-path method disposition (HEAD/GET) -------------------
+
+    public function testStaticFastPathMethodDisposition(): void
+    {
+        $this->assertSame('body', Application::staticFastPathMethodDisposition('GET'));
+        $this->assertSame('head', Application::staticFastPathMethodDisposition('HEAD'));
+        // Case tolerance at the seam (clients are not always canonical).
+        $this->assertSame('body', Application::staticFastPathMethodDisposition('get'));
+        $this->assertSame('head', Application::staticFastPathMethodDisposition('Head'));
+        // Everything else falls through to the router (the hub's documented
+        // no-verb-oracle posture answers unknown paths 404, never 405).
+        foreach (['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as $method) {
+            $this->assertNull(Application::staticFastPathMethodDisposition($method), $method);
+        }
+    }
+
+    /**
+     * @return array{real: string, mtime: int, size: int}
+     */
+    private function staticFileShape(string $relative): array
+    {
+        $real = dirname(__DIR__, 2) . '/public' . $relative;
+        $size = filesize($real);
+        $mtime = filemtime($real);
+        $this->assertIsInt($size);
+        $this->assertIsInt($mtime);
+
+        return ['real' => $real, 'mtime' => $mtime, 'size' => $size];
+    }
+
+    public function testHeadStaticReplyIsBodylessWithAuthoritativeContentLength(): void
+    {
+        $file = $this->staticFileShape(self::NON_HASHED_ASSET);
+        $response = Application::buildStaticFastPathResponse('head', self::NON_HASHED_ASSET, $file, null, null);
+        $wire = (string) $response;
+
+        // Exact terminator: the head ends and NO entity bytes follow.
+        $this->assertStringEndsWith("\r\n\r\n", $wire);
+        $this->assertStringNotContainsString('_Button-Dfl4y6vO-B2IjqPMe.js', $wire);
+        // The GET-equivalent length is advertised, per RFC 9110 §9.3.2.
+        $this->assertStringContainsString('HTTP/1.1 200 OK', $wire);
+        $this->assertStringContainsString("Content-Length: {$file['size']}\r\n", $wire);
+        $this->assertStringContainsString("Content-Type: application/json; charset=utf-8\r\n", $wire);
+        $this->assertStringContainsString("X-Content-Type-Options: nosniff\r\n", $wire);
+        $this->assertStringContainsString('Cache-Control: public, max-age=86400', $wire);
+        $this->assertStringContainsString('ETag: ', $wire);
+    }
+
+    public function testGetOfNonHashedAssetKeepsLegacyByteShape(): void
+    {
+        $file = $this->staticFileShape(self::NON_HASHED_ASSET);
+        $response = Application::buildStaticFastPathResponse('body', self::NON_HASHED_ASSET, $file, null, null);
+        $wire = (string) $response;
+
+        // File-backed reply: the head is the whole rendering; Http::encode
+        // appends `Content-Length` (from filesize at send time) and
+        // `Accept-Ranges: bytes` and streams the entity. The pin therefore
+        // covers the full decision-header set plus the file pointer — the
+        // entity bytes are the file itself, unchanged (byte-identity by
+        // construction: offset 0, full length, no body rewriting).
+        $this->assertStringStartsWith('HTTP/1.1 200 OK', $wire);
+        $this->assertStringContainsString('Cache-Control: public, max-age=86400', $wire);
+        $this->assertStringContainsString(sprintf('ETag: "%x-%x"', $file['mtime'], $file['size']), $wire);
+        $this->assertStringContainsString('Connection: keep-alive', $wire);
+        $this->assertStringContainsString('Content-Type: application/json; charset=utf-8', $wire);
+        $this->assertStringContainsString('X-Content-Type-Options: nosniff', $wire);
+        $this->assertSame(
+            ['file' => $file['real'], 'offset' => 0, 'length' => 0],
+            $response->file,
+        );
+    }
+
+    public function testGetOfHashedChunkCarriesImmutableYear(): void
+    {
+        $relative = '/assets/app/assets/AdminLayout-DeZOGC0--DAyU1OvF.js';
+        $file = $this->staticFileShape($relative);
+        $response = Application::buildStaticFastPathResponse('body', $relative, $file, null, null);
+        $wire = (string) $response;
+
+        $this->assertStringContainsString('Cache-Control: public, max-age=31536000, immutable', $wire);
+        $this->assertStringNotContainsString('ETag:', $wire);
+        $this->assertStringContainsString('Content-Type: application/javascript', $wire);
+    }
+
+    public function testConditionalGetStillAnswers304OnNonHashedAsset(): void
+    {
+        $file = $this->staticFileShape(self::NON_HASHED_ASSET);
+        $etag = sprintf('"%x-%x"', $file['mtime'], $file['size']);
+        $response = Application::buildStaticFastPathResponse('body', self::NON_HASHED_ASSET, $file, $etag, null);
+        $wire = (string) $response;
+
+        $this->assertStringStartsWith('HTTP/1.1 304 Not Modified', $wire);
+        $this->assertStringNotContainsString("\r\n\r\n\r\n", $wire);
+        $this->assertStringEndsWith("\r\n\r\n", $wire);
+    }
+
+    // ---- SH-071: raw SPA shell denial (hub-only gate) ----------------------
+
+    /**
+     * The coordinated estate DENIED list stays ['php','map','tpl'] (server
+     * twin — do not extend). The SPA shell is a HUB-only concern: raw
+     * /assets/app/index.html bypassed the nonce/CSP-configured shell()
+     * emitter. A separate gate keeps the coordinated list untouched.
+     */
+    public function testStaticHtmlDenialRefusesShellAndKeepsRealAssets(): void
+    {
+        $this->assertTrue(Application::isStaticHtmlDenial('/srv/hub/public/assets/app/index.html'));
+        $this->assertTrue(Application::isStaticHtmlDenial('/x/Index.HTM'));
+        $this->assertTrue(Application::isStaticHtmlDenial('/x/page.htm'));
+        $this->assertFalse(Application::isStaticHtmlDenial('/x/App-Bj_6TB9X.js'));
+        $this->assertFalse(Application::isStaticHtmlDenial('/x/manifest.json'));
+        $this->assertFalse(Application::isStaticHtmlDenial('/x/noext'));
+    }
+
+    /**
+     * The gates are unit-pinned at their seams, but the fast path lives in an
+     * onMessage closure that no HTTP-level unit test drives — a dropped arm
+     * there would be silent. This source pin keeps the closure's wiring to
+     * the extracted gates load-bearing (SH-071 convictions M-A/M-B/M-C):
+     * every conjunct of the admission condition is required verbatim, and a
+     * reformat that preserves the law trips the pin so the reviewer can see
+     * exactly which arm moved.
+     */
+    public function testFastPathClosureWiresTheExtractedGates(): void
+    {
+        $location = (new \ReflectionClass(Application::class))->getFileName();
+        if (!is_string($location)) {
+            $this->fail('Application must be loaded from a file for the source pin.');
+        }
+        $source = file_get_contents($location);
+        if (!is_string($source)) {
+            $this->fail('Could not read the Application source for the pin.');
+        }
+
+        $required = [
+            '$fastPathMethod = self::staticFastPathMethodDisposition((string) $request->method());',
+            '$fastPathMethod !== null',
+            '&& !self::isDeniedStaticPath($file[\'real\'])',
+            '&& !self::isStaticHtmlDenial($file[\'real\'])',
+            '$resp = self::buildStaticFastPathResponse(',
+        ];
+        foreach ($required as $needle) {
+            $this->assertSame(
+                1,
+                substr_count($source, $needle),
+                "fast-path arm missing or duplicated: $needle",
+            );
+        }
+        // The old inline classifier must not survive beside the extracted one.
+        $this->assertStringNotContainsString('$isHashedAsset = (bool) preg_match(', $source);
     }
 }
