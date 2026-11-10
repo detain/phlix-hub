@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Phlix\Hub\Tests\Unit\Hub;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Support\WorkermanProcessReloader;
 use Phlix\Hub\Http\Controllers\HubRestartController;
 use Phlix\Hub\Http\Request;
+use Phlix\Hub\Tests\Support\FakeProcessReloader;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -99,7 +101,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '99999'); // non-existent PID
 
-        $controller = new TestableRestartController($this->pidFile, false, $this->makeLogger());
+        $controller = new HubRestartController($this->pidFile, $this->makeLogger(), new FakeProcessReloader(false));
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
@@ -114,7 +116,7 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '12345');
 
-        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
+        $controller = new HubRestartController($this->pidFile, $this->makeLogger(), new FakeProcessReloader());
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(200, $response->statusCode);
@@ -136,28 +138,27 @@ final class HubRestartControllerTest extends TestCase
      * plan_settings.md §3.35: "Return a JSON ack, then reload/restart *after*
      * the response flushes (never mid-request)."
      *
-     * The only signal delivered while building the response must be the
-     * no-op liveness probe (signal 0); the reload itself must still be
-     * pending when the Response is handed back.
+     * The only OS limb exercised while building the response is the no-op
+     * liveness probe; the reload itself must still be pending (scheduled, not
+     * delivered) when the Response is handed back — the recording fake fires
+     * it exactly once afterwards, standing in for the Workerman timer.
      */
     public function testAckIsBuiltBeforeTheReloadSignalIsDelivered(): void
     {
         file_put_contents($this->pidFile, '12345');
 
-        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
+        $reloader   = new FakeProcessReloader();
+        $controller = new HubRestartController($this->pidFile, $this->makeLogger(), $reloader);
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(200, $response->statusCode);
-        self::assertSame([12345], $controller->scheduled, 'reload must be deferred, not sent inline');
-        self::assertSame(
-            [[12345, 0]],
-            $controller->signals,
-            'only the signal-0 liveness probe may run before the ack',
-        );
+        self::assertSame([12345], $reloader->scheduled, 'reload must be deferred, not sent inline');
+        self::assertSame([], $reloader->delivered, 'nothing may be delivered before the ack');
+        self::assertSame([12345], $reloader->probes, 'only the liveness probe may run before the ack');
 
         // Now let the deferred one-shot fire, as the Workerman timer would.
-        self::assertTrue($controller->fireScheduledSignal());
-        self::assertSame([[12345, 0], [12345, SIGUSR2]], $controller->signals);
+        self::assertTrue($reloader->fireScheduledReload());
+        self::assertSame([[12345, SIGUSR2]], $reloader->delivered);
     }
 
     /**
@@ -171,12 +172,13 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '4242');
 
-        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
+        $reloader   = new FakeProcessReloader();
+        $controller = new HubRestartController($this->pidFile, $this->makeLogger(), $reloader);
         $controller->restart($this->makeRequest(), []);
-        $controller->fireScheduledSignal();
+        self::assertTrue($reloader->fireScheduledReload());
 
         $delivered = array_values(array_filter(
-            $controller->signals,
+            $reloader->delivered,
             static fn (array $pair): bool => $pair[1] !== 0,
         ));
 
@@ -192,12 +194,13 @@ final class HubRestartControllerTest extends TestCase
     {
         file_put_contents($this->pidFile, '99999');
 
-        $controller = new TestableRestartController($this->pidFile, false, $this->makeLogger());
+        $reloader   = new FakeProcessReloader(false);
+        $controller = new HubRestartController($this->pidFile, $this->makeLogger(), $reloader);
         $response   = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
-        self::assertSame([], $controller->scheduled);
-        self::assertFalse($controller->fireScheduledSignal());
+        self::assertSame([], $reloader->scheduled);
+        self::assertFalse($reloader->fireScheduledReload());
     }
 
     public function testRecycledPidIdentityMismatchRefusesToSignal(): void
@@ -207,30 +210,32 @@ final class HubRestartControllerTest extends TestCase
         // — no SIGUSR2 scheduled, no cheerful ack.
         file_put_contents($this->pidFile, '99999');
 
-        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
-        $controller->cmdline = "/usr/sbin/nginx\0-g\0daemon\0off\0";
+        $reloader          = new FakeProcessReloader();
+        $reloader->cmdline = "/usr/sbin/nginx\0-g\0daemon\0off\0";
+        $controller        = new HubRestartController($this->pidFile, $this->makeLogger(), $reloader);
         $response = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
         $body = json_decode((string) $response->body, true);
         self::assertIsArray($body);
         self::assertSame('pid_identity_mismatch', $body['error'] ?? null);
-        self::assertSame([], $controller->scheduled, 'a foreign process must never receive the reload signal');
+        self::assertSame([], $reloader->scheduled, 'a foreign process must never receive the reload signal');
     }
 
     public function testUnreadableCmdlineRefusesFailClosed(): void
     {
         file_put_contents($this->pidFile, '99999');
 
-        $controller = new TestableRestartController($this->pidFile, true, $this->makeLogger());
-        $controller->cmdline = null;
+        $reloader          = new FakeProcessReloader();
+        $reloader->cmdline = null;
+        $controller        = new HubRestartController($this->pidFile, $this->makeLogger(), $reloader);
         $response = $controller->restart($this->makeRequest(), []);
 
         self::assertSame(500, $response->statusCode);
         $body = json_decode((string) $response->body, true);
         self::assertIsArray($body);
         self::assertSame('pid_identity_mismatch', $body['error'] ?? null);
-        self::assertSame([], $controller->scheduled);
+        self::assertSame([], $reloader->scheduled);
     }
 
     public function testCmdlineIdentityLawReadsOnlyTheFirstTwoArgvSlots(): void
@@ -470,6 +475,136 @@ final class HubRestartControllerTest extends TestCase
             'the restart 500 envelope carries no machine code: the @phlix/contracts registry is '
             . 'frozen and no code was added for this operation (no-new-wire-codes law)',
         );
+    }
+
+    // ---------------------------------- SH-070: the production adapter's own laws
+    //
+    // The controller can no longer pin WHICH signal the deferred leg carries —
+    // that limb moved behind the port (that move IS the review cure). These
+    // tests keep the graceful + one-shot laws honest anyway: the /proc and
+    // probe limbs run against REAL posix pids (loop-independent), and the
+    // timer limb is pinned against the adapter's source text, the same
+    // self-source extraction style this file already uses for the 500 arms —
+    // there is no Workerman event loop under PHPUnit to fire a timer into.
+
+    private function adapterSource(): string
+    {
+        $path = dirname(__DIR__, 3) . '/src/Common/Support/WorkermanProcessReloader.php';
+        self::assertFileExists($path, 'the process-reload adapter must exist to be pinned');
+
+        return (string) file_get_contents($path);
+    }
+
+    public function testTheAdapterCarriesTheGracefulSignalAndTheOneShotDeferral(): void
+    {
+        $source = $this->adapterSource();
+
+        // The signal choice: graceful SIGUSR2, single constant, used by the
+        // deferred leg (a bare posix_kill($pid, SIGUSR1) slipping in here
+        // would hard-kill relay tunnels — Worker.php only arms its SIGKILL
+        // timer when gracefulStop is false).
+        self::assertMatchesRegularExpression(
+            '/public const int RELOAD_SIGNAL = SIGUSR2;/',
+            $source,
+            'the reload signal must stay the GRACEFUL SIGUSR2 (hub carries long-lived relay tunnels)',
+        );
+        self::assertMatchesRegularExpression(
+            '/posix_kill\(\$pid, self::RELOAD_SIGNAL\)/',
+            $source,
+            'the deferred leg must deliver through the named constant, never a bare signal literal',
+        );
+
+        // The deferral: a one-shot Timer::add (trailing false — Workerman
+        // timers REPEAT by default, and a repeating reload signal would cycle
+        // the workers forever).
+        $oneShot = '/Timer::add\(\s*self::SIGNAL_DELAY_SECONDS,'
+            . '\s*fn \(\): bool => posix_kill\(\$pid, self::RELOAD_SIGNAL\),'
+            . '\s*\[\],\s*false,\s*\)/';
+        self::assertMatchesRegularExpression(
+            $oneShot,
+            $source,
+            'scheduleGracefulReload must stay a ONE-SHOT deferred Timer::add '
+            . '(ack flushes first, no repeating reload)',
+        );
+
+        // The probe stays a no-delivery signal-0 check.
+        self::assertMatchesRegularExpression(
+            '/posix_kill\(\$pid, 0\)/',
+            $source,
+            'the liveness limb must stay a signal-0 probe (existence + permission without delivering)',
+        );
+    }
+
+    public function testTheAdapterProbeAndCmdlineWorkAgainstRealProcesses(): void
+    {
+        $adapter = new WorkermanProcessReloader();
+        $ownPid  = getmypid();
+        self::assertIsInt($ownPid, 'the CLI runner must have a pid to probe itself with');
+
+        self::assertTrue($adapter->isSignallable($ownPid), 'this php process is alive and ours');
+        self::assertFalse($adapter->isSignallable(2147483647), 'an impossible pid is not signallable');
+
+        $own = $adapter->readCmdline($ownPid);
+        self::assertIsString($own, 'our own /proc entry is readable');
+        self::assertStringContainsString('phpunit', (string) $own);
+        self::assertNull($adapter->readCmdline(2147483647), 'no /proc entry means the fail-closed null');
+    }
+
+    public function testTheControllerDefaultsToTheProductionAdapter(): void
+    {
+        // Wiring law: the DI provider builds the controller with two
+        // arguments, so the NULLED third limb must self-default to the real
+        // Workerman/POSIX adapter — a test fake can never leak into prod by
+        // nobody remembering to pass it.
+        $controller = new HubRestartController('/nonexistent/phlix-hub-test.pid', $this->makeLogger());
+
+        $reflection = new \ReflectionProperty(HubRestartController::class, 'reloader');
+        $reloader   = $reflection->getValue($controller);
+
+        self::assertInstanceOf(WorkermanProcessReloader::class, $reloader);
+    }
+
+    // ------------------------------------------------ SH-070 seam closure (round 2)
+
+    /**
+     * Review hub__srphp #5 (SH-070): AGENTS.md demands `final` controllers —
+     * this was the estate's one open class, held open only so a test subclass
+     * could intercept the restart signal. The cure replaces the inheritance
+     * seam with an injected process-reloader boundary; this pin keeps the
+     * class closed forever.
+     */
+    public function testTheRestartControllerIsFinal(): void
+    {
+        $reflection = new \ReflectionClass(HubRestartController::class);
+
+        self::assertTrue(
+            $reflection->isFinal(),
+            'AGENTS.md "Controllers: final" — the restart controller must stay closed to inheritance',
+        );
+    }
+
+    /**
+     * The retired seam must stay retired: a resurrected subclass would both
+     * fatal against a final parent and silently re-open the test-only hole
+     * the review named. The seam's whole justification was intercepting the
+     * signal; with the injected reloader it has no remaining purpose.
+     *
+     * Checked by name/file (not ::class) so the pin itself survives the file's
+     * deletion for phpstan and for future readers.
+     */
+    public function testTheTestSeamSubclassStaysRetired(): void
+    {
+        // autoload=false: the honest question is "is it on the class path at
+        // all", not "can the composer PSR-4 fallback notice its absence with
+        // an include warning" (PHPUnit would surface the miss as a run issue).
+        self::assertFalse(
+            class_exists('Phlix\\Hub\\Tests\\Unit\\Hub\\TestableRestartController', false),
+            'TestableRestartController was the sole reason HubRestartController was non-final; '
+            . 'with the injected ProcessReloaderInterface seam it must not come back',
+        );
+
+        $seamFile = dirname(__DIR__, 3) . '/tests/Unit/Hub/TestableRestartController.php';
+        self::assertFileDoesNotExist($seamFile, 'the retired inheritance seam must stay deleted');
     }
 
     /**

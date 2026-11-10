@@ -12,10 +12,11 @@ declare(strict_types=1);
 namespace Phlix\Hub\Http\Controllers;
 
 use Phlix\Hub\Common\Logger\StructuredLogger;
+use Phlix\Hub\Common\Support\ProcessReloaderInterface;
+use Phlix\Hub\Common\Support\WorkermanProcessReloader;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Throwable;
-use Workerman\Timer;
 
 /**
  * Graceful hub reload via SIGUSR2.
@@ -25,64 +26,56 @@ use Workerman\Timer;
  * to `Worker::$pidFile`) and asks the master to cycle its workers, so every
  * worker re-runs `onWorkerStart` and re-reads `config/*.php`.
  *
- * ## Signal choice — SIGUSR2, not SIGUSR1
+ * ## The OS limb is injected, not inherited
  *
- * Workerman treats BOTH as "reload"; the difference is whether the reload is
- * graceful (`vendor/workerman/workerman/src/Worker.php:1385-1391` sets
- * `static::$gracefulStop = $signal === SIGUSR2`):
- *
- *  - **SIGUSR2 → graceful.** Workers finish their in-flight requests and let
- *    their connections close before exiting. No `SIGKILL` timer is armed
- *    (`Worker.php:2009-2012` only arms it when `getGracefulStop()` is false).
- *  - **SIGUSR1 → NON-graceful.** Workers are stopped immediately and hard-
- *    killed after `Worker::$stopTimeout`, cutting active relay tunnels and
- *    in-flight HLS proxying.
- *
- * The hub multiplexes long-lived relay tunnels, so the non-graceful variant is
- * the wrong choice here. `scripts/install.sh`'s `ExecReload` sends the same
- * SIGUSR2 so `systemctl reload phlix-hub` and this endpoint behave identically.
+ * Probe, /proc witness, and the deferred graceful signal (whose SIGUSR2
+ * rationale and one-shot Timer deferral law live in
+ * {@see WorkermanProcessReloader}) all cross the
+ * {@see ProcessReloaderInterface} boundary. Review hub__srphp #5 (SH-070):
+ * this used to be the estate's one non-final controller because a test
+ * subclass intercepted the protected signal limbs; AGENTS.md demands `final`
+ * controllers, and the injected port closes the class while keeping every
+ * limb testable with a recording fake.
  *
  * ## Ordering — ack first, signal after the flush
  *
  * plan_settings.md §3.35 requires the JSON ack to reach the client *before*
- * the restart begins. The signal is therefore deferred onto a one-shot
- * {@see Timer} (note the `false` repeat flag — Workerman timers repeat by
- * default) that fires after the current request has been written and the event
- * loop has come back round. Never `sleep()`: this is a resident-memory
- * Workerman worker.
+ * the restart begins. The controller therefore only ever *schedules* the
+ * signal; {@see ProcessReloaderInterface::scheduleGracefulReload()} is the
+ * deferred leg. Never `sleep()`: this is a resident-memory Workerman worker.
  *
  * Route is gated by {@see \Phlix\Hub\Http\Middleware\AdminMiddleware}.
  *
  * @package Phlix\Hub\Http\Controllers
  * @since   Phase 10
  */
-class HubRestartController
+final class HubRestartController
 {
-    /**
-     * Seconds to wait before signalling, so the JSON ack is fully flushed to
-     * the client first. Short enough to feel instant, long enough for the
-     * response write to complete.
-     */
-    private const float SIGNAL_DELAY_SECONDS = 0.2;
-
     /** @var string Absolute path to the PID file, sourced from config. */
     private string $pidFile;
 
+    private ProcessReloaderInterface $reloader;
+
     /**
-     * @param string           $pidFile Absolute path to the PID file (from config/server.php's
-     *                                  `pid_file`, which start.php also uses for
-     *                                  `Worker::$pidFile` — single source of truth).
-     * @param StructuredLogger $logger  Hub-channel log. Injected (house controller pattern):
-     *                                  {@see restart()} records the real failure detail the
-     *                                  constant wire message deliberately withholds.
+     * @param string                        $pidFile   Absolute path to the PID file (from config/server.php's
+     *                                                 `pid_file`, which start.php also uses for
+     *                                                 `Worker::$pidFile` — single source of truth).
+     * @param StructuredLogger              $logger    Hub-channel log. Injected (house controller pattern):
+     *                                                 {@see restart()} records the real failure detail the
+     *                                                 constant wire message deliberately withholds.
+     * @param ProcessReloaderInterface|null $reloader  OS-process boundary; null (production wiring) builds the
+     *                                                 Workerman/POSIX adapter — the same defaulting posture as
+     *                                                 RequestManager's logger.
      *
      * @since Phase 10
      */
     public function __construct(
         string $pidFile,
         private readonly StructuredLogger $logger,
+        ?ProcessReloaderInterface $reloader = null,
     ) {
         $this->pidFile = $pidFile;
+        $this->reloader = $reloader ?? new WorkermanProcessReloader();
     }
 
     /**
@@ -126,11 +119,10 @@ class HubRestartController
                 ]);
             }
 
-            // Liveness check BEFORE acking: signal 0 performs the permission +
-            // existence check without delivering anything, so a stale pid file
-            // still yields a real error response instead of a cheerful ack the
-            // deferred signal would silently contradict.
-            if (!$this->sendSignal((int) $pid, 0)) {
+            // Liveness check BEFORE acking (probe semantics live in the
+            // reloader): a stale pid file must yield a real error response,
+            // never a cheerful ack the deferred signal would contradict.
+            if (!$this->reloader->isSignallable((int) $pid)) {
                 return (new Response())->status(500)->json([
                     'success' => false,
                     'error'   => 'signal_send_failed',
@@ -144,7 +136,7 @@ class HubRestartController
             // 200 and never reloaded. /proc's argv is the cheap, unspoofable
             // (by the hub's own standards) witness: the Workerman master
             // always carries start.php within its first two argv slots.
-            $cmdline = $this->readProcessCmdline((int) $pid);
+            $cmdline = $this->reloader->readCmdline((int) $pid);
             if ($cmdline === null || !self::cmdlineIdentifiesHub($cmdline)) {
                 return (new Response())->status(500)->json([
                     'success' => false,
@@ -157,7 +149,7 @@ class HubRestartController
                 ]);
             }
 
-            $this->scheduleSignal((int) $pid);
+            $this->reloader->scheduleGracefulReload((int) $pid);
 
             // The ack names what the operator just caused (review
             // hub__webux): SIGUSR2 is graceful but not invisible — workers
@@ -185,61 +177,6 @@ class HubRestartController
                 'message' => 'Restart could not be scheduled',
             ]);
         }
-    }
-
-    /**
-     * Defer the graceful-reload signal until after this response has flushed.
-     *
-     * Extracted (like {@see sendSignal()}) so tests can assert the deferral
-     * without arming a real Workerman timer.
-     *
-     * @param int $pid Workerman master PID.
-     */
-    protected function scheduleSignal(int $pid): void
-    {
-        // One-shot: the trailing `false` is REQUIRED — Workerman's Timer::add()
-        // repeats by default, and a repeating reload signal would cycle the
-        // workers forever.
-        Timer::add(
-            self::SIGNAL_DELAY_SECONDS,
-            fn (): bool => $this->sendSignal($pid, SIGUSR2),
-            [],
-            false,
-        );
-    }
-
-    /**
-     * Send a signal to a process.
-     *
-     * Extracted to a protected method so tests can mock it.
-     *
-     * @param int $pid    Process ID.
-     * @param int $signal Signal constant (`SIGUSR2` to reload, `0` to probe).
-     *
-     * @return bool True when posix_kill() returned true; false otherwise.
-     */
-    protected function sendSignal(int $pid, int $signal): bool
-    {
-        return posix_kill($pid, $signal);
-    }
-
-    /**
-     * Read /proc/<pid>/cmdline for the identity gate (Minor 55).
-     *
-     * Extracted as a seam so tests control the witness without a real
-     * process. Null means "no readable argv" — the gate treats that as
-     * refusal (fail closed: an unverifiable pid must never receive the
-     * reload signal on the hub's behalf).
-     */
-    protected function readProcessCmdline(int $pid): ?string
-    {
-        $path = '/proc/' . $pid . '/cmdline';
-        if (!is_file($path)) {
-            return null;
-        }
-        $raw = @file_get_contents($path);
-
-        return $raw === false ? null : $raw;
     }
 
     /**

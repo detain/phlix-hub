@@ -6,6 +6,45 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-w17L4-round2-1109] — SH-075: admin request approve/deny second click is a 409 conflict, not a 500 blaming the *arr backend; SH-070: HubRestartController goes `final` behind an injected process-reloader port
+
+- **SH-075** (`src/Requests/RequestManager.php`, `src/Requests/RequestTransitionResult.php`
+  new, `src/Http/Controllers/RequestController.php`): `approveRequest()` returned
+  a plain `bool` that collapsed three worlds — "you did it", "someone already
+  did it" (double-click or the other admin), "the arr backend refused" — into
+  one 500 `approve_failed` whose sentence blamed Radarr/Sonarr even for a
+  harmless second click; `denyRequest()` was worse: a 500 whose `error` was the
+  bare HTTP phrase with no human leg at all (review hub__webux #1). The manager
+  now answers a `RequestTransitionResult` enum (`Applied`/`NotPending`/
+  `NotFound`/`Failed`) and the controller maps each arm to a truthful status:
+  the conflict answers 409 `This request was already approved or denied.`, the
+  vanished row answers the same 404 `request_not_found` frame as the
+  controller's own pre-read (no oracle), and only a genuine backend refusal
+  keeps the byte-identical 500 arr-blame frame. No new wire codes — the
+  @phlix/contracts registry is frozen (ErrorCodesContractTest), so the conflict
+  rides the already-registered `approve_failed`/`deny_failed`. Deny's losing
+  UPDATE re-reads the row to separate conflict from vanished (only the failure
+  path pays the extra SELECT); audit + member notification stay single-shot
+  across double clicks (pinned). Openapi gains the two 409 nodes.
+- **SH-070** (`src/Http/Controllers/HubRestartController.php`,
+  `src/Common/Support/ProcessReloaderInterface.php` +
+  `src/Common/Support/WorkermanProcessReloader.php` new,
+  `tests/Unit/Hub/TestableRestartController.php` deleted): the estate's one
+  non-final controller existed only so a test subclass could intercept
+  `posix_kill`/`Timer::add`/`/proc`. Measurement showed the seam carried THREE
+  overridden limbs, not the one the review named. The OS boundary is now an
+  injected port (`?ProcessReloaderInterface` third ctor arg, self-defaulting to
+  the Workerman/POSIX adapter — DI wiring unchanged at two args); the
+  controller is `final`, the fake is a recorder (`FakeProcessReloader`), and
+  the graceful-SIGUSR2/one-shot-timer laws move to source-pinned + real-posix
+  tests on the adapter itself (no event loop exists under PHPUnit). Two pins
+  keep the class closed: reflection `isFinal`, and the retired seam staying
+  absent by class name and by file.
+
+Deltas (measured): `RequestControllerTest` 14 → 19 tests, `RequestManagerTest`
+28 → 29, `HubRestartControllerTest` 14 → 19 (no new test FILES — the blessed
+`scripts/parallel/test-durations.json` inventory is unchanged).
+
 ### Fixed [cert-rotation-hub-1109] — audit §3.1/§3.2/§3.4/§3.5/§5.2: live-path HAProxy binds, loud TLS-material failure, tear-free renewal, single renewal mechanism
 
 - **§3.1** (`scripts/install.sh`): the managed `frontend fe_https` no longer

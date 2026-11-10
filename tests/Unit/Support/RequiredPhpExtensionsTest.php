@@ -84,7 +84,7 @@ final class RequiredPhpExtensionsTest extends TestCase
         'hash' => ['hash_hmac', 'src/Auth/JwtHandler.php'],
         'filter' => ['filter_var', 'src/Common/Http/TrustedProxyResolver.php'],
         'ctype' => ['ctype_digit', 'src/Common/Http/TrustedProxyResolver.php'],
-        'posix' => ['posix_kill', 'src/Http/Controllers/HubRestartController.php'],
+        'posix' => ['posix_kill', 'src/Common/Support/WorkermanProcessReloader.php'],
     ];
 
     /**

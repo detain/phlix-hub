@@ -597,6 +597,12 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: "Row left `pending` under this click — second click or another admin acted first (`approve_failed`). Only a genuine Sonarr/Radarr refusal answers 500."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/admin/requests/{id}/deny":
@@ -638,6 +644,12 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: "Row left `pending` under this click — second click or another admin acted first (`deny_failed`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/admin/restart":

@@ -126,8 +126,10 @@ const REQUIRED_EXTENSIONS = [
     ],
     'posix' => [
         'symbol' => 'posix_kill',
-        'source' => 'src/Http/Controllers/HubRestartController.php',
-        'why' => 'Signalling the resident master process for the admin-gated restart endpoint.',
+        'source' => 'src/Common/Support/WorkermanProcessReloader.php',
+        'why' => 'Signalling the resident master process for the admin-gated restart endpoint '
+            . '(the probe and the deferred graceful signal — limb ported out of '
+            . 'HubRestartController behind ProcessReloaderInterface so the controller could close).',
     ],
 ];
 

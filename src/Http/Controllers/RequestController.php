@@ -20,6 +20,7 @@ use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Hub\Requests\RequestManager;
 use Phlix\Hub\Requests\RequestNotification;
+use Phlix\Hub\Requests\RequestTransitionResult;
 
 /**
  * REST API for the Jellyseerr-class request UI on the hub.
@@ -331,13 +332,32 @@ final class RequestController
             ]);
         }
 
-        $success = $this->manager->approveRequest($requestId);
-        if (!$success) {
-            return (new Response())->status(500)->json([
-                'error'   => 'Internal Server Error',
-                'code'    => 'approve_failed',
-                'message' => 'Failed to approve. Check Radarr/Sonarr configuration.',
-            ]);
+        $outcome = $this->manager->approveRequest($requestId);
+        if ($outcome !== RequestTransitionResult::Applied) {
+            // Review hub__webux #1 (SH-075): the arms were one conflated 500
+            // blaming the *arr backend for every false. Now each world speaks
+            // for itself on a truthful status, riding ONLY the registered
+            // codes (the @phlix/contracts registry is frozen — ErrorCodes-
+            // ContractTest law — so the conflict reuses approve_failed with
+            // the human sentence on error/message per the MemberErrorProse
+            // shape; the 500 survives for the genuine backend refusal, where
+            // the Radarr/Sonarr blame is finally true).
+            return match ($outcome) {
+                RequestTransitionResult::NotPending => (new Response())->status(409)->json([
+                    'error'   => 'This request was already approved or denied.',
+                    'code'    => 'approve_failed',
+                    'message' => 'This request was already approved or denied.',
+                ]),
+                RequestTransitionResult::NotFound => (new Response())->status(404)->json([
+                    'error' => 'Not Found',
+                    'code'  => 'request_not_found',
+                ]),
+                default => (new Response())->status(500)->json([
+                    'error'   => 'Internal Server Error',
+                    'code'    => 'approve_failed',
+                    'message' => 'Failed to approve. Check Radarr/Sonarr configuration.',
+                ]),
+            };
         }
 
         $this->audit->logAdminAction(
@@ -387,12 +407,32 @@ final class RequestController
         $reasonRaw = $body['reason'] ?? '';
         $reason = is_string($reasonRaw) ? $reasonRaw : '';
 
-        $success = $this->manager->rejectRequest($requestId, $reason);
-        if (!$success) {
-            return (new Response())->status(500)->json([
-                'error' => 'Internal Server Error',
-                'code'  => 'deny_failed',
-            ]);
+        $outcome = $this->manager->rejectRequest($requestId, $reason);
+        if ($outcome !== RequestTransitionResult::Applied) {
+            // Review hub__webux #1 (SH-075), deny half — "worse" because the
+            // frame carried no human sentence at all while the pinned client
+            // renders `error` first. The conditional UPDATE is the whole
+            // operation, so losing it is a state conflict, never a server
+            // crash: 409 with the sentence on BOTH fields (the Failed arm
+            // below is structurally unreachable for deny — rejectRequest
+            // documents that it never returns it — kept as the fail-loud
+            // default so a future side-effect limb cannot silently 409).
+            return match ($outcome) {
+                RequestTransitionResult::NotPending => (new Response())->status(409)->json([
+                    'error'   => 'This request was already approved or denied.',
+                    'code'    => 'deny_failed',
+                    'message' => 'This request was already approved or denied.',
+                ]),
+                RequestTransitionResult::NotFound => (new Response())->status(404)->json([
+                    'error' => 'Not Found',
+                    'code'  => 'request_not_found',
+                ]),
+                default => (new Response())->status(500)->json([
+                    'error'   => 'Failed to deny the request. Try again.',
+                    'code'    => 'deny_failed',
+                    'message' => 'Failed to deny the request. Try again.',
+                ]),
+            };
         }
 
         $this->audit->logAdminAction(

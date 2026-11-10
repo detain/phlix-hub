@@ -6,6 +6,7 @@ namespace Phlix\Hub\Tests\Unit\Requests;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Hub\Requests\RequestManager;
+use Phlix\Hub\Requests\RequestTransitionResult;
 use Phlix\Hub\Common\Logger\StructuredLogger;
 use Phlix\Shared\Arr\ArrClientFactory;
 use Workerman\MySQL\Connection;
@@ -173,19 +174,29 @@ final class RequestManagerTest extends TestCase
                 return [];
             });
 
-        self::assertTrue($this->manager->rejectRequest('test-id', 'Too controversial'));
+        self::assertSame(
+            RequestTransitionResult::Applied,
+            $this->manager->rejectRequest('test-id', 'Too controversial'),
+        );
     }
 
-    public function testRejectRequestReturnsFalseForNonPending(): void
+    /**
+     * SH-075: losing the guarded UPDATE is a state conflict (the row left
+     * `pending`), never a backend failure — and the re-read after the 0-row
+     * UPDATE is what proves it. The mock answers every query with the same
+     * approved row: affected-rows extraction from a non-numeric result gives 0
+     * (the losing UPDATE), the re-read then names the state.
+     */
+    public function testRejectRequestReportsNotPendingForNonPending(): void
     {
         $this->db->method('query')->willReturn([self::row(['id' => 'test-id', 'status' => 'approved'])]);
-        self::assertFalse($this->manager->rejectRequest('test-id', 'reason'));
+        self::assertSame(RequestTransitionResult::NotPending, $this->manager->rejectRequest('test-id', 'reason'));
     }
 
-    public function testRejectRequestReturnsFalseForNonExistent(): void
+    public function testRejectRequestReportsNotFoundForNonExistent(): void
     {
         $this->db->method('query')->willReturn([]);
-        self::assertFalse($this->manager->rejectRequest('nope', 'reason'));
+        self::assertSame(RequestTransitionResult::NotFound, $this->manager->rejectRequest('nope', 'reason'));
     }
 
     public function testGetRequestStatusReturnsCorrectStatus(): void
@@ -286,30 +297,55 @@ final class RequestManagerTest extends TestCase
         self::assertFalse($this->manager->deleteRequest('nope'));
     }
 
-    public function testApproveMovieReturnsFalseWhenRadarrNotConfigured(): void
+    /**
+     * SH-075 with a wired claim: once the guarded UPDATE succeeds, the
+     * unconfigured Radarr client is a REAL backend refusal — the Failed arm
+     * (and its 500 arr-blame frame) is reserved for exactly this world.
+     */
+    public function testApproveMovieReportsFailedWhenRadarrNotConfigured(): void
     {
-        $this->db->method('query')->willReturn([self::row([
-            'id' => 'test-id',
-            'type' => 'movie',
-            'status' => 'pending'
-        ])]);
-        self::assertFalse($this->manager->approveRequest('test-id'));
+        $this->db->method('query')
+            ->willReturnCallback(static function (string $sql) {
+                if (str_contains($sql, 'FROM requests WHERE id')) {
+                    return [self::row(['id' => 'test-id', 'type' => 'movie', 'status' => 'pending'])];
+                }
+                if (str_contains($sql, 'UPDATE requests SET status = :to')) {
+                    return 1;
+                }
+                return [];
+            });
+        self::assertSame(RequestTransitionResult::Failed, $this->manager->approveRequest('test-id'));
     }
 
-    public function testApproveSeriesReturnsFalseWhenSonarrNotConfigured(): void
+    public function testApproveSeriesReportsFailedWhenSonarrNotConfigured(): void
     {
-        $this->db->method('query')->willReturn([self::row([
-            'id' => 'test-id',
-            'type' => 'series',
-            'status' => 'pending'
-        ])]);
-        self::assertFalse($this->manager->approveRequest('test-id'));
+        $this->db->method('query')
+            ->willReturnCallback(static function (string $sql) {
+                if (str_contains($sql, 'FROM requests WHERE id')) {
+                    return [self::row(['id' => 'test-id', 'type' => 'series', 'status' => 'pending'])];
+                }
+                if (str_contains($sql, 'UPDATE requests SET status = :to')) {
+                    return 1;
+                }
+                return [];
+            });
+        self::assertSame(RequestTransitionResult::Failed, $this->manager->approveRequest('test-id'));
     }
 
-    public function testApproveRequestReturnsFalseForNonPending(): void
+    public function testApproveRequestReportsNotPendingForNonPending(): void
     {
         $this->db->method('query')->willReturn([self::row(['id' => 'test-id', 'status' => 'approved'])]);
-        self::assertFalse($this->manager->approveRequest('test-id'));
+        self::assertSame(RequestTransitionResult::NotPending, $this->manager->approveRequest('test-id'));
+    }
+
+    /**
+     * A row deleted between the controller's pre-read and the manager's read
+     * is NotFound, not a backend failure — the 404 half of the SH-075 split.
+     */
+    public function testApproveRequestReportsNotFoundForVanishedRow(): void
+    {
+        $this->db->method('query')->willReturn([]);
+        self::assertSame(RequestTransitionResult::NotFound, $this->manager->approveRequest('test-id'));
     }
 
     public function testMarkAvailable(): void
@@ -349,9 +385,10 @@ final class RequestManagerTest extends TestCase
                 return [];
             });
 
-        // ArrClientFactory([]) has no Radarr configured -> approve returns false
-        // after the claim, so the revert UPDATE must be the LAST statement run.
-        self::assertFalse($this->manager->approveRequest('test-id'));
+        // ArrClientFactory([]) has no Radarr configured -> approve FAILS after
+        // the claim (the Failed arm), so the revert UPDATE must be the LAST
+        // statement run.
+        self::assertSame(RequestTransitionResult::Failed, $this->manager->approveRequest('test-id'));
 
         self::assertCount(3, $executed);
         self::assertStringContainsString('FROM requests WHERE id', $executed[0]);
@@ -360,7 +397,12 @@ final class RequestManagerTest extends TestCase
         self::assertStringContainsString('UPDATE requests SET status = :to', $executed[2]);
     }
 
-    public function testApproveRequestReturnsFalseWhenClaimLost(): void
+    /**
+     * SH-075: the concurrent loser of the claim sees NotPending — someone
+     * already moved the row — which the controller must answer as a 409
+     * conflict, not a 500 blaming the arr backend.
+     */
+    public function testApproveRequestReportsNotPendingWhenClaimLost(): void
     {
         $claimRan = false;
         $this->db->method('query')
@@ -375,7 +417,7 @@ final class RequestManagerTest extends TestCase
                 return [];
             });
 
-        self::assertFalse($this->manager->approveRequest('test-id'));
+        self::assertSame(RequestTransitionResult::NotPending, $this->manager->approveRequest('test-id'));
         self::assertTrue($claimRan);
     }
 

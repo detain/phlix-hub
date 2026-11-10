@@ -255,7 +255,7 @@ class RequestManager
         // fails the create itself.
         if ($this->autoApproveEnabled()) {
             try {
-                $approved = $this->approveRequest($request['id']);
+                $approved = $this->approveRequest($request['id']) === RequestTransitionResult::Applied;
                 if ($approved) {
                     // Re-read so the create response honestly carries the
                     // post-approval row (status 'approved'), not the stale
@@ -288,47 +288,90 @@ class RequestManager
      * The `pending -> approved` transition is CLAIMED with a conditional
      * UPDATE before the (slow) arr round-trip so two concurrent approvals of
      * the same request can never both fire `addMovie`/`addSeries`: exactly one
-     * caller flips the row (affected-rows 1); the loser sees 0 and returns
-     * false. If the arr call then fails the claim is released by reverting the
-     * row to `pending` — best-effort, guarded on our own claim.
+     * caller flips the row (affected-rows 1); the loser sees 0 and reports
+     * {@see RequestTransitionResult::NotPending} (review SH-075: the loser is
+     * NOT a backend failure — the row simply isn't pending for this caller
+     * anymore). If the arr call then fails the claim is released by reverting
+     * the row to `pending` — best-effort, guarded on our own claim.
      *
      * @param string $requestId Request UUID to approve.
      *
-     * @return bool True when the arr client accepted the add and the row was updated.
+     * @return RequestTransitionResult Applied only when the arr client accepted
+     *         the add and the row stayed `approved`; Failed only for a real
+     *         backend refusal (the caller keeps the arr blame frame for it).
      */
-    public function approveRequest(string $requestId): bool
+    public function approveRequest(string $requestId): RequestTransitionResult
     {
         $request = $this->getRequestById($requestId);
-        if ($request === null || $request['status'] !== 'pending') {
-            return false;
+        if ($request === null) {
+            return RequestTransitionResult::NotFound;
+        }
+        if ($request['status'] !== 'pending') {
+            $this->logger->info('Request approve refused: row is no longer pending', [
+                'request_id' => $requestId,
+                'status'     => $request['status'],
+            ]);
+
+            return RequestTransitionResult::NotPending;
         }
 
         if (!$this->transitionStatus($requestId, from: 'pending', to: 'approved')) {
-            return false;
+            $this->logger->info('Request approve refused: another actor claimed the transition', [
+                'request_id' => $requestId,
+            ]);
+
+            return RequestTransitionResult::NotPending;
         }
 
         $success = match ($request['type']) {
             'movie'  => $this->approveMovieRequest($request),
             'series' => $this->approveSeriesRequest($request),
-            default  => false,
+            default  => $this->rejectCorruptRequestType($request),
         };
 
         if (!$success) {
             $this->transitionStatus($requestId, from: 'approved', to: 'pending');
+            return RequestTransitionResult::Failed;
         }
 
-        return $success;
+        return RequestTransitionResult::Applied;
+    }
+
+    /**
+     * Fail loud on a row whose `type` escaped the schema's ENUM('movie','series'):
+     * this is a corrupt-row witness (external SQL edit, restore from before the
+     * enum), never a state a UI click can produce. The caller sees the generic
+     * Failed arm — the wire carries no detail — while the log names the value.
+     *
+     * @param array<string, mixed> $request The already-claimed request row.
+     */
+    private function rejectCorruptRequestType(array $request): bool
+    {
+        $this->logger->error('Request row carries a type outside the schema enum', [
+            'request_id' => $request['id'],
+            'type'       => $request['type'],
+        ]);
+
+        return false;
     }
 
     /**
      * Reject a pending request with an optional human-readable reason.
      *
+     * Review SH-075: the conditional UPDATE is the whole operation, so
+     * affected-rows 0 is never a backend failure — it means the row left
+     * `pending` (or vanished) under this click. The re-read after the losing
+     * UPDATE separates the two states so the controller can answer 409 vs 404
+     * honestly; only the failure path pays the extra SELECT.
+     *
      * @param string $requestId Request UUID to reject.
      * @param string $reason    Optional rejection reason.
      *
-     * @return bool True when the row transitioned from `pending`.
+     * @return RequestTransitionResult Applied, NotPending (row exists but was
+     *         already acted on), or NotFound (row gone). Failed is reserved to
+     *         approve's backend arm and is never returned here.
      */
-    public function rejectRequest(string $requestId, string $reason = ''): bool
+    public function rejectRequest(string $requestId, string $reason = ''): RequestTransitionResult
     {
         /** @var mixed $result */
         $result = $this->db->query(
@@ -337,7 +380,21 @@ class RequestManager
             ['reason' => $reason, 'id' => $requestId]
         );
 
-        return self::affectedRows($result) === 1;
+        if (self::affectedRows($result) === 1) {
+            return RequestTransitionResult::Applied;
+        }
+
+        $current = $this->getRequestById($requestId);
+        if ($current === null) {
+            return RequestTransitionResult::NotFound;
+        }
+
+        $this->logger->info('Request deny refused: row is no longer pending', [
+            'request_id' => $requestId,
+            'status'     => $current['status'],
+        ]);
+
+        return RequestTransitionResult::NotPending;
     }
 
     /**
