@@ -12,6 +12,33 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Added [hub-w21L6] — SH-064: the two client-facing WS listeners (:8803/:8804) gain the M21/M22 TLS posture family — opt-in native wss://, fail-closed mandate, loud plaintext advisory — plus a bind-host knob; defaults unchanged — 2026-11-10
+
+- `ClientRelayWorker` (:8803, relay bearer tokens) and `SyncPlayRelayWorker`
+  (:8804, join-frame member auth) previously bound `0.0.0.0` plaintext-only
+  with no posture machinery at all — the TLS work that shipped for :8802
+  (M21) and :8805 (M22) never reached the client-facing pair. Both now speak
+  the same tri-state: `HUB_CLIENT_RELAY_TLS`/`HUB_SYNCPLAY_TLS` (+
+  `_CERT`/`_KEY`) bind `wss://` with the estate-hardened ssl context (new
+  `WsTlsContext` kit — cipher list byte-committed against the RelayWorker
+  shape), `*_REQUIRE_TLS=1` without material REFUSES the bind loudly before a
+  socket exists, and the default posture stays warn-only: one security
+  advisory per worker at boot naming the payload at risk and every cure knob.
+  No default is flipped (F2): plaintext binds continue exactly as shipped;
+  `TlsMaterialWatch` covers change-after-boot on the TLS legs.
+- `HUB_WS_BIND` makes the previously document-only escape real: it governs
+  ONLY the :8803/:8804 pair (their binds were raw literals), defaulting to
+  the historical `0.0.0.0`; proxy-fronted hosts can pin `127.0.0.1`/`::1`
+  without editing code. The :8802/:8805 binds are byte-frozen by their own
+  suites and stay untouched.
+- Three new suites (`ClientRelayWorkerTlsPostureTest` 14,
+  `SyncPlayRelayWorkerTlsPostureTest` 13, `WsTlsContextTest` 3 — blessed into
+  the parallel durations cache in the same commit), red-first at parent;
+  seven planted mutations (refusal→log downgrade, plaintext advisory silenced
+  ×2, bind default flipped, cipher softening, bracket stripping, config
+  default flip) each redden named tests — transcripts in
+  .reviews/2026-11-10/FIX-hub-w21L6.md.
+
 ### Fixed [hub-w21L6] — SH-071: the static-serving fast path gets a method gate (GET/HEAD only, HEAD bodyless), a hashed-asset detector that actually matches what Vite ships, and a hub-only raw-HTML denial — 2026-11-10
 
 - Method gate: previously any method with a static-looking path got the file

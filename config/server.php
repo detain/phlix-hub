@@ -267,6 +267,42 @@ return [
     'federation_tls_key' => ($v = getenv('HUB_FEDERATION_TLS_KEY')) !== false && $v !== '' ? $v : null,
     'federation_require_tls' => filter_var(($v = getenv('HUB_FEDERATION_REQUIRE_TLS')) !== false && $v !== '' ? $v : 'false', FILTER_VALIDATE_BOOLEAN),
 
+    // SH-064 (review hub__secnet#1): the M21/M22 posture family extended to the
+    // two CLIENT-facing WS surfaces that never got it — :8803 (client relay;
+    // browsers present their relay bearer token on it) and :8804 (SyncPlay
+    // relay; join frames carry member auth tokens). Same tri-state as :8802/
+    // :8805: opt-in native wss:// (+ cert/key), fail-closed mandate, default
+    // false = warn-only boot advisory (estate default-off law — a mandate
+    // flip moves topology docs and both tunnel sides in one owner wave).
+    'client_relay_tls' => filter_var(
+        ($v = getenv('HUB_CLIENT_RELAY_TLS')) !== false && $v !== '' ? $v : 'false',
+        FILTER_VALIDATE_BOOLEAN,
+    ),
+    'client_relay_tls_cert' => ($v = getenv('HUB_CLIENT_RELAY_TLS_CERT')) !== false && $v !== '' ? $v : null,
+    'client_relay_tls_key' => ($v = getenv('HUB_CLIENT_RELAY_TLS_KEY')) !== false && $v !== '' ? $v : null,
+    'client_relay_require_tls' => filter_var(
+        ($v = getenv('HUB_CLIENT_RELAY_REQUIRE_TLS')) !== false && $v !== '' ? $v : 'false',
+        FILTER_VALIDATE_BOOLEAN,
+    ),
+    'syncplay_tls' => filter_var(
+        ($v = getenv('HUB_SYNCPLAY_TLS')) !== false && $v !== '' ? $v : 'false',
+        FILTER_VALIDATE_BOOLEAN,
+    ),
+    'syncplay_tls_cert' => ($v = getenv('HUB_SYNCPLAY_TLS_CERT')) !== false && $v !== '' ? $v : null,
+    'syncplay_tls_key' => ($v = getenv('HUB_SYNCPLAY_TLS_KEY')) !== false && $v !== '' ? $v : null,
+    'syncplay_require_tls' => filter_var(
+        ($v = getenv('HUB_SYNCPLAY_REQUIRE_TLS')) !== false && $v !== '' ? $v : 'false',
+        FILTER_VALIDATE_BOOLEAN,
+    ),
+    // SH-064: listen host for the client-facing pair (:8803/:8804). Default
+    // '0.0.0.0' is the historical hardcoded literal — NOT flipped (an estate-
+    // wide bind default change is an owner call; this key makes the documented
+    // "front it with a local proxy, pin the bind" escape REAL: set it to
+    // 127.0.0.1/::1 when HAProxy is loopback-local). It governs ONLY these two
+    // surfaces; :8802 (M21) and :8805 (M22) shipped without a host knob and
+    // their binds/pins are byte-frozen by their own suites.
+    'ws_bind_host' => ($v = getenv('HUB_WS_BIND')) !== false && $v !== '' ? $v : '0.0.0.0',
+
     // Sonarr/Radarr endpoints used by the request UI.
     // See \Phlix\Shared\Arr\ArrClientFactory for the expected shape.
     'arr' => [

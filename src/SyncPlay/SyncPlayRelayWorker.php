@@ -26,7 +26,9 @@ use Phlix\Hub\Relay\InboundHandshakeGuard;
 use Phlix\Hub\Relay\InboundPackageCap;
 use Phlix\Hub\Relay\RelayProxyProtocol;
 use Phlix\Hub\Relay\TokenBucket;
+use Phlix\Hub\Relay\TlsMaterialWatch;
 use Phlix\Hub\Relay\WebSocketCloseFrame;
+use Phlix\Hub\Relay\WsTlsContext;
 use Throwable;
 use Workerman\Connection\TcpConnection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
@@ -449,6 +451,14 @@ final class SyncPlayRelayWorker
      *        disables the per-client budget entirely (diagnostics only).
      * @param float              $handshakeTimeoutSeconds TCP-accept → WS-upgrade
      *        deadline ({@see InboundHandshakeGuard}); <= 0 disables the guard.
+     * @param string             $bindHost  SH-064 listen host (HUB_WS_BIND;
+     *        default 0.0.0.0 = the historical literal, deliberately NOT
+     *        flipped — a bind-default change is an estate-wide owner call).
+     * @param bool               $useTls    Serve native wss:// (HUB_SYNCPLAY_TLS).
+     * @param string|null        $tlsCert   local_cert PEM (HUB_SYNCPLAY_TLS_CERT).
+     * @param string|null        $tlsKey    local_pk PEM (HUB_SYNCPLAY_TLS_KEY).
+     * @param bool               $requireTls Fail-closed mandate (HUB_SYNCPLAY_REQUIRE_TLS):
+     *        plaintext + mandate = start() throws before any socket exists.
      *
      * The channel and inbound-budget parameters are TRAILING and DEFAULTED on
      * purpose: every existing call site (`Application::run()`, the unit suite)
@@ -466,9 +476,80 @@ final class SyncPlayRelayWorker
         // HOST-3 H3-3: pre-upgrade deadline (relay.ws_handshake_timeout_seconds,
         // <= 0 disables); see InboundHandshakeGuard.
         private readonly float $handshakeTimeoutSeconds = InboundHandshakeGuard::DEFAULT_TIMEOUT_SECONDS,
+        // SH-064 (hub__secnet#1): the M21 posture trio + bind host, trailing
+        // and defaulted for the same positional-call-site law as above.
+        private readonly string $bindHost = '0.0.0.0',
+        private readonly bool $useTls = false,
+        private readonly ?string $tlsCert = null,
+        private readonly ?string $tlsKey = null,
+        private readonly bool $requireTls = false,
     ) {
         ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-syncplay-relay-ws (:8804)');
     }
+
+    /**
+     * Bind-time TLS posture for the :8804 listener (SH-064, M21 pattern —
+     * identical tri-state to {@see \Phlix\Hub\Relay\ClientRelayWorker::tlsBootPosture()},
+     * kept per-class like every shipped surface so each suite pins its own).
+     *
+     * @param bool $useTls     TLS configured on this listener (syncplay_tls).
+     * @param bool $requireTls Operator mandate (syncplay_require_tls).
+     *
+     * @return 'secure'|'advisory'|'refused'
+     */
+    public static function tlsBootPosture(bool $useTls, bool $requireTls): string
+    {
+        if ($useTls) {
+            return 'secure';
+        }
+
+        return $requireTls ? 'refused' : 'advisory';
+    }
+
+    /**
+     * The one-per-boot cleartext advisory text (SH-064).
+     *
+     * Wording duty: name WHAT travels in the clear (SyncPlay join tokens —
+     * member credentials the relay authenticates — plus all group state),
+     * the HAProxy-fronting assumption, and ALL THREE cures (native TLS, the
+     * mandate, pinning the bind via HUB_WS_BIND to the proxy-facing address).
+     *
+     * @param int $port Bound SyncPlay relay port.
+     *
+     * @return string Warning text for the relay log channel.
+     */
+    public static function plaintextAdvisory(int $port): string
+    {
+        return 'SECURITY — SyncPlay relay listener :' . $port . ' is binding PLAINTEXT ws:// '
+            . '(syncplay_tls not enabled). SyncPlay clients authenticate this socket '
+            . 'with their member auth token in the join frame and every group-state, '
+            . 'position and command afterwards rides it in the clear. The managed '
+            . 'install fronts :8804 through HAProxy over loopback — if that proxy is '
+            . 'not LOCAL to this exact bind, on-path capturers get member credentials. '
+            . 'Set HUB_SYNCPLAY_TLS=true (+ HUB_SYNCPLAY_TLS_CERT/KEY) to serve wss:// '
+            . 'natively, pin the bind to the proxy-facing address with HUB_WS_BIND '
+            . '(e.g. 127.0.0.1), and/or HUB_SYNCPLAY_REQUIRE_TLS=1 to turn this '
+            . 'advisory into a fail-closed boot refusal.';
+    }
+
+    /**
+     * The fail-closed refusal text (SH-064): require_tls + plaintext = no bind.
+     *
+     * @param int $port Requested SyncPlay relay port.
+     *
+     * @return string RuntimeException message.
+     */
+    public static function plaintextRefusal(int $port): string
+    {
+        return 'Refusing to bind SyncPlay relay listener :' . $port . ' as PLAINTEXT ws:// '
+            . 'because syncplay_require_tls is enabled (HUB_SYNCPLAY_REQUIRE_TLS=1). '
+            . 'The :8804 surface carries member auth tokens and watch-party state '
+            . 'in the clear; under the mandate the hub will not start a credential-'
+            . 'bearing cleartext listener. Enable TLS (HUB_SYNCPLAY_TLS=true + '
+            . 'HUB_SYNCPLAY_TLS_CERT/KEY) or unset HUB_SYNCPLAY_REQUIRE_TLS to '
+            . 'return to warn-only behaviour.';
+    }
+
 
     /**
      * Per-worker :8804 pre-auth connect limiter (`rate_limiter.syncplay_mount`,
@@ -501,9 +582,50 @@ final class SyncPlayRelayWorker
      */
     public function start(): Worker
     {
-        $worker = new Worker("websocket://0.0.0.0:{$this->port}");
+        // SH-064 (hub__secnet#1): bind-time TLS posture (see tlsBootPosture()
+        // for the law); 'refused' throws before any socket exists.
+        $posture = self::tlsBootPosture($this->useTls, $this->requireTls);
+        if ($posture === 'refused') {
+            throw new \RuntimeException(self::plaintextRefusal($this->port));
+        }
+        if ($posture === 'advisory') {
+            LoggerFactory::get(LogChannels::RELAY)->warning(self::plaintextAdvisory($this->port));
+        }
+
+        // Workerman's Worker::__construct() types $socketContext as a non-nullable
+        // array — empty context on the non-TLS path, never null (TypeError).
+        $sslContext = [];
+        $materialWatch = null;
+        if ($this->useTls) {
+            if ($this->tlsCert === null || $this->tlsKey === null) {
+                throw new \InvalidArgumentException(
+                    'TLS enabled for SyncPlay relay worker but HUB_SYNCPLAY_TLS_CERT '
+                        . 'and/or HUB_SYNCPLAY_TLS_KEY env vars are not set',
+                );
+            }
+            $envPaths = ['HUB_SYNCPLAY_TLS_CERT' => $this->tlsCert, 'HUB_SYNCPLAY_TLS_KEY' => $this->tlsKey];
+            // MISSING PEM fails fast pre-bind; exists-but-UNREADABLE degrades
+            // to a loud boot warning + the per-connection watch (audit §3.2).
+            $decision = TlsMaterialWatch::bootDecision($envPaths, 'SyncPlay relay worker', 'HUB_SYNCPLAY_TLS');
+            if ($decision['fatal'] !== null) {
+                throw TlsMaterialWatch::failFast($decision['fatal']);
+            }
+
+            foreach ($decision['warnings'] as $bootWarning) {
+                LoggerFactory::get(LogChannels::RELAY)->warning($bootWarning);
+            }
+
+            $materialWatch = new TlsMaterialWatch('syncplay-relay-ws :' . $this->port, $envPaths);
+            $sslContext = WsTlsContext::forListener($this->tlsCert, $this->tlsKey);
+        }
+
+        $worker = new Worker(WsTlsContext::listenString($this->bindHost, $this->port), $sslContext);
         $worker->name = 'phlix-hub-syncplay-relay-ws';
         $worker->count = $this->count;
+
+        if ($this->useTls) {
+            $worker->transport = 'ssl';
+        }
 
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         // Minor 57: declared inbound package cap pinned at TCP-accept (law in
@@ -511,11 +633,37 @@ final class SyncPlayRelayWorker
         // inherits it from vendor.
         // HOST-3 H3-3: wrapped in the repo-owned handshake deadline (silent
         // pre-upgrade sockets are closed, not held).
-        $worker->onConnect = InboundHandshakeGuard::compose(
+        // SH-064: under TLS the guard is wrapped once more so every accept
+        // re-checks the TLS material (rate-gated ERROR on transitions) and
+        // enable_crypto failures reach onError instead of vendor's silent close.
+        $handshakeGuard = InboundHandshakeGuard::compose(
             InboundPackageCap::onConnect(),
             $this->handshakeTimeoutSeconds,
             'syncplay-relay-ws :' . $this->port,
         );
+        if ($materialWatch !== null) {
+            $watch = $materialWatch;
+            $worker->onConnect = static function (TcpConnection $connection) use ($handshakeGuard, $watch): void {
+                $notice = $watch->materialNotice(time());
+                if ($notice !== null) {
+                    LoggerFactory::get(LogChannels::RELAY)->error($notice);
+                }
+
+                $handshakeGuard($connection);
+            };
+            $worker->onError = static function (
+                TcpConnection $connection,
+                int $code,
+                string $message
+            ) use ($watch): void {
+                $notice = $watch->handshakeFailureNotice(time(), $message);
+                if ($notice !== null) {
+                    LoggerFactory::get(LogChannels::RELAY)->error($notice);
+                }
+            };
+        } else {
+            $worker->onConnect = $handshakeGuard;
+        }
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
         $worker->onWorkerStart = [$this, 'onWorkerStart'];

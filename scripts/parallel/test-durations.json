@@ -1,5 +1,5 @@
 {
-    "generatedFrom": "2b427b4f-era serial Unit-only junit (3 RelayProxyBridge swoole-absence host errors pre-existing class; w32L1 CP-013 blesses CookieAuthCeremonyTest + re-measures CookiePolicyOriginLawTest; re-blessed post phpcs-wrap, same-shape timings)",
+    "generatedFrom": "2b427b4f-era serial Unit-only junit (3 RelayProxyBridge swoole-absence host errors pre-existing class; w32L1 CP-013 blesses CookieAuthCeremonyTest + re-measures CookiePolicyOriginLawTest; re-blessed post phpcs-wrap, same-shape timings; w21L6 SH-064 blesses ClientRelayWorkerTlsPostureTest + WsTlsContextTest + SyncPlayRelayWorkerTlsPostureTest (measured solo, new suites))",
     "unit": {
         "tests/Common/Database/MigrationRunnerTest.php": 0.016,
         "tests/Health/HealthControllerTest.php": 0.006,
@@ -247,6 +247,7 @@
         "tests/Unit/OAuth/TokenStorageHashingTest.php": 0.006,
         "tests/Unit/Relay/ClientConnectionTest.php": 0.007,
         "tests/Unit/Relay/ClientRelayWorkerTest.php": 0.024,
+        "tests/Unit/Relay/ClientRelayWorkerTlsPostureTest.php": 0.04,
         "tests/Unit/Relay/FederationWorkerExceptionBarrierTest.php": 0.054,
         "tests/Unit/Relay/FederationWorkerRateLimitTest.php": 0.011,
         "tests/Unit/Relay/FederationWorkerTlsMaterialTest.php": 0.002,
@@ -282,6 +283,7 @@
         "tests/Unit/Relay/TunnelThrottleRateSweepTest.php": 0.283,
         "tests/Unit/Relay/TunnelThrottleTimerLoopTest.php": 5.009,
         "tests/Unit/Relay/WebSocketCloseFrameTest.php": 0.006,
+        "tests/Unit/Relay/WsTlsContextTest.php": 0.02,
         "tests/Unit/Requests/RequestManagerAutoApproveTest.php": 0.002,
         "tests/Unit/Requests/RequestManagerTest.php": 0.009,
         "tests/Unit/Requests/RequestNotificationTest.php": 0.001,
@@ -324,6 +326,7 @@
         "tests/Unit/SyncPlay/SyncPlayRelayFrameGuardTest.php": 0.011,
         "tests/Unit/SyncPlay/SyncPlayRelayWirePolicyTest.php": 0.047,
         "tests/Unit/SyncPlay/SyncPlayRelayWorkerTest.php": 0.031,
+        "tests/Unit/SyncPlay/SyncPlayRelayWorkerTlsPostureTest.php": 0.042,
         "tests/VersionTest.php": 0.004
     }
 }

@@ -173,6 +173,14 @@ final class ClientRelayWorker
      * @param ContainerInterface $container PSR-11 container for resolving services.
      * @param int                $port      Client-facing WS port (default 8803).
      * @param int                $count     Number of worker processes.
+     * @param string             $bindHost  SH-064 listen host (HUB_WS_BIND;
+     *        default 0.0.0.0 = the historical literal, deliberately NOT
+     *        flipped — a bind-default change is an estate-wide owner call).
+     * @param bool               $useTls    Serve native wss:// (HUB_CLIENT_RELAY_TLS).
+     * @param string|null        $tlsCert   local_cert PEM (HUB_CLIENT_RELAY_TLS_CERT).
+     * @param string|null        $tlsKey    local_pk PEM (HUB_CLIENT_RELAY_TLS_KEY).
+     * @param bool               $requireTls Fail-closed mandate (HUB_CLIENT_RELAY_REQUIRE_TLS):
+     *        plaintext + mandate = start() throws before any socket exists.
      */
     public function __construct(
         private readonly ContainerInterface $container,
@@ -181,9 +189,89 @@ final class ClientRelayWorker
         // HOST-3 H3-3: pre-upgrade deadline (relay.ws_handshake_timeout_seconds,
         // <= 0 disables); see InboundHandshakeGuard.
         private readonly float $handshakeTimeoutSeconds = InboundHandshakeGuard::DEFAULT_TIMEOUT_SECONDS,
+        // SH-064 (hub__secnet#1): the M21 posture trio + bind host, trailing
+        // and defaulted so every existing positional call site keeps compiling.
+        private readonly string $bindHost = '0.0.0.0',
+        private readonly bool $useTls = false,
+        private readonly ?string $tlsCert = null,
+        private readonly ?string $tlsKey = null,
+        private readonly bool $requireTls = false,
     ) {
         ProcessLocalTopology::assertSingleProcess($count, 'phlix-hub-client-relay-ws (:8803)');
     }
+
+    /**
+     * Bind-time TLS posture for the :8803 listener (SH-064, M21 pattern).
+     *
+     *  - `secure`   — TLS configured; bind wss:// (opt-in path).
+     *  - `advisory` — plaintext default; bind ws:// after ONE loud boot
+     *    warning (the shipped bind behavior plus the missing announcement).
+     *  - `refused`  — `require_tls` set without TLS; never bind.
+     *
+     * The default stays warn-only by estate law: the sibling :8802 shipped
+     * the same tri-state default-off, and a mandate flip moves both sides of
+     * a link (docs, proxy topology, consumers) in one coordinated wave.
+     *
+     * @param bool $useTls     TLS configured on this listener (client_relay_tls).
+     * @param bool $requireTls Operator mandate (client_relay_require_tls).
+     *
+     * @return 'secure'|'advisory'|'refused'
+     */
+    public static function tlsBootPosture(bool $useTls, bool $requireTls): string
+    {
+        if ($useTls) {
+            return 'secure';
+        }
+
+        return $requireTls ? 'refused' : 'advisory';
+    }
+
+    /**
+     * The one-per-boot cleartext advisory text (SH-064).
+     *
+     * Wording duty: name WHAT travels in the clear (client relay bearer
+     * tokens + every relayed request/response), the topology assumption it
+     * breaks when the bind is host-reachable (HAProxy fronting over
+     * loopback), and ALL THREE cures (native TLS, the mandate, and pinning
+     * the bind host to the proxy-facing address).
+     *
+     * @param int $port Bound client relay port.
+     *
+     * @return string Warning text for the relay log channel.
+     */
+    public static function plaintextAdvisory(int $port): string
+    {
+        return 'SECURITY — client relay listener :' . $port . ' is binding PLAINTEXT ws:// '
+            . '(client_relay_tls not enabled). Browsers present their client relay '
+            . 'bearer token on this socket (sec-websocket-protocol bearer handshake, '
+            . 'see ClientRelayTokenService) and every relayed request/response rides '
+            . 'it in the clear. The managed install fronts :8803 through HAProxy over '
+            . 'loopback — if that proxy is not LOCAL to this exact bind, on-path '
+            . 'capturers get durable bearer traffic. Set HUB_CLIENT_RELAY_TLS=true '
+            . '(+ HUB_CLIENT_RELAY_TLS_CERT/KEY) to serve wss:// natively, pin the '
+            . 'bind to the proxy-facing address with HUB_WS_BIND (e.g. 127.0.0.1), '
+            . 'and/or HUB_CLIENT_RELAY_REQUIRE_TLS=1 to turn this advisory into a '
+            . 'fail-closed boot refusal.';
+    }
+
+    /**
+     * The fail-closed refusal text (SH-064): require_tls + plaintext = no bind.
+     *
+     * @param int $port Requested client relay port.
+     *
+     * @return string RuntimeException message.
+     */
+    public static function plaintextRefusal(int $port): string
+    {
+        return 'Refusing to bind client relay listener :' . $port . ' as PLAINTEXT ws:// '
+            . 'because client_relay_require_tls is enabled (HUB_CLIENT_RELAY_REQUIRE_TLS=1). '
+            . 'The :8803 surface carries client relay bearer tokens and relayed HTTP '
+            . 'in the clear; under the mandate the hub will not start a credential-'
+            . 'bearing cleartext listener. Enable TLS (HUB_CLIENT_RELAY_TLS=true + '
+            . 'HUB_CLIENT_RELAY_TLS_CERT/KEY) or unset HUB_CLIENT_RELAY_REQUIRE_TLS to '
+            . 'return to warn-only behaviour.';
+    }
+
 
     /**
      * Start the client relay WebSocket worker.
@@ -195,20 +283,92 @@ final class ClientRelayWorker
      */
     public function start(): Worker
     {
-        $worker = new Worker("websocket://0.0.0.0:{$this->port}");
+        // SH-064 (hub__secnet#1): bind-time TLS posture, mirroring the shipped
+        // :8802 (M21) law. 'refused' throws before any socket exists (the
+        // exception propagates out of Application::boot — no try/catch wraps
+        // this construction site); 'advisory' is today's default bind path
+        // plus the loud announcement it never had.
+        $posture = self::tlsBootPosture($this->useTls, $this->requireTls);
+        if ($posture === 'refused') {
+            throw new \RuntimeException(self::plaintextRefusal($this->port));
+        }
+        if ($posture === 'advisory') {
+            LoggerFactory::get(LogChannels::RELAY)->warning(self::plaintextAdvisory($this->port));
+        }
+
+        // Workerman's Worker::__construct() types $socketContext as a non-nullable
+        // array, so default to an empty context rather than null — passing null
+        // throws a TypeError on the non-TLS path.
+        $sslContext = [];
+        $materialWatch = null;
+        if ($this->useTls) {
+            if ($this->tlsCert === null || $this->tlsKey === null) {
+                throw new \InvalidArgumentException(
+                    'TLS enabled for client relay worker but HUB_CLIENT_RELAY_TLS_CERT '
+                        . 'and/or HUB_CLIENT_RELAY_TLS_KEY env vars are not set',
+                );
+            }
+            $envPaths = ['HUB_CLIENT_RELAY_TLS_CERT' => $this->tlsCert, 'HUB_CLIENT_RELAY_TLS_KEY' => $this->tlsKey];
+            // MISSING PEM fails fast pre-bind; exists-but-UNREADABLE degrades
+            // to a loud boot warning + the per-connection watch below (audit
+            // §3.2 law: an off-pipeline rotation must never kill boot, and
+            // must never go silent either).
+            $decision = TlsMaterialWatch::bootDecision($envPaths, 'client relay worker', 'HUB_CLIENT_RELAY_TLS');
+            if ($decision['fatal'] !== null) {
+                throw TlsMaterialWatch::failFast($decision['fatal']);
+            }
+            foreach ($decision['warnings'] as $bootWarning) {
+                LoggerFactory::get(LogChannels::RELAY)->warning($bootWarning);
+            }
+
+            $materialWatch = new TlsMaterialWatch('client-relay-ws :' . $this->port, $envPaths);
+            $sslContext = WsTlsContext::forListener($this->tlsCert, $this->tlsKey);
+        }
+
+        $worker = new Worker(WsTlsContext::listenString($this->bindHost, $this->port), $sslContext);
         $worker->name = 'phlix-hub-client-relay-ws';
         $worker->count = $this->count;
+
+        if ($this->useTls) {
+            $worker->transport = 'ssl';
+        }
 
         $worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         // Minor 57: declared inbound package cap pinned at TCP-accept (law in
         // InboundPackageCap) — this surface no longer inherits it from vendor.
         // HOST-3 H3-3: wrapped in the repo-owned handshake deadline (silent
         // pre-upgrade sockets are closed, not held).
-        $worker->onConnect = InboundHandshakeGuard::compose(
+        // SH-064: under TLS the guard is wrapped once more so every accept
+        // re-checks the TLS material (rate-gated ERROR on transitions) and
+        // enable_crypto failures reach onError instead of vendor's silent close.
+        $handshakeGuard = InboundHandshakeGuard::compose(
             InboundPackageCap::onConnect(),
             $this->handshakeTimeoutSeconds,
             'client-relay-ws :' . $this->port,
         );
+        if ($materialWatch !== null) {
+            $watch = $materialWatch;
+            $worker->onConnect = static function (TcpConnection $connection) use ($handshakeGuard, $watch): void {
+                $notice = $watch->materialNotice(time());
+                if ($notice !== null) {
+                    LoggerFactory::get(LogChannels::RELAY)->error($notice);
+                }
+
+                $handshakeGuard($connection);
+            };
+            $worker->onError = static function (
+                TcpConnection $connection,
+                int $code,
+                string $message
+            ) use ($watch): void {
+                $notice = $watch->handshakeFailureNotice(time(), $message);
+                if ($notice !== null) {
+                    LoggerFactory::get(LogChannels::RELAY)->error($notice);
+                }
+            };
+        } else {
+            $worker->onConnect = $handshakeGuard;
+        }
         $worker->onMessage = [$this, 'onMessage'];
         $worker->onClose = [$this, 'onClose'];
         // Per-worker metrics wiring: resolve this worker's collector and arm the

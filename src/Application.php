@@ -2678,6 +2678,32 @@ final class Application
         /** @var mixed $wsHandshakeTimeoutRaw */
         $wsHandshakeTimeoutRaw = is_array($relayConfig) ? ($relayConfig['ws_handshake_timeout_seconds'] ?? null) : null;
         $wsHandshakeTimeoutSeconds = InboundHandshakeGuard::resolveTimeoutSeconds($wsHandshakeTimeoutRaw);
+        // SH-064 (hub__secnet#1): the bind-time TLS posture trio + listen host
+        // for the two client-facing surfaces. All default off/0.0.0.0 in
+        // config/server.php — today's bind behavior plus the new knobs; the
+        // workers themselves enforce the loud/refused posture at start().
+        /** @var bool $clientRelayTls */
+        $clientRelayTls = (bool) ($this->config['client_relay_tls'] ?? false);
+        /** @var string|null $clientRelayTlsCert */
+        $clientRelayTlsCert = $this->config['client_relay_tls_cert'] ?? null;
+        /** @var string|null $clientRelayTlsKey */
+        $clientRelayTlsKey = $this->config['client_relay_tls_key'] ?? null;
+        /** @var bool $clientRelayRequireTls */
+        $clientRelayRequireTls = (bool) ($this->config['client_relay_require_tls'] ?? false);
+        /** @var bool $syncplayTls */
+        $syncplayTls = (bool) ($this->config['syncplay_tls'] ?? false);
+        /** @var string|null $syncplayTlsCert */
+        $syncplayTlsCert = $this->config['syncplay_tls_cert'] ?? null;
+        /** @var string|null $syncplayTlsKey */
+        $syncplayTlsKey = $this->config['syncplay_tls_key'] ?? null;
+        /** @var bool $syncplayRequireTls */
+        $syncplayRequireTls = (bool) ($this->config['syncplay_require_tls'] ?? false);
+        // Boundary parse, not a blind cast: env slop falls back to the
+        // historical default rather than binding a garbage host.
+        $wsBindHostRaw = $this->config['ws_bind_host'] ?? '0.0.0.0';
+        $wsBindHost = is_string($wsBindHostRaw) && $wsBindHostRaw !== ''
+            ? $wsBindHostRaw
+            : '0.0.0.0';
         $relayWorker = new RelayWorker(
             $this->container,
             $relayPort,
@@ -2703,7 +2729,18 @@ final class Application
         $clientRelayPort = is_int($clientRelayPortRaw)
             ? $clientRelayPortRaw
             : (int) (is_numeric($clientRelayPortRaw) ? $clientRelayPortRaw : ClientRelayWorker::DEFAULT_PORT);
-        $clientRelayWorker = new ClientRelayWorker($this->container, $clientRelayPort, 1, $wsHandshakeTimeoutSeconds);
+        $clientRelayWorker = new ClientRelayWorker(
+            $this->container,
+            $clientRelayPort,
+            1,
+            $wsHandshakeTimeoutSeconds,
+            // SH-064: named for clarity at the seam (bind host + TLS posture trio).
+            bindHost: $wsBindHost,
+            useTls: $clientRelayTls,
+            tlsCert: $clientRelayTlsCert,
+            tlsKey: $clientRelayTlsKey,
+            requireTls: $clientRelayRequireTls,
+        );
         // R14-01/R16-01: prepend the curated-hook step to this worker's
         // class-owned onWorkerStart (same wrap law as the relay worker).
         CoroutineHooks::wrap($clientRelayWorker->start(), $this->config);
@@ -2727,8 +2764,14 @@ final class Application
             $channelHost,
             $channelPort,
             // Named: the 6th/7th positions are the inbound byte-budget pair;
-            // the deadline rides the trailing parameter (HOST-3 H3-3).
+            // the deadline rides the trailing parameter (HOST-3 H3-3), and
+            // SH-064's bind host + TLS posture trio follow it.
             handshakeTimeoutSeconds: $wsHandshakeTimeoutSeconds,
+            bindHost: $wsBindHost,
+            useTls: $syncplayTls,
+            tlsCert: $syncplayTlsCert,
+            tlsKey: $syncplayTlsKey,
+            requireTls: $syncplayRequireTls,
         );
         // R14-01/R16-01: prepend the curated-hook step to this worker's
         // class-owned onWorkerStart (same wrap law as the relay worker).

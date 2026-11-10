@@ -27,6 +27,17 @@ use Phlix\Hub\Relay\InboundPackageCap;
  * connection, and — source-scan, the estate idiom for worker wiring — all
  * four websocket worker files assign the cap AND no fifth websocket worker
  * exists that forgot to.
+ *
+ * The scan recognizes TWO bind grammars, both of which construct a
+ * `websocket://` listener: the direct literal `new Worker("websocket://…")`
+ * (:8802/:8805, byte-frozen by their own posture suites) and the SH-064
+ * `new Worker(WsTlsContext::listenString($bindHost, $port))` form (:8803/:8804,
+ * which must build the scheme+host+port dynamically for the bind-host knob and
+ * IPv6 bracketing). A future worker that dodges BOTH markers to escape the cap
+ * pin is the exact thing the completeness scan refuses to allow silently — so
+ * the two-marker union is strictly stronger than the old single literal, not a
+ * relaxation: any new websocket listener must reuse one of these two
+ * constructions (or extend this list, which is a disclosed census move).
  */
 final class InboundPackageCapTest extends TestCase
 {
@@ -37,6 +48,55 @@ final class InboundPackageCapTest extends TestCase
         'src/Relay/FederationWorker.php',
         'src/SyncPlay/SyncPlayRelayWorker.php',
     ];
+
+    /**
+     * Substrings that each mark "this file opens a websocket listener". A file
+     * counts as a governed WS surface if it contains ANY one of them; the
+     * completeness scan matches the SAME set so the two tests can never drift
+     * on what a websocket worker IS.
+     *
+     * @var list<string>
+     */
+    private const WEBSOCKET_BIND_MARKERS = [
+        'websocket://',
+        'WsTlsContext::listenString(',
+    ];
+
+    /**
+     * Constructor-call-site substrings for the completeness scan — the SAME
+     * two bind grammars as above, but pinned at the `new Worker(` call so a
+     * docblock or comment that merely mentions `websocket://` can never be
+     * mistaken for a worker (which would under-count) nor a real listener
+     * missed (which is the "forgotten fifth" the scan exists to catch).
+     *
+     * @var list<string>
+     */
+    private const WEBSOCKET_CONSTRUCTOR_MARKERS = [
+        'new Worker("websocket://',
+        'new Worker(WsTlsContext::listenString(',
+    ];
+
+    private static function bindsWebsocket(string $source): bool
+    {
+        foreach (self::WEBSOCKET_BIND_MARKERS as $marker) {
+            if (str_contains($source, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function constructsWebsocketWorker(string $source): bool
+    {
+        foreach (self::WEBSOCKET_CONSTRUCTOR_MARKERS as $marker) {
+            if (str_contains($source, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     public function testTheDeclaredCapEqualsTheCurrentVendorDefault(): void
     {
@@ -82,9 +142,8 @@ final class InboundPackageCapTest extends TestCase
         foreach (self::WORKER_FILES as $relative) {
             $source = file_get_contents($root . '/' . $relative);
             self::assertIsString($source, $relative . ' must exist');
-            self::assertStringContainsString(
-                'websocket://',
-                $source,
+            self::assertTrue(
+                self::bindsWebsocket($source),
                 $relative . ' is expected to be a websocket worker',
             );
             self::assertStringContainsString(
@@ -110,7 +169,7 @@ final class InboundPackageCapTest extends TestCase
                 continue;
             }
             $contents = file_get_contents($file->getPathname());
-            if (is_string($contents) && str_contains($contents, 'new Worker("websocket://')) {
+            if (is_string($contents) && self::constructsWebsocketWorker($contents)) {
                 $found[] = ltrim(str_replace($root, '', $file->getPathname()), '/');
             }
         }
