@@ -136,9 +136,12 @@ This README is the operator/API reference; those pages are the illustrated path.
   for clean, per-server URLs.
 - **Library sharing** — share a specific library on one of your servers with another Hub user,
   with read-only or read/write permission levels. The **Shares** page carries the direct door
-  (share instantly with a registered collaborator) above the list-and-revoke view; for people
-  without an account yet, **Invite Links** create the account and the share in one step.
-- **Invite links** — single-use, signed invite links that grant library access to a recipient.
+  (share instantly with a registered collaborator) above the list-and-revoke view; an
+  invite recipient also needs a hub account to redeem — sign-up when it is open, else an
+  admin-created account — the invite itself only grants the library share.
+- **Invite links** — links carry an opaque token (stored only as a SHA-256 hash) and grant
+  a library share to the signed-in hub account that redeems them; one use by default, more
+  if the creator raises `max_uses`.
 - **Hub-to-hub federation** — federate with peer hubs to share libraries across hubs, with
   per-peer sessions and admin delegation. Honest limit: delegation is currently local
   bookkeeping only — `createAdminDelegation` writes the DB row plus an audit entry, but the
@@ -429,7 +432,8 @@ What `--update` does, in order:
 What it explicitly does **not** touch: the env file, MySQL grants, HAProxy config, or the
 Let's Encrypt certificate. If a release adds new `HUB_*` env vars, append them to
 `/etc/phlix-hub.env` yourself — anything the code expects but doesn't find falls back to its
-documented default.
+documented default, with one policy exception: `HUB_DB_PASSWORD` has no silent fallback
+outside dev/local, the escape flag, or PHPUnit — unset means the hub refuses to boot.
 
 ## Backing up and restoring
 
@@ -837,7 +841,11 @@ sudo chmod 600 /etc/phlix-hub.env
 ```
 
 > The `HUB_DB_PASSWORD` placeholder above still needs a real value matching the MySQL user
-> you created in step 2 — the boot gate polices only `HUB_JWT_SECRET`.
+> you created in step 2 — and it is policed: with `HUB_DB_PASSWORD` unset the hub **refuses
+> to boot** (a `RuntimeException` from `config/database.php`), rather than silently using the
+> published `phlix_hub` literal. The gate's only admissions are dev/local `APP_ENV`/`HUB_ENV`,
+> the explicit escape `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD=1`, and PHPUnit — never set the
+> escape on a reachable host.
 
 `HUB_JWT_SECRET` is enforced before the worker fork (R14-08): a value on the placeholder denylist
 (`CHANGE-ME-run-openssl-rand-hex-32`, `change-me`, `your-secret-here`, `replace-me`, … —
@@ -1391,7 +1399,7 @@ at boot per worker).
 | `HUB_DB_HOST` | `127.0.0.1` | MySQL host |
 | `HUB_DB_PORT` | `3306` | MySQL port |
 | `HUB_DB_USER` | `phlix_hub` | MySQL user |
-| `HUB_DB_PASSWORD` | `phlix_hub` | MySQL password |
+| `HUB_DB_PASSWORD` | *(no silent default — unset refuses boot outside dev/local, the escape below, or PHPUnit; `config/database.php`)* | MySQL password |
 | `HUB_DB_NAME` | `phlix_hub` | MySQL database name |
 | `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD` | unset — **refuse** | When `HUB_DB_PASSWORD` is unset, admits the published `phlix_hub` literal fallback instead of refusing boot (`config/database.php` throws `RuntimeException` naming this var). Development/testing escape only — dev/local `APP_ENV`/`HUB_ENV` and PHPUnit already pass without it; never set on a reachable host |
 | `DB_POOL_ENABLED` | `1` | Coroutine connection pool (each coroutine leases its own connection). `0` falls back to the single mutex-serialized socket |
@@ -1438,7 +1446,7 @@ A deployment running a non-default sql_mode must re-verify both paths.
 |-------|---------|
 | **Accounts and authentication** | |
 | `users` | Hub accounts (Argon2id passwords; unique email + username) |
-| `invite_links` | Single-use signed invite links |
+| `invite_links` | Invite links — opaque tokens stored as SHA-256 hashes, usable until `max_uses` (1 by default) is spent or the link expires |
 | `login_rate_limit` | Shared, cross-worker login rate-limit buckets (one row per key; the only DB-backed limiter) |
 | `auth_signup_guard` | First-admin election mutex — a single-row INSERT serializes concurrent registrations, so exactly one first user can ever self-elect |
 | `auth_revoked_refresh_tokens` | Revocation registry: logouts record the `jti` of a presented refresh JWT, and token refresh refuses anything recorded here |
@@ -1690,9 +1698,13 @@ Federation links **two hub installations** so their users can share libraries ac
 hubs and (optionally) delegate admin actions. Each hub signs its handshake with the
 Ed25519 key created on first boot (`config/hub-signing-key.pem`, README
 *Backing up and restoring*); the paired remote hub must store the matching **public**
-key before the link can ever verify. Everything below is also exposed in the portal —
-**Federation** and **Federation Shares** pages (admin-only nav entries) — so the
-`curl` calls are the equivalent low-level path, not the only one.
+key before the link can ever verify. The portal — **Federation** and **Federation
+Shares** pages (admin-only nav entries) — carries the peer roster (add and remove
+peers) and the offer replies (view, accept or reject incoming share offers; view and
+revoke outgoing ones). The steps marked **(API only)** below have no portal control at
+all — hub-config reads and writes, the `leaf_hub_id` binding, the per-peer relay and
+admin-delegation toggles, named delegations, and creating an outgoing offer: there the
+`curl` calls are the path, not a convenience.
 
 **Prerequisites on both sides.** The `federation.enabled` hub setting must be on —
 while it is off, every federation control-plane route answers `409` and no dial is
@@ -1739,13 +1751,16 @@ curl -s -X POST -H "Authorization: Bearer $MASTER_JWT" -H "Content-Type: applica
 ```
 
 `leaf_hub_id` is what the path lookup matches; it may be omitted here and bound later
-with `PUT /api/v1/me/federation/peers/{id}/leaf-hub-id` — until it is set, the leaf's
-dials are refused, which is the safe failure.
+with `PUT /api/v1/me/federation/peers/{id}/leaf-hub-id` — **(API only)** binding: the
+portal's add-peer form carries URL, name and public key but no `leaf_hub_id` field, so
+a portal-created peer always needs this call to become dialable. Until it is set, the
+leaf's dials are refused, which is the safe failure.
 
 **Step 4 — the leaf registers the master and declares its role.** On the leaf,
-`POST …/federation/peers` with the master's URL and public key (that row is the dial
-target; the handshake answers with the master's own proof-of-key before any data is
-accepted), then flip this hub's role:
+`POST …/federation/peers` with the master's URL and public key (portal-covered;
+that row is the dial target — the handshake answers with the master's own
+proof-of-key before any data is accepted), then flip this hub's role **(API only —
+no portal control writes `role` or `is_active`)**:
 
 ```bash
 curl -s -X PUT -H "Authorization: Bearer $LEAF_JWT" -H "Content-Type: application/json" \
@@ -1759,11 +1774,14 @@ state are retried on schedule after a drop); a master hub's own config stays at
 
 **Step 5 — enable what the link is allowed to carry.** Peer registration alone moves
 no data. Per peer: `PUT /api/v1/me/federation/peers/{id}/relay {"enabled": true}`
-switches on library relay; `PUT …/peers/{id}/admin-delegation {"enabled": true}`
-switches on the admin-delegation channel (further gated by named delegations,
-`POST /api/v1/me/federation/admin-delegations`). Library sharing itself is an offer
-flow: `POST …/library-shares/outgoing` on the offering side, then the receiving user
-sees it under *incoming offers* and answers `accept` or `reject`.
+switches on library relay **(API only — the Federation page exposes no relay
+switch)**; `PUT …/peers/{id}/admin-delegation {"enabled": true}` switches on the
+admin-delegation channel (further gated by named delegations,
+`POST /api/v1/me/federation/admin-delegations`) **(also API only)**. Library sharing
+itself is an offer flow: `POST …/library-shares/outgoing` on the offering side
+**(API only — the shares page can revoke outgoing offers but not create them)**,
+then the receiving user sees it under *incoming offers* and answers `accept` or
+`reject` (the portal **Federation Shares** page's controls).
 
 **Reading the link state.** `GET /api/v1/me/federation/peers` shows each peer's
 status; `connected` only ever appears after a successful `hub_hello_ack` ceremony —
@@ -1789,7 +1807,7 @@ entry merely reflects that.
 | **Search** (`/app/search`) | Cross-library search against the selected server. |
 | **Shares** (`/app/shares`) | Grant other members access to your paired server's libraries. |
 | **Shared With Me** (`/app/shared-with-me`) | Libraries other members have granted you. |
-| **Invite Links** (`/app/invite-links`) | Create single-use signed invites — one step creates the account AND the library share; the recipient lands on the public `/app/invite/:token` page. |
+| **Invite Links** (`/app/invite-links`) | Create invite links — an opaque token, hashed at rest, granting a library share. The public `/invite/:token` link lands on the acceptance page, where the recipient signs in (or signs up when signups are open) and redeems: the accept call is authenticated (anonymous → 401 `auth.required`), so an invite grants the share but never creates the account. |
 | **Watch Party** (`/app/watch-party`) | Host or join a watch party for synchronized viewing on your selected server. |
 | **Requests** (`/app/requests`) | Jellyseerr-style request queue: ask for movies/series; admins approve. |
 | **Security** (`/app/settings/security`) | Your own password change. Session revocation is not offered — sign-in tokens expire on their own (the page says so too). |
@@ -1804,7 +1822,7 @@ unlinked — they have no data to show; pair or re-select under My Servers first
 
 | Page | What it's for |
 |---|---|
-| **Dashboard** | Hub-wide counts: users, servers, parties, traffic. |
+| **Dashboard** | Hub-wide counts: servers (total/online/offline), active relay sessions, pending requests, users — plus the recent-audit activity list. No party or traffic counters live here (traffic is its own page below). |
 | **Server Traffic** (`/app/admin/metrics`) | Relay traffic charts — snapshot, history, connections, per-route — fed by the metrics collectors. Data appears only with `server.metrics.enabled` on (the toggle is restart-gated: it re-reads at worker boot). |
 | **Users** | Create users (the on-ramp when signups are closed), edit, promote/demote admin, reset a member's password, delete. |
 | **Logs** | Recent hub log lines in the browser — no SSH needed. |
@@ -1822,7 +1840,7 @@ are denied by design and belong in the [env reference](#configuration-reference)
 
 | Toggle (store key) | Effect | Live? |
 |---|---|---|
-| **Signups disabled** `auth.signups_disabled` | `POST` registration answers 403 `auth.signups_disabled`. Invite links remain the on-ramp. Before enabling, make sure at least one admin password you know works — recovery without one is `bin/phlix user:list` / `user:promote`. | live |
+| **Signups disabled** `auth.signups_disabled` | `POST` registration answers 403 `auth.signups_disabled`. Invite links remain the on-ramp — but only for people who already hold a hub account or gain one from an admin (the **Users** page's create is the fallback); accepts are authenticated. Before enabling, make sure at least one admin password you know works — recovery without one is `bin/phlix user:list` / `user:promote`. | live |
 | **Maintenance mode** `hub.maintenance_mode` | Every API request answers 503 `provider_unavailable` EXCEPT health checks, auth endpoints (nobody gets locked out mid-maintenance), the hub/admin settings routes (so you can switch it back off), and the admin restart. Takes effect within ~1 s. | live |
 | **Federation enabled** `federation.enabled` | The hub↔hub master switch. Off: outbound dials stop and their reconnect ticks park into ≤60 s probes, all 11 federation admin mutations answer 409 `provider.not_configured`, inbound peer frames are dropped. On: parked probes resume dialing within a minute. | live |
 | **Auto-approve requests** `requests.auto_approve` | New requests are approved without admin review (best-effort Sonarr/Radarr dispatch). | live |

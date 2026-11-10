@@ -6,6 +6,42 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-w20L3] — README truth batch: federation portal coverage, invite redemption prerequisites, DB-password boot gate, Dashboard counts (hub w20 L3, six-row HH docs batch) — 2026-11-10
+
+- SH-087 (review hub__enduser #1, hub__pm #2): the federation walkthrough opened with
+  "everything below is also exposed in the portal". Not so — the vendored
+  **Federation**/**Federation Shares** pages (checked against `@phlix/ui` v0.99.26's
+  built calls and `src/Application.php`'s federation route list) carry the peer roster
+  (add/remove) and the offer replies (incoming accept/reject; outgoing view/revoke)
+  only. The preamble now enumerates coverage vs. absence, and Steps 3-5 carry **(API
+  only)** markers on the `leaf_hub_id` binding, the `role`/`is_active` hub-config flip,
+  the relay and admin-delegation toggles, named delegations and outgoing-offer creation.
+- SH-088 (review hub__enduser #2, hub__pm #7): four sites claimed an invite "creates the
+  account AND the library share", called tokens "signed", or pinned them as inherently
+  "single-use". Code truth: the token is `bin2hex(random_bytes(32))` stored only as a
+  SHA-256 hash (nothing signature-verifies it); redemption
+  (`POST /api/v1/me/invite-links/{token}/redeem`, `AuthMiddleware` per `openapi.yaml`)
+  bails `401 auth.required` without a signed-in user (`InviteLinkController`), so the
+  invite grants the share and never the account; `max_uses` is creator-settable (int,
+  minimum 1 — the default). Features, the page tour, the `signups_disabled` row and the
+  `invite_links` table row now say exactly that.
+- SH-090 (review hub__ipd #1, the part still open at this tip): the install note asserted
+  "the boot gate polices only `HUB_JWT_SECRET`", the update section promised every unset
+  var "falls back to its documented default", and the env table listed `phlix_hub` as the
+  `HUB_DB_PASSWORD` default — all three contradict `config/database.php`, which refuses
+  boot unless dev/local `APP_ENV`/`HUB_ENV`, the `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD`
+  escape, or PHPUnit admits the published literal. All three rewritten to the gate's
+  verbatim admissions. (The escape's Configuration-reference row landed earlier via
+  29adb633 and the php.ini line-cites were swept by 62a46866 — those legs closed with
+  proof, not redone.)
+- SH-093 (review hub__enduser #3-#5, hub__pm #3/#5): the Dashboard tour row promised
+  "users, servers, parties, traffic"; `StatsRepository::dashboardCounts()` answers
+  servers (total/online/offline), active relay sessions, pending requests and user
+  count — plus the recent-audit list on the page. Rewritten. The Server Traffic tour row
+  and the Security page's session wording were already corrected by earlier drift lanes
+  (bcf42afc era) — closed with proof.
+- Docs-only: zero wire/schema/code change; contracts registry untouched.
+
 ### Fixed [hub-w18L2] — federation write-path atomicity + strict booleans + honest responder fields; admin error-shape consistency; maintenance-mode visibility; scheme-honest relay steer copy; written copy conventions (hub w18 L2, six-row DD batch) — 2026-11-10
 
 - SH-077 (`FederationController`): `PUT hub-config` is now two-phase — every supplied
