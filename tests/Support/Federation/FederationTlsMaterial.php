@@ -16,7 +16,7 @@
  * a client trusting only that other anchor must be refused.
  *
  * @copyright 2026 Phlix
- * @license MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

@@ -446,12 +446,8 @@ final class UserRepositoryTest extends TestCase
         self::assertSame(0, $repo->countAdmins());
     }
 
-    public function testGenerateUuidProducesV4Shape(): void
-    {
-        $uuid = UserRepository::generateUuid();
-        self::assertMatchesRegularExpression(
-            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
-            $uuid,
-        );
-    }
+    // SH-068 folded the public static UserRepository::generateUuid() delegate
+    // away; its canonical-shape law was the exact same regex already pinned at
+    // the mint itself — tests/Unit/Common/Support/IdsTest::
+    // testUuidV4MatchesCanonicalShape — so the pin lives there now.
 }

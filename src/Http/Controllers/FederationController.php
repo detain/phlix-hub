@@ -4,7 +4,7 @@
  * Phlix hub component: Controllers.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -410,7 +410,7 @@ final class FederationController
             ]);
         }
 
-        $peerId = $this->generateUuid();
+        $peerId = Ids::uuidV4();
         $leafHubId = $leafHubIdRaw;
         $this->hubRepo->createPeer($peerId, $nameRaw, $urlRaw, $publicKeyRaw, $leafHubId);
 
@@ -745,7 +745,7 @@ final class FederationController
             return $this->badRequest('missing_library_name');
         }
 
-        $shareId = $this->generateUuid();
+        $shareId = Ids::uuidV4();
         $this->libraryShares->createOutgoingShare(
             $shareId,
             $libraryIdRaw,
@@ -1084,7 +1084,7 @@ final class FederationController
             ]);
         }
 
-        $delegationId = $this->generateUuid();
+        $delegationId = Ids::uuidV4();
         $this->adminDel->grant($delegationId, $peerIdRaw, $userIdRaw);
 
         $this->audit->logAdminDelegation($peerIdRaw, $userIdRaw, 'grant');
@@ -1241,15 +1241,5 @@ final class FederationController
         $isMasterRaw = is_array($hubConfig) ? ($hubConfig['is_master'] ?? null) : null;
 
         return is_int($isMasterRaw) ? $isMasterRaw === 1 : (is_string($isMasterRaw) && $isMasterRaw === '1');
-    }
-
-    /**
-     * Generate a random UUID v4.
-     *
-     * @return string
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

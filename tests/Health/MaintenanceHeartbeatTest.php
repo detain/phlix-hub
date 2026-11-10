@@ -132,11 +132,80 @@ final class MaintenanceHeartbeatTest extends TestCase
         self::assertSame(MaintenanceHeartbeat::STATUS_DEGRADED, $snapshot['status']);
         self::assertSame('sweep_failing', $snapshot['reason']);
         self::assertSame(1, $snapshot['consecutive_failures']);
-        self::assertIsString($snapshot['last_error']);
-        self::assertStringContainsString('Connection refused', $snapshot['last_error']);
+        // SH-061: /health is UNAUTHENTICATED. The public payload carries the
+        // exception CLASS (operationally useful, payload-free) and the stable
+        // redaction token — never the message, which for DB failures carries
+        // host/user detail. The raw line lives in the on-disk record and logs.
+        self::assertSame(
+            'RuntimeException: ' . MaintenanceHeartbeat::PUBLIC_ERROR_REDACTION,
+            $snapshot['last_error'],
+        );
+        self::assertStringNotContainsString('Connection refused', $snapshot['last_error']);
         // The worker is ALIVE. Pulling a reachable hub out of a pool because its
         // database blipped is a different decision from S312's.
         self::assertFalse(MaintenanceHeartbeat::isProbeFailure($snapshot));
+    }
+
+    public function testThePublicSnapshotNeverLeaksDriverCredentialDetail(): void
+    {
+        $hb = $this->heartbeat();
+        $hb->arm(1, 1_000);
+        $hb->recordSweep(
+            'server_reaper',
+            new RuntimeException("Access denied for user 'phlix_hub'@'10.0.0.5' (using password: YES)"),
+            1_060,
+        );
+
+        $lastError = $hb->snapshot(1_070)['last_error'];
+
+        self::assertIsString($lastError);
+        self::assertSame('RuntimeException: ' . MaintenanceHeartbeat::PUBLIC_ERROR_REDACTION, $lastError);
+        self::assertStringNotContainsString('phlix_hub', $lastError);
+        self::assertStringNotContainsString('10.0.0.5', $lastError);
+        self::assertStringNotContainsString('password', $lastError);
+    }
+
+    public function testTheStoredRecordKeepsTheRawDetailForOperators(): void
+    {
+        $hb = $this->heartbeat();
+        $hb->arm(1, 1_000);
+        $hb->recordSweep('server_reaper', new RuntimeException('Connection refused'), 1_060);
+
+        /** @var array<string, mixed> $record */
+        $record = json_decode((string) file_get_contents($this->path), true, 512, JSON_THROW_ON_ERROR);
+        /** @var array<string, array<string, mixed>> $tasks */
+        $tasks = $record['tasks'];
+
+        // Redaction happens at the PUBLIC boundary only: the operator-facing
+        // file must still carry the full raw line, or the cure would trade one
+        // blind spot for another.
+        self::assertSame('RuntimeException: Connection refused', $tasks['server_reaper']['last_error']);
+    }
+
+    public function testPublicLastErrorIsTotalOverEveryStoredShape(): void
+    {
+        // The null lane (no failure yet).
+        self::assertNull(MaintenanceHeartbeat::publicLastError(null));
+
+        // Well-formed 'class: message' — class survives, message goes.
+        self::assertSame(
+            'PDOException: ' . MaintenanceHeartbeat::PUBLIC_ERROR_REDACTION,
+            MaintenanceHeartbeat::publicLastError('PDOException: SQLSTATE[HY000] [2002] Connection refused'),
+        );
+
+        // A message that itself contains ': ' — cut is at the FIRST separator,
+        // so the class prefix (which can never contain one) is exactly preserved.
+        self::assertSame(
+            'RuntimeException: ' . MaintenanceHeartbeat::PUBLIC_ERROR_REDACTION,
+            MaintenanceHeartbeat::publicLastError('RuntimeException: a: b: c'),
+        );
+
+        // No separator at all — the string is not a provable class prefix, so
+        // NOTHING of it is publishable (fail-closed redaction).
+        self::assertSame(
+            MaintenanceHeartbeat::PUBLIC_ERROR_REDACTION,
+            MaintenanceHeartbeat::publicLastError('hand-edited garbage'),
+        );
     }
 
     public function testASweepThatStopsHappeningGoesStale(): void
@@ -440,9 +509,22 @@ final class MaintenanceHeartbeatTest extends TestCase
         $hb->arm(1, 1_000);
         $hb->recordSweep('t', new RuntimeException(str_repeat('x', 5_000)), 1_010);
 
-        $lastError = $hb->snapshot(1_011)['last_error'];
-        self::assertIsString($lastError);
-        self::assertSame(300, strlen($lastError));
+        // SH-061 moved the clip's meaning: it bounds the STORED record (the
+        // file grows on every failing tick — that is the rewrite pressure the
+        // clip protects against). The public snapshot redacts the message
+        // outright, so its value is short by construction, never by clipping.
+        /** @var array<string, mixed> $record */
+        $record = json_decode((string) file_get_contents($this->path), true, 512, JSON_THROW_ON_ERROR);
+        /** @var array<string, array<string, mixed>> $tasks */
+        $tasks = $record['tasks'];
+        $stored = $tasks['t']['last_error'];
+
+        self::assertIsString($stored);
+        self::assertSame(300, strlen($stored));
+
+        $public = $hb->snapshot(1_011)['last_error'];
+        self::assertSame('RuntimeException: ' . MaintenanceHeartbeat::PUBLIC_ERROR_REDACTION, $public);
+        self::assertStringNotContainsString('xxxx', (string) $public);
     }
 
     public function testAccessorsReportTheConfiguredValues(): void

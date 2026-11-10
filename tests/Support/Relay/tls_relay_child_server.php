@@ -34,7 +34,7 @@
  * into the marker dir — the tests/ tree stays clean.
  *
  * @copyright 2026 Phlix
- * @license MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

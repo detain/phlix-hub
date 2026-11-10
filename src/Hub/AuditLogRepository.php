@@ -4,7 +4,7 @@
  * Phlix hub component: Hub.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -66,7 +66,7 @@ class AuditLogRepository
         ?string $userAgent = null,
         array $context = [],
     ): void {
-        $id = $this->generateUuid();
+        $id = Ids::uuidV4();
         $contextJson = $context !== [] ? json_encode($context, JSON_THROW_ON_ERROR) : null;
 
         $this->db->query(
@@ -258,20 +258,5 @@ class AuditLogRepository
             'context' => $context,
             'created_at' => is_string($row['created_at'] ?? null) ? $row['created_at'] : null,
         ];
-    }
-
-    /**
-     * Generate a random UUID v4.
-     *
-     * Uses the inline sprintf pattern per the hub runtime rules (no UUID
-     * library required).
-     *
-     * @return string Formatted UUID string.
-     *
-     * @since H.5b
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

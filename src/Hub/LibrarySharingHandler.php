@@ -4,7 +4,7 @@
  * Phlix hub component: Hub.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -154,7 +154,7 @@ class LibrarySharingHandler
                 $this->assertWithinShareCap($serverId, $collaboratorId, $now);
 
                 /** @var string $shareId */
-                $shareId = $this->generateUuid();
+                $shareId = Ids::uuidV4();
 
                 try {
                     $this->db->query(
@@ -743,13 +743,5 @@ class LibrarySharingHandler
             createdAt: $now,
             expiresAt: $expiresAt,
         );
-    }
-
-    /**
-     * Generate a UUID v4 string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

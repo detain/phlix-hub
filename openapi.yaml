@@ -5577,7 +5577,13 @@ components:
           type: [integer, "null"]
         last_error:
           type: [string, "null"]
-          description: "Class and message of the most recent sweep failure, clipped to 300 characters."
+          description: |-
+            Exception class of the most recent sweep failure, then the stable token
+            `error_message_withheld_see_hub_logs` in place of the message. This endpoint is
+            unauthenticated and DB-failure messages carry host/user detail, so the raw text is
+            redacted here by law; it stays in the operator-visible heartbeat record and in the
+            hub logs (the reapers log the full detail). The 300-character clip bounds the
+            stored record, which is rewritten on every failing tick.
         stale_after_seconds:
           type: integer
           description: "Seconds without a completed sweep before `status` becomes `down`."

@@ -4,7 +4,7 @@
  * Phlix hub component: Hub.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -130,7 +130,7 @@ class RelaySessionManager
                 ],
             );
 
-            $sessionId = $this->generateUuid();
+            $sessionId = Ids::uuidV4();
 
             $this->db->query(
                 'INSERT INTO relay_sessions (id, server_id, worker_node, opened_at, bytes_in, bytes_out)
@@ -464,14 +464,6 @@ class RelaySessionManager
         foreach ($sessionIds as $sessionId) {
             $this->flushSession($sessionId);
         }
-    }
-
-    /**
-     * Generate a random UUID v4.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 
     /**

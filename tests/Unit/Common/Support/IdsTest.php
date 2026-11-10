@@ -70,4 +70,45 @@ final class IdsTest extends TestCase
 
         self::assertNotSame($a, $b);
     }
+
+    /**
+     * Tripwire (SH-068): Ids::uuidV4() is the SINGLE mint. The 13 private
+     * one-line `generateUuid()` delegates this repo carried were byte-for-byte
+     * `return Ids::uuidV4();` wrappers — two of them with docblocks claiming an
+     * inline sprintf implementation that no longer existed. A wrapper
+     * reappearing anywhere in src/ re-opens the drift surface (the false
+     * docblocks were exactly where the truth had rotted), so this scans for
+     * any declaration or call of `generateUuid` in src/ and reddens on it.
+     *
+     * The prose mention in {@see Ids}'s own class docblock (the history
+     * note) cannot match: declarations need the `function` keyword and call
+     * sites need `->`/`::`.
+     */
+    public function testNoGenerateUuidDelegateSurvivesAnywhereInSrc(): void
+    {
+        $srcRoot = dirname(__DIR__, 4) . '/src';
+        $offenders = [];
+
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($srcRoot));
+        /** @var \SplFileInfo $file */
+        foreach ($iterator as $file) {
+            if (!$file->isFile() || $file->getExtension() !== 'php') {
+                continue;
+            }
+
+            $contents = (string) file_get_contents($file->getPathname());
+            if (
+                preg_match('/function\s+generateUuid\s*\(/', $contents) === 1
+                || preg_match('/(?:->|::)generateUuid\s*\(/', $contents) === 1
+            ) {
+                $offenders[] = substr($file->getPathname(), strlen($srcRoot) + 1);
+            }
+        }
+
+        self::assertSame(
+            [],
+            $offenders,
+            'src/ must mint every UUID through Ids::uuidV4() directly — no generateUuid() wrappers (SH-068).',
+        );
+    }
 }

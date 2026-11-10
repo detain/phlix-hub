@@ -53,10 +53,14 @@ final class FederationMasterDialConstructionTest extends TestCase
 {
     private string|false $origCaBundle = false;
 
+    private string|false $origAllowlist = false;
+
     protected function setUp(): void
     {
         $this->origCaBundle = getenv('PHLIX_FEDERATION_CA_BUNDLE');
+        $this->origAllowlist = getenv('PHLIX_FEDERATION_ALLOWED_HOSTS');
         putenv('PHLIX_FEDERATION_CA_BUNDLE');
+        putenv('PHLIX_FEDERATION_ALLOWED_HOSTS');
     }
 
     protected function tearDown(): void
@@ -65,6 +69,12 @@ final class FederationMasterDialConstructionTest extends TestCase
             putenv('PHLIX_FEDERATION_CA_BUNDLE');
         } else {
             putenv('PHLIX_FEDERATION_CA_BUNDLE=' . $this->origCaBundle);
+        }
+
+        if ($this->origAllowlist === false) {
+            putenv('PHLIX_FEDERATION_ALLOWED_HOSTS');
+        } else {
+            putenv('PHLIX_FEDERATION_ALLOWED_HOSTS=' . $this->origAllowlist);
         }
     }
 
@@ -199,6 +209,108 @@ final class FederationMasterDialConstructionTest extends TestCase
         } finally {
             Worker::$globalEvent = $prevLoop;
         }
+    }
+
+    /**
+     * SH-066: admission is TOTAL. Every configured master_url shape from which
+     * a clean host cannot be parsed throws at PLAN BUILD instead of the old
+     * raw-string fallback, which embedded the whole configured string as the
+     * host component of `ws://{host}:{port}` (e.g. 'evil.com/a?b=c#d' produced
+     * `ws://evil.com/a?b=c#d/relay/federation/...`). The refusal message names
+     * the configured URL because it reaches the OPERATOR log (all three dial
+     * escape sites — boot, reconnect tick, push channel — catch Throwable and
+     * log), never a wire response.
+     */
+    public function testUnadmissibleMasterUrlFailsLoudAtPlanTime(): void
+    {
+        $rejected = [
+            'path/query/fragment junk' => 'evil.com/a?b=c#d',
+            'bare host with query'     => 'evil.com?x=y',
+            'space inside'             => 'host port',
+            'empty string'             => '',
+            'scheme with no host'      => 'https:///missing-host',
+            'port above range'         => 'ws://master.lan:99999',
+            'port zero'                => 'ws://master.lan:0',
+            'credentials with no host' => 'http://user:pass@',
+            'scheme-only garbage'      => 'http://',
+        ];
+
+        foreach ($rejected as $label => $url) {
+            try {
+                $plan = $this->buildPlan($url);
+                self::fail("$label: unadmissible master_url produced a plan (uri '{$plan['uri']}')");
+            } catch (RuntimeException $e) {
+                self::assertStringContainsString(
+                    'refusing to dial',
+                    $e->getMessage(),
+                    "$label: wrong refusal shape",
+                );
+            }
+        }
+    }
+
+    /**
+     * SH-066 guard against OVER-rejection: the bare-host config shape the old
+     * fallback quietly supported (parse_url leaves it in `path`) must keep
+     * dialing, now through the explicit admission lane. Bracketed IPv6
+     * literals — what parse_url yields for `http://[::1]:8805` — are hosts
+     * too, in both plaintext and TLS shapes.
+     */
+    public function testAdmissibleShapesStillBuildPlans(): void
+    {
+        $bare = $this->buildPlan('master.example.com');
+        self::assertSame('ws://master.example.com/relay/federation/leaf-1', $bare['uri']);
+        self::assertSame('ssl', $bare['transport'], 'bare host keeps the legacy secure-by-default TLS mapping');
+
+        $v6Plain = $this->buildPlan('http://[::1]:8805');
+        self::assertSame('ws://[::1]:8805/relay/federation/leaf-1', $v6Plain['uri']);
+        self::assertSame('', $v6Plain['transport']);
+
+        $v6Tls = $this->buildPlan('https://[2001:db8::1]:8443');
+        self::assertSame('ssl', $v6Tls['transport']);
+        $ssl = $v6Tls['socket_context']['ssl'];
+        self::assertIsArray($ssl);
+        self::assertSame('[2001:db8::1]', $ssl['peer_name']);
+        self::assertTrue($ssl['verify_peer']);
+        self::assertTrue($ssl['verify_peer_name']);
+    }
+
+    /**
+     * SH-066 (optional containment): PHLIX_FEDERATION_ALLOWED_HOSTS is a
+     * comma-separated EXACT-host egress allowlist for federation dials,
+     * case-insensitive and bracket-insensitive for IPv6. Unset or blank keeps
+     * the pre-existing open-by-config posture (LAN masters are legitimate
+     * federation topology — the default must not break them); once set, any
+     * host not listed is refused at plan build, loudly.
+     */
+    public function testEgressAllowlistGatesDialOut(): void
+    {
+        $allowed = $this->buildPlan('https://master.example.com:8443')['uri'];
+
+        putenv('PHLIX_FEDERATION_ALLOWED_HOSTS=master.example.com');
+        self::assertSame($allowed, $this->buildPlan('https://master.example.com:8443')['uri']);
+
+        putenv('PHLIX_FEDERATION_ALLOWED_HOSTS= MASTER.Example.com , other.example ');
+        self::assertSame(
+            $allowed,
+            $this->buildPlan('https://master.example.com:8443')['uri'],
+            'entries trim and match case-insensitively',
+        );
+
+        putenv('PHLIX_FEDERATION_ALLOWED_HOSTS=other.example');
+        try {
+            $this->buildPlan('https://master.example.com:8443');
+            self::fail('host outside the egress allowlist produced a plan');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('PHLIX_FEDERATION_ALLOWED_HOSTS', $e->getMessage());
+        }
+
+        putenv('PHLIX_FEDERATION_ALLOWED_HOSTS=  ');
+        self::assertSame(
+            $allowed,
+            $this->buildPlan('https://master.example.com:8443')['uri'],
+            'a blank allowlist restricts nothing (unset posture)',
+        );
     }
 
     /**

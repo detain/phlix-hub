@@ -4,7 +4,7 @@
  * Phlix hub component: Requests.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -212,7 +212,7 @@ class RequestManager
         ?int $season = null,
         ?int $episode = null
     ): array {
-        $id = $this->generateUuid();
+        $id = Ids::uuidV4();
 
         $this->db->query(
             'INSERT INTO requests
@@ -756,13 +756,5 @@ class RequestManager
             return (int) $val;
         }
         return null;
-    }
-
-    /**
-     * Generate a UUID v4 string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

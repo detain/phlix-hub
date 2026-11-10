@@ -4,7 +4,7 @@
  * Phlix hub component: Hub.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -215,7 +215,7 @@ class HeartbeatHandler
                     // DATABASE clock (NOW() in the VALUES list) — the same
                     // column the retention sweep (ServerReaper::sweepHeartbeats)
                     // ages against NOW(). No PHP-clock param rides this write.
-                    'id' => $this->generateUuid(),
+                    'id' => Ids::uuidV4(),
                     'server_id' => $serverId,
                     'version' => $heartbeat->version,
                     'uptime_seconds' => $heartbeat->uptimeSeconds,
@@ -310,7 +310,7 @@ class HeartbeatHandler
                 $i,
                 $i
             );
-            $upsertParams['id_' . $i] = $this->generateUuid();
+            $upsertParams['id_' . $i] = Ids::uuidV4();
             $upsertParams['server_id_' . $i] = $serverId;
             $upsertParams['library_id_' . $i] = $ref->libraryId;
             $upsertParams['library_name_' . $i] = $ref->libraryName;
@@ -446,14 +446,6 @@ class HeartbeatHandler
             ];
         }
         return $result;
-    }
-
-    /**
-     * Generate a random UUID v4.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 
     /**

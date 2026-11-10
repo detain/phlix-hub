@@ -4,7 +4,7 @@
  * Phlix hub component: Hub.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -244,7 +244,7 @@ class ClaimRequestHandler
         // floor (M-HUB-13) — bounded table, honest 429, zero new wire codes.
         $this->assertRoomForNewClaim();
 
-        $claimId = $this->generateUuid();
+        $claimId = Ids::uuidV4();
         $claimCode = $this->generateClaimCode();
         $now = time();
         $expiresAt = $now + self::CLAIM_TTL_SECONDS;
@@ -416,7 +416,7 @@ class ClaimRequestHandler
             // servers land.
             $this->assertWithinServerCap($userId);
 
-            $serverId = $this->generateUuid();
+            $serverId = Ids::uuidV4();
             $nowUnix = time();
 
             /** @var string */
@@ -847,13 +847,5 @@ class ClaimRequestHandler
         ksort($jwk);
         $canonical = json_encode($jwk);
         return hash('sha256', $canonical !== false ? $canonical : '', true);
-    }
-
-    /**
-     * Generate a random UUID v4.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

@@ -31,7 +31,7 @@
  * backoff chain must survive it (reconnect re-armed, nothing half-verified).
  *
  * @copyright 2026 Phlix
- * @license MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

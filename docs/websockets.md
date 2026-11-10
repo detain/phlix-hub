@@ -675,6 +675,14 @@ strict stream context (`verify_peer`, `verify_peer_name`, `SNI_enabled`,
 `verify_peer = false` escape hatch ships. For a master with a private-CA
 certificate, set `PHLIX_FEDERATION_CA_BUNDLE` to an absolute PEM bundle path
 (unset = system trust store; set-but-unreadable = the dial is refused loudly).
+Admission of the configured URL itself is total (SH-066): the URI is built
+from the PARSED host and port only — the pre-fix fallback that embedded a
+host-less `master_url` string wholesale is gone, so anything that yields no
+legal hostname/IP literal (path, query, fragment, credentials, space, bad
+port) refuses the dial loudly at plan build instead of shipping a malformed
+socket target. Operators can further contain egress with
+`PHLIX_FEDERATION_ALLOWED_HOSTS` (comma-separated exact hosts; unset by
+default, which restricts nothing — LAN masters are legitimate topology).
 TLS dials additionally require the openssl PHP extension at runtime — without
 it the dial is refused with a log line naming the extension. This listener
 itself stays plaintext unless the master enables native TLS (see below); when

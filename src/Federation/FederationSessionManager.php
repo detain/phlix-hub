@@ -4,7 +4,7 @@
  * Phlix hub component: Federation.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -85,7 +85,7 @@ class FederationSessionManager
      */
     public function registerSession(string $peerId): string
     {
-        $sessionId = $this->generateUuid();
+        $sessionId = Ids::uuidV4();
 
         // A fresh session supersedes any handshake still pending under an
         // older attempt for this peer (re-hello without the old conn having
@@ -473,15 +473,5 @@ class FederationSessionManager
         }
 
         return [implode(', ', $names), $params];
-    }
-
-    /**
-     * Generate a random UUID v4.
-     *
-     * @return string Formatted UUID string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

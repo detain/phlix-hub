@@ -531,7 +531,13 @@ final class MaintenanceSweepGuardTest extends TestCase
             self::assertSame(1, $snapshot['consecutive_failures']);
             self::assertSame(1, $snapshot['incarnations']);
             self::assertIsString($snapshot['last_error']);
-            self::assertStringContainsString('Connection refused', $snapshot['last_error']);
+            // SH-061: public payload is class + redaction token; the driver
+            // prose ('SQLSTATE… Connection refused') stays log/record-side.
+            self::assertSame(
+                'PDOException: ' . MaintenanceHeartbeat::PUBLIC_ERROR_REDACTION,
+                $snapshot['last_error'],
+            );
+            self::assertStringNotContainsString('Connection refused', $snapshot['last_error']);
         } finally {
             foreach (glob($dir . '/*') ?: [] as $file) {
                 @unlink($file);

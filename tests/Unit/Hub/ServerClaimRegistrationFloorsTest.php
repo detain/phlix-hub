@@ -4,7 +4,7 @@
  * Phlix hub component: Tests.
  *
  * @copyright 2026 Joe Huss <detain@gmail.com>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

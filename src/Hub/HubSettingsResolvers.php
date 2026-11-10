@@ -1,5 +1,12 @@
 <?php
 
+/**
+ * Phlix hub component: Hub.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MPL-2.0
+ */
+
 declare(strict_types=1);
 
 namespace Phlix\Hub\Hub;

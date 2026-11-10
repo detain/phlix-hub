@@ -4,7 +4,7 @@
  * Phlix hub component: Hub.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -321,7 +321,7 @@ class HubSettingsRepository
      */
     public function set(string $key, mixed $value, string $valueType): void
     {
-        $id      = $this->generateUuid();
+        $id      = Ids::uuidV4();
         $encoded = self::encode($value, $valueType);
 
         // Upsert on the unique `setting_key` index.
@@ -493,18 +493,5 @@ class HubSettingsRepository
             'json'  => json_decode($raw, true),
             default => $raw,
         };
-    }
-
-    /**
-     * Generate a random UUID v4.
-     *
-     * Mirrors the inline sprintf pattern used by other hub classes
-     * (per the repo's no-UUID-library rule).
-     *
-     * @return string Formatted UUID string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

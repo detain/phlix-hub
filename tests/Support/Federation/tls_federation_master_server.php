@@ -34,7 +34,7 @@
  * orphan a listening process.
  *
  * @copyright 2026 Phlix
- * @license MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

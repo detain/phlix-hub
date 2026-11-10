@@ -4,7 +4,7 @@
  * REAL-TLS loopback E2E for the hub's :8802 relay listener (INBOUND accept).
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);

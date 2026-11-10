@@ -4,7 +4,7 @@
  * Phlix hub component: Health.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -146,8 +146,23 @@ final class MaintenanceHeartbeat
      */
     public const int DEFAULT_STALE_AFTER_SECONDS = 180;
 
-    /** Clip for `last_error`: it is served over /health and rewritten every failing tick. */
+    /** Clip for `last_error`: the stored record is rewritten every failing tick. */
     private const int MAX_ERROR_LENGTH = 300;
+
+    /**
+     * Stable token that replaces the exception MESSAGE in public payloads.
+     *
+     * `last_error` is published on the UNAUTHENTICATED `/health` surface, and
+     * DB-sweep failures carry driver text through it — MySQL messages of this
+     * shape contain host/port/user (e.g. "Access denied for user
+     * 'phlix_hub'@'…'"). The clip bounded the SIZE of that exposure, never its
+     * content (review hub__devops-code #3, SH-061). The class name in front of
+     * the token is kept because it is payload-free and operationally useful;
+     * everything after the first `: ` is withheld. The raw line stays in the
+     * on-disk record for operators, and the reapers log the full detail
+     * (`IdleReaper` / `ServerReaper` each `logger->error` the message).
+     */
+    public const string PUBLIC_ERROR_REDACTION = 'error_message_withheld_see_hub_logs';
 
     /**
      * The record this process owns, between writes. See the class docblock:
@@ -372,7 +387,12 @@ final class MaintenanceHeartbeat
                 $worstTask = $name;
                 /** @var mixed $err */
                 $err = $row['last_error'] ?? null;
-                $worstError = is_string($err) ? $err : null;
+                // SH-061: sanitize AT THE BOUNDARY. $worstError only ever flows
+                // into the verdict HealthController publishes unauthenticated,
+                // so the raw stored string is converted here, once — a future
+                // second consumer of snapshot() cannot accidentally republish
+                // the driver text.
+                $worstError = is_string($err) ? self::publicLastError($err) : null;
             }
         }
 
@@ -418,6 +438,30 @@ final class MaintenanceHeartbeat
     public static function isProbeFailure(array $snapshot): bool
     {
         return $snapshot['status'] === self::STATUS_DOWN;
+    }
+
+    /**
+     * The PUBLIC face of a stored sweep error: exception class, then the
+     * stable {@see PUBLIC_ERROR_REDACTION} token in place of the message.
+     *
+     * Total function — every string maps to a publishable string, `null`
+     * (never failed yet) maps to `null`. The cut is at the FIRST `': '`,
+     * because a PHP class name can never contain one while messages routinely
+     * do; a stored string WITHOUT the separator is not a provable class
+     * prefix (hand-edited or legacy record), so NOTHING of it is published.
+     */
+    public static function publicLastError(?string $stored): ?string
+    {
+        if ($stored === null) {
+            return null;
+        }
+
+        $sep = strpos($stored, ': ');
+        if ($sep === false) {
+            return self::PUBLIC_ERROR_REDACTION;
+        }
+
+        return substr($stored, 0, $sep) . ': ' . self::PUBLIC_ERROR_REDACTION;
     }
 
     /**

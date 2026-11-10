@@ -171,8 +171,14 @@ final class HealthControllerTest extends TestCase
 
         self::assertSame('ok', $payload['status']);
         self::assertSame(MaintenanceHeartbeat::STATUS_DEGRADED, $payload['maintenance']['status']);
-        self::assertIsString($payload['maintenance']['last_error']);
-        self::assertStringContainsString('Connection refused', $payload['maintenance']['last_error']);
+        // SH-061: the UNAUTHENTICATED /health payload carries class + redaction
+        // token only — 'Connection refused' (and anything driver-shaped like it)
+        // must never cross this boundary.
+        self::assertSame(
+            'RuntimeException: ' . MaintenanceHeartbeat::PUBLIC_ERROR_REDACTION,
+            $payload['maintenance']['last_error'],
+        );
+        self::assertStringNotContainsString('Connection refused', $payload['maintenance']['last_error']);
         self::assertSame(200, HealthController::statusCodeFor($payload));
     }
 

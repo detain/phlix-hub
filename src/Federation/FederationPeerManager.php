@@ -4,7 +4,7 @@
  * Phlix hub component: Federation.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -690,9 +690,11 @@ class FederationPeerManager
      *      forward: https peers now map to the `ws://` + `transport='ssl'`
      *      idiom in {@see self::buildMasterDialPlan()}, so this shape can
      *      no longer occur — the catch below stays for the remaining
-     *      pre-socket throws (a malformed peer URL still fails in the
-     *      constructor; a dead settings/DB read throws before the plan is
-     *      ever built).
+     *      pre-socket throws (a malformed peer URL now refuses LOUD at
+     *      dial-plan build inside establishConnection — SH-066 removed the
+     *      raw-string fallback that used to carry it all the way to the
+     *      transport constructor; a dead settings/DB read throws before the
+     *      plan is ever built).
      *
      * Neither shape can occur inside this worker: the loop exists before
      * onWorkerStart fires (Worker::run() sets globalEvent + Timer::init
@@ -766,7 +768,8 @@ class FederationPeerManager
             // Constructor-class throws still escape establishConnection's
             // connect() catch (the legacy repro used the missing Wss protocol;
             // since the transport=ssl mapping an https peer no longer throws
-            // there, but a malformed peer URL still can, and the settings/DB
+            // there — malformed peer URLs now refuse earlier still, at the
+            // SH-066 admission inside buildMasterDialPlan, and the settings/DB
             // reads before the plan is built always can): a boot dial must
             // never die silently the way the master-side one did — log LOUDLY
             // and hand the chain to the backoff, so the link is retried on
@@ -828,6 +831,24 @@ class FederationPeerManager
      * itself; portless plaintext keeps the :80 default — the same numbers
      * the old wss/ws URLs implied.
      *
+     * Admission is TOTAL (SH-066, review hub__secnet #2): the configured
+     * string is parsed, never embedded. The pre-fix fallback used the RAW
+     * master_url as the host component whenever parse_url yielded no host,
+     * which shipped strings like `evil.com/a?b=c#d` wholesale into the dial
+     * URI. Now: every host must be a legal hostname or IP literal (bracketed
+     * IPv6 included), ports must sit in 1..65535, and a bare host (no scheme
+     * — parse_url leaves it in `path`) is admitted ONLY through the explicit
+     * grammar lane. Anything else throws at plan build. The three dial escape
+     * sites (boot {@see self::bootstrapFromWorker()}, the reconnect tick,
+     * the push-channel command) all already catch Throwable and log — the
+     * refusal is loud in the OPERATOR log and the link simply never dials a
+     * malformed target. Optional containment: `PHLIX_FEDERATION_ALLOWED_HOSTS`
+     * (comma-separated EXACT hosts) restricts dial-out egress once set; the
+     * unset default stays open because private-IP LAN masters are legitimate
+     * federation topology — the residual risk is the admin-trust class the
+     * review named, bounded by the H-4/H-5 proof-of-key ceremony (session-
+     * and nonce-bound signatures), NOT by any hard-coded reachability rule.
+     *
      * @param string $masterUrl Configured peer URL (e.g. https://host:port).
      * @param string $leafHubId This hub's own federation_hubs.id.
      *
@@ -836,6 +857,8 @@ class FederationPeerManager
      *   transport: 'ssl' for TLS masters, '' for plaintext (property left
      *   at workerman's default);
      *   socket_context: ssl stream options for TLS, [] for plaintext.
+     *
+     * @throws RuntimeException when the configured URL is not admissible.
      */
     private function buildMasterDialPlan(string $masterUrl, string $leafHubId): array
     {
@@ -843,10 +866,23 @@ class FederationPeerManager
         $scheme = is_string($scheme) ? strtolower($scheme) : '';
 
         $host = parse_url($masterUrl, PHP_URL_HOST);
-        $masterHost = is_string($host) && $host !== '' ? $host : $masterUrl;
+        $masterHost = (is_string($host) && $host !== '')
+            ? self::admitFederationHost($host, $masterUrl)
+            : self::admitBareHostConfig($masterUrl);
 
         $port = parse_url($masterUrl, PHP_URL_PORT);
-        $portSuffix = is_numeric($port) ? ':' . $port : '';
+        if ($port === null) {
+            $portSuffix = '';
+        } else {
+            // parse_url yields int|null on success and false on a failed
+            // parse of the whole URL — both non-null junk shapes refuse.
+            if (!is_int($port) || $port < 1 || $port > 65535) {
+                throw self::refuseDial($masterUrl, 'carries a port outside 1..65535');
+            }
+            $portSuffix = ':' . $port;
+        }
+
+        self::admitEgress($masterHost);
 
         $uri = 'ws://' . $masterHost . $portSuffix
             . '/relay/federation/' . rawurlencode($leafHubId);
@@ -887,6 +923,118 @@ class FederationPeerManager
             'transport' => 'ssl',
             'socket_context' => ['ssl' => $ssl],
         ];
+    }
+
+    /**
+     * Parse, don't validate (SH-066): the scheme-less config shape
+     * (`master.example.com`, `master.lan:8805` — parse_url leaves these in
+     * `path`, yielding no host component) is admitted ONLY as a plain host.
+     * Any other structured component (user, pass, query, fragment) or a
+     * path that is not a legal host grammar refuses the whole config — the
+     * pre-fix fallback would instead have embedded it into the dial URI.
+     *
+     * @throws RuntimeException when the configured string is not a bare host.
+     */
+    private static function admitBareHostConfig(string $masterUrl): string
+    {
+        $path = parse_url($masterUrl, PHP_URL_PATH);
+
+        if (
+            !is_string($path) || $path === ''
+            || parse_url($masterUrl, PHP_URL_QUERY) !== null
+            || parse_url($masterUrl, PHP_URL_FRAGMENT) !== null
+            || parse_url($masterUrl, PHP_URL_USER) !== null
+            || parse_url($masterUrl, PHP_URL_PASS) !== null
+        ) {
+            throw self::refuseDial($masterUrl, 'yields no parseable host');
+        }
+
+        return self::admitFederationHost($path, $masterUrl);
+    }
+
+    /**
+     * Host grammar admission (SH-066): bracketed IPv6 literal, bare IPv4/IPv6
+     * (as `parse_url` yields for `http://10.0.0.5/`), or a legal hostname.
+     * This is URI-grammar integrity — it says NOTHING about reachability:
+     * private-IP masters are legitimate LAN federation, and the wire's trust
+     * model (H-4/H-5 mutual proof-of-key) is unchanged by this gate.
+     *
+     * @throws RuntimeException when the candidate is not a valid host token.
+     */
+    private static function admitFederationHost(string $candidate, string $masterUrl): string
+    {
+        if (str_starts_with($candidate, '[') && str_ends_with($candidate, ']')) {
+            if (filter_var(substr($candidate, 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false) {
+                throw self::refuseDial($masterUrl, 'carries a bracketed host that is not a valid IPv6 literal');
+            }
+
+            return $candidate;
+        }
+
+        if (filter_var($candidate, FILTER_VALIDATE_IP) !== false) {
+            return $candidate;
+        }
+
+        if (filter_var($candidate, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) !== false) {
+            return $candidate;
+        }
+
+        throw self::refuseDial($masterUrl, 'carries a host that is neither a valid hostname nor an IP literal');
+    }
+
+    /**
+     * Optional egress containment (SH-066): when PHLIX_FEDERATION_ALLOWED_HOSTS
+     * is set to a non-blank value, the dial may only go to one of its
+     * comma-separated EXACT hosts (case-insensitive; IPv6 entries may omit
+     * the brackets). Unset/blank restricts nothing — the pre-allowlist
+     * posture, kept as the default because every private-IP LAN master that
+     * federates today would otherwise strand on a surprise env requirement.
+     * This is an operator containment hatch, not a security boundary: the
+     * admission guarantees of the dial are the grammar gate + the ceremony.
+     *
+     * @throws RuntimeException when the admitted host is outside the allowlist.
+     */
+    private static function admitEgress(string $masterHost): void
+    {
+        $allowlist = getenv('PHLIX_FEDERATION_ALLOWED_HOSTS');
+        if (!is_string($allowlist) || trim($allowlist) === '') {
+            return;
+        }
+
+        // Case-insensitivity rides strcasecmp itself: a pre-lowercased
+        // needle/entry pair plus === re-triggers psalm's lowercase-string
+        // containment check for no semantic gain.
+        $needleBare = trim($masterHost, '[]');
+
+        foreach (explode(',', $allowlist) as $entry) {
+            $entry = trim($entry);
+            if ($entry === '') {
+                continue;
+            }
+
+            if (strcasecmp($masterHost, $entry) === 0 || strcasecmp($needleBare, trim($entry, '[]')) === 0) {
+                return;
+            }
+        }
+
+        throw new RuntimeException(
+            'FederationPeerManager: refusing to dial host "' . $masterHost
+            . '" — it is not on the PHLIX_FEDERATION_ALLOWED_HOSTS egress allowlist.',
+        );
+    }
+
+    /**
+     * The one refusal shape for unparseable peer configs. Embeds the raw
+     * configured URL by design: it reaches the operator log at every dial
+     * escape site, and a config refusal that names its own input is the only
+     * form an operator can act on.
+     */
+    private static function refuseDial(string $masterUrl, string $why): RuntimeException
+    {
+        return new RuntimeException(
+            'FederationPeerManager: refusing to dial — the configured master URL "'
+            . $masterUrl . '" ' . $why . '.',
+        );
     }
 
     /**
@@ -2403,7 +2551,7 @@ class FederationPeerManager
         // every write and audit stamp the local peer row id — the frame's
         // identity strings never reach the database.
         if ($action === 'grant') {
-            $this->adminDel->grant($this->generateUuid(), $this->masterPeerId, $userId);
+            $this->adminDel->grant(Ids::uuidV4(), $this->masterPeerId, $userId);
             $this->audit->logAdminDelegation($this->masterPeerId, $userId, 'grant');
 
             return;
@@ -2638,8 +2786,10 @@ class FederationPeerManager
                     $self->reconnectHoldAnnounced = false;
                     // The dial may THROW before any socket exists (the
                     // establishConnection constructor line is outside its
-                    // own catch — e.g. a malformed peer URL; the https
-                    // mapping since rides transport=ssl instead) or
+                    // own catch, and since SH-066 the refusal usually lands
+                    // even earlier — the malformed-peer-URL throw from
+                    // buildMasterDialPlan admission; the https mapping since
+                    // rides transport=ssl instead) or
                     // inside the guard chain (a settings/DB read failing at
                     // boot). An escape here dies the chain at best and
                     // crash-loops the worker at worst, so a throw re-arms
@@ -2732,15 +2882,5 @@ class FederationPeerManager
         } catch (Throwable) {
             return false;
         }
-    }
-
-    /**
-     * Generate a random UUID v4.
-     *
-     * @return string Formatted UUID string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

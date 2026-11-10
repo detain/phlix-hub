@@ -4,7 +4,7 @@
  * Phlix hub component: Auth.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -174,7 +174,7 @@ class UserRepository
      */
     public function create(array $data): string
     {
-        $id = self::generateUuid();
+        $id = Ids::uuidV4();
 
         if (isset($data['password_hash']) && isset($data['password'])) {
             throw new InvalidArgumentException(
@@ -422,15 +422,5 @@ class UserRepository
             }
         }
         return $out;
-    }
-
-    /**
-     * Generate a UUID v4 string in the canonical 8-4-4-4-12 layout. Kept
-     * inline so the hub doesn't take a hard dependency on a UUID
-     * library; matches the helper used throughout `phlix-server`.
-     */
-    public static function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

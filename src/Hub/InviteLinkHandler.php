@@ -4,7 +4,7 @@
  * Phlix hub component: Hub.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -80,7 +80,7 @@ class InviteLinkHandler
 
         $now = time();
         /** @var string $inviteId */
-        $inviteId = $this->generateUuid();
+        $inviteId = Ids::uuidV4();
 
         $this->db->query(
             'INSERT INTO invite_links
@@ -434,13 +434,5 @@ class InviteLinkHandler
         /** @var string $email */
         $email = is_string($rows[0]['email'] ?? null) ? $rows[0]['email'] : null;
         return $email;
-    }
-
-    /**
-     * Generate a UUID v4 string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

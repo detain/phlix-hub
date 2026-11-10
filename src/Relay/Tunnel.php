@@ -4,7 +4,7 @@
  * Phlix hub component: Relay.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
- * @license   MIT
+ * @license   MPL-2.0
  */
 
 declare(strict_types=1);
@@ -111,7 +111,7 @@ final class Tunnel implements TunnelInterface
         private readonly ?EnrollmentJwtService $jwtService = null,
         private readonly ?RelayProxyManager $proxyManager = null,
     ) {
-        $this->tunnelId = $tunnelId ?? $this->generateUuid();
+        $this->tunnelId = $tunnelId ?? Ids::uuidV4();
         $this->clientConnections = new SplObjectStorage();
         $this->channelClients = [];
         $this->nextChannelId = 0;
@@ -2187,15 +2187,5 @@ final class Tunnel implements TunnelInterface
         /** @var string $hostname */
         $hostname = @gethostname();
         return $hostname ?: 'unknown';
-    }
-
-    /**
-     * Generate a random UUID v4.
-     *
-     * @return string UUID string.
-     */
-    private function generateUuid(): string
-    {
-        return Ids::uuidV4();
     }
 }

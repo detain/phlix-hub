@@ -6,6 +6,67 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [w17L4-hub-1109] — SH-061/066/068: unauthenticated /health redaction, federation dial admission, UUID single-source
+
+- **SH-061** (`src/Health/MaintenanceHeartbeat.php`): the UNAUTHENTICATED
+  `/health` payload no longer echoes raw sweep-exception messages — MySQL
+  driver text of this shape carries host/user detail. Public surface now
+  carries the exception CLASS plus the stable token
+  `error_message_withheld_see_hub_logs` (`PUBLIC_ERROR_REDACTION`, redacted
+  at the `snapshot()` boundary — the single public builder); the raw
+  `class: message` line stays in the operator-visible on-disk record (where
+  the 300-char clip still bounds rewrite pressure) and the reapers already
+  log full detail. `publicLastError()` is total (null lane, first-separator
+  cut, fail-closed on separator-less records). Test flips measured red at
+  parent before the cure; `openapi.yaml` `MaintenanceRecord.last_error`
+  description rewritten to the new truth.
+- **SH-066** (`src/Federation/FederationPeerManager.php`): `buildMasterDialPlan()`
+  admission is TOTAL — the raw-`master_url` host fallback (which embedded
+  unparseable config strings wholesale into `ws://{host}`) is removed. Hosts
+  must be a legal hostname or IP literal (bracketed IPv6 included), ports
+  must sit in 1..65535, and a scheme-less bare host is admitted only through
+  the explicit grammar lane; everything else throws at plan build. All three
+  dial escape sites (boot, reconnect tick, push channel) already catch
+  Throwable, so the refusal logs LOUD and the link never dials a malformed
+  target — the H-4/H-5 handshake ceremony and the ws-URI+transport='ssl'
+  wire shape are UNMOVED. Optional containment:
+  `PHLIX_FEDERATION_ALLOWED_HOSTS` (comma-separated exact hosts;
+  unset/blank = unrestricted — LAN masters stay legitimate). README env
+  table + `docs/websockets.md` carry the law; three stale "malformed URL
+  fails in the constructor" prose sites corrected.
+- **SH-068** (13 files): every private `generateUuid()` delegate folded onto
+  `Ids::uuidV4()` at the call sites — the wrapper bodies were byte-for-byte
+  `return Ids::uuidV4();` so behavior (and the wire-pinned UUID shape) is
+  unchanged; the two false docblocks (UserRepository's "kept inline … no
+  hard dependency", AuditLogRepository's "inline sprintf pattern") are gone
+  with their wrappers, the third false one (HubSettingsRepository) likewise.
+  `IdsTest::testNoGenerateUuidDelegateSurvivesAnywhereInSrc()` is the
+  anti-reintroduction tripwire; the delegate-shape pin in
+  `UserRepositoryTest` now lives at the mint (`IdsTest`).
+
+### Chore [w17L4-hub-1109] — SH-069: file-header license token corrected to MPL-2.0
+
+- The repo declares `"license": "MPL-2.0"` (composer.json) and ships the MPL
+  LICENSE text, while EVERY headered PHP file claimed `@license MIT` — a
+  distribution-level misstatement inherited from the `scripts/add-headers.php`
+  template. Mechanical one-line header flip across the headered roster —
+  measured census: 285 files by the sed pass (src 222, tests 62, scripts 1),
+  the four `@license MIT` single-space variants normalized to the canonical
+  three-space shape; 2 src/ files that had drifted in HEADERLESS
+  (`Hub/MaintenanceGate.php`, `Hub/HubSettingsResolvers.php`) received a full
+  MPL header from the re-run generator, which then re-ran idempotent
+  (0 added / 224 skipped). `add-headers.php`'s own
+  template corrected so new files emit the truth (it has no file header of
+  its own — its diff is the template line alone). Header text only — no code,
+  no behavior: of the 295 PHP files this lane touches, 272 are header-only
+  and the other 23 carry the SH-061/066/068 behavior or test edits (src 16 =
+  the 13 delegate folds + MaintenanceHeartbeat + the 2 generator-added
+  headers; tests 7).
+- `StaticAnalysisScopeTest::testEveryLicenseTagTellsTheMplTruth()` pins the
+  value law (every ` * @license` header line repo-wide reads exactly
+  `* @license   MPL-2.0`), the src/ presence law (copyright+license on all
+  224 src files), and the generator template law.
+
 ### Chore [ui-25-1109] — re-vendor `@phlix/ui` #v0.99.25 + `/app` SPA regen — 2026-11-09
 
 - Tag-form re-pin of the served SPA's vendored library v0.99.22 → v0.99.25 (tag object
