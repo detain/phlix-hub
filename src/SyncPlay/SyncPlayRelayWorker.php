@@ -264,6 +264,59 @@ final class SyncPlayRelayWorker
     public const CANONICAL_MAX_QUEUE_SIZE = 1000;
 
     /**
+     * The canonical `syncplay_*` message catalog this relay knows (§3 of
+     * phlix-syncplay SPEC.md) — inbound names handled, server→client refused,
+     * and hub-emitted alike. This constant is the hub's SSOT for the
+     * vocabulary: the dispatch arms above carry the literals, and
+     * tests/Unit/SyncPlay/SyncPlayRelayCanonicalDialectTest binds THIS set to
+     * THOSE literals with a token scan (a new dispatch name missing from the
+     * catalog, or a catalog name the worker never speaks, reddens that test —
+     * LW-082-b). The full estate SSOT is `Phlix\Shared\Relay\SyncPlayDialect`
+     * (phlix-shared, landed above the current vendored constraint); swapping
+     * this constant to a live import of it is gated on the next shared tag —
+     * see .reviews/2026-11-10/FIX-hub-w21L6.md.
+     *
+     * @var list<string>
+     */
+    public const CANONICAL_MESSAGE_TYPES = [
+        'syncplay_group_create',
+        'syncplay_group_join',
+        'syncplay_group_leave',
+        'syncplay_group_list',
+        'syncplay_group_state',
+        'syncplay_host_elect',
+        'syncplay_host_transfer',
+        'syncplay_playback_play',
+        'syncplay_playback_pause',
+        'syncplay_playback_seek',
+        'syncplay_playback_sync',
+        'syncplay_playback_queue',
+        'syncplay_chat',
+        'syncplay_typing',
+        'syncplay_time_ping',
+        'syncplay_time_pong',
+        'syncplay_time_sync',
+        'syncplay_info',
+        'syncplay_error',
+    ];
+
+    /**
+     * The server→client half of {@see self::CANONICAL_MESSAGE_TYPES} — names a
+     * client SPEAKING inbound is refusing-street for (same `UNKNOWN_MESSAGE`
+     * answer :8097 gives them; dispatch arms above). Subset law and name
+     * identity are test-pinned against the catalog and the dispatch scan.
+     *
+     * @var list<string>
+     */
+    public const CANONICAL_SERVER_ONLY_TYPES = [
+        'syncplay_info',
+        'syncplay_group_state',
+        'syncplay_host_elect',
+        'syncplay_time_pong',
+        'syncplay_error',
+    ];
+
+    /**
      * Member ceiling for one relay room — mirrors phlix-server
      * `GroupState::MAX_MEMBERS = 50` (cited both ways, same-number law as
      * {@see self::CANONICAL_MAX_QUEUE_SIZE}). A relay that admitted past the

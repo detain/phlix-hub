@@ -12,6 +12,26 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Added [hub-w21L6] — LW-082-b: the `:8804` canonical dialect gets a hub-side SSOT constant pair; the catalog test derives from it (plus a token-scan binding the constants to the dispatch literals) — tests-only + docblock-visible constants, zero behavior change — 2026-11-10
+
+- `SyncPlayRelayWorker` now carries `CANONICAL_MESSAGE_TYPES` (the SPEC §3
+  catalog this relay knows) and `CANONICAL_SERVER_ONLY_TYPES` (its inbound-
+  refusal half). The canonical-dialect test file's hand-transcribed refusal
+  list — one leg of the estate-wide catalog triplication LW-082-b registers —
+  is replaced by a live import of the constants.
+- A live import that reads constants nobody binds is the SH-024 vacuity class,
+  so the file gains a token scan: every `syncplay_*` literal the worker source
+  speaks OUTSIDE the two constant definitions must equal the catalog set, both
+  directions (a new dispatch arm missing from the catalog, a catalog name the
+  worker never speaks, or a renamed constant member each redden it; the three
+  plants are transcribed in .reviews/2026-11-10/FIX-hub-w21L6.md). Shape law
+  (list, unique, prefix, refusal-set-subset) pinned alongside.
+- Estate SSOT note: `Phlix\Shared\Relay\SyncPlayDialect` (LW-082-a) landed
+  above the vendored shared tag, so the cross-repo live import is gated on the
+  next shared release — recorded as a report-only handoff row in the same
+  register. Dispatch arms are untouched: the refusal bytes stay exactly as
+  reviewed.
+
 ### Fixed [hub-w20L3] — federation hint gains the peers-are-hubs terminology note; served /app rebuilt (review hub__pm #6) — 2026-11-10
 
 - The vendored `@phlix/ui` federation page still renders "Connect with other Phlix

@@ -18,9 +18,11 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
 use function array_keys;
 use function array_merge;
 use function array_search;
+use function array_unique;
 use function array_values;
 use function count;
 use function end;
+use function file_get_contents;
 use function hash;
 use function implode;
 use function in_array;
@@ -29,9 +31,16 @@ use function is_string;
 use function json_decode;
 use function json_encode;
 use function microtime;
+use function preg_match;
+use function range;
 use function round;
+use function sort;
 use function str_contains;
+use function str_starts_with;
+use function strlen;
+use function strpos;
 use function time;
+use function token_get_all;
 
 /**
  * Unit tests for the CANONICAL `syncplay_*` dialect of the SyncPlay relay
@@ -809,24 +818,157 @@ final class SyncPlayRelayCanonicalDialectTest extends TestCase
         $worker->onMessage($connB, $this->canonicalFrame('syncplay_group_join', ['group_id' => 'party']));
 
         $beforeB = count($sinkB);
-        $serverOnlyTypes = [
-            'syncplay_info',
-            'syncplay_group_state',
-            'syncplay_host_elect',
-            'syncplay_time_pong',
-            'syncplay_error',
-        ];
+        // LW-082-b: the refusal set is LIVE-IMPORTED from the worker's
+        // catalog constant (was a hand-transcribed list — the triplication
+        // this row closes). Dispatch-literal <-> constant identity is pinned
+        // by the token scan in testCatalogConstantsMatchTheWorkerLiterals;
+        // this loop proves every server-only name actually REFUSES inbound.
+        $serverOnlyTypes = SyncPlayRelayWorker::CANONICAL_SERVER_ONLY_TYPES;
         foreach ($serverOnlyTypes as $serverOnlyType) {
             $worker->onMessage($connA, $this->canonicalFrame($serverOnlyType, ['message' => 'pretend']));
         }
 
         $errors = $this->sinkFramesOfType($sinkA, 'syncplay_error');
-        self::assertCount(5, $errors);
+        self::assertCount(count($serverOnlyTypes), $errors);
         foreach ($errors as $error) {
             self::assertSame('UNKNOWN_MESSAGE', $error['error_code'], 'the same refusal :8097 gives these types');
             self::assertSame('Unknown message type', $error['message']);
         }
         self::assertSame($beforeB, count($sinkB), 'the lie never fanned out to the room');
+    }
+
+    // ---- Catalog SSOT (LW-082-b) ----------------------------------------------
+
+    /**
+     * The catalog constant must describe the worker, not shadow it: every
+     * `syncplay_*` literal the source speaks OUTSIDE the two constant
+     * definitions is in the catalog, and every catalog name is such a
+     * literal. Renaming a catalog member while the dispatch arm keeps the old
+     * name (or adding a dispatch arm without the catalog) reddens this test —
+     * the live binding that makes the constant import in the refusal loop and
+     * the rest of this file non-vacuous (SH-024 class guard).
+     */
+    public function testCatalogConstantsMatchTheWorkerLiterals(): void
+    {
+        $source = (string) file_get_contents(
+            (string) (new \ReflectionClass(SyncPlayRelayWorker::class))->getFileName(),
+        );
+
+        $spoken = self::collectSyncPlayLiteralsOutsideCatalogConsts($source);
+        $catalog = SyncPlayRelayWorker::CANONICAL_MESSAGE_TYPES;
+
+        self::assertNotCount(0, $spoken, 'a scan matching nothing convicts nothing');
+        sort($spoken);
+        $expected = $catalog;
+        sort($expected);
+        self::assertSame(
+            $expected,
+            $spoken,
+            'the CANONICAL_MESSAGE_TYPES catalog and the worker source literals diverged (LW-082-b)',
+        );
+    }
+
+    /**
+     * Shape law: the catalog is a unique `syncplay_`-prefixed list and the
+     * server-only refusal set is a non-empty subset of it — the import in
+     * {@see self::testServerToClientTypesSpokenInboundAreRefusedNotRelayed()}
+     * can only ever feed names the closed canonical floor knows.
+     */
+    public function testCatalogConstantShape(): void
+    {
+        self::assertCatalogShapeIsList(SyncPlayRelayWorker::CANONICAL_MESSAGE_TYPES, 'catalog');
+        self::assertCatalogShapeIsList(SyncPlayRelayWorker::CANONICAL_SERVER_ONLY_TYPES, 'refusal set');
+
+        self::assertSubsetOf(
+            SyncPlayRelayWorker::CANONICAL_SERVER_ONLY_TYPES,
+            SyncPlayRelayWorker::CANONICAL_MESSAGE_TYPES,
+            'every refusal name must live in the catalog',
+        );
+    }
+
+    /**
+     * One list law, both catalog constants: non-empty, plain list keys, string
+     * members, canonical prefix, unique names.
+     *
+     * @param array<array-key, mixed> $values
+     */
+    private static function assertCatalogShapeIsList(array $values, string $label): void
+    {
+        self::assertNotCount(0, $values, "the $label must not be empty");
+        self::assertSame(range(0, count($values) - 1), array_keys($values), "the $label must be a plain list");
+
+        $members = [];
+        foreach ($values as $value) {
+            if (!is_string($value)) {
+                self::fail("the $label members must be strings");
+            }
+
+            self::assertTrue(
+                str_starts_with($value, 'syncplay_'),
+                "a $label member is not a canonical syncplay_* name",
+            );
+            $members[] = $value;
+        }
+
+        self::assertCount(count($members), array_unique($members), "the $label members must be unique");
+    }
+
+    /**
+     * Strict subset law through a mixed-typed boundary: a direct in_array of
+     * one literal-typed constant against the other is statically always true
+     * today, which is exactly the vacuity PHPStan level 9 refuses to read as
+     * a test. Through these params both sides are `array` and the assertion
+     * runs (and convicts) on the values.
+     *
+     * @param array<array-key, mixed> $subset
+     * @param array<array-key, mixed> $superset
+     */
+    private static function assertSubsetOf(array $subset, array $superset, string $message): void
+    {
+        foreach ($subset as $value) {
+            self::assertTrue(in_array($value, $superset, true), $message);
+        }
+    }
+
+    /**
+     * `syncplay_*` string/identifier literals in $source, EXCLUDING the two
+     * constant-definition spans (a self-referential scan would forgive a
+     * renamed constant member — its ghost literal still sits in the array).
+     *
+     * @return list<string>
+     */
+    private static function collectSyncPlayLiteralsOutsideCatalogConsts(string $source): array
+    {
+        $spans = [];
+        $constNames = ['CANONICAL_MESSAGE_TYPES', 'CANONICAL_SERVER_ONLY_TYPES'];
+        foreach ($constNames as $constName) {
+            $start = strpos($source, $constName . ' = [');
+            self::assertIsInt($start, "catalog constant $constName vanished from the worker source");
+            $end = strpos($source, '];', $start);
+            self::assertIsInt($end, "catalog constant $constName has no array close");
+            $spans[] = [$start, $end + 2];
+        }
+
+        $found = [];
+        $offset = 0;
+        foreach (token_get_all($source) as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            if (!is_array($token) || $token[0] === T_CONSTANT_ENCAPSED_STRING || $token[0] === T_STRING) {
+                $insideSpan = false;
+                foreach ($spans as [$spanStart, $spanEnd]) {
+                    if ($offset >= $spanStart && $offset < $spanEnd) {
+                        $insideSpan = true;
+                        break;
+                    }
+                }
+                if (!$insideSpan && preg_match('/^syncplay_[a-z_]+$/', trim($text, "'\"")) === 1) {
+                    $found[trim($text, "'\"")] = true;
+                }
+            }
+            $offset += strlen($text);
+        }
+
+        return array_keys($found);
     }
 
     // ---- Ping / clock --------------------------------------------------------
