@@ -191,4 +191,43 @@ final class CookiePolicyOriginLawTest extends TestCase
         // (same shape as the server's parseHostHeader tail).
         self::assertFalse($this->law('https://' . self::HOST, null, null, ''));
     }
+
+    public function testUnparseableOriginIsRefusedByTheParseGuardArm(): void
+    {
+        // CP-013 fold of the CP-011-DD review minor: the `parse_url === false`
+        // guard arms (referer leg and origin leg) had ZERO test inputs —
+        // 'not a url' parses to a path-only ARRAY and walks past them.
+        // `http://x:bad` (non-numeric port) is a genuine parse FALSE: the
+        // origin-leg guard refuses it outright.
+        self::assertFalse($this->law('http://x:bad'));
+    }
+
+    public function testUnparseableOriginWithEmptyHostIsRefusedNotByDoubleEmptyFallback(): void
+    {
+        // The DISCRIMINATING conviction leg (reviewer's shape, executed at
+        // 6a3d4b76 as F=0): soften the origin-leg guard to an empty-parts
+        // fallback and this input — parse-false Origin, no Referer, EMPTY
+        // Host — produces host '' vs server '' with both ports null, a
+        // double-empty coincidence that the fallback ACCEPTS. The shipped
+        // guard refuses first. This leg reddens iff the origin-arm guard is
+        // weakened; the plain mismatch leg above cannot catch that.
+        self::assertFalse($this->law('http://x:bad', null, null, ''));
+    }
+
+    public function testUnparseableRefererIsRefusedByTheParseGuardArm(): void
+    {
+        // Referer-leg twin of the origin-arm pin above: the guard arm at the
+        // referer parse is reached by no other input in the corpus.
+        self::assertFalse($this->law(null, 'http://x:bad'));
+    }
+
+    public function testUnparseableRefererWithEmptyHostIsRefusedNotByDoubleEmptyFallback(): void
+    {
+        // Referer-leg discriminator: softened to empty-parts, refererHost ''
+        // would match the empty-Host server parts and the origin leg is
+        // absent — the tail ACCEPTs. Shipped: refused. The origin-arm mutant
+        // leaves this leg green (the referer guard still fires), so the two
+        // discriminator legs convict their arms SEPARATELY.
+        self::assertFalse($this->law(null, 'http://x:bad', null, ''));
+    }
 }

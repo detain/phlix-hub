@@ -6,6 +6,61 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added [hub-w32L1-1110] — CP-013: the cookie/CSRF ceremony suite layer + parse-false arm conviction (COOKIE-DESIGN §7 gap inventory, tests-only — zero src/wire change; folds the CP-011-DD review minor the w31L2 reviewer left open)
+
+- **CookieAuthCeremonyTest** (`tests/Unit/Http/CookieAuthCeremonyTest.php`,
+  6 legs/63 assertions — the §7 scenario layer): every previous CP-011/012
+  suite pins ITS seam with mocked string tokens; this suite runs the two
+  layers TOGETHER on real minted JWTs (same secret issues and validates),
+  owning laws that lived only in docblocks until now — the full browser arc
+  (login dual-emits the real access JWT → the issued cookie authenticates a
+  same-site write → hostile Origin refuses the same jar with the byte-exact
+  403 frame BEFORE hydration → cookie-sourced refresh rotates the pair → the
+  rotated jar flows through the guard → logout reads the rotated refresh and
+  clears both names, wire-proven Max-Age=0 pair → the emptied jar answers
+  401 `auth.required`, not a guard frame); the §2.5 Sec-Fetch belt ON THE
+  MIDDLEWARE ROUTE (CP-012 pinned belt legs in the pure law and the
+  controller arms only — the AuthMiddleware seam had none); bearer/device
+  immunity through the WHOLE lifecycle (login→write→refresh→logout, all
+  hostile-Origin, all ungated); the §7 rollback law PAIR at ceremony scale
+  (master-switch OFF stops every Set-Cookie on login AND refresh arms while
+  the still-live jar keeps authenticating AND keeps meeting the guard —
+  CookiePolicy's class-docblock law, testless since CP-011); and the two
+  custody CROSS-CHECKS (issuance normalizes the default port while the guard
+  refuses it — `Origin: https://HOST:443` vs bare Host EARNS the cookie and
+  is REFUSED the rotation, the ratified divergence now pinned on the wire
+  with a both-ports-named control; and the device marker is an ISSUANCE axis
+  only — cookie-lineage + marker + hostile Origin is still 403).
+- **CookiePolicyOriginLawTest +4 legs/+4 assertions** (19/29 → 23/33; the
+  folded REVIEW-w31L2hub.md minor: the `parse_url === false` guard arms in
+  `stateChangingRequestOriginAllowed()` had ZERO test inputs — the corpus's
+  only "unparseable" value `not a url` parses to a path-only ARRAY and walks
+  past both guards (reviewer's executed probe: soften either arm to an
+  empty-parts fallback ⇒ F=0). New shape `http://x:bad` (non-numeric port ⇒
+  genuine parse FALSE): one direct refusal leg per arm (first inputs ever to
+  REACH the guards) plus one DISCRIMINATING leg per arm (parse-false header +
+  EMPTY Host: the fallback would match host `''` against the empty-Host
+  server parts — a double-empty coincidence it ACCEPTS and the shipped guard
+  refuses). Mutations: origin-arm fallback ⇒ exactly 1 red (its
+  discriminator); referer-arm fallback ⇒ exactly 1 red (its own); the two
+  discriminators convict their arms SEPARATELY.
+- **durations blessed IN THIS COMMIT** (323→324 entries, serial Unit junit,
+  w32L1 provenance stamp): the S468 DurationCacheTracksSuiteTest red-firsted
+  exactly on the unblessed file (4 failures at plant, 9/9 green on bless) —
+  the 256f8ab4 fail-loud class stays closed. Measured: ceremony suite 6
+  legs/63 assertions, law suite 19/29 → 23/33 (+10 tests/+67 assertions
+  exact across the pair); K=24 Unit,Integration battery merged
+  5794 tests = parent 5784 + 10 exact (sole local red bucket the 3
+  pre-existing RelayProxyBridge swoole-absence host errors; CI-merged
+  assertions rise by the ceremony+law delta at headSha); S299 corpus
+  650→651 files 0E/0W (mid-lane catch: 8 LineLength warnings on the first
+  draft, wrapped, re-blessed); phpstan [OK] (host = CI-faithful no-swoole);
+  psalm tests-config "No errors found!" on both files (2 non-gating INFOs
+  match the shipped CookieDualEmitTest idiom); §7 WS-handshake and
+  grace-window rows declared N/A-with-proof for the hub in the lane register
+  (no cookie carrier exists on :8802-:8805; server surfaces belong to
+  server lanes).
+
 ### Added [hub-w31L2-1109] — CP-012: the CSRF Origin guard for cookie-lineage state changes (hub twin of the server's ratified validateCsrfOrigin/validateSameSiteOrigin law, COOKIE-DESIGN §2.5/§4.2, owner ruling CD-8a): cross-site cookie POST/PUT/DELETE/PATCH now answers the server's byte-ident 403 `csrf.invalid_origin` frame BEFORE identity lands or side effects run, bearer lineage stays CSRF-immune by pinned law — plus the CP-011-DD truth carry: every bearer-only docblock/README/openapi surface that stopped being true at 506110fa now states the shipped cookie reality (zero new wire codes)
 
 - **CP-012 guard** (`src/Hub/CookiePolicy.php` gains
