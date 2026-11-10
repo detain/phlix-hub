@@ -6,6 +6,87 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added [hub-w31L2-1109] — CP-012: the CSRF Origin guard for cookie-lineage state changes (hub twin of the server's ratified validateCsrfOrigin/validateSameSiteOrigin law, COOKIE-DESIGN §2.5/§4.2, owner ruling CD-8a): cross-site cookie POST/PUT/DELETE/PATCH now answers the server's byte-ident 403 `csrf.invalid_origin` frame BEFORE identity lands or side effects run, bearer lineage stays CSRF-immune by pinned law — plus the CP-011-DD truth carry: every bearer-only docblock/README/openapi surface that stopped being true at 506110fa now states the shipped cookie reality (zero new wire codes)
+
+- **CP-012 guard** (`src/Hub/CookiePolicy.php` gains
+  `stateChangingRequestOriginAllowed()` + two private helpers — purely additive,
+  zero restructure of the CP-011 primitives; `src/Http/Middleware/CsrfOriginGuard.php`
+  new; `src/Http/Middleware/AuthMiddleware.php`, `src/Http/Controllers/AuthController.php`):
+  the second half of the §2.5/§4.2 pair. The server gates at global dispatch
+  because its authenticator runs everywhere; the hub authenticates per-route, so
+  the law rides THREE seams: inside AuthMiddleware after the token validated and
+  the existence gate passed (BEFORE hydration — a refused request leaves no
+  userId/claims), and inside the two auth routes that run without the middleware
+  yet consume cookie lineage since CP-011 — POST /auth/refresh and POST
+  /auth/logout — BEFORE the rotation or revocation side effect (a rejected CSRF
+  logout is not a logout: no jti revoke, no jar clear). Lineage scope uses the
+  server's own primitive: bearer presented (null/'' — the same test
+  `extractToken()` precedence runs on, now shared as `presentsBearer()`) →
+  exempt; cookie-sourced → gated; requests that never authenticated answer the
+  existing 401 envelopes first (the 403-vs-401 order is never a carrier oracle).
+  The header law mirrors the server ratification exactly: no Origin AND no
+  Referer refuses fail-closed; literal `null` Origin refuses (M-SERVER-76);
+  parsed hosts compare RAW case-sensitively with the both-present-or-both-absent
+  port rule and NO default-port normalization; Referer and Origin legs both run
+  (one forged header cannot hide behind the other). Deliberately NOT shared with
+  the lowercasing, port-normalizing `originIsSameSite()` issuance classifier —
+  validation is stricter by design, the same split the server's own pair of laws
+  keeps. The empty-string-Origin accept quirk is pinned at the server's shape,
+  not polished. The §2.5 `Sec-Fetch-Site: cross-site` reject belt is the design
+  ADD the server has not grown (one-directionally STRICTER hub — the server-side
+  twin row is carried by the lane register). Rejection is the server's compact
+  403 frame byte-for-byte (`{"error":"CSRF validation failed",
+  "code":"csrf.invalid_origin"}`); the code pre-exists in the openapi codes enum
+  and the vendored contracts fixture — ZERO new wire codes; no log line, server
+  parity. §2.5 keeps `SameSite=Lax` as the FINAL attribute — the guard and the
+  attribute are complementary, the CookiePolicy class docblock now carries that
+  law instead of an interim hedge.
+- **Truth carry (the CP-011 DD's prose minors, shipped here)**:
+  `src/Application.php` (class-docblock route list rewritten to the shipped
+  surface — the form-era POST /signup|/login|/logout and SSR landing are
+  redirects only; OAuth-consent bullet's bearer-only claim),
+  `src/Http/Controllers/McpController.php` (bearer-only parenthetical, reworded
+  without cookie-name literals so the wiring guard's confinement law holds),
+  `README.md` (the HUB_COOKIE_INSECURE row and the auth paragraph),
+  `openapi.yaml` (login/register/logout/refresh descriptions, the `AuthSession`
+  schema, `bearerAuth`, the CORS section). The DD's m2 unowned-mirror row is
+  PICKED UP: a `cookieAuth` apiKey scheme is DECLARED (§3 mirror law) with an
+  exemplar `security` reference on GET /api/v1/me, and logout/refresh gain 403
+  response entries; the bulk operation-level cookieAuth sweep stays a register
+  seam note. Redocly lint: 38 warnings parent vs tip — no drift;
+  OpenApiSpecMatchesRouterTest green unmodified.
+- **Tests**: 3 new suites, 44 legs / 114 assertions —
+  `tests/Unit/Hub/CookiePolicyOriginLawTest.php` (19T: the pure-law matrix incl.
+  the pinned server quirk and belt semantics),
+  `tests/Unit/Http/Middleware/CsrfOriginGuardMiddlewareTest.php` (13T: the
+  bearer-immunity centerpiece — valid bearer with a foreign Origin AND headerless
+  bearer must pass, the M8 class whose violation would brick every native
+  client; auth-precedes-guard ordering pins; byte-exact rejection frame),
+  `tests/Unit/Http/Controllers/CookieOriginAuthRoutesTest.php` (12T: refusal
+  before `AuthManager::refresh()`/`logout()` side effects via never()-expects,
+  body-precedence exemptions, the credentialless-logout clear, §5 login/signup
+  issuance exemption). Red-first at 506110fa: 7 behavioral convictions (cross-site
+  cookie mutations authenticated; the revocation strike ran) + 19 law-suite
+  errors (API absent at parent). Mutations M1-M8 each convicted by named tests
+  (M6's first pass was an EQUIVALENT mutant — the `null` limb already shadowed by
+  host mismatch — cured by adding the empty-Host distinguishing leg before
+  re-running to exactly 1 red). Two existing CP-011 interim legs
+  (`AuthMiddlewareTest::testMutatingApiRequestWithOnlyCookieAuthenticates`,
+  `AuthControllerTest::testRefreshJsonAcceptsLegacyCookieFallback`) updated to
+  carry the same-site Origin a real SPA sends — the guard convicts their
+  headerless interim posture BY DESIGN; rejection is owned by the new suites.
+  Durations blessed in this commit (serial Unit junit).
+- **Measured at this tip**: K=24 parallel Unit,Integration battery (own docker
+  mysql venue, 127.0.0.1:33877) = merged totals 5784 tests / 48116 assertions /
+  31 skipped — tests EXACTLY parent-CI 5740 + 44 new legs, zero unattributed
+  movement; sole failure bucket = the 3 pre-existing `RelayProxyBridgeTest`
+  swoole-absence host errors (same class CP-011 disclosed; CI installs swoole).
+  Local assertion delta vs. CI parent (−21) = my +114 minus what the swoole-
+  absent host loses on the 3 error legs and the 30-vs-1 skip-class spread —
+  CI merged totals at this sha are the authoritative figure. phpstan
+  (src+tests single config) [OK]; phpcs S299 corpus gate OK 650 files 0E/0W;
+  bare PSR12 clean on every changed file.
+
 ### Added [hub-w30L2-round1-1109] — CP-011: auth-cookie dual-emit re-introduced on a policy seam (hub twin of server 7e1b0497): browser-class login/register/refresh get the HttpOnly `phlix_hub_token`+`phlix_hub_refresh` pair ADDITIVELY, the auth middleware reads the cookie after bearer, logout clears the jar unconditionally
 
 - **CP-011** (`src/Hub/CookiePolicy.php` new, `src/Http/Controllers/AuthController.php`,

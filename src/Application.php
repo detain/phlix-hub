@@ -88,17 +88,24 @@ use Workerman\Worker;
  * Wires the HTTP router with the public surface:
  *
  *  - `GET /health`                — service health JSON.
- *  - `GET /`                       — landing page (SSR).
- *  - `GET /signup` / `POST /signup` — signup form + submission.
- *  - `GET /login`  / `POST /login`  — login form + submission.
- *  - `POST /logout`                — clear cookies + redirect.
- *  - `GET /my-servers`             — protected dashboard.
- *  - `POST /api/v1/auth/signup`    — JSON signup.
+ *  - `GET /`                      — redirect to `/app/servers` (the SSR form
+ *    era retired with Smarty; only SPA-shell redirects remain).
+ *  - `GET /signup` / `GET /login` — redirect to the matching `/app/…` SPA route.
+ *  - `GET /my-servers`            — auth-gated redirect to `/app/servers`
+ *    (the protected dashboard is the SPA; only the redirect leg is PHP).
+ *  - `GET /app` + `/app/{path}`   — shared Vue SPA shell (no gate).
+ *  - `POST /api/v1/auth/register` / `signup` — JSON signup (aliases).
  *  - `POST /api/v1/auth/login`     — JSON login.
- *  - `POST /api/v1/auth/logout`    — JSON logout.
+ *  - `POST /api/v1/auth/logout`    — JSON logout (CP-011: cookie-sourced legs
+ *    gated by the CP-012 Origin guard; no form-era POST /logout exists).
  *  - `POST /api/v1/auth/refresh`   — refresh access token.
  *  - `GET  /api/v1/me`             — current user JSON (protected).
  *  - `POST /api/v1/me/password`    — self-service password change (protected).
+ *
+ * The auth routes run WITHOUT AuthMiddleware (a logged-out client must reach
+ * them); every OTHER `/api/v1` surface authenticates through it — bearer
+ * first, session-cookie fallback (CP-011), with cookie lineage behind the
+ * CSRF Origin guard (CP-012).
  *
  * @package Phlix\Hub
  */
@@ -805,12 +812,14 @@ final class Application
      *  - **`AuthMiddleware`, not `AuthMiddleware` + something.** The path is not
      *    under `/api/`, so an unauthenticated visitor is bounced to
      *    `/app/login` (a 302) rather than handed a JSON 401 — which is what a
-     *    human arriving from a third-party app should get. The middleware is
-     *    bearer-only on every path (the legacy cookie surface was deleted as
-     *    dead code), so this POST carries the SPA's bearer token exactly like
-     *    `/api/` calls do. The consent form's CSRF defence
-     *    is the single-use, user-bound consent ticket, which a cross-origin page
-     *    cannot read (see {@see \Phlix\Hub\OAuth\ConsentTicketService}).
+     *    human arriving from a third-party app should get. The middleware
+     *    authenticates bearer-first with the CP-011 session-cookie fallback
+     *    (CP-012 gates only the cookie lineage: this same-site POST from the
+     *    SPA passes the Origin guard on its browser headers, so the mint
+     *    path is identical for bearer and cookie clients). The consent
+     *    form's CSRF defence is the single-use, user-bound consent ticket,
+     *    which a cross-origin page cannot read (see
+     *    {@see \Phlix\Hub\OAuth\ConsentTicketService}).
      *  - **`/oauth/token` carries NO route middleware, on purpose.** Its caller
      *    is a client, not a hub user; it has no session and must not be bounced
      *    to a login page. It authenticates itself inside the controller with

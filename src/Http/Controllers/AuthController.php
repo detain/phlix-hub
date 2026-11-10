@@ -16,6 +16,7 @@ use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\RateLimitException;
 use Phlix\Hub\Auth\SignupsDisabledException;
 use Phlix\Hub\Hub\CookiePolicy;
+use Phlix\Hub\Http\Middleware\CsrfOriginGuard;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Events\Auth\UserLoggedOut;
@@ -36,6 +37,13 @@ use Phlix\Shared\Events\Auth\UserLoggedOut;
  * bearer-only wire byte-for-byte and NEVER receive a Set-Cookie. Every
  * issuance decision consults the ONE {@see CookiePolicy} seam — there is no
  * second minter in this repo (guarded by CookiePolicyWiringGuardTest).
+ * CP-012 (COOKIE-DESIGN §2.5/§4.2) completes the pair: the two routes here
+ * that accept cookie as a CREDENTIAL source — refresh and logout — run
+ * WITHOUT AuthMiddleware, so each applies the {@see CsrfOriginGuard} to its
+ * own cookie-SOURCED arm (body token present = body lineage = ungated, the
+ * precedence CP-011 shipped; cookie sole-source = cookie lineage = gated)
+ * BEFORE any rotation or revocation side effect. Login/signup are the §5
+ * issuance exemption — a fresh response fixes nothing — and stay ungated.
  *
  * Every failure frame carries the machine-readable `code` field on the
  * contract-registered vocabulary (`auth.missing_credentials`,
@@ -235,9 +243,13 @@ final class AuthController
     }
 
     /**
-     * JSON logout endpoint. Always 204 No Content (body bytes: none — the
-     * status is the entire contract and stays untouched by the cookie
-     * program; the clear rides as additive Set-Cookie headers).
+     * JSON logout endpoint. Answers 204 No Content on every accepted arm
+     * (body bytes: none — the status is the entire contract; the clear rides
+     * as additive Set-Cookie headers). CP-012 adds the ONE refusal this
+     * endpoint can now give: a cookie-SOURCED logout whose Origin does not
+     * name this host answers the shared 403 `csrf.invalid_origin` frame
+     * BEFORE any revocation — a rejected cross-site logout is not a logout,
+     * so neither the `jti` revoke nor the jar clear runs behind it.
      *
      * The auth routes run WITHOUT {@see AuthMiddleware} (a logged-out client
      * must be able to call it), so `$request->userId` is normally empty here —
@@ -249,17 +261,27 @@ final class AuthController
      * {@see AuthManager::logout()} validates it, revokes its `jti`, and uses
      * the signed `sub` for the audit trail; this finally makes the spec's
      * "invalidates the refresh token" promise true for cookie clients too.
-     * Both cookie names are cleared on every logout, NOT gated by the master
-     * switch (§4.2 re-introduction law; {@see self::clearAuthCookies()}
+     * Both cookie names are cleared on every ACCEPTED logout, NOT gated by the
+     * master switch (§4.2 re-introduction law; {@see self::clearAuthCookies()}
      * carries the rationale).
      */
     public function logoutJson(Request $request): Response
     {
         $userId = $request->userId ?? '';
-        $refreshToken = self::stringField($request, 'refresh_token');
-        if ($refreshToken === '') {
-            $refreshToken = $request->getCookie(CookiePolicy::REFRESH_COOKIE) ?? '';
+        [$refreshToken, $fromCookie] = self::resolveRefreshToken($request);
+
+        // CP-012: gate the cookie lineage BEFORE any revocation or jar clear.
+        // A body-presented token is body lineage (CP-011 precedence) and is
+        // never touched; a credential-less request carries no lineage to
+        // defend and keeps its idempotent clear. The guard frame is not a
+        // logout — no revocation strikes, no Set-Cookie ride.
+        if ($fromCookie) {
+            $rejected = CsrfOriginGuard::enforce($request);
+            if ($rejected !== null) {
+                return $rejected;
+            }
         }
+
         if ($userId !== '' || $refreshToken !== '') {
             $this->auth->logout(
                 $userId,
@@ -284,19 +306,31 @@ final class AuthController
      * cookies at all; the ui/mobile refresh flows stay byte-ident).
      *
      * Failure mapping: absent token (body AND cookie) → 400
-     * `auth.missing_credentials`; a token that fails any of the three refresh
-     * gates (cryptographic, revoked, user-gone) → 401 `auth.invalid_token`,
+     * `auth.missing_credentials`; a COOKIE-sourced token whose Origin does
+     * not name this host → the CP-012 403 `csrf.invalid_origin` frame before
+     * the rotation runs (body-sourced callers are never guarded — CP-011
+     * precedence); a token that fails any of the three refresh gates
+     * (cryptographic, revoked, user-gone) → 401 `auth.invalid_token`,
      * deliberately not distinguishing which gate fired.
      */
     public function refreshJson(Request $request): Response
     {
-        $token = self::stringField($request, 'refresh_token');
-        if ($token === '') {
-            $token = $request->getCookie(CookiePolicy::REFRESH_COOKIE) ?? '';
-        }
+        [$token, $fromCookie] = self::resolveRefreshToken($request);
         if ($token === '') {
             return self::errorFrame(400, 'auth.missing_credentials', 'refresh_token is required');
         }
+
+        // CP-012: cookie-sourced rotation is the one lineage the Origin guard
+        // owns here (body token = body lineage, CP-011 precedence, ungated).
+        // The guard runs BEFORE auth->refresh() so a refusal can never burn,
+        // rotate or re-issue anything — the 403 frame carries no Set-Cookie.
+        if ($fromCookie) {
+            $rejected = CsrfOriginGuard::enforce($request);
+            if ($rejected !== null) {
+                return $rejected;
+            }
+        }
+
         try {
             $result = $this->auth->refresh($token);
             $response = (new Response())->json([
@@ -315,6 +349,27 @@ final class AuthController
         } catch (InvalidArgumentException $e) {
             return self::errorFrame(401, 'auth.invalid_token', $e->getMessage());
         }
+    }
+
+    /**
+     * CP-011/CP-012 shared credential resolver for the two auth legs that
+     * accept cookies: the body `refresh_token` takes PRECEDENCE (a presented
+     * artifact is body lineage — every legacy native wire stays ungated),
+     * and only the cookie as SOLE source marks the request cookie-lineage
+     * (the second return flag) — the lineage the Origin guard owns.
+     *
+     * @return array{0: string, 1: bool} [token, sourced-from-cookie]
+     */
+    private static function resolveRefreshToken(Request $request): array
+    {
+        $body = self::stringField($request, 'refresh_token');
+        if ($body !== '') {
+            return [$body, false];
+        }
+
+        $cookie = $request->getCookie(CookiePolicy::REFRESH_COOKIE) ?? '';
+
+        return [$cookie, $cookie !== ''];
     }
 
     /**

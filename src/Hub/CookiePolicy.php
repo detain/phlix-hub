@@ -15,10 +15,10 @@ use Closure;
 use Throwable;
 
 /**
- * Single source of truth for the hub's auth-cookie issuance policy
- * (COOKIE-DESIGN.md §2.1/§2.4, owner rulings CD-3a/CD-8a; the semantic twin
- * of the server's `Phlix\Auth\CookiePolicy` — same law, hub codebase).
- * Answers three independent questions:
+ * Single source of truth for the hub's auth-cookie policy
+ * (COOKIE-DESIGN.md §2.1/§2.4/§2.5, owner rulings CD-3a/CD-8a; the semantic
+ * twin of the server's `Phlix\Auth\CookiePolicy` — same law, hub codebase).
+ * Answers four independent questions — three issuance, one request law:
  *
  *  1. CLASS — is this request browser-class (may receive HttpOnly cookies) or
  *     device-class (bearer-only, NO Set-Cookie ever)? Device marker wins:
@@ -45,6 +45,26 @@ use Throwable;
  *     pre-existing Secure-resolver already shipped — or its stored twin
  *     `auth.cookie.insecure`, which ALSO drops the Secure attribute; there is
  *     never a silent Secure downgrade onto plain HTTP).
+ *  4. REQUEST LAW (CP-012) — a state-changing request that authenticated via
+ *     the session cookie must NAME this origin:
+ *     {@see stateChangingRequestOriginAllowed()} is the pure law the
+ *     {@see \Phlix\Hub\Http\Middleware\CsrfOriginGuard} enforces, the hub
+ *     twin of the server's ratified `validateSameSiteOrigin` plus the §2.5
+ *     `Sec-Fetch-Site: cross-site` reject belt. It lives on this class
+ *     because custody and request-validation are the SAME axis — both read
+ *     Origin/Referer/Host/Sec-Fetch — and one SSOT owning both is what keeps
+ *     the issuance classification and the guard from ever disagreeing about
+ *     what "same-site" means to this deployment.
+ *
+ * CSRF posture, ratified (§2.5, CP-011→CP-012 pair): `SameSite=Lax` is the
+ * SHIPPED and FINAL attribute — deliberately NOT tightened to `Strict` now
+ * that the Origin guard exists. Lax keeps the top-level GET navigations the
+ * SPA legitimately performs (deep links, reloads with an expired access
+ * token) authenticated; the state-changing attack surface it cannot cover
+ * (cross-site POST) is exactly the surface the guard convicts, so the belt
+ * and the attribute are complementary, not redundant. A `Strict` cookie
+ * would buy nothing the guard does not already enforce and would strand
+ * same-tab navigations arriving from an external page.
  *
  * Cookie NAMES are the hub's legacy-surface names (`phlix_hub_token` /
  * `phlix_hub_refresh`, per the deletion record in the AuthMiddleware history)
@@ -57,7 +77,9 @@ use Throwable;
  * accepting a presented refresh cookie) is intentionally NOT gated by the
  * master switch — mirroring the server's RequestAuthenticator law: presented
  * artifacts are validated, never re-adjudicated by the toggle that governs
- * ISSUANCE. Logout's cookie CLEAR also rides ungated: clearing is revocation
+ * ISSUANCE. The CP-012 Origin guard rides that same ungating (toggling
+ * issuance OFF must never leave a still-authenticated jar UNGUARDED).
+ * Logout's cookie CLEAR also rides ungated: clearing is revocation
  * hygiene, not credential issuance.
  *
  * @package Phlix\Hub\Hub
@@ -262,6 +284,136 @@ final class CookiePolicy
         $requestPort = (is_array($hostParts) ? ($hostParts['port'] ?? null) : null) ?? self::defaultPort($scheme);
 
         return $originPort === $requestPort;
+    }
+
+    /**
+     * CP-012 (COOKIE-DESIGN §2.5/§4.2): the fourth question this SSOT answers
+     * — REQUEST VALIDATION, the read-side twin of the issuance laws above.
+     * Whether a state-changing request that authenticated via the session
+     * cookie (lineage scope is the CALLER's decision; see
+     * {@see \Phlix\Hub\Http\Middleware\CsrfOriginGuard::enforce()}) names
+     * this server as its origin. The law is the server's ratified shape in
+     * `RequestAuthenticator::validateSameSiteOrigin()`, adopted semantically:
+     *
+     *  - the §2.5 design-ADD belt first: a present `Sec-Fetch-Site:
+     *    cross-site` refuses outright — an honest UA reporting a cross-site
+     *    context is refused even behind a forged same-host Origin, the one
+     *    hole the header law alone cannot see (the server has not grown the
+     *    belt yet; the divergence is one-directional — the hub is STRICTER
+     *    here, never looser, and the register carries the server-side twin
+     *    row);
+     *  - no Origin AND no Referer → refuse (fail-closed; browsers always
+     *    send at least one on a same-site state-changing request, and
+     *    cookie-lineage requests only ever come from browsers);
+     *  - the literal `null` Origin → refuse (M-SERVER-76 opaque-origin
+     *    marker, checked before either header leg);
+     *  - every PRESENT header leg must name the Host exactly: parsed hosts
+     *    compare RAW (case-sensitive — the fail-closed direction the server
+     *    ratified) with the suffix-bypass law (`evil-hub`, `hub…evil` both
+     *    die), and ports must both-be-present-and-equal or both-be-absent.
+     *
+     * Deliberately NOT shared with {@see originIsSameSite()}: that law
+     * CLASSIFIES custody for issuance and normalizes case + default ports;
+     * THIS law VALIDATES a credential-carrying request and refuses anything
+     * not literally named. The server's own pair (`isBrowserRequest()` vs
+     * the guard) differs the same way — collapsing the two axes would
+     * silently loosen the guard, which is exactly what M-SERVER-76 caught
+     * once already. The empty-string Origin keeps the server's accept
+     * quirk (the skip names only `'null'`); it is pinned, not polished.
+     *
+     * @param string|null $originHeader   Raw `Origin` header value or null.
+     * @param string|null $refererHeader  Raw `Referer` header value or null.
+     * @param string|null $hostHeader     Raw request `Host` header value.
+     * @param string|null $secFetchSite   Raw `Sec-Fetch-Site` value or null.
+     */
+    public static function stateChangingRequestOriginAllowed(
+        ?string $originHeader,
+        ?string $refererHeader,
+        ?string $hostHeader,
+        ?string $secFetchSite,
+    ): bool {
+        if ($secFetchSite !== null && strtolower(trim($secFetchSite)) === 'cross-site') {
+            return false;
+        }
+
+        if ($originHeader === null && $refererHeader === null) {
+            return false;
+        }
+
+        if ($originHeader === 'null') {
+            return false;
+        }
+
+        $server = self::originLawHostParts($hostHeader ?? '');
+
+        if ($refererHeader !== null) {
+            $refererParts = parse_url($refererHeader);
+            if (!is_array($refererParts)) {
+                return false;
+            }
+
+            $refererHost = $refererParts['host'] ?? '';
+            $refererPort = isset($refererParts['port']) ? (int) $refererParts['port'] : null;
+            if (!self::originLawHostsMatch($refererHost, $refererPort, $server)) {
+                return false;
+            }
+        }
+
+        if ($originHeader !== null && $originHeader !== '') {
+            $originParts = parse_url($originHeader);
+            if (!is_array($originParts)) {
+                return false;
+            }
+
+            $originHost = $originParts['host'] ?? '';
+            $originPort = isset($originParts['port']) ? (int) $originParts['port'] : null;
+            if (!self::originLawHostsMatch($originHost, $originPort, $server)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Host-port split of a Host header for the CP-012 law (mirror of the
+     * server's parseHostHeader, including its raw-string fallback when
+     * parse_url refuses the value — an unparseable/empty Host then matches
+     * nothing and everything is refused: fail-closed by construction).
+     *
+     * @return array{host: string, port: int|null}
+     */
+    private static function originLawHostParts(string $hostHeader): array
+    {
+        $parts = parse_url('http://' . $hostHeader);
+        if (!is_array($parts)) {
+            return ['host' => $hostHeader, 'port' => null];
+        }
+
+        return [
+            'host' => $parts['host'] ?? $hostHeader,
+            'port' => isset($parts['port']) ? (int) $parts['port'] : null,
+        ];
+    }
+
+    /**
+     * The CP-012 exact-match limb: hosts compare raw, and the pair must
+     * either both carry a port and agree, or both omit it (server-ratified;
+     * no default-port normalization on this axis).
+     *
+     * @param array{host: string, port: int|null} $server
+     */
+    private static function originLawHostsMatch(string $candidateHost, ?int $candidatePort, array $server): bool
+    {
+        if ($candidateHost !== $server['host']) {
+            return false;
+        }
+
+        if (($candidatePort !== null) !== ($server['port'] !== null)) {
+            return false;
+        }
+
+        return !($candidatePort !== null && $candidatePort !== $server['port']);
     }
 
     /** Default port used when a side omits the :port (URL normalization). */

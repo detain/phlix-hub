@@ -57,8 +57,8 @@ use const JSON_UNESCAPED_SLASHES;
  * ## Why this route is registered with NO middleware
  *
  * `AuthMiddleware` authenticates a hub USER SESSION — an HS256 access JWT
- * carried as a bearer token (the hub is bearer-only; the legacy cookie
- * surface was deleted as dead code). An MCP client has neither; it has a PAT. So this
+ * carried as a bearer token, or (since CP-011) the same JWT in the HttpOnly
+ * session cookie, with the CP-012 Origin guard on that lineage. An MCP client has neither; it has a PAT. So this
  * controller authenticates itself, exactly as `RelayController`,
  * `ClientMountController` and `SubdomainController` already do for their own
  * (Ed25519 enrollment) credential. `ApplicationRouteCompositionTest` pins the

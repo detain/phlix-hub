@@ -41,14 +41,19 @@ use function time;
  * is absolute: a request presenting BOTH carries the bearer's identity, so
  * every pre-cookie client's wire behavior is byte-identical.
  *
- * CSRF posture of the cookie carrier: SameSite=Lax is shipped on the cookie
- * itself (cross-site POSTs never attach it); the request-level Origin guard
- * mirroring the server's validateCsrfOrigin is the NEXT registered row
- * (CP-012) and lands behind this seam — the seam note is part of the lane
- * register. Bearer-authenticated requests remain CSRF-immune by construction
- * (browsers do not auto-attach Authorization cross-origin), and the hub's
- * CORS stays never-credentials, so the cookie surface is same-origin /app
- * only — STRICTER than the server and consistent (§1.6).
+ * CSRF posture of the cookie carrier (CP-011 + CP-012, the shipped pair):
+ * SameSite=Lax rides the cookie itself (cross-site POSTs never attach it),
+ * and every cookie-LINEAGE request this seam authenticates passes the
+ * request-level {@see CsrfOriginGuard} — the hub twin of the server's
+ * ratified validateCsrfOrigin, riding the same-origin law on
+ * {@see CookiePolicy} (§2.5/§4.2). Bearer lineage is NEVER gated — not by
+ * omission but by law: browsers do not auto-attach Authorization
+ * cross-origin, so gating a bearer on Origin headers would brick the every
+ * headerless native client in the estate (the guard's non-regression
+ * centerpiece, pinned by name in CsrfOriginGuardMiddlewareTest). The hub's
+ * CORS stays never-credentials and the guard refuses the same-site-malicious
+ * residue Lax cannot see: the cookie surface is same-origin /app only —
+ * STRICTER than the server and consistent (§1.6).
  *
  * Hydrates {@see Request::$userId} when the token validates. When the
  * token is missing or invalid:
@@ -146,10 +151,38 @@ final class AuthMiddleware
             return $this->challenge($request, 'auth.user_not_found');
         }
 
+        // CP-012: the CSRF Origin guard, reached ONLY on a fully-authenticated
+        // request whose token came from the session cookie (bearer precedence
+        // in extractToken is absolute, so a bearer-presenting request never
+        // falls through here — gating a valid bearer on Origin would be the
+        // estate-wide Critical regression the guard exists to avoid). The
+        // gate runs BEFORE hydration so a refused request leaves no identity
+        // on the object; the auth-failure envelopes above answer first, so
+        // the 403-vs-401 order is never a carrier oracle (server parity).
+        if (!self::presentsBearer($request)) {
+            $rejected = CsrfOriginGuard::enforce($request);
+            if ($rejected !== null) {
+                return $rejected;
+            }
+        }
+
         $request->userId = $userId;
         $request->claims = $claims;
 
         return null;
+    }
+
+    /**
+     * Whether the request presented a bearer token (the ONLY question that
+     * decides CSRF lineage on this seam: bearer-present → authenticated by
+     * it and immune; bearer-absent → the cookie fallback carries any
+     * identity and the Origin guard applies). Shared with
+     * {@see self::extractToken()} so the precedence test and the lineage
+     * test cannot drift.
+     */
+    private static function presentsBearer(Request $request): bool
+    {
+        return $request->bearerToken !== null && $request->bearerToken !== '';
     }
 
     /**
@@ -162,7 +195,7 @@ final class AuthMiddleware
      */
     private function extractToken(Request $request): ?string
     {
-        if ($request->bearerToken !== null && $request->bearerToken !== '') {
+        if (self::presentsBearer($request)) {
             return $request->bearerToken;
         }
         return $request->getCookie(CookiePolicy::SESSION_COOKIE);

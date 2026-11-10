@@ -179,10 +179,12 @@ final class AuthMiddlewareTest extends TestCase
     /**
      * CP-011 FLIP of "mutating API with only the legacy cookie is rejected":
      * the cookie now authenticates EVERY method (the server twin's shipped
-     * posture). The interim CSRF defense is SameSite=Lax at issuance — the
-     * Origin guard on cookie-authenticated mutations is CP-012, named in the
-     * AuthMiddleware class docblock seam note, deliberately NOT smuggle-fixed
-     * on this lane.
+     * posture). CP-012 SHIPPED the Origin guard the CP-011 seam note
+     * announced, so this leg now carries the same-site Origin a real
+     * cookie-mode SPA sends — the mutation authenticates on its ORIGIN, not
+     * merely on its carrier. The no-Origin cookie mutation the interim
+     * allowed is convicted by CsrfOriginGuardMiddlewareTest (the guard is
+     * tested there, not smuggle-reverted here).
      */
     public function testMutatingApiRequestWithOnlyCookieAuthenticates(): void
     {
@@ -197,7 +199,11 @@ final class AuthMiddlewareTest extends TestCase
         $request = new Request();
         $request->method = 'POST';
         $request->path = '/api/v1/me/shares';
-        $request->headers = ['COOKIE' => 'phlix_hub_token=' . $token];
+        $request->headers = [
+            'COOKIE' => 'phlix_hub_token=' . $token,
+            'ORIGIN' => 'https://hub.example.test',
+            'HOST' => 'hub.example.test',
+        ];
 
         self::assertNull($mw($request));
         self::assertSame('u-api', $request->userId);

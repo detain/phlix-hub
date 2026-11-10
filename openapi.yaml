@@ -61,9 +61,10 @@ info:
     is allowlisted; a denied preflight (known path, disallowed origin) is answered with the same
     404 envelope as an unknown path, so probing from a disallowed origin cannot map the route
     table. `Access-Control-Allow-Headers` mirrors the requested headers and
-    `Access-Control-Max-Age` is 600; `Access-Control-Allow-Credentials` is never emitted — hub
-    REST authenticates with bearer tokens, which CORS does not govern, and no browser-side
-    cross-origin read can ride a hub session cookie. Allowlisted origins also get
+    `Access-Control-Max-Age` is 600; `Access-Control-Allow-Credentials` is never emitted — so no
+    browser-side cross-origin read can consume a response authenticated by the CP-011 session
+    cookie (the cookie surface is same-origin `/app` only, additionally defended by SameSite=Lax
+    and the CP-012 CSRF Origin guard, not by CORS). Allowlisted origins also get
     `Access-Control-Allow-Origin` on the actual (non-preflight) replies, and every response the
     router produces for a request carrying `Origin` — the 204 preflight allow, the 404 deny, the
     auth challenge, and handler replies — carries `Vary: Origin`; same-origin traffic sends no
@@ -1230,8 +1231,12 @@ paths:
       tags: ["Authentication"]
       summary: "Log in"
       description: |-
-        Exchanges credentials for an HS256 access token plus a refresh token (bearer-only surface —
-        the hub sets no cookies; both tokens are returned in the body). Rate-limited by a shared
+        Exchanges credentials for an HS256 access token plus a refresh token, always returned in the
+        body. Issuance surface (COOKIE-DESIGN §5): browser-class requests additionally receive the
+        HttpOnly `phlix_hub_token`/`phlix_hub_refresh` pair as ADDITIVE Set-Cookie headers (CP-011,
+        gated by `auth.cookie.enabled` + the scheme law); device-class and body-only callers keep the
+        pure bearer wire byte-identical. No Origin guard applies here — issuance cannot be CSRF'd.
+        Rate-limited by a shared
         DB-backed limiter keyed on the resolved client IP. Auth failures use the house error envelope
         `{error, code}` plus the legacy top-level `message` key mirroring `error`.
       x-phlix-middleware: []
@@ -1285,10 +1290,12 @@ paths:
       tags: ["Authentication"]
       summary: "Log out"
       description: |-
-        Revokes the presented refresh token's jti lineage and audits the logout. Bearer/body-only —
-        the hub sets no session cookies, so there is nothing to clear (the legacy cookie surface was
-        deleted as unreachable code). Idempotent: always answers 204 No Content, including when the
-        body is absent or the token is already dead.
+        Revokes the presented refresh token's jti lineage and audits the logout. The body
+        `refresh_token` takes precedence; when absent, the `phlix_hub_refresh` cookie is the second
+        lineage source (CP-011), and a cookie-SOURCED logout must pass the CSRF Origin guard or it
+        answers 403 `csrf.invalid_origin` with no revocation and no jar clear (CP-012). Accepted
+        arms answer idempotent 204 No Content — including when no credential is presented at all —
+        and always clear both cookie names.
       x-phlix-middleware: []
       security: []
       requestBody:
@@ -1300,10 +1307,19 @@ paths:
               properties:
                 refresh_token:
                   type: string
-                  description: "The refresh JWT whose lineage to revoke; omitting it audits an empty revoke."
+                  description: "The refresh JWT whose lineage to revoke; when absent, the phlix_hub_refresh cookie is consulted (CP-011), presenting none audits an empty revoke."
       responses:
         "204":
           description: "Logged out — no content."
+        "403":
+          description: >-
+            Cookie-SOURCED request whose Origin/Referer does not name this host — refused BEFORE any
+            revocation or jar clear by the CP-012 CSRF Origin guard. Code: `csrf.invalid_origin`.
+            Body-sourced and credential-less requests are never guarded here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/auth/me":
@@ -1334,9 +1350,12 @@ paths:
       tags: ["Authentication"]
       summary: "Refresh the access token"
       description: |-
-        Exchanges a refresh token for a new short-lived access token. Bearer-body surface only — the
-        cookie fallback was deleted along with the dead cookie surface. Auth failures use the house
-        error envelope `{error, code}` plus the legacy top-level `message` key mirroring `error`.
+        Exchanges a refresh token for a new short-lived access token. Body `refresh_token` takes
+        precedence — body-sourced callers keep the pure bearer wire; when the body carries none, the
+        `phlix_hub_refresh` cookie is consulted (CP-011) and the request must pass the CSRF Origin
+        guard, answering 403 `csrf.invalid_origin` before rotation when its Origin does not name
+        this host (CP-012). Cookie-class responses dual-emit the rotated pair. Auth failures use the
+        house error envelope `{error, code}` plus the legacy top-level `message` key mirroring `error`.
       x-phlix-middleware: []
       security: []
       requestBody:
@@ -1367,6 +1386,15 @@ paths:
           description: >-
             The token failed any of the three refresh gates (cryptographic, revoked, user-gone) —
             deliberately not distinguishing which. Code: `auth.invalid_token`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >-
+            Cookie-SOURCED request (no body token) whose Origin/Referer does not name this host, or
+            that presents no origin at all — refused BEFORE rotation by the CP-012 CSRF Origin guard.
+            Code: `csrf.invalid_origin`. Body-sourced and bearer requests are never guarded here.
           content:
             application/json:
               schema:
@@ -1497,6 +1525,7 @@ paths:
       x-phlix-middleware: [AuthMiddleware]
       security:
         - bearerAuth: []
+        - cookieAuth: []
       responses:
         "200":
           description: "Success."
@@ -5105,8 +5134,25 @@ components:
       bearerFormat: JWT
       description: >-
         A hub user access token (HS256), minted by POST /api/v1/auth/login or /refresh. Enforced by
-        AuthMiddleware. On an /api/ path a missing or invalid token is a JSON 401 with code
-        `auth.required`; on a page path it is a 302 to /app/login.
+        AuthMiddleware. Bearer precedence is absolute; browser clients may instead carry the same
+        JWT in the `phlix_hub_token` HttpOnly cookie (CP-011), and every cookie-lineage
+        state-changing request must additionally pass the CP-012 CSRF Origin guard
+        (`403 csrf.invalid_origin`). On an /api/ path a missing or invalid token is a JSON 401 with
+        code `auth.required`; on a page path it is a 302 to /app/login.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: phlix_hub_token
+      description: >-
+        The CP-011 session-cookie lineage: the same HS256 access JWT carried in the HttpOnly
+        `phlix_hub_token` cookie (with `phlix_hub_refresh` for the refresh endpoint), issued
+        additively to browser-class callers of /api/v1/auth/login|register|refresh when
+        `auth.cookie.enabled` is not false and the §2.4 scheme law holds. Bearer precedence stays
+        absolute; on COOKIE lineage every state-changing method (POST/PUT/DELETE/PATCH) must also
+        pass the CP-012 CSRF Origin guard — a foreign or unnamed Origin answers 403
+        `csrf.invalid_origin`. SameSite=Lax is the shipped attribute. This scheme is a valid
+        credential on every AuthMiddleware route; operations list `bearerAuth` as the exemplar and
+        the per-path 401/302 challenge law applies unchanged.
     enrollmentJwt:
       type: http
       scheme: bearer
@@ -5624,7 +5670,7 @@ components:
       additionalProperties: true
     AuthSession:
       type: object
-      description: "A minted session. Bearer-only: the hub sets no cookies — both tokens are returned in the body for the client to carry."
+      description: "A minted session. Both tokens are always returned in the body; browser-class issuance additionally receives them as HttpOnly cookies (CP-011 dual-emit, master-switched)."
       properties:
         access_token:
           type: string

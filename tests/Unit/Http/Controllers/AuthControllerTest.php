@@ -569,6 +569,9 @@ final class AuthControllerTest extends TestCase
      * authenticates — the `phlix_hub_refresh` cookie is the second lineage
      * source. The BEARER-vs-cookie PRECEDENCE itself is pinned behaviorally
      * in CookieDualEmitTest; here the point is the read seam re-opened.
+     * CP-012 landed the Origin guard since (its cookie-sourced refusal arms
+     * live in CookieOriginAuthRoutesTest), so this leg carries the
+     * same-site Origin the guard requires of every cookie-lineage request.
      */
     public function testRefreshJsonAcceptsLegacyCookieFallback(): void
     {
@@ -585,7 +588,11 @@ final class AuthControllerTest extends TestCase
         $request = new Request();
         $request->method = 'POST';
         $request->path = '/api/v1/auth/refresh';
-        $request->headers = ['COOKIE' => 'phlix_hub_refresh=cookie-tok'];
+        $request->headers = [
+            'COOKIE' => 'phlix_hub_refresh=cookie-tok',
+            'ORIGIN' => 'https://hub.example.test',
+            'HOST' => 'hub.example.test',
+        ];
 
         self::assertSame(200, $controller($request)->statusCode);
     }
