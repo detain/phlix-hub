@@ -201,7 +201,7 @@ final class ErrorCodesContractTest extends TestCase
         'Http/Response.php::errorBody' => 'swept:errorBody@1',
         'Relay/FrameEncoder.php::error' => 'swept:error@2',
         'Http/Controllers/FederationController.php::badRequest' => 'swept:badRequest@1',
-        'Http/Controllers/AdminUserController.php::badRequest' => 'swept:badRequest@2',
+        'Http/Controllers/AdminUserController.php::conflict' => 'swept:conflict@2',
         'Http/Controllers/McpController.php::unauthorized' => 'swept:unauthorized@1',
         'Http/Middleware/AuthMiddleware.php::challenge' => 'swept:challenge@2',
         'SyncPlay/SyncPlayRelayWorker.php::sendCanonicalError' => 'swept:sendCanonicalError@2',
@@ -260,7 +260,7 @@ final class ErrorCodesContractTest extends TestCase
         ],
         [
             'file' => 'Http/Controllers/AdminUserController.php',
-            'call' => 'badRequest',
+            'call' => 'conflict',
             'positions' => [2],
             'staticReceivers' => null,
         ],
