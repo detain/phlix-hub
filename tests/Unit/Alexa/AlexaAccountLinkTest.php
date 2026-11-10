@@ -160,9 +160,8 @@ final class AlexaAccountLinkTest extends TestCase
      * `AlexaAccountLink::resolve()` keeps its own empty-sub belt as defence in
      * depth. It is unreachable through a real token while the parse law holds
      * (`JwtHandler` is final, so the belt cannot be driven through a stub
-     * either); the resolve leg below would catch a vendor regression together
-     * with the never-DB law — the belt refuses a parsed-away no more than the
-     * parse layer refuses an empty claim, and both refuse the same attack.
+     * either); its continued wiring is pinned by source shape in
+     * {@see self::testTheEmptySubjectBeltInsideResolveStaysWired()}.
      */
     public function testATokenWhoseSubjectIsEmptyIsRefusedBeforeTheDatabaseIsAsked(): void
     {
@@ -180,6 +179,42 @@ final class AlexaAccountLinkTest extends TestCase
         $users->expects(self::never())->method('userExists');
 
         self::assertNull((new AlexaAccountLink($this->jwt, $users))->resolve($token));
+    }
+
+    /**
+     * The empty-`sub` belt inside `resolve()` stays wired.
+     *
+     * Since v0.54.0 the parse layer refuses an empty-sub token, and
+     * `JwtHandler` is final, so no double can deliver one to the belt — the
+     * arm is unreachable by construction. Unreachable defence in depth is
+     * still defence, but only while it EXISTS: this source-shape pin (the
+     * estate's idiom for seams no input can reach) reddens if the arm is
+     * deleted, moved after the existence probe, or rewritten to a looser
+     * comparison. A pre-LW-059 vendor would deliver a parsed empty-sub token
+     * here and the belt — still pinned present — is what refuses it.
+     */
+    public function testTheEmptySubjectBeltInsideResolveStaysWired(): void
+    {
+        $method = new \ReflectionMethod(AlexaAccountLink::class, 'resolve');
+        $lines = file((string) $method->getFileName());
+        self::assertIsArray($lines, 'the resolve() source must be readable to pin the belt');
+
+        $body = implode('', array_slice(
+            $lines,
+            $method->getStartLine() - 1,
+            $method->getEndLine() - $method->getStartLine() + 1
+        ));
+
+        self::assertStringContainsString(
+            "if (\$userId === '') {",
+            $body,
+            'the empty-subject belt must stay inside resolve() behind the LW-059 parse door'
+        );
+        self::assertLessThan(
+            (int) strpos($body, 'userExists'),
+            (int) strpos($body, "if (\$userId === '') {"),
+            'the belt must refuse before the existence probe, not after it'
+        );
     }
 
     /**
