@@ -144,24 +144,38 @@ final class AlexaAccountLinkTest extends TestCase
     }
 
     /**
-     * A structurally valid token whose `sub` is the EMPTY STRING.
+     * A token whose `sub` is the EMPTY STRING is refused BEFORE the database
+     * is asked.
      *
-     * `JwtHandler` mints and validates it happily — checked directly here so the
-     * case is a real one rather than a hypothetical. An empty user id would sail
-     * through the existence probe's SQL as `WHERE id = ''` and, worse, would be
-     * assigned as `Request::$userId` where every downstream gate treats "" as
-     * "unauthenticated". Refusing it here is what keeps that from being an
-     * authorisation question at all.
+     * Two layers pin this, in this order:
+     * 1. the PARSE layer — since `detain/phlix-shared` v0.54.0 (LW-059
+     *    non-empty-claims law) `JwtClaims::fromPayload()` throws on an empty
+     *    `sub`, and `JwtHandler::validateAccessToken()` maps that throw to
+     *    null. The assertion below is the vendor-law pin: it is RED against
+     *    any pre-v0.54.0 vendor, where validation minted past the empty
+     *    subject happily;
+     * 2. the RESOLVE layer — the endpoint-level consequence is unchanged
+     *    across both vendors: no existence probe, no userId.
+     *
+     * `AlexaAccountLink::resolve()` keeps its own empty-sub belt as defence in
+     * depth. It is unreachable through a real token while the parse law holds
+     * (`JwtHandler` is final, so the belt cannot be driven through a stub
+     * either); the resolve leg below would catch a vendor regression together
+     * with the never-DB law — the belt refuses a parsed-away no more than the
+     * parse layer refuses an empty claim, and both refuse the same attack.
      */
     public function testATokenWhoseSubjectIsEmptyIsRefusedBeforeTheDatabaseIsAsked(): void
     {
         $token = $this->jwt->createAccessToken('');
 
-        // The premise: the token really is valid, and its subject really is ''.
-        $claims = $this->jwt->validateAccessToken($token);
-        self::assertNotNull($claims, 'the premise of this test is a VALID token');
-        self::assertSame('', $claims->sub);
+        // Layer 1 (shared >= v0.54.0): the parse layer itself refuses the
+        // empty-sub token — the mint side (trusted code) still produced it.
+        self::assertNull(
+            $this->jwt->validateAccessToken($token),
+            'LW-059 vendor law: an empty-sub token is refused at the parse layer'
+        );
 
+        // Layer 2: the resolve path reaches no database for that token.
         $users = $this->createMock(UserRepository::class);
         $users->expects(self::never())->method('userExists');
 

@@ -12,6 +12,33 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Changed [hub-w24L1] — LW-085 adaptation leg: the Alexa empty-sub guard is re-driven at the parse layer after the v0.54.0 re-vendor — 2026-11-10
+
+- The re-vendor commit above this entry claimed "no adaptation leg"; the full
+  close battery disproved that claim on the first tip run, and this entry
+  carries the correction forward (history above stays verbatim). Shared
+  v0.54.0 landed the LW-059 non-empty-claims law: `JwtClaims::fromPayload()`
+  now throws on an explicitly empty `iss`/`sub`/`aud`/`type`, and the hub's
+  `JwtHandler::validateAccessToken()` maps that throw to null. The Alexa
+  linked-account test had pinned the OPPOSITE vendor behavior as its premise —
+  a minted empty-sub token that "validates happily" — so the premise leg went
+  red on the new vendor while the security outcome it guards (refusal before
+  any database question) never wavered: the defense simply moved upstream and
+  widened to every `JwtHandler` consumer.
+- The test is re-driven as a two-layer law pin: the parse layer refuses the
+  empty-sub token (red against any pre-v0.54.0 vendor — measured on a
+  re-vendored parent clone, green at tip), and the resolve layer reaches no
+  database (green on both vendors — the continuity law). `AlexaAccountLink`'s
+  own empty-sub belt stays as defence in depth; `JwtHandler` is final, so the
+  belt cannot be driven through a stub while the parse law holds, and the
+  docblock names the regression shape that would reach it again.
+- Battery attribution at this tip: the only other non-green legs are the two
+  documented local-venue gaps (the swoole-dependent `RelayProxyBridgeTest`
+  error trio, byte-identical on the parent vendor, and one order-dependent
+  `stream_socket_client` warning bucket that did not reproduce on the parent
+  re-run nor stand-alone); CI — where swoole is installed — is the
+  authoritative leg for these classes.
+
 ### Changed [hub-w24L1] — LW-085: composer re-vendor `detain/phlix-shared` v0.53.0 → v0.54.0; vendored settings-schema surface and wire held unmoved — 2026-11-10
 
 - The constraint moves to `^0.54.0`, targeting the newest live tag re-derived at
