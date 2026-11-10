@@ -12,6 +12,29 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Changed [hub-w24L1] — LW-085: composer re-vendor `detain/phlix-shared` v0.53.0 → v0.54.0; vendored settings-schema surface and wire held unmoved — 2026-11-10
+
+- The constraint moves to `^0.54.0`, targeting the newest live tag re-derived at
+  execution by a full-list `ls-remote refs/tags/*` (v0.54.0 = tag object
+  `dcba451a`, peel `55f3e680`); the lock delta is the shared block's
+  source/dist references and the content-hash only — zero transitive
+  re-resolutions, whole-lock audit green.
+- Survey of the tag diff over every shared class the hub consumes
+  (`Phlix\Shared\Hub\*` DTOs, `Auth\JwtClaims`, the relay codec, `Hmac`, the
+  Arr family): no public signature moved. The DTO rework is a shape-identical
+  `final class` + per-property `readonly` → `final readonly class` conversion,
+  and every new method in the diff is a private or internal helper. The
+  `Phlix\Shared\Schema\` family is untouched in the diff, so the vendored
+  hub-settings schema surface (whose key rows are wave-6 owner items) stays
+  frozen; no hub-side adaptation leg was needed — the server sibling's
+  `SettingsMasker::declaredSettings` adapter (server `080cb724`) consumed the
+  typed-settings narrowing on a surface the hub never imports.
+- The LW-082-b dialect handoff stays open: the estate SSOT class
+  `Phlix\Shared\Relay\SyncPlayDialect` (shared `b67d920`) landed ABOVE the
+  v0.54.0 peel and is still absent from vendor, so the hub-side canonical
+  constants + literal-binding token scan remain the effective teeth until the
+  next shared tag (v0.55.0 — owner-gated).
+
 ### Fixed [hub-w21L6] — SH-094 + SH-096 (grouped docs commit, per-row legs below) — SH-096: README truth pass — duplicated --no-proxy sentence deduped, rate-limit env-override claim given its two file-only exceptions, password-reset prose says what the endpoint actually does (generates + returns one fresh random password), HUB_UPDATES_* rows moved out from under the rate-limit table, dev-gate vocabulary aligned to the code family (`dev`/`development`/`local`) across all four gates' prose, JWT-secret row names the PHPUnit/test-env skip seam, backup recipe carries its own credentials through a 0600 option file + `umask 077` instead of assuming who happens to authenticate `mysqldump` — 2026-11-10
 
 - Closed-with-proof legs of the same card rows (already true at tip before
