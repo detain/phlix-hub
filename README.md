@@ -433,7 +433,8 @@ What it explicitly does **not** touch: the env file, MySQL grants, HAProxy confi
 Let's Encrypt certificate. If a release adds new `HUB_*` env vars, append them to
 `/etc/phlix-hub.env` yourself — anything the code expects but doesn't find falls back to its
 documented default, with one policy exception: `HUB_DB_PASSWORD` has no silent fallback
-outside dev/local, the escape flag, or PHPUnit — unset means the hub refuses to boot.
+outside the dev-family (`dev`, `development`, `local`), the escape flag, or
+PHPUnit — unset means the hub refuses to boot.
 
 ## Backing up and restoring
 
@@ -458,10 +459,22 @@ Backup (cron-friendly, keeps the trio in one archive):
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077   # every artifact below carries member data — never depend on the caller's umask
 STAMP=$(date +%F_%H%M)
 DEST=/var/backups/phlix-hub/$STAMP; mkdir -p "$DEST"
-# 1. Database (consistent snapshot without locking tables).
-mysqldump --single-transaction --routines phlix_hub | gzip > "$DEST/hub-db.sql.gz"
+# 1. Database (consistent snapshot without locking tables). The dump runs with
+#    THIS hub's own credentials, read from the env file — a bare `mysqldump`
+#    silently relies on whoever runs it happening to authenticate (a distro
+#    root's unix_socket login is exactly that; this repo's installer creates
+#    PASSWORD users, so the cron user needs them spelled out). The password
+#    travels through a 0600 option file, never argv, where `ps` could read it.
+CREDS=$(mktemp); trap 'rm -f "$CREDS"' EXIT; chmod 600 "$CREDS"
+# shellcheck disable=SC1091
+set -a; . /etc/phlix-hub.env; set +a
+printf '[client]\nhost=%s\nuser=%s\npassword=%s\n' \
+    "${HUB_DB_HOST:-127.0.0.1}" "$HUB_DB_USER" "$HUB_DB_PASSWORD" > "$CREDS"
+mysqldump --defaults-extra-file="$CREDS" --single-transaction --routines \
+    "${HUB_DB_NAME:-phlix_hub}" | gzip > "$DEST/hub-db.sql.gz"
 # 2. Environment (contains HUB_JWT_SECRET + DB credentials) and 3. signing key.
 install -m 600 /etc/phlix-hub.env               "$DEST/phlix-hub.env"
 install -m 600 /opt/phlix-hub/config/hub-signing-key.pem "$DEST/hub-signing-key.pem"
@@ -476,8 +489,12 @@ Restore, in the order that keeps every boot gate happy:
    error and leaves an empty schema:
 
    ```bash
-   gunzip -c hub-db.sql.gz | mysql phlix_hub
+   gunzip -c hub-db.sql.gz | mysql --defaults-extra-file="$CREDS" "${HUB_DB_NAME:-phlix_hub}"
    ```
+
+   (same 0600 option-file posture as the dump recipe above — not argv, not
+   implicit socket auth)
+
 3. Put `phlix-hub.env` at `/etc/phlix-hub.env` **before** first boot (mode 600,
    owned by root — the service reads it via `EnvironmentFile`), and the key at
    `config/hub-signing-key.pem` **before** first boot (mode 600, owned by the
@@ -633,9 +650,6 @@ The manual escape hatch stays open for everyone else too: hand-set
 `HUB_WS_URL=wss://<hub-domain>` with `HUB_WS_PATH=/syncplay` in
 `/etc/phlix-hub.env` (both grammar-validated per the env table below; the
 installer never overwrites a non-empty value) and restart `phlix-hub`.
-`--no-proxy` installs open `8804`/`8805` in ufw (when it is active), so the plain
-`ws://<host>:8804` / `ws://<host>:8805` forms documented in
-[`docs/websockets.md`](docs/websockets.md) are reachable there directly.
 
 If you'd rather use your own reverse proxy (nginx, Caddy, Traefik, etc.) instead of the
 managed HAProxy, pass `--no-proxy` to either install script. Each service then listens on its
@@ -843,7 +857,8 @@ sudo chmod 600 /etc/phlix-hub.env
 > The `HUB_DB_PASSWORD` placeholder above still needs a real value matching the MySQL user
 > you created in step 2 — and it is policed: with `HUB_DB_PASSWORD` unset the hub **refuses
 > to boot** (a `RuntimeException` from `config/database.php`), rather than silently using the
-> published `phlix_hub` literal. The gate's only admissions are dev/local `APP_ENV`/`HUB_ENV`,
+> published `phlix_hub` literal. The gate's only admissions are the dev-family
+> `APP_ENV`/`HUB_ENV` values (`dev`, `development`, `local`),
 > the explicit escape `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD=1`, and PHPUnit — never set the
 > escape on a reachable host.
 
@@ -863,12 +878,16 @@ straight before step 7 starts the daemon:
 - `:8800` serves the admin console and the REST API. Behind nginx + TLS you may
   keep it loopback-only; exposed directly it is the whole control plane.
 - `:8802`, `:8803`, `:8804`, `:8805` (relay, client-relay, SyncPlay, federation)
-  **always bind all interfaces** — the worker code hard-codes the bind address
-  (`websocket://0.0.0.0:<port>` in `RelayWorker.php:328`,
-  `ClientRelayWorker.php:198`, `SyncPlayRelayWorker.php:451`,
-  `FederationWorker.php:318`). `HUB_HOST` restricts **only** `:8800`. Setting
-  `HUB_HOST=127.0.0.1` behind nginx still leaves every relay listener on the
-  public interface unless you firewall it.
+  **default to binding all interfaces**. `:8802` and `:8805` hard-code it
+  (`websocket://0.0.0.0:<port>` in `RelayWorker.php:352`,
+  `FederationWorker.php:336`); `:8803` and `:8804` honor `HUB_WS_BIND`
+  since SH-064 (`WsTlsContext::listenString()` at `ClientRelayWorker.php:328`,
+  `SyncPlayRelayWorker.php:622`) — a proxy-fronted install can pin those two
+  to loopback, which is their intended shape since both ride the shared
+  frontend's `/client/` and `/syncplay/` routes. `HUB_HOST` restricts
+  **only** `:8800`. Setting `HUB_HOST=127.0.0.1` behind nginx still leaves
+  every relay listener on the public interface unless you firewall it or
+  pin the two that take the knob.
 - The installer-managed path opens `ufw` rules per-port only **when ufw is
   active** (see the ports table under *Install modes*); the manual path runs no
   firewall at all. If `sudo ufw status` says `inactive`, you have no host
@@ -1189,7 +1208,10 @@ plain HTTP — and Docker publishes them on every host interface. Two honest pos
   set `HUB_RELAY_TLS=1` with `HUB_RELAY_TLS_CERT`/`HUB_RELAY_TLS_KEY` before pairing anything,
   and `HUB_RELAY_REQUIRE_TLS=1` so a misconfigured plaintext `:8802` refuses to boot instead of
   leaking enrollment credentials. Federation peers want the same treatment on `:8805`
-  (`HUB_FEDERATION_TLS*` / `HUB_FEDERATION_REQUIRE_TLS`). The family is tabulated in the
+  (`HUB_FEDERATION_TLS*` / `HUB_FEDERATION_REQUIRE_TLS`). Since SH-064 the client-facing
+  pair carries the family too — `HUB_CLIENT_RELAY_TLS*` / `HUB_SYNCPLAY_TLS*` with their
+  `*_REQUIRE_TLS` siblings — and `HUB_WS_BIND` can pin those two listeners to loopback
+  outright. The family is tabulated in the
   [configuration reference](#configuration-reference).
 
 Migrations run automatically from the entrypoint on every boot (look for the
@@ -1277,8 +1299,15 @@ the `PHLIX_HUB_RATELIMIT_*` envs below, so when it is set the env defaults are N
 | `HUB_FEDERATION_TLS` | `false` | Terminates TLS natively on the `:8805` hub-to-hub federation listener (`wss://`) — for masters reached WITHOUT a TLS-terminating upstream proxy. Needs `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` (both default `null`). A plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot (M22) |
 | `HUB_FEDERATION_TLS_CERT` / `HUB_FEDERATION_TLS_KEY` | `null` | PEM paths for the `:8805` TLS context above |
 | `HUB_FEDERATION_REQUIRE_TLS` | `false` | Fail-closed `:8805` bind mandate, the federation sibling of `HUB_RELAY_REQUIRE_TLS` above: `true` makes `FederationWorker::start()` throw before constructing the listener when TLS is off — no cleartext federation socket is ever bound (federation inbound stays down, the hub serves the rest). `false` = warn-only. Keep unset on managed installs, where HAProxy fronts `:8805` and terminates TLS upstream |
+| `HUB_CLIENT_RELAY_TLS` | `false` | Terminates TLS natively on the `:8803` client-mount listener (`wss://`). Needs `HUB_CLIENT_RELAY_TLS_CERT` / `HUB_CLIENT_RELAY_TLS_KEY` (both default `null`). A plaintext bind logs one loud `SECURITY` advisory on the relay channel at boot (SH-064, same posture as M22 above) — on managed installs the shared frontend's `/client/` route is the supported shape, so leave this off there |
+| `HUB_CLIENT_RELAY_TLS_CERT` / `HUB_CLIENT_RELAY_TLS_KEY` | `null` | PEM paths for the `:8803` TLS context above. A missing path aborts boot (fail-fast); an unreadable one warns loudly and is guarded per connection (`TlsMaterialWatch`) |
+| `HUB_CLIENT_RELAY_REQUIRE_TLS` | `false` | Fail-closed `:8803` bind mandate (SH-064): `true` makes `ClientRelayWorker::start()` throw before constructing the listener when TLS is off. Unlike the federation worker — whose refusal the boot supervisor catches and skips — this listener has no supervisor catch: the hub process refuses to boot at all (fail-closed; the mandate means "never run me with a credential-bearing cleartext listener up"). `false` = warn-only |
+| `HUB_SYNCPLAY_TLS` | `false` | Terminates TLS natively on the `:8804` SyncPlay watch-party listener (`wss://`), the sibling posture of `HUB_CLIENT_RELAY_TLS` above. Needs `HUB_SYNCPLAY_TLS_CERT` / `HUB_SYNCPLAY_TLS_KEY` (both default `null`); plaintext bind logs one loud `SECURITY` advisory at boot. The managed `/syncplay/` route stays the supported browser path; this knob is for direct-dial topologies |
+| `HUB_SYNCPLAY_TLS_CERT` / `HUB_SYNCPLAY_TLS_KEY` | `null` | PEM paths for the `:8804` TLS context above. Missing path aborts boot (fail-fast); unreadable warns loudly, guarded per connection (`TlsMaterialWatch`) |
+| `HUB_SYNCPLAY_REQUIRE_TLS` | `false` | Fail-closed `:8804` bind mandate (SH-064): `true` refuses the plaintext bind before the socket is constructed — the hub process refuses to boot (same supervisorless fail-closed shape as `:8803` above), so group tokens are never carried in the clear. `false` = warn-only |
+| `HUB_WS_BIND` | `0.0.0.0` | Bind address for the `:8803` and `:8804` listeners ONLY (SH-064) — pin them to `127.0.0.1` on proxy-fronted installs, where HAProxy's `/client/` and `/syncplay/` routes are the real entrypoints. `:8802` and `:8805` keep their hard-coded all-interface binds (their dialing is the direct-dial law); `:8800` is governed by `HUB_HOST`. Bare IPv6 literals are bracketed for the transport automatically |
 | `HUB_COOKIE_INSECURE` | unset | Drops `Secure` from cookies set through `Response::cookie()`, and is the env twin of the stored `auth.cookie.insecure` override: since CP-011 the hub DOES set session cookies on browser-class issuance paths (gated by `auth.cookie.enabled`, §2.4 scheme law), and this opt-in is how a plain-HTTP deployment makes them usable — never a silent Secure downgrade (CD-3a). The CP-012 CSRF Origin guard applies to cookie-authenticated state-changing requests regardless of this flag |
-| `XDEBUG_MODE` | `off` | Xdebug mode inside the container (`docker/php.ini` §[xdebug] block; formerly also cited as an installer-generated bare-metal ini — that path was REMOVED 2026-11-05: after the swoole coroutine-teardown GPF evidence the installer no longer installs php-xdebug or writes any xdebug ini, and `--update` DISARMS an enablement an older recipe left (`phlix_disarm_xdebug`; HOST-5 Q6/Q8, owner ruling)). **Never set `debug` or `trace` in production**: `start_with_request = trigger` means any request carrying the trigger value arms step-debugging/tracing, and traces land world-writable in `/tmp/xdebug` (`docker-entrypoint.sh:48`) |
+| `XDEBUG_MODE` | `off` | Xdebug mode inside the container (`docker/php.ini` §[xdebug] block; formerly also cited as an installer-generated bare-metal ini — that path was REMOVED 2026-11-05: after the swoole coroutine-teardown GPF evidence the installer no longer installs php-xdebug or writes any xdebug ini, and `--update` DISARMS an enablement an older recipe left (`phlix_disarm_xdebug`; HOST-5 Q6/Q8, owner ruling)). **Never set `debug` or `trace` in production**: `start_with_request = trigger` means any request carrying the trigger value arms step-debugging/tracing, and traces land in `/tmp/xdebug` — pre-created inside the container's shared world-writable `/tmp` (`docker-entrypoint.sh` boot mkdir; `xdebug.trace_output_dir` in the same `docker/php.ini` block). On today's bare metal the installer ships no xdebug at all, so the trace directory is a container-surface concern |
 | `XDEBUG_TRIGGER` | `devdebug` | Trigger value for the mode above (`docker/php.ini` §[xdebug] block). Treat it as a secret if you ever enable a debug/trace mode on a reachable host; the former `.env.example` carried it as plain text and was deleted because nothing in this repo loads `.env` files (no dotenv in the lock) |
 | `PHLIX_CORS_ALLOW_ORIGINS` | unset — **deny-all** | Cross-origin allowlist for the hub's REST HTTP surface (`src/Http/CorsPolicy.php`, read once at router construction — boot-scoped, changes need a hub restart): comma-separated **exact lowercase origins** (`PHLIX_CORS_ALLOW_ORIGINS=https://hub.example.com,app://-`); a malformed entry — wildcard, uppercase, path, whitespace — fails LOUD at boot instead of silently denying at runtime. Allowlisted origins earn the `OPTIONS` 204 preflight and an `Access-Control-Allow-Origin` echo on actual replies; `Access-Control-Allow-Credentials` is never emitted (hub REST is bearer-auth, and a cross-origin cookie ride is exactly what this posture refuses). A disallowed-origin preflight is byte-identical to an unknown-path 404 — a probe cannot map the route table. `app://-` is the origin the desktop (Electron Windows client) hub-mode renderer presents — add it when the hub serves packaged desktop clients. Honest scope limit (the position law, M-HUB-09 r2/r3): `OPTIONS` on AUTHED routes runs the auth chain before any CORS grant, so this knob opens cross-origin reach for the **public** control endpoints (health, auth, server-claims trio); authed desktop hub-mode REST deliberately stays beyond browser-CORS reach there — its live cross-origin work rides the CORS-exempt relay WebSockets (`:8802`–`:8804`). The same-origin `/app` portal needs nothing: same-origin fetches never preflight. Full policy text in `openapi.yaml` §"Cross-origin (CORS)" |
 | `HUB_WS_HOST` | falls back to `HUB_PUBLIC_DOMAIN`, then `your-hub-host` | Host advertised in the `X-WS-Endpoint` steer when a plain HTTP GET hits the `:8802`/`:8803` WebSocket mounts — host only: the steer's `ws://` scheme and default port are fixed, not proxy/port-aware |
@@ -1315,7 +1344,9 @@ everything but login). Sixteen profiles exist in three custody postures: **`logi
 below); the five `count=1`-worker surfaces (`relay_connect`, `client_mount`,
 `syncplay_mount`, `federation_connect`, `federation_frame`) are per-worker too,
 but per-worker *is* global there. Every threshold is
-env-overridable; absent keys fall back to the defaults below. HTTP surfaces that trip return
+env-overridable — except the two profile rows below that say so explicitly
+(file-only override, no `PHLIX_HUB_RATELIMIT_*` seam); absent keys fall back to
+the defaults below. HTTP surfaces that trip return
 **429** with a `Retry-After` header and `{"error":"Too Many Requests","code":"rate_limited"}`; the
 WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013** (Try Again Later) instead.
 
@@ -1341,13 +1372,6 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 | `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` | Trusted proxy IPs/CIDRs used to resolve the real client address for the IP-keyed limiters (`src/Common/Http/TrustedProxyResolver.php`) — a forgeable leftmost `X-Forwarded-For` is never trusted |
 | `PHLIX_FEDERATION_CA_BUNDLE` | unset | TLS trust-anchor selection for federation **dials** (this hub as leaf connecting to an `https://`/`wss://` master): absolute path to a PEM bundle that replaces the system store as verification anchor. Set it when the master serves a private-CA certificate; an unreadable path fails LOUD at dial (never a silent system-store fallback). Put CA/root certificates in this file; never your master's leaf/fullchain — leaves change every ~60 days, and a leaf-anchored bundle then breaks every dial silently at rotation. `src/Federation/FederationPeerManager.php` (`buildMasterDialPlan`) — see also `docs/websockets.md` |
 | `PHLIX_FEDERATION_ALLOWED_HOSTS` | unset | Optional egress containment for federation **dials**: comma-separated EXACT hostnames/IPs (case-insensitive; IPv6 brackets optional) the leaf may connect to. Unset or blank = no host restriction (default — private-IP LAN masters are legitimate federation topology). Once set, any other host is refused LOUD at dial-plan build (`PHLIX...FederationPeerManager::admitEgress`); this is an operator containment hatch, not a security boundary — the dial's security is the H-4/H-5 proof-of-key ceremony |
-| `HUB_UPDATES_CHECK_ENABLED` | `true` | Update-check master switch. **On by default**: the hub fetches a version marker from `raw.githubusercontent.com` (below) once per poll interval. Disable with `false` on egress-restricted or air-gapped installs — a blocked fetch is recorded as a failed check and retried on the next interval; it never blocks boot or serves. An admin can also flip it at runtime via `PUT /api/v1/admin/updates/settings` (a `hub_settings` override, which wins over this default) |
-| `HUB_UPDATES_MARKER_URL` | `https://raw.githubusercontent.com/detain/phlix-hub/master/VERSION` | The remote version marker fetched per poll; kept in lockstep with `Phlix\Hub\Version::VERSION` (pinned by `tests/VersionTest.php`) |
-| `HUB_UPDATES_COMMAND` | the installer's `--update` one-liner | Copy-to-clipboard update command surfaced by `GET /api/v1/admin/updates/status` — verbatim from *Updating an existing install* above; an operator pastes it into a root shell |
-| `HUB_UPDATES_POLL_SECONDS` | `86400` | Steady-state interval between marker fetches (nothing fetches on the boot path; the worker only touches the network when this interval elapsed since the last completed check) |
-| `HUB_UPDATES_SWEEP_SECONDS` | `60` | How often the maintenance worker asks whether a poll is due — one `hub_settings` read, not a network call |
-| `HUB_UPDATES_TIMEOUT_SECONDS` | `10` | Socket timeout for the marker fetch |
-| `HUB_UPDATES_DEADLINE_SECONDS` | `20` | Backstop deadline for an in-flight fetch (NOT a duplicate of the timeout: with no route out, hooked DNS resolution can stall `stream_socket_client()` past the vendor client's own timer — measured 2026-08-10; without the deadline, an egress-filtered hub's first fetch stays in flight forever). At expiry the check is recorded as timed out and the single-flight guard released |
 
 > **Per-worker vs global caveat.** Most thresholds are enforced **per worker process**. The
 > :8802/:8803/:8805 relay and federation workers are `count=1`, so per-worker == global for
@@ -1371,6 +1395,21 @@ WebSocket handshakes (:8802/:8803/:8804/:8805) reject with WS close code **1013*
 > answers an over-cap body with **413** and the registered `invalid_payload` code — before the
 > maintenance gate and before any route handler reads it. Relay (:8802/:8803), SyncPlay (:8804)
 > and federation (:8805) frames carry their own smaller documented bounds (`docs/websockets.md`).
+
+#### Update checks ([`config/updates.php`](config/updates.php))
+
+The hub polls its own published version marker so the admin console can show
+"update available" — every row below is fetch-policy, none gates serving:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `HUB_UPDATES_CHECK_ENABLED` | `true` | Update-check master switch. **On by default**: the hub fetches a version marker from `raw.githubusercontent.com` (below) once per poll interval. Disable with `false` on egress-restricted or air-gapped installs — a blocked fetch is recorded as a failed check and retried on the next interval; it never blocks boot or serves. An admin can also flip it at runtime via `PUT /api/v1/admin/updates/settings` (a `hub_settings` override, which wins over this default) |
+| `HUB_UPDATES_MARKER_URL` | `https://raw.githubusercontent.com/detain/phlix-hub/master/VERSION` | The remote version marker fetched per poll; kept in lockstep with `Phlix\Hub\Version::VERSION` (pinned by `tests/VersionTest.php`) |
+| `HUB_UPDATES_COMMAND` | the installer's `--update` one-liner | Copy-to-clipboard update command surfaced by `GET /api/v1/admin/updates/status` — verbatim from *Updating an existing install* above; an operator pastes it into a root shell |
+| `HUB_UPDATES_POLL_SECONDS` | `86400` | Steady-state interval between marker fetches (nothing fetches on the boot path; the worker only touches the network when this interval elapsed since the last completed check) |
+| `HUB_UPDATES_SWEEP_SECONDS` | `60` | How often the maintenance worker asks whether a poll is due — one `hub_settings` read, not a network call |
+| `HUB_UPDATES_TIMEOUT_SECONDS` | `10` | Socket timeout for the marker fetch |
+| `HUB_UPDATES_DEADLINE_SECONDS` | `20` | Backstop deadline for an in-flight fetch (NOT a duplicate of the timeout: with no route out, hooked DNS resolution can stall `stream_socket_client()` past the vendor client's own timer — measured 2026-08-10; without the deadline, an egress-filtered hub's first fetch stays in flight forever). At expiry the check is recorded as timed out and the single-flight guard released |
 
 ### Metrics ([`config/metrics.php`](config/metrics.php))
 
@@ -1399,9 +1438,9 @@ at boot per worker).
 | `HUB_DB_HOST` | `127.0.0.1` | MySQL host |
 | `HUB_DB_PORT` | `3306` | MySQL port |
 | `HUB_DB_USER` | `phlix_hub` | MySQL user |
-| `HUB_DB_PASSWORD` | *(no silent default — unset refuses boot outside dev/local, the escape below, or PHPUnit; `config/database.php`)* | MySQL password |
+| `HUB_DB_PASSWORD` | *(no silent default — unset refuses boot outside the dev-family (`dev`/`development`/`local`), the escape below, or PHPUnit; `config/database.php`)* | MySQL password |
 | `HUB_DB_NAME` | `phlix_hub` | MySQL database name |
-| `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD` | unset — **refuse** | When `HUB_DB_PASSWORD` is unset, admits the published `phlix_hub` literal fallback instead of refusing boot (`config/database.php` throws `RuntimeException` naming this var). Development/testing escape only — dev/local `APP_ENV`/`HUB_ENV` and PHPUnit already pass without it; never set on a reachable host |
+| `PHLIX_HUB_ALLOW_DEFAULT_DB_PASSWORD` | unset — **refuse** | When `HUB_DB_PASSWORD` is unset, admits the published `phlix_hub` literal fallback instead of refusing boot (`config/database.php` throws `RuntimeException` naming this var). Development/testing escape only — the dev-family `APP_ENV`/`HUB_ENV` (`dev`, `development`, `local`) and PHPUnit already pass without it; never set on a reachable host |
 | `DB_POOL_ENABLED` | `1` | Coroutine connection pool (each coroutine leases its own connection). `0` falls back to the single mutex-serialized socket |
 | `DB_POOL_SIZE` | `8` | Pool size per connection name **per worker** — keep `workers × connection names × DB_POOL_SIZE` under MySQL `max_connections` |
 
@@ -1409,7 +1448,7 @@ at boot per worker).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HUB_JWT_SECRET` | _(none in prod)_ | **Required in production.** ≥32-byte HMAC secret. A denylisted placeholder literal is refused at boot with `exit 1` (R14-08 pre-flight, folded into `resolveSecret()` so console commands and workers enforce it too); unset = hard boot refusal (`MissingJwtSecretException`) outside dev, random per-process fallback inside dev (`APP_ENV`/`HUB_ENV` `dev\|local` or `HUB_JWT_ALLOW_DEV_SECRET=1`). The Docker entrypoint generates + persists one to `/var/phlix/config/hub_jwt_secret` when unset |
+| `HUB_JWT_SECRET` | _(none in prod)_ | **Required in production.** ≥32-byte HMAC secret. A denylisted placeholder literal is refused at boot with `exit 1` (R14-08 pre-flight, folded into `resolveSecret()` so console commands and workers enforce it too); unset = hard boot refusal (`MissingJwtSecretException`) outside dev, random per-process fallback inside dev (`APP_ENV`/`HUB_ENV` ∈ `dev`/`development`/`local` — the full accepted vocabulary — or `HUB_JWT_ALLOW_DEV_SECRET=1`). The placeholder policing is separately SKIPPED under PHPUnit or when `HUB_ENV`/`APP_ENV`/`PHLIX_ENV` is `test` (`AuthServicesProvider::isTestEnvironment()`) — the test env never carries a real secret. The Docker entrypoint generates + persists one to `/var/phlix/config/hub_jwt_secret` when unset |
 | `HUB_JWT_ACCESS_TTL` | `3600` | Access-token lifetime (seconds) |
 | `HUB_JWT_REFRESH_TTL` | `604800` | Refresh-token lifetime (seconds) |
 
@@ -1577,7 +1616,7 @@ The Vue admin console at `/app/admin/*` is backed by these admin-gated endpoints
 | `GET`/`POST` | `/api/v1/admin/users` | List / create accounts |
 | `GET`/`PUT`/`DELETE` | `/api/v1/admin/users/{id}` | Fetch / update / delete an account |
 | `POST` | `/api/v1/admin/users/{id}/set-admin` | Grant / revoke admin |
-| `POST` | `/api/v1/admin/users/{id}/reset-password` | Set a new password |
+| `POST` | `/api/v1/admin/users/{id}/reset-password` | Generate + return one fresh random password (`new_password`) |
 | `GET` | `/api/v1/admin/metrics/{snapshot,history,connections,routes}` | Relay traffic rollups — the four series the **Server Traffic** admin page renders (collectors tuned by *Metrics* in the [configuration reference](#configuration-reference)) |
 | `GET` | `/api/v1/admin/logs`, `/logs/tail`, `/logs/tail-all` | Browse / tail the hub log files |
 | `GET`/`PUT` | `/api/v1/admin/settings` | Read / persist hub settings |
@@ -1706,11 +1745,17 @@ all — hub-config reads and writes, the `leaf_hub_id` binding, the per-peer rel
 admin-delegation toggles, named delegations, and creating an outgoing offer: there the
 `curl` calls are the path, not a convenience.
 
-**Prerequisites on both sides.** The `federation.enabled` hub setting must be on —
-while it is off, every federation control-plane route answers `409` and no dial is
-attempted (Configuration reference). Each hub needs a publicly reachable `:8805`
-listener; on TLS-managed installs that listener speaks `wss://` (see
-`docs/websockets.md`, *The :8805 federation lane*).
+**Prerequisites.** The `federation.enabled` hub setting must be on —
+while it is off, every federation admin mutation answers `409`, inbound
+peer frames are dropped, and no dial is attempted (Configuration reference;
+reads stay open, which is what lets you configure the pairing at all). Reach
+runs ONE way: the **leaf dials the master**, so it is the MASTER-side
+listener that the leaf must be able to reach — a pure leaf needs no inbound
+federation port at all. On a managed install that reach rides the master's
+shared 443 frontend (`/relay/federation/` route, TLS included, nothing extra
+to open); a native `wss://` on `:8805` itself exists only when the
+`HUB_FEDERATION_TLS*` set is configured (see `docs/websockets.md`,
+*`:8805` — hub federation*).
 
 **Step 1 — each admin reads their own identity.** Two endpoints, both trivial:
 
@@ -1749,6 +1794,15 @@ curl -s -X POST -H "Authorization: Bearer $MASTER_JWT" -H "Content-Type: applica
   -d '{"url": "https://LEAF-HUB:8805", "public_key": "<LEAF_PUBLIC_KEY>", "name": "Annabell hub", "leaf_hub_id": "<LEAF_HUB_ID>"}' \
   https://MASTER-HUB/api/v1/me/federation/peers
 ```
+
+`url` records how a hub says it is reachable for federation — which for a
+master-side row like this one is the leaf's advertised identity, never a dial
+target (the master does not dial out). Prefer the managed shape: the public
+`https://` frontend URL whose `/relay/federation/` route carries peer traffic.
+A `:8805` in the URL means the NATIVE federation listener — speak `wss://`
+there only when that hub has configured `HUB_FEDERATION_TLS*`; a bare
+`ws://<host>:8805` is the `--no-proxy` plaintext shape, documented (with its
+firewall caveats) in `docs/websockets.md`, *`:8805` — hub federation*.
 
 `leaf_hub_id` is what the path lookup matches; it may be omitted here and bound later
 with `PUT /api/v1/me/federation/peers/{id}/leaf-hub-id` — **(API only)** binding: the
@@ -1868,7 +1922,8 @@ means that tunnel is down — check the server side first:
    THERE, not on the hub.)
 2. Can the server reach `hub-domain:8802`? The hub's firewall must allow it —
    and note the relay listeners bind `0.0.0.0` regardless of `HUB_HOST`
-   (see *Firewall the exposure* in the manual install).
+   (`HUB_WS_BIND` can pin only `:8803`/`:8804`; see *Firewall the exposure*
+   in the manual install).
 3. If the hub runs with `HUB_RELAY_TLS`/`HUB_RELAY_REQUIRE_TLS`, the server
    must present TLS-compatible dialing — a `wss://` hub refuses plaintext
    tunnels when `REQUIRE_TLS` is on.
@@ -1934,7 +1989,10 @@ front-load, don't fight the throttle.
 
 There is **no self-service reset** — no mail transport exists to send a
 reset link. A member who forgets their password asks an admin: **Admin →
-Users → reset-password** (`POST /api/v1/admin/users/{id}/reset-password`).
+Users → reset-password** (`POST /api/v1/admin/users/{id}/reset-password`),
+which GENERATES a fresh random password and returns it once in the response
+body (`new_password`) — there is nothing to "set" and nothing to email; the
+admin relays the value over their own trusted channel.
 The admin who locked everyone else out (or was demoted) is recovered from the
 shell: `bin/phlix user:list` to find the account, `bin/phlix user:promote
 'username-or-email'` to restore admin (it toggles — `--revoke` demotes,

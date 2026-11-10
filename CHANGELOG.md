@@ -12,6 +12,18 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Fixed [hub-w21L6] — SH-094 + SH-096 (grouped docs commit, per-row legs below) — SH-096: README truth pass — duplicated --no-proxy sentence deduped, rate-limit env-override claim given its two file-only exceptions, password-reset prose says what the endpoint actually does (generates + returns one fresh random password), HUB_UPDATES_* rows moved out from under the rate-limit table, dev-gate vocabulary aligned to the code family (`dev`/`development`/`local`) across all four gates' prose, JWT-secret row names the PHPUnit/test-env skip seam, backup recipe carries its own credentials through a 0600 option file + `umask 077` instead of assuming who happens to authenticate `mysqldump` — 2026-11-10
+
+- Closed-with-proof legs of the same card rows (already true at tip before
+  this commit, verified line by line): the stale-pin paragraph is stable-form
+  since c0784a7c, the invites and dashboard-counts truths landed with
+  569ad2dd (SH-088/SH-093), the docker `--env-file` argv-leak note was already
+  in *Containerized install*, the installer's xdebug disarm history is told
+  verbatim in the `XDEBUG_MODE` row, and the ui-asset-rebuild secret-writing
+  recipe is already the argv-clean heredoc form.
+
+### Fixed [hub-w21L6] — SH-094: federation prereqs state the real direction (leaf dials master — a pure leaf needs no inbound federation port; the 409-while-disabled law is mutations-only, reads stay open to configure the pairing), the example peer URL gets TLS-truthful annotation, the *Firewall the exposure* bind block and the offline-troubleshooting cite now describe post-SH-064 reality (`:8803`/`:8804` honor `HUB_WS_BIND`, `:8802`/`:8805` hard-code all-interfaces), the eight new SH-064 env knobs get Configuration-reference rows — including the true supervisor semantics (`:8803`/`:8804` refusals abort boot; only federation's refusal is supervisor-skipped) — and the XDEBUG trace-directory claim drops an unprovable mode for a stable-form container-surface statement; `docs/websockets.md` gains the `:8803` TLS/bind posture block and the `:8804` default-vs-opt-in distinction — 2026-11-10
+
 ### Added [hub-w21L6] — SH-064: the two client-facing WS listeners (:8803/:8804) gain the M21/M22 TLS posture family — opt-in native wss://, fail-closed mandate, loud plaintext advisory — plus a bind-host knob; defaults unchanged — 2026-11-10
 
 - `ClientRelayWorker` (:8803, relay bearer tokens) and `SyncPlayRelayWorker`

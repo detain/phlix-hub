@@ -285,6 +285,15 @@ ws://hub.example.com:8803/client/{server_id}
 Parsed by `ClientRelayWorker::parseServerId()` with the anchored pattern
 `~^/client/([^/?#]+)/?(?:[?#].*)?$~`.
 
+**TLS/bind posture (SH-064).** The form above is the DEFAULT: plaintext `ws://`
+bound to all interfaces, with one loud `SECURITY` advisory on the relay channel
+at boot (the M22 pattern applied to this surface). `HUB_CLIENT_RELAY_TLS*`
+serves the same listener natively as `wss://`; `HUB_CLIENT_RELAY_REQUIRE_TLS`
+turns the plaintext bind into a boot-refusing mandate; `HUB_WS_BIND` pins the
+bind address (`127.0.0.1` is the proxy-fronted shape, which remains the
+supported topology even though the mount itself is declared-unavailable above —
+the listener exists and carries the posture machinery regardless).
+
 > The same path is registered on the `:8800` HTTP surface as
 > `GET /client/{server_id}` — **deliberately without the `/api/v1` prefix** every
 > other server-facing hub route carries. Adding a prefix there would make the HTTP
@@ -358,11 +367,15 @@ portal's seam adoption) and, wherever the bootstrap is absent, falls back to
 `ws(s)://<page-host>:8804/…` with the port fixed by
 `SyncPlayRelayWorker::DEFAULT_PORT`, never the origin's port. A seeded
 install therefore needs no `8804` opening for ANY browser path; `8804` is a
-plaintext listener, so an HTTPS-served page cannot complete a direct dial at
-all, and its only viable path — the same-origin
+plaintext listener by default (SH-064 added the opt-in family:
+`HUB_SYNCPLAY_TLS*` serves this listener natively as `wss://`,
+`HUB_SYNCPLAY_REQUIRE_TLS` makes that posture a boot mandate, and
+`HUB_WS_BIND` can pin the bind), so on the default shape an HTTPS-served page
+cannot complete a direct dial at all, and its only viable path — the same-origin
 `wss://<hub-domain>/syncplay/…` route — is live for portal and ui clients
-alike. On a TLS-served hub the direct form never becomes viable, so
-there `ufw allow 8804/tcp` is pure downside — do NOT open it.
+alike. On a TLS-served hub with a plaintext listener the direct form never
+becomes viable, so there
+`ufw allow 8804/tcp` is pure downside — do NOT open it.
 Installs the installer never seeds — no-domain managed and
 `--no-proxy` boxes, where it cannot name an origin clients will actually reach — keep the
 hand-set door: the same two vars in `/etc/phlix-hub.env` and a restart (a non-empty
