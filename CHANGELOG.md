@@ -4,7 +4,34 @@ All notable changes to `detain/phlix-hub` are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Convention (declared 2026-11-10, for future entries): release headings use
+`## [<version>] — YYYY-MM-DD` (em dash), and each entry under `[Unreleased]` closes its
+heading with ` — YYYY-MM-DD` naming the day the work was written — never a projected
+date. Deviations already in the history below are recorded, not rewritten, in the
+2026-11-10 hygiene errata entry.
+
 ## [Unreleased]
+
+### Fixed [hub-w20L3] — CHANGELOG structural hygiene + errata (review hub__writer #1/#6/#7/#9) — 2026-11-10
+
+- Rejoined the pin token split by a line wrap inside the v0.99.16 re-vendor entry
+  (`0.5.6@` + newline + the sha → one span). Structural only — the recorded value is
+  unchanged and re-verified at this writing: `git ls-remote
+  https://github.com/detain/phlix-contracts refs/tags/v0.5.6^{}` peels to exactly
+  `c89c8420cd4d50e51f232885754cb74c92a9e05c` (annotated tag object `9f04fc50…`).
+- Added a disambiguation note under the mid-history duplicate `## [Unreleased]` heading
+  (the one sitting between `[0.4.0]` and `[0.2.0]`); its block — Phase 6/Web UI content
+  and the 0.5.0 correction blockquote inside it — stands verbatim. The live block is the
+  file's first heading.
+- Declared the heading/date convention in the preamble (writer #9). Historical deviations
+  are NOT rewritten: `[0.5.0]` and `[0.4.0]` really shipped the same day (2026-07-20) with
+  hyphen-style dates while `[0.2.0]`/`[0.1.0]` use em dashes, and the released chain skips
+  a `[0.3.0]` heading entirely. Errata, invented nowhere.
+- Date erratum: the entries "the invite-link 201 echoes the effective fields" (HUB-m29),
+  "the 429 auth envelope gains its human sentence" (HUB-m13) and "deadlock retries decide
+  on wire codes, not English text" (HUB-m56) are stamped `2026-11-05` but were authored
+  and committed on 2026-11-04 (`fe7be52b`, `a86aa2a6`, `fa0e1a4e` — all three, git
+  authorship re-read at this tip). The stamps stand verbatim; this entry is the record.
 
 ### Fixed [hub-w20L3] — README truth batch: federation portal coverage, invite redemption prerequisites, DB-password boot gate, Dashboard counts (hub w20 L3, six-row HH docs batch) — 2026-11-10
 
@@ -1628,8 +1655,8 @@ ruling (HOST-5 Q6/Q8, live-host cure confirmed by HOST-6) — 2026-11-05
   install --package-lock-only` under npm 11 + `NPM_CONFIG_USERCONFIG=/dev/null`
   rotated the root echo, the ui node's version/resolved/integrity and its
   contracts dep-spec; the resolver left the nested `node_modules/@phlix/contracts`
-  node at `0.5.5@e2159816`, so it was hand-rotated to `0.5.6@
-  c89c8420cd4d50e51f232885754cb74c92a9e05c` — the v0.5.6 tag peel,
+  node at `0.5.5@e2159816`, so it was hand-rotated to
+  `0.5.6@c89c8420cd4d50e51f232885754cb74c92a9e05c` — the v0.5.6 tag peel,
   ls-remote-verified — and the edit proven IDEMPOTENT by a re-run of
   `--package-lock-only` (lock sha256 unchanged: `cfc1572e…`). NESTED syncplay
   leg: MEASURED honest-zero — the lock/installed nodes already carry
@@ -9776,6 +9803,12 @@ untouched.
 - **`HubRestartControllerTest`** added (5 test cases covering missing/empty/invalid pid_file, signal failure, signal success). These passed only because they injected a temp pid path, so they did not catch the misconfigured default.
 
 ## [Unreleased]
+
+> **Disambiguation (docs hygiene, 2026-11-10).** This mid-history heading is a stale
+> duplicate of the live `## [Unreleased]` at the top of the file — the Phase 6 / Web UI
+> block below it is pre-0.5.0 snapshot content that was never re-headed, and the released
+> chain below additionally skips a `[0.3.0]` heading. The content stands verbatim; see
+> the CHANGELOG-hygiene errata entry under the live `[Unreleased]`.
 
 ### Hub Settings (Phase 6)
 
