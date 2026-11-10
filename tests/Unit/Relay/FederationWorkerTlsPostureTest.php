@@ -94,6 +94,10 @@ final class FederationWorkerTlsPostureTest extends TestCase
         parent::tearDown();
         FederationWorker::reset();
         LoggerFactory::reset();
+        foreach ($this->scratchFiles as $path) {
+            @unlink($path);
+        }
+        $this->scratchFiles = [];
     }
 
     /**
@@ -280,6 +284,10 @@ final class FederationWorkerTlsPostureTest extends TestCase
     {
         $this->seedRecordingLogger();
 
+        // Audit §3.2 aligned the federation boot with its :8802 sibling: the
+        // material decision now runs pre-bind, so the secure leg carries real
+        // readable scratch PEMs (existence + readability is the law under
+        // test, content is irrelevant before runAll()).
         $worker = new FederationWorker(
             $this->container,
             self::PORT,
@@ -287,14 +295,32 @@ final class FederationWorkerTlsPostureTest extends TestCase
             '127.0.0.1',
             RelayProxyProtocol::DEFAULT_CHANNEL_PORT,
             true,
-            '/tmp/phlix-m22-absent-cert.pem',
-            '/tmp/phlix-m22-absent-key.pem',
+            $this->writeScratchPem('cert'),
+            $this->writeScratchPem('key'),
             true,
         );
         $workerman = $worker->start();
 
         self::assertSame([], $this->recordedWarnings, 'a wss:// bind must never cry wolf');
         self::assertSame('ssl', $workerman->transport);
+    }
+
+    /** @var array<int, string> Scratch PEM paths removed in tearDown(). */
+    private array $scratchFiles = [];
+
+    /**
+     * Write a throwaway file for the secure-path fixture (content is
+     * irrelevant to the pre-bind law under test: existence + readability).
+     */
+    private function writeScratchPem(string $role): string
+    {
+        $path = sys_get_temp_dir() . '/phlix-m22-' . $role . '-' . bin2hex(random_bytes(6)) . '.pem';
+        if (file_put_contents($path, "-----BEGIN PHLEX SCRATCH " . strtoupper($role) . "-----\n") === false) {
+            self::fail("could not write scratch $role pem to $path");
+        }
+        $this->scratchFiles[] = $path;
+
+        return $path;
     }
 
     public function testTlsEnabledWithoutCertKeyFailsLoud(): void
