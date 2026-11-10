@@ -26,15 +26,19 @@ use support\Context;
 /**
  * CP-013 (COOKIE-DESIGN §7): the ceremony layer — end-to-end auth flows that
  * COMBINE the CP-011 issuance seam and the CP-012 Origin guard in one wire
- * story, the layer §7 names but the per-seam suites (CookieDualEmitTest,
- * CsrfOriginGuardMiddlewareTest, CookieOriginAuthRoutesTest, CookieAuthFallbackTest)
- * cannot express because each pins its own seam in isolation with MOCKED
- * tokens. Here the access token the AuthController mints is a REAL JWT under
- * the same secret the AuthMiddleware validates, so every leg proves the two
- * layers actually speak the same artifact: login → cookie issued → hostile
- * Origin write → 403 → friendly Origin → pass → cookie-sourced refresh
- * rotates the custody pair → rotated access authenticates → logout clears
- * the jar → the emptied jar is refused. The ceremony additionally owns the
+ * story, the layer §7 names but the per-seam suites cannot express: the
+ * issuance-side pair (CookieDualEmitTest, CookieOriginAuthRoutesTest) pins its
+ * seam with MOCKED string tokens, and the read-side pair
+ * (CookieAuthFallbackTest, CsrfOriginGuardMiddlewareTest) mints REAL JWTs via a
+ * same-secret JwtHandler but injects each artifact directly into the single
+ * seam its suite owns — neither shape crosses the issuance→read CONTINUITY
+ * between the two layers. Here the access token the AuthController mints is a
+ * REAL JWT under the same secret the AuthMiddleware validates, so every leg
+ * proves the two layers actually speak the same artifact: login → cookie
+ * issued → hostile Origin write → 403 → friendly Origin → pass →
+ * cookie-sourced refresh rotates the custody pair → rotated access
+ * authenticates → logout clears the jar → the emptied jar is refused.
+ * The ceremony additionally owns the
  * cross-layer laws that live only at the seam BETWEEN suites:
  *
  *  - token continuity (the issued value authenticates — a per-arm string-mock

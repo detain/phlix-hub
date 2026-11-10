@@ -2,14 +2,13 @@
 /**
  * Hub-local contextual page hint (W5 / plan §9 PageHint pass).
  *
- * Upstream `PageHint` is on the RUNTIME barrel at the vendored v0.99.25 pin
- * (a `PageHint` export of `dist/phlix-ui.js`) but NOT the TYPE barrel —
- * `dist/index.d.ts` never names it (the component's declaration exists only
- * at `dist/components/ui/PageHint.vue.d.ts`), so a typed `import { PageHint
- * } from '@phlix/ui'` still fails `vue-tsc`. The hub's three shell pages
- * therefore keep the minimal hub-side equivalent until upstream declares the
- * export at the package entry — at which point these wrappers swap the
- * import and this component retires ([tag-wave C2] registers the follow-up).
+ * Upstream `PageHint` is on BOTH barrels at the vendored v0.99.26 pin — the
+ * RUNTIME barrel (a `PageHint` export of `dist/phlix-ui.js`) AND the TYPE
+ * entry (`dist/index.d.ts:30` names it; a typed `import { PageHint }
+ * from '@phlix/ui'` now passes `vue-tsc` — re-executed at this pin). The
+ * type-barrel absence that forced this file existed only at earlier pins;
+ * the swap-and-retire of these wrappers is therefore UNBLOCKED behavior work,
+ * registered as a follow-up at [tag-wave C2] and kept out of re-pin lanes.
  * Contract mirrors the ui pattern:
  * a dismissable contextual paragraph + at least one link, persisted
  * dismissal keyed by `hintId`.

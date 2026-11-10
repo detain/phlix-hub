@@ -6,6 +6,73 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Chore [ui-26-1110] — re-vendor `@phlix/ui` #v0.99.26 + `/app` SPA regen + the CP-013 prose folds (hub w34L2, cookie-era ui tag, hub leg of the .26 consumer wave) — 2026-11-10
+
+- Tag-form re-pin of the served SPA's vendored library v0.99.25 → v0.99.26 (tag object
+  `74c120bc`, peel `dc2e70fe` == ui master tip, ls-remote-verified; ui-ci run `42782879327`
+  success): carries the ui-side cookie-era legs — CP-014 cookie custody (`CookieTokenStore`,
+  same-origin-gated credentials policy, boot probe), CP-016 401 single-flight refresh +
+  credentials-consistent logout, CP-017 cookie-mode suites + custody pin flips, the w32
+  review MAJOR-1 forward-fix (single-flight HOLD pinned through delayed settle, 9ae8628a +
+  c3a5a411), CU-126's pinia-peer widening and LW-072's root-barrel `PageHint` naming. This
+  is the client twin of the hub's shipped CP-011/012/013 family.
+- `web-ui/package.json` 1+/1-; lock 5+/5- (npm 11.19.0 `--package-lock-only`,
+  `NPM_CONFIG_USERCONFIG=/dev/null`, node 24.20.0; re-run idempotent): ui version/resolved/
+  integrity triple + root echo + the ui node's `pinia` peer mirror `^3.0.0` →
+  `^3.0.0 || ^4.0.0` — an UPSTREAM CU-126 edge (e2c45746), not a resolver artifact;
+  contracts holds `#v0.5.7` and syncplay `#v0.1.7`, and no hoisted-node repair was needed
+  this wave (the .25-era npm stale-node class did not recur — the contracts edge did not
+  move). Fresh `npm ci`: installed tree byte-identical to the codeload tag (npm's
+  `.npmignore` swap disclosed) — `phlix-ui.js` `7cea63d4`, `player.js` `a6428a08`, dist
+  aggregate `0c957181`.
+- `/app` rebuilt: deterministic ×2 (`diff -r` clean), 198 files, aggregate md5 recipe
+  `e30ab33006113c66150ba23abbd85963`; stamp `0.99.26` on `index-DiyOxnYu.js`, zero
+  `0.99.25`/`.24`/`.23` residue; carrier rotates `PlayerPage-Bp-fkb06-CGqbc3Gf` →
+  `PlayerPage-5onGq7ES-Bfs7ug0N`; delta 123↔123 rehash rename pairs + 2 in-place
+  (`index.html`, `.vite/manifest.json`) + 73 byte-identical.
+- Four pin-era docblocks rotated v0.99.25 → v0.99.26 from the tripwire's own conviction
+  (`ui-pin-currency` 2F pre-rotation at 152, green after — the coordinates moved THIS
+  wave): `safeHref` `dist/index.d.ts:218`→`:219` (LW-072's insert shifted it), dial law
+  `:16` unchanged (re-executed byte-equal), locale exports now `:256`/`:257` (+1, no prose
+  coordinate to move), and `HubPageHint.vue`'s premise FLIPPED — upstream now names
+  `PageHint` on BOTH barrels (`dist/index.d.ts:30`; typed-import probe re-executed:
+  `vue-tsc` RC=0), so the docblock states the .26 reality and the swap-and-retire of the
+  hub wrappers is UNBLOCKED behavior work, still registered at [tag-wave C2].
+  `HubWatchPartyPage.vue`'s historical `v0.99.13` posture sentence follows the
+  .20/.21/.22/.25-wave precedent of non-rotation (no measured red; claim re-executed
+  true at .26: dial exports present, `SyncPlayPage` still the only unexported component).
+- S181: base tip `25d6e1c7` measured RED today through the reporter's own seam — hub,
+  server AND windows 1 behind the live `v0.99.26` ladder (3 blocking rows; tizen already
+  CURRENT via its landed .26 leg). This commit brings the hub row CURRENT; the job's
+  verdict at this tip additionally grades the two external legs' landing order — attested
+  in the lane register (`.reviews/2026-11-10/FIX-hub-w34L2.md`).
+- Folded with the re-pin (prose-only legs, from the closed cookie-family DDs): see the
+  next entry.
+- Gates: web-ui `node --test` 152/152 (2F→0F by the rotation, suites unchanged); K=24
+  `Unit,Integration` battery merged 5794T/46604A/169skip — exact parity with the parent
+  (zero tests added/removed), sole red bucket the 3 pre-existing RelayProxyBridge
+  swoole-absence HOST errors (CI installs swoole; parent class); phpstan level-9 corpus
+  `[OK]`; psalm (docker 8.4 venue) tests corpus — zero hits in the files this lane
+  touched; phpcs S299 corpus 651 files 0E/0W held + bare PSR12 clean on the changed test
+  file; ceremony suite re-run OK 6/63 after the comment cure. PHP src untouched; zero new
+  wire codes; zero src/ behavior change; no migrations.
+
+### Fixed [cookie-prose-fold-1110] — CP-013 entry characterization erratum: the per-seam suites are NOT all mocked-token (tests-only comment cure; hub w34L2 carrying the closed DD queue) — 2026-11-10
+
+- The CP-013 entry above [hub-w32L1-1110] (and the `CookieAuthCeremonyTest` class header
+  it mirrors) characterized EVERY previous CP-011/012 suite as pinning its seam "with
+  mocked string tokens." The read-side pair does not: `CookieAuthFallbackTest`
+  (`tests/Unit/Http/Middleware/`, :65-69/:78-83/:116) and `CsrfOriginGuardMiddlewareTest`
+  (same dir, :71/:173/:189) mint REAL JWTs through a same-secret `JwtHandler` — verified at
+  tip before this cure. The characterization was only true of the issuance-side pair
+  (`CookieDualEmitTest`, `CookieOriginAuthRoutesTest`: zero `new JwtHandler` occurrences,
+  measured). CP-013's genuine novelty is not real-vs-mock tokens but the
+  issuance→read CONTINUITY of the same artifact across the two layers — mocked issuance
+  pins can never catch the layers disagreeing, and directly-injected real mints never cross
+  the controller→middleware boundary. The test-file header is corrected in place (comments
+  only, suite re-run green); this entry forward-corrects the CHANGELOG per the
+  append-only verbatim-history law — the historical entry stands unedited.
+
 ### Added [hub-w32L1-1110] — CP-013: the cookie/CSRF ceremony suite layer + parse-false arm conviction (COOKIE-DESIGN §7 gap inventory, tests-only — zero src/wire change; folds the CP-011-DD review minor the w31L2 reviewer left open)
 
 - **CookieAuthCeremonyTest** (`tests/Unit/Http/CookieAuthCeremonyTest.php`,
