@@ -572,13 +572,17 @@ final class ErrorPromotionFramesTest extends TestCase
 
         // 426 steer: authenticated, but no WebSocket upgrade. Wave-2 promotion
         // attaches the registry twin of the ClientMount 426's client_ws_endpoint.
+        // SH-081 era: the message steers through the scheme-honest seam (plain
+        // bind in this process ⇒ ws://) and the frame gained the machine-readable
+        // ws_endpoint leg — prose is no longer the only carrier of the address.
         self::assertGateFrame(
             426,
             [
                 'error' => 'UPGRADE_REQUIRED',
                 'code' => 'relay.ws_http_endpoint',
-                'message' => 'This endpoint requires a WebSocket upgrade. Please connect via WSS.',
+                'message' => 'This endpoint requires a WebSocket upgrade. Connect to ws://your-hub-host:8802.',
                 'upgrade' => 'websocket',
+                'ws_endpoint' => 'ws://your-hub-host:8802',
             ],
             (new RelayController($passingService))->handle($authed, ['id' => 'srv-1']),
             'RelayController 426 UPGRADE_REQUIRED',

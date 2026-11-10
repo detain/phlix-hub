@@ -708,9 +708,13 @@ final class AdminUserRoutesTest extends TestCase
         $router = $this->buildRouter($db);
 
         $res = $router->dispatch($this->request('DELETE', '/api/v1/admin/users/admin-1', 'admin-1'));
-        self::assertSame(400, $res->statusCode);
+        // SH-078 #7: state conflicts answer 409 in the hub's conflict shape
+        // ({error:'Conflict', code, message}) — the prose moved to `message`.
+        self::assertSame(409, $res->statusCode);
         $payload = $this->decode($res);
         self::assertSame('cannot_delete_self', $payload['code'] ?? null);
+        self::assertSame('Conflict', $payload['error'] ?? null);
+        self::assertSame('Cannot delete your own account', $payload['message'] ?? null);
     }
 
     public function testDeleteRejectsLastAdmin(): void
@@ -720,9 +724,11 @@ final class AdminUserRoutesTest extends TestCase
         $router = $this->buildRouter($db);
 
         $res = $router->dispatch($this->request('DELETE', '/api/v1/admin/users/u-2', 'admin-1'));
-        self::assertSame(400, $res->statusCode);
+        // SH-078 #7: 409 conflict (see testDeleteRejectsSelf for the law).
+        self::assertSame(409, $res->statusCode);
         $payload = $this->decode($res);
         self::assertSame('last_admin', $payload['code'] ?? null);
+        self::assertSame('Cannot delete the last admin', $payload['message'] ?? null);
     }
 
     public function testDeleteSucceedsForPlainUser(): void
@@ -783,9 +789,11 @@ final class AdminUserRoutesTest extends TestCase
         $res = $router->dispatch($this->request('POST', '/api/v1/admin/users/admin-1/set-admin', 'admin-1', [
             'is_admin' => false,
         ]));
-        self::assertSame(400, $res->statusCode);
+        // SH-078 #7: 409 conflict (see testDeleteRejectsSelf for the law).
+        self::assertSame(409, $res->statusCode);
         $payload = $this->decode($res);
         self::assertSame('cannot_demote_self', $payload['code'] ?? null);
+        self::assertSame('Cannot demote yourself', $payload['message'] ?? null);
     }
 
     public function testSetAdminRejectsDemotingLastAdmin(): void
@@ -797,9 +805,11 @@ final class AdminUserRoutesTest extends TestCase
         $res = $router->dispatch($this->request('POST', '/api/v1/admin/users/u-2/set-admin', 'admin-1', [
             'is_admin' => false,
         ]));
-        self::assertSame(400, $res->statusCode);
+        // SH-078 #7: 409 conflict (see testDeleteRejectsSelf for the law).
+        self::assertSame(409, $res->statusCode);
         $payload = $this->decode($res);
         self::assertSame('last_admin', $payload['code'] ?? null);
+        self::assertSame('Cannot demote the last admin', $payload['message'] ?? null);
     }
 
     public function testSetAdminDemotesWhenOtherAdminsExist(): void
@@ -860,5 +870,81 @@ final class AdminUserRoutesTest extends TestCase
         $payload = $this->decode($res);
         self::assertArrayHasKey('profiles', $payload);
         self::assertSame([], $payload['profiles']);
+    }
+
+    // ── SH-078 (review hub__webux #6/#7) — all-problems validation, honest no-op ──
+
+    /**
+     * #6: one body with THREE broken fields must land all three details in a
+     * single 400 — the old shape reported one problem per round-trip.
+     */
+    public function testCreateReportsEveryFieldProblemAtOnce(): void
+    {
+        $this->asAdmin('admin-1', true);
+        $db = $this->makeDb(['emailExists' => false, 'usernameExists' => false]);
+        $router = $this->buildRouter($db);
+
+        $res = $router->dispatch($this->request('POST', '/api/v1/admin/users', 'admin-1', [
+            'username' => 'x',
+            'email'    => 'not-an-email',
+            'password' => 'short',
+        ]));
+
+        self::assertSame(400, $res->statusCode);
+        $payload = $this->decode($res);
+        self::assertSame('validation_failed', $payload['code'] ?? null);
+        self::assertSame('Validation failed', $payload['error'] ?? null);
+        $fieldErrors = $payload['field_errors'] ?? null;
+        self::assertIsArray($fieldErrors);
+        self::assertSame(
+            ['username', 'email', 'password'],
+            array_keys($fieldErrors),
+            'every failing field must be reported in the same response',
+        );
+        // Per-field detail strings are byte-ident to the legacy arms.
+        self::assertSame('Username must be 3-50 characters', $fieldErrors['username']);
+        self::assertSame('Invalid email format', $fieldErrors['email']);
+        self::assertSame('Password must be at least 8 characters', $fieldErrors['password']);
+    }
+
+    /**
+     * #6: update reports all field problems together too.
+     */
+    public function testUpdateReportsEveryFieldProblemAtOnce(): void
+    {
+        $this->asAdmin('admin-1', true);
+        $db = $this->makeDb(['findById' => ['id' => 'u-1', 'username' => 'me', 'email' => 'me@example.com']]);
+        $router = $this->buildRouter($db);
+
+        $res = $router->dispatch($this->request('PUT', '/api/v1/admin/users/u-1', 'admin-1', [
+            'username' => 'y',
+            'password' => 'tiny',
+        ]));
+
+        self::assertSame(400, $res->statusCode);
+        $payload = $this->decode($res);
+        $fieldErrors = $payload['field_errors'] ?? null;
+        self::assertIsArray($fieldErrors);
+        self::assertSame(['username', 'password'], array_keys($fieldErrors));
+    }
+
+    /**
+     * #6: a PUT that names no recognized field no longer claims a successful
+     * update (the 200 stays — nothing failed — but the message tells the truth).
+     */
+    public function testUpdateWithNoRecognizedFieldsSaysSo(): void
+    {
+        $this->asAdmin('admin-1', true);
+        $db = $this->makeDb(['findById' => ['id' => 'u-1', 'username' => 'me', 'email' => 'me@example.com']]);
+        $router = $this->buildRouter($db);
+
+        $res = $router->dispatch($this->request('PUT', '/api/v1/admin/users/u-1', 'admin-1', [
+            'note' => 'hello',
+        ]));
+
+        self::assertSame(200, $res->statusCode);
+        $payload = $this->decode($res);
+        self::assertSame('No recognized fields to update', $payload['message'] ?? null);
+        self::assertFalse($this->queriedFragment('UPDATE users SET'), 'no-op must not touch the row');
     }
 }

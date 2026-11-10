@@ -41,6 +41,15 @@ use Throwable;
  * an admin reaches the settings page. A hub under maintenance still boots
  * its own console by design.
  *
+ * SH-079 visibility law: the web-ui portal banner (`web-ui/src/utils/
+ * maintenanceNotice.ts`) narrates this state by keying on the UNIFORM 503
+ * frame emitted at Application::maintenanceResponse() — code
+ * `provider_unavailable`. The frame shape is therefore load-bearing on both
+ * sides of the boundary: the server whole-frame pin
+ * (tests/Unit/ApplicationMaintenanceResponseTest.php) and the client matcher
+ * (web-ui/tests/maintenance-notice.test.ts) must move together, or the
+ * maintenance mode goes invisible exactly the way the review found.
+ *
  * Read posture: LIVE, with a one-second per-worker memo. Live means an admin
  * PUT is observed by every HTTP worker within one second — the memo bounds
  * the hot-path cost (one unique-index SELECT/second/worker) without ever

@@ -106,13 +106,39 @@ final class RelayController
             ]);
         }
 
+        // SH-077/SH-081 seam (ruling 20): the endpoint signpost is computed ONCE
+        // above BOTH steer arms. TLS-lane truth: the steered SCHEME tracks the
+        // listener's bind-time posture (config `relay_tls` / HUB_RELAY_TLS — same
+        // truthiness idiom as config/server.php). Announcing `ws://` against a
+        // wss:// bind (or the reverse) sends operators into the endless-reconnect
+        // shape RelayConsumer itself documents. The PORT remains the fixed
+        // default — that limitation is documented, unchanged.
+        $docsUrl = 'https://detain.github.io/phlix-docs/dev/relay-protocol';
+        $hubWsHost = getenv('HUB_WS_HOST');
+        $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : getenv('HUB_PUBLIC_DOMAIN');
+        $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : 'your-hub-host';
+        $relayTls = filter_var(
+            ($v = getenv('HUB_RELAY_TLS')) !== false && $v !== '' ? $v : 'false',
+            FILTER_VALIDATE_BOOLEAN,
+        );
+        $wsEndpoint = ($relayTls ? 'wss://' : 'ws://') . $hubWsHost . ':8802';
+
         // Same normalisation caveat as the Authorization read above — the raw
         // bag only ever holds 'UPGRADE', so the literal 'Upgrade' never matched
         // and this branch fired for every caller, making the 501 below dead.
+        //
+        // SH-081 (hub__copywriter #1): the old copy promised "Please connect via
+        // WSS." unconditionally — a FALSE scheme promise on every hub that binds
+        // :8802 in plaintext (the default). The leg now steers through the same
+        // seam as the 501 below, so its sentence names the endpoint the hub
+        // actually serves, and the machine-readable `ws_endpoint` field joins the
+        // frame so callers never parse prose for the address.
         if ($request->getHeader('Upgrade') !== 'websocket') {
             return (new Response())->error(426, 'relay.ws_http_endpoint', 'UPGRADE_REQUIRED', [
-                'message' => 'This endpoint requires a WebSocket upgrade. Please connect via WSS.',
+                'message' => 'This endpoint requires a WebSocket upgrade.'
+                    . ' Connect to ' . $wsEndpoint . '.',
                 'upgrade' => 'websocket',
+                'ws_endpoint' => $wsEndpoint,
             ]);
         }
 
@@ -121,24 +147,14 @@ final class RelayController
         // for "this server doesn't know how to fulfill the request method"
         // — instead of 500 (which would imply a transient server fault).
         // Auth still runs above so unauth attempts still get 401/403.
-        $docsUrl = 'https://detain.github.io/phlix-docs/dev/relay-protocol';
-        $hubWsHost = getenv('HUB_WS_HOST');
-        $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : getenv('HUB_PUBLIC_DOMAIN');
-        $hubWsHost = is_string($hubWsHost) && $hubWsHost !== '' ? $hubWsHost : 'your-hub-host';
-
-        // TLS-lane signpost truth: the steered SCHEME tracks the listener's bind-time
-        // posture (config `relay_tls` / HUB_RELAY_TLS — same truthiness idiom as
-        // config/server.php). Announcing `ws://` against a wss:// bind (or the
-        // reverse) sends operators into the endless-reconnect shape RelayConsumer
-        // itself documents; before this seam the scheme was hardcoded `ws://`
-        // whatever the hub was actually serving on :8802. The PORT remains the
-        // fixed default — that limitation is documented, unchanged.
-        $relayTls = filter_var(
-            ($v = getenv('HUB_RELAY_TLS')) !== false && $v !== '' ? $v : 'false',
-            FILTER_VALIDATE_BOOLEAN,
-        );
-        $wsEndpoint = ($relayTls ? 'wss://' : 'ws://') . $hubWsHost . ':8802';
-
+        //
+        // SH-081 (hub__copywriter #4/#5): the steer family speaks one canonical
+        // sentence (byte-ident here and in ClientMountController's arms, modulo
+        // the surface noun + credential phrase), and the `protocol` key — which
+        // carried PROSE in a machine-field slot, was read by zero consumers, and
+        // named nothing resembling a protocol identifier — is retired. The
+        // pointer to the framing spec rides its honest legs: the `docs` field
+        // and the Link header.
         return (new Response())
             ->header('Link', '<' . $docsUrl . '>; rel="help"')
             ->header('X-WS-Endpoint', $wsEndpoint)
@@ -146,10 +162,9 @@ final class RelayController
             ->json([
                 'error'   => 'NOT_IMPLEMENTED_VIA_HTTP',
                 'code'    => 'relay.ws_http_endpoint',
-                'message' => 'Relay tunnel must be established via WebSocket.'
+                'message' => 'The relay tunnel must be established via WebSocket.'
                     . ' Connect to ' . $wsEndpoint . ' with your enrollment JWT.',
                 'ws_endpoint' => $wsEndpoint,
-                'protocol'    => 'See docs/dev/relay-protocol for the WS framing specification',
                 'docs'        => $docsUrl,
             ]);
     }

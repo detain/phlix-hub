@@ -231,6 +231,104 @@ final class RelayControllerTest extends TestCase
     }
 
     /**
+     * SH-081 (hub__copywriter #1): the 426 leg must steer through the SAME
+     * scheme-honest seam as the 501 — the old copy promised "Please connect via
+     * WSS." on every hub, which is a false scheme on the plaintext default bind
+     * (and the address was prose-only). Default env here ⇒ ws:// + the
+     * machine-readable ws_endpoint leg; the uppercase WSS promise is dead.
+     */
+    public function testUpgradeRequiredSteersThroughTheSchemeHonestSeam(): void
+    {
+        $restore = getenv('HUB_RELAY_TLS');
+        putenv('HUB_RELAY_TLS');
+
+        try {
+            $serverId = 'server-uuid-scheme';
+            $token = $this->jwtService->createEnrollmentJwt($serverId);
+
+            $request = new Request();
+            $request->headers['Authorization'] = 'Bearer ' . $token;
+
+            $response = $this->controller->handle($request, ['id' => $serverId]);
+
+            self::assertSame(426, $response->statusCode);
+            $body = $this->decodeJsonBody($response->body);
+            self::assertSame('UPGRADE_REQUIRED', $body['error']);
+            self::assertSame('websocket', $body['upgrade']);
+            self::assertIsString($body['message']);
+            self::assertStringContainsString('ws://', $body['message']);
+            self::assertStringNotContainsString('WSS', $body['message']);
+            self::assertIsString($body['ws_endpoint']);
+            self::assertStringStartsWith('ws://', $body['ws_endpoint']);
+        } finally {
+            if (is_string($restore)) {
+                putenv('HUB_RELAY_TLS=' . $restore);
+            } else {
+                putenv('HUB_RELAY_TLS');
+            }
+        }
+    }
+
+    /**
+     * The other half of the seam: with HUB_RELAY_TLS the 426 sentence must
+     * steer at wss:// — both steer legs share one endpoint source, so scheme
+     * drift between them is structurally impossible.
+     */
+    public function testUpgradeRequiredSignpostsWssWhenRelayTlsEnabled(): void
+    {
+        $restore = getenv('HUB_RELAY_TLS');
+        putenv('HUB_RELAY_TLS=true');
+
+        try {
+            $serverId = 'server-uuid-scheme-tls';
+            $token = $this->jwtService->createEnrollmentJwt($serverId);
+
+            $request = new Request();
+            $request->headers['Authorization'] = 'Bearer ' . $token;
+
+            $response = $this->controller->handle($request, ['id' => $serverId]);
+
+            self::assertSame(426, $response->statusCode);
+            $body = $this->decodeJsonBody($response->body);
+            self::assertIsString($body['message']);
+            self::assertStringContainsString('wss://', $body['message']);
+            self::assertIsString($body['ws_endpoint']);
+            self::assertStringStartsWith('wss://', $body['ws_endpoint']);
+        } finally {
+            if (is_string($restore)) {
+                putenv('HUB_RELAY_TLS=' . $restore);
+            } else {
+                putenv('HUB_RELAY_TLS');
+            }
+        }
+    }
+
+    /**
+     * SH-081 (hub__copywriter #4/#5): the 501 body carries the canonical steer
+     * family sentence, and the `protocol` key — prose squatting in a
+     * machine-field slot, zero readers estate-wide — is retired; the framing
+     * pointer rides its honest legs (`docs` + the Link header, pinned above).
+     */
+    public function testSteerFamilySpeaksOneCanonicalSentenceWithoutTheProtocolSquat(): void
+    {
+        $serverId = 'server-uuid-canonical';
+        $token = $this->jwtService->createEnrollmentJwt($serverId);
+
+        $request = new Request();
+        $request->headers['Authorization'] = 'Bearer ' . $token;
+        $request->headers['Upgrade'] = 'websocket';
+
+        $response = $this->controller->handle($request, ['id' => $serverId]);
+
+        self::assertSame(501, $response->statusCode);
+        $body = $this->decodeJsonBody($response->body);
+        self::assertIsString($body['message']);
+        self::assertStringStartsWith('The relay tunnel must be established via WebSocket.', $body['message']);
+        self::assertArrayNotHasKey('protocol', $body);
+        self::assertArrayHasKey('docs', $body);
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function decodeJsonBody(string $body): array

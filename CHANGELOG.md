@@ -6,6 +6,61 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed [hub-w18L2] — federation write-path atomicity + strict booleans + honest responder fields; admin error-shape consistency; maintenance-mode visibility; scheme-honest relay steer copy; written copy conventions (hub w18 L2, six-row DD batch) — 2026-11-10
+
+- SH-077 (`FederationController`): `PUT hub-config` is now two-phase — every supplied
+  field validates BEFORE any write or leaf intent leaves the process; previously a
+  `{role, malformed-url}` body persisted the role switch (including the worker
+  disconnect/connect requests) and then answered 400, leaving the hub on a side its
+  admin never confirmed. `toggleRelay`, `toggleAdminDelegation` and the `is_active`
+  arm parse their boolean fields STRICTLY — real booleans plus the documented
+  `'true'/'false'/1/0/'1'/'0'` spellings; anything else, a missing field included,
+  answers 400 `invalid_payload` with a `reason` naming the field instead of silently
+  persisting FALSE. Incoming-offer frames stop presenting the responder as an
+  accepter: the list carries `responded_by` honestly and keeps `accepted_by` non-null
+  only for real accepts; the reject response names the responder via
+  `responded_by` (DB columns untouched — it was the wire field that lied).
+- SH-078 (`AdminUserController` + `openapi.yaml`): create/update accumulate EVERY
+  per-field problem into one 400 (`{error:'Validation failed',
+  code:'validation_failed', field_errors:{…}}`, mirroring the hub's own
+  settings-controller law) instead of bailing at the first; a PUT carrying no
+  recognized fields answers 200 with a distinct no-op message instead of claiming
+  an update; delete and set-admin state conflicts (self-delete, last-admin,
+  self-demote) move from 400 to the hub's own 409 conflict shape
+  `{error:'Conflict', code, message}` — `cannot_delete_self`, `last_admin`,
+  `cannot_demote_self` are all registry codes, zero new wire codes — and the four
+  admin-user operations document their 400/409 legs in the spec.
+- SH-079 (`web-ui` + `MaintenanceGate` docblock): maintenance mode becomes visible
+  instead of a scatter of failed buttons — a portal-level notice
+  (`web-ui/src/utils/maintenanceNotice.ts`, installed after mount, headless-pinned by
+  `web-ui/tests/maintenance-notice.test.ts`) keys on the uniform 503
+  `provider_unavailable` frame, states the cause and links to the admin settings
+  page; the exempt escape-hatch surfaces answer non-503, so the toggle that ends
+  maintenance stays reachable and the banner clears itself. The frame shape is now
+  load-bearing on both sides of the boundary and pinned in both directions. The
+  `/app` bundle was regenerated deterministically (×2 `diff -r` clean); the entry
+  chunk rotates `index-DiyOxnYu` → `index-Du6IJpw1` and the chunk-name wave is
+  reference rotation, disclosed in the lane register.
+- SH-081 (`RelayController` + `ClientMountController`, owner-ratified reduced seam):
+  the `:8802` 426 leg hoists ONTO the existing `825e70dd` endpoint seam, so its
+  sentence can no longer promise WSS on a plaintext-default bind — it steers the
+  actual `ws://`/`wss://` endpoint and gained the machine-readable `ws_endpoint` leg;
+  the `:8803` 426/501 pair and the `:8802` 501 now speak one canonical steer family
+  sentence; the 501 body's `protocol` key (prose squatting in a machine-field slot,
+  zero readers estate-wide) is retired — the framing pointer rides its honest legs
+  (`docs` + the Link header). The `wss://` announcement carve-out stays reciprocally
+  live; the promoted 426 whole-frame pin rotated in the same commit.
+- SH-083 (README): the two copy conventions are WRITTEN law now — no terminal
+  periods on API message legs (the quota-frames M58 law, generalized; legacy
+  period-carrying arms named and grandfathered pending a coordinated copy wave) and
+  prose spells `ID` while machine keys stay snake_case. New strings shipped this
+  batch obey the law from birth.
+- LW-064-b closed with proof, zero diff: the hub's only `HeartbeatDto` construction
+  site (`ServerController`) has passed the strict-libraries flag since the
+  a1a7652a era; the reviewed default-invites drift lives in `phlix-shared` and its
+  default-side flip stays an owner-gated plan note. The card's
+  `src/Hub/HeartbeatDto.php` coordinate never existed in this repo.
+
 ### Chore [ui-26-1110] — re-vendor `@phlix/ui` #v0.99.26 + `/app` SPA regen + the CP-013 prose folds (hub w34L2, cookie-era ui tag, hub leg of the .26 consumer wave) — 2026-11-10
 
 - Tag-form re-pin of the served SPA's vendored library v0.99.25 → v0.99.26 (tag object

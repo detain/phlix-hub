@@ -886,6 +886,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+        "400":
+          description: "Validation failed — `field_errors` names every offending field in one response (SH-078)."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -921,6 +928,13 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: "State conflict: self-delete or last-admin (`cannot_delete_self` / `last_admin`), hub conflict shape {error, code, message} (SH-078)."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "429":
           $ref: "#/components/responses/TooManyRequests"
     get:
@@ -968,7 +982,7 @@ paths:
         - bearerAuth: []
       requestBody:
         required: false
-        description: Partial update — only the fields present and non-blank are written.
+        description: Partial update — only the recognized fields present are written; a body with none answers 200 with a no-op message (SH-078).
         content:
           application/json:
             schema:
@@ -990,6 +1004,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+        "400":
+          description: "Validation failed — `field_errors` names every offending field in one response (SH-078)."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1177,6 +1198,13 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: "State conflict: self-demotion or last-admin (`cannot_demote_self` / `last_admin`), hub conflict shape {error, code, message} (SH-078)."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "429":
           $ref: "#/components/responses/TooManyRequests"
   "/api/v1/admin/users/{id}/throttle":

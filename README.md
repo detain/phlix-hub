@@ -50,6 +50,7 @@ Sign in once, reach any of your servers from anywhere — no port forwarding, no
   - [Sonarr / Radarr (optional, for media requests — `config/server.php`)](#sonarr--radarr-optional-for-media-requests--configserverphp)
 - [Database schema](#database-schema)
 - [HTTP API](#http-api)
+  - [Copy conventions](#copy-conventions)
   - [Health & discovery](#health--discovery)
   - [Auth](#auth)
   - [Servers](#servers)
@@ -1491,6 +1492,26 @@ absolute precedence; browser clients may instead carry the HttpOnly
 state-changing request must pass the CP-012 CSRF Origin guard
 (`403 csrf.invalid_origin` otherwise). The legacy SSR page paths 302-redirect
 to `/app` unconditionally.
+
+### Copy conventions
+
+Two laws govern the human-readable legs of API responses (they generalize the
+quota-family law already written into `src/Http/QuotaFrames.php`):
+
+1. **No terminal periods.** Message legs carry no trailing period — the law is
+   written verbatim in the quota frames ("No leg carries a terminal period
+   (M58 API-message law)"). Several legacy arms still
+   ship period-closing sentences (`AdminUpdatesController`, `HubSettingsController`,
+   `RequestController`, `HubRestartController`, `McpTokenController`); they are
+   grandfathered until a coordinated copy wave rotates their whole-frame pins,
+   and every NEW or EDITED leg obeys the law from day one.
+2. **Prose spells `ID`.** Human-readable text writes "Server ID", "Peer ID",
+   "Offer ID"; machine keys stay snake_case (`server_id`, `peer_id`). Legacy
+   lowercase outliers (`ServerClaimController`'s "claim id" and the MCP tools'
+   "Id of a server…") are grandfathered under the same coordinated-wave rule.
+
+Consumer duty: clients match on `code`, never on prose — prose legs are free to
+be reworded, which is exactly why the whole-frame test pins exist on both sides.
 
 ### Health & discovery
 

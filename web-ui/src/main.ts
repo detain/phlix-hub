@@ -10,6 +10,7 @@ import HubSharedWithMePage from './pages/HubSharedWithMePage.vue';
 import HubSecuritySettingsPage from './pages/HubSecuritySettingsPage.vue';
 import HubWatchPartyPage from './pages/HubWatchPartyPage.vue';
 import { needsServerSelection, SERVER_DIRECTORY_PATH } from './utils/mediaGuard';
+import { installMaintenanceNotice } from './utils/maintenanceNotice';
 
 interface MinimalRouter {
     beforeEach(guard: (to: { path: string }) => true | { path: string }): void;
@@ -312,3 +313,9 @@ router.beforeEach((to) => (
 ));
 
 app.mount('#phlix-app');
+
+// SH-079: hub-level maintenance notice. Installs after mount so the banner's
+// body-append lands on the live document; wraps globalThis.fetch for the whole
+// app (the vendored @phlix/ui client uses fetch, so every API response is
+// observed). Law + inert-outside-browser guarantees in src/utils/maintenanceNotice.ts.
+installMaintenanceNotice();

@@ -171,6 +171,12 @@ final class ClientMountController
         // branch fired for every caller — the 501 steer below was unreachable.
         // getHeader() compares with strcasecmp(). See
         // tests/Unit/Http/RawHeaderIndexGateTest.php.
+        // SH-081 (hub__copywriter #4): the steer family speaks ONE canonical
+        // sentence — identical template here and in RelayController, modulo the
+        // surface noun and the credential phrase. The 426 leg previously said
+        // "The client relay must be established…" and the 501 leg "…over the
+        // WebSocket worker": three phrasings for one fact. The unavailable note
+        // (M2 law) rides every leg unchanged, byte-for-byte.
         if ($request->getHeader('Upgrade') !== 'websocket') {
             return (new Response())
                 ->header('X-WS-Endpoint', $wsEndpoint)
@@ -178,7 +184,7 @@ final class ClientMountController
                 ->json([
                     'error' => 'UPGRADE_REQUIRED',
                     'code' => 'relay.client_ws_endpoint',
-                    'message' => 'The client relay must be established via WebSocket. Connect to '
+                    'message' => 'The client relay tunnel must be established via WebSocket. Connect to '
                         . $wsEndpoint . ' with your client relay token.' . $unavailableNote,
                     'ws_endpoint' => $wsEndpoint,
                     'available' => false,
@@ -191,7 +197,7 @@ final class ClientMountController
             ->json([
                 'error' => 'NOT_IMPLEMENTED_VIA_HTTP',
                 'code' => 'relay.client_ws_endpoint',
-                'message' => 'The client relay tunnel must be established over the WebSocket worker. Connect to '
+                'message' => 'The client relay tunnel must be established via WebSocket. Connect to '
                     . $wsEndpoint . ' with your client relay token.' . $unavailableNote,
                 'ws_endpoint' => $wsEndpoint,
                 'available' => false,

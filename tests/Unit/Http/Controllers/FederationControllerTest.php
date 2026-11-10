@@ -1258,4 +1258,275 @@ final class FederationControllerTest extends TestCase
 
         self::assertSame(204, $this->controller->deletePeer($request, ['id' => 'peer-1'])->statusCode);
     }
+
+    // ── SH-077 (review hub__webux #3/#4/#5) — write-path atomicity, strict
+    //    toggles, honest responder fields ────────────────────────────────────
+
+    /**
+     * #3: a `{role, bad url}` body must be a clean 400 — the old sequential
+     * composition persisted the role switch (and fired the worker intents)
+     * before validating the URL, so the caller's "failed" request had already
+     * moved the hub to the other side.
+     */
+    public function testPutHubConfigRoleWithMalformedUrlWritesNothingAndSendsNoIntents(): void
+    {
+        $this->hubRepo->expects(self::never())->method('updateRole');
+        $this->hubRepo->expects(self::never())->method('ensureHubExists');
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['role' => 'leaf', 'url' => 'not a url at all'];
+
+        $response = $this->controller->putHubConfig($request);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_url', $body['code'] ?? null);
+        self::assertSame([], $this->leafCommandActions(), 'rejected body must publish zero worker intents');
+    }
+
+    public function testPutHubConfigRoleWithForeignSchemeUrlWritesNothingAndSendsNoIntents(): void
+    {
+        $this->hubRepo->expects(self::never())->method('updateRole');
+        $this->hubRepo->expects(self::never())->method('ensureHubExists');
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['role' => 'master', 'url' => 'ftp://hub.example.com'];
+
+        $response = $this->controller->putHubConfig($request);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_url', $body['code'] ?? null);
+        self::assertSame([], $this->leafCommandActions());
+    }
+
+    /**
+     * #4: the `enabled` field is strictly parsed now — ambiguous spellings
+     * (ints outside 1/0, prose, arrays) and absent fields reject with the
+     * registered invalid_payload code instead of silently writing FALSE.
+     */
+    public function testToggleRelayRejectsAmbiguousEnabledValues(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'relay_enabled' => 1,
+            'admin_delegation_enabled' => 0,
+        ]);
+        $this->hubRepo->expects(self::never())->method('updatePeerToggles');
+
+        foreach ([2, 'yes', '', [], null, ['true']] as $ambiguous) {
+            $request = new Request();
+            $request->method = 'PUT';
+            $request->userId = 'admin-1';
+            $request->body = ['enabled' => $ambiguous];
+
+            $response = $this->controller->toggleRelay($request, ['id' => 'peer-1']);
+
+            self::assertSame(400, $response->statusCode, 'ambiguous enabled value must reject');
+            $body = self::arrayNode(json_decode($response->body, true));
+            self::assertSame('invalid_payload', $body['code'] ?? null);
+        }
+    }
+
+    public function testToggleRelayRejectsMissingEnabledField(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'relay_enabled' => 1,
+            'admin_delegation_enabled' => 0,
+        ]);
+        $this->hubRepo->expects(self::never())->method('updatePeerToggles');
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['note' => 'flip it'];
+
+        $response = $this->controller->toggleRelay($request, ['id' => 'peer-1']);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_payload', $body['code'] ?? null);
+        // The old coercion treated a missing field as false AND ANSWERED 200
+        // while tearing relay down; nothing may leave this process now.
+        self::assertSame([], $this->leafCommandActions());
+    }
+
+    /**
+     * The documented accepted spellings — real booleans plus the string/int
+     * forms senders already use — all still parse (byte-compat law for the
+     * 'true'/'false' strings; 1/0 ride the DB row form).
+     */
+    public function testToggleRelayAcceptsDocumentedBooleanSpellings(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'relay_enabled' => 0,
+            'admin_delegation_enabled' => 0,
+        ]);
+
+        $truthy = [true, 'true', 1, '1'];
+        $falsy = [false, 'false', 0, '0'];
+
+        foreach ($truthy as $raw) {
+            $request = new Request();
+            $request->method = 'PUT';
+            $request->userId = 'admin-1';
+            $request->body = ['enabled' => $raw];
+
+            $response = $this->controller->toggleRelay($request, ['id' => 'peer-1']);
+            self::assertSame(200, $response->statusCode);
+            $body = self::arrayNode(json_decode($response->body, true));
+            self::assertTrue($body['relay_enabled'], var_export($raw, true) . ' must parse true');
+        }
+
+        foreach ($falsy as $raw) {
+            $request = new Request();
+            $request->method = 'PUT';
+            $request->userId = 'admin-1';
+            $request->body = ['enabled' => $raw];
+
+            $response = $this->controller->toggleRelay($request, ['id' => 'peer-1']);
+            self::assertSame(200, $response->statusCode);
+            $body = self::arrayNode(json_decode($response->body, true));
+            self::assertFalse($body['relay_enabled'], var_export($raw, true) . ' must parse false');
+        }
+    }
+
+    public function testToggleAdminDelegationRejectsNonBooleanEnabled(): void
+    {
+        $this->hubRepo->method('getPeerById')->willReturn([
+            'id' => 'peer-1',
+            'relay_enabled' => 1,
+            'admin_delegation_enabled' => 1,
+        ]);
+        $this->hubRepo->expects(self::never())->method('updatePeerToggles');
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['enabled' => 'yes'];
+
+        $response = $this->controller->toggleAdminDelegation($request, ['id' => 'peer-1']);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_payload', $body['code'] ?? null);
+    }
+
+    /**
+     * #4 family cure: hub-config `is_active` parses strictly too — and the
+     * optional-field law keeps an ABSENT field a no-op rather than a rejection.
+     */
+    public function testPutHubConfigRejectsNonBooleanIsActive(): void
+    {
+        $this->hubRepo->expects(self::never())->method('updateActive');
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['is_active' => 'yes'];
+
+        $response = $this->controller->putHubConfig($request);
+
+        self::assertSame(400, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('invalid_payload', $body['code'] ?? null);
+        self::assertSame([], $this->leafCommandActions());
+    }
+
+    public function testPutHubConfigTreatsAbsentIsActiveAsNoOp(): void
+    {
+        $this->hubRepo->expects(self::never())->method('updateActive');
+
+        $request = new Request();
+        $request->method = 'PUT';
+        $request->userId = 'admin-1';
+        $request->body = ['name' => 'Renamed'];
+
+        self::assertSame(200, $this->controller->putHubConfig($request)->statusCode);
+    }
+
+    /**
+     * #5: one DB column records WHOEVER responded; the list frame must not
+     * publish a rejection's actor as an acceptance.
+     */
+    public function testIncomingOfferListNamesResponderHonestly(): void
+    {
+        $this->libraryShares->method('getIncomingOffers')->willReturn([
+            ['id' => 'o-accept', 'peer_id' => 'p', 'library_id' => 'l', 'permission' => 'read',
+                'status' => 'accepted', 'offered_at' => null, 'responded_at' => 'x', 'accepted_by' => 'u-1'],
+            ['id' => 'o-reject', 'peer_id' => 'p', 'library_id' => 'l', 'permission' => 'read',
+                'status' => 'rejected', 'offered_at' => null, 'responded_at' => 'y', 'accepted_by' => 'u-2'],
+            ['id' => 'o-pending', 'peer_id' => 'p', 'library_id' => 'l', 'permission' => 'read',
+                'status' => 'pending', 'offered_at' => null, 'responded_at' => null, 'accepted_by' => null],
+        ]);
+
+        $request = new Request();
+        $request->method = 'GET';
+
+        $response = $this->controller->getIncomingOffers($request);
+        self::assertSame(200, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        $offers = self::arrayNode($body['incoming_offers']);
+
+        $byId = [];
+        foreach ($offers as $offer) {
+            $offer = self::arrayNode($offer);
+            $offerId = $offer['id'];
+            self::assertIsString($offerId);
+            $byId[$offerId] = $offer;
+        }
+
+        self::assertSame('u-1', $byId['o-accept']['accepted_by']);
+        self::assertSame('u-1', $byId['o-accept']['responded_by']);
+        self::assertNull($byId['o-reject']['accepted_by'], 'a rejection must not claim an accepter');
+        self::assertSame('u-2', $byId['o-reject']['responded_by']);
+        self::assertNull($byId['o-pending']['accepted_by']);
+        self::assertNull($byId['o-pending']['responded_by']);
+    }
+
+    public function testAcceptIncomingOfferRespondsBothFaces(): void
+    {
+        $this->libraryShares->method('getIncomingOfferById')->willReturn([
+            'id' => 'offer-1', 'peer_id' => 'peer-1', 'library_id' => 'lib-1',
+            'permission' => 'read', 'status' => 'pending',
+        ]);
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+
+        $response = $this->controller->acceptIncomingOffer($request, ['id' => 'offer-1']);
+
+        self::assertSame(200, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('accepted', $body['status']);
+        self::assertSame('admin-1', $body['accepted_by']);
+        self::assertSame('admin-1', $body['responded_by']);
+    }
+
+    public function testRejectIncomingOfferNeverClaimsAcceptance(): void
+    {
+        $this->libraryShares->method('getIncomingOfferById')->willReturn([
+            'id' => 'offer-1', 'peer_id' => 'peer-1', 'library_id' => 'lib-1',
+            'permission' => 'read', 'status' => 'pending',
+        ]);
+
+        $request = new Request();
+        $request->method = 'POST';
+        $request->userId = 'admin-1';
+
+        $response = $this->controller->rejectIncomingOffer($request, ['id' => 'offer-1']);
+
+        self::assertSame(200, $response->statusCode);
+        $body = self::arrayNode(json_decode($response->body, true));
+        self::assertSame('rejected', $body['status']);
+        self::assertArrayNotHasKey('accepted_by', $body, 'reject frame must not carry an acceptance claim');
+        self::assertSame('admin-1', $body['responded_by']);
+    }
 }

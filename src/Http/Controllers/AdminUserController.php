@@ -52,7 +52,13 @@ use Phlix\Hub\Http\Response;
  * Responses mirror the server controller's shapes so the shared client
  * unwraps them unchanged: `{ users }`, `{ user }`, `{ user_id, message }`,
  * `{ message }`, `{ message, new_password }`, `{ profiles }`; errors carry
- * `{ error, code, field_errors? }`.
+ * `{ error, code, field_errors? }`. Two deliberate hub-side divergences
+ * (SH-078, review hub__webux #6/#7) ride INSIDE that envelope contract:
+ * validation answers ONE 400 carrying every failing field (hub's own settings
+ * law), and state conflicts (self-delete, last-admin, self-demotion) answer
+ * 409 with `{ error: 'Conflict', code, message }` (hub's own federation
+ * conflict shape). Codes and field_errors are unchanged in kind, so the
+ * shared client's code-keyed surfacing keeps working on both hosts.
  *
  * @package Phlix\Hub\Http\Controllers
  */
@@ -114,24 +120,40 @@ final class AdminUserController
         $isAdmin = filter_var($body['is_admin'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
         $usernameError = $this->validateUsername($username);
+        $emailValid = filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+        $passwordValid = strlen($password) >= self::MIN_PASSWORD_LENGTH;
+
+        // SH-078 (review hub__webux #6): every field problem is reported in ONE
+        // 400 — the old bail-on-first shape made admins fix one field per
+        // round-trip. This mirrors the hub's own settings law
+        // (HubSettingsController::putSettings answers ALL problems at once);
+        // per-field detail strings ride unchanged inside field_errors.
+        /** @var array<string, string> $fieldErrors */
+        $fieldErrors = [];
         if ($usernameError !== null) {
-            return $this->fieldError('Invalid username', 'username', $usernameError);
+            $fieldErrors['username'] = $usernameError;
         }
-        if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
-            return $this->fieldError('Invalid email', 'email', 'Invalid email format');
+        if (!$emailValid) {
+            $fieldErrors['email'] = 'Invalid email format';
         }
-        if (strlen($password) < self::MIN_PASSWORD_LENGTH) {
-            return $this->fieldError(
-                'Invalid password',
-                'password',
-                'Password must be at least 8 characters',
-            );
+        if (!$passwordValid) {
+            $fieldErrors['password'] = 'Password must be at least 8 characters';
         }
-        if ($this->users->emailExists($email)) {
-            return $this->fieldError('Email already exists', 'email', 'This email is already registered');
+
+        // Uniqueness pre-checks run only when every format check passed: they
+        // need the DB, and a malformed value must not spend a lookup whose
+        // slot already carries the format detail.
+        if ($fieldErrors === []) {
+            if ($this->users->emailExists($email)) {
+                $fieldErrors['email'] = 'This email is already registered';
+            }
+            if ($this->users->usernameExists($username)) {
+                $fieldErrors['username'] = 'This username is already taken';
+            }
         }
-        if ($this->users->usernameExists($username)) {
-            return $this->fieldError('Username already exists', 'username', 'This username is already taken');
+
+        if ($fieldErrors !== []) {
+            return $this->fieldErrors($fieldErrors);
         }
 
         $userId = $this->users->create([
@@ -175,41 +197,52 @@ final class AdminUserController
         /** @var array<string, string> $data */
         $data = [];
 
+        // SH-078 (review hub__webux #6): accumulate every field problem into a
+        // single 400 (see create() for the law); details keep their exact
+        // legacy strings.
+        /** @var array<string, string> $fieldErrors */
+        $fieldErrors = [];
+
         if (array_key_exists('username', $body)) {
             $username = $this->trimmedString($body, 'username');
             $usernameError = $this->validateUsername($username);
             if ($usernameError !== null) {
-                return $this->fieldError('Invalid username', 'username', $usernameError);
+                $fieldErrors['username'] = $usernameError;
+            } else {
+                $clash = $this->users->findByUsername($username);
+                if ($clash !== null && $this->str($clash, 'id') !== $id) {
+                    $fieldErrors['username'] = 'This username is already taken';
+                } else {
+                    $data['username'] = $username;
+                }
             }
-            $clash = $this->users->findByUsername($username);
-            if ($clash !== null && $this->str($clash, 'id') !== $id) {
-                return $this->fieldError('Username already in use', 'username', 'This username is already taken');
-            }
-            $data['username'] = $username;
         }
 
         if (array_key_exists('email', $body)) {
             $email = $this->trimmedString($body, 'email');
             if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
-                return $this->fieldError('Invalid email', 'email', 'Invalid email format');
+                $fieldErrors['email'] = 'Invalid email format';
+            } else {
+                $clash = $this->users->findByEmail($email);
+                if ($clash !== null && $this->str($clash, 'id') !== $id) {
+                    $fieldErrors['email'] = 'This email is already registered';
+                } else {
+                    $data['email'] = $email;
+                }
             }
-            $clash = $this->users->findByEmail($email);
-            if ($clash !== null && $this->str($clash, 'id') !== $id) {
-                return $this->fieldError('Email already in use', 'email', 'This email is already registered');
-            }
-            $data['email'] = $email;
         }
 
         if (array_key_exists('password', $body)) {
             $password = $this->rawString($body, 'password');
             if (strlen($password) < self::MIN_PASSWORD_LENGTH) {
-                return $this->fieldError(
-                    'Invalid password',
-                    'password',
-                    'Password must be at least 8 characters',
-                );
+                $fieldErrors['password'] = 'Password must be at least 8 characters';
+            } else {
+                $data['password'] = $password;
             }
-            $data['password'] = $password;
+        }
+
+        if ($fieldErrors !== []) {
+            return $this->fieldErrors($fieldErrors);
         }
 
         if ($data !== []) {
@@ -220,9 +253,15 @@ final class AdminUserController
                 $id,
                 ['fields' => array_keys($data)],
             );
+
+            return (new Response())->json(['message' => 'User updated successfully']);
         }
 
-        return (new Response())->json(['message' => 'User updated successfully']);
+        // SH-078: a PUT that recognized no fields said "updated" anyway. The
+        // 200 stays (the request is valid and the row is untouched — nothing
+        // failed), but the message now says what actually happened. Copy obeys
+        // the hub terminal-period law (SH-083).
+        return (new Response())->json(['message' => 'No recognized fields to update']);
     }
 
     /**
@@ -239,11 +278,16 @@ final class AdminUserController
             return $this->notFound();
         }
 
+        // SH-078 (review hub__webux #7): these are conflicts with the CURRENT
+        // resource state (who the caller is, how many admins remain), not
+        // malformed requests — 409, mirroring the hub's own conflict precedent
+        // (FederationController's offer_already_responded shape
+        // {error: 'Conflict', code, message}). Codes ride unchanged.
         if (($request->userId ?? '') === $id) {
-            return $this->badRequest('Cannot delete your own account', 'cannot_delete_self');
+            return $this->conflict('Cannot delete your own account', 'cannot_delete_self');
         }
         if ($this->intFlag($existing, 'is_admin') === 1 && $this->users->countAdmins() <= 1) {
-            return $this->badRequest('Cannot delete the last admin', 'last_admin');
+            return $this->conflict('Cannot delete the last admin', 'last_admin');
         }
 
         $this->users->delete($id);
@@ -270,11 +314,12 @@ final class AdminUserController
         $isAdmin = filter_var($request->body['is_admin'] ?? false, FILTER_VALIDATE_BOOLEAN);
         $actingId = $request->userId ?? '';
 
+        // SH-078 #7: state conflicts answer 409 (see delete() for the law).
         if (!$isAdmin && $actingId === $id) {
-            return $this->badRequest('Cannot demote yourself', 'cannot_demote_self');
+            return $this->conflict('Cannot demote yourself', 'cannot_demote_self');
         }
         if (!$isAdmin && $this->intFlag($existing, 'is_admin') === 1 && $this->users->countAdmins() <= 1) {
-            return $this->badRequest('Cannot demote the last admin', 'last_admin');
+            return $this->conflict('Cannot demote the last admin', 'last_admin');
         }
 
         $this->users->setAdmin($id, $isAdmin);
@@ -448,26 +493,39 @@ final class AdminUserController
     }
 
     /**
-     * 400 — a business-rule rejection (`{ error, code }`).
+     * 409 — a conflict with the resource's current state
+     * (`{ error, code, message }`), mirroring the hub's federation-conflict
+     * shape (review hub__webux #7). The prose lives in `message`; `error`
+     * carries the status-family word, exactly like the shipped
+     * offer_already_responded frame.
      */
-    private function badRequest(string $error, string $code): Response
+    private function conflict(string $message, string $code): Response
     {
-        return (new Response())->status(400)->json([
-            'error' => $error,
-            'code'  => $code,
+        return (new Response())->status(409)->json([
+            'error'   => 'Conflict',
+            'code'    => $code,
+            'message' => $message,
         ]);
     }
 
     /**
-     * 400 — a field validation failure (`{ error, code, field_errors }`),
-     * matching the server controller so the shared client surfaces it.
+     * 400 — field validation failure(s) (`{ error, code, field_errors }`).
+     *
+     * SH-078 (review hub__webux #6): ONE response carries EVERY failing field
+     * (hub law, mirroring HubSettingsController's all-problems-at-once shape);
+     * the umbrella `error` is the fixed string 'Validation failed' and the
+     * per-field detail strings live in `field_errors`. The shared client
+     * unwraps `code`/`field_errors` unchanged; code stays registered
+     * 'validation_failed'.
+     *
+     * @param array<string, string> $fieldErrors
      */
-    private function fieldError(string $error, string $field, string $detail): Response
+    private function fieldErrors(array $fieldErrors): Response
     {
         return (new Response())->status(400)->json([
-            'error'        => $error,
+            'error'        => 'Validation failed',
             'code'         => 'validation_failed',
-            'field_errors' => [$field => $detail],
+            'field_errors' => $fieldErrors,
         ]);
     }
 

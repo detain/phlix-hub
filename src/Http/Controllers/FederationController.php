@@ -196,12 +196,45 @@ final class FederationController
         /** @var mixed $publicKeyRaw */
         $publicKeyRaw = $body['public_key'] ?? null;
 
-        // Validate role
+        // ── Validation phase (SH-077, review hub__webux #3) ─────────────────
+        // Every supplied field is checked to completion BEFORE this handler
+        // writes anything or publishes any worker intent. The old sequential
+        // composition applied `role` (DB write + disconnect/connect intents)
+        // while `url` had not been inspected yet, so a `{role, bad url}` body
+        // persisted the role switch and then answered 400 — the caller saw a
+        // failure for a request that had already moved the hub to the other
+        // side. Guard-clause discipline: no partial-effect path remains.
         if ($roleRaw !== null) {
             if (!is_string($roleRaw) || !in_array($roleRaw, ['master', 'leaf'], true)) {
                 return $this->badRequest('invalid_role');
             }
+        }
 
+        // The hub's advertised dial-address earns the same store-time law as
+        // peer URLs (Minor 47): this arm once checked only "non-empty string",
+        // so any scheme-less/foreign-scheme value landed in federation_hubs and
+        // went out to followers.
+        if ($urlRaw !== null) {
+            if (!is_string($urlRaw) || $urlRaw === '' || !filter_var($urlRaw, FILTER_VALIDATE_URL)) {
+                return $this->badRequest('invalid_url');
+            }
+
+            if (!self::hasAllowedUrlScheme($urlRaw)) {
+                return $this->badRequest('invalid_url', 'hub URL scheme must be one of: http, https, ws, wss');
+            }
+        }
+
+        // `is_active` is a strict boolean now (SH-077 family cure, see
+        // tryParseBoolField). The field is optional — putHubConfig is a partial
+        // update — so only a PRESENT value is parsed; absence must not 400.
+        $hasActive = array_key_exists('is_active', $body);
+        $isActive = null;
+        if ($hasActive && !self::tryParseBoolField($isActiveRaw, $isActive)) {
+            return $this->badRequest('invalid_payload', 'Field "is_active" must be a boolean');
+        }
+
+        // ── Persist phase (validation is done; order of effects unchanged) ──
+        if ($roleRaw !== null) {
             // If role is changing, update is_master flag
             $this->hubRepo->updateRole($roleRaw);
 
@@ -216,19 +249,7 @@ final class FederationController
             }
         }
 
-        // Validate and update URL — the hub's advertised dial-address earns the
-        // same store-time law as peer URLs (Minor 47): this arm previously
-        // checked only "non-empty string", so any scheme-less/foreign-scheme
-        // value landed in federation_hubs and went out to followers.
         if ($urlRaw !== null) {
-            if (!is_string($urlRaw) || $urlRaw === '' || !filter_var($urlRaw, FILTER_VALIDATE_URL)) {
-                return $this->badRequest('invalid_url');
-            }
-
-            if (!self::hasAllowedUrlScheme($urlRaw)) {
-                return $this->badRequest('invalid_url', 'hub URL scheme must be one of: http, https, ws, wss');
-            }
-
             // Update hub URL
             $hubConfig = $this->hubRepo->getHubConfig();
             if ($hubConfig !== null) {
@@ -269,20 +290,61 @@ final class FederationController
         }
 
         // Update active flag
-        if ($isActiveRaw !== null) {
-            $isActive = is_bool($isActiveRaw) ? $isActiveRaw
-                : (is_string($isActiveRaw) && $isActiveRaw === 'true');
-            $this->hubRepo->updateActive($isActive);
+        if ($hasActive) {
+            // Validation phase guarantees $isActive is a parsed bool here.
+            $this->hubRepo->updateActive((bool) $isActive);
 
             // If deactivating, request the worker take the leaf link down
             // (review hub__asphp: this used to mutate an HTTP-local instance
             // while the real :8805 link and its ladder kept running).
-            if (!$isActive) {
+            if ($isActive === false) {
                 $this->requestLeafLink(FederationPushProtocol::ACTION_LEAF_DISCONNECT);
             }
         }
 
         return $this->getHubConfig($request);
+    }
+
+    /**
+     * Strict tri-state parse for boolean body fields (SH-077, review
+     * hub__webux #4).
+     *
+     * The old coercion `is_bool($raw) ? $raw : ($raw === 'true')` silently
+     * wrote FALSE for `{enabled: 1}`, `{enabled: 'yes'}` and for a MISSING
+     * field alike — an ambiguous body disabled links while answering 200.
+     * Accepted spellings (documented, all preserved for senders that already
+     * used them): real booleans; the strings 'true'/'false'; 1/0 and '1'/'0'
+     * (the DB row form toggles arrive in). Anything else — including null at a
+     * call site whose field is required — rejects with the registered
+     * 'invalid_payload' code (no new wire codes; ServerClaimController set the
+     * "body present-but-malformed → invalid_payload" precedent in this repo).
+     *
+     * @param mixed     $raw   Raw body value.
+     * @param bool|null $value Parsed verdict on success, null on rejection.
+     */
+    private static function tryParseBoolField(mixed $raw, ?bool &$value): bool
+    {
+        if (is_bool($raw)) {
+            $value = $raw;
+
+            return true;
+        }
+
+        if ($raw === 'true' || $raw === 1 || $raw === '1') {
+            $value = true;
+
+            return true;
+        }
+
+        if ($raw === 'false' || $raw === 0 || $raw === '0') {
+            $value = false;
+
+            return true;
+        }
+
+        $value = null;
+
+        return false;
     }
 
     /**
@@ -583,8 +645,14 @@ final class FederationController
 
         /** @var mixed $enabledRaw */
         $enabledRaw = $body['enabled'] ?? null;
-        $relayEnabled = is_bool($enabledRaw) ? $enabledRaw
-            : (is_string($enabledRaw) && $enabledRaw === 'true');
+        // SH-077 (review hub__webux #4): strict parse — the old coercion wrote
+        // FALSE (and answered 200) for {enabled: 1} and for a missing field.
+        $relayEnabled = null;
+        if (!self::tryParseBoolField($enabledRaw, $relayEnabled)) {
+            return $this->badRequest('invalid_payload', 'Field "enabled" must be a boolean');
+        }
+        // Narrowing after the guard: the parse succeeded, so this is a bool.
+        $relayEnabled = $relayEnabled === true;
 
         /** @var mixed $adminDelRaw */
         $adminDelRaw = $peer['admin_delegation_enabled'] ?? null;
@@ -649,8 +717,12 @@ final class FederationController
 
         /** @var mixed $enabledRaw */
         $enabledRaw = $body['enabled'] ?? null;
-        $adminDelEnabled = is_bool($enabledRaw) ? $enabledRaw
-            : (is_string($enabledRaw) && $enabledRaw === 'true');
+        // SH-077 (review hub__webux #4): strict parse, same law as toggleRelay.
+        $adminDelEnabled = null;
+        if (!self::tryParseBoolField($enabledRaw, $adminDelEnabled)) {
+            return $this->badRequest('invalid_payload', 'Field "enabled" must be a boolean');
+        }
+        $adminDelEnabled = $adminDelEnabled === true;
 
         /** @var mixed $relayRaw */
         $relayRaw = $peer['relay_enabled'] ?? null;
@@ -874,7 +946,16 @@ final class FederationController
                     'status' => $o['status'] ?? 'pending',
                     'offered_at' => $o['offered_at'] ?? null,
                     'responded_at' => $o['responded_at'] ?? null,
-                    'accepted_by' => $o['accepted_by'] ?? null,
+                    // SH-077 (review hub__webux #5): the single responder column
+                    // is named by WHOEVER responded — this arm used to publish it
+                    // as 'accepted_by' for rejected offers too, claiming every
+                    // responder an accepter. The truth carries both faces: the
+                    // actor in 'responded_by' (column echo), 'accepted_by' only
+                    // when the outcome actually IS an acceptance.
+                    'responded_by' => $o['accepted_by'] ?? null,
+                    'accepted_by' => ($o['status'] ?? 'pending') === 'accepted'
+                        ? ($o['accepted_by'] ?? null)
+                        : null,
                 ],
                 $offers,
             ),
@@ -931,7 +1012,9 @@ final class FederationController
         return (new Response())->json([
             'id' => $offerId,
             'status' => 'accepted',
+            // SH-077: both faces of the responder column, honestly named.
             'accepted_by' => $userId,
+            'responded_by' => $userId,
         ]);
     }
 
@@ -985,7 +1068,11 @@ final class FederationController
         return (new Response())->json([
             'id' => $offerId,
             'status' => 'rejected',
-            'accepted_by' => $userId,
+            // SH-077 (review hub__webux #5): the old frame reported the
+            // rejecting user under 'accepted_by' — a lie on the wire. A
+            // rejection names its responder in 'responded_by' and carries no
+            // acceptance claim.
+            'responded_by' => $userId,
         ]);
     }
 
