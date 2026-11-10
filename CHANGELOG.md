@@ -6,6 +6,57 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added [hub-w30L2-round1-1109] — CP-011: auth-cookie dual-emit re-introduced on a policy seam (hub twin of server 7e1b0497): browser-class login/register/refresh get the HttpOnly `phlix_hub_token`+`phlix_hub_refresh` pair ADDITIVELY, the auth middleware reads the cookie after bearer, logout clears the jar unconditionally
+
+- **CP-011** (`src/Hub/CookiePolicy.php` new, `src/Http/Controllers/AuthController.php`,
+  `src/Http/Middleware/AuthMiddleware.php`, `src/Http/Request.php`,
+  `src/Auth/AuthManager.php`, `src/Common/Container/Providers/HttpServicesProvider.php`):
+  COOKIE-DESIGN.md §4.2 re-introduces the hub's deleted cookie half (the AuthMiddleware
+  docblock literally recorded "deleted as unreachable code") behind ONE policy seam.
+  `CookiePolicy` answers §2.1 custody (device marker / foreign-or-webview Origin /
+  no-signal → bearer, byte-ident today; same-site http(s) Origin or
+  `Sec-Fetch-Site: same-origin` → browser-class — the hub has NO form-era limb), the
+  §7 master switch `auth.cookie.enabled` (shared schema 2683579, live
+  `HubSettingsResolvers::bool` read, fail-OPEN; belt AND braces: classify gate plus an
+  attach-point consult), and the §2.4 scheme law (`X-Forwarded-Proto` first hop,
+  localhost Host any port, or the explicit `HUB_COOKIE_INSECURE=1|true` / stored
+  `auth.cookie.insecure` override which drops `Secure` too — never a silent downgrade,
+  CD-3a). Cookie NAMES revive the hub's legacy pair deliberately distinct from the
+  server's: port-agnostic jars behind one hostname (jar-clobber law).
+  signup/login/refresh capture the response, classify, and attach the pair
+  (`HttpOnly`, `SameSite=Lax`, session Max-Age = payload `expires_in`, refresh Max-Age =
+  new `AuthManager::refreshTtl()` delegate — the two lifetimes can never drift from the
+  JWTs' `exp`); the JSON body stays byte-identical (`json_encode` compact, ZERO new wire
+  codes). Refresh/logout accept the cookie as second lineage source (body token keeps
+  precedence); logout clears both names on EVERY path — revocation hygiene, not
+  issuance. The read fallback in `AuthMiddleware::extractToken` is intentionally NOT
+  gated by the switch (presented artifacts are validated, never re-adjudicated) and
+  bearer precedence is absolute, so mobile/console/rok/tizen/windows wire behavior is
+  byte-ident. CSRF: SameSite=Lax interim posture; the Origin guard is the next
+  registered row (CP-012) riding these same primitives.
+- **Tests** (`tests/Unit/Hub/CookiePolicyTest.php`,
+  `tests/Unit/Http/Controllers/CookieDualEmitTest.php`,
+  `tests/Unit/Http/Controllers/CookiePolicyWiringGuardTest.php`,
+  `tests/Unit/Http/Middleware/CookieAuthFallbackTest.php` new;
+  `tests/Support/CookiePolicyTestShapes.php` fixture): 47 new legs / 166 assertions —
+  pure-policy matrix (fail-open/env forms/scheme table/custody incl. bracketed IPv6),
+  dual-emit wire proofs (byte-ident bodies both classes, insecure-env leg, 201 register
+  pair, refresh precedence + rotation, cookie-lineage + anonymous logout, compose-level
+  Set-Cookie strings), read-path fallback (real JwtHandler tokens, bearer wins, garbage
+  hits the same `auth.invalid_token` frame, refresh-type refused), and a source-scan
+  wiring guard pinning AuthController as the ONLY cookie minter, the belt, the three
+  classify legs, the provider singleton, and the contracts mode-vocabulary literals.
+  Red-first at parent recorded per leg (four suites; two frame legs GREEN-at-parent by
+  design = the non-regression frames); ten mutations M1–M10 each convicted by named
+  tests. Sibling law flips disclosed: `AuthControllerTest` (jar-clear + cookie-fallback
+  legs) and `AuthMiddlewareTest` (three cookie legs bearer-era rejections → authenticates,
+  SameSite=Lax/CP-012 posture in docblocks).
+- **Durations** (`scripts/parallel/test-durations.json`): bless law honoured IN this
+  commit — 4 new Unit files entered from a serial Unit junit (5602 tests; the junit's 3
+  RelayProxyBridge swoole-absence host errors are the pre-existing class its own
+  generatedFrom note already documents).
+
+
 ### Fixed [hub-w17L4-round2-1109] — SH-075: admin request approve/deny second click is a 409 conflict, not a 500 blaming the *arr backend; SH-070: HubRestartController goes `final` behind an injected process-reloader port
 
 - **SH-075** (`src/Requests/RequestManager.php`, `src/Requests/RequestTransitionResult.php`

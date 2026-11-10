@@ -13,6 +13,7 @@ namespace Phlix\Hub\Http\Middleware;
 
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
+use Phlix\Hub\Hub\CookiePolicy;
 use Phlix\Hub\Http\Request;
 use Phlix\Hub\Http\Response;
 use Phlix\Shared\Auth\JwtClaims;
@@ -21,16 +22,33 @@ use function count;
 use function time;
 
 /**
- * Hub-side BEARER-ONLY auth middleware.
+ * Hub-side auth middleware — bearer first, session cookie second.
  *
- * Reads the access JWT from the `Authorization: Bearer …` header — the
- * session-cookie path was deleted as dead code: nothing in the hub ever
- * SETS a `phlix_hub_token`/`phlix_hub_refresh` cookie (login/refresh
- * respond with tokens in the JSON body and the Vue SPA carries the
- * bearer header), so the cookie-read branch was unreachable legacy left
- * over from the retired SSR form UI. Removing it also removes the
- * cookie-CSRF consideration from this surface entirely: bearer headers
- * are not attached cross-origin.
+ * Reads the access JWT from the `Authorization: Bearer …` header; when none
+ * is presented it falls back to the `phlix_hub_token` cookie minted by
+ * {@see \Phlix\Hub\Http\Controllers\AuthController}'s CP-011 dual-emit
+ * (COOKIE-DESIGN.md §4.2, owner ruling CD-8a — the hub twin of the server's
+ * RequestAuthenticator precedence). The deleted-surface note this text
+ * replaced claimed the cookie read was unreachable dead code; CP-011 makes
+ * that history false on purpose: the hub's same-origin /app SPA moves to
+ * HttpOnly cookie custody and this is the read seam it rides.
+ *
+ * The fallback is deliberately NOT gated by the `auth.cookie.enabled`
+ * master switch — presented artifacts are VALIDATED, never re-adjudicated by
+ * the toggle that governs issuance (the same law as the server read path:
+ * flipping the switch off stops NEW cookies; a still-unexpired JWT in a jar
+ * stays as valid — or as invalid — as the signature says). Bearer precedence
+ * is absolute: a request presenting BOTH carries the bearer's identity, so
+ * every pre-cookie client's wire behavior is byte-identical.
+ *
+ * CSRF posture of the cookie carrier: SameSite=Lax is shipped on the cookie
+ * itself (cross-site POSTs never attach it); the request-level Origin guard
+ * mirroring the server's validateCsrfOrigin is the NEXT registered row
+ * (CP-012) and lands behind this seam — the seam note is part of the lane
+ * register. Bearer-authenticated requests remain CSRF-immune by construction
+ * (browsers do not auto-attach Authorization cross-origin), and the hub's
+ * CORS stays never-credentials, so the cookie surface is same-origin /app
+ * only — STRICTER than the server and consistent (§1.6).
  *
  * Hydrates {@see Request::$userId} when the token validates. When the
  * token is missing or invalid:
@@ -135,17 +153,19 @@ final class AuthMiddleware
     }
 
     /**
-     * Pull the token from the `Authorization: Bearer …` header.
-     *
-     * Bearer-only by design — see the class docblock for why the legacy
-     * cookie read was deleted.
+     * Pull the access token: `Authorization: Bearer …` FIRST, then the
+     * `phlix_hub_token` session cookie (CP-011 read-path fallback — see the
+     * class docblock for the precedence, ungating and CSRF-posture laws).
+     * A cookie that fails validation falls through to the existing
+     * `auth.invalid_token` challenge exactly like a bad bearer: one gate,
+     * one envelope, no carrier oracle.
      */
     private function extractToken(Request $request): ?string
     {
         if ($request->bearerToken !== null && $request->bearerToken !== '') {
             return $request->bearerToken;
         }
-        return null;
+        return $request->getCookie(CookiePolicy::SESSION_COOKIE);
     }
 
     /**

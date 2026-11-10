@@ -147,18 +147,23 @@ final class AuthMiddlewareTest extends TestCase
     }
 
     /**
-     * Finding 8: the legacy `phlix_hub_token` cookie is DEAD surface — nothing
-     * ever set it, and the read branch was deleted. A cookie-only request must
-     * be challenged exactly like a request with no credentials at all.
+     * CP-011 FLIP of Finding 8 ("the legacy cookie is DEAD surface — a
+     * cookie-only request must be challenged"): the read seam is
+     * re-introduced at {@see AuthMiddleware::extractToken()}. A valid
+     * session cookie now authenticates, and the user probe IS reached.
+     * Cookie-vs-bearer precedence and the failure frames carry their full
+     * pin-set in CookieAuthFallbackTest; this leg keeps the file's own
+     * historical narrative honest.
      */
-    public function testLegacyCookieIsIgnoredAndChallenges(): void
+    public function testSessionCookieAuthenticatesAfterCP011(): void
     {
         $jwt = new JwtHandler(self::SECRET);
         $token = $jwt->createAccessToken('u-c');
 
         $repo = $this->createMock(UserRepository::class);
-        // The cookie must never authenticate, so the user probe is unreachable.
-        $repo->expects(self::never())->method('userExists');
+        // The cookie authenticates, so the probe IS reached.
+        $repo->expects(self::once())->method('userExists')->with('u-c')->willReturn(true);
+        $repo->method('findById')->willReturn(['id' => 'u-c', 'username' => 'c']);
 
         $mw = new AuthMiddleware($jwt, $repo);
         $request = new Request();
@@ -167,25 +172,26 @@ final class AuthMiddlewareTest extends TestCase
         $request->headers = ['COOKIE' => 'phlix_hub_token=' . $token . '; other=1'];
 
         $response = $mw($request);
-        self::assertNotNull($response);
-        // HTML path challenge: 302 to the SPA login, no identity attached.
-        self::assertSame(302, $response->statusCode);
-        self::assertNull($request->userId);
+        self::assertNull($response);
+        self::assertSame('u-c', $request->userId);
     }
 
     /**
-     * A MUTATING `/api/v1` request with only the legacy cookie is rejected
-     * (it always was) — and now for the stronger reason that NO cookie path
-     * exists at all: the API surface is bearer-only for every method.
+     * CP-011 FLIP of "mutating API with only the legacy cookie is rejected":
+     * the cookie now authenticates EVERY method (the server twin's shipped
+     * posture). The interim CSRF defense is SameSite=Lax at issuance — the
+     * Origin guard on cookie-authenticated mutations is CP-012, named in the
+     * AuthMiddleware class docblock seam note, deliberately NOT smuggle-fixed
+     * on this lane.
      */
-    public function testMutatingApiRequestWithOnlyCookieIsRejected(): void
+    public function testMutatingApiRequestWithOnlyCookieAuthenticates(): void
     {
         $jwt = new JwtHandler(self::SECRET);
         $token = $jwt->createAccessToken('u-api');
 
         $repo = $this->createMock(UserRepository::class);
-        // userExists must never be reached because the cookie is ignored.
-        $repo->expects(self::never())->method('userExists');
+        $repo->expects(self::once())->method('userExists')->with('u-api')->willReturn(true);
+        $repo->method('findById')->willReturn(['id' => 'u-api', 'username' => 'api']);
 
         $mw = new AuthMiddleware($jwt, $repo);
         $request = new Request();
@@ -193,10 +199,8 @@ final class AuthMiddlewareTest extends TestCase
         $request->path = '/api/v1/me/shares';
         $request->headers = ['COOKIE' => 'phlix_hub_token=' . $token];
 
-        $response = $mw($request);
-        self::assertNotNull($response);
-        self::assertSame(401, $response->statusCode);
-        self::assertStringContainsString('auth.required', $response->body);
+        self::assertNull($mw($request));
+        self::assertSame('u-api', $request->userId);
     }
 
     /**
@@ -223,17 +227,18 @@ final class AuthMiddlewareTest extends TestCase
     }
 
     /**
-     * Finding 8 regression: even a NON-mutating GET on `/api/v1` no longer
-     * accepts the cookie — bearer-only is method-agnostic now that the
-     * cookie read is deleted outright.
+     * CP-011 FLIP of "even a non-mutating GET rejects the cookie": cookie
+     * auth is method-agnostic again (the bearer-only deletion-era law is
+     * superseded — see the class docblock for the re-introduction story).
      */
-    public function testGetApiRequestWithCookieIsRejectedToo(): void
+    public function testGetApiRequestWithCookieAuthenticates(): void
     {
         $jwt = new JwtHandler(self::SECRET);
         $token = $jwt->createAccessToken('u-get');
 
         $repo = $this->createMock(UserRepository::class);
-        $repo->expects(self::never())->method('userExists');
+        $repo->method('userExists')->with('u-get')->willReturn(true);
+        $repo->method('findById')->willReturn(['id' => 'u-get', 'username' => 'get']);
 
         $mw = new AuthMiddleware($jwt, $repo);
         $request = new Request();
@@ -241,10 +246,8 @@ final class AuthMiddlewareTest extends TestCase
         $request->path = '/api/v1/me';
         $request->headers = ['COOKIE' => 'phlix_hub_token=' . $token];
 
-        $response = $mw($request);
-        self::assertNotNull($response);
-        self::assertSame(401, $response->statusCode);
-        self::assertStringContainsString('auth.required', $response->body);
+        self::assertNull($mw($request));
+        self::assertSame('u-get', $request->userId);
     }
 
     /**

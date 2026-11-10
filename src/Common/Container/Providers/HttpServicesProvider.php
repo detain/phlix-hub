@@ -16,6 +16,7 @@ use Phlix\Hub\Auth\AuthManager;
 use Phlix\Hub\Auth\JwtHandler;
 use Phlix\Hub\Auth\UserRepository;
 use Phlix\Hub\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Hub\CookiePolicy;
 use Phlix\Hub\Hub\ServerInfoHandler;
 use Phlix\Hub\Common\Logger\AuditLogger;
 use Phlix\Hub\Health\HealthController;
@@ -65,10 +66,21 @@ final class HttpServicesProvider implements ServiceProviderInterface
                 return new HealthController($maintenance);
             })->parameter('maintenance', get(MaintenanceHeartbeat::class)),
 
+            // CP-011: the ONE auth-cookie policy instance. Singleton so the
+            // classify / attach / clear seams inside AuthController can never
+            // disagree, and so any future consumer (the CP-012 Origin guard
+            // rides the same scheme/class primitives) shares the same live
+            // settings reads. Resolvers default to the canonical
+            // HubSettingsResolvers idiom inside the class.
+            CookiePolicy::class => factory(static function (): CookiePolicy {
+                return new CookiePolicy();
+            }),
+
             AuthController::class => factory(static function (
                 AuthManager $auth,
+                CookiePolicy $cookiePolicy,
             ): AuthController {
-                return new AuthController($auth);
+                return new AuthController($auth, $cookiePolicy);
             }),
 
             MeController::class => factory(static function (

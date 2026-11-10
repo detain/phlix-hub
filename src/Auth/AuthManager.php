@@ -616,6 +616,28 @@ class AuthManager
     }
 
     /**
+     * Effective access-token TTL in seconds (live `auth.access_ttl` override
+     * → config default). The cookie dual-emit's fallback lifetime: the access
+     * cookie's Max-Age must never drift from the `exp` of the JWT it stores,
+     * so the value comes from the handler that minted it, never a literal
+     * (mirrors the server's AuthManager::accessTtl()).
+     */
+    public function accessTtl(): int
+    {
+        return $this->jwtHandler->getAccessTtl();
+    }
+
+    /**
+     * Effective refresh-token TTL in seconds (live `auth.refresh_ttl`
+     * override → config default). Used by the refresh cookie's Max-Age so the
+     * two lifetimes can never disagree when an admin edits the setting.
+     */
+    public function refreshTtl(): int
+    {
+        return $this->jwtHandler->getRefreshTtl();
+    }
+
+    /**
      * Mark the user as logged out and, when the caller presents the refresh
      * JWT it is ending the session with, revoke it for real: its `jti` goes
      * into {@see RefreshTokenRevocationService} and every later `refresh()`

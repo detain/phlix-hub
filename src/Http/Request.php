@@ -337,6 +337,40 @@ class Request
     }
 
     /**
+     * Read one cookie value from the request's `Cookie` header.
+     *
+     * Parsed per RFC 6265 §5.4 (semicolon-separated `name=value` pairs, the
+     * response side rawurlencode()-s values so the read side urldecode()-s
+     * them). Returns null when the pair is absent or the value is empty —
+     * callers treat "no cookie" and "empty cookie" identically. Deliberately
+     * UNTRUSTED input like every other client header: a presented cookie is
+     * only ever a credential CANDIDATE and must pass the same JWT validation
+     * a bearer token would.
+     */
+    public function getCookie(string $name): ?string
+    {
+        $header = $this->getHeader('Cookie');
+        if ($header === null || $header === '') {
+            return null;
+        }
+
+        foreach (explode(';', $header) as $pair) {
+            $eq = strpos($pair, '=');
+            if ($eq === false) {
+                continue;
+            }
+            if (trim(substr($pair, 0, $eq)) !== $name) {
+                continue;
+            }
+            $value = rawurldecode(trim(substr($pair, $eq + 1)));
+
+            return $value === '' ? null : $value;
+        }
+
+        return null;
+    }
+
+    /**
      * Resolve the REAL client IP for security-sensitive keys (rate limiting) in a
      * trusted-proxy-aware way (mirrors the server's SV-4.15 fix).
      *

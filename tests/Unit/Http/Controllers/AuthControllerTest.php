@@ -24,9 +24,13 @@ use PHPUnit\Framework\TestCase;
  * Unit tests for {@see AuthController}.
  *
  * The legacy form-driven SSR routes (`POST /signup|/login|/logout`) have been
- * retired with the Smarty UI, and the dead session-cookie surface (read in
- * refresh, cleared on logout) was deleted with the auth audit — the JSON API
- * under `/api/v1/auth/*` is bearer/body-only.
+ * retired with the Smarty UI. CP-011 re-introduced the session-cookie surface
+ * (read in refresh/logout, dual-emitted for browser-class clients): this
+ * suite keeps the BEARER/NO-SIGNAL wire law — no Origin/Sec-Fetch headers
+ * here, so every arm lands bearer-class and no leg ever carries a queued
+ * cookie except the unconditional logout jar-clear. The browser-class
+ * dual-emit and cookie-fallback positive law lives in
+ * {@see CookieDualEmitTest} / {@see CookiePolicyWiringGuardTest}.
  *
  * Every failure path is asserted against its registered contract code
  * (`auth.invalid_credentials`, `auth.missing_credentials`,
@@ -467,7 +471,7 @@ final class AuthControllerTest extends TestCase
         self::assertSame('auth.missing_credentials', $decoded['code']);
     }
 
-    public function testLogoutJsonReturns204WithoutCookies(): void
+    public function testLogoutJsonReturns204AndAlwaysClearsTheJar(): void
     {
         $mgr = $this->authMgr();
         $mgr->expects(self::once())->method('logout');
@@ -480,8 +484,10 @@ final class AuthControllerTest extends TestCase
 
         $response = $controller($request);
         self::assertSame(204, $response->statusCode);
-        // The dead cookie-clearing surface is gone: bearer-only logout.
-        self::assertCount(0, $response->cookies);
+        // CP-011: clearing is revocation HYGIENE, not issuance — even a
+        // bearer-era caller gets the jar-death headers (CookieDualEmitTest
+        // pins the shapes; here only the count rides the bearer arm).
+        self::assertCount(2, $response->cookies);
     }
 
     /**
@@ -559,13 +565,21 @@ final class AuthControllerTest extends TestCase
     }
 
     /**
-     * The retired cookie fallback must NOT authenticate: a Cookie header
-     * carrying the legacy refresh name behaves exactly like an empty body.
+     * CP-011 FLIP of the "retired fallback" law: a cookie-only refresh now
+     * authenticates — the `phlix_hub_refresh` cookie is the second lineage
+     * source. The BEARER-vs-cookie PRECEDENCE itself is pinned behaviorally
+     * in CookieDualEmitTest; here the point is the read seam re-opened.
      */
-    public function testRefreshJsonIgnoresLegacyCookie(): void
+    public function testRefreshJsonAcceptsLegacyCookieFallback(): void
     {
         $mgr = $this->authMgr();
-        $mgr->expects(self::never())->method('refresh');
+        $mgr->expects(self::once())
+            ->method('refresh')
+            ->with('cookie-tok')
+            ->willReturn([
+                'access_token' => 'a', 'refresh_token' => 'b', 'token_type' => 'Bearer',
+                'expires_in' => 3600, 'user' => [], 'claims' => [],
+            ]);
 
         $controller = $this->controller($mgr);
         $request = new Request();
@@ -573,7 +587,7 @@ final class AuthControllerTest extends TestCase
         $request->path = '/api/v1/auth/refresh';
         $request->headers = ['COOKIE' => 'phlix_hub_refresh=cookie-tok'];
 
-        self::assertSame(400, $controller($request)->statusCode);
+        self::assertSame(200, $controller($request)->statusCode);
     }
 
     public function testRefreshJsonReturns401InvalidToken(): void
