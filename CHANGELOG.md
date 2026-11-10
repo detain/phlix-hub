@@ -12,6 +12,30 @@ date. Deviations already in the history below are recorded, not rewritten, in th
 
 ## [Unreleased]
 
+### Changed [hub-route-sync] — S492 unblock: vendored contracts route export and the S332 snapshot re-derived to the shipped contracts regen; S280/S332 pins rotated from measured reds — 2026-11-10
+
+- `phlix-contracts` shipped `dist/server-route-manifest.json` regenerated for
+  server `5c78f6a4` (commit `48ddd403`): the CP-004 logout route adds exactly
+  one tuple (`POST /api/v1/auth/logout`) and nothing else moves. The hub's two
+  independent derivations of the server route table — the vendored contracts
+  export and the boot-derived S332 snapshot — were re-synced to those bytes in
+  lockstep (the S280 same-sha leg makes a half-sync RED by design), the
+  snapshot regenerated through the documented dumper at a checkout pinned to
+  `5c78f6a4`, and the generator's `--check` ritual proves the committed bytes
+  byte-identical to that checkout.
+- The currency pins — the S280 tuple-count pin, its survival-token suffix, and
+  `S332_EXPECTED_SERVER_SOURCE_SHA` — moved in the same commit, each rotated
+  only where it actually reddened and only to the value the failing assertion
+  measured. The route denominator itself lives in the pin, not in this prose.
+  The new route sits outside every `BROWSE_SCOPE_ALLOWLIST` GET prefix, so the
+  S332 derived deny set legitimately gained no entry (verified by running the
+  derivation, not by reasoning about it).
+- The standing-red `Server Route Snapshot Currency` CI job (S492) this closes
+  compares route CONTENT digests per the owner ruling it carries: the synced
+  digest reproduces the halt transcript's live-server figure exactly, so the
+  job greens at contracts-provenance `5c78f6a4` and at any later route-neutral
+  server master (provenance lag stays a non-blocking warning by design).
+
 ### Changed [hub-w24L1] — LW-085 adaptation leg: the Alexa empty-sub guard is re-driven at the parse layer after the v0.54.0 re-vendor — 2026-11-10
 
 - The re-vendor commit above this entry claimed "no adaptation leg"; the full

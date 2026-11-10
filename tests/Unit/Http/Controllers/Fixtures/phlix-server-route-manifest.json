@@ -1,9 +1,9 @@
 {
     "generator": "tests/Unit/Http/Controllers/Fixtures/dump-phlix-server-route-manifest.php",
     "source_repo": "detain/phlix-server",
-    "source_sha": "58530ec207b0d40c3386ed10215d5bda3eaf54af",
-    "route_count": 415,
-    "sha256": "69441e34e6927215b6cb494e8654f636016898044b26d21a6aca30f0a7f16729",
+    "source_sha": "5c78f6a4dc36d4cb799b7131162fcfffba1fb822",
+    "route_count": 416,
+    "sha256": "7a14dd8bad618346e185ebebd3e4a197422adb62152306f350af8dfe9a0e0c60",
     "routes": [
         {
             "method": "DELETE",
@@ -1284,6 +1284,10 @@
         {
             "method": "POST",
             "path": "/api/v1/auth/login"
+        },
+        {
+            "method": "POST",
+            "path": "/api/v1/auth/logout"
         },
         {
             "method": "POST",

@@ -35,11 +35,11 @@
  * digest. That same corpus is what phlix-server commits as two wire-guard
  * constants:
  *
- *   - ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST   (376 entries)
+ *   - ApplicationRouterWirePathGuardTest::ROUTE_MANIFEST   (377 entries)
  *   - WebPortalRouterWirePathGuardTest::ROUTE_MANIFEST     ( 50 entries)
  *
- * whose union minus the 11 shared rails is the 415-tuple snapshot (376+50−11,
- * mirroring the S280 parity pin — server `58530ec2`-era counts; the prologue
+ * whose union minus the 11 shared rails is the 416-tuple snapshot (377+50−11,
+ * mirroring the S280 parity pin — server `5c78f6a4`-era counts; the prologue
  * originally cited the pre-refresh 373/410, then 375/412, breakdown). Both server CI jobs
  * compare their const against the FULL rendered production router table
  * VERBATIM, so an unregistered-in-const route reddens phlix-server itself. The
